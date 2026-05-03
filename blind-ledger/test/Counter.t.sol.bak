@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.13;
+
+import {Test} from "forge-std/Test.sol";
+import {ClaimsRegistry} from "../src/Counter.sol";
+
+contract ClaimsRegistryTest is Test {
+    ClaimsRegistry public registry;
+
+    function setUp() public {
+        registry = new ClaimsRegistry(address(this));
+    }
+
+    function test_SubmitVerifiedClaim() public {
+        bytes32 claimHash = bytes32(uint256(123456));
+
+        registry.submitVerifiedClaim{value: 0.001 ether}(claimHash, hex"1234", 1000);
+
+        bool verified = registry.verifiedClaims(claimHash);
+
+        assertEq(verified, true);
+        assertEq(registry.successfulClaims(), 1);
+        assertEq(registry.baseFeesCollected(), 0.001 ether);
+
+        (
+            bool recordVerified,
+            uint256 claimAmount,
+            uint256 baseFeePaid,
+            uint256 performanceFeeAccrued
+        ) = registry.claims(claimHash);
+
+        assertEq(recordVerified, true);
+        assertEq(claimAmount, 1000);
+        assertEq(baseFeePaid, 0.001 ether);
+        assertEq(performanceFeeAccrued, 0);
+    }
+
+    function test_RejectedProof() public {
+        bytes32 claimHash = bytes32(uint256(123456));
+
+        registry.submitVerifiedClaim(claimHash, "", 5000);
+
+        assertEq(registry.verifiedClaims(claimHash), false);
+        assertEq(registry.rejectedProofs(), 1);
+        assertEq(registry.fraudulentTransactionsBlocked(), 1);
+        assertEq(registry.totalValueSecured(), 5000);
+        assertEq(registry.performanceFeesAccrued(), 1000);
+        assertEq(registry.performanceFeeOwed(), 1000);
+
+        (
+            bool recordVerified,
+            uint256 claimAmount,
+            uint256 baseFeePaid,
+            uint256 performanceFeeAccrued
+        ) = registry.claims(claimHash);
+
+        assertEq(recordVerified, false);
+        assertEq(claimAmount, 5000);
+        assertEq(baseFeePaid, 0);
+        assertEq(performanceFeeAccrued, 1000);
+    }
+
+    function test_RealizePerformanceFees() public {
+        bytes32 claimHash = bytes32(uint256(999));
+
+        registry.submitVerifiedClaim(claimHash, "", 5000);
+
+        registry.realizePerformanceFees(1000);
+
+        assertEq(registry.performanceFeesAccrued(), 0);
+        assertEq(registry.baseFeesCollected(), 1000);
+    }
+
+    function test_WithdrawFees() public {
+        bytes32 claimHash = bytes32(uint256(123));
+
+        registry.submitVerifiedClaim{value: 1 ether}(claimHash, hex"1234", 1000);
+
+        uint256 beforeBalance = address(this).balance;
+
+        registry.withdrawFees();
+
+        uint256 afterBalance = address(this).balance;
+
+        assertGt(afterBalance, beforeBalance);
+        assertEq(address(registry).balance, 0);
+    }
+
+    receive() external payable {}
+}

@@ -1,0 +1,3138 @@
+{
+  "_meta": {
+    "version": "7.2.3",
+    "classification": "DETERMINISTIC_ZK_CIRCUIT_AST",
+    "note": "All rule fields are structured AST objects. No pseudo-code strings. Every node is machine-traversable.",
+    "ast_node_types": [
+      "AND",
+      "OR",
+      "NOT",
+      "IF_THEN",
+      "IF_THEN_ELSE",
+      "COMPARE",
+      "IN",
+      "NOT_IN",
+      "ARITHMETIC",
+      "DATE_ARITHMETIC",
+      "COUNT",
+      "LOOKUP",
+      "ALL_MATCH",
+      "PASS",
+      "VERIFY_ORACLE_SIGNATURE",
+      "MERKLE_NON_MEMBERSHIP",
+      "POSEIDON_HASH",
+      "MERKLE_INCLUSION"
+    ],
+    "operator_set": {
+      "comparison": [
+        "==",
+        "!=",
+        "GT",
+        "GTE",
+        "LT",
+        "LTE"
+      ],
+      "arithmetic": [
+        "ADD",
+        "SUBTRACT",
+        "MULTIPLY",
+        "DIVIDE"
+      ],
+      "date": [
+        "ADD_DAYS",
+        "ADD_MONTHS",
+        "DIFF_DAYS \u2014 if from > to, the circuit produces a deterministic denial (rad: SYSTEM_DATE_ERROR, route: PENDING_MANUAL_REVIEW) instead of computing the difference. Never produces an unprovable proof."
+      ],
+      "set": [
+        "IN",
+        "NOT_IN"
+      ],
+      "existence": [
+        "EXISTS",
+        "NOT_EXISTS",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ]
+    },
+    "field_ref_convention": "Bare string = field on shared_context. Object { ref: 'x.y' } = nested path. Object { literal: v } = constant value.",
+    "citations": {
+      "RAD": "RAD_Repository-1.xlsx",
+      "AID": "2026-Master-Aid-Code-Chart.pdf",
+      "ELECT": "elect.pdf"
+    },
+    "hash_scheme_note": "Poseidon used for all in-circuit hashing (BabyJubJub-friendly, ~600 constraints/hash). keccak256 used only for off-circuit attestation_hash fields (~100k constraints \u2014 never inside proof).",
+    "signature_scheme_note": "EdDSA on BabyJubJub for all oracle signatures. DHCS/CalHHS oracle public keys are hardcoded in circuit as constants.",
+    "date_encoding": "All dates encoded as integer days since 1970-01-01 (proleptic Gregorian). No Unix timestamps. ISO-8601 fields converted by relayer before circuit ingestion. DIFF_DAYS(from, to): if from > to, the circuit immediately produces a deterministic denial (rad: SYSTEM_DATE_ERROR, route: PENDING_MANUAL_REVIEW, appeal_eligible: false) before attempting the calculation. An unprovable proof is never an acceptable output \u2014 every input combination must produce either a valid proof or a deterministic denial. The relayer also guarantees from <= to ordering before injection as defense-in-depth, but the circuit guard is authoritative.",
+    "attestation_hash_note": "attestation_hash is a Poseidon commitment computed inside the circuit. keccak256 is never used inside the proof. The relayer relays the Poseidon output on-chain as a cheap commitment. No keccak256 in any output schema.",
+    "nullifier_concurrency_model": "Sequential proof verification with snapshot root. Prover fetches Merkle witness against root R_n and embeds R_n as a public input. On-chain verifier rejects proof if current_root != R_n. Concurrent claim approval advances root to R_n+1 \u2014 prover must refetch witness and resubmit. ZK proof generation (2-10s today) is the throughput bottleneck, so sequential verification does not meaningfully reduce throughput. Revisit batch verification when hardware provers (FPGA/ASIC) bring proof time below 200ms.",
+    "leaf_canonicalization": "All Poseidon leaf inputs derived from string fields (provider_type, procedure_code, etc.) are encoded as 32-byte arrays: left-justified, null-padded to 32 bytes (0x00). Circomlib/Aztec convention. Relayer and circuit MUST use identical encoding. Required for deterministic test vectors.",
+    "public_input_usage": {
+      "nullifier_tree_root": "E1_DUPLICATE_DETECTION.rule.root, E7_ONCE_PER_DOS.rule.root",
+      "provider_procedure_table_root": "G3_PROVIDER_TYPE_SERVICE_MATCH.rule.root",
+      "l2_attestation_hash": "L3_PROVIDER_ENROLLMENT.prerequisite (off-circuit binding)",
+      "l3_attestation_hash": "L4_CLAIMS_TAR_ADJUDICATION.prerequisite (off-circuit binding)",
+      "oracle_payload_hashes": "L1_ORACLE_INJECTION.signature_verification (all oracles)",
+      "snapshot_root_epoch": "Relayer root freshness check \u2014 verified off-circuit before proof submission"
+    },
+    "circuit_constraint_estimate": "~9-15 EdDSA BabyJubJub signature verifications (~100k constraints each) = ~900k-1.5M + ~30 Poseidon hashes (~600 constraints each) = ~18k + ~1 oracle key registry Merkle inclusion (~20k) + ~2 nullifier SMT non-membership proofs (~40k each) = ~80k + ~150 comparisons/arithmetic nodes (~5-20 constraints each) = ~3k = ~2.5-3M total constraints. Fits comfortably in Plonkish provers (Halo2, Plonky2) with 128 GB RAM. GPU proving time <30s (RTX 4090 class). 32-core CPU: ~4-5 min. Note: 9 oracles minimum; up to ~15 if ALJ override and sub-oracle calls are included. Re-evaluate if oracle count exceeds 20 or nullifier tree depth exceeds 32.",
+    "key_rotation_model": {
+      "problem": "Hardcoded oracle pubkeys require full circuit redeploy on key compromise or expiry.",
+      "solution": "On-chain key registry verified inside circuit as an additional Merkle inclusion proof.",
+      "registry_architecture": {
+        "contract": "OracleKeyRegistry.sol \u2014 deployed on L1/L2",
+        "structure": "Mapping: oracle_id => { pubkey: bytes32, valid_from: uint64, valid_thru: uint64, revoked: bool }",
+        "merkle_root": "Registry committed as Merkle tree root, published on-chain each epoch",
+        "circuit_verification": {
+          "logic": "MERKLE_INCLUSION",
+          "leaf": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "pubkey",
+              "valid_from",
+              "valid_thru"
+            ],
+            "canonicalization": "All inputs zero-padded to 32 bytes. See _meta.leaf_canonicalization."
+          },
+          "root": {
+            "public_input": "oracle_key_registry_root"
+          },
+          "witness": {
+            "private_input": "oracle_key_registry_witness"
+          },
+          "tree_depth": 8,
+          "note": "Depth 8 = 256 oracle slots. More than sufficient. ~20k additional constraints per claim."
+        }
+      },
+      "rotation_procedure": [
+        "1. New key registered in OracleKeyRegistry.sol with valid_from = next_epoch",
+        "2. Registry Merkle root updated on-chain",
+        "3. Relayer begins signing with new key at valid_from epoch",
+        "4. Old key marked revoked \u2014 circuit rejects proofs using revoked key",
+        "5. No circuit redeploy required"
+      ],
+      "new_public_input": "oracle_key_registry_root: [u8; 32]",
+      "constraint_cost": "~20k additional constraints per claim (1 Merkle inclusion proof, depth 8). Negligible.",
+      "pilot_note": "For production, all oracle public keys should be stored in an on-chain registry with Merkle inclusion proofs (see key_rotation_model.registry_architecture). Hardcoded keys are acceptable only for pilot/test environments."
+    }
+  },
+  "execution_model": {
+    "description": "Five-layer sequential gate. Layer N+1 is unreachable unless layer N writes status PASS into shared_context.",
+    "layers": [
+      "L1_ORACLE_INJECTION",
+      "L2_ELIGIBILITY_PROOF",
+      "L3_PROVIDER_ENROLLMENT",
+      "L4_CLAIMS_TAR_ADJUDICATION",
+      "L5_APPEAL_EXCEPTION"
+    ],
+    "shared_context_schema": {
+      "claim_id": {
+        "type": "string"
+      },
+      "recipient_id": {
+        "type": "string",
+        "note": "14-char Medi-Cal ID or 9-digit SSN"
+      },
+      "provider_number": {
+        "type": "string",
+        "note": "NPI or legacy Medi-Cal provider number"
+      },
+      "rendering_provider_number": {
+        "type": "string"
+      },
+      "ordering_provider_number": {
+        "type": "string | null"
+      },
+      "facility_type": {
+        "type": "enum",
+        "values": [
+          "NF_A",
+          "NF_B",
+          "SUBACUTE",
+          "ACUTE",
+          "ALF",
+          "RCFE"
+        ]
+      },
+      "claim_type_code": {
+        "type": "string"
+      },
+      "date_of_service_from": {
+        "type": "integer",
+        "note": "Days since 1970-01-01"
+      },
+      "date_of_service_thru": {
+        "type": "integer",
+        "note": "Days since 1970-01-01"
+      },
+      "claim_received_date": {
+        "type": "integer",
+        "note": "Days since 1970-01-01"
+      },
+      "procedure_code": {
+        "type": "string"
+      },
+      "modifier": {
+        "type": "string | null"
+      },
+      "tar_number": {
+        "type": "string | null"
+      },
+      "tar_status": {
+        "type": "enum | null",
+        "values": [
+          "APPROVED",
+          "PENDING",
+          "DENIED",
+          "EXPIRED"
+        ]
+      },
+      "tar_authorized_from": {
+        "type": "integer | null",
+        "note": "Days since 1970-01-01"
+      },
+      "tar_authorized_thru": {
+        "type": "integer | null",
+        "note": "Days since 1970-01-01"
+      },
+      "tar_authorized_procedure_codes": {
+        "type": "array<string> | null"
+      },
+      "tar_authorized_units": {
+        "type": "decimal | null"
+      },
+      "tar_recipient_id": {
+        "type": "string | null"
+      },
+      "tar_sex": {
+        "type": "string | null"
+      },
+      "tar_dob": {
+        "type": "integer | null",
+        "note": "Days since 1970-01-01"
+      },
+      "claim_units": {
+        "type": "decimal"
+      },
+      "claim_sex": {
+        "type": "string"
+      },
+      "claim_dob": {
+        "type": "integer",
+        "note": "Days since 1970-01-01"
+      },
+      "ccn_original": {
+        "type": "string | null",
+        "note": "13-digit Claim Control Number from original paid claim"
+      },
+      "frequency_type_code": {
+        "type": "enum | null",
+        "values": [
+          "1",
+          "7",
+          "8"
+        ]
+      },
+      "l1_oracle_attestation": {
+        "type": "object",
+        "written_by": "L1"
+      },
+      "l2_eligibility_attestation": {
+        "type": "object",
+        "written_by": "L2"
+      },
+      "l3_provider_attestation": {
+        "type": "object",
+        "written_by": "L3"
+      },
+      "l4_adjudication_result": {
+        "type": "object",
+        "written_by": "L4"
+      },
+      "l5_appeal_result": {
+        "type": "object",
+        "written_by": "L5"
+      },
+      "provider_procedure_table_root": {
+        "type": "bytes32",
+        "note": "Merkle root of CA-MMIS Provider/Procedure Authorization Table. Public input. Versioned and signed by CA-MMIS oracle key. Updated when table changes.",
+        "cardinality_note": "Depth 20 = 2^20 = 1,048,576 slots. CA-MMIS table is sparse \u2014 actual valid (provider_type, procedure_code) pairings estimated in the tens of thousands. Pre-deployment: relayer MUST validate actual cardinality against live CA-MMIS data. If cardinality approaches 500k entries, upgrade to depth 24 (16M slots) before deployment."
+      },
+      "o8_recipient_deceased": {
+        "type": "boolean",
+        "written_by": "O8"
+      },
+      "o8_date_of_death": {
+        "type": "integer | null",
+        "note": "Days since 1970-01-01. null if alive.",
+        "written_by": "O8"
+      },
+      "o9_certification_on_file": {
+        "type": "boolean",
+        "written_by": "O9"
+      },
+      "o9_certification_date": {
+        "type": "integer | null",
+        "note": "Days since 1970-01-01. Date certification was signed.",
+        "written_by": "O9"
+      },
+      "claim_received_date_adjusted": {
+        "type": "integer | null",
+        "note": "Days since 1970-01-01. Injected by off-circuit workflow engine when E8 toll applies. Overrides claim_received_date for E6 evaluation. null = no toll applied.",
+        "written_by": "OFF_CIRCUIT_WORKFLOW_ENGINE"
+      },
+      "o7_determination": {
+        "type": "enum | null",
+        "values": [
+          "ACUTE_CONFIRMED",
+          "SUBACUTE_CONFIRMED",
+          "INSUFFICIENT_DOCUMENTATION"
+        ],
+        "note": "Injected by workflow engine on resubmission after O7 oracle fires. null on first submission.",
+        "written_by": "OFF_CIRCUIT_WORKFLOW_ENGINE"
+      },
+      "pend_start_epoch": {
+        "type": "integer | null",
+        "note": "Unix epoch seconds. Set by relayer when circuit outputs route=PENDING_CLINICAL_REVIEW (E8). Stored off-circuit. Used to compute toll_days for E6 timely filing on resubmission.",
+        "written_by": "OFF_CIRCUIT_RELAYER"
+      }
+    }
+  },
+  "L1_ORACLE_INJECTION": {
+    "purpose": "Inject all external oracle payloads into shared_context before any gate logic runs. Each oracle defines its source, input, output fields, TTL, and stale-response failure behavior.",
+    "oracles": {
+      "O1_ELIGIBILITY_270_271": {
+        "source_system": "CA-MMIS RTIE or AEVS IVR 1-800-786-4346",
+        "transaction_set": "ASC X12N 270/271",
+        "citation": "elect.pdf p.1-2",
+        "must_precede_claim": true,
+        "input": {
+          "NM1_09": "recipient_id",
+          "DMG_02": "claim_dob",
+          "DMG_03": "claim_sex",
+          "date_of_service": "date_of_service_from"
+        },
+        "writes_to_shared_context": {
+          "o1_eligibility_active": {
+            "type": "boolean"
+          },
+          "o1_aid_code": {
+            "type": "string"
+          },
+          "o1_benefit_level": {
+            "type": "enum",
+            "values": [
+              "FULL",
+              "RESTRICTED"
+            ]
+          },
+          "o1_soc_amount": {
+            "type": "decimal"
+          },
+          "o1_soc_met": {
+            "type": "boolean"
+          },
+          "o1_eligibility_period_from": {
+            "type": "ISO-8601"
+          },
+          "o1_eligibility_period_thru": {
+            "type": "ISO-8601"
+          },
+          "o1_managed_care_enrollment": {
+            "type": "enum",
+            "values": [
+              "MANDATORY",
+              "VOLUNTARY",
+              "NA"
+            ]
+          },
+          "o1_program_restrictions": {
+            "type": "array<string>"
+          },
+          "o1_response_timestamp": {
+            "type": "ISO-8601 datetime"
+          }
+        },
+        "ttl_hours": 24,
+        "stale_rule": {
+          "logic": "COMPARE",
+          "left": {
+            "field": "o1_response_timestamp"
+          },
+          "operator": "GT",
+          "right": {
+            "arithmetic": {
+              "op": "ADD",
+              "base": {
+                "ref": "claim_adjudication_timestamp"
+              },
+              "hours": -24
+            }
+          }
+        },
+        "on_stale": "FAIL \u2014 RAD 001",
+        "citation_rad": "RAD_Repository-1.xlsx RAD Code 001",
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "CA_MMIS_RTIE_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O2_LTC_AID_CODE_VALIDATION": {
+        "source_system": "2026 Master Aid Code Chart \u2014 static lookup table",
+        "citation": "2026-Master-Aid-Code-Chart.pdf",
+        "lookup_key": "o1_aid_code",
+        "writes_to_shared_context": {
+          "o2_ltc_aid_code_valid": {
+            "type": "boolean"
+          },
+          "o2_setting_constraint": {
+            "type": "string | null",
+            "example": "NF_LEVEL_A_OR_B_ONLY"
+          },
+          "o2_age_constraint": {
+            "type": "string | null",
+            "example": "21_TO_64"
+          },
+          "o2_soc_possible": {
+            "type": "boolean"
+          },
+          "o2_managed_care_excluded": {
+            "type": "boolean"
+          }
+        },
+        "ltc_valid_aid_codes": [
+          "13",
+          "23",
+          "53",
+          "D3",
+          "D4"
+        ],
+        "ttl": "calendar_month",
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "DHCS_AID_CODE_ORACLE_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O3_DHCS_DISABILITY_DETERMINATION": {
+        "source_system": "DHCS Disability Determination Branch or SSA SSI/SSDI automated linkage",
+        "citation": "RAD_Repository-1.xlsx RAD Code 033",
+        "query_fields": {
+          "recipient_id": "recipient_id",
+          "as_of_date": "date_of_service_from"
+        },
+        "writes_to_shared_context": {
+          "o3_disability_active": {
+            "type": "boolean"
+          },
+          "o3_disability_type": {
+            "type": "string"
+          },
+          "o3_determination_expires": {
+            "type": "ISO-8601 | null",
+            "null_means": "indefinite"
+          }
+        },
+        "ttl_days": 90,
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "DHCS_DISABILITY_ORACLE_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O4_LTC_PARTNERSHIP_BENEFIT": {
+        "source_system": "DHCS LTC Partnership Program database",
+        "query_fields": {
+          "recipient_id": "recipient_id",
+          "as_of_date": "date_of_service_from"
+        },
+        "writes_to_shared_context": {
+          "o4_partnership_active": {
+            "type": "boolean"
+          },
+          "o4_partnership_disregard_usd": {
+            "type": "decimal",
+            "default_if_inactive": 0
+          }
+        },
+        "ttl_days": 30,
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "DHCS_LTC_PARTNERSHIP_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O5_PROVIDER_SUSPENDED_LIST": {
+        "source_system": "CalHHS Provider Suspended and Ineligible List",
+        "url": "https://www.dhcs.ca.gov/provgovpart/Pages/Suspended-and-Ineligible-Providers.aspx",
+        "citation": "RAD_Repository-1.xlsx RAD Code 032",
+        "query_fields": {
+          "provider_number": "provider_number",
+          "check_date": "date_of_service_from"
+        },
+        "writes_to_shared_context": {
+          "o5_provider_suspended": {
+            "type": "boolean"
+          },
+          "o5_suspension_effective_date": {
+            "type": "ISO-8601 | null"
+          },
+          "o5_ordering_provider_suspended": {
+            "type": "boolean"
+          }
+        },
+        "ttl_hours": 24,
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "CALHHS_SUSPENDED_LIST_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O6_PROVIDER_MASTER_FILE": {
+        "source_system": "CA-MMIS Provider Master File",
+        "query_fields": {
+          "provider_number": "provider_number",
+          "rendering_provider_number": "rendering_provider_number",
+          "as_of_date": "date_of_service_from"
+        },
+        "writes_to_shared_context": {
+          "o6_billing_provider_active": {
+            "type": "boolean"
+          },
+          "o6_billing_provider_type": {
+            "type": "string"
+          },
+          "o6_billing_provider_specialty": {
+            "type": "string"
+          },
+          "o6_billing_provider_dod": {
+            "type": "ISO-8601 | null"
+          },
+          "o6_rendering_provider_active": {
+            "type": "boolean"
+          },
+          "o6_rendering_provider_dod": {
+            "type": "ISO-8601 | null"
+          },
+          "o6_ordering_provider_active": {
+            "type": "boolean | null"
+          },
+          "o6_ordering_provider_dod": {
+            "type": "ISO-8601 | null"
+          }
+        },
+        "ttl_hours": 24,
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "CA_MMIS_PROVIDER_MASTER_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O7_MEDICAL_REVIEW_DETERMINATION": {
+        "source_system": "DHCS Medical Review Unit \u2014 manual clinical determination",
+        "note": "Single-use oracle. Consumed once by E8 reentry path, then invalidated.",
+        "writes_to_shared_context": {
+          "o7_determination": {
+            "type": "enum",
+            "values": [
+              "ACUTE_CONFIRMED",
+              "SUBACUTE_CONFIRMED",
+              "INSUFFICIENT_DOCUMENTATION"
+            ]
+          },
+          "o7_reviewer_id": {
+            "type": "string"
+          },
+          "o7_completed_at": {
+            "type": "ISO-8601 datetime"
+          },
+          "o7_clinical_notes_hash": {
+            "type": "bytes32"
+          }
+        },
+        "ttl": "single_use",
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "DHCS_MEDICAL_REVIEW_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ]
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "note": "Graceful degradation. System does not freeze on oracle unavailability.",
+          "on_sla_breach": "DENY with RAD 001 and provider notification"
+        }
+      },
+      "O8_RECIPIENT_DEATH": {
+        "source_system": "CA Vital Records (CDPH) or SSA Death Master File",
+        "citation": "RAD_Repository-1.xlsx RAD Code 019",
+        "query_fields": {
+          "recipient_id": "recipient_id",
+          "as_of_date": "date_of_service_from"
+        },
+        "writes_to_shared_context": {
+          "o8_recipient_deceased": {
+            "type": "boolean"
+          },
+          "o8_date_of_death": {
+            "type": "integer | null",
+            "note": "Days since 1970-01-01. null if alive."
+          }
+        },
+        "ttl_days": 30,
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "CDPH_DEATH_REGISTRY_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ],
+            "canonicalization": "All string inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). See _meta.leaf_canonicalization."
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 4,
+          "on_sla_breach": "DENY with RAD 019 and provider notification"
+        }
+      },
+      "O9_PHYSICIAN_CERTIFICATION": {
+        "source_system": "DHCS or facility-submitted physician certification of medical necessity",
+        "citation": "RAD_Repository-1.xlsx RAD Code 038",
+        "trigger_condition": "facility_type IN [NF_A, NF_B] AND DIFF_DAYS(date_of_service_thru, date_of_service_from) > 30",
+        "query_fields": {
+          "recipient_id": "recipient_id",
+          "date_of_service_from": "date_of_service_from",
+          "facility_type": "facility_type"
+        },
+        "writes_to_shared_context": {
+          "o9_certification_on_file": {
+            "type": "boolean"
+          },
+          "o9_certification_date": {
+            "type": "integer | null",
+            "note": "Days since 1970-01-01"
+          }
+        },
+        "ttl_days": 90,
+        "signature_verification": {
+          "logic": "VERIFY_ORACLE_SIGNATURE",
+          "scheme": "EdDSA_BabyJubJub",
+          "public_key_constant": "DHCS_PHYSICIAN_CERT_EDDSA_PUBKEY",
+          "message": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "oracle_id",
+              "payload_canonical_bytes",
+              "injected_at_epoch"
+            ],
+            "canonicalization": "All string inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). See _meta.leaf_canonicalization."
+          },
+          "signature_field": "oracle_attestation.signature",
+          "on_fail": "REJECT_PAYLOAD \u2014 do not inject into shared_context"
+        },
+        "on_stale_or_failed": {
+          "primary": "PENDING_MANUAL_REVIEW \u2014 claim held, not hard-failed",
+          "sla_hours": 48,
+          "on_sla_breach": "DENY with RAD 038 and provider notification"
+        }
+      }
+    },
+    "relayer_architecture": {
+      "purpose": "Off-circuit indexed relayer pulls signed oracle payloads on TTL schedule. Proof generation uses cached signed data \u2014 no live API call inside circuit.",
+      "responsibilities": [
+        "Pull and verify 9 oracle payloads (O1\u2013O9) on their individual TTL schedules",
+        "Verify EdDSA signature from source system before caching",
+        "Serve signed payloads + Merkle witnesses to prover on request",
+        "Maintain Nullifier Tree (Sparse Merkle Tree depth=32)",
+        "Insert new nullifiers atomically on every APPROVED claim",
+        "Publish current nullifier_tree_root as on-chain commitment"
+      ],
+      "nullifier_tree": {
+        "type": "Sparse Merkle Tree",
+        "depth": 32,
+        "capacity": "4,294,967,296 slots",
+        "hash_function": "Poseidon",
+        "root_commitment": "published on-chain \u2014 public input to every proof"
+      },
+      "failure_isolation": "Oracle outage affects only claims requiring that oracle. Other claims continue processing."
+    }
+  },
+  "L2_ELIGIBILITY_PROOF": {
+    "purpose": "Gate layer. All oracles must be VERIFIED. Produces eligibility_attestation with bytes32 hash for ZK circuit.",
+    "prerequisite": {
+      "logic": "AND",
+      "rules": [
+        {
+          "field": "o1_eligibility_active",
+          "operator": "EXISTS"
+        },
+        {
+          "field": "o2_ltc_aid_code_valid",
+          "operator": "EXISTS"
+        }
+      ]
+    },
+    "gates": {
+      "G1_IDENTITY_VERIFICATION": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 001",
+        "rule": {
+          "logic": "COMPARE",
+          "left": {
+            "field": "o1_eligibility_active"
+          },
+          "operator": "==",
+          "right": {
+            "literal": true
+          }
+        },
+        "on_fail": {
+          "rad": "001",
+          "route": "PENDING_MANUAL_REVIEW",
+          "appeal_eligible": false
+        }
+      },
+      "G2_PROGRAM_ELIGIBILITY": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 002",
+        "rule": {
+          "logic": "AND",
+          "rules": [
+            {
+              "logic": "IN",
+              "field": "o1_aid_code",
+              "value_set": [
+                "13",
+                "23",
+                "53",
+                "D3",
+                "D4"
+              ]
+            },
+            {
+              "logic": "COMPARE",
+              "left": {
+                "field": "o1_benefit_level"
+              },
+              "operator": "IS_NOT_NULL",
+              "right": null
+            }
+          ]
+        },
+        "on_fail": {
+          "rad": "002",
+          "route": "PENDING_MANUAL_REVIEW",
+          "appeal_eligible": false
+        }
+      },
+      "G3_MONTH_OF_SERVICE": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 003",
+        "rule": {
+          "logic": "AND",
+          "rules": [
+            {
+              "logic": "COMPARE",
+              "left": {
+                "field": "date_of_service_from"
+              },
+              "operator": "GTE",
+              "right": {
+                "field": "o1_eligibility_period_from"
+              }
+            },
+            {
+              "logic": "COMPARE",
+              "left": {
+                "field": "date_of_service_thru"
+              },
+              "operator": "LTE",
+              "right": {
+                "field": "o1_eligibility_period_thru"
+              }
+            }
+          ]
+        },
+        "on_fail": {
+          "rad": "003",
+          "route": "PENDING_MANUAL_REVIEW",
+          "appeal_eligible": false
+        }
+      },
+      "G4_SHARE_OF_COST": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 022",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "o1_soc_amount"
+            },
+            "operator": "GT",
+            "right": {
+              "literal": 0
+            }
+          },
+          "then": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "o1_soc_met"
+            },
+            "operator": "==",
+            "right": {
+              "literal": true
+            }
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "022",
+          "route": "DENY",
+          "appeal_eligible": false
+        }
+      },
+      "G5_LTC_SETTING_CONSTRAINT": {
+        "citation": "2026-Master-Aid-Code-Chart.pdf Aid Code 53 | RAD Code 033",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "o2_setting_constraint"
+            },
+            "operator": "==",
+            "right": {
+              "literal": "NF_LEVEL_A_OR_B_ONLY"
+            }
+          },
+          "then": {
+            "logic": "IN",
+            "field": "facility_type",
+            "value_set": [
+              "NF_A",
+              "NF_B"
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "033",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "G6_LTC_AGE_CONSTRAINT": {
+        "citation": "2026-Master-Aid-Code-Chart.pdf Aid Code 53 \u2014 age 21 to under 65",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "o2_age_constraint"
+            },
+            "operator": "==",
+            "right": {
+              "literal": "21_TO_64"
+            }
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "recipient_age_at_dos"
+                },
+                "operator": "GTE",
+                "right": {
+                  "literal": 21
+                }
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "recipient_age_at_dos"
+                },
+                "operator": "LT",
+                "right": {
+                  "literal": 65
+                }
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "033",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "G7_ASSET_TEST": {
+        "citation": "ACWDL 26-02 \u2014 asset_limit_usd sourced from this document, overrides Article 9/10",
+        "rule": {
+          "logic": "COMPARE",
+          "left": {
+            "logic": "ARITHMETIC",
+            "op": "SUBTRACT",
+            "left": {
+              "field": "countable_assets_usd"
+            },
+            "right": {
+              "field": "o4_partnership_disregard_usd"
+            }
+          },
+          "operator": "LTE",
+          "right": {
+            "field": "asset_limit_usd"
+          }
+        },
+        "on_fail": {
+          "route": "ROUTE_TO_30_MONTH_LOOKBACK_REVIEW",
+          "appeal_eligible": true
+        }
+      },
+      "G8_DISABILITY_DETERMINATION": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 033 | 2026-Master-Aid-Code-Chart.pdf Aid Codes 6J,5R,5J,6E,2E",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "IN",
+            "field": "o1_aid_code",
+            "value_set": [
+              "6J",
+              "5R",
+              "5J",
+              "6E",
+              "2E"
+            ]
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "o3_disability_active"
+                },
+                "operator": "==",
+                "right": {
+                  "literal": true
+                }
+              },
+              {
+                "logic": "IF_THEN_ELSE",
+                "condition": {
+                  "logic": "COMPARE",
+                  "left": {
+                    "field": "o3_determination_expires"
+                  },
+                  "operator": "IS_NOT_NULL",
+                  "right": null
+                },
+                "then": {
+                  "logic": "COMPARE",
+                  "left": {
+                    "field": "o3_determination_expires"
+                  },
+                  "operator": "GTE",
+                  "right": {
+                    "field": "date_of_service_from"
+                  }
+                },
+                "else": {
+                  "logic": "PASS"
+                }
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "033",
+          "route": "PENDING_MANUAL_REVIEW",
+          "appeal_eligible": true
+        }
+      },
+      "G9_RECIPIENT_DEATH_CHECK": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 019",
+        "note": "Recipient must be alive on date of service. Separate from provider death (L3 G5).",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "o8_recipient_deceased"
+            },
+            "operator": "==",
+            "right": {
+              "literal": true
+            }
+          },
+          "then": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "date_of_service_from"
+            },
+            "operator": "LT",
+            "right": {
+              "field": "o8_date_of_death"
+            }
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "019",
+          "carc": "CO",
+          "route": "DENY",
+          "appeal_eligible": false,
+          "note": "Recipient deceased before date of service. No appeal rights \u2014 clinical impossibility."
+        }
+      }
+    },
+    "output": {
+      "writes_to_shared_context": "l2_eligibility_attestation",
+      "fields": {
+        "status": {
+          "type": "enum",
+          "values": [
+            "PASS",
+            "FAIL",
+            "PENDING_MANUAL"
+          ]
+        },
+        "aid_code": {
+          "type": "string"
+        },
+        "benefit_level": {
+          "type": "string"
+        },
+        "soc_cleared": {
+          "type": "boolean"
+        },
+        "asset_test_passed": {
+          "type": "boolean"
+        },
+        "disability_verified": {
+          "type": "boolean | null"
+        },
+        "eligibility_verified_ts": {
+          "type": "ISO-8601 datetime"
+        },
+        "attestation_hash": {
+          "type": "bytes32",
+          "value": "Poseidon(status, aid_code, benefit_level, soc_cleared, asset_test_passed, disability_verified, eligibility_verified_ts)",
+          "note": "Computed inside circuit. Relayed on-chain by relayer. Never keccak256."
+        }
+      }
+    }
+  },
+  "L3_PROVIDER_ENROLLMENT": {
+    "purpose": "Verify all providers are enrolled, active, and not suspended on the date of service.",
+    "prerequisite": {
+      "logic": "COMPARE",
+      "left": {
+        "ref": "l2_eligibility_attestation.status"
+      },
+      "operator": "==",
+      "right": {
+        "literal": "PASS"
+      }
+    },
+    "gates": {
+      "G1_BILLING_PROVIDER_ACTIVE": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 031 RARC N570",
+        "rule": {
+          "logic": "COMPARE",
+          "left": {
+            "field": "o6_billing_provider_active"
+          },
+          "operator": "==",
+          "right": {
+            "literal": true
+          }
+        },
+        "on_fail": {
+          "rad": "031",
+          "rarc": "N570",
+          "route": "DENY",
+          "appeal_eligible": false
+        }
+      },
+      "G2_PROVIDER_NOT_SUSPENDED": {
+        "citation": "RAD_Repository-1.xlsx RAD Codes 031, 032",
+        "rule": {
+          "logic": "COMPARE",
+          "left": {
+            "field": "o5_provider_suspended"
+          },
+          "operator": "==",
+          "right": {
+            "literal": false
+          }
+        },
+        "on_fail": {
+          "rad": "031",
+          "route": "DENY",
+          "appeal_eligible": false,
+          "program_integrity_flag": true
+        }
+      },
+      "G3_PROVIDER_TYPE_SERVICE_MATCH": {
+        "citation": "RAD_Repository-1.xlsx RAD Codes 008, 213 RARC N95",
+        "implementation_note": "CA-MMIS authorization table is ~15,000 procedure codes x ~200 provider types. Too large for Plookup directly. Table is committed as a Merkle tree. Root published on-chain as provider_procedure_table_root public input. Relayer serves Merkle inclusion witness for (provider_type, procedure_code) pair.",
+        "rule": {
+          "logic": "MERKLE_INCLUSION",
+          "leaf": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "o6_billing_provider_type",
+              "procedure_code"
+            ],
+            "canonicalization": "Both inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). Example: 'NF_A' \u2192 [0x4E,0x46,0x5F,0x41,0x00,...,0x00] (32 bytes). Matches _meta.leaf_canonicalization. Required for test vector parity between relayer and circuit."
+          },
+          "root": {
+            "public_input": "provider_procedure_table_root"
+          },
+          "witness": {
+            "private_input": "provider_procedure_inclusion_witness"
+          },
+          "tree_depth": 20,
+          "hash_function": "Poseidon",
+          "operator": "EXISTS"
+        },
+        "on_fail": {
+          "rad": "008",
+          "carc": "170",
+          "rarc": "N95",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "G4_ORDERING_PROVIDER_VALID": {
+        "citation": "RAD_Repository-1.xlsx RAD Codes 011, 032 RARC N574",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "tar_number"
+            },
+            "operator": "IS_NOT_NULL",
+            "right": null
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "o6_ordering_provider_active"
+                },
+                "operator": "==",
+                "right": {
+                  "literal": true
+                }
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "o5_ordering_provider_suspended"
+                },
+                "operator": "==",
+                "right": {
+                  "literal": false
+                }
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "011",
+          "carc": "184",
+          "rarc": "N574",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "G5_PROVIDER_DEATH_CHECK": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 030 CARC 13",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "o6_billing_provider_dod"
+            },
+            "operator": "IS_NOT_NULL",
+            "right": null
+          },
+          "then": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "date_of_service_from"
+            },
+            "operator": "LT",
+            "right": {
+              "field": "o6_billing_provider_dod"
+            }
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "030",
+          "carc": "13",
+          "route": "DENY",
+          "appeal_eligible": false,
+          "program_integrity_flag": true
+        }
+      }
+    },
+    "output": {
+      "writes_to_shared_context": "l3_provider_attestation",
+      "fields": {
+        "status": {
+          "type": "enum",
+          "values": [
+            "PASS",
+            "DENY",
+            "PROGRAM_INTEGRITY_FLAG"
+          ]
+        },
+        "billing_provider_verified": {
+          "type": "boolean"
+        },
+        "rendering_provider_verified": {
+          "type": "boolean"
+        },
+        "ordering_provider_verified": {
+          "type": "boolean | null"
+        },
+        "suspended_list_clear": {
+          "type": "boolean"
+        },
+        "attestation_hash": {
+          "type": "bytes32",
+          "value": "Poseidon(billing_provider_verified, rendering_provider_verified, ordering_provider_verified, suspended_list_clear)",
+          "note": "Computed inside circuit. Relayed on-chain by relayer. Never keccak256."
+        }
+      }
+    }
+  },
+  "L4_CLAIMS_TAR_ADJUDICATION": {
+    "purpose": "Full adjudication edit layer. Hard prerequisite: eligibility and provider attestations must both be PASS.",
+    "prerequisite": {
+      "logic": "AND",
+      "rules": [
+        {
+          "logic": "COMPARE",
+          "left": {
+            "ref": "l2_eligibility_attestation.status"
+          },
+          "operator": "==",
+          "right": {
+            "literal": "PASS"
+          }
+        },
+        {
+          "logic": "COMPARE",
+          "left": {
+            "ref": "l3_provider_attestation.status"
+          },
+          "operator": "==",
+          "right": {
+            "literal": "PASS"
+          }
+        }
+      ]
+    },
+    "adjudication_edits": {
+      "E1_DUPLICATE_DETECTION": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 010 CARC B13",
+        "implementation_note": "Replaces database ALL_MATCH scan. Nullifier tree maintained by relayer. O(log n) witness, not O(n) scan.",
+        "nullifier_construction": {
+          "logic": "POSEIDON_HASH",
+          "inputs": [
+            "provider_number",
+            "recipient_id",
+            "date_of_service_from",
+            "date_of_service_thru",
+            "procedure_code",
+            "modifier",
+            "rendering_provider_number"
+          ],
+          "output_field": "claim_nullifier",
+          "canonicalization": "All string inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). See _meta.leaf_canonicalization."
+        },
+        "rule": {
+          "logic": "MERKLE_NON_MEMBERSHIP",
+          "leaf": {
+            "field": "claim_nullifier"
+          },
+          "root": {
+            "public_input": "nullifier_tree_root"
+          },
+          "witness": {
+            "private_input": "nullifier_merkle_witness"
+          },
+          "tree_depth": 32,
+          "hash_function": "Poseidon"
+        },
+        "on_fail": {
+          "rad": "010",
+          "carc": "B13",
+          "route": "DENY",
+          "appeal_eligible": false
+        },
+        "on_approve_side_effect": {
+          "action": "INSERT_NULLIFIER",
+          "instruction": "Relayer inserts claim_nullifier into Nullifier Tree after APPROVED status is written. nullifier_tree_root updated atomically.",
+          "atomicity_requirement": "Payment release and nullifier insertion must be atomic. Rollback both on failure."
+        }
+      },
+      "E2_TAR_REQUIRED": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 005 CARC 197",
+        "note": "PENDING TAR routes to manual hold (may approve before filing window closes). EXPIRED TAR is hard deny. Only APPROVED passes.",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "IN",
+            "field": "procedure_code",
+            "value_set": {
+              "ref": "tar_required_procedure_list"
+            }
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "tar_number"
+                },
+                "operator": "IS_NOT_NULL",
+                "right": null
+              },
+              {
+                "logic": "IN",
+                "field": "tar_status",
+                "value_set": [
+                  "APPROVED"
+                ]
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "tar_status_routing": {
+          "APPROVED": {
+            "action": "PASS"
+          },
+          "PENDING": {
+            "action": "PENDING_MANUAL_QUEUE",
+            "note": "TAR may be approved before timely filing deadline. Hold claim, re-evaluate on TAR status change.",
+            "sla_days": 45,
+            "on_sla_breach": {
+              "rad": "005",
+              "carc": "197",
+              "route": "DENY",
+              "appeal_eligible": true
+            }
+          },
+          "EXPIRED": {
+            "action": "DENY",
+            "rad": "005",
+            "carc": "197",
+            "rarc": "N351",
+            "appeal_eligible": true,
+            "note": "TAR expired before date of service. Provider must obtain new TAR and resubmit."
+          },
+          "DENIED": {
+            "action": "DENY",
+            "rad": "005",
+            "carc": "197",
+            "appeal_eligible": true,
+            "note": "TAR was explicitly denied. Appeal TAR denial first, then resubmit claim."
+          }
+        },
+        "on_fail": {
+          "rad": "005",
+          "carc": "197",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "E3_TAR_RECIPIENT_MATCH": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 004 CARC 284 RARC N54",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "tar_number"
+            },
+            "operator": "IS_NOT_NULL",
+            "right": null
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "recipient_id"
+                },
+                "operator": "==",
+                "right": {
+                  "field": "tar_recipient_id"
+                }
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "claim_sex"
+                },
+                "operator": "==",
+                "right": {
+                  "field": "tar_sex"
+                }
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "claim_dob"
+                },
+                "operator": "==",
+                "right": {
+                  "field": "tar_dob"
+                }
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "004",
+          "carc": "284",
+          "rarc": "N54",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "E4_TAR_DATE_RANGE": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 006 CARC 284 RARC N351",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "tar_number"
+            },
+            "operator": "IS_NOT_NULL",
+            "right": null
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "date_of_service_from"
+                },
+                "operator": "GTE",
+                "right": {
+                  "field": "tar_authorized_from"
+                }
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "date_of_service_thru"
+                },
+                "operator": "LTE",
+                "right": {
+                  "field": "tar_authorized_thru"
+                }
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "006",
+          "carc": "284",
+          "rarc": "N351",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "E5_TAR_CLAIM_CORRESPONDENCE": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 035 CARC 284 RARC N54",
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "tar_number"
+            },
+            "operator": "IS_NOT_NULL",
+            "right": null
+          },
+          "then": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "IN",
+                "field": "procedure_code",
+                "value_set": {
+                  "field": "tar_authorized_procedure_codes"
+                }
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "claim_units"
+                },
+                "operator": "LTE",
+                "right": {
+                  "field": "tar_authorized_units"
+                }
+              }
+            ]
+          },
+          "else": {
+            "logic": "PASS"
+          }
+        },
+        "on_fail": {
+          "rad": "035",
+          "carc": "284",
+          "rarc": "N54",
+          "route": "DENY",
+          "appeal_eligible": true
+        }
+      },
+      "E6_TIMELY_FILING": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 021 CARC 29 | elect.pdf 6-month resubmission window",
+        "rule": {
+          "logic": "COMPARE",
+          "left": {
+            "field": "claim_received_date"
+          },
+          "operator": "LTE",
+          "right": {
+            "logic": "DATE_ARITHMETIC",
+            "op": "ADD_DAYS",
+            "base": {
+              "field": "date_of_service_from"
+            },
+            "days": 365
+          }
+        },
+        "frequency_type_7_exception": {
+          "description": "Replacement claims: RAD date of prior claim must be within 6 months of resubmission",
+          "rule": {
+            "logic": "IF_THEN_ELSE",
+            "condition": {
+              "logic": "COMPARE",
+              "left": {
+                "field": "frequency_type_code"
+              },
+              "operator": "==",
+              "right": {
+                "literal": "7"
+              }
+            },
+            "then": {
+              "logic": "COMPARE",
+              "left": {
+                "field": "claim_received_date"
+              },
+              "operator": "LTE",
+              "right": {
+                "logic": "DATE_ARITHMETIC",
+                "op": "ADD_DAYS",
+                "base": {
+                  "field": "original_rad_date"
+                },
+                "days": 180
+              }
+            },
+            "else": {
+              "logic": "PASS"
+            }
+          }
+        },
+        "on_fail": {
+          "rad": "021",
+          "carc": "29",
+          "route": "DENY",
+          "appeal_eligible": false
+        },
+        "toll_during_pend": {
+          "description": "v7.2.0: Toll computed off-circuit by workflow engine. Circuit uses claim_received_date_adjusted when non-null.",
+          "rule": {
+            "logic": "IF_THEN_ELSE",
+            "condition": {
+              "logic": "COMPARE",
+              "left": {
+                "field": "claim_received_date_adjusted"
+              },
+              "operator": "IS_NOT_NULL",
+              "right": null
+            },
+            "then": {
+              "logic": "COMPARE",
+              "left": {
+                "field": "claim_received_date_adjusted"
+              },
+              "operator": "LTE",
+              "right": {
+                "logic": "DATE_ARITHMETIC",
+                "op": "ADD_DAYS",
+                "base": {
+                  "field": "date_of_service_from"
+                },
+                "days": 365
+              }
+            },
+            "else": {
+              "logic": "COMPARE",
+              "left": {
+                "field": "claim_received_date"
+              },
+              "operator": "LTE",
+              "right": {
+                "logic": "DATE_ARITHMETIC",
+                "op": "ADD_DAYS",
+                "base": {
+                  "field": "date_of_service_from"
+                },
+                "days": 365
+              }
+            }
+          },
+          "note": "The toll_days value is supplied by the relayer as claim_received_date_adjusted \u2014 a private input to the proof that includes O7. The circuit does not remember state from a previous proof. The relayer computes the toll off-circuit using floor((o7_completed_at_epoch - recorded_pend_start_epoch) / 86400), then injects the adjusted date before proof generation. Floor division is authoritative \u2014 relayer implementation MUST use integer floor, not rounding."
+        }
+      },
+      "E7_ONCE_PER_DOS": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 029 CARC 119 RARC M86",
+        "implementation_note": "Narrower nullifier than E1 \u2014 covers recipient+procedure+DOS only. Uses same Nullifier Tree.",
+        "nullifier_construction": {
+          "logic": "POSEIDON_HASH",
+          "inputs": [
+            "recipient_id",
+            "procedure_code",
+            "date_of_service_from"
+          ],
+          "output_field": "once_per_dos_nullifier",
+          "canonicalization": "All string inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). See _meta.leaf_canonicalization."
+        },
+        "rule": {
+          "logic": "MERKLE_NON_MEMBERSHIP",
+          "leaf": {
+            "field": "once_per_dos_nullifier"
+          },
+          "root": {
+            "public_input": "nullifier_tree_root"
+          },
+          "witness": {
+            "private_input": "once_per_dos_merkle_witness"
+          },
+          "tree_depth": 32,
+          "hash_function": "Poseidon"
+        },
+        "on_fail": {
+          "rad": "029",
+          "carc": "119",
+          "rarc": "M86",
+          "route": "DENY",
+          "appeal_eligible": false
+        },
+        "on_approve_side_effect": {
+          "action": "INSERT_NULLIFIER",
+          "instruction": "Relayer inserts once_per_dos_nullifier into Nullifier Tree after APPROVED.",
+          "note": "E1 and E7 nullifiers are distinct hashes \u2014 both inserted on approval, both checked independently."
+        }
+      },
+      "E8_SUBACUTE_CONFLICT": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 036",
+        "architecture_note": "v7.2.0: HALT/reentry state machine moved OFF-CIRCUIT. Statefulness in ZK circuits is operationally dangerous: pend_start_epoch injection errors and toll floor-division consensus splits are silent failure modes. NEW MODEL: Circuit outputs PENDING_CLINICAL_REVIEW as a terminal result. A traditional stateful workflow engine (off-chain) handles O7 response and resubmission. The resubmission arrives as a NEW claim with o7_determination injected as a signed oracle payload. E6 timely filing toll is computed by the workflow engine and injected as claim_received_date_adjusted. This removes all HALT state, pend_start_epoch, l4_halt_residual_flags, and reentry logic from the circuit.",
+        "trigger": {
+          "logic": "AND",
+          "rules": [
+            {
+              "logic": "COMPARE",
+              "left": {
+                "field": "facility_type"
+              },
+              "operator": "==",
+              "right": {
+                "literal": "SUBACUTE"
+              }
+            },
+            {
+              "logic": "COMPARE",
+              "left": {
+                "field": "claim_type_code"
+              },
+              "operator": "==",
+              "right": {
+                "literal": "ACUTE_INPATIENT"
+              }
+            }
+          ]
+        },
+        "on_trigger": {
+          "action": "DENY",
+          "rad": "036",
+          "route": "PENDING_CLINICAL_REVIEW",
+          "appeal_eligible": true,
+          "off_circuit_workflow": {
+            "step_1": "Workflow engine receives PENDING_CLINICAL_REVIEW signal",
+            "step_2": "Routes to Medical Review Unit queue (SLA: 72 hours)",
+            "step_3": "O7 oracle payload signed on determination",
+            "step_4": "Workflow engine computes adjusted_received_date accounting for pend duration",
+            "step_5": "Resubmission injected as new claim with o7_determination in shared_context",
+            "step_6": "New proof generated \u2014 E8 trigger evaluates differently with o7 present",
+            "sla_breach_action": "DENY RAD 036 \u2014 appeal rights preserved"
+          },
+          "note": "The relayer records the current Unix time as pend_start_epoch when the circuit outputs status = HALT. This value is stored off-circuit by the relayer and used later when O7 arrives. The circuit itself is stateless \u2014 it does not set or remember pend_start_epoch.",
+          "appeal_track_note": "rad stays '036' for Track A selector compatibility. The off-circuit workflow engine reads the 'route' field (PENDING_CLINICAL_REVIEW) to determine queue routing. The L5 Track selector uses the rad code '036' to route to Track A (CIF resubmission) on final denial."
+        },
+        "reentry_via_new_claim": {
+          "o7_routing_table": {
+            "ACUTE_CONFIRMED": {
+              "action": "claim_type_code overridden to ACUTE_INPATIENT_CONFIRMED by workflow engine before injection"
+            },
+            "SUBACUTE_CONFIRMED": {
+              "action": "CLOSE \u2014 workflow engine marks original as RECLASSIFIED"
+            },
+            "INSUFFICIENT_DOCUMENTATION": {
+              "action": "DENY RAD 036 RARC N366 \u2014 appeal eligible"
+            }
+          }
+        },
+        "single_halt_invariant": {
+          "current_halt_paths": [
+            "E8_SUBACUTE_CONFLICT"
+          ],
+          "max_concurrent_halts": 1,
+          "statelessness_note": "All state tracking (pend_start_epoch, toll calculation) is off-circuit, managed by the relayer. The circuit remains stateless across proofs. The relayer computes toll_days = floor((o7_epoch - pend_start_epoch) / 86400) off-circuit and injects the result as claim_received_date_adjusted before the resubmission proof.",
+          "future_engineer_warning": "If a second HALT path is ever added, the relayer MUST track multiple (start, end) intervals and E6 toll MUST sum all intervals. Do NOT add a second HALT without updating the relayer toll computation logic. All state tracking remains off-circuit."
+        }
+      },
+      "E9_REPLACEMENT_VOID": {
+        "citation": "elect.pdf Frequency Type Codes 7 and 8",
+        "frequency_type_7": {
+          "rule": {
+            "logic": "AND",
+            "rules": [
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "field": "ccn_original"
+                },
+                "operator": "IS_NOT_NULL",
+                "right": null
+              },
+              {
+                "logic": "COMPARE",
+                "left": {
+                  "logic": "ARITHMETIC",
+                  "op": "LENGTH",
+                  "field": "ccn_original"
+                },
+                "operator": "==",
+                "right": {
+                  "literal": 13
+                }
+              }
+            ]
+          },
+          "on_fail": {
+            "route": "TECHNICAL_REJECT",
+            "appeal_eligible": false
+          }
+        },
+        "frequency_type_8": {
+          "rule": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "ccn_original"
+            },
+            "operator": "IS_NOT_NULL",
+            "right": null
+          },
+          "on_fail": {
+            "route": "TECHNICAL_REJECT",
+            "appeal_eligible": false
+          }
+        }
+      },
+      "G10_PHYSICIAN_CERTIFICATION": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 038",
+        "note": "NF-A/NF-B stays >30 days require physician certification of medical necessity. Date-order guard at top: if from > to, immediate SYSTEM_DATE_ERROR denial \u2014 never computes DIFF_DAYS on invalid inputs. Null-safe: o9_certification_date IS_NOT_NULL checked before LTE comparison.",
+        "trigger": {
+          "logic": "AND",
+          "rules": [
+            {
+              "logic": "IN",
+              "field": "facility_type",
+              "value_set": [
+                "NF_A",
+                "NF_B"
+              ]
+            },
+            {
+              "logic": "COMPARE",
+              "left": {
+                "logic": "DATE_ARITHMETIC",
+                "op": "DIFF_DAYS",
+                "from": {
+                  "field": "date_of_service_from"
+                },
+                "to": {
+                  "field": "date_of_service_thru"
+                }
+              },
+              "operator": "GT",
+              "right": {
+                "literal": 30
+              }
+            }
+          ]
+        },
+        "rule": {
+          "logic": "IF_THEN_ELSE",
+          "condition": {
+            "logic": "COMPARE",
+            "left": {
+              "field": "date_of_service_from"
+            },
+            "operator": "LTE",
+            "right": {
+              "field": "date_of_service_thru"
+            }
+          },
+          "then": {
+            "logic": "IF_THEN_ELSE",
+            "condition": {
+              "logic": "AND",
+              "rules": [
+                {
+                  "logic": "IN",
+                  "field": "facility_type",
+                  "value_set": [
+                    "NF_A",
+                    "NF_B"
+                  ]
+                },
+                {
+                  "logic": "COMPARE",
+                  "left": {
+                    "logic": "DATE_ARITHMETIC",
+                    "op": "DIFF_DAYS",
+                    "from": {
+                      "field": "date_of_service_from"
+                    },
+                    "to": {
+                      "field": "date_of_service_thru"
+                    }
+                  },
+                  "operator": "GT",
+                  "right": {
+                    "literal": 30
+                  }
+                }
+              ]
+            },
+            "then": {
+              "logic": "AND",
+              "rules": [
+                {
+                  "logic": "COMPARE",
+                  "left": {
+                    "field": "o9_certification_date"
+                  },
+                  "operator": "IS_NOT_NULL",
+                  "right": null
+                },
+                {
+                  "logic": "COMPARE",
+                  "left": {
+                    "field": "o9_certification_on_file"
+                  },
+                  "operator": "==",
+                  "right": {
+                    "literal": true
+                  }
+                },
+                {
+                  "logic": "COMPARE",
+                  "left": {
+                    "field": "o9_certification_date"
+                  },
+                  "operator": "LTE",
+                  "right": {
+                    "field": "date_of_service_from"
+                  }
+                }
+              ]
+            },
+            "else": {
+              "logic": "PASS"
+            }
+          },
+          "else": {
+            "logic": "DENY",
+            "rad": "SYSTEM_DATE_ERROR",
+            "route": "PENDING_MANUAL_REVIEW",
+            "appeal_eligible": false,
+            "note": "date_of_service_from > date_of_service_thru \u2014 deterministic denial. Never attempts DIFF_DAYS on invalid inputs."
+          }
+        },
+        "on_fail": {
+          "rad": "038",
+          "route": "DENY",
+          "appeal_eligible": true,
+          "appeal_track": "TRACK_A_CIF",
+          "note": "Provider must submit physician certification retroactively via CIF resubmission."
+        }
+      }
+    },
+    "output": {
+      "writes_to_shared_context": "l4_adjudication_result",
+      "fields": {
+        "status": {
+          "type": "enum",
+          "values": [
+            "APPROVED",
+            "DENIED",
+            "PENDING_MANUAL",
+            "ADJUSTED",
+            "RECLASSIFIED"
+          ],
+          "note": "HALT removed in v7.2.2. E8 now outputs DENY with rad=036 and route=PENDING_CLINICAL_REVIEW. All stateful HALT tracking is handled off-circuit by the relayer/workflow engine."
+        },
+        "rad_code": {
+          "type": "string | null"
+        },
+        "carc": {
+          "type": "string | null"
+        },
+        "rarc": {
+          "type": "string | null"
+        },
+        "payment_amount_usd": {
+          "type": "decimal | null"
+        },
+        "appeal_eligible": {
+          "type": "boolean"
+        },
+        "appeal_track": {
+          "type": "string | null"
+        },
+        "routing_queue": {
+          "type": "string | null"
+        },
+        "attestation_hash": {
+          "type": "bytes32"
+        },
+        "835_ready": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "L5_APPEAL_EXCEPTION": {
+    "purpose": "Denial \u2192 appeal \u2192 override. Activated when l4_adjudication_result.appeal_eligible == true.",
+    "prerequisite": {
+      "logic": "COMPARE",
+      "left": {
+        "ref": "l4_adjudication_result.appeal_eligible"
+      },
+      "operator": "==",
+      "right": {
+        "literal": true
+      }
+    },
+    "track_selector": {
+      "logic": "IF_THEN_ELSE",
+      "condition": {
+        "logic": "IN",
+        "field": {
+          "ref": "l4_adjudication_result.rad_code"
+        },
+        "value_set": [
+          "004",
+          "006",
+          "020",
+          "035",
+          "036",
+          "039",
+          "040"
+        ]
+      },
+      "then": "TRACK_A_CIF_RESUBMISSION",
+      "else": {
+        "logic": "IF_THEN_ELSE",
+        "condition": {
+          "logic": "COMPARE",
+          "left": {
+            "ref": "l3_provider_attestation.status"
+          },
+          "operator": "==",
+          "right": {
+            "literal": "PROGRAM_INTEGRITY_FLAG"
+          }
+        },
+        "then": "TRACK_C_PROGRAM_INTEGRITY",
+        "else": "TRACK_B_FORMAL_APPEAL"
+      }
+    },
+    "tracks": {
+      "TRACK_A_CIF_RESUBMISSION": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 004 billing tips | elect.pdf 6-month window",
+        "trigger_rad_codes": [
+          "004",
+          "006",
+          "020",
+          "035",
+          "036",
+          "039",
+          "040"
+        ],
+        "filing_window": {
+          "logic": "COMPARE",
+          "left": {
+            "field": "cif_submission_date"
+          },
+          "operator": "LTE",
+          "right": {
+            "logic": "DATE_ARITHMETIC",
+            "op": "ADD_DAYS",
+            "base": {
+              "field": "original_rad_date"
+            },
+            "days": 180
+          }
+        },
+        "required_attachments": [
+          "corrected_claim",
+          "tar_copy",
+          "eligibility_screen_print"
+        ],
+        "sla_days": 45,
+        "outcomes": {
+          "APPROVE_ADJUSTED": "Write adjusted payment to 835",
+          "DENY_FINAL_NO_FURTHER_APPEAL": "Write final denial to 835 with MA130"
+        }
+      },
+      "TRACK_B_FORMAL_APPEAL": {
+        "citation": "RAD_Repository-1.xlsx RAD Code 004 billing tips",
+        "trigger_rad_codes": [
+          "002",
+          "003",
+          "005",
+          "008",
+          "009",
+          "033"
+        ],
+        "required_attachments": [
+          "denied_claim",
+          "rad_document",
+          "clinical_documentation"
+        ],
+        "sla_days": 60,
+        "outcomes": {
+          "APPROVE_OVERRIDE": "Re-enter L4 with override_flag = true \u2014 skip re-evaluation of overridden gate",
+          "DENY_UPHELD": "Write final denial to 835",
+          "PARTIAL_APPROVAL_ADJUSTED": "Re-enter L4 with adjusted claim values"
+        },
+        "escalation": {
+          "trigger": "DENY_UPHELD",
+          "next": "ALJ_HEARING_REQUEST",
+          "sla_days": 90
+        },
+        "appeal_override_schema": {
+          "description": "Override flag is cryptographically bound to one specific gate on one specific claim. Cannot be generalized or replayed.",
+          "gate_id_hash": {
+            "logic": "POSEIDON_HASH",
+            "inputs": [
+              "gate_identifier",
+              "rule_version",
+              "claim_id"
+            ],
+            "output_field": "override_gate_id_hash",
+            "canonicalization": "All string inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). See _meta.leaf_canonicalization."
+          },
+          "authorized_by": {
+            "logic": "VERIFY_ORACLE_SIGNATURE",
+            "scheme": "EdDSA_BabyJubJub",
+            "public_key_constant": "DHCS_ALJ_APPEALS_AUTHORITY_EDDSA_PUBKEY",
+            "message": {
+              "logic": "POSEIDON_HASH",
+              "inputs": [
+                "override_gate_id_hash",
+                "claim_id",
+                "override_epoch"
+              ],
+              "canonicalization": "All string inputs zero-padded to 32 bytes (left-justified, null-padded 0x00). See _meta.leaf_canonicalization."
+            },
+            "signature_field": "alj_override_attestation.signature",
+            "on_fail": "REJECT_OVERRIDE \u2014 claim remains DENIED, malicious prover cannot bypass arbitrary gates"
+          },
+          "security_note": "A malicious prover cannot use override_flag=true to skip timely filing, duplicate detection, or any gate not explicitly named in the ALJ signed attestation. Each override is a unique Poseidon commitment of (gate, claim, epoch) \u2014 cannot be replayed."
+        }
+      },
+      "TRACK_C_PROGRAM_INTEGRITY": {
+        "citation": "RAD_Repository-1.xlsx RAD Codes 031, 032 RARC N570",
+        "payment_hold": true,
+        "required_actions": [
+          "DHCS_PI_REFERRAL",
+          "PROVIDER_WRITTEN_NOTICE"
+        ],
+        "provider_reconsideration_window_days": 30,
+        "outcomes": {
+          "HOLD_CLEARED": "Re-enter L3 at G1",
+          "HOLD_SUSTAINED": "DENY \u2014 refer for potential exclusion proceedings"
+        }
+      }
+    },
+    "terminal_denial": {
+      "trigger": {
+        "logic": "IN",
+        "field": {
+          "ref": "l4_adjudication_result.rad_code"
+        },
+        "value_set": [
+          "010",
+          "021",
+          "030",
+          "019"
+        ]
+      },
+      "action": "WRITE_TO_835_FINAL_DENIAL",
+      "rarc": "MA130",
+      "appeal_eligible": false,
+      "citation": "RAD_Repository-1.xlsx RARC MA130 \u2014 no appeal rights afforded on unprocessable claims",
+      "note": "RAD 010 (duplicate), 019 (deceased recipient), 021 (timely filing), 030 (provider deceased) \u2014 all non-appealable terminal denials."
+    }
+  },
+  "ORACLE_INJECTION_CONTRACT": {
+    "injection_schema": {
+      "oracle_id": {
+        "type": "string"
+      },
+      "injected_at": {
+        "type": "ISO-8601 datetime"
+      },
+      "source_system": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object"
+      },
+      "signature": {
+        "type": "bytes32",
+        "note": "oracle provider signs keccak256(payload)"
+      },
+      "expiry": {
+        "type": "ISO-8601 datetime"
+      },
+      "status": {
+        "type": "enum",
+        "values": [
+          "VERIFIED",
+          "STALE",
+          "FAILED",
+          "PENDING"
+        ]
+      }
+    },
+    "ttl_policy": {
+      "O1_ELIGIBILITY_270_271": {
+        "ttl_hours": 24
+      },
+      "O2_LTC_AID_CODE_VALIDATION": {
+        "ttl": "calendar_month"
+      },
+      "O3_DHCS_DISABILITY_DETERMINATION": {
+        "ttl_days": 90,
+        "hard_expiry_field": "o3_determination_expires"
+      },
+      "O4_LTC_PARTNERSHIP_BENEFIT": {
+        "ttl_days": 30
+      },
+      "O5_PROVIDER_SUSPENDED_LIST": {
+        "ttl_hours": 24
+      },
+      "O6_PROVIDER_MASTER_FILE": {
+        "ttl_hours": 24
+      },
+      "O7_MEDICAL_REVIEW_DETERMINATION": {
+        "ttl": "single_use"
+      }
+    },
+    "rust_interface": {
+      "oracle_attestation_struct": "pub struct OracleAttestation { pub oracle_id: [u8; 32], pub payload_hash: [u8; 32], pub injected_at_epoch: u64, pub expiry_epoch: u64, pub signature: [u8; 64], pub status: u8 }",
+      "nullifier_witness_struct": "pub struct MerkleWitness { pub leaf: [u8; 32], pub path: Vec<[u8; 32]>, pub indices: Vec<bool> }",
+      "public_inputs": [
+        "nullifier_tree_root: [u8; 32]",
+        "provider_procedure_table_root: [u8; 32]",
+        "l2_attestation_hash: [u8; 32]",
+        "l3_attestation_hash: [u8; 32]",
+        "oracle_payload_hashes: Vec<[u8; 32]>",
+        "snapshot_root_epoch: u64",
+        "oracle_key_registry_root: [u8; 32]"
+      ],
+      "private_inputs": [
+        "claim_fields: ClaimContext",
+        "oracle_signatures: Vec<OracleAttestation>",
+        "nullifier_merkle_witness: MerkleWitness",
+        "once_per_dos_merkle_witness: MerkleWitness",
+        "provider_procedure_inclusion_witness: MerkleWitness",
+        "alj_override_attestation: Option<AljOverrideAttestation>",
+        "oracle_key_registry_witnesses: Vec<MerkleWitness>"
+      ],
+      "poseidon_note": "Use poseidon_rs crate or arkworks-rs poseidon. BabyJubJub-parameterized. Do NOT use keccak256 inside circuit.",
+      "new_structs": {
+        "AljOverrideAttestation": "pub struct AljOverrideAttestation { pub gate_id_hash: [u8; 32], pub claim_id: [u8; 32], pub override_epoch: u64, pub signature: [u8; 64] }",
+        "ClaimContext_date_note": "All date fields encoded as i32 (integer days since 1970-01-01). Relayer converts ISO-8601 to this before proof generation."
+      }
+    }
+  },
+  "TEST_VECTOR_MANIFEST": {
+    "_manifest_meta": {
+      "version": "7.0.0",
+      "purpose": "Acceptance criteria for circuit implementation. One PASS + one FAIL per gate.",
+      "convention": "All dates as integer days since 1970-01-01. DOS_FROM=19723 = 2024-01-01. DOS_FROM=19754 = 2024-02-01.",
+      "base_dates": {
+        "DOS_FROM": 19723,
+        "DOS_THRU": 19723,
+        "RECEIVED": 19750,
+        "ELIGIBILITY_FROM": 19710,
+        "ELIGIBILITY_THRU": 19753,
+        "TAR_FROM": 19710,
+        "TAR_THRU": 19753
+      }
+    },
+    "L2_ELIGIBILITY": {
+      "G1_IDENTITY_VERIFICATION": {
+        "PASS": {
+          "test_id": "G1_IDENTITY_PASS",
+          "claim": {
+            "recipient_id": "99000000000001",
+            "date_of_service_from": 19723
+          },
+          "oracle_payloads": {
+            "O1": {
+              "o1_eligibility_active": true
+            }
+          },
+          "expected": {
+            "gate": "G1",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G1_IDENTITY_FAIL",
+          "description": "Recipient ID not found in MMIS \u2014 inactive",
+          "claim": {
+            "recipient_id": "99000000000002",
+            "date_of_service_from": 19723
+          },
+          "oracle_payloads": {
+            "O1": {
+              "o1_eligibility_active": false
+            }
+          },
+          "expected": {
+            "gate": "G1",
+            "rad": "001",
+            "route": "PENDING_MANUAL_REVIEW"
+          }
+        }
+      },
+      "G2_PROGRAM_ELIGIBILITY": {
+        "PASS": {
+          "test_id": "G2_PROGRAM_PASS",
+          "oracle_payloads": {
+            "O1": {
+              "o1_aid_code": "53",
+              "o1_benefit_level": "FULL"
+            }
+          },
+          "expected": {
+            "gate": "G2",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G2_PROGRAM_FAIL",
+          "description": "Aid code 01 is not a valid LTC code",
+          "oracle_payloads": {
+            "O1": {
+              "o1_aid_code": "01",
+              "o1_benefit_level": "FULL"
+            }
+          },
+          "expected": {
+            "gate": "G2",
+            "rad": "002",
+            "route": "PENDING_MANUAL_REVIEW"
+          }
+        }
+      },
+      "G3_MONTH_OF_SERVICE": {
+        "PASS": {
+          "test_id": "G3_MOS_PASS",
+          "claim": {
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19723
+          },
+          "oracle_payloads": {
+            "O1": {
+              "o1_eligibility_period_from": 19710,
+              "o1_eligibility_period_thru": 19753
+            }
+          },
+          "expected": {
+            "gate": "G3",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G3_MOS_FAIL",
+          "description": "Date of service outside eligibility period",
+          "claim": {
+            "date_of_service_from": 19760,
+            "date_of_service_thru": 19760
+          },
+          "oracle_payloads": {
+            "O1": {
+              "o1_eligibility_period_from": 19710,
+              "o1_eligibility_period_thru": 19753
+            }
+          },
+          "expected": {
+            "gate": "G3",
+            "rad": "003",
+            "route": "PENDING_MANUAL_REVIEW"
+          }
+        }
+      },
+      "G4_SHARE_OF_COST": {
+        "PASS": {
+          "test_id": "G4_SOC_PASS",
+          "oracle_payloads": {
+            "O1": {
+              "o1_soc_amount": 150.0,
+              "o1_soc_met": true
+            }
+          },
+          "expected": {
+            "gate": "G4",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G4_SOC_FAIL",
+          "description": "SOC of $150 required but not yet met",
+          "oracle_payloads": {
+            "O1": {
+              "o1_soc_amount": 150.0,
+              "o1_soc_met": false
+            }
+          },
+          "expected": {
+            "gate": "G4",
+            "rad": "022",
+            "route": "DENY"
+          }
+        }
+      },
+      "G5_LTC_SETTING_CONSTRAINT": {
+        "PASS": {
+          "test_id": "G5_SETTING_PASS",
+          "claim": {
+            "facility_type": "NF_A"
+          },
+          "oracle_payloads": {
+            "O2": {
+              "o2_setting_constraint": "NF_LEVEL_A_OR_B_ONLY"
+            }
+          },
+          "expected": {
+            "gate": "G5",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G5_SETTING_FAIL",
+          "description": "Aid code 53 requires NF_A/NF_B but facility is RCFE",
+          "claim": {
+            "facility_type": "RCFE"
+          },
+          "oracle_payloads": {
+            "O2": {
+              "o2_setting_constraint": "NF_LEVEL_A_OR_B_ONLY"
+            }
+          },
+          "expected": {
+            "gate": "G5",
+            "rad": "033",
+            "route": "DENY"
+          }
+        }
+      },
+      "G6_LTC_AGE_CONSTRAINT": {
+        "PASS": {
+          "test_id": "G6_AGE_PASS",
+          "claim": {
+            "recipient_age_at_dos": 45
+          },
+          "oracle_payloads": {
+            "O2": {
+              "o2_age_constraint": "21_TO_64"
+            }
+          },
+          "expected": {
+            "gate": "G6",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G6_AGE_FAIL",
+          "description": "Recipient age 70 fails 21-64 constraint for aid code 53",
+          "claim": {
+            "recipient_age_at_dos": 70
+          },
+          "oracle_payloads": {
+            "O2": {
+              "o2_age_constraint": "21_TO_64"
+            }
+          },
+          "expected": {
+            "gate": "G6",
+            "rad": "033",
+            "route": "DENY"
+          }
+        }
+      },
+      "G7_ASSET_TEST": {
+        "PASS": {
+          "test_id": "G7_ASSET_PASS",
+          "claim": {
+            "countable_assets_usd": 1500.0,
+            "asset_limit_usd": 2000.0
+          },
+          "oracle_payloads": {
+            "O4": {
+              "o4_partnership_disregard_usd": 0
+            }
+          },
+          "expected": {
+            "gate": "G7",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G7_ASSET_FAIL",
+          "description": "Assets $3000 exceed $2000 limit with no partnership disregard",
+          "claim": {
+            "countable_assets_usd": 3000.0,
+            "asset_limit_usd": 2000.0
+          },
+          "oracle_payloads": {
+            "O4": {
+              "o4_partnership_disregard_usd": 0
+            }
+          },
+          "expected": {
+            "gate": "G7",
+            "route": "ROUTE_TO_30_MONTH_LOOKBACK_REVIEW"
+          }
+        }
+      },
+      "G8_DISABILITY_DETERMINATION": {
+        "PASS": {
+          "test_id": "G8_DISABILITY_PASS",
+          "claim": {
+            "date_of_service_from": 19723
+          },
+          "oracle_payloads": {
+            "O1": {
+              "o1_aid_code": "6J"
+            },
+            "O3": {
+              "o3_disability_active": true,
+              "o3_determination_expires": 20088
+            }
+          },
+          "expected": {
+            "gate": "G8",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G8_DISABILITY_FAIL",
+          "description": "Aid code 6J requires active disability but determination expired",
+          "claim": {
+            "date_of_service_from": 19723
+          },
+          "oracle_payloads": {
+            "O1": {
+              "o1_aid_code": "6J"
+            },
+            "O3": {
+              "o3_disability_active": true,
+              "o3_determination_expires": 19700
+            }
+          },
+          "expected": {
+            "gate": "G8",
+            "rad": "033",
+            "route": "PENDING_MANUAL_REVIEW"
+          }
+        }
+      },
+      "G9_RECIPIENT_DEATH_CHECK": {
+        "PASS": {
+          "test_id": "G9_DEATH_PASS",
+          "description": "Recipient alive \u2014 service date before date of death",
+          "claim": {
+            "date_of_service_from": 19723
+          },
+          "oracle_payloads": {
+            "O8": {
+              "o8_recipient_deceased": true,
+              "o8_date_of_death": 19800
+            }
+          },
+          "expected": {
+            "gate": "G9",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G9_DEATH_FAIL",
+          "description": "Recipient deceased before date of service \u2014 clinical impossibility",
+          "claim": {
+            "date_of_service_from": 19723
+          },
+          "oracle_payloads": {
+            "O8": {
+              "o8_recipient_deceased": true,
+              "o8_date_of_death": 19700
+            }
+          },
+          "expected": {
+            "gate": "G9",
+            "rad": "019",
+            "route": "DENY",
+            "appeal_eligible": false
+          }
+        }
+      }
+    },
+    "L3_PROVIDER": {
+      "G1_BILLING_PROVIDER_ACTIVE": {
+        "PASS": {
+          "test_id": "L3G1_PROVIDER_ACTIVE_PASS",
+          "oracle_payloads": {
+            "O6": {
+              "o6_billing_provider_active": true
+            }
+          },
+          "expected": {
+            "gate": "L3_G1",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "L3G1_PROVIDER_ACTIVE_FAIL",
+          "description": "Billing provider not enrolled in Medi-Cal on date of service",
+          "oracle_payloads": {
+            "O6": {
+              "o6_billing_provider_active": false
+            }
+          },
+          "expected": {
+            "gate": "L3_G1",
+            "rad": "031",
+            "route": "DENY"
+          }
+        }
+      },
+      "G2_PROVIDER_NOT_SUSPENDED": {
+        "PASS": {
+          "test_id": "L3G2_NOT_SUSPENDED_PASS",
+          "oracle_payloads": {
+            "O5": {
+              "o5_provider_suspended": false
+            }
+          },
+          "expected": {
+            "gate": "L3_G2",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "L3G2_NOT_SUSPENDED_FAIL",
+          "description": "Provider on CalHHS suspended and ineligible list",
+          "oracle_payloads": {
+            "O5": {
+              "o5_provider_suspended": true,
+              "o5_suspension_effective_date": 19600
+            }
+          },
+          "expected": {
+            "gate": "L3_G2",
+            "rad": "031",
+            "route": "DENY",
+            "program_integrity_flag": true
+          }
+        }
+      },
+      "G3_PROVIDER_TYPE_SERVICE_MATCH": {
+        "PASS": {
+          "test_id": "L3G3_TYPE_MATCH_PASS",
+          "claim": {
+            "procedure_code": "T2025"
+          },
+          "oracle_payloads": {
+            "O6": {
+              "o6_billing_provider_type": "NF_A"
+            }
+          },
+          "merkle": {
+            "provider_procedure_inclusion_witness": "valid_witness_for_(NF_A, T2025)"
+          },
+          "expected": {
+            "gate": "L3_G3",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "L3G3_TYPE_MATCH_FAIL",
+          "description": "Provider type not authorized for procedure code",
+          "claim": {
+            "procedure_code": "T2025"
+          },
+          "oracle_payloads": {
+            "O6": {
+              "o6_billing_provider_type": "RCFE"
+            }
+          },
+          "merkle": {
+            "provider_procedure_inclusion_witness": "no_witness_for_(RCFE, T2025)"
+          },
+          "expected": {
+            "gate": "L3_G3",
+            "rad": "008",
+            "route": "DENY"
+          }
+        }
+      }
+    },
+    "L4_ADJUDICATION": {
+      "E1_DUPLICATE_DETECTION": {
+        "PASS": {
+          "test_id": "E1_DUPLICATE_PASS",
+          "description": "First submission \u2014 nullifier not in tree",
+          "claim": {
+            "provider_number": "P001",
+            "recipient_id": "99000000000001",
+            "date_of_service_from": 19723,
+            "procedure_code": "T2025",
+            "modifier": null
+          },
+          "nullifier": {
+            "expected_poseidon_hash": "COMPUTED_AT_RUNTIME",
+            "merkle_non_membership": true
+          },
+          "expected": {
+            "gate": "E1",
+            "result": "PASS"
+          }
+        },
+        "FAIL": {
+          "test_id": "E1_DUPLICATE_FAIL",
+          "description": "Identical claim already paid \u2014 nullifier in tree",
+          "claim": {
+            "provider_number": "P001",
+            "recipient_id": "99000000000001",
+            "date_of_service_from": 19723,
+            "procedure_code": "T2025",
+            "modifier": null
+          },
+          "nullifier": {
+            "merkle_non_membership": false
+          },
+          "expected": {
+            "gate": "E1",
+            "rad": "010",
+            "carc": "B13",
+            "route": "DENY"
+          }
+        }
+      },
+      "E2_TAR_REQUIRED": {
+        "PASS": {
+          "test_id": "E2_TAR_PASS",
+          "claim": {
+            "procedure_code": "T2025",
+            "tar_number": "TAR123456",
+            "tar_status": "APPROVED"
+          },
+          "expected": {
+            "gate": "E2",
+            "result": "PASS"
+          }
+        },
+        "FAIL_EXPIRED": {
+          "test_id": "E2_TAR_EXPIRED_FAIL",
+          "description": "TAR exists but is expired",
+          "claim": {
+            "procedure_code": "T2025",
+            "tar_number": "TAR123456",
+            "tar_status": "EXPIRED"
+          },
+          "expected": {
+            "gate": "E2",
+            "rad": "005",
+            "carc": "197",
+            "rarc": "N351",
+            "route": "DENY"
+          }
+        },
+        "HOLD_PENDING": {
+          "test_id": "E2_TAR_PENDING_HOLD",
+          "description": "TAR pending \u2014 claim held in manual queue",
+          "claim": {
+            "procedure_code": "T2025",
+            "tar_number": "TAR123456",
+            "tar_status": "PENDING"
+          },
+          "expected": {
+            "gate": "E2",
+            "route": "PENDING_MANUAL_QUEUE"
+          }
+        }
+      },
+      "E6_TIMELY_FILING": {
+        "PASS": {
+          "test_id": "E6_TIMELY_PASS",
+          "claim": {
+            "date_of_service_from": 19723,
+            "claim_received_date": 19900
+          },
+          "expected": {
+            "gate": "E6",
+            "result": "PASS",
+            "note": "19723+365=20088, received 19900 < 20088"
+          }
+        },
+        "FAIL": {
+          "test_id": "E6_TIMELY_FAIL",
+          "description": "Claim received more than 365 days after date of service",
+          "claim": {
+            "date_of_service_from": 19723,
+            "claim_received_date": 20100
+          },
+          "expected": {
+            "gate": "E6",
+            "rad": "021",
+            "carc": "29",
+            "route": "DENY",
+            "note": "20100 > 20088 deadline"
+          }
+        }
+      },
+      "E8_SUBACUTE_CONFLICT": {
+        "PASS": {
+          "test_id": "E8_SUBACUTE_PASS",
+          "description": "Acute claim at acute facility \u2014 no conflict",
+          "claim": {
+            "facility_type": "ACUTE",
+            "claim_type_code": "ACUTE_INPATIENT"
+          },
+          "expected": {
+            "gate": "E8",
+            "result": "PASS_NO_TRIGGER"
+          }
+        },
+        "PENDING_CLINICAL_REVIEW": {
+          "test_id": "E8_SUBACUTE_PENDING_CLINICAL_REVIEW",
+          "description": "Subacute facility + ACUTE_INPATIENT code \u2014 routes to clinical review queue",
+          "claim": {
+            "facility_type": "SUBACUTE",
+            "claim_type_code": "ACUTE_INPATIENT"
+          },
+          "expected": {
+            "gate": "E8",
+            "rad": "036",
+            "route": "PENDING_CLINICAL_REVIEW",
+            "appeal_eligible": true,
+            "note": "No HALT state in circuit. Workflow engine handles queue routing off-circuit."
+          }
+        }
+      },
+      "G10_PHYSICIAN_CERTIFICATION": {
+        "PASS": {
+          "test_id": "G10_PHYS_CERT_PASS",
+          "description": "NF-A stay >30 days with valid physician certification on file",
+          "claim": {
+            "facility_type": "NF_A",
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19755
+          },
+          "oracle_payloads": {
+            "O9": {
+              "o9_certification_on_file": true,
+              "o9_certification_date": 19720
+            }
+          },
+          "expected": {
+            "gate": "G10",
+            "result": "PASS",
+            "note": "DIFF_DAYS=32 > 30, cert on file and predates DOS"
+          }
+        },
+        "FAIL": {
+          "test_id": "G10_PHYS_CERT_FAIL",
+          "description": "NF-A stay >30 days but no physician certification on file",
+          "claim": {
+            "facility_type": "NF_A",
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19755
+          },
+          "oracle_payloads": {
+            "O9": {
+              "o9_certification_on_file": false,
+              "o9_certification_date": null
+            }
+          },
+          "expected": {
+            "gate": "G10",
+            "rad": "038",
+            "route": "DENY",
+            "appeal_eligible": true
+          }
+        },
+        "SKIP": {
+          "test_id": "G10_PHYS_CERT_SKIP",
+          "description": "NF-A stay <=30 days \u2014 gate skips, no certification required",
+          "claim": {
+            "facility_type": "NF_A",
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19740
+          },
+          "expected": {
+            "gate": "G10",
+            "result": "PASS",
+            "note": "DIFF_DAYS=17, trigger condition false"
+          }
+        }
+      }
+    },
+    "BOUNDARY_AND_ADVERSARIAL": {
+      "_note": "Production-grade coverage. Run these AFTER gate acceptance vectors pass.",
+      "G10_BOUNDARY_30_DAYS": {
+        "EXACTLY_30_DAYS_NO_CERT_REQUIRED": {
+          "test_id": "G10_BOUNDARY_30_PASS",
+          "description": "Exactly 30 days \u2014 G10 condition is GT 30, so 30 days does NOT trigger cert requirement",
+          "claim": {
+            "facility_type": "NF_A",
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19753
+          },
+          "expected": {
+            "gate": "G10",
+            "condition_triggered": false,
+            "result": "PASS"
+          }
+        },
+        "EXACTLY_31_DAYS_CERT_REQUIRED": {
+          "test_id": "G10_BOUNDARY_31_FAIL",
+          "description": "Exactly 31 days \u2014 triggers cert requirement. No cert on file.",
+          "claim": {
+            "facility_type": "NF_A",
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19754
+          },
+          "oracle_payloads": {
+            "O9": {
+              "o9_certification_on_file": false,
+              "o9_certification_date": null
+            }
+          },
+          "expected": {
+            "gate": "G10",
+            "condition_triggered": true,
+            "rad": "038",
+            "route": "DENY"
+          }
+        }
+      },
+      "E6_BOUNDARY_365_DAYS": {
+        "EXACTLY_365_DAYS_PASS": {
+          "test_id": "E6_BOUNDARY_365_PASS",
+          "description": "Received on day 365 exactly \u2014 must PASS (LTE 365)",
+          "claim": {
+            "date_of_service_from": 19723,
+            "claim_received_date": 20088
+          },
+          "expected": {
+            "gate": "E6",
+            "result": "PASS"
+          }
+        },
+        "DAY_366_FAIL": {
+          "test_id": "E6_BOUNDARY_366_FAIL",
+          "description": "Received on day 366 \u2014 must DENY",
+          "claim": {
+            "date_of_service_from": 19723,
+            "claim_received_date": 20089
+          },
+          "expected": {
+            "gate": "E6",
+            "rad": "021",
+            "carc": "29",
+            "route": "DENY"
+          }
+        }
+      },
+      "E1_NULLIFIER_COLLISION": {
+        "DUPLICATE_EXACT_MATCH": {
+          "test_id": "E1_NULLIFIER_COLLISION",
+          "description": "Identical claim resubmitted \u2014 nullifier already in tree",
+          "claim": {
+            "provider_number": "P001",
+            "recipient_id": "99000000000001",
+            "date_of_service_from": 19723,
+            "date_of_service_thru": 19723,
+            "procedure_code": "A2001",
+            "modifier": null,
+            "rendering_provider_number": "R001"
+          },
+          "precondition": "Nullifier for this combination already inserted in SMT",
+          "expected": {
+            "gate": "E1",
+            "rad": "010",
+            "carc": "B13",
+            "route": "DENY"
+          }
+        }
+      },
+      "MERKLE_WITNESS_CORRUPTION": {
+        "INVALID_WITNESS_REJECTED": {
+          "test_id": "MERKLE_CORRUPT_WITNESS",
+          "description": "Valid nullifier non-membership claimed but witness is corrupted \u2014 proof must fail to generate",
+          "precondition": "Correct leaf, corrupted sibling path",
+          "expected": {
+            "result": "PROOF_GENERATION_FAILURE",
+            "note": "Circuit constraint violation \u2014 prover cannot produce valid proof"
+          }
+        }
+      },
+      "ORACLE_SIGNATURE_MALLEABILITY": {
+        "REPLAYED_SIGNATURE": {
+          "test_id": "ORACLE_SIG_REPLAY",
+          "description": "Valid signature from O1 replayed with different payload \u2014 must reject",
+          "attack": "Attacker replaces payload bytes but reuses signature from a prior valid oracle call",
+          "expected": {
+            "result": "REJECT_PAYLOAD",
+            "note": "EdDSA non-malleability: signature binds to exact Poseidon(oracle_id, payload_bytes, injected_at_epoch)"
+          }
+        },
+        "WRONG_ORACLE_KEY": {
+          "test_id": "ORACLE_WRONG_KEY",
+          "description": "Payload signed by O2 key presented as O1 payload",
+          "expected": {
+            "result": "REJECT_PAYLOAD",
+            "note": "oracle_key_registry_root inclusion proof will fail \u2014 O2 key not registered for O1 oracle_id"
+          }
+        }
+      },
+      "DIFF_DAYS_DATE_ORDER": {
+        "SWAPPED_DATES_DETERMINISTIC_DENY": {
+          "test_id": "DIFF_DAYS_SWAP",
+          "description": "date_of_service_thru < date_of_service_from \u2014 must produce deterministic DENY, never UNDEFINED",
+          "claim": {
+            "date_of_service_from": 19730,
+            "date_of_service_thru": 19720
+          },
+          "expected": {
+            "result": "DENY",
+            "rad": "SYSTEM_DATE_ERROR",
+            "note": "ASSERT(to >= from) fires before DIFF_DAYS. Never an unprovable hole."
+          },
+          "note": "Matches _meta.date_encoding and G10 else-branch rad: SYSTEM_DATE_ERROR."
+        }
+      },
+      "TTL_BOUNDARY": {
+        "ORACLE_EXACTLY_AT_TTL_BOUNDARY": {
+          "test_id": "TTL_BOUNDARY_PASS",
+          "description": "O1 oracle payload injected exactly 24 hours ago \u2014 must still be valid (LTE not LT)",
+          "claim": {
+            "injected_at_epoch": 1745694000,
+            "current_epoch": 1745780400
+          },
+          "note": "Delta = exactly 86400 seconds = 24 hours. Valid if TTL is LTE 24h.",
+          "expected": {
+            "result": "PASS"
+          }
+        },
+        "ORACLE_ONE_SECOND_STALE": {
+          "test_id": "TTL_BOUNDARY_FAIL",
+          "description": "O1 oracle payload injected 24 hours + 1 second ago \u2014 must be stale",
+          "claim": {
+            "injected_at_epoch": 1745693999,
+            "current_epoch": 1745780400
+          },
+          "note": "Delta = 86401 seconds. Stale.",
+          "expected": {
+            "result": "PENDING_MANUAL_REVIEW",
+            "sla_hours": 4
+          }
+        }
+      }
+    }
+  }
+}
+
