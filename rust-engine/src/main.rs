@@ -43,6 +43,14 @@ struct ClaimInput {
     physician_certification_valid: u8,
 }
 
+#[derive(Debug, Deserialize)]
+struct AppConfig {
+    claims_registry_address: String,
+    private_key: String,
+    rpc_url: String,
+    transaction_value: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ZkCircuitInput {
     eligibility_active: u8,
@@ -216,10 +224,17 @@ fn write_result(result: &AdjudicationResult) {
     .unwrap();
 }
 
+fn read_config() -> AppConfig {
+    let config_json = fs::read_to_string("config.json").expect("could not read config.json");
+    serde_json::from_str(&config_json).expect("invalid config.json")
+}
+
 fn main() {
-    let contract = "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e";
-    let private_key =
-        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    let config = read_config();
+    let contract = config.claims_registry_address.as_str();
+    let private_key = config.private_key.as_str();
+    let rpc_url = config.rpc_url.as_str();
+    let transaction_value = config.transaction_value.as_str();
 
     let claim_json = fs::read_to_string("claim_input.json")
         .expect("could not read claim_input.json");
@@ -279,9 +294,9 @@ fn main() {
 '{c}' \
 '{input}' \
 {} \
---value 0.001ether \
+--value {transaction_value} \
 --private-key {private_key} \
---rpc-url http://127.0.0.1:8545"#,
+--rpc-url {rpc_url}"#,
         claim.claim_amount
     ));
     let tx_hash = extract_transaction_hash(&cast_output)
