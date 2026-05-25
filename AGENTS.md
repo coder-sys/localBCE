@@ -24,11 +24,15 @@ claim_input.json
 
 # Project Structure
 
-localBCE/
+## zk-prover Directory
 
-- blind-ledger/ → Solidity + Foundry
-- zk/ → Circom + snarkjs
-- rust-engine/ → Rust adjudication + ZK orchestration
+zk-prover/ exists as a future dedicated proving service directory.
+
+Current active proof orchestration still happens from:
+
+rust-engine/src/main.rs
+
+Do not move proof orchestration into zk-prover until the current Groth16 flow is stable and explicitly refactored.
 
 ---
 
@@ -123,3 +127,14 @@ Long-term goals include:
 - ZK Bouncer architecture
 
 Do not prematurely migrate the current system to full v9 architecture.
+
+# Autonomous Work Rules
+
+- Prefer small incremental refactors.
+- Never perform large rewrites.
+- Always preserve working Groth16 flow.
+- Do not change zk circuits unless explicitly instructed.
+- Run cargo test and cargo check after Rust changes.
+- Preserve backward compatibility.
+- Create backups before major refactors.
+- Prefer adding over replacing.
