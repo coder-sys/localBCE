@@ -38,13 +38,21 @@ template ClaimValidator() {
     // G7 input
     signal input is_duplicate;
 
+    // G8 input
+    signal input disability_determination_valid;
+
+    // G9 input
+    signal input recipient_not_deceased;
+
+    // G10 input
+    signal input physician_certification_valid;
+
     signal output valid;
 
     // G1
     eligibility_active === 1;
 
     // G2 aid code: 13, 23, 53, 103, 104
-    // D3 = 103, D4 = 104
     component eq13 = IsEqual();
     component eq23 = IsEqual();
     component eq53 = IsEqual();
@@ -100,6 +108,15 @@ template ClaimValidator() {
 
     // G7: Duplicate prevention
     is_duplicate === 0;
+
+    // G8: Disability determination
+    disability_determination_valid === 1;
+
+    // G9: Recipient not deceased
+    recipient_not_deceased === 1;
+
+    // G10: Physician certification
+    physician_certification_valid === 1;
 
     valid <== 1;
 }
