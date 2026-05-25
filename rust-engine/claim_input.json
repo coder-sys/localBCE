@@ -1,5 +1,5 @@
 {
-  "claim_id": "CLAIM-DEMO-002",
+  "claim_id": "CLAIM-DEMO-011",
   "claim_amount": 1000,
 
   "eligibility_active": 1,
@@ -19,5 +19,8 @@
   "billing_code_valid": 1,
   "units_valid": 1,
 
-  "is_duplicate": 0
+  "is_duplicate": 0,
+  "disability_determination_valid": 1,
+"recipient_not_deceased": 1,
+"physician_certification_valid": 1
 }
