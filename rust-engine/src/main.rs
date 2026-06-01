@@ -1,17 +1,49 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::process::Command;
 
 #[derive(Debug, Serialize)]
+enum AdjudicationStatus {
+    #[serde(rename = "APPROVED")]
+    Approved,
+    #[serde(rename = "DENIED")]
+    Denied,
+}
+
+#[derive(Debug, Serialize)]
 struct AdjudicationResult {
     claim_id: String,
     claim_hash: String,
-    status: String,
+    status: AdjudicationStatus,
     reason: Option<String>,
     tx_submitted: bool,
     tx_hash: Option<String>,
+}
+
+impl AdjudicationResult {
+    fn approved(claim_id: String, claim_hash: String, tx_hash: String) -> Self {
+        Self {
+            claim_id,
+            claim_hash,
+            status: AdjudicationStatus::Approved,
+            reason: None,
+            tx_submitted: true,
+            tx_hash: Some(tx_hash),
+        }
+    }
+
+    fn denied(claim_id: String, claim_hash: String, reason: &str) -> Self {
+        Self {
+            claim_id,
+            claim_hash,
+            status: AdjudicationStatus::Denied,
+            reason: Some(reason.to_string()),
+            tx_submitted: false,
+            tx_hash: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +256,19 @@ fn write_result(result: &AdjudicationResult) {
     .unwrap();
 }
 
+fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) {
+    println!(
+        "{}",
+        json!({
+            "event": "proof_generation",
+            "stage": stage,
+            "status": status,
+            "claim_id": claim_id,
+            "claim_hash": claim_hash,
+        })
+    );
+}
+
 fn read_config() -> AppConfig {
     let config_json = fs::read_to_string("config.json").expect("could not read config.json");
     serde_json::from_str(&config_json).expect("invalid config.json")
@@ -245,14 +290,7 @@ fn main() {
     let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
 
     if let Some(reason) = denial_reason(&claim) {
-        let result = AdjudicationResult {
-            claim_id: claim.claim_id.clone(),
-            claim_hash,
-            status: "DENIED".to_string(),
-            reason: Some(reason.to_string()),
-            tx_submitted: false,
-            tx_hash: None,
-        };
+        let result = AdjudicationResult::denied(claim.claim_id.clone(), claim_hash, reason);
 
         write_result(&result);
 
@@ -268,13 +306,29 @@ fn main() {
 
     fs::write("../zk/input.json", zk_input).unwrap();
 
+    log_proof_event(
+        "witness_generation",
+        "started",
+        &claim.claim_id,
+        &claim_hash,
+    );
     run("node ../zk/claim_js/generate_witness.js ../zk/claim_js/claim.wasm ../zk/input.json ../zk/witness.wtns");
+    log_proof_event(
+        "witness_generation",
+        "completed",
+        &claim.claim_id,
+        &claim_hash,
+    );
 
+    log_proof_event("groth16_prove", "started", &claim.claim_id, &claim_hash);
     run("snarkjs groth16 prove ../zk/claim_final.zkey ../zk/witness.wtns ../zk/proof.json ../zk/public.json");
+    log_proof_event("groth16_prove", "completed", &claim.claim_id, &claim_hash);
 
+    log_proof_event("calldata_export", "started", &claim.claim_id, &claim_hash);
     let calldata = run_output("cd ../zk && snarkjs zkey export soliditycalldata public.json proof.json")
         .replace("\"", "")
         .replace(" ", "");
+    log_proof_event("calldata_export", "completed", &claim.claim_id, &claim_hash);
 
     let parts = split_calldata(&calldata);
 
@@ -285,6 +339,7 @@ fn main() {
 
     println!("Proof calldata parsed dynamically.");
 
+    log_proof_event("chain_submission", "started", &claim.claim_id, &claim_hash);
     let cast_output = run_output(&format!(
         r#"cast send {contract} \
 "submitVerifiedClaim(bytes32,uint[2],uint[2][2],uint[2],uint[1],uint256)" \
@@ -301,17 +356,11 @@ fn main() {
     ));
     let tx_hash = extract_transaction_hash(&cast_output)
         .expect("cast send output did not include transactionHash");
+    log_proof_event("chain_submission", "completed", &claim.claim_id, &claim_hash);
 
     println!("Dynamic proof submitted on-chain.");
 
-    let result = AdjudicationResult {
-        claim_id: claim.claim_id.clone(),
-        claim_hash,
-        status: "APPROVED".to_string(),
-        reason: None,
-        tx_submitted: true,
-        tx_hash: Some(tx_hash),
-    };
+    let result = AdjudicationResult::approved(claim.claim_id.clone(), claim_hash, tx_hash);
 
     write_result(&result);
     println!("Wrote adjudication_result.json");
@@ -355,10 +404,94 @@ mod tests {
     }
 
     #[test]
+    fn approved_result_serializes_existing_schema() {
+        let result = AdjudicationResult::approved(
+            "CLAIM-TEST-001".to_string(),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        );
+
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
+        assert_eq!(value["status"], "APPROVED");
+        assert_eq!(value["reason"], Value::Null);
+        assert_eq!(value["tx_submitted"], true);
+        assert_eq!(
+            value["tx_hash"],
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+    }
+
+    #[test]
+    fn denied_result_serializes_existing_schema() {
+        let result = AdjudicationResult::denied(
+            "CLAIM-TEST-002".to_string(),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "G9_RECIPIENT_DECEASED",
+        );
+
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["claim_id"], "CLAIM-TEST-002");
+        assert_eq!(value["status"], "DENIED");
+        assert_eq!(value["reason"], "G9_RECIPIENT_DECEASED");
+        assert_eq!(value["tx_submitted"], false);
+        assert_eq!(value["tx_hash"], Value::Null);
+    }
+
+    #[test]
     fn denial_reason_returns_none_for_valid_claim() {
         let claim = valid_claim();
 
         assert_eq!(denial_reason(&claim), None);
+    }
+
+    #[test]
+    fn denial_reason_returns_identity_verification_failed() {
+        let mut claim = valid_claim();
+        claim.eligibility_active = 0;
+
+        assert_eq!(
+            denial_reason(&claim),
+            Some("G1_IDENTITY_VERIFICATION_FAILED")
+        );
+    }
+
+    #[test]
+    fn denial_reason_returns_program_eligibility_failed() {
+        let mut claim = valid_claim();
+        claim.aid_code = 999;
+
+        assert_eq!(
+            denial_reason(&claim),
+            Some("G2_PROGRAM_ELIGIBILITY_FAILED")
+        );
+    }
+
+    #[test]
+    fn denial_reason_returns_benefit_level_missing() {
+        let mut claim = valid_claim();
+        claim.benefit_level_exists = 0;
+
+        assert_eq!(denial_reason(&claim), Some("G2_BENEFIT_LEVEL_MISSING"));
+    }
+
+    #[test]
+    fn denial_reason_returns_month_of_service_failed() {
+        let mut claim = valid_claim();
+        claim.date_of_service_from = claim.eligibility_period_thru + 1;
+
+        assert_eq!(denial_reason(&claim), Some("G3_MONTH_OF_SERVICE_FAILED"));
+    }
+
+    #[test]
+    fn denial_reason_returns_share_of_cost_failed() {
+        let mut claim = valid_claim();
+        claim.soc_amount = 100;
+        claim.soc_met = 0;
+
+        assert_eq!(denial_reason(&claim), Some("G4_SHARE_OF_COST_FAILED"));
     }
 
     #[test]
@@ -370,6 +503,30 @@ mod tests {
     }
 
     #[test]
+    fn denial_reason_returns_provider_type_invalid() {
+        let mut claim = valid_claim();
+        claim.provider_type_valid = 0;
+
+        assert_eq!(denial_reason(&claim), Some("G5_PROVIDER_TYPE_INVALID"));
+    }
+
+    #[test]
+    fn denial_reason_returns_billing_code_invalid() {
+        let mut claim = valid_claim();
+        claim.billing_code_valid = 0;
+
+        assert_eq!(denial_reason(&claim), Some("G6_BILLING_CODE_INVALID"));
+    }
+
+    #[test]
+    fn denial_reason_returns_units_invalid() {
+        let mut claim = valid_claim();
+        claim.units_valid = 0;
+
+        assert_eq!(denial_reason(&claim), Some("G6_UNITS_INVALID"));
+    }
+
+    #[test]
     fn denial_reason_returns_duplicate_claim() {
         let mut claim = valid_claim();
         claim.is_duplicate = 1;
@@ -378,10 +535,38 @@ mod tests {
     }
 
     #[test]
+    fn denial_reason_returns_disability_determination_failed() {
+        let mut claim = valid_claim();
+        claim.disability_determination_valid = 0;
+
+        assert_eq!(
+            denial_reason(&claim),
+            Some("G8_DISABILITY_DETERMINATION_FAILED")
+        );
+    }
+
+    #[test]
     fn denial_reason_returns_recipient_deceased() {
         let mut claim = valid_claim();
         claim.recipient_not_deceased = 0;
 
         assert_eq!(denial_reason(&claim), Some("G9_RECIPIENT_DECEASED"));
+    }
+
+    #[test]
+    fn denial_reason_returns_physician_certification_failed() {
+        let mut claim = valid_claim();
+        claim.physician_certification_valid = 0;
+
+        assert_eq!(
+            denial_reason(&claim),
+            Some("G10_PHYSICIAN_CERTIFICATION_FAILED")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local Anvil, snarkjs, node, cast, config.json, and a fresh approved claim_id"]
+    fn approved_claim_flow_end_to_end() {
+        main();
     }
 }

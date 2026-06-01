@@ -2,7 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {Script} from "forge-std/Script.sol";
-import {ClaimsRegistry} from "../src/Counter.sol";
+import {ClaimsRegistry} from "../src/ClaimsRegistry.sol";
 import {Groth16Verifier} from "../src/Verifier.sol";
 
 contract DeployClaimsRegistry is Script {
@@ -16,5 +16,13 @@ contract DeployClaimsRegistry is Script {
         registry = new ClaimsRegistry(msg.sender, address(verifier));
 
         vm.stopBroadcast();
+
+        string memory deployment = "deployment";
+        vm.serializeAddress(deployment, "claimsRegistry", address(registry));
+        vm.serializeAddress(deployment, "verifier", address(verifier));
+        vm.serializeAddress(deployment, "treasury", msg.sender);
+        vm.serializeUint(deployment, "chainId", block.chainid);
+        string memory finalJson = vm.serializeUint(deployment, "deployedAtBlock", block.number);
+        vm.writeJson(finalJson, "./deployment.json");
     }
 }
