@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "./Verifier.sol";
+import {Groth16Verifier} from "./Verifier.sol";
 
 contract ClaimsRegistry {
     mapping(bytes32 => bool) public verifiedClaims;
@@ -56,7 +56,12 @@ contract ClaimsRegistry {
             uint256 fee = (claimAmount * performanceFeeBps) / 10_000;
             performanceFeesAccrued += fee;
 
-            claims[claimHash] = ClaimRecord(false, claimAmount, 0, fee);
+            claims[claimHash] = ClaimRecord({
+                verified: false,
+                claimAmount: claimAmount,
+                baseFeePaid: 0,
+                performanceFeeAccrued: fee
+            });
 
             emit ProofRejected(claimHash);
             emit ClaimRecorded(claimHash, false, claimAmount, fee);
@@ -69,7 +74,12 @@ contract ClaimsRegistry {
         successfulClaims++;
         baseFeesCollected += msg.value;
 
-        claims[claimHash] = ClaimRecord(true, claimAmount, msg.value, 0);
+        claims[claimHash] = ClaimRecord({
+            verified: true,
+            claimAmount: claimAmount,
+            baseFeePaid: msg.value,
+            performanceFeeAccrued: 0
+        });
 
         emit ClaimVerified(claimHash);
         emit ClaimRecorded(claimHash, true, claimAmount, msg.value);
