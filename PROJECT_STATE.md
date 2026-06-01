@@ -26,10 +26,14 @@ claim_input.json
 - adjudication_result.json is generated for both approved and denied claims.
 - tx_hash extraction is implemented for approved claims.
 - claim_hash is generated from claim_id + claim_amount.
+- Runtime submission config is loaded from rust-engine/config.json.
+- Active Foundry tests cover ClaimsRegistry behavior.
 
 ## Active ClaimsRegistry
 
 0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e
+
+Configured in rust-engine/config.json.
 
 ## Current Inputs
 
@@ -40,6 +44,10 @@ rust-engine/claim_input.json
 Current Rust engine reads:
 
 claim_input.json
+
+Runtime config reads:
+
+config.json
 
 It does not yet read rules_v9.json directly.
 
@@ -57,7 +65,7 @@ Do not overwrite either file.
 - Approved claims need a fresh claim_id.
 - If claim.circom changes, Verifier.sol must be regenerated.
 - If Verifier.sol changes, contracts must be redeployed.
-- After redeploy, main.rs contract address must be updated.
+- After redeploy, rust-engine/config.json claims_registry_address must be updated.
 
 ## Current Limitation
 

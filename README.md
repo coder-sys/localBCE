@@ -45,6 +45,8 @@ localBCE/
 - G1–G10 rule validation
 - adjudication_result.json generation
 - tx_hash extraction
+- runtime config via config.json
+- structured proof-stage logging
 
 ## ZK Layer
 
@@ -58,6 +60,7 @@ localBCE/
 - Verifier.sol
 - ClaimsRegistry.sol
 - On-chain approved claim recording
+- Active Foundry tests for ClaimsRegistry.sol
 
 ---
 
@@ -117,6 +120,8 @@ Working components:
 - Solidity verification
 - ClaimsRegistry recording
 - structured adjudication outputs
+- Rust unit tests
+- Foundry ClaimsRegistry tests
 
 ---
 
@@ -137,6 +142,12 @@ Current Rust engine still reads:
 claim_input.json
 ```
 
+Runtime submission config is read from:
+
+```text
+config.json
+```
+
 rules_v9.json is not yet active.
 
 ---
@@ -148,6 +159,7 @@ rules_v9.json is not yet active.
 - approved claims require unique claim_id
 - adjudication_result.json must continue working
 - rules.json and rules_v9.json must remain parallel
+- rust-engine/config.json must hold the active ClaimsRegistry address
 
 If claim.circom changes:
 
@@ -155,7 +167,33 @@ If claim.circom changes:
 2. Regenerate zkey
 3. Regenerate Verifier.sol
 4. Redeploy contracts
-5. Update contract address in main.rs
+5. Update claims_registry_address in rust-engine/config.json
+
+---
+
+# Verification
+
+Rust:
+
+```bash
+cd rust-engine
+cargo test
+cargo check
+```
+
+Solidity:
+
+```bash
+cd blind-ledger
+forge test
+forge build
+```
+
+Redeploy workflow:
+
+```text
+REDEPLOY_WORKFLOW.md
+```
 
 ---
 

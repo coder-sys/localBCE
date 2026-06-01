@@ -39,11 +39,14 @@ Do not move proof orchestration into zk-prover until the current Groth16 flow is
 # Important Active Files
 
 - rust-engine/src/main.rs
+- rust-engine/config.json
 - rust-engine/claim_input.json
 - rust-engine/adjudication_result.json
 - rust-engine/rules.json
 - rust-engine/rules_v9.json
 - zk/claim.circom
+- blind-ledger/src/ClaimsRegistry.sol
+- blind-ledger/test/ClaimsRegistry.t.sol
 
 ---
 
@@ -58,6 +61,8 @@ Do not move proof orchestration into zk-prover until the current Groth16 flow is
 - claim_hash generation
 - Groth16 proof generation
 - Solidity verifier integration
+- runtime config loaded from rust-engine/config.json
+- active Foundry tests for ClaimsRegistry
 
 ---
 
@@ -71,6 +76,7 @@ Do not move proof orchestration into zk-prover until the current Groth16 flow is
 - rules.json and rules_v9.json must remain parallel
 - adjudication_result.json must continue working
 - approved claims require unique claim_id
+- active ClaimsRegistry address lives in rust-engine/config.json
 
 ---
 
@@ -82,7 +88,7 @@ If claim.circom changes:
 2. Regenerate zkey/verifier
 3. Regenerate Verifier.sol
 4. Redeploy contracts
-5. Update contract address in main.rs
+5. Update claims_registry_address in rust-engine/config.json
 
 Do not modify circuits casually.
 
@@ -94,7 +100,7 @@ Current active ClaimsRegistry:
 
 0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e
 
-Contract address is currently hardcoded in main.rs.
+Contract address is configured in rust-engine/config.json.
 
 ---
 
@@ -135,6 +141,7 @@ Do not prematurely migrate the current system to full v9 architecture.
 - Always preserve working Groth16 flow.
 - Do not change zk circuits unless explicitly instructed.
 - Run cargo test and cargo check after Rust changes.
+- Run forge test and forge build after Solidity changes.
 - Preserve backward compatibility.
 - Create backups before major refactors.
 - Prefer adding over replacing.
