@@ -126,32 +126,71 @@ impl From<&ClaimInput> for ZkCircuitInput {
     }
 }
 
-fn run(cmd: &str) {
-    let status = Command::new("bash")
-        .arg("-lc")
-        .arg(cmd)
-        .status()
-        .expect("failed to run command");
+fn command_output_excerpt(output: &str) -> String {
+    const MAX_LEN: usize = 500;
 
-    if !status.success() {
-        panic!("command failed: {}", cmd);
+    match output.char_indices().nth(MAX_LEN) {
+        Some((idx, _)) => format!("{}...", &output[..idx]),
+        None => output.to_string(),
     }
 }
 
-fn run_output(cmd: &str) -> String {
+fn command_failure_message(cmd: &str, status: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
+    format!(
+        "command failed: {}\nexit status: {:?}\nSTDOUT:\n{}\nSTDERR:\n{}",
+        cmd,
+        status,
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    )
+}
+
+fn run(cmd: &str) -> Result<(), String> {
     let output = Command::new("bash")
         .arg("-lc")
         .arg(cmd)
         .output()
-        .expect("failed to run command");
+        .map_err(|err| format!("failed to run command '{}': {}", cmd, err))?;
 
-    if !output.status.success() {
-        eprintln!("STDOUT:\n{}", String::from_utf8_lossy(&output.stdout));
-        eprintln!("STDERR:\n{}", String::from_utf8_lossy(&output.stderr));
-        panic!("command failed: {}", cmd);
+    if !output.stdout.is_empty() {
+        print!("{}", String::from_utf8_lossy(&output.stdout));
     }
 
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    if !output.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    if !output.status.success() {
+        return Err(command_failure_message(
+            cmd,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+        ));
+    }
+
+    Ok(())
+}
+
+fn run_output(cmd: &str) -> Result<String, String> {
+    let output = Command::new("bash")
+        .arg("-lc")
+        .arg(cmd)
+        .output()
+        .map_err(|err| format!("failed to run command '{}': {}", cmd, err))?;
+
+    if !output.status.success() {
+        return Err(command_failure_message(
+            cmd,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+        ));
+    }
+
+    String::from_utf8(output.stdout)
+        .map(|stdout| stdout.trim().to_string())
+        .map_err(|err| format!("command output was not valid UTF-8 for '{}': {}", cmd, err))
 }
 
 fn claim_hash_32(claim_id: &str, claim_amount: u64) -> String {
@@ -248,12 +287,15 @@ fn denial_reason(claim: &ClaimInput) -> Option<&'static str> {
     None
 }
 
-fn write_result(result: &AdjudicationResult) {
+fn write_result(result: &AdjudicationResult) -> Result<(), String> {
+    let result_json = serde_json::to_string_pretty(result)
+        .map_err(|err| format!("could not serialize adjudication_result.json: {}", err))?;
+
     fs::write(
         "adjudication_result.json",
-        serde_json::to_string_pretty(result).unwrap(),
+        result_json,
     )
-    .unwrap();
+    .map_err(|err| format!("could not write adjudication_result.json: {}", err))
 }
 
 fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) {
@@ -269,42 +311,52 @@ fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) 
     );
 }
 
-fn read_config() -> AppConfig {
-    let config_json = fs::read_to_string("config.json").expect("could not read config.json");
-    serde_json::from_str(&config_json).expect("invalid config.json")
+fn read_config() -> Result<AppConfig, String> {
+    let config_json = fs::read_to_string("config.json")
+        .map_err(|err| format!("could not read config.json: {}", err))?;
+    serde_json::from_str(&config_json).map_err(|err| format!("invalid config.json: {}", err))
 }
 
 fn main() {
-    let config = read_config();
+    if let Err(err) = run_app() {
+        eprintln!("{}", err);
+        std::process::exit(1);
+    }
+}
+
+fn run_app() -> Result<(), String> {
+    let config = read_config()?;
     let contract = config.claims_registry_address.as_str();
     let private_key = config.private_key.as_str();
     let rpc_url = config.rpc_url.as_str();
     let transaction_value = config.transaction_value.as_str();
 
     let claim_json = fs::read_to_string("claim_input.json")
-        .expect("could not read claim_input.json");
+        .map_err(|err| format!("could not read claim_input.json: {}", err))?;
 
     let claim: ClaimInput = serde_json::from_str(&claim_json)
-        .expect("invalid claim_input.json");
+        .map_err(|err| format!("invalid claim_input.json: {}", err))?;
 
     let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
 
     if let Some(reason) = denial_reason(&claim) {
         let result = AdjudicationResult::denied(claim.claim_id.clone(), claim_hash, reason);
 
-        write_result(&result);
+        write_result(&result)?;
 
         println!("Claim denied before proof generation: {}", reason);
         println!("Wrote adjudication_result.json");
-        return;
+        return Ok(());
     }
 
     println!("Claim ID: {}", claim.claim_id);
     println!("Claim Hash: {}", claim_hash);
 
-    let zk_input = serde_json::to_string_pretty(&ZkCircuitInput::from(&claim)).unwrap();
+    let zk_input = serde_json::to_string_pretty(&ZkCircuitInput::from(&claim))
+        .map_err(|err| format!("could not serialize ../zk/input.json: {}", err))?;
 
-    fs::write("../zk/input.json", zk_input).unwrap();
+    fs::write("../zk/input.json", zk_input)
+        .map_err(|err| format!("could not write ../zk/input.json: {}", err))?;
 
     log_proof_event(
         "witness_generation",
@@ -312,7 +364,7 @@ fn main() {
         &claim.claim_id,
         &claim_hash,
     );
-    run("node ../zk/claim_js/generate_witness.js ../zk/claim_js/claim.wasm ../zk/input.json ../zk/witness.wtns");
+    run("node ../zk/claim_js/generate_witness.js ../zk/claim_js/claim.wasm ../zk/input.json ../zk/witness.wtns")?;
     log_proof_event(
         "witness_generation",
         "completed",
@@ -321,16 +373,24 @@ fn main() {
     );
 
     log_proof_event("groth16_prove", "started", &claim.claim_id, &claim_hash);
-    run("snarkjs groth16 prove ../zk/claim_final.zkey ../zk/witness.wtns ../zk/proof.json ../zk/public.json");
+    run("snarkjs groth16 prove ../zk/claim_final.zkey ../zk/witness.wtns ../zk/proof.json ../zk/public.json")?;
     log_proof_event("groth16_prove", "completed", &claim.claim_id, &claim_hash);
 
     log_proof_event("calldata_export", "started", &claim.claim_id, &claim_hash);
-    let calldata = run_output("cd ../zk && snarkjs zkey export soliditycalldata public.json proof.json")
+    let calldata = run_output("cd ../zk && snarkjs zkey export soliditycalldata public.json proof.json")?
         .replace("\"", "")
         .replace(" ", "");
     log_proof_event("calldata_export", "completed", &claim.claim_id, &claim_hash);
 
     let parts = split_calldata(&calldata);
+
+    if parts.len() != 4 {
+        return Err(format!(
+            "expected 4 calldata parts from snarkjs, got {}: {}",
+            parts.len(),
+            command_output_excerpt(&calldata)
+        ));
+    }
 
     let a = &parts[0];
     let b = &parts[1];
@@ -353,17 +413,23 @@ fn main() {
 --private-key {private_key} \
 --rpc-url {rpc_url}"#,
         claim.claim_amount
-    ));
-    let tx_hash = extract_transaction_hash(&cast_output)
-        .expect("cast send output did not include transactionHash");
+    ))?;
+    let tx_hash = extract_transaction_hash(&cast_output).ok_or_else(|| {
+        format!(
+            "cast send output did not include transactionHash: {}",
+            command_output_excerpt(&cast_output)
+        )
+    })?;
     log_proof_event("chain_submission", "completed", &claim.claim_id, &claim_hash);
 
     println!("Dynamic proof submitted on-chain.");
 
     let result = AdjudicationResult::approved(claim.claim_id.clone(), claim_hash, tx_hash);
 
-    write_result(&result);
+    write_result(&result)?;
     println!("Wrote adjudication_result.json");
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -644,6 +710,6 @@ status                  1";
     #[test]
     #[ignore = "requires local Anvil, snarkjs, node, cast, config.json, and a fresh approved claim_id"]
     fn approved_claim_flow_end_to_end() {
-        main();
+        run_app().unwrap();
     }
 }
