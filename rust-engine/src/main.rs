@@ -441,6 +441,44 @@ mod tests {
     }
 
     #[test]
+    fn extract_transaction_hash_from_plain_cast_output() {
+        let output = "\
+blockHash               0x1111111111111111111111111111111111111111111111111111111111111111
+blockNumber             123
+transactionHash         0x2222222222222222222222222222222222222222222222222222222222222222
+status                  1";
+
+        assert_eq!(
+            extract_transaction_hash(output),
+            Some("0x2222222222222222222222222222222222222222222222222222222222222222".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_transaction_hash_from_json_cast_output() {
+        let output = r#"{
+            "blockHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "transactionHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "status": "0x1"
+        }"#;
+
+        assert_eq!(
+            extract_transaction_hash(output),
+            Some("0x3333333333333333333333333333333333333333333333333333333333333333".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_transaction_hash_returns_none_when_missing() {
+        let output = "\
+blockHash               0x1111111111111111111111111111111111111111111111111111111111111111
+blockNumber             123
+status                  1";
+
+        assert_eq!(extract_transaction_hash(output), None);
+    }
+
+    #[test]
     fn denial_reason_returns_none_for_valid_claim() {
         let claim = valid_claim();
 
