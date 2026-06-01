@@ -1,4 +1,4 @@
-# Blind Ledger — ZK Claims Adjudication Prototype
+# Blind Ledger - ZK Claims Adjudication Prototype
 
 Blind Ledger is a local prototype for privacy-preserving healthcare claims adjudication using:
 
@@ -15,24 +15,27 @@ The system validates claims off-chain, generates zero-knowledge proofs for appro
 # Current Workflow
 
 claim_input.json
-→ Rust adjudication
-→ denial_reason validation
-→ zk/input.json
-→ witness generation
-→ Groth16 proof
-→ Solidity verifier
-→ ClaimsRegistry
-→ adjudication_result.json
+-> Rust adjudication
+-> denial_reason validation
+-> zk/input.json
+-> witness generation
+-> Groth16 proof
+-> Solidity verifier
+-> ClaimsRegistry
+-> adjudication_result.json
 
 ---
 
 # Project Structure
 
+```text
 localBCE/
-├── blind-ledger/     Solidity + Foundry
-├── zk/               Circom + snarkjs artifacts
-├── zk-prover/        future/dedicated proof service
-└── rust-engine/      Rust adjudication engine
+  blind-ledger/   Solidity + Foundry
+  zk/             Circom + snarkjs artifacts
+  zk-prover/      future/dedicated proof service
+  rust-engine/    Rust adjudication engine
+```
+
 ---
 
 # Current Features
@@ -42,11 +45,12 @@ localBCE/
 - Claim parsing
 - Claim hashing
 - Structured denial reasons
-- G1–G10 rule validation
+- G1-G10 rule validation
 - adjudication_result.json generation
 - tx_hash extraction
 - runtime config via config.json
 - structured proof-stage logging
+- Rust unit tests
 
 ## ZK Layer
 
@@ -61,6 +65,31 @@ localBCE/
 - ClaimsRegistry.sol
 - On-chain approved claim recording
 - Active Foundry tests for ClaimsRegistry.sol
+- Deployment JSON smoke test for deployment.json
+
+---
+
+# Active Files
+
+## Rust
+
+- rust-engine/src/main.rs
+- rust-engine/config.json
+- rust-engine/claim_input.json
+- rust-engine/adjudication_result.json
+
+## Solidity and Foundry
+
+- blind-ledger/src/ClaimsRegistry.sol
+- blind-ledger/src/Verifier.sol
+- blind-ledger/script/Counter.s.sol
+- blind-ledger/test/ClaimsRegistry.t.sol
+- blind-ledger/test/DeploymentJson.t.sol
+- blind-ledger/foundry.toml
+
+## ZK
+
+- zk/claim.circom
 
 ---
 
@@ -115,13 +144,14 @@ Prototype is functional end-to-end.
 
 Working components:
 
-- Rust → ZK integration
+- Rust -> ZK integration
 - Groth16 proof generation
 - Solidity verification
 - ClaimsRegistry recording
 - structured adjudication outputs
 - Rust unit tests
 - Foundry ClaimsRegistry tests
+- Foundry deployment.json smoke test
 
 ---
 
@@ -129,12 +159,18 @@ Working components:
 
 0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e
 
+Configured in:
+
+```text
+rust-engine/config.json
+```
+
 ---
 
 # Current Rules Files
 
-- rules.json — current/simple working rules
-- rules_v9.json — future target architecture
+- rules.json - current/simple working rules
+- rules_v9.json - future target architecture
 
 Current Rust engine still reads:
 

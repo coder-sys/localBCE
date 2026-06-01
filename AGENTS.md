@@ -1,4 +1,4 @@
-# AGENTS.md — Blind Ledger Instructions
+# AGENTS.md - Blind Ledger Instructions
 
 ## Project Goal
 
@@ -12,13 +12,13 @@ Maintain a working local prototype for privacy-preserving claims adjudication us
 Current workflow:
 
 claim_input.json
-→ Rust adjudication
-→ zk/input.json
-→ witness generation
-→ Groth16 proof
-→ Solidity verification
-→ ClaimsRegistry submission
-→ adjudication_result.json
+-> Rust adjudication
+-> zk/input.json
+-> witness generation
+-> Groth16 proof
+-> Solidity verification
+-> ClaimsRegistry submission
+-> adjudication_result.json
 
 ---
 
@@ -46,13 +46,17 @@ Do not move proof orchestration into zk-prover until the current Groth16 flow is
 - rust-engine/rules_v9.json
 - zk/claim.circom
 - blind-ledger/src/ClaimsRegistry.sol
+- blind-ledger/src/Verifier.sol
+- blind-ledger/script/Counter.s.sol
 - blind-ledger/test/ClaimsRegistry.t.sol
+- blind-ledger/test/DeploymentJson.t.sol
+- blind-ledger/foundry.toml
 
 ---
 
 # Current Working Features
 
-- G1–G10 denial rules
+- G1-G10 denial rules
 - denial_reason() in Rust
 - Approved claims submit on-chain
 - Denied claims stop before proof generation
@@ -63,6 +67,7 @@ Do not move proof orchestration into zk-prover until the current Groth16 flow is
 - Solidity verifier integration
 - runtime config loaded from rust-engine/config.json
 - active Foundry tests for ClaimsRegistry
+- deployment.json smoke test
 
 ---
 
@@ -101,6 +106,18 @@ Current active ClaimsRegistry:
 0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e
 
 Contract address is configured in rust-engine/config.json.
+
+Deployment metadata is written to:
+
+```text
+blind-ledger/deployment.json
+```
+
+The deployment JSON behavior is covered by:
+
+```text
+blind-ledger/test/DeploymentJson.t.sol
+```
 
 ---
 

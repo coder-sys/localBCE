@@ -1,33 +1,34 @@
-# Project State — Blind Ledger
+# Project State - Blind Ledger
 
 ## Current Working Flow
 
 claim_input.json
-→ Rust adjudication
-→ denial_reason validation
-→ zk/input.json
-→ Circom witness generation
-→ Groth16 proof generation
-→ Solidity verifier
-→ ClaimsRegistry
-→ adjudication_result.json
+-> Rust adjudication
+-> denial_reason validation
+-> zk/input.json
+-> Circom witness generation
+-> Groth16 proof generation
+-> Solidity verifier
+-> ClaimsRegistry
+-> adjudication_result.json
 
 ## Active Project Folders
 
-- blind-ledger/ — Solidity + Foundry
-- zk/ — Circom + snarkjs
-- rust-engine/ — Rust adjudication engine and ZK orchestration
+- blind-ledger/ - Solidity + Foundry
+- zk/ - Circom + snarkjs
+- rust-engine/ - Rust adjudication engine and ZK orchestration
+- zk-prover/ - future dedicated proving service
 
 ## Current Working Status
 
-- G1–G10 prototype gates are working.
+- G1-G10 prototype gates are working.
 - Approved claims generate a proof and submit on-chain.
 - Denied claims stop before proof generation.
 - adjudication_result.json is generated for both approved and denied claims.
 - tx_hash extraction is implemented for approved claims.
 - claim_hash is generated from claim_id + claim_amount.
 - Runtime submission config is loaded from rust-engine/config.json.
-- Active Foundry tests cover ClaimsRegistry behavior.
+- Active Foundry tests cover ClaimsRegistry behavior and deployment.json generation.
 
 ## Active ClaimsRegistry
 
@@ -51,10 +52,17 @@ config.json
 
 It does not yet read rules_v9.json directly.
 
+## Active Test Files
+
+- rust-engine/src/main.rs - Rust unit tests live beside the prototype binary.
+- blind-ledger/test/ClaimsRegistry.t.sol - active ClaimsRegistry behavior tests.
+- blind-ledger/test/DeploymentJson.t.sol - deployment.json smoke test.
+- blind-ledger/foundry.toml - includes the narrow deployment.json filesystem permission needed by the smoke test.
+
 ## Rules Files
 
-- rules.json — current/simple working rules
-- rules_v9.json — future target architecture
+- rules.json - current/simple working rules
+- rules_v9.json - future target architecture
 
 Do not overwrite either file.
 
