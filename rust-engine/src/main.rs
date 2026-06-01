@@ -404,6 +404,45 @@ mod tests {
     }
 
     #[test]
+    fn split_calldata_preserves_nested_arrays() {
+        let calldata = "[1,2],[[3,4],[5,6]],[7,8],[9]";
+
+        assert_eq!(
+            split_calldata(calldata),
+            vec![
+                "[1,2]".to_string(),
+                "[[3,4],[5,6]]".to_string(),
+                "[7,8]".to_string(),
+                "[9]".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn zk_circuit_input_serializes_existing_schema() {
+        let value = serde_json::to_value(ZkCircuitInput::from(&valid_claim())).unwrap();
+
+        assert_eq!(value["eligibility_active"], 1);
+        assert_eq!(value["aid_code"], 53);
+        assert_eq!(value["benefit_level_exists"], 1);
+        assert_eq!(value["date_of_service_from"], 20000);
+        assert_eq!(value["eligibility_period_from"], 19900);
+        assert_eq!(value["eligibility_period_thru"], 21000);
+        assert_eq!(value["soc_amount"], 0);
+        assert_eq!(value["soc_met"], 1);
+        assert_eq!(value["provider_enrolled"], 1);
+        assert_eq!(value["provider_type_valid"], 1);
+        assert_eq!(value["billing_code_valid"], 1);
+        assert_eq!(value["units_valid"], 1);
+        assert_eq!(value["is_duplicate"], 0);
+        assert_eq!(value["disability_determination_valid"], 1);
+        assert_eq!(value["recipient_not_deceased"], 1);
+        assert_eq!(value["physician_certification_valid"], 1);
+
+        assert_eq!(value.as_object().unwrap().len(), 16);
+    }
+
+    #[test]
     fn approved_result_serializes_existing_schema() {
         let result = AdjudicationResult::approved(
             "CLAIM-TEST-001".to_string(),

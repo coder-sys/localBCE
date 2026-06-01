@@ -36,6 +36,11 @@ contract ClaimsRegistryTest is Test {
         registry = new ClaimsRegistry(treasury, address(verifier));
     }
 
+    function test_ConstructorStoresTreasuryAndVerifier() public {
+        assertEq(registry.treasury(), treasury);
+        assertEq(address(registry.verifier()), address(verifier));
+    }
+
     function test_SubmitVerifiedClaimRecordsApprovedClaim() public {
         verifier.setProofValid(true);
         bytes32 claimHash = keccak256("approved-claim");
@@ -102,6 +107,16 @@ contract ClaimsRegistryTest is Test {
         registry.submitVerifiedClaim{value: 0.001 ether}(claimHash, a, b, c, input, 1000);
     }
 
+    function test_SubmitRejectedProofRejectsDuplicateClaimHash() public {
+        verifier.setProofValid(false);
+        bytes32 claimHash = keccak256("duplicate-rejected-proof");
+
+        registry.submitVerifiedClaim(claimHash, a, b, c, input, 1000);
+
+        vm.expectRevert("Claim already recorded");
+        registry.submitVerifiedClaim(claimHash, a, b, c, input, 1000);
+    }
+
     function test_RealizePerformanceFeesRequiresTreasury() public {
         verifier.setProofValid(false);
         registry.submitVerifiedClaim(keccak256("performance-fee"), a, b, c, input, 5000);
@@ -114,6 +129,21 @@ contract ClaimsRegistryTest is Test {
 
         assertEq(registry.performanceFeesAccrued(), 0);
         assertEq(registry.baseFeesCollected(), 1000);
+    }
+
+    function test_RealizePerformanceFeesRejectsAmountAboveAccrued() public {
+        verifier.setProofValid(false);
+        registry.submitVerifiedClaim(keccak256("excess-performance-fee"), a, b, c, input, 5000);
+
+        vm.expectRevert("Exceeds accrued");
+        vm.prank(treasury);
+        registry.realizePerformanceFees(1001);
+    }
+
+    function test_WithdrawFeesRejectsWhenNoFunds() public {
+        vm.expectRevert("No funds");
+        vm.prank(treasury);
+        registry.withdrawFees();
     }
 
     function test_WithdrawFeesRequiresTreasury() public {
