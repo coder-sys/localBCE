@@ -17,10 +17,18 @@ contract DeployClaimsRegistry is Script {
 
         vm.stopBroadcast();
 
+        writeDeploymentJson(address(registry), address(verifier), msg.sender);
+    }
+
+    function writeDeploymentJson(
+        address registryAddress,
+        address verifierAddress,
+        address treasuryAddress
+    ) public {
         string memory deployment = "deployment";
-        vm.serializeAddress(deployment, "claimsRegistry", address(registry));
-        vm.serializeAddress(deployment, "verifier", address(verifier));
-        vm.serializeAddress(deployment, "treasury", msg.sender);
+        vm.serializeAddress(deployment, "claimsRegistry", registryAddress);
+        vm.serializeAddress(deployment, "verifier", verifierAddress);
+        vm.serializeAddress(deployment, "treasury", treasuryAddress);
         vm.serializeUint(deployment, "chainId", block.chainid);
         string memory finalJson = vm.serializeUint(deployment, "deployedAtBlock", block.number);
         vm.writeJson(finalJson, "./deployment.json");
