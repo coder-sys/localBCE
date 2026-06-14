@@ -10,7 +10,7 @@ from .domain import RULE_UNIT_TYPES, SOURCE_TYPES, valid_program, valid_vertical
 
 
 def review_claude_web_candidates(workdir: Path, min_confidence: float = 0.85) -> dict:
-    source_path = workdir / "reports" / "claude_web_research.json"
+    source_path = preferred_candidate_source_path(workdir)
     if not source_path.exists():
         raise FileNotFoundError(f"Claude web research report not found: {source_path}")
     report = json.loads(source_path.read_text(encoding="utf-8"))
@@ -23,6 +23,7 @@ def review_claude_web_candidates(workdir: Path, min_confidence: float = 0.85) ->
     human_review = [item for item in reviewed if item["review_status"] != "promotion_ready"]
     hierarchy = group_reviewed_by_hierarchy(reviewed)
     summary = build_review_summary(reviewed, promotion_ready, human_review, min_confidence)
+    summary["source_report"] = str(source_path)
 
     reports_dir = workdir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,13 @@ def review_claude_web_candidates(workdir: Path, min_confidence: float = 0.85) ->
         "summary": summary,
         "verdict": "CLAUDE_WEB_REVIEW_READY",
     }
+
+
+def preferred_candidate_source_path(workdir: Path) -> Path:
+    corpus_path = workdir / "reports" / "claude_web_candidate_corpus.json"
+    if corpus_path.exists():
+        return corpus_path
+    return workdir / "reports" / "claude_web_research.json"
 
 
 def review_candidate(candidate: dict, min_confidence: float) -> dict:

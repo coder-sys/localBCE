@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -397,6 +398,7 @@ def write_claude_web_research(workdir: Path, options: ClaudeWebResearchOptions) 
     report = build_claude_web_research(options)
     json_path = reports_dir / "claude_web_research.json"
     markdown_path = reports_dir / "claude_web_research.md"
+    corpus_path = reports_dir / "claude_web_candidate_corpus.json"
     if should_preserve_existing_report(report, json_path):
         existing = json.loads(json_path.read_text(encoding="utf-8"))
         preserved_path = reports_dir / "claude_web_research_failed_last_run.json"
@@ -413,12 +415,16 @@ def write_claude_web_research(workdir: Path, options: ClaudeWebResearchOptions) 
         }
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     markdown_path.write_text(write_claude_web_research_markdown(report), encoding="utf-8")
+    corpus = merge_candidate_corpus(corpus_path, report)
     return {
         "claude_web_research": str(json_path),
+        "candidate_corpus": str(corpus_path),
         "markdown": str(markdown_path),
         "mode": report["mode"],
         "provider_used": report["provider_used"],
         "candidate_rule_count": report.get("candidate_rule_count", 0),
+        "corpus_candidate_count": corpus.get("candidate_rule_count", 0),
+        "new_unique_candidates": corpus.get("last_merge", {}).get("new_unique_candidates", 0),
         "verdict": "CLAUDE_WEB_RESEARCH_READY",
     }
 
@@ -436,6 +442,69 @@ def should_preserve_existing_report(report: dict, json_path: Path) -> bool:
     except Exception:
         return False
     return int(existing.get("candidate_rule_count", 0) or 0) > 0
+
+
+def merge_candidate_corpus(corpus_path: Path, latest_report: dict) -> dict:
+    existing = read_json_if_exists(corpus_path, {})
+    existing_candidates = existing.get("candidate_rules", []) if isinstance(existing, dict) else []
+    if not isinstance(existing_candidates, list):
+        existing_candidates = []
+    latest_candidates = latest_report.get("candidate_rules", [])
+    if not isinstance(latest_candidates, list):
+        latest_candidates = []
+
+    merged_by_id: dict[str, dict] = {}
+    for candidate in existing_candidates:
+        if isinstance(candidate, dict):
+            normalized = with_candidate_id(candidate)
+            merged_by_id[normalized["candidate_id"]] = normalized
+    before_count = len(merged_by_id)
+    for candidate in latest_candidates:
+        if isinstance(candidate, dict):
+            normalized = with_candidate_id(candidate)
+            merged_by_id.setdefault(normalized["candidate_id"], normalized)
+    merged = list(merged_by_id.values())
+    payload = {
+        "mode": RESEARCH_MODE,
+        "candidate_rule_count": len(merged),
+        "candidate_rules": merged,
+        "last_merge": {
+            "latest_run_candidates": len(latest_candidates),
+            "existing_candidates": before_count,
+            "new_unique_candidates": len(merged) - before_count,
+            "deduped_candidates": before_count + len(latest_candidates) - len(merged),
+        },
+        "verification_warning": "Corpus candidates are not verified rules; they are Claude web-grounded candidates.",
+    }
+    corpus_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
+def with_candidate_id(candidate: dict) -> dict:
+    item = dict(candidate)
+    item["candidate_id"] = item.get("candidate_id") or candidate_id(item)
+    return item
+
+
+def candidate_id(candidate: dict) -> str:
+    parts = [
+        str(candidate.get("program") or "").strip().lower(),
+        str(candidate.get("rule_unit_type") or "").strip().lower(),
+        str(candidate.get("source_url") or "").strip().lower(),
+        normalize_for_id(str(candidate.get("statement") or "")),
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:24]
+    return f"claude-web:{digest}"
+
+
+def normalize_for_id(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def read_json_if_exists(path: Path, default: object) -> object:
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_claude_web_research_markdown(report: dict) -> str:
