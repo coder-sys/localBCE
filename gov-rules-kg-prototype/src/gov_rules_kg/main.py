@@ -9,6 +9,7 @@ from .agent_discovery import build_agent_discovery_plan, discover_sources_from_p
 from .ai import AIOptions, AIProviderError, validate_ai_provider
 from .bulk_plan import build_bulk_plan
 from .claude_web_research import ClaudeWebResearchOptions, write_claude_web_research
+from .claude_web_review import review_claude_web_candidates
 from .config import make_config
 from .discovery import DiscoveryEngine
 from .env import load_env_file
@@ -55,7 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     claude_web_parser.add_argument("--max-branches", type=int, default=5, help="0 means all taxonomy branches")
     claude_web_parser.add_argument("--max-uses", type=int, default=10, help="Maximum Claude web_search uses")
     claude_web_parser.add_argument("--max-candidates-per-branch", type=int, default=3)
+    claude_web_parser.add_argument("--batch-size", type=int, default=5)
+    claude_web_parser.add_argument("--timeout-seconds", type=float, default=240.0)
+    claude_web_parser.add_argument("--retries", type=int, default=1)
     claude_web_parser.add_argument("--allowed-domains", default="", help="Comma-separated official domains; default uses built-in government domains")
+    claude_review_parser = subparsers.add_parser("claude-web-review", help="Review Claude web candidates and export promotion/human-review/hierarchy reports")
+    claude_review_parser.add_argument("--min-confidence", type=float, default=0.85)
     subparsers.add_parser("validate-citations", help="Validate strict citation index from last run")
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate extraction against a gold set")
     eval_parser.add_argument("--gold-set", type=Path, required=True)
@@ -206,11 +212,23 @@ def main() -> None:
             max_branches=args.max_branches,
             max_uses=args.max_uses,
             max_candidates_per_branch=args.max_candidates_per_branch,
+            batch_size=args.batch_size,
+            timeout_seconds=args.timeout_seconds,
+            retries=args.retries,
             allowed_domains=parse_domains(args.allowed_domains),
         )
         try:
             payload = write_claude_web_research(workdir, options)
         except AIProviderError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-review":
+        try:
+            payload = review_claude_web_candidates(workdir, args.min_confidence)
+        except FileNotFoundError as exc:
             print(str(exc))
             raise SystemExit(2) from exc
         print(json.dumps(payload, indent=2, sort_keys=True))

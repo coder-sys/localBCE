@@ -114,6 +114,7 @@ SOURCE_TYPES = [
 
 RULE_UNIT_TYPES = [
     "eligibility_rule",
+    "enrollment_rule",
     "claim_rule",
     "payment_rule",
     "provider_rule",

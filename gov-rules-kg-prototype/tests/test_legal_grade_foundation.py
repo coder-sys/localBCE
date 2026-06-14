@@ -16,7 +16,8 @@ from gov_rules_kg.ai import (
 )
 from gov_rules_kg.agent_discovery import PROGRAM_OFFICIAL_ENTRYPOINTS, build_deterministic_discovery_plan, build_official_source_pack, clean_search_result_url, extract_discovery_payload_from_content, extract_href_values, normalize_discovery_branches, source_allowed, write_official_source_pack
 from gov_rules_kg.citations import citations_exactly_match, parse_citations
-from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, deterministic_web_research_plan, extract_web_research_payload, write_claude_web_research
+from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, call_claude_web_search_batches, deterministic_web_research_plan, extract_web_research_payload, should_preserve_existing_report, write_claude_web_research
+from gov_rules_kg.claude_web_review import review_claude_web_candidates, review_candidate
 from gov_rules_kg.domain import classify_family_and_type, classify_government_hierarchy, infer_jurisdiction, valid_vertical
 from gov_rules_kg.extract import extract_text
 from gov_rules_kg.hierarchy_plan import PLAN_MODE, build_deterministic_hierarchy_plan, write_ai_hierarchy_plan
@@ -246,6 +247,98 @@ class LegalGradeFoundationTests(unittest.TestCase):
         )
         self.assertEqual(len(payload["candidate_rules"]), 2)
         self.assertIn("salvaged 2 complete", payload["coverage_notes"][0])
+
+    def test_claude_web_research_batch_failures_return_partial_report(self) -> None:
+        options = ClaudeWebResearchOptions(
+            ai_options=AIOptions(provider="claude", claude_model="claude-sonnet-4-6"),
+            batch_size=1,
+        )
+        branches = [
+            {"program": "medicaid", "vertical": "healthcare_benefits"},
+            {"program": "medicare", "vertical": "healthcare_benefits"},
+        ]
+        original = __import__("gov_rules_kg.claude_web_research", fromlist=["call_claude_web_search_batch"])
+
+        def fake_batch(_options, batch, _allowed_domains, batch_index):
+            if batch_index == 2:
+                raise AIProviderError("timeout")
+            return {
+                "candidate_rules": [{"statement": "Rule", "source_url": "https://www.medicaid.gov/"}],
+                "coverage_notes": ["ok"],
+                "raw_usage": {"web_search_requests": 1},
+            }
+
+        previous = original.call_claude_web_search_batch
+        original.call_claude_web_search_batch = fake_batch
+        try:
+            report = call_claude_web_search_batches(options, branches, ["medicaid.gov"], batch_size=1)
+        finally:
+            original.call_claude_web_search_batch = previous
+        self.assertEqual(report["candidate_rule_count"], 1)
+        self.assertEqual(len(report["failed_batches"]), 1)
+        self.assertIn("timeout", report["failed_batches"][0]["error"])
+
+    def test_claude_web_research_preserves_existing_report_after_empty_failed_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "claude_web_research.json"
+            path.write_text(
+                '{"candidate_rule_count": 3, "mode": "claude_server_web_search_no_local_fetch_no_local_parse", "provider_used": "claude_web_search"}',
+                encoding="utf-8",
+            )
+            failed_report = {"candidate_rule_count": 0, "failed_batches": [{"batch_index": 1}]}
+            self.assertTrue(should_preserve_existing_report(failed_report, path))
+
+    def test_claude_web_review_marks_clean_candidate_promotion_ready(self) -> None:
+        reviewed = review_candidate(
+            {
+                "domain": "government_transaction_rules",
+                "vertical": "healthcare_benefits",
+                "program": "medicaid",
+                "jurisdiction_level": "federal",
+                "source_type": "agency_guidance",
+                "rule_unit_type": "eligibility_rule",
+                "statement": "Medicaid financial eligibility for most children and adults is determined using MAGI methodology.",
+                "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy",
+                "citation_text": "MAGI is the basis for determining Medicaid income eligibility for most children, pregnant women, parents, and adults.",
+                "confidence_score": 0.96,
+            },
+            0.85,
+        )
+        self.assertEqual(reviewed["review_status"], "promotion_ready")
+        self.assertEqual(reviewed["review_issues"], [])
+        self.assertEqual(reviewed["promotion_status"], "candidate_only_not_verified")
+
+    def test_claude_web_review_accepts_enrollment_rule_unit_type(self) -> None:
+        reviewed = review_candidate(
+            {
+                "domain": "government_transaction_rules",
+                "vertical": "healthcare_benefits",
+                "program": "medicare",
+                "jurisdiction_level": "federal",
+                "source_type": "agency_guidance",
+                "rule_unit_type": "enrollment_rule",
+                "statement": "Individuals already receiving Social Security benefits may be automatically enrolled in Medicare Part A and Part B.",
+                "source_url": "https://www.cms.gov/medicare/enrollment-renewal/original-part-a-b",
+                "citation_text": "Individuals already receiving Social Security or RRB benefits are automatically enrolled in both premium-free Part A and Part B.",
+                "confidence_score": 0.96,
+            },
+            0.85,
+        )
+        self.assertEqual(reviewed["review_status"], "promotion_ready")
+
+    def test_claude_web_review_writes_review_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            (reports_dir / "claude_web_research.json").write_text(
+                '{"candidate_rules":[{"domain":"government_transaction_rules","vertical":"healthcare_benefits","program":"medicaid","jurisdiction_level":"federal","source_type":"agency_guidance","rule_unit_type":"eligibility_rule","statement":"Medicaid financial eligibility for most children and adults is determined using MAGI methodology.","source_url":"https://www.medicaid.gov/medicaid/eligibility-policy","citation_text":"MAGI is the basis for determining Medicaid income eligibility for most children, pregnant women, parents, and adults.","confidence_score":0.96}]}',
+                encoding="utf-8",
+            )
+            result = review_claude_web_candidates(workdir)
+        self.assertEqual(result["verdict"], "CLAUDE_WEB_REVIEW_READY")
+        self.assertEqual(result["summary"]["promotion_ready_candidates"], 1)
+        self.assertEqual(result["summary"]["human_review_required"], 0)
 
     def test_agent_discovery_plan_covers_multiple_hierarchy_branches(self) -> None:
         plan = build_deterministic_discovery_plan(max_branches=0, queries_per_branch=2)

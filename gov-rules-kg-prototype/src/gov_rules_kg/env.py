@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 def load_env_file(workdir: Path) -> None:
-    env_path = workdir / ".env"
-    if not env_path.exists():
+    env_path = find_env_file(workdir)
+    if env_path is None:
         return
 
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
@@ -19,3 +19,15 @@ def load_env_file(workdir: Path) -> None:
         value = value.strip().strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = value
+
+
+def find_env_file(workdir: Path) -> Path | None:
+    candidates = [
+        workdir / ".env",
+        workdir / "gov-rules-kg-prototype" / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None

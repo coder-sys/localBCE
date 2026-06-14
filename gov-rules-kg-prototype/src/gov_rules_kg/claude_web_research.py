@@ -51,6 +51,9 @@ class ClaudeWebResearchOptions:
     max_branches: int = 5
     max_uses: int = 10
     max_candidates_per_branch: int = 3
+    batch_size: int = 5
+    timeout_seconds: float = 240.0
+    retries: int = 1
     allowed_domains: list[str] | None = None
 
 
@@ -89,6 +92,65 @@ def call_claude_web_search(options: ClaudeWebResearchOptions) -> dict:
 
     branches = taxonomy_branches(options.max_branches)
     allowed_domains = options.allowed_domains or DEFAULT_ALLOWED_DOMAINS
+    batch_size = max(1, options.batch_size)
+    if len(branches) > batch_size:
+        return call_claude_web_search_batches(options, branches, allowed_domains, batch_size)
+
+    return call_claude_web_search_batch(options, branches, allowed_domains, batch_index=1)
+
+
+def call_claude_web_search_batches(
+    options: ClaudeWebResearchOptions,
+    branches: list[dict],
+    allowed_domains: list[str],
+    batch_size: int,
+) -> dict:
+    all_candidates: list[dict] = []
+    coverage_notes: list[str] = []
+    raw_usage: list[dict] = []
+    failed_batches: list[dict] = []
+    batches = [branches[index : index + batch_size] for index in range(0, len(branches), batch_size)]
+    for batch_index, batch in enumerate(batches, start=1):
+        try:
+            result = call_claude_web_search_batch(options, batch, allowed_domains, batch_index=batch_index)
+        except AIProviderError as exc:
+            failed_batches.append(
+                {
+                    "batch_index": batch_index,
+                    "programs": [branch["program"] for branch in batch],
+                    "error": str(exc),
+                }
+            )
+            coverage_notes.append(f"Batch {batch_index} failed: {exc}")
+            continue
+        all_candidates.extend(result.get("candidate_rules", []))
+        coverage_notes.extend(result.get("coverage_notes", []))
+        raw_usage.append(result.get("raw_usage", {}))
+    return {
+        "mode": RESEARCH_MODE,
+        "provider_used": "claude_web_search",
+        "model_used": options.ai_options.claude_model,
+        "branch_count": len(branches),
+        "batch_count": len(batches),
+        "failed_batches": failed_batches,
+        "allowed_domains": allowed_domains,
+        "candidate_rule_count": len(all_candidates),
+        "candidate_rules": all_candidates,
+        "coverage_notes": coverage_notes,
+        "raw_usage_batches": raw_usage,
+        "verification_warning": "These are web-grounded candidates, not verified rules.",
+    }
+
+
+def call_claude_web_search_batch(
+    options: ClaudeWebResearchOptions,
+    branches: list[dict],
+    allowed_domains: list[str],
+    batch_index: int,
+) -> dict:
+    api_key = claude_api_key()
+    if not api_key:
+        raise AIProviderError("Claude web research selected, but no Claude API key is configured.")
     prompt = {
         "task": "Use Claude server-side web search to research official government transaction rules and organize them into a hierarchy.",
         "strict_constraints": [
@@ -103,6 +165,7 @@ def call_claude_web_search(options: ClaudeWebResearchOptions) -> dict:
             "Do not rely on model memory as evidence.",
         ],
         "mode": RESEARCH_MODE,
+        "batch_index": batch_index,
         "branches_to_research": branches,
         "taxonomy": taxonomy_for_prompt(),
         "rule_unit_types": RULE_UNIT_TYPES,
@@ -128,41 +191,51 @@ def call_claude_web_search(options: ClaudeWebResearchOptions) -> dict:
         },
     }
 
-    response = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": options.ai_options.claude_model,
-            "max_tokens": 8192,
-            "temperature": 0,
-            "system": (
-                "You are a government rules research agent. Use only the provided server-side web_search tool "
-                "for current web research. Return strict JSON text after searching. Do not claim verification."
-            ),
-            "tools": [
-                {
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": options.max_uses,
-                    "allowed_domains": allowed_domains,
+    request_payload = {
+        "model": options.ai_options.claude_model,
+        "max_tokens": 8192,
+        "temperature": 0,
+        "system": (
+            "You are a government rules research agent. Use only the provided server-side web_search tool "
+            "for current web research. Return strict JSON text after searching. Do not claim verification."
+        ),
+        "tools": [
+            {
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": options.max_uses,
+                "allowed_domains": allowed_domains,
+            },
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    json.dumps(prompt, ensure_ascii=False)
+                    + "\n\nReturn only compact JSON with keys candidate_rules and coverage_notes. Do not wrap it in markdown fences."
+                ),
+            }
+        ],
+    }
+    response = None
+    last_error: Exception | None = None
+    for _attempt in range(options.retries + 1):
+        try:
+            response = httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
                 },
-            ],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        json.dumps(prompt, ensure_ascii=False)
-                        + "\n\nReturn only compact JSON with keys candidate_rules and coverage_notes. Do not wrap it in markdown fences."
-                    ),
-                }
-            ],
-        },
-        timeout=120,
-    )
+                json=request_payload,
+                timeout=options.timeout_seconds,
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+    if response is None:
+        raise AIProviderError(f"Claude web research timed out or failed: {last_error}")
     if response.status_code >= 400:
         raise AIProviderError(f"Claude web research error {response.status_code}: {response.text[:1000]}")
 
@@ -174,6 +247,7 @@ def call_claude_web_search(options: ClaudeWebResearchOptions) -> dict:
         "provider_used": "claude_web_search",
         "model_used": options.ai_options.claude_model,
         "branch_count": len(branches),
+        "batch_index": batch_index,
         "allowed_domains": allowed_domains,
         "candidate_rule_count": len(candidate_rules),
         "candidate_rules": candidate_rules,
@@ -323,6 +397,20 @@ def write_claude_web_research(workdir: Path, options: ClaudeWebResearchOptions) 
     report = build_claude_web_research(options)
     json_path = reports_dir / "claude_web_research.json"
     markdown_path = reports_dir / "claude_web_research.md"
+    if should_preserve_existing_report(report, json_path):
+        existing = json.loads(json_path.read_text(encoding="utf-8"))
+        preserved_path = reports_dir / "claude_web_research_failed_last_run.json"
+        preserved_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        markdown_path.write_text(write_claude_web_research_markdown(existing), encoding="utf-8")
+        return {
+            "claude_web_research": str(json_path),
+            "failed_last_run": str(preserved_path),
+            "markdown": str(markdown_path),
+            "mode": existing["mode"],
+            "provider_used": existing["provider_used"],
+            "candidate_rule_count": existing.get("candidate_rule_count", 0),
+            "verdict": "CLAUDE_WEB_RESEARCH_PRESERVED_EXISTING_AFTER_EMPTY_FAILED_RUN",
+        }
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     markdown_path.write_text(write_claude_web_research_markdown(report), encoding="utf-8")
     return {
@@ -335,6 +423,21 @@ def write_claude_web_research(workdir: Path, options: ClaudeWebResearchOptions) 
     }
 
 
+def should_preserve_existing_report(report: dict, json_path: Path) -> bool:
+    if not json_path.exists():
+        return False
+    if int(report.get("candidate_rule_count", 0) or 0) > 0:
+        return False
+    failed_batches = report.get("failed_batches", [])
+    if not failed_batches:
+        return False
+    try:
+        existing = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return int(existing.get("candidate_rule_count", 0) or 0) > 0
+
+
 def write_claude_web_research_markdown(report: dict) -> str:
     lines = [
         "# Claude Web Research",
@@ -342,6 +445,8 @@ def write_claude_web_research_markdown(report: dict) -> str:
         f"- mode: {report.get('mode')}",
         f"- provider_used: {report.get('provider_used')}",
         f"- candidate_rule_count: {report.get('candidate_rule_count', len(report.get('candidate_rules', [])))}",
+        f"- batch_count: {report.get('batch_count', 1)}",
+        f"- failed_batches: {len(report.get('failed_batches', []))}",
         "",
         "These are Claude web-search grounded candidates, not verified rules.",
         "The local app did not fetch URLs, parse HTML, crawl links, or use bs4 for this command.",
@@ -365,4 +470,9 @@ def write_claude_web_research_markdown(report: dict) -> str:
         lines.extend(["", "## Coverage Notes", ""])
         for note in notes:
             lines.append(f"- {note}")
+    failed_batches = report.get("failed_batches", [])
+    if failed_batches:
+        lines.extend(["", "## Failed Batches", ""])
+        for batch in failed_batches:
+            lines.append(f"- batch {batch.get('batch_index')}: {', '.join(batch.get('programs', []))} -- {batch.get('error')}")
     return "\n".join(lines)
