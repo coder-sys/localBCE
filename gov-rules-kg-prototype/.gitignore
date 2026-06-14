@@ -1,0 +1,15 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+
+data/cache/*
+data/*.sqlite
+data/*.sqlite-*
+
+reports/*.json
+reports/*.md
+!reports/.gitkeep
+!data/.gitkeep
+!data/cache/.gitkeep
