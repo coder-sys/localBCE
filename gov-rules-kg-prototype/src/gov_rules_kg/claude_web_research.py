@@ -50,6 +50,7 @@ DEFAULT_ALLOWED_DOMAINS = [
 class ClaudeWebResearchOptions:
     ai_options: AIOptions
     max_branches: int = 5
+    programs: list[str] | None = None
     max_uses: int = 10
     max_candidates_per_branch: int = 3
     batch_size: int = 5
@@ -71,7 +72,7 @@ def build_claude_web_research(options: ClaudeWebResearchOptions) -> dict:
 
 
 def deterministic_web_research_plan(options: ClaudeWebResearchOptions) -> dict:
-    branches = taxonomy_branches(options.max_branches)
+    branches = taxonomy_branches(options.max_branches, options.programs)
     return {
         "mode": RESEARCH_MODE,
         "provider_used": "local_stub",
@@ -91,7 +92,7 @@ def call_claude_web_search(options: ClaudeWebResearchOptions) -> dict:
     if not api_key:
         raise AIProviderError("Claude web research selected, but no Claude API key is configured.")
 
-    branches = taxonomy_branches(options.max_branches)
+    branches = taxonomy_branches(options.max_branches, options.programs)
     allowed_domains = options.allowed_domains or DEFAULT_ALLOWED_DOMAINS
     batch_size = max(1, options.batch_size)
     if len(branches) > batch_size:
@@ -375,10 +376,13 @@ def normalize_candidate_rules(raw_rules: Any) -> list[dict]:
     return normalized
 
 
-def taxonomy_branches(max_branches: int) -> list[dict]:
+def taxonomy_branches(max_branches: int, programs: list[str] | None = None) -> list[dict]:
+    requested = set(programs or [])
     branches: list[dict] = []
     for vertical, programs in GOVERNMENT_RULE_TAXONOMY["government_transaction_rules"].items():
         for program in programs:
+            if requested and program not in requested:
+                continue
             branches.append(
                 {
                     "domain": "government_transaction_rules",

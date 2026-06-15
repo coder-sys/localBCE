@@ -8,10 +8,13 @@ from .access import dependency_report, phase0_access_check
 from .agent_discovery import build_agent_discovery_plan, discover_sources_from_plan, discovered_sources_to_config_sources, write_agent_discovery_reports, write_official_source_pack
 from .ai import AIOptions, AIProviderError, validate_ai_provider
 from .bulk_plan import build_bulk_plan
+from .claude_web_coverage import write_claude_web_coverage
+from .claude_web_executable import write_claude_web_executable_candidates, write_claude_web_proof_report
 from .claude_web_research import ClaudeWebResearchOptions, write_claude_web_research
 from .claude_web_review import review_claude_web_candidates
 from .config import make_config
 from .discovery import DiscoveryEngine
+from .domain import valid_program
 from .env import load_env_file
 from .evaluation import evaluate_gold_set
 from .hierarchy_plan import write_ai_hierarchy_plan
@@ -60,8 +63,15 @@ def build_parser() -> argparse.ArgumentParser:
     claude_web_parser.add_argument("--timeout-seconds", type=float, default=240.0)
     claude_web_parser.add_argument("--retries", type=int, default=1)
     claude_web_parser.add_argument("--allowed-domains", default="", help="Comma-separated official domains; default uses built-in government domains")
+    claude_web_parser.add_argument("--programs", default="", help="Comma-separated taxonomy programs to research; overrides --max-branches when set")
     claude_review_parser = subparsers.add_parser("claude-web-review", help="Review Claude web candidates and export promotion/human-review/hierarchy reports")
     claude_review_parser.add_argument("--min-confidence", type=float, default=0.85)
+    claude_coverage_parser = subparsers.add_parser("claude-web-coverage", help="Report 51-program Claude web candidate coverage and next recommended batches")
+    claude_coverage_parser.add_argument("--batch-size", type=int, default=5)
+    claude_coverage_parser.add_argument("--min-confidence", type=float, default=0.85)
+    subparsers.add_parser("claude-web-export-executable", help="Export Claude web promotion-ready candidates into deterministic executable candidate schema")
+    claude_web_proof_parser = subparsers.add_parser("claude-web-proof-report", help="Generate a Claude-web-only proof report from executable candidates")
+    claude_web_proof_parser.add_argument("--confidence-threshold", type=float, default=0.85)
     subparsers.add_parser("validate-citations", help="Validate strict citation index from last run")
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate extraction against a gold set")
     eval_parser.add_argument("--gold-set", type=Path, required=True)
@@ -210,6 +220,7 @@ def main() -> None:
                 fail_on_ai_fallback=parse_bool(args.fail_on_ai_fallback),
             ),
             max_branches=args.max_branches,
+            programs=parse_programs(args.programs),
             max_uses=args.max_uses,
             max_candidates_per_branch=args.max_candidates_per_branch,
             batch_size=args.batch_size,
@@ -228,6 +239,29 @@ def main() -> None:
     if args.command == "claude-web-review":
         try:
             payload = review_claude_web_candidates(workdir, args.min_confidence)
+        except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-coverage":
+        payload = write_claude_web_coverage(workdir, args.batch_size, args.min_confidence)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-export-executable":
+        try:
+            payload = write_claude_web_executable_candidates(workdir)
+        except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-proof-report":
+        try:
+            payload = write_claude_web_proof_report(workdir, args.confidence_threshold)
         except FileNotFoundError as exc:
             print(str(exc))
             raise SystemExit(2) from exc
@@ -456,6 +490,22 @@ def parse_states(value: str) -> list[str]:
 def parse_domains(value: str) -> list[str] | None:
     domains = [part.strip().lower() for part in value.split(",") if part.strip()]
     return domains or None
+
+
+def parse_programs(value: str) -> list[str] | None:
+    programs: list[str] = []
+    invalid: list[str] = []
+    for part in value.split(","):
+        if not part.strip():
+            continue
+        program = valid_program(part)
+        if program:
+            programs.append(program)
+        else:
+            invalid.append(part.strip())
+    if invalid:
+        raise argparse.ArgumentTypeError(f"unknown taxonomy program(s): {', '.join(invalid)}")
+    return programs or None
 
 
 def read_json_if_exists(path: Path, default: object) -> object:

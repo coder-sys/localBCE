@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -16,7 +17,10 @@ from gov_rules_kg.ai import (
 )
 from gov_rules_kg.agent_discovery import PROGRAM_OFFICIAL_ENTRYPOINTS, build_deterministic_discovery_plan, build_official_source_pack, clean_search_result_url, extract_discovery_payload_from_content, extract_href_values, normalize_discovery_branches, source_allowed, write_official_source_pack
 from gov_rules_kg.citations import citations_exactly_match, parse_citations
+from gov_rules_kg.claude_web_coverage import write_claude_web_coverage
+from gov_rules_kg.claude_web_executable import classify_executable_rule_type, normalize_executable_candidate, write_claude_web_executable_candidates, write_claude_web_proof_report
 from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, call_claude_web_search_batches, candidate_id, deterministic_web_research_plan, extract_web_research_payload, merge_candidate_corpus, should_preserve_existing_report, write_claude_web_research
+from gov_rules_kg.claude_web_research import taxonomy_branches
 from gov_rules_kg.claude_web_review import preferred_candidate_source_path, review_claude_web_candidates, review_candidate
 from gov_rules_kg.domain import classify_family_and_type, classify_government_hierarchy, infer_jurisdiction, valid_vertical
 from gov_rules_kg.extract import extract_text
@@ -190,6 +194,11 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertEqual(report["allowed_domains"], ["cms.gov"])
         self.assertEqual(report["candidate_rules"], [])
         self.assertIn("No local fetching", report["claim"])
+
+    def test_claude_web_research_can_target_specific_programs(self) -> None:
+        branches = taxonomy_branches(max_branches=0, programs=["snap", "wic"])
+        self.assertEqual([branch["program"] for branch in branches], ["snap", "wic"])
+        self.assertEqual([branch["vertical"] for branch in branches], ["food_nutrition_benefits", "food_nutrition_benefits"])
 
     def test_claude_web_research_writes_planning_report_without_local_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -381,6 +390,80 @@ class LegalGradeFoundationTests(unittest.TestCase):
             self.assertTrue(str(preferred_candidate_source_path(workdir)).endswith("claude_web_candidate_corpus.json"))
             result = review_claude_web_candidates(workdir)
         self.assertEqual(result["summary"]["total_candidates"], 1)
+
+    def test_claude_web_coverage_reports_missing_program_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            (reports_dir / "claude_web_candidate_corpus.json").write_text(
+                '{"candidate_rules":[{"domain":"government_transaction_rules","vertical":"healthcare_benefits","program":"medicaid","jurisdiction_level":"federal","source_type":"agency_guidance","rule_unit_type":"eligibility_rule","statement":"Medicaid financial eligibility for most children and adults is determined using MAGI methodology.","source_url":"https://www.medicaid.gov/medicaid/eligibility-policy","citation_text":"MAGI is the basis for determining Medicaid income eligibility for most children, pregnant women, parents, and adults.","confidence_score":0.96}]}',
+                encoding="utf-8",
+            )
+            result = write_claude_web_coverage(workdir, batch_size=5)
+            coverage = Path(result["claude_web_coverage"]).read_text(encoding="utf-8")
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(result["summary"]["taxonomy_programs_total"], 51)
+        self.assertEqual(result["summary"]["programs_with_candidates"], 1)
+        self.assertEqual(result["summary"]["programs_with_promotion_ready"], 1)
+        self.assertEqual(result["summary"]["missing_programs"], 50)
+        self.assertIn('"medicaid": 1', coverage)
+        self.assertIn("--programs", markdown)
+
+    def test_claude_web_executable_export_normalizes_promotion_ready_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            (reports_dir / "claude_web_promotion_ready.json").write_text(
+                '[{"candidate_id":"claude-web:test","domain":"government_transaction_rules","vertical":"healthcare_benefits","program":"medicaid","jurisdiction_level":"federal","source_type":"agency_guidance","rule_unit_type":"eligibility_rule","statement":"Medicaid financial eligibility for most children and adults is determined using MAGI methodology.","source_url":"https://www.medicaid.gov/medicaid/eligibility-policy","citation_text":"MAGI is the basis for determining Medicaid income eligibility for most children, pregnant women, parents, and adults.","confidence_score":0.96}]',
+                encoding="utf-8",
+            )
+            result = write_claude_web_executable_candidates(workdir)
+            exported = Path(result["executable_rule_candidates"]).read_text(encoding="utf-8")
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(result["input_candidates"], 1)
+        self.assertEqual(result["exported_candidates"], 1)
+        self.assertEqual(result["programs_covered"], 1)
+        self.assertIn('"executable_status": "needs_deterministic_mapping"', exported)
+        self.assertIn('"validation_status": "promotion_ready_not_legal_verified"', exported)
+        self.assertIn("Medicaid financial eligibility", exported)
+        self.assertIn("not legally verified", markdown)
+
+    def test_claude_web_executable_rule_type_classification(self) -> None:
+        self.assertEqual(classify_executable_rule_type({"rule_unit_type": "claim_rule", "statement": "A claim must be submitted."}), "administration_rule")
+        self.assertEqual(classify_executable_rule_type({"statement": "The agency must investigate fraud and abuse."}), "fraud_abuse_rule")
+        self.assertEqual(classify_executable_rule_type({"statement": "The applicant may appeal the denial."}), "appeal_rule")
+
+    def test_claude_web_proof_report_counts_exported_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            candidate = normalize_executable_candidate(
+                {
+                    "candidate_id": "claude-web:test",
+                    "vertical": "healthcare_benefits",
+                    "program": "medicaid",
+                    "jurisdiction_level": "federal",
+                    "source_type": "agency_guidance",
+                    "rule_unit_type": "eligibility_rule",
+                    "statement": "Medicaid financial eligibility for most children and adults is determined using MAGI methodology.",
+                    "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy",
+                    "citation_text": "MAGI is the basis for determining Medicaid income eligibility for most children, pregnant women, parents, and adults.",
+                    "confidence_score": 0.96,
+                }
+            )
+            (reports_dir / "claude_web_executable_rule_candidates.json").write_text(f"[{json.dumps(candidate)}]", encoding="utf-8")
+            result = write_claude_web_proof_report(workdir)
+            report = Path(result["programmatic_proof_report"]).read_text(encoding="utf-8")
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(result["summary"]["total_claude_web_candidates"], 1)
+        self.assertEqual(result["summary"]["executable_candidates_exported"], 1)
+        self.assertEqual(result["summary"]["citation_coverage_rate"], 1.0)
+        self.assertEqual(result["summary"]["source_url_coverage_rate"], 1.0)
+        self.assertIn('"missing_programs": 50', report)
+        self.assertIn("promotion-ready candidates", markdown)
 
     def test_agent_discovery_plan_covers_multiple_hierarchy_branches(self) -> None:
         plan = build_deterministic_discovery_plan(max_branches=0, queries_per_branch=2)
