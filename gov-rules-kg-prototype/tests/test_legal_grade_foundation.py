@@ -539,6 +539,10 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertIn("deadline", infer_inputs_required(text))
         self.assertIn("application_status", infer_inputs_required(text))
         self.assertIn("disability_status", infer_inputs_required(text))
+        self.assertEqual(extract_threshold("There is a five-month waiting period.")["value"], "5")
+        self.assertEqual(extract_threshold("Open enrollment runs from November 1 to January 15.")["kind"], "date_range")
+        self.assertEqual(extract_exception_text("People residing in the US (except Puerto Rico) are automatically enrolled."), "except Puerto Rico")
+        self.assertEqual(extract_exception_text("Veterans separated under any condition other than dishonorable may qualify."), "other than dishonorable")
 
     def test_claude_web_mapping_maps_executable_candidate(self) -> None:
         candidate = normalize_executable_candidate(

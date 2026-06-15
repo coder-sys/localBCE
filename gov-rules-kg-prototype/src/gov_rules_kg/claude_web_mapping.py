@@ -16,10 +16,28 @@ INPUT_KEYWORDS = {
     "citizenship_or_immigration_status": ["citizen", "national", "lawfully present", "qualified non-citizen", "immigration"],
     "disability_status": ["disability", "disabled", "blindness", "blind"],
     "application_status": ["application", "apply", "enroll", "enrollment"],
-    "documentation": ["documentation", "record", "form", "submit"],
-    "deadline": ["within", "days", "months", "deadline", "period"],
-    "payment": ["payment", "premium", "reimburse", "reimbursement", "refund", "credit"],
-    "provider_status": ["provider", "vendor", "license", "contractor"],
+    "documentation": ["documentation", "document", "record", "form", "submit", "evidence"],
+    "deadline": ["within", "days", "months", "years", "deadline", "period", "waiting period", "no later than"],
+    "payment": ["payment", "premium", "reimburse", "reimbursement", "refund", "credit", "benefit", "paid", "cost", "fee"],
+    "provider_status": ["provider", "vendor", "license", "contractor", "professional", "business"],
+    "coverage_status": ["coverage", "covered", "insurance", "benefits", "health care"],
+    "household_status": ["household", "family", "families", "child", "children", "pregnant"],
+    "compliance_status": ["compliance", "audit", "penalty", "fraud", "abuse", "violation"],
+}
+
+NUMBER_WORDS = {
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
 }
 
 
@@ -97,11 +115,19 @@ def map_deterministic_candidate(candidate: dict) -> dict:
 def infer_operator(text: str, candidate: dict) -> str:
     lowered = text.lower()
     rule_type = str(candidate.get("rule_type") or "")
+    if rule_type == "appeal_rule":
+        return "appeal_right"
+    if rule_type == "reporting_rule":
+        return "reporting"
+    if rule_type == "payment_rule" and any(term in lowered for term in ["payment", "premium", "paid", "benefit", "reimburse", "refund", "credit"]):
+        return "payment"
+    if rule_type == "eligibility_rule" and any(term in lowered for term in ["eligibility", "eligible", "qualify", "qualifies", "is determined", "are determined"]):
+        return "determine_eligibility"
     if any(term in lowered for term in ["prohibited", "may not", "must not", "ineligible", "deny", "denied"]):
         return "prohibit_or_deny"
     if any(term in lowered for term in ["must", "shall", "required", "requires"]):
         return "require"
-    if any(term in lowered for term in ["eligible", "qualify", "qualifies"]):
+    if any(term in lowered for term in ["eligible", "eligibility", "qualify", "qualifies", "is determined", "are determined", "is based on", "are based on"]):
         return "determine_eligibility"
     if any(term in lowered for term in ["within", "no later than", "before", "after"]) or rule_type == "deadline_rule":
         return "deadline"
@@ -111,6 +137,12 @@ def infer_operator(text: str, candidate: dict) -> str:
         return "reporting"
     if any(term in lowered for term in ["appeal", "hearing"]):
         return "appeal_right"
+    if any(term in lowered for term in ["can begin", "may begin", "begins", "starts"]):
+        return "deadline"
+    if any(term in lowered for term in ["imposes", "limit", "limits", "does not affect", "doesn't affect"]):
+        return "prohibit_or_deny"
+    if any(term in lowered for term in ["are assigned", "is assigned", "provides", "covers", "includes"]):
+        return "require"
     return "unknown"
 
 
@@ -119,13 +151,24 @@ def extract_threshold(text: str) -> dict | None:
         (r"(\d+(?:\.\d+)?)\s*%(\s*(?:of)?\s*(?:the)?\s*(?:federal poverty level|fpl))?", "percent"),
         (r"\$(\d+(?:,\d{3})*(?:\.\d+)?)", "currency"),
         (r"\b(\d+)\s+(days|months|years)\b", "duration"),
+        (r"\b(" + "|".join(NUMBER_WORDS) + r")[-\s]+(day|days|month|months|year|years)\b", "word_duration"),
+        (r"\b([A-Z][a-z]+\s+\d{1,2})\s+to\s+([A-Z][a-z]+\s+\d{1,2})\b", "date_range"),
         (r"\bage\s+(\d+)\b|\b(\d+)\s+or\s+older\b", "age"),
     ]
     lowered = text.lower()
     for pattern, kind in patterns:
-        match = re.search(pattern, lowered)
+        flags = 0 if kind == "date_range" else re.IGNORECASE
+        match = re.search(pattern, text if kind == "date_range" else lowered, flags=flags)
         if not match:
             continue
+        if kind == "word_duration":
+            value = NUMBER_WORDS[match.group(1).lower()]
+            unit = match.group(2).lower()
+            if not unit.endswith("s"):
+                unit = f"{unit}s"
+            return {"kind": "duration", "value": value, "unit": unit, "text": match.group(0)}
+        if kind == "date_range":
+            return {"kind": "date_range", "value": f"{match.group(1)} to {match.group(2)}", "unit": "date_range", "text": match.group(0)}
         value = next(group for group in match.groups() if group and re.match(r"^\d", group.replace(",", "")))
         unit = kind
         if kind == "duration" and len(match.groups()) >= 2:
@@ -148,10 +191,27 @@ def extract_effective_date(text: str) -> str | None:
 
 
 def extract_exception_text(text: str) -> str | None:
+    paren = re.search(r"\((except|except for|other than)\s+([^)]+)\)", text, flags=re.IGNORECASE)
+    if paren:
+        return f"{paren.group(1)} {paren.group(2)}".strip().rstrip(".")
     match = re.search(r"\b(unless|except|except for|other than)\b(.+)$", text, flags=re.IGNORECASE)
     if not match:
         return None
-    return match.group(0).strip().rstrip(".")
+    clause = match.group(0).strip().rstrip(".")
+    stops = [
+        " may qualify ",
+        " are automatically ",
+        " is automatically ",
+        " must ",
+        " shall ",
+        " will ",
+    ]
+    lowered = f" {clause.lower()} "
+    for stop in stops:
+        index = lowered.find(stop)
+        if index > 0:
+            return clause[: index - 1].strip(" ;,.")
+    return clause
 
 
 def infer_inputs_required(text: str) -> list[str]:
