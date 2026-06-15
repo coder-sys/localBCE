@@ -18,6 +18,8 @@ claim_input.json
 - zk/ - Circom + snarkjs
 - rust-engine/ - Rust adjudication engine and ZK orchestration
 - zk-prover/ - future dedicated proving service
+- blind-ledger-app-layer/ - imported standalone app/audit layer from cofounder handoff
+- gov-rules-kg-prototype/ - Claude web-grounded rules knowledge graph prototype
 
 ## Current Working Status
 
@@ -58,6 +60,18 @@ It does not yet read rules_v9.json directly.
 - blind-ledger/test/ClaimsRegistry.t.sol - active ClaimsRegistry behavior tests.
 - blind-ledger/test/DeploymentJson.t.sol - deployment.json smoke test.
 - blind-ledger/foundry.toml - includes the narrow deployment.json filesystem permission needed by the smoke test.
+
+## Imported Standalone App/Audit Layer
+
+- blind-ledger-app-layer/app/ - Python claim ingestion, orchestration, 835 generation, dashboard state, and batch helpers.
+- blind-ledger-app-layer/contracts/ - standalone Solidity contracts/tests from the cofounder handoff.
+- blind-ledger-app-layer/tests/ - standalone Python tests for the imported app layer.
+- blind-ledger-app-layer/rules-engine-rust/ - standalone Rust rules-engine crate from the handoff.
+- blind-ledger-app-layer/zk-production-binding/ - standalone production-binding Circom lane and local smoke inputs/reports.
+- blind-ledger-app-layer/zk-stark/, blind-ledger-app-layer/zk-sp1/, blind-ledger-app-layer/zk-cairo-sharp/ - research/audit lanes.
+
+This layer is intentionally kept separate from the current active
+rust-engine/zk/blind-ledger flow until a future explicit integration step.
 
 ## Rules Files
 

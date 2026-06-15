@@ -1,0 +1,31 @@
+{
+  "label": "soundness-checked, PROTOTYPE, PENDING CRYPTO AUDIT",
+  "phase": "Phase 2 recursion / aggregation prototype",
+  "status": "WALLED_CLEAN_AT_TOOLING",
+  "largest_n_genuinely_aggregated": 0,
+  "method_attempted": "local snarkjs/circom recursion capability check",
+  "evidence": {
+    "snarkjs_version": "0.7.6",
+    "snarkjs_commands_observed": [
+      "powersoftau",
+      "r1cs",
+      "wtns",
+      "zkey",
+      "groth16 setup/prove/verify",
+      "plonk setup/prove/verify",
+      "fflonk setup/prove/verify",
+      "solidity verifier export"
+    ],
+    "missing_capability": "No snarkjs command for proof folding, proof aggregation, or recursive proof composition was present in the local CLI help.",
+    "circomlib_search": "Local circomlib circuits include poseidon, bitify, comparators, eddsa, smt, sha256, and related primitives, but no Groth16 verifier, pairing verifier, Miller loop, final exponentiation, or recursive aggregation circuit template.",
+    "repo_search": "Repository search found Solidity Groth16 verifier code and stubs, not a circuit-level verifier suitable for recursive aggregation."
+  },
+  "why_no_fake_aggregate": "An aggregate proof must genuinely attest all N sub-proofs. Hashing N proof files together or verifying one representative proof would not be recursive proof composition and would be fake security.",
+  "what_would_be_required": [
+    "A circuit-level verifier for the chosen proof system, or a zkVM/STARK recursion stack with supported proof aggregation.",
+    "A setup large enough for the recursive verifier circuit if using Groth16-in-Groth16.",
+    "Tests where one invalid sub-proof makes the aggregate fail, a swapped sub-proof fails, and claimed N cannot differ from the actual sub-proof count.",
+    "External cryptographic audit before production use."
+  ],
+  "conclusion": "Aggregation path is cloud/audit-track in this local environment. Phase 1 multi-claim circuit is the more production-suitable local path today."
+}

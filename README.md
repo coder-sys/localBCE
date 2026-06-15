@@ -31,9 +31,13 @@ claim_input.json
 ```text
 localBCE/
   blind-ledger/   Solidity + Foundry
+  blind-ledger-app-layer/
+                  imported standalone app/audit layer
   zk/             Circom + snarkjs artifacts
   zk-prover/      future/dedicated proof service
   rust-engine/    Rust adjudication engine
+  gov-rules-kg-prototype/
+                  Claude web-grounded rules KG prototype
 ```
 
 ---
@@ -90,6 +94,21 @@ localBCE/
 ## ZK
 
 - zk/claim.circom
+
+## Imported App and Audit Layer
+
+- blind-ledger-app-layer/README.md
+- blind-ledger-app-layer/COFOUNDER_HANDOFF_README.md
+- blind-ledger-app-layer/app/
+- blind-ledger-app-layer/contracts/
+- blind-ledger-app-layer/tests/
+- blind-ledger-app-layer/zk-production-binding/
+- blind-ledger-app-layer/zk-stark/
+- blind-ledger-app-layer/zk-sp1/
+
+Note: blind-ledger-app-layer is imported as a standalone cofounder handoff and
+audit/research lane. It is not wired into the active Rust -> Groth16 ->
+ClaimsRegistry workflow yet.
 
 ---
 

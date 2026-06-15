@@ -1,0 +1,18 @@
+﻿{
+    "status":  "v2-groth16-smoke-proof-generated-and-verified-pending-crypto-audit",
+    "caveat":  "This smoke proof is Groth16 over the Circom production-binding v2 circuit. It is not post-quantum and the local setup is not a production ceremony.",
+    "elapsed_seconds":  500.288,
+    "approved_proof":  {
+                           "verify_exit_code":  0,
+                           "verify_output":  "\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: OK!",
+                           "proof_size_bytes":  803,
+                           "proof_sha256":  "6683E491E0428B7544BEB8CE3C28BC181C9B3EFE86D8EE1A42B35F56F4442C18",
+                           "public_sha256":  "968C5D26DC6CE22814DE3469AE490177DC4F8B56138B99C6DE710CD31677EF90"
+                       },
+    "tampered_public_decision":  {
+                                     "expected":  "reject",
+                                     "verify_exit_code":  1,
+                                     "verify_output":  "\u001b[31;22m[ERROR] \u001b[39;1msnarkJS\u001b[0m: Invalid proof",
+                                     "rejected":  true
+                                 }
+}

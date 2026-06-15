@@ -8,6 +8,7 @@ Maintain a working local prototype for privacy-preserving claims adjudication us
 - Circom + Groth16 proofs
 - Solidity verifier
 - ClaimsRegistry smart contract
+- Imported standalone app/audit layer from the cofounder handoff
 
 Current workflow:
 
@@ -34,6 +35,21 @@ rust-engine/src/main.rs
 
 Do not move proof orchestration into zk-prover until the current Groth16 flow is stable and explicitly refactored.
 
+## blind-ledger-app-layer Directory
+
+blind-ledger-app-layer/ is an imported standalone app/audit/research lane from the cofounder handoff.
+
+It contains:
+
+- Python app-layer orchestration and tests
+- standalone Solidity contracts/tests
+- standalone Rust rules-engine crate
+- production-binding Circom research lane
+- STARK/SP1/Cairo research notes and source
+
+Do not silently wire this layer into the active rust-engine/zk/blind-ledger workflow.
+Treat it as a separate review and integration candidate unless explicitly asked to merge behavior.
+
 ---
 
 # Important Active Files
@@ -51,6 +67,13 @@ Do not move proof orchestration into zk-prover until the current Groth16 flow is
 - blind-ledger/test/ClaimsRegistry.t.sol
 - blind-ledger/test/DeploymentJson.t.sol
 - blind-ledger/foundry.toml
+- blind-ledger-app-layer/README.md
+- blind-ledger-app-layer/COFOUNDER_HANDOFF_README.md
+- blind-ledger-app-layer/app/
+- blind-ledger-app-layer/contracts/
+- blind-ledger-app-layer/tests/
+- blind-ledger-app-layer/rules-engine-rust/
+- blind-ledger-app-layer/zk-production-binding/
 
 ---
 

@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "name": "blind-ledger-zk",
+  "version": "0.1.0",
+  "description": "Local dev ZK circuit tooling for Blind Ledger app-layer proofs.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "snarkjs": "0.7.6"
+  },
+  "overrides": {
+    "bfj": "9.1.3",
+    "underscore": "1.13.8",
+    "ws": "8.21.0"
+  }
+}

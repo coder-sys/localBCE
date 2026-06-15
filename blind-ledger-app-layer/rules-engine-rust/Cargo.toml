@@ -1,0 +1,17 @@
+[package]
+name = "blind-ledger-rules-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "blind_ledger_rules_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rules-engine"
+path = "src/main.rs"
+

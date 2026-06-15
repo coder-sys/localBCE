@@ -1,0 +1,74 @@
+﻿{
+    "circuit":  "zk-production-binding/circuits/production_binding_v1.circom",
+    "status":  "compiled-circuit-membership-binding-checks-pending-crypto-audit",
+    "tooling":  {
+                    "circom":  "circom compiler 2.2.3",
+                    "node":  "v24.14.0",
+                    "snarkjs":  "0.7.6"
+                },
+    "r1cs_info":  "\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: Curve: bn-128\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Wires: 53214\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Constraints: 53199\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Private Inputs: 125\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Public Inputs: 17\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Labels: 82342\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Outputs: 0",
+    "cases":  [
+                  {
+                      "case":  "approved",
+                      "expected":  "pass",
+                      "actual":  "pass",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "ineligible_denied",
+                      "expected":  "pass",
+                      "actual":  "pass",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "fabricated_oracle_facts",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "fake_fee_ceiling",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "recipient_redirect",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "prior_auth_bypass",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "duplicate_replay_forged_nonmembership",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "overwide_amount",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  }
+              ],
+    "closed_v0_findings":  [
+                               "oracle facts require Merkle inclusion under oracleFactsRoot",
+                               "fee allowed amount and priorAuthRequired require Merkle inclusion under feeScheduleRoot",
+                               "recipientField requires Merkle inclusion under addressBookRoot",
+                               "nullifier is derived from claim facts and inserted through a sparse empty-slot transition",
+                               "payment amount equals governed allowed amount on approval",
+                               "amount/date values have 32-bit range constraints"
+                           ],
+    "caveats":  [
+                    "This is still Circom/Groth16-oriented, not end-to-end post-quantum.",
+                    "The verifier/contract must pin oracleFactsRoot, feeScheduleRoot, addressBookRoot, rulesetRoot, and nullifierRootBefore to governed on-chain state.",
+                    "The nullifier transition is an auditable sparse-slot/indexed construction, but still pending external cryptographic audit.",
+                    "The circuit prevents duplicate approval by making replayed nullifier proofs invalid; it does not separately produce a duplicate-denial proof in this v1 lane."
+                ]
+}

@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local demo/runtime output
+demo_output/
+demo_output_rust/
+demo_output_rarc/
+app/batch/nullifier_runtime/
+
+# Local proof/build output
+target/
+node_modules/
+zk-stark/outputs/
+l2/deployments/
+

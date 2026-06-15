@@ -1,0 +1,18 @@
+{
+  "memberId": "123456789",
+  "providerNpi": "1999999987",
+  "eligibilityActive": "1",
+  "providerEnrolled": "1",
+  "serviceLineCount": "1",
+  "diagnosisCount": "1",
+  "priorAuthOk": "1",
+  "chargeCents": "12500",
+  "maxChargeCents": "500000",
+  "duplicateFlag": "0",
+  "programIntegrityHold": "0",
+  "claimNonce": "42",
+  "decision": "1",
+  "failureCode": "0",
+  "claimCommitment": "2018862763959807303020355561231145852204354695766848109320544363300874529786",
+  "nullifier": "12323340925438738127420192643565448825530862059055456170353074110991211222301"
+}

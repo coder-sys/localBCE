@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Blind Ledger Claims Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 32px; color: #222; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 12px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; background: #fafafa; }
+    .value { font-size: 28px; font-weight: 700; }
+    table { border-collapse: collapse; width: 100%; margin-top: 24px; }
+    th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Blind Ledger Claims Dashboard</h1>
+  <div class="grid">
+    <div class="card"><div>Processed</div><div id="processed" class="value">0</div></div>
+    <div class="card"><div>Approved</div><div id="approved" class="value">0</div></div>
+    <div class="card"><div>Denied</div><div id="denied" class="value">0</div></div>
+    <div class="card"><div>Appeals</div><div id="appeals" class="value">0</div></div>
+  </div>
+  <h2>Denial Reasons</h2>
+  <pre id="reasons"></pre>
+  <h2>Appeal Queue</h2>
+  <table><thead><tr><th>Claim</th><th>Track</th><th>Reason</th></tr></thead><tbody id="queue"></tbody></table>
+  <script>
+    fetch('../demo_output/dashboard_state.json').then(r => r.json()).then(s => {
+      processed.textContent = s.claims_processed;
+      approved.textContent = s.approved;
+      denied.textContent = s.denied;
+      appeals.textContent = s.appeal_queue.length;
+      reasons.textContent = JSON.stringify(s.denial_reasons, null, 2);
+      queue.innerHTML = s.appeal_queue.map(r => `<tr><td>${r.claim_id}</td><td>${r.track}</td><td>${r.denial_reason}</td></tr>`).join('');
+    });
+  </script>
+</body>
+</html>

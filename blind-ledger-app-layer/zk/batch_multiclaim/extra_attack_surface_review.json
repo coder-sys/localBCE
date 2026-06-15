@@ -1,0 +1,46 @@
+{
+  "label": "soundness-checked, PROTOTYPE, PENDING CRYPTO AUDIT",
+  "scope": "Fresh attack-surface review beyond the explicit Phase 4 list and prior app-layer attacks.",
+  "findings": [
+    {
+      "id": "X1",
+      "name": "pepper-rotation duplicate bypass window",
+      "result": "SUCCEEDED_AGAINST_DERIVATION_ASSUMPTION",
+      "evidence": "Executed same BL-CLAIM-0001 derivation with BL_DUPLICATE_CHECK_PEPPER=pepper_epoch_A and pepper_epoch_B. The duplicate_check_key and duplicate_nullifier differed; keys_equal=false and nullifiers_equal=false.",
+      "why_it_matters": "If production rotates the duplicate pepper without checking historical pepper epochs or migrating the nullifier set, the same claim can derive a fresh nullifier and bypass duplicate prevention.",
+      "real_now_fixable": "Yes: add pepper epoch/version to ruleset governance, keep historical epochs live for duplicate checks, and require migration/audit before retiring an epoch."
+    },
+    {
+      "id": "X2",
+      "name": "proof-to-claim-root binding gap",
+      "result": "SUCCEEDED_AS_DESIGN_GAP_IF_WIRED_NAIVELY",
+      "evidence": "The new multi-claim circuit public values are rootBefore, rootAfter, batchNullifierCommitment. Current BatchClaimsRegistry batchInputs are claimRoot, resultRoot, nullifierRootBefore, nullifierRootAfter, paymentRoot, rulesetRoot, verifierKeyId. No current contract field binds batchNullifierCommitment to claim/result/payment roots.",
+      "why_it_matters": "A valid nullifier transition proof alone does not prove that the claimRoot/resultRoot/paymentRoot correspond to those exact nullifiers. A production adapter must bind the nullifier commitment into the claim/result leaf construction or into on-chain public inputs.",
+      "real_now_fixable": "Yes: add batchNullifierCommitment to BatchSubmission and batchInputs, and make claim/result leaves include the exact duplicate nullifier committed by the circuit."
+    },
+    {
+      "id": "X3",
+      "name": "verifier-key mismatch",
+      "result": "BLOCKED",
+      "evidence": "Executed snarkjs verify with N4 proof under N8 verification key and N8 proof under N4 verification key. Both returned Invalid proof.",
+      "why_it_matters": "This blocks a direct wrong-circuit proof replay. The contract still needs strict verifierKeyId-to-vkey governance for the eventual on-chain adapter.",
+      "real_now_fixable": "Already blocked at proof-system level; still needs adapter governance tests when wired."
+    },
+    {
+      "id": "X4",
+      "name": "public-input trailing data ambiguity",
+      "result": "DESIGN_RISK",
+      "evidence": "BatchClaimsRegistry._batchInputsMatch currently checks batchInputs.length >= 7, not == 7. Extra trailing public inputs are ignored by registry matching.",
+      "why_it_matters": "Once a real verifier adapter is added, loose length checks can create ambiguity between what the registry stores and what the verifier actually verifies.",
+      "real_now_fixable": "Yes: require exact public input length per verifierKeyId and reject trailing data."
+    },
+    {
+      "id": "X5",
+      "name": "trusted setup file scale and provenance",
+      "result": "NEEDS_AUDIT_TRACK",
+      "evidence": "N4 used pot19_final.ptau; N8 used pot20_final.ptau. These were locally generated prototype ceremony files, not production MPC/beacon artifacts.",
+      "why_it_matters": "Groth16 soundness depends on setup toxic-waste disposal. Prototype setup is not acceptable for production.",
+      "real_now_fixable": "Careful track: replace with audited ceremony/beacon or move to a transparent proof system."
+    }
+  ]
+}

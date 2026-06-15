@@ -1,0 +1,219 @@
+{
+  "label": "soundness-checked, PROTOTYPE, PENDING CRYPTO AUDIT",
+  "construction": "multi-claim indexed Merkle non-membership with sequential root transition root_0 -> root_N",
+  "tooling": {
+    "node": {
+      "code": 0,
+      "output": [
+        "v24.16.0"
+      ]
+    },
+    "circom": {
+      "code": 0,
+      "output": [
+        "circom compiler 2.2.3"
+      ]
+    },
+    "snarkjs": {
+      "code": 99,
+      "output": [
+        "snarkjs@0.7.6",
+        "        Copyright (C) 2018  0kims association",
+        "        This program comes with ABSOLUTELY NO WARRANTY;",
+        "        This is free software, and you are welcome to redistribute it",
+        "        under certain conditions; see the COPYING file in the official"
+      ]
+    },
+    "circomspect_help": {
+      "code": 0,
+      "output": [
+        "circomspect ",
+        "A static analyzer and linter for Circom programs",
+        "",
+        "USAGE:",
+        "    circomspect.exe [OPTIONS] [INPUT]..."
+      ]
+    }
+  },
+  "scaling": [
+    {
+      "n": 4,
+      "wrapper": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\generated\\batch_nullifier_nonmembership_N4.circom",
+      "constraints": 293812,
+      "ptau": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\keys\\pot19_final.ptau",
+      "compile_ms": 9975,
+      "circomspect_ms": 127,
+      "setup_ms": 0,
+      "contribute_ms": 0,
+      "zkey_verify_ms": 59804,
+      "circomspect_log": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\logs\\N4_circomspect.log",
+      "proof_size_bytes": 805,
+      "witness_ms": 553,
+      "prove_ms": 11689,
+      "verify_ms": 678,
+      "proof_result": "ACCEPTED"
+    },
+    {
+      "n": 8,
+      "wrapper": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\generated\\batch_nullifier_nonmembership_N8.circom",
+      "constraints": 587624,
+      "ptau": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\keys\\pot20_final.ptau",
+      "compile_ms": 19441,
+      "circomspect_ms": 141,
+      "setup_ms": 0,
+      "contribute_ms": 0,
+      "zkey_verify_ms": 117074,
+      "circomspect_log": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\logs\\N8_circomspect.log",
+      "proof_size_bytes": 806,
+      "witness_ms": 937,
+      "prove_ms": 21286,
+      "verify_ms": 665,
+      "proof_result": "ACCEPTED"
+    }
+  ],
+  "phase1_tests": [
+    {
+      "n": 8,
+      "case": "all_distinct_accepts",
+      "expected": "ACCEPT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_all_distinct_accepts.json",
+      "witness_ms": 914,
+      "wtns_check_ms": 9101,
+      "prove_ms": 20394,
+      "result": "ACCEPTED",
+      "stage": "verify",
+      "verify_ms": 646,
+      "proof": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\proofs\\N8_all_distinct_accepts.proof.json",
+      "public": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\proofs\\N8_all_distinct_accepts.public.json",
+      "proof_size_bytes": 806,
+      "public_values": [
+        "7742276995776983336961222336437830584343243065030568212494641362927004753708",
+        "2954613052822239571045096858747316780682209892166022564513633719649655382197",
+        "20736220133162014186711736633297712957228305227661649458875990934405121167373"
+      ],
+      "evidence": "\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: OK!\n"
+    },
+    {
+      "n": 8,
+      "case": "one_duplicate_existing_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_one_duplicate_existing_rejects.json",
+      "witness_ms": 117,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 123\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "in_batch_repeat_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_in_batch_repeat_rejects.json",
+      "witness_ms": 664,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 123\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "tampered_sub_witness_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_tampered_sub_witness_rejects.json",
+      "witness_ms": 255,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 138\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    }
+  ],
+  "attacks": [
+    {
+      "n": 8,
+      "case": "reordered_nullifiers_with_old_witnesses_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_reordered_nullifiers_with_old_witnesses_rejects.json",
+      "witness_ms": 224,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 161\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "zero_padding_slot_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_zero_padding_slot_rejects.json",
+      "witness_ms": 676,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 116\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "field_modulus_wraparound_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_field_modulus_wraparound_rejects.json",
+      "witness_ms": 632,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 116\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "cross_batch_gap_root_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_cross_batch_gap_root_rejects.json",
+      "witness_ms": 185,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 138\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "cross_batch_overlap_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_cross_batch_overlap_rejects.json",
+      "witness_ms": 113,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template InsertNonMemberStep_152 line: 123\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 8,
+      "case": "witness_malleability_insert_index_rejects",
+      "expected": "REJECT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N8_witness_malleability_insert_index_rejects.json",
+      "witness_ms": 224,
+      "result": "REJECTED",
+      "stage": "witness",
+      "evidence": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166\n                    throw new Error(err);\n                          ^\n\nError: Error: Assert Failed.\nError in template MerklePathToRoot_151 line: 82\nError in template InsertNonMemberStep_152 line: 159\nError in template BatchNullifierNonMembership_153 line: 218\n\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:166:27\n    at Array.forEach (<anonymous>)\n    at WitnessCalculator._doCalculateWitness (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:141:14)\n    at WitnessCalculator.calculateWTNSBin (C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\witness_calculator.js:216:20)\n    at C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\build\\N8\\batch_nullifier_nonmembership_N8_js\\generate_witness.js:16:38\n\nNode.js v24.16.0\n"
+    },
+    {
+      "n": 1,
+      "case": "boundary_N1_accepts",
+      "expected": "ACCEPT",
+      "input": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\inputs\\N1_boundary_N1_accepts.json",
+      "witness_ms": 265,
+      "wtns_check_ms": 1607,
+      "prove_ms": 3691,
+      "result": "ACCEPTED",
+      "stage": "verify",
+      "verify_ms": 641,
+      "proof": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\proofs\\N1_boundary_N1_accepts.proof.json",
+      "public": "C:\\Users\\neers\\Documents\\Codex\\blind-ledger-app-layer\\zk\\batch_multiclaim\\proofs\\N1_boundary_N1_accepts.public.json",
+      "proof_size_bytes": 804,
+      "public_values": [
+        "7742276995776983336961222336437830584343243065030568212494641362927004753708",
+        "7478191517279005979304405566472835396307319188394708265606632488222325133465",
+        "5322981773949698469355582495675904818170873108578315857739298786926763318371"
+      ],
+      "evidence": "\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: OK!\n"
+    },
+    {
+      "case": "boundary_N0_rejected_before_circuit",
+      "result": "REJECTED",
+      "stage": "input_builder",
+      "evidence": "N=0 is rejected: empty nullifier batches are not a valid circuit instance"
+    }
+  ],
+  "walls": [],
+  "largest_n": 8,
+  "boundary_n1_constraints": 73453
+}

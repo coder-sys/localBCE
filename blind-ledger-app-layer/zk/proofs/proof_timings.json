@@ -1,0 +1,20 @@
+﻿[
+    {
+        "case":  "approved",
+        "prove_ms":  1074.89,
+        "verify_ms":  810.75,
+        "verified":  true
+    },
+    {
+        "case":  "duplicateDenied",
+        "prove_ms":  1075.1,
+        "verify_ms":  778.58,
+        "verified":  true
+    },
+    {
+        "case":  "ineligibleDenied",
+        "prove_ms":  992.55,
+        "verify_ms":  854.32,
+        "verified":  true
+    }
+]

@@ -1,0 +1,49 @@
+﻿{
+    "circuit":  "zk-production-binding/circuits/production_binding_v0.circom",
+    "status":  "compiled-circuit-local-witness-checks-pending-crypto-audit",
+    "tooling":  {
+                    "circom":  "circom compiler 2.2.3",
+                    "node":  "v24.14.0",
+                    "snarkjs":  "0.7.6"
+                },
+    "r1cs_info":  "\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: Curve: bn-128\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Wires: 7704\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Constraints: 7696\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Private Inputs: 20\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Public Inputs: 16\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Labels: 12387\n\u001b[32;22m[INFO]  \u001b[39;1msnarkJS\u001b[0m: # of Outputs: 0",
+    "cases":  [
+                  {
+                      "case":  "approved",
+                      "expected":  "pass",
+                      "actual":  "pass",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "duplicate_denied",
+                      "expected":  "pass",
+                      "actual":  "pass",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "tampered_oracle_root",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "fee_too_low_forced_approved",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  },
+                  {
+                      "case":  "recipient_swap",
+                      "expected":  "fail",
+                      "actual":  "fail",
+                      "matched":  true
+                  }
+              ],
+    "caveats":  [
+                    "This is a Circom production-binding circuit, not a native STARK/Cairo circuit.",
+                    "It binds the raw-claim digest, oracle facts root, fee root, result, payment, nullifier transition, ruleset root, and combined commitment.",
+                    "It does not parse raw 837 text in-circuit.",
+                    "It does not verify Ed25519 oracle signatures in-circuit; signed-oracle governance remains outside this circuit in the app harness.",
+                    "Ceiling label: soundness-checked by compile/witness tests, PENDING CRYPTOGRAPHIC AUDIT."
+                ]
+}
