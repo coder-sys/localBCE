@@ -8,6 +8,7 @@ from .access import dependency_report, phase0_access_check
 from .agent_discovery import build_agent_discovery_plan, discover_sources_from_plan, discovered_sources_to_config_sources, write_agent_discovery_reports, write_official_source_pack
 from .ai import AIOptions, AIProviderError, validate_ai_provider
 from .bulk_plan import build_bulk_plan
+from .claude_web_audit import write_claude_web_audit
 from .claude_web_coverage import write_claude_web_coverage
 from .claude_web_executable import write_claude_web_executable_candidates, write_claude_web_proof_report
 from .claude_web_research import ClaudeWebResearchOptions, write_claude_web_research
@@ -72,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claude-web-export-executable", help="Export Claude web promotion-ready candidates into deterministic executable candidate schema")
     claude_web_proof_parser = subparsers.add_parser("claude-web-proof-report", help="Generate a Claude-web-only proof report from executable candidates")
     claude_web_proof_parser.add_argument("--confidence-threshold", type=float, default=0.85)
+    subparsers.add_parser("claude-web-audit", help="Run deterministic quality gates over Claude web executable candidates")
     subparsers.add_parser("validate-citations", help="Validate strict citation index from last run")
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate extraction against a gold set")
     eval_parser.add_argument("--gold-set", type=Path, required=True)
@@ -262,6 +264,15 @@ def main() -> None:
     if args.command == "claude-web-proof-report":
         try:
             payload = write_claude_web_proof_report(workdir, args.confidence_threshold)
+        except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-audit":
+        try:
+            payload = write_claude_web_audit(workdir)
         except FileNotFoundError as exc:
             print(str(exc))
             raise SystemExit(2) from exc

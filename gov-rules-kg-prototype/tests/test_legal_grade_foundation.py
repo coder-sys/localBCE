@@ -17,6 +17,7 @@ from gov_rules_kg.ai import (
 )
 from gov_rules_kg.agent_discovery import PROGRAM_OFFICIAL_ENTRYPOINTS, build_deterministic_discovery_plan, build_official_source_pack, clean_search_result_url, extract_discovery_payload_from_content, extract_href_values, normalize_discovery_branches, source_allowed, write_official_source_pack
 from gov_rules_kg.citations import citations_exactly_match, parse_citations
+from gov_rules_kg.claude_web_audit import build_claude_web_audit, write_claude_web_audit
 from gov_rules_kg.claude_web_coverage import write_claude_web_coverage
 from gov_rules_kg.claude_web_executable import classify_executable_rule_type, normalize_executable_candidate, write_claude_web_executable_candidates, write_claude_web_proof_report
 from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, call_claude_web_search_batches, candidate_id, deterministic_web_research_plan, extract_web_research_payload, merge_candidate_corpus, should_preserve_existing_report, write_claude_web_research
@@ -464,6 +465,69 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertEqual(result["summary"]["source_url_coverage_rate"], 1.0)
         self.assertIn('"missing_programs": 50', report)
         self.assertIn("promotion-ready candidates", markdown)
+
+    def test_claude_web_audit_flags_mapping_and_source_risks(self) -> None:
+        strong = normalize_executable_candidate(
+            {
+                "candidate_id": "claude-web:strong",
+                "vertical": "healthcare_benefits",
+                "program": "medicaid",
+                "jurisdiction_level": "federal",
+                "source_type": "agency_guidance",
+                "rule_unit_type": "eligibility_rule",
+                "statement": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy",
+                "citation_text": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                "confidence_score": 0.96,
+            }
+        )
+        weak = normalize_executable_candidate(
+            {
+                "candidate_id": "claude-web:weak",
+                "vertical": "healthcare_benefits",
+                "program": "medicaid",
+                "jurisdiction_level": "federal",
+                "source_type": "agency_guidance",
+                "rule_unit_type": "eligibility_rule",
+                "statement": "Medicaid eligibility generally varies by state and may depend on income and household factors.",
+                "source_url": "https://www.example.com/not-official",
+                "citation_text": "Too short.",
+                "confidence_score": 0.96,
+            }
+        )
+        report = build_claude_web_audit([strong, weak, {**strong, "executable_rule_id": "exec:dupe"}])
+        self.assertEqual(report["summary"]["input_candidates"], 3)
+        self.assertGreater(report["summary"]["audit_attention_candidates"], 0)
+        self.assertIn("citation_text_weak_or_missing", report["summary"]["by_issue"])
+        self.assertIn("source_url_not_official_allowed", report["summary"]["by_issue"])
+        self.assertIn("needs_deterministic_condition_outcome_split", report["summary"]["by_warning"])
+        self.assertIn("exact_duplicate_statement", report["summary"]["by_warning"])
+
+    def test_claude_web_audit_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            candidate = normalize_executable_candidate(
+                {
+                    "candidate_id": "claude-web:test",
+                    "vertical": "healthcare_benefits",
+                    "program": "medicaid",
+                    "jurisdiction_level": "federal",
+                    "source_type": "agency_guidance",
+                    "rule_unit_type": "eligibility_rule",
+                    "statement": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                    "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy",
+                    "citation_text": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                    "confidence_score": 0.96,
+                }
+            )
+            (reports_dir / "claude_web_executable_rule_candidates.json").write_text(f"[{json.dumps(candidate)}]", encoding="utf-8")
+            result = write_claude_web_audit(workdir)
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(result["verdict"], "CLAUDE_WEB_AUDIT_READY")
+        self.assertEqual(result["input_candidates"], 1)
+        self.assertIn("needs_deterministic_condition_outcome_split", markdown)
 
     def test_agent_discovery_plan_covers_multiple_hierarchy_branches(self) -> None:
         plan = build_deterministic_discovery_plan(max_branches=0, queries_per_branch=2)
