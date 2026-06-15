@@ -25,6 +25,7 @@ from gov_rules_kg.claude_web_mapping_qa import build_mapping_qa, malformed_excep
 from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, call_claude_web_search_batches, candidate_id, deterministic_web_research_plan, extract_web_research_payload, merge_candidate_corpus, should_preserve_existing_report, write_claude_web_research
 from gov_rules_kg.claude_web_research import taxonomy_branches
 from gov_rules_kg.claude_web_review import preferred_candidate_source_path, review_claude_web_candidates, review_candidate
+from gov_rules_kg.claude_web_scale_plan import build_claude_web_scale_plan, write_claude_web_scale_plan
 from gov_rules_kg.domain import classify_family_and_type, classify_government_hierarchy, infer_jurisdiction, valid_vertical
 from gov_rules_kg.extract import extract_text
 from gov_rules_kg.hierarchy_plan import PLAN_MODE, build_deterministic_hierarchy_plan, write_ai_hierarchy_plan
@@ -202,6 +203,17 @@ class LegalGradeFoundationTests(unittest.TestCase):
         branches = taxonomy_branches(max_branches=0, programs=["snap", "wic"])
         self.assertEqual([branch["program"] for branch in branches], ["snap", "wic"])
         self.assertEqual([branch["vertical"] for branch in branches], ["food_nutrition_benefits", "food_nutrition_benefits"])
+
+    def test_claude_web_research_branches_can_target_jurisdiction_and_source_type(self) -> None:
+        branches = taxonomy_branches(
+            max_branches=0,
+            programs=["medicaid"],
+            jurisdictions=["federal", "state_ca"],
+            source_types=["regulation", "manual"],
+        )
+        self.assertEqual(len(branches), 4)
+        self.assertEqual({branch["jurisdiction_level"] for branch in branches}, {"federal", "state_ca"})
+        self.assertEqual({branch["source_type"] for branch in branches}, {"regulation", "manual"})
 
     def test_claude_web_research_writes_planning_report_without_local_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -638,6 +650,40 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "CLAUDE_WEB_MAPPING_QA_READY")
         self.assertEqual(result["input_candidates"], 1)
         self.assertIn("deadline_operator_without_threshold", markdown)
+
+    def test_claude_web_scale_plan_builds_structured_batches(self) -> None:
+        plan = build_claude_web_scale_plan(
+            target_candidates_per_branch=25,
+            batch_size=4,
+            jurisdictions=["federal"],
+            source_types=["regulation", "manual"],
+            max_batches=2,
+        )
+        self.assertEqual(plan["summary"]["taxonomy_programs"], 51)
+        self.assertEqual(plan["summary"]["planned_batches"], 2)
+        self.assertEqual(plan["summary"]["planned_branches"], 8)
+        self.assertEqual(plan["summary"]["planned_candidate_slots"], 200)
+        self.assertIn("--source-types", plan["batches"][0]["command"])
+        self.assertIn("--jurisdictions", plan["batches"][0]["command"])
+        self.assertEqual(len({branch["source_type"] for branch in plan["batches"][0]["branches"]}), 1)
+        self.assertEqual(len({branch["jurisdiction"] for branch in plan["batches"][0]["branches"]}), 1)
+
+    def test_claude_web_scale_plan_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = write_claude_web_scale_plan(
+                Path(tmpdir),
+                target_candidates_per_branch=10,
+                batch_size=5,
+                jurisdictions=["federal"],
+                source_types=["regulation"],
+                max_batches=1,
+            )
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+            commands = Path(result["commands"]).read_text(encoding="utf-8")
+        self.assertEqual(result["verdict"], "CLAUDE_WEB_SCALE_PLAN_READY")
+        self.assertEqual(result["summary"]["planned_candidate_slots"], 50)
+        self.assertIn("Claude Web Scale Plan", markdown)
+        self.assertIn("claude-web-research", commands)
 
     def test_agent_discovery_plan_covers_multiple_hierarchy_branches(self) -> None:
         plan = build_deterministic_discovery_plan(max_branches=0, queries_per_branch=2)

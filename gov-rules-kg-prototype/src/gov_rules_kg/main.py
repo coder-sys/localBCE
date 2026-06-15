@@ -15,6 +15,7 @@ from .claude_web_mapping import write_claude_web_deterministic_mapping
 from .claude_web_mapping_qa import write_claude_web_mapping_qa
 from .claude_web_research import ClaudeWebResearchOptions, write_claude_web_research
 from .claude_web_review import review_claude_web_candidates
+from .claude_web_scale_plan import DEFAULT_JURISDICTIONS, DEFAULT_SOURCE_TYPES, allowed_source_types, parse_csv_or_default, write_claude_web_scale_plan
 from .config import make_config
 from .discovery import DiscoveryEngine
 from .domain import valid_program
@@ -67,6 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
     claude_web_parser.add_argument("--retries", type=int, default=1)
     claude_web_parser.add_argument("--allowed-domains", default="", help="Comma-separated official domains; default uses built-in government domains")
     claude_web_parser.add_argument("--programs", default="", help="Comma-separated taxonomy programs to research; overrides --max-branches when set")
+    claude_web_parser.add_argument("--jurisdictions", default="", help="Comma-separated jurisdiction targets, e.g. federal,state_ca")
+    claude_web_parser.add_argument("--source-types", default="", help="Comma-separated source-type targets, e.g. regulation,statute")
     claude_review_parser = subparsers.add_parser("claude-web-review", help="Review Claude web candidates and export promotion/human-review/hierarchy reports")
     claude_review_parser.add_argument("--min-confidence", type=float, default=0.85)
     claude_coverage_parser = subparsers.add_parser("claude-web-coverage", help="Report 51-program Claude web candidate coverage and next recommended batches")
@@ -78,6 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claude-web-audit", help="Run deterministic quality gates over Claude web executable candidates")
     subparsers.add_parser("claude-web-map-deterministic", help="Map Claude web executable candidates into deterministic rule-shape candidates")
     subparsers.add_parser("claude-web-mapping-qa", help="Report deterministic mapping weaknesses and next fix buckets")
+    claude_scale_parser = subparsers.add_parser("claude-web-scale-plan", help="Plan structured Claude web expansion batches across programs, jurisdictions, and source types")
+    claude_scale_parser.add_argument("--target-candidates-per-branch", type=int, default=10)
+    claude_scale_parser.add_argument("--batch-size", type=int, default=5)
+    claude_scale_parser.add_argument("--jurisdictions", default="")
+    claude_scale_parser.add_argument("--source-types", default="")
+    claude_scale_parser.add_argument("--max-batches", type=int, default=0, help="0 means all batches")
     subparsers.add_parser("validate-citations", help="Validate strict citation index from last run")
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate extraction against a gold set")
     eval_parser.add_argument("--gold-set", type=Path, required=True)
@@ -227,6 +236,8 @@ def main() -> None:
             ),
             max_branches=args.max_branches,
             programs=parse_programs(args.programs),
+            jurisdictions=parse_jurisdictions(args.jurisdictions),
+            source_types=parse_source_types(args.source_types),
             max_uses=args.max_uses,
             max_candidates_per_branch=args.max_candidates_per_branch,
             batch_size=args.batch_size,
@@ -296,6 +307,22 @@ def main() -> None:
         try:
             payload = write_claude_web_mapping_qa(workdir)
         except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-scale-plan":
+        try:
+            payload = write_claude_web_scale_plan(
+                workdir,
+                target_candidates_per_branch=args.target_candidates_per_branch,
+                batch_size=args.batch_size,
+                jurisdictions=parse_jurisdictions(args.jurisdictions) or DEFAULT_JURISDICTIONS,
+                source_types=parse_source_types(args.source_types) or DEFAULT_SOURCE_TYPES,
+                max_batches=args.max_batches,
+            )
+        except ValueError as exc:
             print(str(exc))
             raise SystemExit(2) from exc
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -539,6 +566,14 @@ def parse_programs(value: str) -> list[str] | None:
     if invalid:
         raise argparse.ArgumentTypeError(f"unknown taxonomy program(s): {', '.join(invalid)}")
     return programs or None
+
+
+def parse_jurisdictions(value: str) -> list[str] | None:
+    return parse_csv_or_default(value, [], None) or None
+
+
+def parse_source_types(value: str) -> list[str] | None:
+    return parse_csv_or_default(value, [], allowed_source_types()) or None
 
 
 def read_json_if_exists(path: Path, default: object) -> object:
