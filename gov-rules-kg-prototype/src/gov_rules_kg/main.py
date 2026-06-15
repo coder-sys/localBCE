@@ -11,6 +11,8 @@ from .bulk_plan import build_bulk_plan
 from .claude_web_audit import write_claude_web_audit
 from .claude_web_coverage import write_claude_web_coverage
 from .claude_web_executable import write_claude_web_executable_candidates, write_claude_web_proof_report
+from .claude_web_mapping import write_claude_web_deterministic_mapping
+from .claude_web_mapping_qa import write_claude_web_mapping_qa
 from .claude_web_research import ClaudeWebResearchOptions, write_claude_web_research
 from .claude_web_review import review_claude_web_candidates
 from .config import make_config
@@ -74,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     claude_web_proof_parser = subparsers.add_parser("claude-web-proof-report", help="Generate a Claude-web-only proof report from executable candidates")
     claude_web_proof_parser.add_argument("--confidence-threshold", type=float, default=0.85)
     subparsers.add_parser("claude-web-audit", help="Run deterministic quality gates over Claude web executable candidates")
+    subparsers.add_parser("claude-web-map-deterministic", help="Map Claude web executable candidates into deterministic rule-shape candidates")
+    subparsers.add_parser("claude-web-mapping-qa", help="Report deterministic mapping weaknesses and next fix buckets")
     subparsers.add_parser("validate-citations", help="Validate strict citation index from last run")
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate extraction against a gold set")
     eval_parser.add_argument("--gold-set", type=Path, required=True)
@@ -273,6 +277,24 @@ def main() -> None:
     if args.command == "claude-web-audit":
         try:
             payload = write_claude_web_audit(workdir)
+        except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-map-deterministic":
+        try:
+            payload = write_claude_web_deterministic_mapping(workdir)
+        except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-mapping-qa":
+        try:
+            payload = write_claude_web_mapping_qa(workdir)
         except FileNotFoundError as exc:
             print(str(exc))
             raise SystemExit(2) from exc

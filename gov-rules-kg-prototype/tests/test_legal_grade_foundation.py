@@ -20,6 +20,8 @@ from gov_rules_kg.citations import citations_exactly_match, parse_citations
 from gov_rules_kg.claude_web_audit import build_claude_web_audit, write_claude_web_audit
 from gov_rules_kg.claude_web_coverage import write_claude_web_coverage
 from gov_rules_kg.claude_web_executable import classify_executable_rule_type, normalize_executable_candidate, write_claude_web_executable_candidates, write_claude_web_proof_report
+from gov_rules_kg.claude_web_mapping import extract_effective_date, extract_exception_text, extract_threshold, infer_inputs_required, map_deterministic_candidate, write_claude_web_deterministic_mapping
+from gov_rules_kg.claude_web_mapping_qa import build_mapping_qa, malformed_exception_text, write_claude_web_mapping_qa
 from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, call_claude_web_search_batches, candidate_id, deterministic_web_research_plan, extract_web_research_payload, merge_candidate_corpus, should_preserve_existing_report, write_claude_web_research
 from gov_rules_kg.claude_web_research import taxonomy_branches
 from gov_rules_kg.claude_web_review import preferred_candidate_source_path, review_claude_web_candidates, review_candidate
@@ -528,6 +530,110 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "CLAUDE_WEB_AUDIT_READY")
         self.assertEqual(result["input_candidates"], 1)
         self.assertIn("needs_deterministic_condition_outcome_split", markdown)
+
+    def test_claude_web_mapping_extracts_threshold_date_exception_and_inputs(self) -> None:
+        text = "The agency must determine eligibility within 45 days effective June 3, 2024 unless the application is based on disability."
+        self.assertEqual(extract_threshold(text), {"kind": "duration", "value": "45", "unit": "days", "text": "45 days"})
+        self.assertEqual(extract_effective_date(text), "June 3, 2024")
+        self.assertEqual(extract_exception_text(text), "unless the application is based on disability")
+        self.assertIn("deadline", infer_inputs_required(text))
+        self.assertIn("application_status", infer_inputs_required(text))
+        self.assertIn("disability_status", infer_inputs_required(text))
+
+    def test_claude_web_mapping_maps_executable_candidate(self) -> None:
+        candidate = normalize_executable_candidate(
+            {
+                "candidate_id": "claude-web:test",
+                "vertical": "healthcare_benefits",
+                "program": "medicaid",
+                "jurisdiction_level": "federal",
+                "source_type": "agency_guidance",
+                "rule_unit_type": "deadline_rule",
+                "statement": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy",
+                "citation_text": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                "confidence_score": 0.96,
+            }
+        )
+        mapped = map_deterministic_candidate(candidate)
+        self.assertEqual(mapped["operator"], "require")
+        self.assertEqual(mapped["threshold"]["kind"], "duration")
+        self.assertEqual(mapped["mapping_status"], "strong_mapping_candidate")
+        self.assertIn("deadline", mapped["inputs_required"])
+
+    def test_claude_web_mapping_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            candidate = normalize_executable_candidate(
+                {
+                    "candidate_id": "claude-web:test",
+                    "vertical": "healthcare_benefits",
+                    "program": "medicaid",
+                    "jurisdiction_level": "federal",
+                    "source_type": "agency_guidance",
+                    "rule_unit_type": "deadline_rule",
+                    "statement": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                    "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy",
+                    "citation_text": "The Medicaid agency must determine eligibility within 45 days after receiving a complete application.",
+                    "confidence_score": 0.96,
+                }
+            )
+            (reports_dir / "claude_web_executable_rule_candidates.json").write_text(f"[{json.dumps(candidate)}]", encoding="utf-8")
+            result = write_claude_web_deterministic_mapping(workdir)
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(result["verdict"], "CLAUDE_WEB_DETERMINISTIC_MAPPING_READY")
+        self.assertEqual(result["mapped_candidates"], 1)
+        self.assertEqual(result["strong_mapping_candidates"], 1)
+        self.assertIn("45 days", markdown)
+
+    def test_claude_web_mapping_qa_flags_weak_buckets(self) -> None:
+        weak = {
+            "mapping_candidate_id": "map:weak",
+            "program": "medicare",
+            "rule_type": "deadline_rule",
+            "operator": "unknown",
+            "mapping_status": "needs_manual_mapping",
+            "inputs_required": [],
+            "threshold": None,
+            "exception_text": "except Puerto Rico) are automatically enrolled",
+            "condition_text": "Manual mapping needed.",
+        }
+        report = build_mapping_qa([weak])
+        self.assertEqual(report["summary"]["qa_attention_candidates"], 1)
+        self.assertIn("operator_unknown", report["summary"]["by_issue"])
+        self.assertIn("malformed_exception_text", report["summary"]["by_issue"])
+        self.assertIn("expected_threshold_missing", report["summary"]["by_issue"])
+        self.assertEqual(report["summary"]["next_fix_buckets"][0]["issue"], "operator_unknown")
+
+    def test_claude_web_mapping_qa_detects_malformed_exception_text(self) -> None:
+        self.assertTrue(malformed_exception_text("except Puerto Rico) are automatically enrolled"))
+        self.assertTrue(malformed_exception_text("unless the agency determines that the applicant has multiple records and must submit many additional documents before review proceeds"))
+        self.assertFalse(malformed_exception_text("unless the application is based on disability"))
+
+    def test_claude_web_mapping_qa_writes_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports_dir = workdir / "reports"
+            reports_dir.mkdir()
+            mapped = {
+                "mapping_candidate_id": "map:test",
+                "program": "medicaid",
+                "rule_type": "deadline_rule",
+                "operator": "deadline",
+                "mapping_status": "partial_mapping_candidate",
+                "inputs_required": ["deadline"],
+                "threshold": None,
+                "exception_text": None,
+                "condition_text": "The agency must act within a reasonable period.",
+            }
+            (reports_dir / "claude_web_deterministic_mapping_candidates.json").write_text(f"[{json.dumps(mapped)}]", encoding="utf-8")
+            result = write_claude_web_mapping_qa(workdir)
+            markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(result["verdict"], "CLAUDE_WEB_MAPPING_QA_READY")
+        self.assertEqual(result["input_candidates"], 1)
+        self.assertIn("deadline_operator_without_threshold", markdown)
 
     def test_agent_discovery_plan_covers_multiple_hierarchy_branches(self) -> None:
         plan = build_deterministic_discovery_plan(max_branches=0, queries_per_branch=2)
