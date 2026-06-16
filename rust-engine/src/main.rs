@@ -558,6 +558,36 @@ mod tests {
         failure_reason: Option<&'static str>,
     }
 
+    #[derive(Debug, Serialize)]
+    struct StarkSidecarArtifact {
+        artifact_version: &'static str,
+        proof_system: &'static str,
+        proof_mode: &'static str,
+        runtime_status: &'static str,
+        claim_id: String,
+        claim_hash: String,
+        decision: u8,
+        failure_code: u32,
+        failure_reason: Option<&'static str>,
+        public_inputs: StarkSidecarPublicInputs,
+        metadata: StarkSidecarMetadata,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct StarkSidecarPublicInputs {
+        claim_hash: String,
+        decision: u8,
+        failure_code: u32,
+        ruleset_id: &'static str,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct StarkSidecarMetadata {
+        verifier_status: &'static str,
+        on_chain_submission: bool,
+        groth16_flow_unchanged: bool,
+    }
+
     impl StarkCompatibleWitness {
         fn from_claim(claim: &ClaimInput) -> Self {
             let failure_reason = denial_reason(claim);
@@ -582,6 +612,36 @@ mod tests {
                 decision: bool_u8(failure_reason.is_none()),
                 failure_code: failure_reason.map(stark_failure_code).unwrap_or(0),
                 failure_reason,
+            }
+        }
+    }
+
+    impl StarkSidecarArtifact {
+        fn from_claim(claim: &ClaimInput) -> Self {
+            let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+            let witness = StarkCompatibleWitness::from_claim(claim);
+
+            Self {
+                artifact_version: "stark-sidecar-v0-test-only",
+                proof_system: "stark",
+                proof_mode: "sidecar_schema_only",
+                runtime_status: "not_written_by_runtime",
+                claim_id: claim.claim_id.clone(),
+                claim_hash: claim_hash.clone(),
+                decision: witness.decision,
+                failure_code: witness.failure_code,
+                failure_reason: witness.failure_reason,
+                public_inputs: StarkSidecarPublicInputs {
+                    claim_hash,
+                    decision: witness.decision,
+                    failure_code: witness.failure_code,
+                    ruleset_id: "current_g1_g10_shadow_rules",
+                },
+                metadata: StarkSidecarMetadata {
+                    verifier_status: "not_selected",
+                    on_chain_submission: false,
+                    groth16_flow_unchanged: true,
+                },
             }
         }
     }
@@ -864,6 +924,60 @@ status                  1";
                 );
             }
         }
+    }
+
+    #[test]
+    fn stark_sidecar_artifact_serializes_approved_claim_schema() {
+        let claim = valid_claim();
+        let value = serde_json::to_value(StarkSidecarArtifact::from_claim(&claim)).unwrap();
+        let expected_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+
+        assert_eq!(value["artifact_version"], "stark-sidecar-v0-test-only");
+        assert_eq!(value["proof_system"], "stark");
+        assert_eq!(value["proof_mode"], "sidecar_schema_only");
+        assert_eq!(value["runtime_status"], "not_written_by_runtime");
+        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
+        assert_eq!(value["claim_hash"], expected_hash);
+        assert_eq!(value["decision"], 1);
+        assert_eq!(value["failure_code"], 0);
+        assert_eq!(value["failure_reason"], Value::Null);
+        assert_eq!(value["public_inputs"]["claim_hash"], expected_hash);
+        assert_eq!(value["public_inputs"]["decision"], 1);
+        assert_eq!(value["public_inputs"]["failure_code"], 0);
+        assert_eq!(
+            value["public_inputs"]["ruleset_id"],
+            "current_g1_g10_shadow_rules"
+        );
+        assert_eq!(value["metadata"]["verifier_status"], "not_selected");
+        assert_eq!(value["metadata"]["on_chain_submission"], false);
+        assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
+    }
+
+    #[test]
+    fn stark_sidecar_artifact_serializes_denied_claim_schema() {
+        let mut claim = valid_claim();
+        claim.recipient_not_deceased = 0;
+
+        let value = serde_json::to_value(StarkSidecarArtifact::from_claim(&claim)).unwrap();
+        let expected_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+
+        assert_eq!(value["artifact_version"], "stark-sidecar-v0-test-only");
+        assert_eq!(value["proof_system"], "stark");
+        assert_eq!(value["runtime_status"], "not_written_by_runtime");
+        assert_eq!(value["claim_hash"], expected_hash);
+        assert_eq!(value["decision"], 0);
+        assert_eq!(value["failure_code"], 9);
+        assert_eq!(value["failure_reason"], "G9_RECIPIENT_DECEASED");
+        assert_eq!(value["public_inputs"]["claim_hash"], expected_hash);
+        assert_eq!(value["public_inputs"]["decision"], 0);
+        assert_eq!(value["public_inputs"]["failure_code"], 9);
+        assert_eq!(
+            value["public_inputs"]["ruleset_id"],
+            "current_g1_g10_shadow_rules"
+        );
+        assert_eq!(value["metadata"]["verifier_status"], "not_selected");
+        assert_eq!(value["metadata"]["on_chain_submission"], false);
+        assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
     }
 
     #[test]
