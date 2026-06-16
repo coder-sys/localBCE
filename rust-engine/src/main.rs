@@ -81,6 +81,13 @@ struct AppConfig {
     private_key: String,
     rpc_url: String,
     transaction_value: String,
+    enable_stark_sidecar_artifacts: Option<bool>,
+}
+
+impl AppConfig {
+    fn stark_sidecar_enabled(&self) -> bool {
+        self.enable_stark_sidecar_artifacts.unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +130,90 @@ impl From<&ClaimInput> for ZkCircuitInput {
             recipient_not_deceased: claim.recipient_not_deceased,
             physician_certification_valid: claim.physician_certification_valid,
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct StarkSidecarArtifact {
+    artifact_version: &'static str,
+    proof_system: &'static str,
+    proof_mode: &'static str,
+    runtime_status: &'static str,
+    claim_id: String,
+    claim_hash: String,
+    decision: u8,
+    failure_code: u32,
+    failure_reason: Option<&'static str>,
+    public_inputs: StarkSidecarPublicInputs,
+    metadata: StarkSidecarMetadata,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkSidecarPublicInputs {
+    claim_hash: String,
+    decision: u8,
+    failure_code: u32,
+    ruleset_id: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkSidecarMetadata {
+    verifier_status: &'static str,
+    on_chain_submission: bool,
+    groth16_flow_unchanged: bool,
+}
+
+impl StarkSidecarArtifact {
+    fn from_claim(claim: &ClaimInput, claim_hash: &str) -> Self {
+        let failure_reason = denial_reason(claim);
+        let decision = bool_u8(failure_reason.is_none());
+        let failure_code = failure_reason.map(stark_failure_code).unwrap_or(0);
+
+        Self {
+            artifact_version: "stark-sidecar-v0",
+            proof_system: "stark",
+            proof_mode: "sidecar_schema_only",
+            runtime_status: "written_only_when_config_enabled",
+            claim_id: claim.claim_id.clone(),
+            claim_hash: claim_hash.to_string(),
+            decision,
+            failure_code,
+            failure_reason,
+            public_inputs: StarkSidecarPublicInputs {
+                claim_hash: claim_hash.to_string(),
+                decision,
+                failure_code,
+                ruleset_id: "current_g1_g10_denial_reason",
+            },
+            metadata: StarkSidecarMetadata {
+                verifier_status: "not_selected",
+                on_chain_submission: false,
+                groth16_flow_unchanged: true,
+            },
+        }
+    }
+}
+
+fn bool_u8(value: bool) -> u8 {
+    if value { 1 } else { 0 }
+}
+
+fn stark_failure_code(reason: &str) -> u32 {
+    match reason {
+        "G1_IDENTITY_VERIFICATION_FAILED" => 1,
+        "G2_PROGRAM_ELIGIBILITY_FAILED" => 201,
+        "G2_BENEFIT_LEVEL_MISSING" => 202,
+        "G3_MONTH_OF_SERVICE_FAILED" => 3,
+        "G4_SHARE_OF_COST_FAILED" => 4,
+        "G5_PROVIDER_NOT_ENROLLED" => 501,
+        "G5_PROVIDER_TYPE_INVALID" => 502,
+        "G6_BILLING_CODE_INVALID" => 601,
+        "G6_UNITS_INVALID" => 602,
+        "G7_DUPLICATE_CLAIM" => 7,
+        "G8_DISABILITY_DETERMINATION_FAILED" => 8,
+        "G9_RECIPIENT_DECEASED" => 9,
+        "G10_PHYSICIAN_CERTIFICATION_FAILED" => 10,
+        _ => panic!("unmapped STARK sidecar failure reason: {reason}"),
     }
 }
 
@@ -295,6 +386,19 @@ fn write_result(result: &AdjudicationResult) -> Result<(), String> {
         .map_err(|err| format!("could not write adjudication_result.json: {}", err))
 }
 
+fn write_stark_sidecar_artifact(claim: &ClaimInput, claim_hash: &str) -> Result<(), String> {
+    let artifact = StarkSidecarArtifact::from_claim(claim, claim_hash);
+    let artifact_json = serde_json::to_string_pretty(&artifact).map_err(|err| {
+        format!(
+            "could not serialize stark_adjudication_result.json: {}",
+            err
+        )
+    })?;
+
+    fs::write("stark_adjudication_result.json", artifact_json)
+        .map_err(|err| format!("could not write stark_adjudication_result.json: {}", err))
+}
+
 fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) {
     println!(
         "{}",
@@ -337,6 +441,10 @@ fn run_app() -> Result<(), String> {
     let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
 
     if let Some(reason) = denial_reason(&claim) {
+        if config.stark_sidecar_enabled() {
+            write_stark_sidecar_artifact(&claim, &claim_hash)?;
+        }
+
         let result = AdjudicationResult::denied(claim.claim_id.clone(), claim_hash, reason);
 
         write_result(&result)?;
@@ -433,6 +541,10 @@ fn run_app() -> Result<(), String> {
 
     let result = AdjudicationResult::approved(claim.claim_id.clone(), claim_hash, tx_hash);
 
+    if config.stark_sidecar_enabled() {
+        write_stark_sidecar_artifact(&claim, &result.claim_hash)?;
+    }
+
     write_result(&result)?;
     println!("Wrote adjudication_result.json");
 
@@ -464,6 +576,21 @@ mod tests {
             recipient_not_deceased: 1,
             physician_certification_valid: 1,
         }
+    }
+
+    fn config_json(enable_stark_sidecar_artifacts: Option<bool>) -> String {
+        let mut value = json!({
+            "claims_registry_address": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+            "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            "rpc_url": "http://127.0.0.1:8545",
+            "transaction_value": "0.001ether",
+        });
+
+        if let Some(enabled) = enable_stark_sidecar_artifacts {
+            value["enable_stark_sidecar_artifacts"] = json!(enabled);
+        }
+
+        value.to_string()
     }
 
     struct ShadowRule {
@@ -739,6 +866,20 @@ mod tests {
     }
 
     #[test]
+    fn config_missing_stark_sidecar_flag_defaults_disabled() {
+        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
+
+        assert!(!config.stark_sidecar_enabled());
+    }
+
+    #[test]
+    fn config_stark_sidecar_flag_can_enable_artifacts() {
+        let config: AppConfig = serde_json::from_str(&config_json(Some(true))).unwrap();
+
+        assert!(config.stark_sidecar_enabled());
+    }
+
+    #[test]
     fn split_calldata_preserves_nested_arrays() {
         let calldata = "[1,2],[[3,4],[5,6]],[7,8],[9]";
 
@@ -974,6 +1115,37 @@ status                  1";
         assert_eq!(
             value["public_inputs"]["ruleset_id"],
             "current_g1_g10_shadow_rules"
+        );
+        assert_eq!(value["metadata"]["verifier_status"], "not_selected");
+        assert_eq!(value["metadata"]["on_chain_submission"], false);
+        assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
+    }
+
+    #[test]
+    fn runtime_stark_sidecar_artifact_serializes_enabled_schema() {
+        let mut claim = valid_claim();
+        claim.is_duplicate = 1;
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+
+        let value =
+            serde_json::to_value(super::StarkSidecarArtifact::from_claim(&claim, &claim_hash))
+                .unwrap();
+
+        assert_eq!(value["artifact_version"], "stark-sidecar-v0");
+        assert_eq!(value["proof_system"], "stark");
+        assert_eq!(value["proof_mode"], "sidecar_schema_only");
+        assert_eq!(value["runtime_status"], "written_only_when_config_enabled");
+        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
+        assert_eq!(value["claim_hash"], claim_hash);
+        assert_eq!(value["decision"], 0);
+        assert_eq!(value["failure_code"], 7);
+        assert_eq!(value["failure_reason"], "G7_DUPLICATE_CLAIM");
+        assert_eq!(value["public_inputs"]["claim_hash"], claim_hash);
+        assert_eq!(value["public_inputs"]["decision"], 0);
+        assert_eq!(value["public_inputs"]["failure_code"], 7);
+        assert_eq!(
+            value["public_inputs"]["ruleset_id"],
+            "current_g1_g10_denial_reason"
         );
         assert_eq!(value["metadata"]["verifier_status"], "not_selected");
         assert_eq!(value["metadata"]["on_chain_submission"], false);
