@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::process::Command;
@@ -291,11 +291,8 @@ fn write_result(result: &AdjudicationResult) -> Result<(), String> {
     let result_json = serde_json::to_string_pretty(result)
         .map_err(|err| format!("could not serialize adjudication_result.json: {}", err))?;
 
-    fs::write(
-        "adjudication_result.json",
-        result_json,
-    )
-    .map_err(|err| format!("could not write adjudication_result.json: {}", err))
+    fs::write("adjudication_result.json", result_json)
+        .map_err(|err| format!("could not write adjudication_result.json: {}", err))
 }
 
 fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) {
@@ -364,7 +361,9 @@ fn run_app() -> Result<(), String> {
         &claim.claim_id,
         &claim_hash,
     );
-    run("node ../zk/claim_js/generate_witness.js ../zk/claim_js/claim.wasm ../zk/input.json ../zk/witness.wtns")?;
+    run(
+        "node ../zk/claim_js/generate_witness.js ../zk/claim_js/claim.wasm ../zk/input.json ../zk/witness.wtns",
+    )?;
     log_proof_event(
         "witness_generation",
         "completed",
@@ -373,13 +372,16 @@ fn run_app() -> Result<(), String> {
     );
 
     log_proof_event("groth16_prove", "started", &claim.claim_id, &claim_hash);
-    run("snarkjs groth16 prove ../zk/claim_final.zkey ../zk/witness.wtns ../zk/proof.json ../zk/public.json")?;
+    run(
+        "snarkjs groth16 prove ../zk/claim_final.zkey ../zk/witness.wtns ../zk/proof.json ../zk/public.json",
+    )?;
     log_proof_event("groth16_prove", "completed", &claim.claim_id, &claim_hash);
 
     log_proof_event("calldata_export", "started", &claim.claim_id, &claim_hash);
-    let calldata = run_output("cd ../zk && snarkjs zkey export soliditycalldata public.json proof.json")?
-        .replace("\"", "")
-        .replace(" ", "");
+    let calldata =
+        run_output("cd ../zk && snarkjs zkey export soliditycalldata public.json proof.json")?
+            .replace("\"", "")
+            .replace(" ", "");
     log_proof_event("calldata_export", "completed", &claim.claim_id, &claim_hash);
 
     let parts = split_calldata(&calldata);
@@ -420,7 +422,12 @@ fn run_app() -> Result<(), String> {
             command_output_excerpt(&cast_output)
         )
     })?;
-    log_proof_event("chain_submission", "completed", &claim.claim_id, &claim_hash);
+    log_proof_event(
+        "chain_submission",
+        "completed",
+        &claim.claim_id,
+        &claim_hash,
+    );
 
     println!("Dynamic proof submitted on-chain.");
 
@@ -529,6 +536,136 @@ mod tests {
             .into_iter()
             .find(|rule| (rule.fails)(claim))
             .map(|rule| rule.reason)
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct StarkCompatibleWitness {
+        eligibility_active: u8,
+        program_eligible: u8,
+        benefit_level_exists: u8,
+        month_of_service_valid: u8,
+        share_of_cost_valid: u8,
+        provider_enrolled: u8,
+        provider_type_valid: u8,
+        billing_code_valid: u8,
+        units_valid: u8,
+        duplicate_clear: u8,
+        disability_determination_valid: u8,
+        recipient_not_deceased: u8,
+        physician_certification_valid: u8,
+        decision: u8,
+        failure_code: u32,
+        failure_reason: Option<&'static str>,
+    }
+
+    impl StarkCompatibleWitness {
+        fn from_claim(claim: &ClaimInput) -> Self {
+            let failure_reason = denial_reason(claim);
+
+            Self {
+                eligibility_active: bool_u8(claim.eligibility_active == 1),
+                program_eligible: bool_u8(matches!(claim.aid_code, 13 | 23 | 53 | 103 | 104)),
+                benefit_level_exists: bool_u8(claim.benefit_level_exists == 1),
+                month_of_service_valid: bool_u8(
+                    claim.date_of_service_from >= claim.eligibility_period_from
+                        && claim.date_of_service_from <= claim.eligibility_period_thru,
+                ),
+                share_of_cost_valid: bool_u8(claim.soc_amount == 0 || claim.soc_met == 1),
+                provider_enrolled: bool_u8(claim.provider_enrolled == 1),
+                provider_type_valid: bool_u8(claim.provider_type_valid == 1),
+                billing_code_valid: bool_u8(claim.billing_code_valid == 1),
+                units_valid: bool_u8(claim.units_valid == 1),
+                duplicate_clear: bool_u8(claim.is_duplicate == 0),
+                disability_determination_valid: bool_u8(claim.disability_determination_valid == 1),
+                recipient_not_deceased: bool_u8(claim.recipient_not_deceased == 1),
+                physician_certification_valid: bool_u8(claim.physician_certification_valid == 1),
+                decision: bool_u8(failure_reason.is_none()),
+                failure_code: failure_reason.map(stark_failure_code).unwrap_or(0),
+                failure_reason,
+            }
+        }
+    }
+
+    fn bool_u8(value: bool) -> u8 {
+        if value { 1 } else { 0 }
+    }
+
+    fn stark_failure_code(reason: &str) -> u32 {
+        match reason {
+            "G1_IDENTITY_VERIFICATION_FAILED" => 1,
+            "G2_PROGRAM_ELIGIBILITY_FAILED" => 201,
+            "G2_BENEFIT_LEVEL_MISSING" => 202,
+            "G3_MONTH_OF_SERVICE_FAILED" => 3,
+            "G4_SHARE_OF_COST_FAILED" => 4,
+            "G5_PROVIDER_NOT_ENROLLED" => 501,
+            "G5_PROVIDER_TYPE_INVALID" => 502,
+            "G6_BILLING_CODE_INVALID" => 601,
+            "G6_UNITS_INVALID" => 602,
+            "G7_DUPLICATE_CLAIM" => 7,
+            "G8_DISABILITY_DETERMINATION_FAILED" => 8,
+            "G9_RECIPIENT_DECEASED" => 9,
+            "G10_PHYSICIAN_CERTIFICATION_FAILED" => 10,
+            _ => panic!("unmapped STARK compatibility failure reason: {reason}"),
+        }
+    }
+
+    fn current_gate_cases() -> Vec<(&'static str, ClaimInput)> {
+        let mut cases: Vec<(&str, ClaimInput)> = vec![("valid", valid_claim())];
+
+        let mut claim = valid_claim();
+        claim.eligibility_active = 0;
+        cases.push(("G1_IDENTITY_VERIFICATION_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.aid_code = 999;
+        cases.push(("G2_PROGRAM_ELIGIBILITY_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.benefit_level_exists = 0;
+        cases.push(("G2_BENEFIT_LEVEL_MISSING", claim));
+
+        let mut claim = valid_claim();
+        claim.date_of_service_from = claim.eligibility_period_thru + 1;
+        cases.push(("G3_MONTH_OF_SERVICE_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.soc_amount = 100;
+        claim.soc_met = 0;
+        cases.push(("G4_SHARE_OF_COST_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.provider_enrolled = 0;
+        cases.push(("G5_PROVIDER_NOT_ENROLLED", claim));
+
+        let mut claim = valid_claim();
+        claim.provider_type_valid = 0;
+        cases.push(("G5_PROVIDER_TYPE_INVALID", claim));
+
+        let mut claim = valid_claim();
+        claim.billing_code_valid = 0;
+        cases.push(("G6_BILLING_CODE_INVALID", claim));
+
+        let mut claim = valid_claim();
+        claim.units_valid = 0;
+        cases.push(("G6_UNITS_INVALID", claim));
+
+        let mut claim = valid_claim();
+        claim.is_duplicate = 1;
+        cases.push(("G7_DUPLICATE_CLAIM", claim));
+
+        let mut claim = valid_claim();
+        claim.disability_determination_valid = 0;
+        cases.push(("G8_DISABILITY_DETERMINATION_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.recipient_not_deceased = 0;
+        cases.push(("G9_RECIPIENT_DECEASED", claim));
+
+        let mut claim = valid_claim();
+        claim.physician_certification_valid = 0;
+        cases.push(("G10_PHYSICIAN_CERTIFICATION_FAILED", claim));
+
+        cases
     }
 
     #[test]
@@ -664,67 +801,68 @@ status                  1";
 
     #[test]
     fn shadow_rules_match_denial_reason_for_current_gates() {
-        let mut cases: Vec<(&str, ClaimInput)> = vec![("valid", valid_claim())];
-
-        let mut claim = valid_claim();
-        claim.eligibility_active = 0;
-        cases.push(("G1_IDENTITY_VERIFICATION_FAILED", claim));
-
-        let mut claim = valid_claim();
-        claim.aid_code = 999;
-        cases.push(("G2_PROGRAM_ELIGIBILITY_FAILED", claim));
-
-        let mut claim = valid_claim();
-        claim.benefit_level_exists = 0;
-        cases.push(("G2_BENEFIT_LEVEL_MISSING", claim));
-
-        let mut claim = valid_claim();
-        claim.date_of_service_from = claim.eligibility_period_thru + 1;
-        cases.push(("G3_MONTH_OF_SERVICE_FAILED", claim));
-
-        let mut claim = valid_claim();
-        claim.soc_amount = 100;
-        claim.soc_met = 0;
-        cases.push(("G4_SHARE_OF_COST_FAILED", claim));
-
-        let mut claim = valid_claim();
-        claim.provider_enrolled = 0;
-        cases.push(("G5_PROVIDER_NOT_ENROLLED", claim));
-
-        let mut claim = valid_claim();
-        claim.provider_type_valid = 0;
-        cases.push(("G5_PROVIDER_TYPE_INVALID", claim));
-
-        let mut claim = valid_claim();
-        claim.billing_code_valid = 0;
-        cases.push(("G6_BILLING_CODE_INVALID", claim));
-
-        let mut claim = valid_claim();
-        claim.units_valid = 0;
-        cases.push(("G6_UNITS_INVALID", claim));
-
-        let mut claim = valid_claim();
-        claim.is_duplicate = 1;
-        cases.push(("G7_DUPLICATE_CLAIM", claim));
-
-        let mut claim = valid_claim();
-        claim.disability_determination_valid = 0;
-        cases.push(("G8_DISABILITY_DETERMINATION_FAILED", claim));
-
-        let mut claim = valid_claim();
-        claim.recipient_not_deceased = 0;
-        cases.push(("G9_RECIPIENT_DECEASED", claim));
-
-        let mut claim = valid_claim();
-        claim.physician_certification_valid = 0;
-        cases.push(("G10_PHYSICIAN_CERTIFICATION_FAILED", claim));
-
-        for (case_name, claim) in cases {
+        for (case_name, claim) in current_gate_cases() {
             assert_eq!(
                 shadow_denial_reason(&claim),
                 denial_reason(&claim),
                 "shadow rule mismatch for {case_name}"
             );
+        }
+    }
+
+    #[test]
+    fn stark_compatible_witness_approves_valid_claim() {
+        let witness = StarkCompatibleWitness::from_claim(&valid_claim());
+
+        assert_eq!(witness.decision, 1);
+        assert_eq!(witness.failure_code, 0);
+        assert_eq!(witness.failure_reason, None);
+        assert_eq!(witness.eligibility_active, 1);
+        assert_eq!(witness.program_eligible, 1);
+        assert_eq!(witness.benefit_level_exists, 1);
+        assert_eq!(witness.month_of_service_valid, 1);
+        assert_eq!(witness.share_of_cost_valid, 1);
+        assert_eq!(witness.provider_enrolled, 1);
+        assert_eq!(witness.provider_type_valid, 1);
+        assert_eq!(witness.billing_code_valid, 1);
+        assert_eq!(witness.units_valid, 1);
+        assert_eq!(witness.duplicate_clear, 1);
+        assert_eq!(witness.disability_determination_valid, 1);
+        assert_eq!(witness.recipient_not_deceased, 1);
+        assert_eq!(witness.physician_certification_valid, 1);
+    }
+
+    #[test]
+    fn stark_compatible_witness_matches_denial_reason_for_current_gates() {
+        for (case_name, claim) in current_gate_cases() {
+            let witness = StarkCompatibleWitness::from_claim(&claim);
+            let denial = denial_reason(&claim);
+
+            assert_eq!(
+                witness.failure_reason, denial,
+                "STARK witness reason mismatch for {case_name}"
+            );
+
+            if let Some(reason) = denial {
+                assert_eq!(
+                    witness.decision, 0,
+                    "STARK witness decision mismatch for {case_name}"
+                );
+                assert_eq!(
+                    witness.failure_code,
+                    stark_failure_code(reason),
+                    "STARK witness code mismatch for {case_name}"
+                );
+            } else {
+                assert_eq!(
+                    witness.decision, 1,
+                    "STARK witness decision mismatch for {case_name}"
+                );
+                assert_eq!(
+                    witness.failure_code, 0,
+                    "STARK witness code mismatch for {case_name}"
+                );
+            }
         }
     }
 
@@ -744,10 +882,7 @@ status                  1";
         let mut claim = valid_claim();
         claim.aid_code = 999;
 
-        assert_eq!(
-            denial_reason(&claim),
-            Some("G2_PROGRAM_ELIGIBILITY_FAILED")
-        );
+        assert_eq!(denial_reason(&claim), Some("G2_PROGRAM_ELIGIBILITY_FAILED"));
     }
 
     #[test]
