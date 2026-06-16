@@ -459,6 +459,78 @@ mod tests {
         }
     }
 
+    struct ShadowRule {
+        reason: &'static str,
+        fails: fn(&ClaimInput) -> bool,
+    }
+
+    fn shadow_rules() -> Vec<ShadowRule> {
+        vec![
+            ShadowRule {
+                reason: "G1_IDENTITY_VERIFICATION_FAILED",
+                fails: |claim| claim.eligibility_active != 1,
+            },
+            ShadowRule {
+                reason: "G2_PROGRAM_ELIGIBILITY_FAILED",
+                fails: |claim| !matches!(claim.aid_code, 13 | 23 | 53 | 103 | 104),
+            },
+            ShadowRule {
+                reason: "G2_BENEFIT_LEVEL_MISSING",
+                fails: |claim| claim.benefit_level_exists != 1,
+            },
+            ShadowRule {
+                reason: "G3_MONTH_OF_SERVICE_FAILED",
+                fails: |claim| {
+                    claim.date_of_service_from < claim.eligibility_period_from
+                        || claim.date_of_service_from > claim.eligibility_period_thru
+                },
+            },
+            ShadowRule {
+                reason: "G4_SHARE_OF_COST_FAILED",
+                fails: |claim| claim.soc_amount > 0 && claim.soc_met != 1,
+            },
+            ShadowRule {
+                reason: "G5_PROVIDER_NOT_ENROLLED",
+                fails: |claim| claim.provider_enrolled != 1,
+            },
+            ShadowRule {
+                reason: "G5_PROVIDER_TYPE_INVALID",
+                fails: |claim| claim.provider_type_valid != 1,
+            },
+            ShadowRule {
+                reason: "G6_BILLING_CODE_INVALID",
+                fails: |claim| claim.billing_code_valid != 1,
+            },
+            ShadowRule {
+                reason: "G6_UNITS_INVALID",
+                fails: |claim| claim.units_valid != 1,
+            },
+            ShadowRule {
+                reason: "G7_DUPLICATE_CLAIM",
+                fails: |claim| claim.is_duplicate != 0,
+            },
+            ShadowRule {
+                reason: "G8_DISABILITY_DETERMINATION_FAILED",
+                fails: |claim| claim.disability_determination_valid != 1,
+            },
+            ShadowRule {
+                reason: "G9_RECIPIENT_DECEASED",
+                fails: |claim| claim.recipient_not_deceased != 1,
+            },
+            ShadowRule {
+                reason: "G10_PHYSICIAN_CERTIFICATION_FAILED",
+                fails: |claim| claim.physician_certification_valid != 1,
+            },
+        ]
+    }
+
+    fn shadow_denial_reason(claim: &ClaimInput) -> Option<&'static str> {
+        shadow_rules()
+            .into_iter()
+            .find(|rule| (rule.fails)(claim))
+            .map(|rule| rule.reason)
+    }
+
     #[test]
     fn claim_hash_32_returns_stable_prefixed_32_byte_hex() {
         let hash = claim_hash_32("CLAIM-TEST-001", 1000);
@@ -588,6 +660,72 @@ status                  1";
         let claim = valid_claim();
 
         assert_eq!(denial_reason(&claim), None);
+    }
+
+    #[test]
+    fn shadow_rules_match_denial_reason_for_current_gates() {
+        let mut cases: Vec<(&str, ClaimInput)> = vec![("valid", valid_claim())];
+
+        let mut claim = valid_claim();
+        claim.eligibility_active = 0;
+        cases.push(("G1_IDENTITY_VERIFICATION_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.aid_code = 999;
+        cases.push(("G2_PROGRAM_ELIGIBILITY_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.benefit_level_exists = 0;
+        cases.push(("G2_BENEFIT_LEVEL_MISSING", claim));
+
+        let mut claim = valid_claim();
+        claim.date_of_service_from = claim.eligibility_period_thru + 1;
+        cases.push(("G3_MONTH_OF_SERVICE_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.soc_amount = 100;
+        claim.soc_met = 0;
+        cases.push(("G4_SHARE_OF_COST_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.provider_enrolled = 0;
+        cases.push(("G5_PROVIDER_NOT_ENROLLED", claim));
+
+        let mut claim = valid_claim();
+        claim.provider_type_valid = 0;
+        cases.push(("G5_PROVIDER_TYPE_INVALID", claim));
+
+        let mut claim = valid_claim();
+        claim.billing_code_valid = 0;
+        cases.push(("G6_BILLING_CODE_INVALID", claim));
+
+        let mut claim = valid_claim();
+        claim.units_valid = 0;
+        cases.push(("G6_UNITS_INVALID", claim));
+
+        let mut claim = valid_claim();
+        claim.is_duplicate = 1;
+        cases.push(("G7_DUPLICATE_CLAIM", claim));
+
+        let mut claim = valid_claim();
+        claim.disability_determination_valid = 0;
+        cases.push(("G8_DISABILITY_DETERMINATION_FAILED", claim));
+
+        let mut claim = valid_claim();
+        claim.recipient_not_deceased = 0;
+        cases.push(("G9_RECIPIENT_DECEASED", claim));
+
+        let mut claim = valid_claim();
+        claim.physician_certification_valid = 0;
+        cases.push(("G10_PHYSICIAN_CERTIFICATION_FAILED", claim));
+
+        for (case_name, claim) in cases {
+            assert_eq!(
+                shadow_denial_reason(&claim),
+                denial_reason(&claim),
+                "shadow rule mismatch for {case_name}"
+            );
+        }
     }
 
     #[test]

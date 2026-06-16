@@ -117,6 +117,53 @@ contract ClaimsRegistryTest is Test {
         registry.submitVerifiedClaim(claimHash, a, b, c, input, 1000);
     }
 
+    function test_SubmitRejectedProofRejectsDuplicateEvenIfLaterProofValid() public {
+        verifier.setProofValid(false);
+        bytes32 claimHash = keccak256("rejected-then-valid-duplicate");
+
+        registry.submitVerifiedClaim(claimHash, a, b, c, input, 1000);
+
+        verifier.setProofValid(true);
+
+        vm.expectRevert("Claim already recorded");
+        registry.submitVerifiedClaim{value: 0.001 ether}(claimHash, a, b, c, input, 1000);
+    }
+
+    function test_RejectedProofMetricsAccumulateAcrossClaims() public {
+        verifier.setProofValid(false);
+
+        registry.submitVerifiedClaim(keccak256("rejected-proof-one"), a, b, c, input, 5000);
+        registry.submitVerifiedClaim(keccak256("rejected-proof-two"), a, b, c, input, 2500);
+
+        assertEq(registry.rejectedProofs(), 2);
+        assertEq(registry.fraudulentTransactionsBlocked(), 2);
+        assertEq(registry.totalValueSecured(), 7500);
+        assertEq(registry.performanceFeesAccrued(), 1500);
+        assertEq(registry.performanceFeeOwed(), 1500);
+    }
+
+    function test_ValidProofMissingFeeDoesNotRecordClaim() public {
+        verifier.setProofValid(true);
+        bytes32 claimHash = keccak256("valid-proof-no-fee-no-record");
+
+        vm.expectRevert("Fee required");
+        registry.submitVerifiedClaim(claimHash, a, b, c, input, 1000);
+
+        (
+            bool recordVerified,
+            uint256 claimAmount,
+            uint256 baseFeePaid,
+            uint256 performanceFeeAccrued
+        ) = registry.claims(claimHash);
+
+        assertFalse(registry.verifiedClaims(claimHash));
+        assertFalse(recordVerified);
+        assertEq(claimAmount, 0);
+        assertEq(baseFeePaid, 0);
+        assertEq(performanceFeeAccrued, 0);
+        assertEq(registry.successfulClaims(), 0);
+    }
+
     function test_RealizePerformanceFeesRequiresTreasury() public {
         verifier.setProofValid(false);
         registry.submitVerifiedClaim(keccak256("performance-fee"), a, b, c, input, 5000);
@@ -138,6 +185,18 @@ contract ClaimsRegistryTest is Test {
         vm.expectRevert("Exceeds accrued");
         vm.prank(treasury);
         registry.realizePerformanceFees(1001);
+    }
+
+    function test_RealizePerformanceFeesAllowsTreasuryPartialRealization() public {
+        verifier.setProofValid(false);
+        registry.submitVerifiedClaim(keccak256("partial-performance-fee"), a, b, c, input, 5000);
+
+        vm.prank(treasury);
+        registry.realizePerformanceFees(400);
+
+        assertEq(registry.performanceFeesAccrued(), 600);
+        assertEq(registry.baseFeesCollected(), 400);
+        assertEq(registry.performanceFeeOwed(), 600);
     }
 
     function test_WithdrawFeesRejectsWhenNoFunds() public {

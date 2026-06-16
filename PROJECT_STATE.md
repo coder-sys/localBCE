@@ -2,6 +2,8 @@
 
 ## Current Working Flow
 
+Current active compatibility/demo flow:
+
 claim_input.json
 -> Rust adjudication
 -> denial_reason validation
@@ -11,6 +13,10 @@ claim_input.json
 -> Solidity verifier
 -> ClaimsRegistry
 -> adjudication_result.json
+
+Production direction:
+
+STARK-based adjudication proofs, batch roots, result roots, nullifier roots, and a selected native verifier or controlled attestation anchor. See STARK_PIVOT_PLAN.md.
 
 ## Active Project Folders
 
@@ -73,6 +79,9 @@ It does not yet read rules_v9.json directly.
 This layer is intentionally kept separate from the current active
 rust-engine/zk/blind-ledger flow until a future explicit integration step.
 
+The STARK lane is the production proof-system direction, but it is not wired
+into the active ClaimsRegistry flow yet.
+
 ## Rules Files
 
 - rules.json - current/simple working rules
@@ -94,6 +103,8 @@ Do not overwrite either file.
 The current implementation is a working prototype using:
 
 Rust + Circom + Groth16 + Foundry
+
+Groth16 remains the active compatibility/demo path.
 
 The long-term target architecture in rules_v9.json is broader and includes:
 
