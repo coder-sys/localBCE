@@ -757,6 +757,20 @@ mod tests {
         groth16_flow_unchanged: bool,
     }
 
+    #[derive(Debug, PartialEq)]
+    enum ImportedStarkMappingClass {
+        Direct,
+        Partial,
+        Unmapped,
+    }
+
+    struct ImportedStarkFieldMapping {
+        imported_stark_field: &'static str,
+        active_rust_source: Option<&'static str>,
+        class: ImportedStarkMappingClass,
+        note: &'static str,
+    }
+
     impl StarkCompatibleWitness {
         fn from_claim(claim: &ClaimInput) -> Self {
             let failure_reason = denial_reason(claim);
@@ -813,6 +827,77 @@ mod tests {
                 },
             }
         }
+    }
+
+    fn imported_winterfell_stark_field_mappings() -> Vec<ImportedStarkFieldMapping> {
+        vec![
+            ImportedStarkFieldMapping {
+                imported_stark_field: "member_id",
+                active_rust_source: None,
+                class: ImportedStarkMappingClass::Unmapped,
+                note: "active claim input has claim_id string, not numeric member_id",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "provider_npi",
+                active_rust_source: None,
+                class: ImportedStarkMappingClass::Unmapped,
+                note: "active input tracks enrollment/type validity, not NPI presence",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "eligibility_active",
+                active_rust_source: Some("eligibility_active"),
+                class: ImportedStarkMappingClass::Direct,
+                note: "both models treat 1 as active/pass",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "provider_enrolled",
+                active_rust_source: Some("provider_enrolled"),
+                class: ImportedStarkMappingClass::Direct,
+                note: "both models treat 1 as enrolled/pass",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "service_line_count",
+                active_rust_source: Some("billing_code_valid, units_valid"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "active booleans imply service-line validity, not a count",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "diagnosis_count",
+                active_rust_source: None,
+                class: ImportedStarkMappingClass::Unmapped,
+                note: "active input has no diagnosis count",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "prior_auth_ok",
+                active_rust_source: Some("physician_certification_valid"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "certification may support authorization but is not equivalent",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "charge_cents",
+                active_rust_source: Some("claim_amount"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "amount can map only after units/currency normalization",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "max_charge_cents",
+                active_rust_source: None,
+                class: ImportedStarkMappingClass::Unmapped,
+                note: "active input has no maximum allowed charge field",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "duplicate_flag",
+                active_rust_source: Some("is_duplicate"),
+                class: ImportedStarkMappingClass::Direct,
+                note: "same duplicate fact, with pass condition inverted in the gate",
+            },
+            ImportedStarkFieldMapping {
+                imported_stark_field: "program_integrity_hold",
+                active_rust_source: Some("disability_determination_valid, recipient_not_deceased"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "active checks can contribute to integrity status but do not equal a hold flag",
+            },
+        ]
     }
 
     fn bool_u8(value: bool) -> u8 {
@@ -1203,6 +1288,112 @@ status                  1";
         assert_eq!(value["metadata"]["verifier_status"], "not_selected");
         assert_eq!(value["metadata"]["on_chain_submission"], false);
         assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
+    }
+
+    #[test]
+    fn imported_winterfell_stark_mapping_classifies_all_input_fields() {
+        let mappings = imported_winterfell_stark_field_mappings();
+
+        assert_eq!(mappings.len(), 11);
+        assert_eq!(
+            mappings
+                .iter()
+                .filter(|mapping| mapping.class == ImportedStarkMappingClass::Direct)
+                .count(),
+            3
+        );
+        assert_eq!(
+            mappings
+                .iter()
+                .filter(|mapping| mapping.class == ImportedStarkMappingClass::Partial)
+                .count(),
+            4
+        );
+        assert_eq!(
+            mappings
+                .iter()
+                .filter(|mapping| mapping.class == ImportedStarkMappingClass::Unmapped)
+                .count(),
+            4
+        );
+
+        for expected_field in [
+            "member_id",
+            "provider_npi",
+            "eligibility_active",
+            "provider_enrolled",
+            "service_line_count",
+            "diagnosis_count",
+            "prior_auth_ok",
+            "charge_cents",
+            "max_charge_cents",
+            "duplicate_flag",
+            "program_integrity_hold",
+        ] {
+            assert!(
+                mappings
+                    .iter()
+                    .any(|mapping| mapping.imported_stark_field == expected_field),
+                "missing imported STARK field mapping for {expected_field}"
+            );
+        }
+
+        let eligibility_mapping = mappings
+            .iter()
+            .find(|mapping| mapping.imported_stark_field == "eligibility_active")
+            .unwrap();
+        assert_eq!(
+            eligibility_mapping.active_rust_source,
+            Some("eligibility_active")
+        );
+        assert_eq!(
+            eligibility_mapping.note,
+            "both models treat 1 as active/pass"
+        );
+    }
+
+    #[test]
+    fn imported_winterfell_direct_mappings_match_sidecar_failures() {
+        let direct_fields: Vec<&str> = imported_winterfell_stark_field_mappings()
+            .into_iter()
+            .filter(|mapping| mapping.class == ImportedStarkMappingClass::Direct)
+            .map(|mapping| mapping.imported_stark_field)
+            .collect();
+
+        assert_eq!(
+            direct_fields,
+            vec!["eligibility_active", "provider_enrolled", "duplicate_flag"]
+        );
+
+        let mut claim = valid_claim();
+        claim.eligibility_active = 0;
+        let value = serde_json::to_value(super::StarkSidecarArtifact::from_claim(
+            &claim,
+            &claim_hash_32(&claim.claim_id, claim.claim_amount),
+        ))
+        .unwrap();
+        assert_eq!(value["failure_reason"], "G1_IDENTITY_VERIFICATION_FAILED");
+        assert_eq!(value["failure_code"], 1);
+
+        let mut claim = valid_claim();
+        claim.provider_enrolled = 0;
+        let value = serde_json::to_value(super::StarkSidecarArtifact::from_claim(
+            &claim,
+            &claim_hash_32(&claim.claim_id, claim.claim_amount),
+        ))
+        .unwrap();
+        assert_eq!(value["failure_reason"], "G5_PROVIDER_NOT_ENROLLED");
+        assert_eq!(value["failure_code"], 501);
+
+        let mut claim = valid_claim();
+        claim.is_duplicate = 1;
+        let value = serde_json::to_value(super::StarkSidecarArtifact::from_claim(
+            &claim,
+            &claim_hash_32(&claim.claim_id, claim.claim_amount),
+        ))
+        .unwrap();
+        assert_eq!(value["failure_reason"], "G7_DUPLICATE_CLAIM");
+        assert_eq!(value["failure_code"], 7);
     }
 
     #[test]
