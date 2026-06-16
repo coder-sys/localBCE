@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::env;
 use std::fs;
 use std::process::Command;
+
+const STARK_SIDECAR_OUTPUT_PATH: &str = "stark_adjudication_result.json";
 
 #[derive(Debug, Serialize)]
 enum AdjudicationStatus {
@@ -395,7 +398,7 @@ fn write_stark_sidecar_artifact(claim: &ClaimInput, claim_hash: &str) -> Result<
         )
     })?;
 
-    fs::write("stark_adjudication_result.json", artifact_json)
+    fs::write(STARK_SIDECAR_OUTPUT_PATH, artifact_json)
         .map_err(|err| format!("could not write stark_adjudication_result.json: {}", err))
 }
 
@@ -418,11 +421,54 @@ fn read_config() -> Result<AppConfig, String> {
     serde_json::from_str(&config_json).map_err(|err| format!("invalid config.json: {}", err))
 }
 
+fn read_claim_input() -> Result<ClaimInput, String> {
+    let claim_json = fs::read_to_string("claim_input.json")
+        .map_err(|err| format!("could not read claim_input.json: {}", err))?;
+
+    serde_json::from_str(&claim_json).map_err(|err| format!("invalid claim_input.json: {}", err))
+}
+
+fn is_stark_sidecar_dry_run_arg(arg: Option<&str>) -> bool {
+    matches!(
+        arg,
+        Some("stark-sidecar-dry-run") | Some("--stark-sidecar-dry-run")
+    )
+}
+
 fn main() {
-    if let Err(err) = run_app() {
+    let arg = env::args().nth(1);
+    let result = if is_stark_sidecar_dry_run_arg(arg.as_deref()) {
+        run_stark_sidecar_dry_run()
+    } else {
+        run_app()
+    };
+
+    if let Err(err) = result {
         eprintln!("{}", err);
         std::process::exit(1);
     }
+}
+
+fn run_stark_sidecar_dry_run() -> Result<(), String> {
+    let claim = read_claim_input()?;
+    let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+
+    write_stark_sidecar_artifact(&claim, &claim_hash)?;
+
+    println!(
+        "{}",
+        json!({
+            "event": "stark_sidecar_dry_run",
+            "status": "completed",
+            "claim_id": claim.claim_id,
+            "claim_hash": claim_hash,
+            "output": STARK_SIDECAR_OUTPUT_PATH,
+            "groth16_executed": false,
+            "chain_submission": false,
+        })
+    );
+
+    Ok(())
 }
 
 fn run_app() -> Result<(), String> {
@@ -432,11 +478,7 @@ fn run_app() -> Result<(), String> {
     let rpc_url = config.rpc_url.as_str();
     let transaction_value = config.transaction_value.as_str();
 
-    let claim_json = fs::read_to_string("claim_input.json")
-        .map_err(|err| format!("could not read claim_input.json: {}", err))?;
-
-    let claim: ClaimInput = serde_json::from_str(&claim_json)
-        .map_err(|err| format!("invalid claim_input.json: {}", err))?;
+    let claim = read_claim_input()?;
 
     let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
 
@@ -877,6 +919,17 @@ mod tests {
         let config: AppConfig = serde_json::from_str(&config_json(Some(true))).unwrap();
 
         assert!(config.stark_sidecar_enabled());
+    }
+
+    #[test]
+    fn stark_sidecar_dry_run_arg_is_explicit() {
+        assert!(is_stark_sidecar_dry_run_arg(Some("stark-sidecar-dry-run")));
+        assert!(is_stark_sidecar_dry_run_arg(Some(
+            "--stark-sidecar-dry-run"
+        )));
+        assert!(!is_stark_sidecar_dry_run_arg(None));
+        assert!(!is_stark_sidecar_dry_run_arg(Some("run")));
+        assert!(!is_stark_sidecar_dry_run_arg(Some("--help")));
     }
 
     #[test]
