@@ -10,6 +10,8 @@ Blind Ledger is a local prototype for privacy-preserving healthcare claims adjud
 
 The system validates claims off-chain, generates zero-knowledge proofs for approved claims, and records approved adjudications on-chain.
 
+Groth16 is the active compatibility/demo proof path. STARK is the production proof-system direction and is being added incrementally through sidecar artifacts and a first-class bridge crate.
+
 ---
 
 # Current Workflow
@@ -36,6 +38,7 @@ localBCE/
   zk/             Circom + snarkjs artifacts
   zk-prover/      future/dedicated proof service
   rust-engine/    Rust adjudication engine
+  stark-engine/   first-class STARK bridge crate
   gov-rules-kg-prototype/
                   Claude web-grounded rules KG prototype
 ```
@@ -62,6 +65,15 @@ localBCE/
 - Witness generation
 - Groth16 proving
 - Solidity verifier generation
+- Optional STARK sidecar artifact generation from rust-engine dry-run path
+
+## STARK Bridge
+
+- stark-engine/ is a first-class localBCE crate for STARK compatibility modeling.
+- blind-ledger-app-layer/zk-stark/ remains the imported Winterfell reference/audit source.
+- rust-engine/ remains the active Groth16 runtime.
+- No STARK prover is wired into runtime yet.
+- No STARK verifier is wired into ClaimsRegistry yet.
 
 ## Smart Contracts
 
@@ -94,6 +106,12 @@ localBCE/
 ## ZK
 
 - zk/claim.circom
+
+## STARK
+
+- stark-engine/Cargo.toml
+- stark-engine/src/lib.rs
+- stark-engine/tests/compatibility.rs
 
 ## Imported App and Audit Layer
 
