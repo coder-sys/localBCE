@@ -150,12 +150,93 @@ pub struct BridgeProofStatus {
 
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const PRODUCER: &'static str = "rust-engine";
+    pub const EXPECTED_MAPPING_COUNTS: MappingCounts = MappingCounts {
+        direct: 3,
+        partial: 4,
+        unmapped: 4,
+    };
 
     pub fn mapping_counts(&self) -> MappingCounts {
         MappingCounts {
             direct: 3,
             partial: 4,
             unmapped: 4,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.producer != Self::PRODUCER {
+            errors.push(format!(
+                "producer must be {}, got {}",
+                Self::PRODUCER,
+                self.producer
+            ));
+        }
+
+        if self.claim.claim_hash.trim().is_empty() {
+            errors.push("claim.claim_hash must be present".to_string());
+        }
+
+        if self.public_inputs.claim_hash.trim().is_empty() {
+            errors.push("public_inputs.claim_hash must be present".to_string());
+        }
+
+        if !self.claim.claim_hash.trim().is_empty()
+            && !self.public_inputs.claim_hash.trim().is_empty()
+            && self.claim.claim_hash != self.public_inputs.claim_hash
+        {
+            errors.push("claim.claim_hash must match public_inputs.claim_hash".to_string());
+        }
+
+        if self.adjudication.decision > 1 {
+            errors.push(format!(
+                "adjudication.decision must be 0 or 1, got {}",
+                self.adjudication.decision
+            ));
+        }
+
+        if self.public_inputs.decision > 1 {
+            errors.push(format!(
+                "public_inputs.decision must be 0 or 1, got {}",
+                self.public_inputs.decision
+            ));
+        }
+
+        if self.adjudication.decision <= 1
+            && self.public_inputs.decision <= 1
+            && self.adjudication.decision != self.public_inputs.decision
+        {
+            errors.push("adjudication.decision must match public_inputs.decision".to_string());
+        }
+
+        if self.mapping_counts() != Self::EXPECTED_MAPPING_COUNTS {
+            errors.push(format!(
+                "mapping counts must be direct={}, partial={}, unmapped={}",
+                Self::EXPECTED_MAPPING_COUNTS.direct,
+                Self::EXPECTED_MAPPING_COUNTS.partial,
+                Self::EXPECTED_MAPPING_COUNTS.unmapped
+            ));
+        }
+
+        if self.proof_status.stark_proof_generated {
+            errors.push("proof_status.stark_proof_generated must be false".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }

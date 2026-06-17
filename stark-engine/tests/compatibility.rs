@@ -84,6 +84,10 @@ fn sample_bridge_input_json() -> &'static str {
     }"#
 }
 
+fn sample_bridge_input() -> StarkBridgeInput {
+    serde_json::from_str(sample_bridge_input_json()).unwrap()
+}
+
 #[test]
 fn imported_winterfell_stark_fields_are_all_classified() {
     let mappings = ActiveClaimToStarkBridge::field_mappings();
@@ -159,7 +163,7 @@ fn direct_mappings_point_to_existing_active_rust_sources() {
 
 #[test]
 fn stark_bridge_input_deserializes_proposed_schema() {
-    let input: StarkBridgeInput = serde_json::from_str(sample_bridge_input_json()).unwrap();
+    let input = sample_bridge_input();
 
     assert_eq!(input.schema_version, StarkBridgeInput::SCHEMA_VERSION);
     assert_eq!(input.producer, "rust-engine");
@@ -180,7 +184,7 @@ fn stark_bridge_input_deserializes_proposed_schema() {
 
 #[test]
 fn stark_bridge_input_validates_mapping_counts() {
-    let input: StarkBridgeInput = serde_json::from_str(sample_bridge_input_json()).unwrap();
+    let input = sample_bridge_input();
 
     assert_eq!(
         input.mapping_counts(),
@@ -194,7 +198,7 @@ fn stark_bridge_input_validates_mapping_counts() {
 
 #[test]
 fn stark_bridge_input_direct_fields_match_active_facts() {
-    let input: StarkBridgeInput = serde_json::from_str(sample_bridge_input_json()).unwrap();
+    let input = sample_bridge_input();
 
     assert_eq!(
         input.winterfell_poc_mapping.direct.eligibility_active,
@@ -207,5 +211,54 @@ fn stark_bridge_input_direct_fields_match_active_facts() {
     assert_eq!(
         input.winterfell_poc_mapping.direct.duplicate_flag,
         input.active_rust_facts.is_duplicate
+    );
+}
+
+#[test]
+fn stark_bridge_input_validation_accepts_sample() {
+    let input = sample_bridge_input();
+
+    assert_eq!(input.validate(), Ok(()));
+}
+
+#[test]
+fn stark_bridge_input_validation_rejects_bad_schema_version() {
+    let mut input = sample_bridge_input();
+    input.schema_version = "wrong-schema".to_string();
+
+    let errors = input.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("schema_version must be stark-bridge-input-v0"))
+    );
+}
+
+#[test]
+fn stark_bridge_input_validation_rejects_invalid_decision() {
+    let mut input = sample_bridge_input();
+    input.adjudication.decision = 2;
+
+    let errors = input.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("adjudication.decision must be 0 or 1"))
+    );
+}
+
+#[test]
+fn stark_bridge_input_validation_rejects_generated_proof_status() {
+    let mut input = sample_bridge_input();
+    input.proof_status.stark_proof_generated = true;
+
+    let errors = input.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("proof_status.stark_proof_generated must be false"))
     );
 }
