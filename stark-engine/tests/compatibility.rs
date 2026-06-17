@@ -1,4 +1,88 @@
-use stark_engine::{ActiveClaimToStarkBridge, MappingClass};
+use stark_engine::{ActiveClaimToStarkBridge, MappingClass, MappingCounts, StarkBridgeInput};
+
+fn sample_bridge_input_json() -> &'static str {
+    r#"{
+      "schema_version": "stark-bridge-input-v0",
+      "producer": "rust-engine",
+      "purpose": "stark_engine_compatibility_input",
+      "runtime_mode": "dry_run_or_optional_sidecar",
+      "claim": {
+        "claim_id": "CLAIM-DEMO-011",
+        "claim_amount": 1000,
+        "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607"
+      },
+      "adjudication": {
+        "decision": 1,
+        "failure_code": 0,
+        "failure_reason": null,
+        "ruleset_id": "current_g1_g10_denial_reason"
+      },
+      "active_rust_facts": {
+        "eligibility_active": 1,
+        "aid_code": 53,
+        "benefit_level_exists": 1,
+        "date_of_service_from": 20000,
+        "eligibility_period_from": 19900,
+        "eligibility_period_thru": 21000,
+        "soc_amount": 0,
+        "soc_met": 1,
+        "provider_enrolled": 1,
+        "provider_type_valid": 1,
+        "billing_code_valid": 1,
+        "units_valid": 1,
+        "is_duplicate": 0,
+        "disability_determination_valid": 1,
+        "recipient_not_deceased": 1,
+        "physician_certification_valid": 1
+      },
+      "winterfell_poc_mapping": {
+        "direct": {
+          "eligibility_active": 1,
+          "provider_enrolled": 1,
+          "duplicate_flag": 0
+        },
+        "partial": {
+          "service_line_count": {
+            "source": ["billing_code_valid", "units_valid"],
+            "status": "not_equivalent"
+          },
+          "prior_auth_ok": {
+            "source": ["physician_certification_valid"],
+            "status": "not_equivalent"
+          },
+          "charge_cents": {
+            "source": ["claim_amount"],
+            "status": "requires_unit_normalization"
+          },
+          "program_integrity_hold": {
+            "source": [
+              "disability_determination_valid",
+              "recipient_not_deceased"
+            ],
+            "status": "not_equivalent"
+          }
+        },
+        "unmapped": {
+          "member_id": null,
+          "provider_npi": null,
+          "diagnosis_count": null,
+          "max_charge_cents": null
+        }
+      },
+      "public_inputs": {
+        "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607",
+        "decision": 1,
+        "failure_code": 0,
+        "ruleset_id": "current_g1_g10_denial_reason"
+      },
+      "proof_status": {
+        "stark_proof_generated": false,
+        "winterfell_poc_compatible": false,
+        "groth16_flow_unchanged": true,
+        "on_chain_submission": false
+      }
+    }"#
+}
 
 #[test]
 fn imported_winterfell_stark_fields_are_all_classified() {
@@ -71,4 +155,57 @@ fn direct_mappings_point_to_existing_active_rust_sources() {
             "direct mapping source field is not in active Rust model: {source}"
         );
     }
+}
+
+#[test]
+fn stark_bridge_input_deserializes_proposed_schema() {
+    let input: StarkBridgeInput = serde_json::from_str(sample_bridge_input_json()).unwrap();
+
+    assert_eq!(input.schema_version, StarkBridgeInput::SCHEMA_VERSION);
+    assert_eq!(input.producer, "rust-engine");
+    assert_eq!(input.purpose, "stark_engine_compatibility_input");
+    assert_eq!(input.claim.claim_id, "CLAIM-DEMO-011");
+    assert_eq!(input.claim.claim_amount, 1000);
+    assert_eq!(input.adjudication.decision, 1);
+    assert_eq!(input.adjudication.failure_code, 0);
+    assert_eq!(input.adjudication.failure_reason, None);
+    assert_eq!(input.active_rust_facts.eligibility_active, 1);
+    assert_eq!(input.active_rust_facts.provider_enrolled, 1);
+    assert_eq!(input.active_rust_facts.is_duplicate, 0);
+    assert!(!input.proof_status.stark_proof_generated);
+    assert!(!input.proof_status.winterfell_poc_compatible);
+    assert!(input.proof_status.groth16_flow_unchanged);
+    assert!(!input.proof_status.on_chain_submission);
+}
+
+#[test]
+fn stark_bridge_input_validates_mapping_counts() {
+    let input: StarkBridgeInput = serde_json::from_str(sample_bridge_input_json()).unwrap();
+
+    assert_eq!(
+        input.mapping_counts(),
+        MappingCounts {
+            direct: 3,
+            partial: 4,
+            unmapped: 4,
+        }
+    );
+}
+
+#[test]
+fn stark_bridge_input_direct_fields_match_active_facts() {
+    let input: StarkBridgeInput = serde_json::from_str(sample_bridge_input_json()).unwrap();
+
+    assert_eq!(
+        input.winterfell_poc_mapping.direct.eligibility_active,
+        input.active_rust_facts.eligibility_active
+    );
+    assert_eq!(
+        input.winterfell_poc_mapping.direct.provider_enrolled,
+        input.active_rust_facts.provider_enrolled
+    );
+    assert_eq!(
+        input.winterfell_poc_mapping.direct.duplicate_flag,
+        input.active_rust_facts.is_duplicate
+    );
 }

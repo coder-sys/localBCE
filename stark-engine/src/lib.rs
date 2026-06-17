@@ -7,6 +7,8 @@
 //! Its first job is to document and test the bridge assumptions between the
 //! active Rust adjudication model and the imported Winterfell STARK input model.
 
+use serde::{Deserialize, Serialize};
+
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +40,132 @@ pub struct FieldMapping {
 /// that the imported STARK proof system already proves the exact active
 /// adjudication semantics.
 pub struct ActiveClaimToStarkBridge;
+
+/// Typed JSON data contract produced by `rust-engine` and consumed by
+/// `stark-engine`.
+///
+/// This is a bridge input, not a proof artifact. It explicitly carries both the
+/// active Rust facts and the current compatibility status against the imported
+/// Winterfell proof-of-concept model.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkBridgeInput {
+    pub schema_version: String,
+    pub producer: String,
+    pub purpose: String,
+    pub runtime_mode: String,
+    pub claim: BridgeClaim,
+    pub adjudication: BridgeAdjudication,
+    pub active_rust_facts: ActiveRustFacts,
+    pub winterfell_poc_mapping: WinterfellPocMapping,
+    pub public_inputs: BridgePublicInputs,
+    pub proof_status: BridgeProofStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgeClaim {
+    pub claim_id: String,
+    pub claim_amount: u64,
+    pub claim_hash: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgeAdjudication {
+    pub decision: u8,
+    pub failure_code: u32,
+    pub failure_reason: Option<String>,
+    pub ruleset_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActiveRustFacts {
+    pub eligibility_active: u8,
+    pub aid_code: u64,
+    pub benefit_level_exists: u8,
+    pub date_of_service_from: u64,
+    pub eligibility_period_from: u64,
+    pub eligibility_period_thru: u64,
+    pub soc_amount: u64,
+    pub soc_met: u8,
+    pub provider_enrolled: u8,
+    pub provider_type_valid: u8,
+    pub billing_code_valid: u8,
+    pub units_valid: u8,
+    pub is_duplicate: u8,
+    pub disability_determination_valid: u8,
+    pub recipient_not_deceased: u8,
+    pub physician_certification_valid: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellPocMapping {
+    pub direct: WinterfellDirectMapping,
+    pub partial: WinterfellPartialMapping,
+    pub unmapped: WinterfellUnmappedMapping,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellDirectMapping {
+    pub eligibility_active: u8,
+    pub provider_enrolled: u8,
+    pub duplicate_flag: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellPartialMapping {
+    pub service_line_count: PartialMappingEvidence,
+    pub prior_auth_ok: PartialMappingEvidence,
+    pub charge_cents: PartialMappingEvidence,
+    pub program_integrity_hold: PartialMappingEvidence,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PartialMappingEvidence {
+    pub source: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellUnmappedMapping {
+    pub member_id: Option<u64>,
+    pub provider_npi: Option<u64>,
+    pub diagnosis_count: Option<u64>,
+    pub max_charge_cents: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgePublicInputs {
+    pub claim_hash: String,
+    pub decision: u8,
+    pub failure_code: u32,
+    pub ruleset_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgeProofStatus {
+    pub stark_proof_generated: bool,
+    pub winterfell_poc_compatible: bool,
+    pub groth16_flow_unchanged: bool,
+    pub on_chain_submission: bool,
+}
+
+impl StarkBridgeInput {
+    pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+
+    pub fn mapping_counts(&self) -> MappingCounts {
+        MappingCounts {
+            direct: 3,
+            partial: 4,
+            unmapped: 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MappingCounts {
+    pub direct: usize,
+    pub partial: usize,
+    pub unmapped: usize,
+}
 
 impl ActiveClaimToStarkBridge {
     /// Imported Winterfell STARK input fields, in the order used by the PoC.
