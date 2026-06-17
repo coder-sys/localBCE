@@ -6,6 +6,7 @@ use std::fs;
 use std::process::Command;
 
 const STARK_SIDECAR_OUTPUT_PATH: &str = "stark_adjudication_result.json";
+const STARK_BRIDGE_INPUT_OUTPUT_PATH: &str = "stark_bridge_input.json";
 
 #[derive(Debug, Serialize)]
 enum AdjudicationStatus {
@@ -166,6 +167,107 @@ struct StarkSidecarMetadata {
     groth16_flow_unchanged: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct StarkBridgeInput {
+    schema_version: &'static str,
+    producer: &'static str,
+    purpose: &'static str,
+    runtime_mode: &'static str,
+    claim: StarkBridgeClaim,
+    adjudication: StarkBridgeAdjudication,
+    active_rust_facts: StarkBridgeActiveRustFacts,
+    winterfell_poc_mapping: StarkBridgeWinterfellPocMapping,
+    public_inputs: StarkBridgePublicInputs,
+    proof_status: StarkBridgeProofStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeClaim {
+    claim_id: String,
+    claim_amount: u64,
+    claim_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeAdjudication {
+    decision: u8,
+    failure_code: u32,
+    failure_reason: Option<&'static str>,
+    ruleset_id: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeActiveRustFacts {
+    eligibility_active: u8,
+    aid_code: u64,
+    benefit_level_exists: u8,
+    date_of_service_from: u64,
+    eligibility_period_from: u64,
+    eligibility_period_thru: u64,
+    soc_amount: u64,
+    soc_met: u8,
+    provider_enrolled: u8,
+    provider_type_valid: u8,
+    billing_code_valid: u8,
+    units_valid: u8,
+    is_duplicate: u8,
+    disability_determination_valid: u8,
+    recipient_not_deceased: u8,
+    physician_certification_valid: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeWinterfellPocMapping {
+    direct: StarkBridgeDirectMapping,
+    partial: StarkBridgePartialMapping,
+    unmapped: StarkBridgeUnmappedMapping,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeDirectMapping {
+    eligibility_active: u8,
+    provider_enrolled: u8,
+    duplicate_flag: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgePartialMapping {
+    service_line_count: StarkBridgePartialEvidence,
+    prior_auth_ok: StarkBridgePartialEvidence,
+    charge_cents: StarkBridgePartialEvidence,
+    program_integrity_hold: StarkBridgePartialEvidence,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgePartialEvidence {
+    source: Vec<&'static str>,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeUnmappedMapping {
+    member_id: Option<u64>,
+    provider_npi: Option<u64>,
+    diagnosis_count: Option<u64>,
+    max_charge_cents: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgePublicInputs {
+    claim_hash: String,
+    decision: u8,
+    failure_code: u32,
+    ruleset_id: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct StarkBridgeProofStatus {
+    stark_proof_generated: bool,
+    winterfell_poc_compatible: bool,
+    groth16_flow_unchanged: bool,
+    on_chain_submission: bool,
+}
+
 impl StarkSidecarArtifact {
     fn from_claim(claim: &ClaimInput, claim_hash: &str) -> Self {
         let failure_reason = denial_reason(claim);
@@ -192,6 +294,93 @@ impl StarkSidecarArtifact {
                 verifier_status: "not_selected",
                 on_chain_submission: false,
                 groth16_flow_unchanged: true,
+            },
+        }
+    }
+}
+
+impl StarkBridgeInput {
+    fn from_claim(claim: &ClaimInput, claim_hash: &str) -> Self {
+        let failure_reason = denial_reason(claim);
+        let decision = bool_u8(failure_reason.is_none());
+        let failure_code = failure_reason.map(stark_failure_code).unwrap_or(0);
+
+        Self {
+            schema_version: "stark-bridge-input-v0",
+            producer: "rust-engine",
+            purpose: "stark_engine_compatibility_input",
+            runtime_mode: "dry_run_or_optional_sidecar",
+            claim: StarkBridgeClaim {
+                claim_id: claim.claim_id.clone(),
+                claim_amount: claim.claim_amount,
+                claim_hash: claim_hash.to_string(),
+            },
+            adjudication: StarkBridgeAdjudication {
+                decision,
+                failure_code,
+                failure_reason,
+                ruleset_id: "current_g1_g10_denial_reason",
+            },
+            active_rust_facts: StarkBridgeActiveRustFacts {
+                eligibility_active: claim.eligibility_active,
+                aid_code: claim.aid_code,
+                benefit_level_exists: claim.benefit_level_exists,
+                date_of_service_from: claim.date_of_service_from,
+                eligibility_period_from: claim.eligibility_period_from,
+                eligibility_period_thru: claim.eligibility_period_thru,
+                soc_amount: claim.soc_amount,
+                soc_met: claim.soc_met,
+                provider_enrolled: claim.provider_enrolled,
+                provider_type_valid: claim.provider_type_valid,
+                billing_code_valid: claim.billing_code_valid,
+                units_valid: claim.units_valid,
+                is_duplicate: claim.is_duplicate,
+                disability_determination_valid: claim.disability_determination_valid,
+                recipient_not_deceased: claim.recipient_not_deceased,
+                physician_certification_valid: claim.physician_certification_valid,
+            },
+            winterfell_poc_mapping: StarkBridgeWinterfellPocMapping {
+                direct: StarkBridgeDirectMapping {
+                    eligibility_active: claim.eligibility_active,
+                    provider_enrolled: claim.provider_enrolled,
+                    duplicate_flag: claim.is_duplicate,
+                },
+                partial: StarkBridgePartialMapping {
+                    service_line_count: StarkBridgePartialEvidence {
+                        source: vec!["billing_code_valid", "units_valid"],
+                        status: "not_equivalent",
+                    },
+                    prior_auth_ok: StarkBridgePartialEvidence {
+                        source: vec!["physician_certification_valid"],
+                        status: "not_equivalent",
+                    },
+                    charge_cents: StarkBridgePartialEvidence {
+                        source: vec!["claim_amount"],
+                        status: "requires_unit_normalization",
+                    },
+                    program_integrity_hold: StarkBridgePartialEvidence {
+                        source: vec!["disability_determination_valid", "recipient_not_deceased"],
+                        status: "not_equivalent",
+                    },
+                },
+                unmapped: StarkBridgeUnmappedMapping {
+                    member_id: None,
+                    provider_npi: None,
+                    diagnosis_count: None,
+                    max_charge_cents: None,
+                },
+            },
+            public_inputs: StarkBridgePublicInputs {
+                claim_hash: claim_hash.to_string(),
+                decision,
+                failure_code,
+                ruleset_id: "current_g1_g10_denial_reason",
+            },
+            proof_status: StarkBridgeProofStatus {
+                stark_proof_generated: false,
+                winterfell_poc_compatible: false,
+                groth16_flow_unchanged: true,
+                on_chain_submission: false,
             },
         }
     }
@@ -402,6 +591,15 @@ fn write_stark_sidecar_artifact(claim: &ClaimInput, claim_hash: &str) -> Result<
         .map_err(|err| format!("could not write stark_adjudication_result.json: {}", err))
 }
 
+fn write_stark_bridge_input(claim: &ClaimInput, claim_hash: &str) -> Result<(), String> {
+    let bridge_input = StarkBridgeInput::from_claim(claim, claim_hash);
+    let bridge_json = serde_json::to_string_pretty(&bridge_input)
+        .map_err(|err| format!("could not serialize stark_bridge_input.json: {}", err))?;
+
+    fs::write(STARK_BRIDGE_INPUT_OUTPUT_PATH, bridge_json)
+        .map_err(|err| format!("could not write stark_bridge_input.json: {}", err))
+}
+
 fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) {
     println!(
         "{}",
@@ -435,10 +633,19 @@ fn is_stark_sidecar_dry_run_arg(arg: Option<&str>) -> bool {
     )
 }
 
+fn is_stark_bridge_input_dry_run_arg(arg: Option<&str>) -> bool {
+    matches!(
+        arg,
+        Some("stark-bridge-input-dry-run") | Some("--stark-bridge-input-dry-run")
+    )
+}
+
 fn main() {
     let arg = env::args().nth(1);
     let result = if is_stark_sidecar_dry_run_arg(arg.as_deref()) {
         run_stark_sidecar_dry_run()
+    } else if is_stark_bridge_input_dry_run_arg(arg.as_deref()) {
+        run_stark_bridge_input_dry_run()
     } else {
         run_app()
     };
@@ -463,6 +670,28 @@ fn run_stark_sidecar_dry_run() -> Result<(), String> {
             "claim_id": claim.claim_id,
             "claim_hash": claim_hash,
             "output": STARK_SIDECAR_OUTPUT_PATH,
+            "groth16_executed": false,
+            "chain_submission": false,
+        })
+    );
+
+    Ok(())
+}
+
+fn run_stark_bridge_input_dry_run() -> Result<(), String> {
+    let claim = read_claim_input()?;
+    let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+
+    write_stark_bridge_input(&claim, &claim_hash)?;
+
+    println!(
+        "{}",
+        json!({
+            "event": "stark_bridge_input_dry_run",
+            "status": "completed",
+            "claim_id": claim.claim_id,
+            "claim_hash": claim_hash,
+            "output": STARK_BRIDGE_INPUT_OUTPUT_PATH,
             "groth16_executed": false,
             "chain_submission": false,
         })
@@ -1018,6 +1247,21 @@ mod tests {
     }
 
     #[test]
+    fn stark_bridge_input_dry_run_arg_is_explicit() {
+        assert!(is_stark_bridge_input_dry_run_arg(Some(
+            "stark-bridge-input-dry-run"
+        )));
+        assert!(is_stark_bridge_input_dry_run_arg(Some(
+            "--stark-bridge-input-dry-run"
+        )));
+        assert!(!is_stark_bridge_input_dry_run_arg(None));
+        assert!(!is_stark_bridge_input_dry_run_arg(Some(
+            "stark-sidecar-dry-run"
+        )));
+        assert!(!is_stark_bridge_input_dry_run_arg(Some("--help")));
+    }
+
+    #[test]
     fn split_calldata_preserves_nested_arrays() {
         let calldata = "[1,2],[[3,4],[5,6]],[7,8],[9]";
 
@@ -1288,6 +1532,95 @@ status                  1";
         assert_eq!(value["metadata"]["verifier_status"], "not_selected");
         assert_eq!(value["metadata"]["on_chain_submission"], false);
         assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
+    }
+
+    #[test]
+    fn stark_bridge_input_serializes_approved_claim_schema() {
+        let claim = valid_claim();
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+        let value =
+            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
+
+        assert_eq!(value["schema_version"], "stark-bridge-input-v0");
+        assert_eq!(value["producer"], "rust-engine");
+        assert_eq!(value["purpose"], "stark_engine_compatibility_input");
+        assert_eq!(value["runtime_mode"], "dry_run_or_optional_sidecar");
+        assert_eq!(value["claim"]["claim_id"], "CLAIM-TEST-001");
+        assert_eq!(value["claim"]["claim_amount"], 1000);
+        assert_eq!(value["claim"]["claim_hash"], claim_hash);
+        assert_eq!(value["adjudication"]["decision"], 1);
+        assert_eq!(value["adjudication"]["failure_code"], 0);
+        assert_eq!(value["adjudication"]["failure_reason"], Value::Null);
+        assert_eq!(
+            value["adjudication"]["ruleset_id"],
+            "current_g1_g10_denial_reason"
+        );
+        assert_eq!(value["active_rust_facts"]["eligibility_active"], 1);
+        assert_eq!(value["active_rust_facts"]["aid_code"], 53);
+        assert_eq!(value["active_rust_facts"]["provider_enrolled"], 1);
+        assert_eq!(value["active_rust_facts"]["is_duplicate"], 0);
+        assert_eq!(
+            value["winterfell_poc_mapping"]["direct"]["eligibility_active"],
+            value["active_rust_facts"]["eligibility_active"]
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["direct"]["provider_enrolled"],
+            value["active_rust_facts"]["provider_enrolled"]
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["direct"]["duplicate_flag"],
+            value["active_rust_facts"]["is_duplicate"]
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["partial"]["charge_cents"]["source"],
+            json!(["claim_amount"])
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["partial"]["charge_cents"]["status"],
+            "requires_unit_normalization"
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["member_id"],
+            Value::Null
+        );
+        assert_eq!(value["public_inputs"]["claim_hash"], claim_hash);
+        assert_eq!(value["public_inputs"]["decision"], 1);
+        assert_eq!(value["public_inputs"]["failure_code"], 0);
+        assert_eq!(value["proof_status"]["stark_proof_generated"], false);
+        assert_eq!(value["proof_status"]["winterfell_poc_compatible"], false);
+        assert_eq!(value["proof_status"]["groth16_flow_unchanged"], true);
+        assert_eq!(value["proof_status"]["on_chain_submission"], false);
+    }
+
+    #[test]
+    fn stark_bridge_input_serializes_denied_claim_schema() {
+        let mut claim = valid_claim();
+        claim.recipient_not_deceased = 0;
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+        let value =
+            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
+
+        assert_eq!(value["schema_version"], "stark-bridge-input-v0");
+        assert_eq!(value["claim"]["claim_hash"], claim_hash);
+        assert_eq!(value["adjudication"]["decision"], 0);
+        assert_eq!(value["adjudication"]["failure_code"], 9);
+        assert_eq!(
+            value["adjudication"]["failure_reason"],
+            "G9_RECIPIENT_DECEASED"
+        );
+        assert_eq!(value["active_rust_facts"]["recipient_not_deceased"], 0);
+        assert_eq!(value["public_inputs"]["decision"], 0);
+        assert_eq!(value["public_inputs"]["failure_code"], 9);
+        assert_eq!(
+            value["winterfell_poc_mapping"]["partial"]["program_integrity_hold"]["source"],
+            json!(["disability_determination_valid", "recipient_not_deceased"])
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["partial"]["program_integrity_hold"]["status"],
+            "not_equivalent"
+        );
+        assert_eq!(value["proof_status"]["stark_proof_generated"], false);
+        assert_eq!(value["proof_status"]["on_chain_submission"], false);
     }
 
     #[test]
