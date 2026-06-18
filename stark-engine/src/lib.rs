@@ -148,6 +148,41 @@ pub struct BridgeProofStatus {
     pub on_chain_submission: bool,
 }
 
+/// Normalized pre-proof intent produced from a validated bridge input.
+///
+/// This is the last object before a future prover-specific witness adapter. It
+/// is intentionally not a Winterfell, Cairo, or Plonky input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StarkProofIntent {
+    pub schema_version: &'static str,
+    pub source_schema_version: String,
+    pub intent_status: &'static str,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub decision: u8,
+    pub failure_code: u32,
+    pub failure_reason: Option<String>,
+    pub ruleset_id: String,
+    pub direct_facts: StarkProofDirectFacts,
+    pub proof_readiness: StarkProofReadiness,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StarkProofDirectFacts {
+    pub eligibility_active: u8,
+    pub provider_enrolled: u8,
+    pub duplicate_flag: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StarkProofReadiness {
+    pub bridge_validated: bool,
+    pub prover_selected: bool,
+    pub witness_generated: bool,
+    pub proof_generated: bool,
+    pub on_chain_submission: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -238,6 +273,34 @@ impl StarkBridgeInput {
         } else {
             Err(errors)
         }
+    }
+
+    pub fn to_proof_intent(&self) -> Result<StarkProofIntent, Vec<String>> {
+        self.validate()?;
+
+        Ok(StarkProofIntent {
+            schema_version: "stark-proof-intent-v0",
+            source_schema_version: self.schema_version.clone(),
+            intent_status: "validated_no_prover_selected",
+            claim_id: self.claim.claim_id.clone(),
+            claim_hash: self.claim.claim_hash.clone(),
+            decision: self.adjudication.decision,
+            failure_code: self.adjudication.failure_code,
+            failure_reason: self.adjudication.failure_reason.clone(),
+            ruleset_id: self.adjudication.ruleset_id.clone(),
+            direct_facts: StarkProofDirectFacts {
+                eligibility_active: self.winterfell_poc_mapping.direct.eligibility_active,
+                provider_enrolled: self.winterfell_poc_mapping.direct.provider_enrolled,
+                duplicate_flag: self.winterfell_poc_mapping.direct.duplicate_flag,
+            },
+            proof_readiness: StarkProofReadiness {
+                bridge_validated: true,
+                prover_selected: false,
+                witness_generated: false,
+                proof_generated: false,
+                on_chain_submission: false,
+            },
+        })
     }
 }
 

@@ -262,3 +262,47 @@ fn stark_bridge_input_validation_rejects_generated_proof_status() {
             .any(|error| error.contains("proof_status.stark_proof_generated must be false"))
     );
 }
+
+#[test]
+fn validated_bridge_input_converts_to_proof_intent() {
+    let input = sample_bridge_input();
+    let intent = input.to_proof_intent().unwrap();
+
+    assert_eq!(intent.schema_version, "stark-proof-intent-v0");
+    assert_eq!(
+        intent.source_schema_version,
+        StarkBridgeInput::SCHEMA_VERSION
+    );
+    assert_eq!(intent.intent_status, "validated_no_prover_selected");
+    assert_eq!(intent.claim_id, "CLAIM-DEMO-011");
+    assert_eq!(
+        intent.claim_hash,
+        "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607"
+    );
+    assert_eq!(intent.decision, 1);
+    assert_eq!(intent.failure_code, 0);
+    assert_eq!(intent.failure_reason, None);
+    assert_eq!(intent.ruleset_id, "current_g1_g10_denial_reason");
+    assert_eq!(intent.direct_facts.eligibility_active, 1);
+    assert_eq!(intent.direct_facts.provider_enrolled, 1);
+    assert_eq!(intent.direct_facts.duplicate_flag, 0);
+    assert!(intent.proof_readiness.bridge_validated);
+    assert!(!intent.proof_readiness.prover_selected);
+    assert!(!intent.proof_readiness.witness_generated);
+    assert!(!intent.proof_readiness.proof_generated);
+    assert!(!intent.proof_readiness.on_chain_submission);
+}
+
+#[test]
+fn invalid_bridge_input_does_not_convert_to_proof_intent() {
+    let mut input = sample_bridge_input();
+    input.public_inputs.claim_hash = String::new();
+
+    let errors = input.to_proof_intent().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("public_inputs.claim_hash must be present"))
+    );
+}
