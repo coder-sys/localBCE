@@ -1,4 +1,6 @@
-use stark_engine::{ActiveClaimToStarkBridge, MappingClass, MappingCounts, StarkBridgeInput};
+use stark_engine::{
+    ActiveClaimToStarkBridge, MappingClass, MappingCounts, StarkBridgeInput, StarkProofIntent,
+};
 
 fn sample_bridge_input_json() -> &'static str {
     r#"{
@@ -86,6 +88,18 @@ fn sample_bridge_input_json() -> &'static str {
 
 fn sample_bridge_input() -> StarkBridgeInput {
     serde_json::from_str(sample_bridge_input_json()).unwrap()
+}
+
+fn denied_bridge_input() -> StarkBridgeInput {
+    let mut input = sample_bridge_input();
+    input.adjudication.decision = 0;
+    input.adjudication.failure_code = 5;
+    input.adjudication.failure_reason = Some("G5_PROVIDER_NOT_ENROLLED".to_string());
+    input.active_rust_facts.provider_enrolled = 0;
+    input.winterfell_poc_mapping.direct.provider_enrolled = 0;
+    input.public_inputs.decision = 0;
+    input.public_inputs.failure_code = 5;
+    input
 }
 
 #[test]
@@ -305,4 +319,67 @@ fn invalid_bridge_input_does_not_convert_to_proof_intent() {
             .iter()
             .any(|error| error.contains("public_inputs.claim_hash must be present"))
     );
+}
+
+#[test]
+fn approved_proof_intent_converts_to_witness_plan() {
+    let intent = sample_bridge_input().to_proof_intent().unwrap();
+    let plan = intent.to_witness_plan();
+
+    assert_eq!(plan.schema_version, "stark-witness-plan-v0");
+    assert_eq!(plan.source_schema_version, "stark-proof-intent-v0");
+    assert_eq!(
+        plan.claim_hash,
+        "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607"
+    );
+    assert_eq!(plan.decision, 1);
+    assert_eq!(plan.failure_code, 0);
+    assert_eq!(plan.direct_facts.eligibility_active, 1);
+    assert_eq!(plan.direct_facts.provider_enrolled, 1);
+    assert_eq!(plan.direct_facts.duplicate_flag, 0);
+    assert_eq!(plan.constraint_groups.len(), 3);
+    assert_eq!(
+        plan.constraint_groups[0].group_id,
+        "public_adjudication_inputs"
+    );
+    assert_eq!(
+        plan.constraint_groups[1].group_id,
+        "direct_fact_constraints"
+    );
+    assert_eq!(plan.constraint_groups[2].group_id, "decision_consistency");
+    assert_eq!(plan.witness_status, "planned_not_generated");
+}
+
+#[test]
+fn proof_intent_json_round_trips_before_witness_planning() {
+    let intent = sample_bridge_input().to_proof_intent().unwrap();
+    let json = serde_json::to_string_pretty(&intent).unwrap();
+    let parsed: StarkProofIntent = serde_json::from_str(&json).unwrap();
+    let plan = parsed.to_witness_plan();
+
+    assert_eq!(parsed, intent);
+    assert_eq!(plan.schema_version, "stark-witness-plan-v0");
+    assert_eq!(plan.source_schema_version, "stark-proof-intent-v0");
+    assert_eq!(plan.witness_status, "planned_not_generated");
+}
+
+#[test]
+fn denied_proof_intent_converts_to_witness_plan() {
+    let intent = denied_bridge_input().to_proof_intent().unwrap();
+    let plan = intent.to_witness_plan();
+
+    assert_eq!(plan.schema_version, "stark-witness-plan-v0");
+    assert_eq!(plan.source_schema_version, "stark-proof-intent-v0");
+    assert_eq!(plan.decision, 0);
+    assert_eq!(plan.failure_code, 5);
+    assert_eq!(plan.direct_facts.eligibility_active, 1);
+    assert_eq!(plan.direct_facts.provider_enrolled, 0);
+    assert_eq!(plan.direct_facts.duplicate_flag, 0);
+    assert!(plan.constraint_groups.iter().any(|group| {
+        group.group_id == "decision_consistency"
+            && group
+                .constraints
+                .contains(&"denied_claim_requires_failure_code".to_string())
+    }));
+    assert_eq!(plan.witness_status, "planned_not_generated");
 }

@@ -152,11 +152,11 @@ pub struct BridgeProofStatus {
 ///
 /// This is the last object before a future prover-specific witness adapter. It
 /// is intentionally not a Winterfell, Cairo, or Plonky input.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StarkProofIntent {
-    pub schema_version: &'static str,
+    pub schema_version: String,
     pub source_schema_version: String,
-    pub intent_status: &'static str,
+    pub intent_status: String,
     pub claim_id: String,
     pub claim_hash: String,
     pub decision: u8,
@@ -167,20 +167,42 @@ pub struct StarkProofIntent {
     pub proof_readiness: StarkProofReadiness,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StarkProofDirectFacts {
     pub eligibility_active: u8,
     pub provider_enrolled: u8,
     pub duplicate_flag: u8,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StarkProofReadiness {
     pub bridge_validated: bool,
     pub prover_selected: bool,
     pub witness_generated: bool,
     pub proof_generated: bool,
     pub on_chain_submission: bool,
+}
+
+/// Deterministic witness planning object produced from a proof intent.
+///
+/// This is not a generated witness and does not contain a prover trace. It
+/// names the constraint groups a future STARK prover adapter must satisfy.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkWitnessPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub claim_hash: String,
+    pub decision: u8,
+    pub failure_code: u32,
+    pub direct_facts: StarkProofDirectFacts,
+    pub constraint_groups: Vec<StarkConstraintGroup>,
+    pub witness_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkConstraintGroup {
+    pub group_id: String,
+    pub constraints: Vec<String>,
 }
 
 impl StarkBridgeInput {
@@ -279,9 +301,9 @@ impl StarkBridgeInput {
         self.validate()?;
 
         Ok(StarkProofIntent {
-            schema_version: "stark-proof-intent-v0",
+            schema_version: "stark-proof-intent-v0".to_string(),
             source_schema_version: self.schema_version.clone(),
-            intent_status: "validated_no_prover_selected",
+            intent_status: "validated_no_prover_selected".to_string(),
             claim_id: self.claim.claim_id.clone(),
             claim_hash: self.claim.claim_hash.clone(),
             decision: self.adjudication.decision,
@@ -301,6 +323,45 @@ impl StarkBridgeInput {
                 on_chain_submission: false,
             },
         })
+    }
+}
+
+impl StarkProofIntent {
+    pub fn to_witness_plan(&self) -> StarkWitnessPlan {
+        StarkWitnessPlan {
+            schema_version: "stark-witness-plan-v0".to_string(),
+            source_schema_version: self.schema_version.clone(),
+            claim_hash: self.claim_hash.clone(),
+            decision: self.decision,
+            failure_code: self.failure_code,
+            direct_facts: self.direct_facts.clone(),
+            constraint_groups: vec![
+                StarkConstraintGroup {
+                    group_id: "public_adjudication_inputs".to_string(),
+                    constraints: vec![
+                        "claim_hash_is_public_input".to_string(),
+                        "decision_is_public_input".to_string(),
+                        "failure_code_is_public_input".to_string(),
+                    ],
+                },
+                StarkConstraintGroup {
+                    group_id: "direct_fact_constraints".to_string(),
+                    constraints: vec![
+                        "eligibility_active_is_boolean".to_string(),
+                        "provider_enrolled_is_boolean".to_string(),
+                        "duplicate_flag_is_boolean".to_string(),
+                    ],
+                },
+                StarkConstraintGroup {
+                    group_id: "decision_consistency".to_string(),
+                    constraints: vec![
+                        "approved_claim_requires_no_failure_code".to_string(),
+                        "denied_claim_requires_failure_code".to_string(),
+                    ],
+                },
+            ],
+            witness_status: "planned_not_generated".to_string(),
+        }
     }
 }
 
