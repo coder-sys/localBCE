@@ -383,3 +383,89 @@ fn denied_proof_intent_converts_to_witness_plan() {
     }));
     assert_eq!(plan.witness_status, "planned_not_generated");
 }
+
+#[test]
+fn witness_plan_validation_accepts_valid_approved_plan() {
+    let plan = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+
+    assert_eq!(plan.validate(), Ok(()));
+}
+
+#[test]
+fn witness_plan_validation_accepts_valid_denied_plan() {
+    let plan = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+
+    assert_eq!(plan.validate(), Ok(()));
+}
+
+#[test]
+fn witness_plan_validation_rejects_invalid_boolean_fact() {
+    let mut plan = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    plan.direct_facts.provider_enrolled = 2;
+
+    let errors = plan.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("direct_facts.provider_enrolled must be 0 or 1"))
+    );
+}
+
+#[test]
+fn witness_plan_validation_rejects_decision_failure_code_mismatch() {
+    let mut approved_plan = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    approved_plan.failure_code = 5;
+
+    let approved_errors = approved_plan.validate().unwrap_err();
+
+    assert!(
+        approved_errors
+            .iter()
+            .any(|error| error.contains("approved claim requires failure_code = 0"))
+    );
+
+    let mut denied_plan = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    denied_plan.failure_code = 0;
+
+    let denied_errors = denied_plan.validate().unwrap_err();
+
+    assert!(
+        denied_errors
+            .iter()
+            .any(|error| error.contains("denied claim requires failure_code != 0"))
+    );
+}
+
+#[test]
+fn witness_plan_validation_rejects_missing_required_group() {
+    let mut plan = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    plan.constraint_groups
+        .retain(|group| group.group_id != "decision_consistency");
+
+    let errors = plan.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("missing required constraint group: decision_consistency"))
+    );
+}

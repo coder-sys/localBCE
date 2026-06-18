@@ -365,6 +365,101 @@ impl StarkProofIntent {
     }
 }
 
+impl StarkWitnessPlan {
+    pub const SCHEMA_VERSION: &'static str = "stark-witness-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-intent-v0";
+    pub const WITNESS_STATUS: &'static str = "planned_not_generated";
+    pub const REQUIRED_CONSTRAINT_GROUPS: [&'static str; 3] = [
+        "public_adjudication_inputs",
+        "direct_fact_constraints",
+        "decision_consistency",
+    ];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.claim_hash.trim().is_empty() {
+            errors.push("claim_hash must be present".to_string());
+        }
+
+        if self.decision > 1 {
+            errors.push(format!("decision must be 0 or 1, got {}", self.decision));
+        }
+
+        if self.decision == 1 && self.failure_code != 0 {
+            errors.push("approved claim requires failure_code = 0".to_string());
+        }
+
+        if self.decision == 0 && self.failure_code == 0 {
+            errors.push("denied claim requires failure_code != 0".to_string());
+        }
+
+        validate_boolean_fact(
+            "direct_facts.eligibility_active",
+            self.direct_facts.eligibility_active,
+            &mut errors,
+        );
+        validate_boolean_fact(
+            "direct_facts.provider_enrolled",
+            self.direct_facts.provider_enrolled,
+            &mut errors,
+        );
+        validate_boolean_fact(
+            "direct_facts.duplicate_flag",
+            self.direct_facts.duplicate_flag,
+            &mut errors,
+        );
+
+        for required_group in Self::REQUIRED_CONSTRAINT_GROUPS {
+            if !self
+                .constraint_groups
+                .iter()
+                .any(|group| group.group_id == required_group)
+            {
+                errors.push(format!(
+                    "missing required constraint group: {required_group}"
+                ));
+            }
+        }
+
+        if self.witness_status != Self::WITNESS_STATUS {
+            errors.push(format!(
+                "witness_status must be {}, got {}",
+                Self::WITNESS_STATUS,
+                self.witness_status
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn validate_boolean_fact(field: &str, value: u8, errors: &mut Vec<String>) {
+    if value > 1 {
+        errors.push(format!("{field} must be 0 or 1, got {value}"));
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MappingCounts {
     pub direct: usize,
