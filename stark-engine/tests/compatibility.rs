@@ -469,3 +469,81 @@ fn witness_plan_validation_rejects_missing_required_group() {
             .any(|error| error.contains("missing required constraint group: decision_consistency"))
     );
 }
+
+#[test]
+fn approved_witness_plan_generates_mock_trace_rows() {
+    let plan = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    let trace = plan.to_mock_trace().unwrap();
+
+    assert_eq!(trace.schema_version, "stark-mock-trace-v0");
+    assert_eq!(trace.source_schema_version, "stark-witness-plan-v0");
+    assert_eq!(
+        trace.claim_hash,
+        "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607"
+    );
+    assert_eq!(trace.rows.len(), 8);
+    assert_eq!(trace.trace_status, "mock_trace_generated_no_proof");
+    assert!(trace.rows.iter().all(|row| row.satisfied));
+
+    assert_eq!(trace.rows[0].step_index, 0);
+    assert_eq!(trace.rows[0].constraint_group, "public_adjudication_inputs");
+    assert_eq!(trace.rows[0].constraint_name, "claim_hash_is_public_input");
+    assert_eq!(trace.rows[7].step_index, 7);
+    assert_eq!(trace.rows[7].constraint_group, "decision_consistency");
+    assert_eq!(
+        trace.rows[7].constraint_name,
+        "denied_claim_requires_failure_code"
+    );
+}
+
+#[test]
+fn denied_witness_plan_generates_mock_trace_rows() {
+    let plan = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    let trace = plan.to_mock_trace().unwrap();
+
+    assert_eq!(trace.rows.len(), 8);
+    assert!(trace.rows.iter().all(|row| row.satisfied));
+
+    let provider_row = trace
+        .rows
+        .iter()
+        .find(|row| row.constraint_name == "provider_enrolled_is_boolean")
+        .unwrap();
+    assert_eq!(provider_row.input_value, "0");
+    assert_eq!(provider_row.expected_value, "0_or_1");
+    assert!(provider_row.satisfied);
+
+    let denied_consistency_row = trace
+        .rows
+        .iter()
+        .find(|row| row.constraint_name == "denied_claim_requires_failure_code")
+        .unwrap();
+    assert_eq!(
+        denied_consistency_row.input_value,
+        "decision=0,failure_code=5"
+    );
+    assert!(denied_consistency_row.satisfied);
+}
+
+#[test]
+fn invalid_witness_plan_does_not_generate_mock_trace() {
+    let mut plan = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan();
+    plan.direct_facts.duplicate_flag = 2;
+
+    let errors = plan.to_mock_trace().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("direct_facts.duplicate_flag must be 0 or 1"))
+    );
+}

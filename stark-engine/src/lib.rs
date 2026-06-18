@@ -205,6 +205,27 @@ pub struct StarkConstraintGroup {
     pub constraints: Vec<String>,
 }
 
+/// Deterministic non-cryptographic trace preview derived from a validated
+/// witness plan.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkMockTrace {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub claim_hash: String,
+    pub rows: Vec<StarkMockTraceRow>,
+    pub trace_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkMockTraceRow {
+    pub step_index: usize,
+    pub constraint_group: String,
+    pub constraint_name: String,
+    pub input_value: String,
+    pub expected_value: String,
+    pub satisfied: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -452,12 +473,114 @@ impl StarkWitnessPlan {
             Err(errors)
         }
     }
+
+    pub fn to_mock_trace(&self) -> Result<StarkMockTrace, Vec<String>> {
+        self.validate()?;
+
+        let mut rows = Vec::new();
+        push_mock_trace_row(
+            &mut rows,
+            "public_adjudication_inputs",
+            "claim_hash_is_public_input",
+            self.claim_hash.clone(),
+            "non_empty_0x_prefixed_hash".to_string(),
+            self.claim_hash.starts_with("0x") && self.claim_hash.len() > 2,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "public_adjudication_inputs",
+            "decision_is_public_input",
+            self.decision.to_string(),
+            "0_or_1".to_string(),
+            self.decision <= 1,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "public_adjudication_inputs",
+            "failure_code_is_public_input",
+            self.failure_code.to_string(),
+            "u32_failure_code".to_string(),
+            true,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "direct_fact_constraints",
+            "eligibility_active_is_boolean",
+            self.direct_facts.eligibility_active.to_string(),
+            "0_or_1".to_string(),
+            self.direct_facts.eligibility_active <= 1,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "direct_fact_constraints",
+            "provider_enrolled_is_boolean",
+            self.direct_facts.provider_enrolled.to_string(),
+            "0_or_1".to_string(),
+            self.direct_facts.provider_enrolled <= 1,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "direct_fact_constraints",
+            "duplicate_flag_is_boolean",
+            self.direct_facts.duplicate_flag.to_string(),
+            "0_or_1".to_string(),
+            self.direct_facts.duplicate_flag <= 1,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "decision_consistency",
+            "approved_claim_requires_no_failure_code",
+            format!(
+                "decision={},failure_code={}",
+                self.decision, self.failure_code
+            ),
+            "decision_1_implies_failure_code_0".to_string(),
+            self.decision != 1 || self.failure_code == 0,
+        );
+        push_mock_trace_row(
+            &mut rows,
+            "decision_consistency",
+            "denied_claim_requires_failure_code",
+            format!(
+                "decision={},failure_code={}",
+                self.decision, self.failure_code
+            ),
+            "decision_0_implies_failure_code_nonzero".to_string(),
+            self.decision != 0 || self.failure_code != 0,
+        );
+
+        Ok(StarkMockTrace {
+            schema_version: "stark-mock-trace-v0".to_string(),
+            source_schema_version: self.schema_version.clone(),
+            claim_hash: self.claim_hash.clone(),
+            rows,
+            trace_status: "mock_trace_generated_no_proof".to_string(),
+        })
+    }
 }
 
 fn validate_boolean_fact(field: &str, value: u8, errors: &mut Vec<String>) {
     if value > 1 {
         errors.push(format!("{field} must be 0 or 1, got {value}"));
     }
+}
+
+fn push_mock_trace_row(
+    rows: &mut Vec<StarkMockTraceRow>,
+    constraint_group: &str,
+    constraint_name: &str,
+    input_value: String,
+    expected_value: String,
+    satisfied: bool,
+) {
+    rows.push(StarkMockTraceRow {
+        step_index: rows.len(),
+        constraint_group: constraint_group.to_string(),
+        constraint_name: constraint_name.to_string(),
+        input_value,
+        expected_value,
+        satisfied,
+    });
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
