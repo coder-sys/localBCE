@@ -1,0 +1,55 @@
+{
+  "schema_version": "blind_ledger_monitoring_events_v1",
+  "events": [
+    {
+      "source": "StarkBatchSettlement",
+      "name": "StarkBatchSubmitted",
+      "severity": "critical",
+      "required_fields": [
+        "batchId",
+        "nullifierRootBefore",
+        "nullifierRootAfter",
+        "dataAvailabilityRoot",
+        "encryptedClaimDataRoot",
+        "approvedAmountCents",
+        "paymentAmountCents"
+      ]
+    },
+    {
+      "source": "BatchClaimsRegistry",
+      "name": "NullifierRootAdvanced",
+      "severity": "critical",
+      "required_fields": [
+        "batchId",
+        "rootBefore",
+        "rootAfter"
+      ]
+    },
+    {
+      "source": "BatchClaimsRegistry",
+      "name": "RootApproved",
+      "severity": "warning",
+      "required_fields": [
+        "rootKind",
+        "root"
+      ]
+    },
+    {
+      "source": "KG",
+      "name": "rule_ratification_invalid",
+      "severity": "critical",
+      "required_fields": [
+        "candidate_id",
+        "reason"
+      ]
+    },
+    {
+      "source": "Ops",
+      "name": "production_readiness_failed",
+      "severity": "critical",
+      "required_fields": [
+        "blockers"
+      ]
+    }
+  ]
+}

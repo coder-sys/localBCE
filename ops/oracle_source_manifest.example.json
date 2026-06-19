@@ -1,0 +1,38 @@
+{
+  "schema_version": "blind_ledger_oracle_source_manifest_v1",
+  "source_count": 4,
+  "sources": [
+    {
+      "name": "cms_medicaid",
+      "program": "medicaid",
+      "source_type": "agency_guidance",
+      "official": true,
+      "required": true,
+      "url": "https://www.medicaid.gov/medicaid/index.html"
+    },
+    {
+      "name": "cms_provider_enrollment",
+      "program": "medicaid",
+      "source_type": "agency_guidance",
+      "official": true,
+      "required": true,
+      "url": "https://www.cms.gov/medicare/enrollment-renewal/providers-suppliers"
+    },
+    {
+      "name": "ecfr_medicaid_eligibility",
+      "program": "medicaid",
+      "source_type": "regulation",
+      "official": true,
+      "required": true,
+      "url": "https://www.ecfr.gov/current/title-42/chapter-IV/subchapter-C/part-435"
+    },
+    {
+      "name": "govinfo_cfr_archive",
+      "program": "medicaid",
+      "source_type": "regulation_archive",
+      "official": true,
+      "required": false,
+      "url": "https://www.govinfo.gov/app/collection/cfr"
+    }
+  ]
+}

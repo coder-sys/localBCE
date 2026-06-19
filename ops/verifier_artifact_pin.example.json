@@ -1,0 +1,24 @@
+{
+  "schema_version": "blind_ledger_native_stark_verifier_pin_v1",
+  "environment": "example_non_production",
+  "production_usable": false,
+  "proof_anchor": "NATIVE_STARK_DIRECT_ANCHOR",
+  "verifier_interface": "INativeStarkVerifier",
+  "artifact_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "is_legacy_proof_wrapper": false,
+  "public_input_schema": "ops/native_stark_public_inputs_v1.json",
+  "source_hashes": [
+    {
+      "path": "blind-ledger-app-layer/contracts/src/stark/INativeStarkVerifier.sol",
+      "sha256": "f7cbd15fffcbc5c7ed6f78d6d7cbad40b0428a7b361726048fbffe37ec6d33f1"
+    },
+    {
+      "path": "blind-ledger-app-layer/contracts/src/stark/StarkBatchSettlement.sol",
+      "sha256": "cf86855e8273c8c1937dcfa2bf044de7510acc2131dda3770c5eaeee6e52a012"
+    },
+    {
+      "path": "ops/native_stark_public_inputs_v1.json",
+      "sha256": "513757af6a578033621f341643532a83bace44546a642c2fa8cacdd47cd12599"
+    }
+  ]
+}

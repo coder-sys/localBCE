@@ -13,7 +13,18 @@ They do not change the active local prototype:
 - `stark-engine/` remains a pre-prover planning and compatibility crate.
 - No real STARK proof or native STARK verifier is active yet.
 
-Machine-readable ops JSON configs and validation scripts are intentionally not
-ported in this step. They should be added only through later explicit
-integration tasks.
+The following machine-readable JSON files are included as inactive scaffolding:
 
+- `launch_blockers.json`
+- `monitoring_events.json`
+- `governance_config.example.json`
+- `oracle_source_manifest.example.json`
+- `verifier_artifact_pin.example.json`
+
+These files are examples and planning inputs only. They are not active runtime
+configuration, do not enable production mode, and do not replace
+`rust-engine/config.json`.
+
+Production environment templates, native STARK public input schemas, and ops
+validation scripts are intentionally not ported yet. They should be added only
+through later explicit integration tasks.
