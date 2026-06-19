@@ -25,6 +25,17 @@ These files are examples and planning inputs only. They are not active runtime
 configuration, do not enable production mode, and do not replace
 `rust-engine/config.json`.
 
-Production environment templates, native STARK public input schemas, and ops
-validation scripts are intentionally not ported yet. They should be added only
-through later explicit integration tasks.
+Validate the inactive JSON scaffolding with:
+
+```bash
+python3 scripts/validate_ops_scaffold.py
+```
+
+The validator checks file presence, JSON parsing, `schema_version` fields,
+example/demo governance addresses, required-source HTTPS/official flags, and
+that the verifier artifact pin remains marked non-production. It does not
+import app-layer code and does not validate production readiness.
+
+Production environment templates, native STARK public input schemas, and
+production automation scripts are intentionally not ported yet. They should be
+added only through later explicit integration tasks.
