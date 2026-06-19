@@ -547,3 +547,89 @@ fn invalid_witness_plan_does_not_generate_mock_trace() {
             .any(|error| error.contains("direct_facts.duplicate_flag must be 0 or 1"))
     );
 }
+
+#[test]
+fn mock_trace_generates_winterfell_poc_compatibility_report() {
+    let trace = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+    let report = trace.winterfell_poc_compatibility_report();
+
+    assert_eq!(
+        report.schema_version,
+        "winterfell-poc-compatibility-report-v0"
+    );
+    assert_eq!(report.source_schema_version, "stark-mock-trace-v0");
+    assert_eq!(
+        report.verdict,
+        "compatible_subset_not_full_winterfell_trace"
+    );
+    assert_eq!(report.mock_trace_rows, 8);
+    assert!(report.all_mock_rows_satisfied);
+    assert!(report.required_mock_constraint_groups_present);
+    assert_eq!(report.imported_winterfell_input_fields.len(), 11);
+    assert_eq!(report.direct_compatible_fields.len(), 3);
+    assert_eq!(report.partial_fields.len(), 4);
+    assert_eq!(report.unmapped_fields.len(), 4);
+    assert!(
+        report
+            .direct_compatible_fields
+            .iter()
+            .any(|field| field.imported_stark_field == "eligibility_active")
+    );
+    assert!(
+        report
+            .direct_compatible_fields
+            .iter()
+            .any(|field| field.imported_stark_field == "provider_enrolled")
+    );
+    assert!(
+        report
+            .direct_compatible_fields
+            .iter()
+            .any(|field| field.imported_stark_field == "duplicate_flag")
+    );
+    assert!(
+        report
+            .unsupported_winterfell_constraints
+            .contains(&"winterfell_commitment_hash_chain".to_string())
+    );
+}
+
+#[test]
+fn winterfell_poc_compatibility_report_is_not_full_prover_compatibility() {
+    let trace = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+    let report = trace.winterfell_poc_compatibility_report();
+
+    assert_eq!(
+        report.verdict,
+        "compatible_subset_not_full_winterfell_trace"
+    );
+    assert!(!report.unsupported_winterfell_constraints.is_empty());
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("not a STARK proof"))
+    );
+    assert!(
+        report
+            .partial_fields
+            .iter()
+            .any(|field| field.imported_stark_field == "charge_cents")
+    );
+    assert!(
+        report
+            .unmapped_fields
+            .iter()
+            .any(|field| field.imported_stark_field == "member_id")
+    );
+}

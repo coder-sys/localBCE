@@ -226,6 +226,35 @@ pub struct StarkMockTraceRow {
     pub satisfied: bool,
 }
 
+/// Static compatibility report between a localBCE mock trace and the imported
+/// Winterfell PoC input/constraint shape.
+///
+/// This report does not import or execute Winterfell. It is an adapter planning
+/// artifact that prevents confusing the mock trace with a real prover trace.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellPocCompatibilityReport {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub verdict: String,
+    pub mock_trace_rows: usize,
+    pub all_mock_rows_satisfied: bool,
+    pub imported_winterfell_input_fields: Vec<String>,
+    pub direct_compatible_fields: Vec<WinterfellPocFieldCompatibility>,
+    pub partial_fields: Vec<WinterfellPocFieldCompatibility>,
+    pub unmapped_fields: Vec<WinterfellPocFieldCompatibility>,
+    pub required_mock_constraint_groups_present: bool,
+    pub unsupported_winterfell_constraints: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellPocFieldCompatibility {
+    pub imported_stark_field: String,
+    pub active_rust_source: Option<String>,
+    pub compatibility: String,
+    pub note: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -559,10 +588,83 @@ impl StarkWitnessPlan {
     }
 }
 
+impl StarkMockTrace {
+    pub const SCHEMA_VERSION: &'static str = "stark-mock-trace-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-witness-plan-v0";
+
+    pub fn winterfell_poc_compatibility_report(&self) -> WinterfellPocCompatibilityReport {
+        let required_groups_present =
+            StarkWitnessPlan::REQUIRED_CONSTRAINT_GROUPS
+                .iter()
+                .all(|required_group| {
+                    self.rows
+                        .iter()
+                        .any(|row| row.constraint_group == *required_group)
+                });
+        let all_mock_rows_satisfied = self.rows.iter().all(|row| row.satisfied);
+        let direct_compatible_fields = compatibility_rows_for_class(MappingClass::Direct);
+        let partial_fields = compatibility_rows_for_class(MappingClass::Partial);
+        let unmapped_fields = compatibility_rows_for_class(MappingClass::Unmapped);
+
+        WinterfellPocCompatibilityReport {
+            schema_version: "winterfell-poc-compatibility-report-v0".to_string(),
+            source_schema_version: self.schema_version.clone(),
+            verdict: "compatible_subset_not_full_winterfell_trace".to_string(),
+            mock_trace_rows: self.rows.len(),
+            all_mock_rows_satisfied,
+            imported_winterfell_input_fields: ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+            direct_compatible_fields,
+            partial_fields,
+            unmapped_fields,
+            required_mock_constraint_groups_present: required_groups_present,
+            unsupported_winterfell_constraints: vec![
+                "member_id_nonzero_inverse_witness".to_string(),
+                "provider_npi_nonzero_inverse_witness".to_string(),
+                "service_line_count_nonzero_inverse_witness".to_string(),
+                "diagnosis_count_nonzero_inverse_witness".to_string(),
+                "charge_cents_positive_inverse_witness".to_string(),
+                "prior_auth_ok_gate_equivalence".to_string(),
+                "program_integrity_hold_inverse_gate".to_string(),
+                "charge_and_max_charge_bit_decomposition".to_string(),
+                "charge_lte_max_charge_comparison_witness".to_string(),
+                "winterfell_commitment_hash_chain".to_string(),
+                "trace_width_172_and_trace_length_16".to_string(),
+            ],
+            notes: vec![
+                "This report is generated without importing or executing Winterfell.".to_string(),
+                "The mock trace covers only the active localBCE direct bridge fields and public decision/failure consistency.".to_string(),
+                "Partial and unmapped fields must be normalized before a real Winterfell or production STARK adapter can be honest.".to_string(),
+                "This is not a STARK proof and does not claim cryptographic verification.".to_string(),
+            ],
+        }
+    }
+}
+
 fn validate_boolean_fact(field: &str, value: u8, errors: &mut Vec<String>) {
     if value > 1 {
         errors.push(format!("{field} must be 0 or 1, got {value}"));
     }
+}
+
+fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCompatibility> {
+    ActiveClaimToStarkBridge::field_mappings()
+        .into_iter()
+        .filter(|mapping| mapping.class == class)
+        .map(|mapping| WinterfellPocFieldCompatibility {
+            imported_stark_field: mapping.imported_stark_field.to_string(),
+            active_rust_source: mapping.active_rust_source.map(str::to_string),
+            compatibility: match mapping.class {
+                MappingClass::Direct => "direct",
+                MappingClass::Partial => "partial",
+                MappingClass::Unmapped => "unmapped",
+            }
+            .to_string(),
+            note: mapping.note.to_string(),
+        })
+        .collect()
 }
 
 fn push_mock_trace_row(
