@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Medi-Cal Settlement Desk</title>
+    <link rel="stylesheet" href="/static/styles.css?v=treasury6" />
+  </head>
+  <body>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="seal" aria-hidden="true">CA</div>
+          <div>
+            <strong>Medi-Cal Settlement Desk</strong>
+            <span>Blind Ledger claim instrument</span>
+          </div>
+        </div>
+
+        <div class="mode-switch" aria-label="Desk mode">
+          <button class="mode-button active" data-mode="operator">Operator</button>
+          <button class="mode-button" data-mode="auditor">Auditor</button>
+        </div>
+
+        <nav class="tabbar" aria-label="Workspace">
+          <button class="tab active" data-view="review">
+            <span>Claims Waiting</span>
+            <strong id="navReviewCount">0</strong>
+          </button>
+          <button class="tab" data-view="intake">
+            <span>Claim Intake</span>
+          </button>
+          <button class="tab" data-view="audit">
+            <span>Decision History</span>
+            <strong id="navAuditCount">0</strong>
+          </button>
+          <button class="tab" data-view="batch">
+            <span>Batch Evidence</span>
+          </button>
+        </nav>
+
+        <div class="top-actions">
+          <div class="system-state">
+            <span id="modeLabel">Local pilot</span>
+            <strong id="proofLabel">Settlement closed</strong>
+          </div>
+          <button id="refreshBtn" class="button secondary">Refresh</button>
+          <button id="resetBtn" class="button quiet">Reset</button>
+        </div>
+      </header>
+
+      <main class="main">
+        <section class="page-intro">
+          <div>
+            <p id="modeEyebrow" class="eyebrow">Claims operations</p>
+            <h1 id="viewTitle">Claims Waiting for Review</h1>
+          </div>
+          <div class="desk-summary" aria-label="Desk status">
+            <div><span>Cleared</span><strong id="approvedMetric">0</strong></div>
+            <div><span>Waiting</span><strong id="reviewMetric">0</strong></div>
+            <div><span>Payments</span><strong id="paymentMetric">0</strong></div>
+            <div><span>Release Holds</span><strong id="blockerMetric">0</strong></div>
+          </div>
+        </section>
+
+        <section class="settlement-strip" aria-label="Settlement state">
+          <div>
+            <span>Nullifier root</span>
+            <strong id="stateNullifier" class="mono">none</strong>
+          </div>
+          <div>
+            <span>Last batch</span>
+            <strong id="stateBatch" class="mono">none</strong>
+          </div>
+          <div>
+            <span>Proof lane</span>
+            <strong id="stateProof">STARK-native</strong>
+          </div>
+          <div>
+            <span>Verifier status</span>
+            <strong id="stateVerifier">Mock verifier / closed</strong>
+          </div>
+        </section>
+
+        <section id="reviewView" class="view active">
+          <div class="casework-grid">
+            <section class="queue-panel" aria-label="Claims waiting for review">
+              <div class="section-title">
+                <div>
+                  <p class="kicker">Today</p>
+                  <h2>Claims Waiting</h2>
+                </div>
+                <span id="queueSubhead">0 open</span>
+              </div>
+              <div class="queue-filters" aria-label="Queue filters">
+                <button class="filter-chip active" data-review-filter="all">All cases</button>
+                <button class="filter-chip" data-review-filter="documents">Documents</button>
+                <button class="filter-chip" data-review-filter="eligibility">Eligibility</button>
+                <button class="filter-chip" data-review-filter="policy">Policy</button>
+              </div>
+              <div id="reviewList" class="queue-list"></div>
+            </section>
+
+            <section class="case-panel" aria-label="Selected claim file">
+              <div id="caseDetail" class="case-detail empty-state"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="intakeView" class="view">
+          <div class="intake-grid">
+            <section class="intake-sheet">
+              <div class="section-title">
+                <div>
+                  <p class="kicker">New package</p>
+                  <h2>Claim Intake</h2>
+                </div>
+                <span id="intakeStatus">Ready</span>
+              </div>
+
+              <div class="sample-strip" aria-label="Sample packages">
+                <button class="sample-chip active" data-sample="clean">Ready to clear</button>
+                <button class="sample-chip" data-sample="priorAuth">Missing auth</button>
+                <button class="sample-chip" data-sample="eligibility">Coverage issue</button>
+                <button class="sample-chip" data-sample="badFile">Unreadable file</button>
+              </div>
+
+              <div class="intake-step">
+                <span class="step-number">1</span>
+                <div class="step-body">
+                  <h3>Claim File</h3>
+                  <div class="field-row">
+                    <label class="field">
+                      <span>Operator</span>
+                      <input id="actorInput" class="input" value="operator@example.gov" autocomplete="off" />
+                    </label>
+                    <label class="field">
+                      <span>Claim ID</span>
+                      <input id="claimIdInput" class="input" value="" autocomplete="off" />
+                    </label>
+                    <label class="file-button">
+                      <input id="claimFileUpload" type="file" accept=".edi,.x12,.txt" />
+                      <span>Load 837</span>
+                    </label>
+                  </div>
+                  <textarea id="ediInput" class="edi-box" spellcheck="false" aria-label="837 claim file"></textarea>
+                </div>
+              </div>
+
+              <div class="intake-step">
+                <span class="step-number">2</span>
+                <div class="step-body">
+                  <h3>Coverage and Documents</h3>
+                  <div class="document-grid" aria-label="Claim checks">
+                    <label class="toggle-line">
+                      <input id="eligibilityActive" type="checkbox" checked />
+                      <span><strong>Coverage active</strong><small>Member eligible on service date</small></span>
+                    </label>
+                    <label class="toggle-line">
+                      <input id="providerEnrolled" type="checkbox" checked />
+                      <span><strong>Provider payable</strong><small>Rendering provider enrolled</small></span>
+                    </label>
+                    <label class="toggle-line">
+                      <input id="priorAuthAttached" type="checkbox" checked />
+                      <span><strong>Authorization attached</strong><small>Auth number present if required</small></span>
+                    </label>
+                    <label class="toggle-line">
+                      <input id="duplicateClaim" type="checkbox" />
+                      <span><strong>Possible duplicate</strong><small>Needs claim-history comparison</small></span>
+                    </label>
+                    <label class="toggle-line">
+                      <input id="programIntegrityHold" type="checkbox" />
+                      <span><strong>Integrity hold</strong><small>Keep payment closed for review</small></span>
+                    </label>
+                    <label class="toggle-line">
+                      <input id="strictOracle" type="checkbox" checked />
+                      <span><strong>Verified sources</strong><small>Require eligibility and provider attestations</small></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="intake-step final-step">
+                <span class="step-number">3</span>
+                <div class="step-body">
+                  <h3>Submit</h3>
+                  <div class="submit-row">
+                    <button id="submitBtn" class="button primary">Submit Claim Package</button>
+                    <label class="checkline">
+                      <input id="proofGate" type="checkbox" checked />
+                      <span>Keep settlement proof-gated</span>
+                    </label>
+                    <span id="notice" class="notice" role="status" aria-live="polite"></span>
+                  </div>
+                </div>
+              </div>
+
+              <details class="tech-preview">
+                <summary>Technical packet</summary>
+                <pre id="jsonPreview"></pre>
+              </details>
+            </section>
+
+            <aside class="readiness-panel">
+              <div class="section-title compact">
+                <div>
+                  <p class="kicker">Before submit</p>
+                  <h2>Readiness</h2>
+                </div>
+              </div>
+              <div id="precheckPanel" class="precheck"></div>
+              <div class="route-strip" aria-label="Claim route">
+                <div><span>Intake</span><strong>Package received</strong></div>
+                <div><span>Rules</span><strong>Automated decision</strong></div>
+                <div><span>Review</span><strong>Staff queue if blocked</strong></div>
+                <div><span>Gate</span><strong>Settlement stays closed</strong></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="auditView" class="view">
+          <div class="history-grid">
+            <section class="history-panel">
+              <div class="section-title">
+                <div>
+                  <p class="kicker">Session record</p>
+                  <h2>Decision History</h2>
+                </div>
+                <span id="auditSubhead">0 entries</span>
+              </div>
+              <div class="audit-search-row">
+                <label class="audit-search">
+                  <span>Claim lookup</span>
+                  <input id="auditSearchInput" class="input" placeholder="Enter claim ID or batch root" autocomplete="off" />
+                </label>
+                <button id="auditSearchClear" class="mini-button" type="button">Clear</button>
+              </div>
+              <div class="history-filters" aria-label="Decision history filters">
+                <button class="filter-chip active" data-history-filter="all">All</button>
+                <button class="filter-chip" data-history-filter="cleared">Cleared</button>
+                <button class="filter-chip" data-history-filter="routed">Routed</button>
+                <button class="filter-chip" data-history-filter="staff">Staff actions</button>
+              </div>
+              <div id="auditTimeline" class="timeline"></div>
+            </section>
+
+            <aside class="release-panel">
+              <div class="section-title compact">
+                <div>
+                  <p class="kicker">Passed review</p>
+                  <h2>Verification Checks</h2>
+                </div>
+              </div>
+              <div id="allowedTrail" class="compact-list"></div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="batchView" class="view">
+          <div class="batch-grid">
+            <section class="evidence-panel">
+              <div class="section-title">
+                <div>
+                  <p class="kicker">Supervisor evidence</p>
+                  <h2>Latest Batch</h2>
+                </div>
+                <span id="batchSubhead">No batch</span>
+              </div>
+              <div id="batchRoots" class="root-grid"></div>
+            </section>
+            <aside class="remit-panel">
+              <div class="section-title compact">
+                <div>
+                  <p class="kicker">Generated record</p>
+                  <h2>835 Output</h2>
+                </div>
+              </div>
+              <pre id="remitBox" class="remit-box"></pre>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js?v=treasury6"></script>
+  </body>
+</html>

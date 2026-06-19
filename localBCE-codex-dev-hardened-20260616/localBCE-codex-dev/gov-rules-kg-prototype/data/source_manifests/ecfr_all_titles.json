@@ -1,0 +1,458 @@
+{
+  "date": "2026-06-10",
+  "manifest_type": "source_manifest",
+  "name": "ecfr_all_titles",
+  "source_count": 50,
+  "sources": [
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_1",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-1.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_2",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-2.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_3",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-3.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_4",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-4.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_5",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-5.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_6",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-6.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_7",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-7.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_8",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-8.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_9",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-9.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_10",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-10.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_11",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-11.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_12",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-12.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_13",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-13.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_14",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-14.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_15",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-15.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_16",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-16.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_17",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-17.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_18",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-18.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_19",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-19.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_20",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-20.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_21",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-21.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_22",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-22.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_23",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-23.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_24",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-24.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_25",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-25.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_26",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-26.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_27",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-27.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_28",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-28.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_29",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-29.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_30",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-30.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_31",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-31.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_32",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-32.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_33",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-33.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_34",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-34.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_35",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-35.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_36",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-36.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_37",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-37.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_38",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-38.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_39",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-39.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_40",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-40.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_41",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-41.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_42",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-42.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_43",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-43.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_44",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-44.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_45",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-45.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_46",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-46.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_47",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-47.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_48",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-48.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_49",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-49.xml"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "ecfr_title_50",
+      "required": false,
+      "source_type": "ecfr_xml",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-06-10/title-50.xml"
+    }
+  ]
+}

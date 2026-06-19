@@ -1,0 +1,10 @@
+requests
+httpx
+cryptography
+playwright
+pypdf
+PyMuPDF
+lxml
+beautifulsoup4
+networkx
+whoosh

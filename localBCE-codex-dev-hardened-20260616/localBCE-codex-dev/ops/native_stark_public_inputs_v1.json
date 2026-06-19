@@ -1,0 +1,61 @@
+{
+  "schema_version": "blind_ledger_native_stark_public_inputs_v1",
+  "contract": "blind-ledger-app-layer/contracts/src/stark/StarkBatchSettlement.sol",
+  "statement": "Public inputs must match StarkBatchSettlement._publicInputsMatch in order and type.",
+  "fields": [
+    {
+      "index": 0,
+      "name": "nullifierRootBefore",
+      "solidity_type": "bytes32",
+      "submission_field": "nullifierRootBefore"
+    },
+    {
+      "index": 1,
+      "name": "nullifierRootAfter",
+      "solidity_type": "bytes32",
+      "submission_field": "nullifierRootAfter"
+    },
+    {
+      "index": 2,
+      "name": "claimRoot",
+      "solidity_type": "bytes32",
+      "submission_field": "claimRoot"
+    },
+    {
+      "index": 3,
+      "name": "resultRoot",
+      "solidity_type": "bytes32",
+      "submission_field": "resultRoot"
+    },
+    {
+      "index": 4,
+      "name": "paymentRoot",
+      "solidity_type": "bytes32",
+      "submission_field": "paymentRoot"
+    },
+    {
+      "index": 5,
+      "name": "dataAvailabilityRoot",
+      "solidity_type": "bytes32",
+      "submission_field": "dataAvailabilityRoot"
+    },
+    {
+      "index": 6,
+      "name": "encryptedClaimDataRoot",
+      "solidity_type": "bytes32",
+      "submission_field": "encryptedClaimDataRoot"
+    },
+    {
+      "index": 7,
+      "name": "valueConservationCommitment",
+      "solidity_type": "bytes32",
+      "submission_field": "valueConservationCommitment"
+    },
+    {
+      "index": 8,
+      "name": "paymentAmountCents",
+      "solidity_type": "uint256_as_bytes32",
+      "submission_field": "paymentAmountCents"
+    }
+  ]
+}

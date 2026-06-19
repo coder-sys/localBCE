@@ -1,0 +1,45 @@
+{
+  "schema_version": "blind_ledger_launch_blockers_v1",
+  "blockers": [
+    {
+      "id": "LB-001",
+      "title": "Production native STARK prover and verifier",
+      "status": "open",
+      "owner": "cryptography_engineering",
+      "external_required": true,
+      "exit_criteria": "Real production STARK proof generation and native verifier verification pass audited acceptance tests."
+    },
+    {
+      "id": "LB-002",
+      "title": "External cryptographic security audit",
+      "status": "open",
+      "owner": "security_owner",
+      "external_required": true,
+      "exit_criteria": "Independent audit report closes or accepts all critical and high findings."
+    },
+    {
+      "id": "LB-003",
+      "title": "Human governance signer enrollment",
+      "status": "open",
+      "owner": "governance_owner",
+      "external_required": true,
+      "exit_criteria": "Multisig signers, recovery process, and timelock operations are tested with real authorized humans."
+    },
+    {
+      "id": "LB-004",
+      "title": "Production oracle data agreements",
+      "status": "open",
+      "owner": "operations_owner",
+      "external_required": true,
+      "exit_criteria": "Official source/API access, data-sharing agreements, and oracle signing keys are active and monitored."
+    },
+    {
+      "id": "LB-005",
+      "title": "Payment and compliance approval",
+      "status": "open",
+      "owner": "compliance_owner",
+      "external_required": true,
+      "exit_criteria": "Legal, compliance, and payment operations approve the exact pilot scope and settlement controls."
+    }
+  ]
+}
