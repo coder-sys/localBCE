@@ -41,6 +41,8 @@ localBCE/
   stark-engine/   first-class STARK bridge crate
   gov-rules-kg-prototype/
                   Claude web-grounded rules KG prototype
+  localBCE-codex-dev-hardened-20260616/
+                  imported hardened reference bundle
 ```
 
 ---
@@ -74,6 +76,25 @@ localBCE/
 - rust-engine/ remains the active Groth16 runtime.
 - No STARK prover is wired into runtime yet.
 - No STARK verifier is wired into ClaimsRegistry yet.
+- No real STARK proof is generated yet.
+
+Current STARK pre-prover planning workflow:
+
+```bash
+cd rust-engine
+cargo run -- stark-bridge-input-dry-run
+
+cd ../stark-engine
+cargo run --bin validate_bridge_input -- ../rust-engine/stark_bridge_input.json
+cargo run --bin generate_proof_intent -- ../rust-engine/stark_bridge_input.json proof_intent.json
+cargo run --bin generate_witness_plan -- proof_intent.json witness_plan.json
+cargo run --bin validate_witness_plan -- witness_plan.json
+cargo run --bin generate_mock_trace -- witness_plan.json mock_trace.json
+cargo run --bin generate_winterfell_compat_report -- mock_trace.json winterfell_compat_report.json
+cargo run --bin generate_winterfell_gap_plan -- winterfell_compat_report.json winterfell_gap_plan.json
+```
+
+This chain validates and normalizes the future STARK path, then produces a mock trace, Winterfell PoC compatibility report, and adapter gap plan. It does not import Winterfell, generate a real STARK proof, replace Groth16, or submit on-chain.
 
 ## Smart Contracts
 
@@ -111,6 +132,13 @@ localBCE/
 
 - stark-engine/Cargo.toml
 - stark-engine/src/lib.rs
+- stark-engine/src/bin/validate_bridge_input.rs
+- stark-engine/src/bin/generate_proof_intent.rs
+- stark-engine/src/bin/generate_witness_plan.rs
+- stark-engine/src/bin/validate_witness_plan.rs
+- stark-engine/src/bin/generate_mock_trace.rs
+- stark-engine/src/bin/generate_winterfell_compat_report.rs
+- stark-engine/src/bin/generate_winterfell_gap_plan.rs
 - stark-engine/tests/compatibility.rs
 
 ## Imported App and Audit Layer
@@ -127,6 +155,24 @@ localBCE/
 Note: blind-ledger-app-layer is imported as a standalone cofounder handoff and
 audit/research lane. It is not wired into the active Rust -> Groth16 ->
 ClaimsRegistry workflow yet.
+
+## Rules Knowledge Graph
+
+- gov-rules-kg-prototype/README.md
+- gov-rules-kg-prototype/src/gov_rules_kg/
+- gov-rules-kg-prototype/tests/
+
+Note: gov-rules-kg-prototype is a rules discovery, Claude web-grounded candidate, review, and export prototype. Its outputs are not active Rust adjudication rules until reviewed and explicitly bridged into rust-engine.
+
+## Hardened Reference Bundle
+
+- localBCE-codex-dev-hardened-20260616/
+- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/ops/
+- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/blind-ledger-app-layer/
+- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/gov-rules-kg-prototype/
+- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/tooling/
+
+Note: this folder is tracked as an imported hardened reference bundle. It is not active runtime code unless a later task explicitly ports a file or behavior into the active project folders.
 
 ---
 
@@ -278,6 +324,13 @@ REDEPLOY_WORKFLOW.md
 - Merkle commitments
 - nullifier trees
 - Plonky3 migration
+
+Near-term next steps:
+
+- Keep Groth16 demo flow green.
+- Use the Winterfell adapter gap plan to choose the first safe real-prover adapter work.
+- Port hardened/app-layer assets only through explicit reviewed integration steps.
+- Bridge reviewed deterministic rule candidates into rust-engine as shadow tests before runtime use.
 - oracle attestations
 - off-circuit rules engine
 - ZK Bouncer architecture

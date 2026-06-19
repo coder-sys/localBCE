@@ -9,6 +9,7 @@ Maintain a working local prototype for privacy-preserving claims adjudication us
 - Solidity verifier
 - ClaimsRegistry smart contract
 - Imported standalone app/audit layer from the cofounder handoff
+- Imported hardened reference bundle
 
 Current workflow:
 
@@ -50,6 +51,15 @@ It contains:
 Do not silently wire this layer into the active rust-engine/zk/blind-ledger workflow.
 Treat it as a separate review and integration candidate unless explicitly asked to merge behavior.
 
+## localBCE-codex-dev-hardened-20260616 Directory
+
+localBCE-codex-dev-hardened-20260616/ is an imported hardened reference bundle.
+
+It contains ops, governance, batch, app-layer, STARK/Cairo, and tooling material.
+
+Do not treat files inside this bundle as active runtime sources unless a task explicitly ports them into the active folders.
+When integrating from this bundle, copy or adapt only the specific reviewed file or behavior needed.
+
 ---
 
 # Important Active Files
@@ -74,6 +84,9 @@ Treat it as a separate review and integration candidate unless explicitly asked 
 - blind-ledger-app-layer/tests/
 - blind-ledger-app-layer/rules-engine-rust/
 - blind-ledger-app-layer/zk-production-binding/
+- gov-rules-kg-prototype/
+- stark-engine/
+- localBCE-codex-dev-hardened-20260616/
 
 ---
 
@@ -91,6 +104,25 @@ Treat it as a separate review and integration candidate unless explicitly asked 
 - runtime config loaded from rust-engine/config.json
 - active Foundry tests for ClaimsRegistry
 - deployment.json smoke test
+- STARK pre-prover planning pipeline in stark-engine/
+
+Current STARK pre-prover planning commands:
+
+```text
+rust-engine:
+  cargo run -- stark-bridge-input-dry-run
+
+stark-engine:
+  validate_bridge_input
+  generate_proof_intent
+  generate_witness_plan
+  validate_witness_plan
+  generate_mock_trace
+  generate_winterfell_compat_report
+  generate_winterfell_gap_plan
+```
+
+These commands do not generate real STARK proofs and do not replace the active Groth16 flow.
 
 ---
 
