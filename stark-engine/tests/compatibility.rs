@@ -633,3 +633,70 @@ fn winterfell_poc_compatibility_report_is_not_full_prover_compatibility() {
             .any(|field| field.imported_stark_field == "member_id")
     );
 }
+
+#[test]
+fn winterfell_compatibility_report_generates_adapter_gap_plan() {
+    let report = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap()
+        .winterfell_poc_compatibility_report();
+    let plan = report.to_adapter_gap_plan();
+
+    assert_eq!(plan.schema_version, "winterfell-adapter-gap-plan-v0");
+    assert_eq!(
+        plan.source_schema_version,
+        "winterfell-poc-compatibility-report-v0"
+    );
+    assert_eq!(
+        plan.plan_status,
+        "adapter_planning_only_no_winterfell_import"
+    );
+    assert_eq!(plan.direct_ready_fields.len(), 3);
+    assert_eq!(plan.partial_fields_requiring_normalization.len(), 4);
+    assert_eq!(plan.unmapped_fields_requiring_source_data.len(), 4);
+    assert_eq!(
+        plan.unsupported_constraints_requiring_prover_work,
+        report.unsupported_winterfell_constraints
+    );
+    assert_eq!(plan.recommended_next_steps.len(), 5);
+}
+
+#[test]
+fn winterfell_adapter_gap_plan_names_critical_gap_categories() {
+    let plan = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap()
+        .winterfell_poc_compatibility_report()
+        .to_adapter_gap_plan();
+
+    assert!(
+        plan.direct_ready_fields
+            .iter()
+            .any(|field| field.imported_stark_field == "duplicate_flag")
+    );
+    assert!(
+        plan.partial_fields_requiring_normalization
+            .iter()
+            .any(|field| field.imported_stark_field == "charge_cents")
+    );
+    assert!(
+        plan.unmapped_fields_requiring_source_data
+            .iter()
+            .any(|field| field.imported_stark_field == "provider_npi")
+    );
+    assert!(
+        plan.unsupported_constraints_requiring_prover_work
+            .contains(&"trace_width_172_and_trace_length_16".to_string())
+    );
+    assert!(
+        plan.recommended_next_steps
+            .iter()
+            .any(|step| step.contains("Keep this path separate from the active Groth16 flow"))
+    );
+}

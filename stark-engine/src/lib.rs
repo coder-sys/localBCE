@@ -255,6 +255,20 @@ pub struct WinterfellPocFieldCompatibility {
     pub note: String,
 }
 
+/// Concrete implementation checklist derived from a Winterfell PoC
+/// compatibility report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellAdapterGapPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub direct_ready_fields: Vec<WinterfellPocFieldCompatibility>,
+    pub partial_fields_requiring_normalization: Vec<WinterfellPocFieldCompatibility>,
+    pub unmapped_fields_requiring_source_data: Vec<WinterfellPocFieldCompatibility>,
+    pub unsupported_constraints_requiring_prover_work: Vec<String>,
+    pub recommended_next_steps: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -638,6 +652,29 @@ impl StarkMockTrace {
                 "The mock trace covers only the active localBCE direct bridge fields and public decision/failure consistency.".to_string(),
                 "Partial and unmapped fields must be normalized before a real Winterfell or production STARK adapter can be honest.".to_string(),
                 "This is not a STARK proof and does not claim cryptographic verification.".to_string(),
+            ],
+        }
+    }
+}
+
+impl WinterfellPocCompatibilityReport {
+    pub fn to_adapter_gap_plan(&self) -> WinterfellAdapterGapPlan {
+        WinterfellAdapterGapPlan {
+            schema_version: "winterfell-adapter-gap-plan-v0".to_string(),
+            source_schema_version: self.schema_version.clone(),
+            plan_status: "adapter_planning_only_no_winterfell_import".to_string(),
+            direct_ready_fields: self.direct_compatible_fields.clone(),
+            partial_fields_requiring_normalization: self.partial_fields.clone(),
+            unmapped_fields_requiring_source_data: self.unmapped_fields.clone(),
+            unsupported_constraints_requiring_prover_work: self
+                .unsupported_winterfell_constraints
+                .clone(),
+            recommended_next_steps: vec![
+                "Freeze the direct field contract for eligibility_active, provider_enrolled, and duplicate_flag.".to_string(),
+                "Define deterministic normalization rules for partial fields before adapting them into a prover witness.".to_string(),
+                "Extend rust-engine or upstream claim intake to supply unmapped Winterfell PoC source fields, or explicitly remove those fields from the adapter target.".to_string(),
+                "Implement prover-side witness generation for inverse, comparison, bit decomposition, and commitment constraints only after source fields are available.".to_string(),
+                "Keep this path separate from the active Groth16 flow until a real STARK proof verifies against public inputs.".to_string(),
             ],
         }
     }
