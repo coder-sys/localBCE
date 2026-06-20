@@ -28,10 +28,51 @@ claim_input.json
 
 ---
 
+# Validation
+
+Run the full local health check from the repository root:
+
+```bash
+bash scripts/validate_localbce.sh
+```
+
+This runs:
+
+- `python3 scripts/validate_ops_scaffold.py`
+- `cargo test` and `cargo check` in `rust-engine/`
+- `cargo test` and `cargo check` in `stark-engine/`
+- `forge test` and `forge build` in `blind-ledger/`
+
+Foundry may print lint notes for generated verifier constants and deployment
+JSON smoke-test file cheatcodes. Those notes are not failures when the test and
+build commands exit successfully.
+
+---
+
+# Architecture Alignment
+
+The repository is aligned to the broader hardened technical architecture through
+an explicit staging model:
+
+- active Groth16 compatibility/demo path: `rust-engine/`, `zk/`, `blind-ledger/`
+- STARK pre-prover bridge path: `stark-engine/`
+- imported app/audit reference lane: `blind-ledger-app-layer/`
+- imported hardened reference bundle: `localBCE-codex-dev-hardened-20260616/`
+- rules discovery/review lane: `gov-rules-kg-prototype/`
+- ops/governance planning scaffold: `ops/`
+
+See `ARCHITECTURE_ALIGNMENT.md` for the maturity-tagged map between the
+technical reference architecture and what is active, scaffolded, reference-only,
+or deferred in this repo.
+
+---
+
 # Project Structure
 
 ```text
 localBCE/
+  ARCHITECTURE_ALIGNMENT.md
+                  maturity-tagged alignment to the technical reference
   blind-ledger/   Solidity + Foundry
   blind-ledger-app-layer/
                   imported standalone app/audit layer
@@ -329,6 +370,7 @@ Near-term next steps:
 
 - Keep Groth16 demo flow green.
 - Use the Winterfell adapter gap plan to choose the first safe real-prover adapter work.
+- Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.
 - Port hardened/app-layer assets only through explicit reviewed integration steps.
 - Bridge reviewed deterministic rule candidates into rust-engine as shadow tests before runtime use.
 - oracle attestations

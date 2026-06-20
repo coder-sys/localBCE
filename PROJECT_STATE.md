@@ -20,6 +20,7 @@ STARK-based adjudication proofs, batch roots, result roots, nullifier roots, and
 
 ## Active Project Folders
 
+- ARCHITECTURE_ALIGNMENT.md - maturity-tagged bridge between the technical reference and current active repo
 - blind-ledger/ - Solidity + Foundry
 - zk/ - Circom + snarkjs
 - rust-engine/ - Rust adjudication engine and ZK orchestration
@@ -115,6 +116,29 @@ rust-engine/zk/blind-ledger flow until a future explicit integration step.
 The STARK lane is the production proof-system direction, but it is not wired
 into the active ClaimsRegistry flow yet.
 
+## Architecture Reference Alignment
+
+The external technical reference describes the broader target architecture:
+837 ingestion, shared context, batch orchestration, Poseidon roots, indexed
+nullifier transitions, native STARK public inputs, Cairo/STARK statements,
+native STARK settlement contracts, payment triggers, encrypted data availability,
+and ops/governance controls.
+
+Current localBCE alignment is intentionally staged:
+
+- `rust-engine/`, `zk/`, and `blind-ledger/` are the active Groth16
+  compatibility/demo path.
+- `stark-engine/` is a STARK pre-prover bridge and planning crate.
+- `blind-ledger-app-layer/` and `localBCE-codex-dev-hardened-20260616/` are
+  reference/import lanes until explicitly ported.
+- `gov-rules-kg-prototype/` produces reviewed candidate rules, not active Rust
+  adjudication policy.
+- `ops/` contains planning scaffolds, not production approval.
+
+Use ARCHITECTURE_ALIGNMENT.md as the boundary map before making any reference
+component active. Do not treat imported code as runtime behavior until it has an
+explicit port, focused tests, and a green validation run.
+
 ## Hardened Reference Bundle
 
 - localBCE-codex-dev-hardened-20260616/ is included as a reference bundle.
@@ -162,6 +186,7 @@ The long-term target architecture in rules_v9.json is broader and includes:
 
 1. Keep the current Groth16 demo path green.
 2. Use stark-engine/ gap plans to decide the first safe real-prover adapter work.
-3. Port hardened/app-layer assets only through explicit, reviewed integration steps.
-4. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into rust-engine/ as shadow tests before runtime use.
-5. Document and test every cross-folder connection before replacing active behavior.
+3. Use ARCHITECTURE_ALIGNMENT.md to decide whether each reference component is active, scaffolded, reference-only, or deferred.
+4. Port hardened/app-layer assets only through explicit, reviewed integration steps.
+5. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into rust-engine/ as shadow tests before runtime use.
+6. Document and test every cross-folder connection before replacing active behavior.
