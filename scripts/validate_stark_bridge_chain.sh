@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_DIR="$(mktemp -d)"
+
+export PATH="${HOME}/.cargo/bin:${PATH}"
+
+cleanup() {
+  rm -rf "${TMP_DIR}"
+  rm -f "${ROOT_DIR}/rust-engine/stark_bridge_input.json"
+  rm -rf "${ROOT_DIR}/rust-engine/target" "${ROOT_DIR}/stark-engine/target"
+}
+
+trap cleanup EXIT
+
+run_step() {
+  local label="$1"
+  shift
+
+  echo
+  echo "==> ${label}"
+  "$@"
+}
+
+run_in_dir() {
+  local label="$1"
+  local dir="$2"
+  shift 2
+
+  echo
+  echo "==> ${label}"
+  (
+    cd "${ROOT_DIR}/${dir}"
+    "$@"
+  )
+}
+
+BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
+PROOF_INTENT="${TMP_DIR}/proof_intent.json"
+WITNESS_PLAN="${TMP_DIR}/witness_plan.json"
+MOCK_TRACE="${TMP_DIR}/mock_trace.json"
+WINTERFELL_REPORT="${TMP_DIR}/winterfell_compat_report.json"
+WINTERFELL_GAP_PLAN="${TMP_DIR}/winterfell_gap_plan.json"
+
+run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
+  cargo run -- stark-bridge-input-dry-run
+
+mv "${ROOT_DIR}/rust-engine/stark_bridge_input.json" "${BRIDGE_INPUT}"
+
+run_in_dir "Validate STARK bridge input" "stark-engine" \
+  cargo run --bin validate_bridge_input -- "${BRIDGE_INPUT}"
+
+run_in_dir "Generate STARK proof intent" "stark-engine" \
+  cargo run --bin generate_proof_intent -- "${BRIDGE_INPUT}" "${PROOF_INTENT}"
+
+run_in_dir "Generate STARK witness plan" "stark-engine" \
+  cargo run --bin generate_witness_plan -- "${PROOF_INTENT}" "${WITNESS_PLAN}"
+
+run_in_dir "Validate STARK witness plan" "stark-engine" \
+  cargo run --bin validate_witness_plan -- "${WITNESS_PLAN}"
+
+run_in_dir "Generate STARK mock trace" "stark-engine" \
+  cargo run --bin generate_mock_trace -- "${WITNESS_PLAN}" "${MOCK_TRACE}"
+
+run_in_dir "Validate STARK mock trace" "stark-engine" \
+  cargo run --bin validate_mock_trace -- "${MOCK_TRACE}"
+
+run_in_dir "Generate Winterfell compatibility report" "stark-engine" \
+  cargo run --bin generate_winterfell_compat_report -- "${MOCK_TRACE}" "${WINTERFELL_REPORT}"
+
+run_in_dir "Generate Winterfell adapter gap plan" "stark-engine" \
+  cargo run --bin generate_winterfell_gap_plan -- "${WINTERFELL_REPORT}" "${WINTERFELL_GAP_PLAN}"
+
+echo
+echo "==> STARK bridge CLI chain smoke test passed"
+echo "    temporary artifacts were written under ${TMP_DIR} and will be removed"
