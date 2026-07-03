@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MappingClass {
     /// The active Rust field has the same fact and pass/fail meaning.
     Direct,
@@ -267,6 +268,30 @@ pub struct WinterfellAdapterGapPlan {
     pub unmapped_fields_requiring_source_data: Vec<WinterfellPocFieldCompatibility>,
     pub unsupported_constraints_requiring_prover_work: Vec<String>,
     pub recommended_next_steps: Vec<String>,
+}
+
+/// Test-only compatibility plan for the target batch-root/public-input layer.
+///
+/// This intentionally does not compute Merkle roots, Poseidon hashes, or
+/// governed-root commitments. It documents which target batch public inputs can
+/// be derived from today's `StarkBridgeInput`, and which require upstream data
+/// that the active Groth16 prototype does not yet export.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BatchRootCompatibilityPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub target_fields: Vec<BatchRootFieldMapping>,
+    pub counts: MappingCounts,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BatchRootFieldMapping {
+    pub target_field: String,
+    pub active_bridge_source: Option<String>,
+    pub class: MappingClass,
+    pub note: String,
 }
 
 impl StarkBridgeInput {
@@ -781,6 +806,111 @@ impl WinterfellPocCompatibilityReport {
     }
 }
 
+impl BatchRootCompatibilityPlan {
+    pub const SCHEMA_VERSION: &'static str = "batch-root-compatibility-plan-v0";
+    pub const PLAN_STATUS: &'static str = "planning_only_no_root_generation";
+    pub const EXPECTED_COUNTS: MappingCounts = MappingCounts {
+        direct: 3,
+        partial: 5,
+        unmapped: 9,
+    };
+
+    pub fn from_bridge_input(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        let target_fields = batch_root_field_mappings()
+            .into_iter()
+            .map(|mapping| BatchRootFieldMapping {
+                target_field: mapping.target_field.to_string(),
+                active_bridge_source: mapping.active_bridge_source.map(str::to_string),
+                class: mapping.class,
+                note: mapping.note.to_string(),
+            })
+            .collect::<Vec<_>>();
+        let counts = mapping_counts_for_batch_root_fields(&target_fields);
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: input.schema_version.clone(),
+            plan_status: Self::PLAN_STATUS.to_string(),
+            target_fields,
+            counts,
+            notes: vec![
+                "This plan is test-only and does not generate claim roots, oracle roots, fee roots, nullifier roots, or proof public inputs.".to_string(),
+                "Current direct fields are limited to existing single-claim public adjudication inputs.".to_string(),
+                "Target batch roots remain unavailable until rust-engine or an upstream intake layer exports normalized root source data.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != StarkBridgeInput::SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                StarkBridgeInput::SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.plan_status != Self::PLAN_STATUS {
+            errors.push(format!(
+                "plan_status must be {}, got {}",
+                Self::PLAN_STATUS,
+                self.plan_status
+            ));
+        }
+
+        if self.target_fields.len() != BATCH_ROOT_TARGET_FIELDS.len() {
+            errors.push(format!(
+                "target_fields must contain {} fields, got {}",
+                BATCH_ROOT_TARGET_FIELDS.len(),
+                self.target_fields.len()
+            ));
+        }
+
+        for required_field in BATCH_ROOT_TARGET_FIELDS {
+            if !self
+                .target_fields
+                .iter()
+                .any(|mapping| mapping.target_field == required_field)
+            {
+                errors.push(format!("missing batch root target field: {required_field}"));
+            }
+        }
+
+        let actual_counts = mapping_counts_for_batch_root_fields(&self.target_fields);
+        if self.counts != actual_counts {
+            errors.push("counts must match target_fields classification".to_string());
+        }
+
+        if self.counts != Self::EXPECTED_COUNTS {
+            errors.push(format!(
+                "counts must be direct={}, partial={}, unmapped={}",
+                Self::EXPECTED_COUNTS.direct,
+                Self::EXPECTED_COUNTS.partial,
+                Self::EXPECTED_COUNTS.unmapped
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 fn validate_boolean_fact(field: &str, value: u8, errors: &mut Vec<String>) {
     if value > 1 {
         errors.push(format!("{field} must be 0 or 1, got {value}"));
@@ -805,6 +935,158 @@ fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCo
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StaticBatchRootFieldMapping {
+    target_field: &'static str,
+    active_bridge_source: Option<&'static str>,
+    class: MappingClass,
+    note: &'static str,
+}
+
+pub const BATCH_ROOT_TARGET_FIELDS: [&str; 17] = [
+    "claim_hash",
+    "decision",
+    "failure_code",
+    "claimSourceRoot",
+    "adjudicationResultRoot",
+    "rulesetRoot",
+    "claimCount",
+    "combinedPublicInputVector",
+    "oracleFactsRoot",
+    "feeScheduleRoot",
+    "addressBookRoot",
+    "paymentRoot",
+    "nullifierRootBefore",
+    "nullifierRootAfter",
+    "batchNullifierCommitment",
+    "verifierKeyId",
+    "paymentCount",
+];
+
+fn batch_root_field_mappings() -> Vec<StaticBatchRootFieldMapping> {
+    vec![
+        StaticBatchRootFieldMapping {
+            target_field: "claim_hash",
+            active_bridge_source: Some("public_inputs.claim_hash"),
+            class: MappingClass::Direct,
+            note: "single-claim public hash is already exported",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "decision",
+            active_bridge_source: Some("public_inputs.decision"),
+            class: MappingClass::Direct,
+            note: "single-claim public decision is already exported",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "failure_code",
+            active_bridge_source: Some("public_inputs.failure_code"),
+            class: MappingClass::Direct,
+            note: "single-claim public failure code is already exported",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "claimSourceRoot",
+            active_bridge_source: Some("claim.claim_hash"),
+            class: MappingClass::Partial,
+            note: "claim hash can seed a future claim leaf, but it is not a governed claim-source Merkle root",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "adjudicationResultRoot",
+            active_bridge_source: Some("adjudication.decision, adjudication.failure_code"),
+            class: MappingClass::Partial,
+            note: "decision fields can seed a result leaf, but no result Merkle root is generated",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "rulesetRoot",
+            active_bridge_source: Some("public_inputs.ruleset_id"),
+            class: MappingClass::Partial,
+            note: "ruleset_id identifies rules, but no canonical ruleset commitment/root is exported",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "claimCount",
+            active_bridge_source: Some("single dry-run claim"),
+            class: MappingClass::Partial,
+            note: "current bridge implies one claim, but does not model batch cardinality",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "combinedPublicInputVector",
+            active_bridge_source: Some("public_inputs"),
+            class: MappingClass::Partial,
+            note: "current public inputs are a subset of the future batch public input vector",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "oracleFactsRoot",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active bridge exports adjudication flags, not oracle evidence roots",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "feeScheduleRoot",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active bridge has no fee schedule source tree or allowed-amount leaf",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "addressBookRoot",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active bridge has no governed provider/payment address book",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "paymentRoot",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "payment aggregation remains outside the current STARK bridge",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "nullifierRootBefore",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active bridge does not track a nullifier tree",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "nullifierRootAfter",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active bridge does not track a nullifier tree transition",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "batchNullifierCommitment",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active bridge has duplicate flag only, not a batch nullifier commitment",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "verifierKeyId",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "active STARK bridge has no selected STARK verifier key",
+        },
+        StaticBatchRootFieldMapping {
+            target_field: "paymentCount",
+            active_bridge_source: None,
+            class: MappingClass::Unmapped,
+            note: "payment records are not part of the current bridge input",
+        },
+    ]
+}
+
+fn mapping_counts_for_batch_root_fields(fields: &[BatchRootFieldMapping]) -> MappingCounts {
+    MappingCounts {
+        direct: fields
+            .iter()
+            .filter(|mapping| mapping.class == MappingClass::Direct)
+            .count(),
+        partial: fields
+            .iter()
+            .filter(|mapping| mapping.class == MappingClass::Partial)
+            .count(),
+        unmapped: fields
+            .iter()
+            .filter(|mapping| mapping.class == MappingClass::Unmapped)
+            .count(),
+    }
+}
+
 fn push_mock_trace_row(
     rows: &mut Vec<StarkMockTraceRow>,
     constraint_group: &str,
@@ -823,7 +1105,7 @@ fn push_mock_trace_row(
     });
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MappingCounts {
     pub direct: usize,
     pub partial: usize,
