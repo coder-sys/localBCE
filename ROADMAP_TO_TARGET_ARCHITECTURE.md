@@ -97,9 +97,9 @@ rust-engine stark-bridge-input-dry-run
 Next safe work:
 
 1. Add fixture-based end-to-end tests for approved and denied bridge inputs.
-2. Add mock-trace validation if not already present for every generated row.
-3. Add stable schema docs for bridge input, proof intent, witness plan, and mock
+2. Add stable schema docs for bridge input, proof intent, witness plan, and mock
    trace.
+3. Add mock-trace validation if not already present for every generated row.
 4. Compare mock trace expectations against the imported Winterfell/Cairo
    reference lanes.
 5. Decide the first real prover adapter boundary without importing a prover into
@@ -244,8 +244,8 @@ Exit criteria:
 
 Implement the next safe non-runtime integration:
 
-1. Add fixture-based STARK bridge end-to-end tests for approved and denied
-   examples.
+1. Keep fixture-based STARK bridge end-to-end tests for approved and denied
+   examples green.
 2. Keep Groth16 validation green with `bash scripts/validate_localbce.sh`.
-3. Do not wire a real prover or native settlement contract until bridge fixtures
-   and schema docs are stable.
+3. Use `stark-engine/SCHEMA.md` as the bridge artifact contract before adding
+   prover-specific adapters.

@@ -144,6 +144,12 @@ cargo run --bin generate_winterfell_gap_plan -- winterfell_compat_report.json wi
 
 This chain validates and normalizes the future STARK path, then produces a mock trace, Winterfell PoC compatibility report, and adapter gap plan. It does not import Winterfell, generate a real STARK proof, replace Groth16, or submit on-chain.
 
+Schema details for the STARK bridge artifacts are documented in:
+
+```text
+stark-engine/SCHEMA.md
+```
+
 ## Smart Contracts
 
 - Verifier.sol
@@ -179,6 +185,7 @@ This chain validates and normalizes the future STARK path, then produces a mock 
 ## STARK
 
 - stark-engine/Cargo.toml
+- stark-engine/SCHEMA.md
 - stark-engine/src/lib.rs
 - stark-engine/src/bin/validate_bridge_input.rs
 - stark-engine/src/bin/generate_proof_intent.rs
