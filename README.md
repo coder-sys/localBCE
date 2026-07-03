@@ -65,6 +65,11 @@ See `ARCHITECTURE_ALIGNMENT.md` for the maturity-tagged map between the
 technical reference architecture and what is active, scaffolded, reference-only,
 or deferred in this repo.
 
+See `ROADMAP_TO_TARGET_ARCHITECTURE.md` for the phased implementation roadmap
+from the active Groth16 prototype toward deterministic rules, STARK bridge
+hardening, batch roots, native STARK settlement, app-layer integration, and
+production ops.
+
 ---
 
 # Project Structure
@@ -73,6 +78,8 @@ or deferred in this repo.
 localBCE/
   ARCHITECTURE_ALIGNMENT.md
                   maturity-tagged alignment to the technical reference
+  ROADMAP_TO_TARGET_ARCHITECTURE.md
+                  phased roadmap from active prototype to target architecture
   blind-ledger/   Solidity + Foundry
   blind-ledger-app-layer/
                   imported standalone app/audit layer
@@ -371,6 +378,7 @@ Near-term next steps:
 - Keep Groth16 demo flow green.
 - Use the Winterfell adapter gap plan to choose the first safe real-prover adapter work.
 - Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.
+- Use ROADMAP_TO_TARGET_ARCHITECTURE.md to choose the next safe integration phase.
 - Port hardened/app-layer assets only through explicit reviewed integration steps.
 - Bridge reviewed deterministic rule candidates into rust-engine as shadow tests before runtime use.
 - oracle attestations

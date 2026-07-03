@@ -21,6 +21,7 @@ STARK-based adjudication proofs, batch roots, result roots, nullifier roots, and
 ## Active Project Folders
 
 - ARCHITECTURE_ALIGNMENT.md - maturity-tagged bridge between the technical reference and current active repo
+- ROADMAP_TO_TARGET_ARCHITECTURE.md - phased integration roadmap from active prototype to target architecture
 - blind-ledger/ - Solidity + Foundry
 - zk/ - Circom + snarkjs
 - rust-engine/ - Rust adjudication engine and ZK orchestration
@@ -139,6 +140,11 @@ Use ARCHITECTURE_ALIGNMENT.md as the boundary map before making any reference
 component active. Do not treat imported code as runtime behavior until it has an
 explicit port, focused tests, and a green validation run.
 
+Use ROADMAP_TO_TARGET_ARCHITECTURE.md as the implementation sequence. It keeps
+the current Groth16 demo green while staging deterministic rules, STARK bridge
+hardening, batch roots, native STARK settlement, app-layer integration, and
+production ops as separate phases.
+
 ## Hardened Reference Bundle
 
 - localBCE-codex-dev-hardened-20260616/ is included as a reference bundle.
@@ -187,6 +193,7 @@ The long-term target architecture in rules_v9.json is broader and includes:
 1. Keep the current Groth16 demo path green.
 2. Use stark-engine/ gap plans to decide the first safe real-prover adapter work.
 3. Use ARCHITECTURE_ALIGNMENT.md to decide whether each reference component is active, scaffolded, reference-only, or deferred.
-4. Port hardened/app-layer assets only through explicit, reviewed integration steps.
-5. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into rust-engine/ as shadow tests before runtime use.
-6. Document and test every cross-folder connection before replacing active behavior.
+4. Use ROADMAP_TO_TARGET_ARCHITECTURE.md to sequence integration phases.
+5. Port hardened/app-layer assets only through explicit, reviewed integration steps.
+6. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into rust-engine/ as shadow tests before runtime use.
+7. Document and test every cross-folder connection before replacing active behavior.
