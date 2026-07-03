@@ -138,6 +138,7 @@ cargo run --bin generate_proof_intent -- ../rust-engine/stark_bridge_input.json 
 cargo run --bin generate_witness_plan -- proof_intent.json witness_plan.json
 cargo run --bin validate_witness_plan -- witness_plan.json
 cargo run --bin generate_mock_trace -- witness_plan.json mock_trace.json
+cargo run --bin validate_mock_trace -- mock_trace.json
 cargo run --bin generate_winterfell_compat_report -- mock_trace.json winterfell_compat_report.json
 cargo run --bin generate_winterfell_gap_plan -- winterfell_compat_report.json winterfell_gap_plan.json
 ```
@@ -192,6 +193,7 @@ stark-engine/SCHEMA.md
 - stark-engine/src/bin/generate_witness_plan.rs
 - stark-engine/src/bin/validate_witness_plan.rs
 - stark-engine/src/bin/generate_mock_trace.rs
+- stark-engine/src/bin/validate_mock_trace.rs
 - stark-engine/src/bin/generate_winterfell_compat_report.rs
 - stark-engine/src/bin/generate_winterfell_gap_plan.rs
 - stark-engine/tests/compatibility.rs

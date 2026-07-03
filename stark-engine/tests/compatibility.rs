@@ -532,6 +532,99 @@ fn denied_witness_plan_generates_mock_trace_rows() {
 }
 
 #[test]
+fn mock_trace_validation_accepts_valid_approved_trace() {
+    let trace = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+
+    assert_eq!(trace.validate(), Ok(()));
+}
+
+#[test]
+fn mock_trace_validation_accepts_valid_denied_trace() {
+    let trace = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+
+    assert_eq!(trace.validate(), Ok(()));
+}
+
+#[test]
+fn mock_trace_validation_rejects_missing_required_group_and_row() {
+    let mut trace = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+    trace
+        .rows
+        .retain(|row| row.constraint_group != "decision_consistency");
+
+    let errors = trace.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("missing required constraint group: decision_consistency"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("missing required constraint: approved_claim_requires_no_failure_code"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("missing required constraint: denied_claim_requires_failure_code"))
+    );
+}
+
+#[test]
+fn mock_trace_validation_rejects_nonsequential_step_index() {
+    let mut trace = sample_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+    trace.rows[3].step_index = 99;
+
+    let errors = trace.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("row 3 step_index must be 3, got 99"))
+    );
+}
+
+#[test]
+fn mock_trace_validation_rejects_unsatisfied_row() {
+    let mut trace = denied_bridge_input()
+        .to_proof_intent()
+        .unwrap()
+        .to_witness_plan()
+        .to_mock_trace()
+        .unwrap();
+    trace.rows[4].satisfied = false;
+
+    let errors = trace.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("row 4 provider_enrolled_is_boolean must be satisfied"))
+    );
+}
+
+#[test]
 fn invalid_witness_plan_does_not_generate_mock_trace() {
     let mut plan = sample_bridge_input()
         .to_proof_intent()

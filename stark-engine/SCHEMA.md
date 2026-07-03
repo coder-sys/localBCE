@@ -11,6 +11,7 @@ StarkBridgeInput
 -> StarkProofIntent
 -> StarkWitnessPlan
 -> StarkMockTrace
+-> StarkMockTrace validation
 -> WinterfellPocCompatibilityReport
 -> WinterfellAdapterGapPlan
 ```
@@ -197,6 +198,24 @@ Current mock rows:
 6. `duplicate_flag_is_boolean`
 7. `approved_claim_requires_no_failure_code`
 8. `denied_claim_requires_failure_code`
+
+Validation command:
+
+```bash
+cargo run --bin validate_mock_trace -- mock_trace.json
+```
+
+Required validation:
+
+- `schema_version == stark-mock-trace-v0`.
+- `source_schema_version == stark-witness-plan-v0`.
+- `claim_hash` is present.
+- `rows` is non-empty.
+- `step_index` is sequential from `0`.
+- required constraint groups exist.
+- required constraint names exist.
+- every row has `satisfied == true`.
+- `trace_status == mock_trace_generated_no_proof`.
 
 ## Non-Claims
 

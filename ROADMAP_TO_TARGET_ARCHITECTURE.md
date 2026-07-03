@@ -90,6 +90,7 @@ rust-engine stark-bridge-input-dry-run
 -> stark-engine generate_witness_plan
 -> stark-engine validate_witness_plan
 -> stark-engine generate_mock_trace
+-> stark-engine validate_mock_trace
 -> stark-engine generate_winterfell_compat_report
 -> stark-engine generate_winterfell_gap_plan
 ```
@@ -99,7 +100,7 @@ Next safe work:
 1. Add fixture-based end-to-end tests for approved and denied bridge inputs.
 2. Add stable schema docs for bridge input, proof intent, witness plan, and mock
    trace.
-3. Add mock-trace validation if not already present for every generated row.
+3. Keep mock-trace validation green for every generated row.
 4. Compare mock trace expectations against the imported Winterfell/Cairo
    reference lanes.
 5. Decide the first real prover adapter boundary without importing a prover into

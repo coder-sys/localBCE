@@ -605,6 +605,107 @@ impl StarkWitnessPlan {
 impl StarkMockTrace {
     pub const SCHEMA_VERSION: &'static str = "stark-mock-trace-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-witness-plan-v0";
+    pub const TRACE_STATUS: &'static str = "mock_trace_generated_no_proof";
+    pub const REQUIRED_CONSTRAINT_NAMES: [&'static str; 8] = [
+        "claim_hash_is_public_input",
+        "decision_is_public_input",
+        "failure_code_is_public_input",
+        "eligibility_active_is_boolean",
+        "provider_enrolled_is_boolean",
+        "duplicate_flag_is_boolean",
+        "approved_claim_requires_no_failure_code",
+        "denied_claim_requires_failure_code",
+    ];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.claim_hash.trim().is_empty() {
+            errors.push("claim_hash must be present".to_string());
+        }
+
+        if self.rows.is_empty() {
+            errors.push("rows must be non-empty".to_string());
+        }
+
+        for (expected_index, row) in self.rows.iter().enumerate() {
+            if row.step_index != expected_index {
+                errors.push(format!(
+                    "row {} step_index must be {}, got {}",
+                    expected_index, expected_index, row.step_index
+                ));
+            }
+
+            if row.constraint_group.trim().is_empty() {
+                errors.push(format!("row {expected_index} constraint_group must be present"));
+            }
+
+            if row.constraint_name.trim().is_empty() {
+                errors.push(format!("row {expected_index} constraint_name must be present"));
+            }
+
+            if !row.satisfied {
+                errors.push(format!(
+                    "row {} {} must be satisfied",
+                    expected_index, row.constraint_name
+                ));
+            }
+        }
+
+        for required_group in StarkWitnessPlan::REQUIRED_CONSTRAINT_GROUPS {
+            if !self
+                .rows
+                .iter()
+                .any(|row| row.constraint_group == required_group)
+            {
+                errors.push(format!(
+                    "missing required constraint group: {required_group}"
+                ));
+            }
+        }
+
+        for required_constraint in Self::REQUIRED_CONSTRAINT_NAMES {
+            if !self
+                .rows
+                .iter()
+                .any(|row| row.constraint_name == required_constraint)
+            {
+                errors.push(format!(
+                    "missing required constraint: {required_constraint}"
+                ));
+            }
+        }
+
+        if self.trace_status != Self::TRACE_STATUS {
+            errors.push(format!(
+                "trace_status must be {}, got {}",
+                Self::TRACE_STATUS,
+                self.trace_status
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 
     pub fn winterfell_poc_compatibility_report(&self) -> WinterfellPocCompatibilityReport {
         let required_groups_present =
