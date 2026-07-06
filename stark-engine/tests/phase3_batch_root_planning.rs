@@ -191,3 +191,17 @@ fn batch_root_plan_serializes_as_planning_artifact_only() {
     assert!(!json.contains("proof_generated"));
     assert!(!json.contains("root_generated"));
 }
+
+#[test]
+fn batch_root_plan_json_round_trips_before_any_root_generation() {
+    let input = sample_bridge_input();
+    let plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    let json = serde_json::to_string_pretty(&plan).unwrap();
+    let round_tripped: BatchRootCompatibilityPlan = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, plan);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert_eq!(round_tripped.counts.direct, 3);
+    assert_eq!(round_tripped.counts.partial, 5);
+    assert_eq!(round_tripped.counts.unmapped, 9);
+}
