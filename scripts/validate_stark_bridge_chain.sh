@@ -37,6 +37,7 @@ run_in_dir() {
 }
 
 BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
+BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
 WITNESS_PLAN="${TMP_DIR}/witness_plan.json"
 MOCK_TRACE="${TMP_DIR}/mock_trace.json"
@@ -50,6 +51,9 @@ mv "${ROOT_DIR}/rust-engine/stark_bridge_input.json" "${BRIDGE_INPUT}"
 
 run_in_dir "Validate STARK bridge input" "stark-engine" \
   cargo run --bin validate_bridge_input -- "${BRIDGE_INPUT}"
+
+run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
+  cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"
 
 run_in_dir "Generate STARK proof intent" "stark-engine" \
   cargo run --bin generate_proof_intent -- "${BRIDGE_INPUT}" "${PROOF_INTENT}"
