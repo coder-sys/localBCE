@@ -55,6 +55,9 @@ run_in_dir "Validate STARK bridge input" "stark-engine" \
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"
 
+run_in_dir "Validate STARK batch root compatibility plan" "stark-engine" \
+  cargo run --bin validate_batch_root_plan -- "${BATCH_ROOT_PLAN}"
+
 run_in_dir "Generate STARK proof intent" "stark-engine" \
   cargo run --bin generate_proof_intent -- "${BRIDGE_INPUT}" "${PROOF_INTENT}"
 

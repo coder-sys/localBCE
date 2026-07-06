@@ -205,3 +205,29 @@ fn batch_root_plan_json_round_trips_before_any_root_generation() {
     assert_eq!(round_tripped.counts.partial, 5);
     assert_eq!(round_tripped.counts.unmapped, 9);
 }
+
+#[test]
+fn batch_root_plan_validation_rejects_bad_counts() {
+    let input = sample_bridge_input();
+    let mut plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    plan.counts.direct = 99;
+
+    let errors = plan.validate().unwrap_err();
+
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("counts must match target_fields classification")));
+}
+
+#[test]
+fn batch_root_plan_validation_rejects_runtime_like_status() {
+    let input = sample_bridge_input();
+    let mut plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    plan.plan_status = "root_generation_ready".to_string();
+
+    let errors = plan.validate().unwrap_err();
+
+    assert!(errors.iter().any(|error| error.contains(
+        "plan_status must be planning_only_no_root_generation"
+    )));
+}
