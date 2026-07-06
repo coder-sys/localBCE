@@ -1,4 +1,6 @@
-use stark_engine::{BatchRootCompatibilityPlan, MappingClass, MappingCounts, StarkBridgeInput};
+use stark_engine::{
+    BatchRootCompatibilityPlan, BatchRootGapReport, MappingClass, MappingCounts, StarkBridgeInput,
+};
 
 fn sample_bridge_input_json() -> &'static str {
     r#"{
@@ -230,4 +232,81 @@ fn batch_root_plan_validation_rejects_runtime_like_status() {
     assert!(errors.iter().any(|error| error.contains(
         "plan_status must be planning_only_no_root_generation"
     )));
+}
+
+#[test]
+fn batch_root_gap_report_groups_plan_by_engineering_work() {
+    let input = sample_bridge_input();
+    let plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    let report = plan.to_gap_report().unwrap();
+
+    assert_eq!(report.schema_version, BatchRootGapReport::SCHEMA_VERSION);
+    assert_eq!(
+        report.source_schema_version,
+        BatchRootCompatibilityPlan::SCHEMA_VERSION
+    );
+    assert_eq!(report.report_status, BatchRootGapReport::REPORT_STATUS);
+    assert_eq!(report.direct_ready_fields.len(), 3);
+    assert_eq!(report.partial_fields_requiring_normalization.len(), 5);
+    assert_eq!(report.unmapped_fields_requiring_source_data.len(), 9);
+    assert!(report.unsupported_root_generation_tasks.len() >= 10);
+    assert!(report.recommended_next_steps.len() >= 5);
+    assert_eq!(report.validate(), Ok(()));
+}
+
+#[test]
+fn batch_root_gap_report_names_claim_oracle_fee_and_nullifier_gaps() {
+    let input = sample_bridge_input();
+    let plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    let report = plan.to_gap_report().unwrap();
+
+    assert!(report
+        .partial_fields_requiring_normalization
+        .iter()
+        .any(|field| field.target_field == "claimSourceRoot"));
+    assert!(report
+        .unmapped_fields_requiring_source_data
+        .iter()
+        .any(|field| field.target_field == "oracleFactsRoot"));
+    assert!(report
+        .unmapped_fields_requiring_source_data
+        .iter()
+        .any(|field| field.target_field == "feeScheduleRoot"));
+    assert!(report
+        .unmapped_fields_requiring_source_data
+        .iter()
+        .any(|field| field.target_field == "nullifierRootBefore"));
+    assert!(report
+        .unsupported_root_generation_tasks
+        .contains(&"claim_source_merkle_root_generation".to_string()));
+    assert!(report
+        .unsupported_root_generation_tasks
+        .contains(&"nullifier_root_before_after_transition".to_string()));
+}
+
+#[test]
+fn batch_root_gap_report_json_round_trips() {
+    let input = sample_bridge_input();
+    let plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    let report = plan.to_gap_report().unwrap();
+    let json = serde_json::to_string_pretty(&report).unwrap();
+    let round_tripped: BatchRootGapReport = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, report);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"batch-root-gap-report-v0\""));
+    assert!(json.contains("\"report_status\": \"gap_report_planning_only_no_root_generation\""));
+}
+
+#[test]
+fn batch_root_gap_report_validation_rejects_missing_gap_sections() {
+    let input = sample_bridge_input();
+    let plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
+    let mut report = plan.to_gap_report().unwrap();
+    report.unmapped_fields_requiring_source_data.clear();
+
+    let errors = report.validate().unwrap_err();
+
+    assert!(errors.iter().any(|error| error
+        .contains("unmapped_fields_requiring_source_data must contain 9 fields")));
 }

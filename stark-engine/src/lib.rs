@@ -294,6 +294,23 @@ pub struct BatchRootFieldMapping {
     pub note: String,
 }
 
+/// Implementation checklist derived from a batch-root compatibility plan.
+///
+/// This is still a planning artifact. It deliberately separates ready fields,
+/// normalization work, missing source data, and future root/prover work so the
+/// active Groth16 prototype is not accidentally treated as batch-root capable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BatchRootGapReport {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub report_status: String,
+    pub direct_ready_fields: Vec<BatchRootFieldMapping>,
+    pub partial_fields_requiring_normalization: Vec<BatchRootFieldMapping>,
+    pub unmapped_fields_requiring_source_data: Vec<BatchRootFieldMapping>,
+    pub unsupported_root_generation_tasks: Vec<String>,
+    pub recommended_next_steps: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -909,6 +926,122 @@ impl BatchRootCompatibilityPlan {
             Err(errors)
         }
     }
+
+    pub fn to_gap_report(&self) -> Result<BatchRootGapReport, Vec<String>> {
+        self.validate()?;
+
+        Ok(BatchRootGapReport {
+            schema_version: "batch-root-gap-report-v0".to_string(),
+            source_schema_version: self.schema_version.clone(),
+            report_status: "gap_report_planning_only_no_root_generation".to_string(),
+            direct_ready_fields: batch_root_fields_for_class(self, MappingClass::Direct),
+            partial_fields_requiring_normalization: batch_root_fields_for_class(
+                self,
+                MappingClass::Partial,
+            ),
+            unmapped_fields_requiring_source_data: batch_root_fields_for_class(
+                self,
+                MappingClass::Unmapped,
+            ),
+            unsupported_root_generation_tasks: vec![
+                "canonical_claim_source_leaf_schema".to_string(),
+                "claim_source_merkle_root_generation".to_string(),
+                "adjudication_result_leaf_schema".to_string(),
+                "adjudication_result_merkle_root_generation".to_string(),
+                "oracle_facts_root_source_manifest".to_string(),
+                "fee_schedule_root_source_manifest".to_string(),
+                "address_book_root_source_manifest".to_string(),
+                "payment_root_generation".to_string(),
+                "nullifier_root_before_after_transition".to_string(),
+                "batch_nullifier_commitment_generation".to_string(),
+                "stark_verifier_key_id_selection".to_string(),
+                "combined_public_input_vector_freeze".to_string(),
+            ],
+            recommended_next_steps: vec![
+                "Freeze the existing single-claim public input contract: claim_hash, decision, and failure_code.".to_string(),
+                "Define normalized leaf schemas before generating claimSourceRoot or adjudicationResultRoot.".to_string(),
+                "Add explicit source manifests for oracle facts, fee schedules, address books, payments, and nullifier state before root generation.".to_string(),
+                "Choose and document the root hash strategy before implementing deterministic root generation.".to_string(),
+                "Keep this report outside the active Groth16 runtime until real STARK root constraints and proofs exist.".to_string(),
+            ],
+        })
+    }
+}
+
+impl BatchRootGapReport {
+    pub const SCHEMA_VERSION: &'static str = "batch-root-gap-report-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "batch-root-compatibility-plan-v0";
+    pub const REPORT_STATUS: &'static str = "gap_report_planning_only_no_root_generation";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.report_status != Self::REPORT_STATUS {
+            errors.push(format!(
+                "report_status must be {}, got {}",
+                Self::REPORT_STATUS,
+                self.report_status
+            ));
+        }
+
+        if self.direct_ready_fields.len() != BatchRootCompatibilityPlan::EXPECTED_COUNTS.direct {
+            errors.push(format!(
+                "direct_ready_fields must contain {} fields, got {}",
+                BatchRootCompatibilityPlan::EXPECTED_COUNTS.direct,
+                self.direct_ready_fields.len()
+            ));
+        }
+
+        if self.partial_fields_requiring_normalization.len()
+            != BatchRootCompatibilityPlan::EXPECTED_COUNTS.partial
+        {
+            errors.push(format!(
+                "partial_fields_requiring_normalization must contain {} fields, got {}",
+                BatchRootCompatibilityPlan::EXPECTED_COUNTS.partial,
+                self.partial_fields_requiring_normalization.len()
+            ));
+        }
+
+        if self.unmapped_fields_requiring_source_data.len()
+            != BatchRootCompatibilityPlan::EXPECTED_COUNTS.unmapped
+        {
+            errors.push(format!(
+                "unmapped_fields_requiring_source_data must contain {} fields, got {}",
+                BatchRootCompatibilityPlan::EXPECTED_COUNTS.unmapped,
+                self.unmapped_fields_requiring_source_data.len()
+            ));
+        }
+
+        if self.unsupported_root_generation_tasks.is_empty() {
+            errors.push("unsupported_root_generation_tasks must be non-empty".to_string());
+        }
+
+        if self.recommended_next_steps.is_empty() {
+            errors.push("recommended_next_steps must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 fn validate_boolean_fact(field: &str, value: u8, errors: &mut Vec<String>) {
@@ -932,6 +1065,17 @@ fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCo
             .to_string(),
             note: mapping.note.to_string(),
         })
+        .collect()
+}
+
+fn batch_root_fields_for_class(
+    plan: &BatchRootCompatibilityPlan,
+    class: MappingClass,
+) -> Vec<BatchRootFieldMapping> {
+    plan.target_fields
+        .iter()
+        .filter(|mapping| mapping.class == class)
+        .cloned()
         .collect()
 }
 

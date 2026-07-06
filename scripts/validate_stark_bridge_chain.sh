@@ -38,6 +38,7 @@ run_in_dir() {
 
 BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
+BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
 WITNESS_PLAN="${TMP_DIR}/witness_plan.json"
 MOCK_TRACE="${TMP_DIR}/mock_trace.json"
@@ -57,6 +58,9 @@ run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
 
 run_in_dir "Validate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin validate_batch_root_plan -- "${BATCH_ROOT_PLAN}"
+
+run_in_dir "Generate STARK batch root gap report" "stark-engine" \
+  cargo run --bin generate_batch_root_gap_report -- "${BATCH_ROOT_PLAN}" "${BATCH_ROOT_GAP_REPORT}"
 
 run_in_dir "Generate STARK proof intent" "stark-engine" \
   cargo run --bin generate_proof_intent -- "${BRIDGE_INPUT}" "${PROOF_INTENT}"
