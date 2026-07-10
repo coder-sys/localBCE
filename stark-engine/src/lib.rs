@@ -311,6 +311,29 @@ pub struct BatchRootGapReport {
     pub recommended_next_steps: Vec<String>,
 }
 
+/// Typed source data for a future `claimSourceRoot`.
+///
+/// This object is intentionally pre-root. It validates the source fields needed
+/// to build a future claim-source leaf/root, but it does not hash, sort, or
+/// construct a Merkle tree.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClaimSourceRootInput {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub input_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub claim_amount: u64,
+    pub member_id: Option<String>,
+    pub provider_npi: Option<String>,
+    pub service_date: Option<u64>,
+    pub procedure_codes: Vec<String>,
+    pub diagnosis_codes: Vec<String>,
+    pub service_line_count: Option<u64>,
+    pub root_generation_status: String,
+    pub notes: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1044,10 +1067,136 @@ impl BatchRootGapReport {
     }
 }
 
+impl ClaimSourceRootInput {
+    pub const SCHEMA_VERSION: &'static str = "claim-source-root-input-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const INPUT_STATUS: &'static str = "source_schema_only_no_root_generation";
+    pub const ROOT_GENERATION_STATUS: &'static str = "not_generated";
+
+    pub fn from_bridge_input(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: input.schema_version.clone(),
+            input_status: Self::INPUT_STATUS.to_string(),
+            claim_id: input.claim.claim_id.clone(),
+            claim_hash: input.claim.claim_hash.clone(),
+            claim_amount: input.claim.claim_amount,
+            member_id: None,
+            provider_npi: None,
+            service_date: Some(input.active_rust_facts.date_of_service_from),
+            procedure_codes: Vec::new(),
+            diagnosis_codes: Vec::new(),
+            service_line_count: None,
+            root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
+            notes: vec![
+                "This input is a normalized source schema for future claimSourceRoot work.".to_string(),
+                "member_id, provider_npi, procedure_codes, diagnosis_codes, and service_line_count are not exported by the current rust-engine bridge.".to_string(),
+                "No claim-source leaf, hash, Merkle root, or STARK proof is generated from this object.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.input_status != Self::INPUT_STATUS {
+            errors.push(format!(
+                "input_status must be {}, got {}",
+                Self::INPUT_STATUS,
+                self.input_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.claim_amount == 0 {
+            errors.push("claim_amount must be greater than zero".to_string());
+        }
+
+        if let Some(provider_npi) = &self.provider_npi {
+            if provider_npi.len() != 10 || !provider_npi.chars().all(|ch| ch.is_ascii_digit()) {
+                errors.push("provider_npi must be exactly 10 decimal digits when present".to_string());
+            }
+        }
+
+        if let Some(service_line_count) = self.service_line_count {
+            if service_line_count == 0 {
+                errors.push("service_line_count must be greater than zero when present".to_string());
+            }
+            if service_line_count as usize != self.procedure_codes.len()
+                && !self.procedure_codes.is_empty()
+            {
+                errors.push(
+                    "service_line_count must match procedure_codes length when procedure codes are present"
+                        .to_string(),
+                );
+            }
+        }
+
+        for (index, procedure_code) in self.procedure_codes.iter().enumerate() {
+            if procedure_code.trim().is_empty() {
+                errors.push(format!("procedure_codes[{index}] must be non-empty"));
+            }
+        }
+
+        for (index, diagnosis_code) in self.diagnosis_codes.iter().enumerate() {
+            if diagnosis_code.trim().is_empty() {
+                errors.push(format!("diagnosis_codes[{index}] must be non-empty"));
+            }
+        }
+
+        if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
+            errors.push(format!(
+                "root_generation_status must be {}, got {}",
+                Self::ROOT_GENERATION_STATUS,
+                self.root_generation_status
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 fn validate_boolean_fact(field: &str, value: u8, errors: &mut Vec<String>) {
     if value > 1 {
         errors.push(format!("{field} must be 0 or 1, got {value}"));
     }
+}
+
+fn is_0x_32_byte_hex(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("0x") else {
+        return false;
+    };
+    hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCompatibility> {
