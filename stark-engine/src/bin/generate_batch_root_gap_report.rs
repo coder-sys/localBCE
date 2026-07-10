@@ -40,8 +40,11 @@ fn run() -> Result<(), Vec<String>> {
         .map_err(|err| vec![format!("invalid batch root plan JSON: {err}")])?;
     let report = plan.to_gap_report()?;
     report.validate()?;
-    let output_json = serde_json::to_string_pretty(&report)
-        .map_err(|err| vec![format!("could not serialize batch root gap report JSON: {err}")])?;
+    let output_json = serde_json::to_string_pretty(&report).map_err(|err| {
+        vec![format!(
+            "could not serialize batch root gap report JSON: {err}"
+        )]
+    })?;
 
     fs::write(&output_path, format!("{output_json}\n"))
         .map_err(|err| vec![format!("could not write {output_path}: {err}")])?;

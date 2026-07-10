@@ -574,16 +574,12 @@ fn mock_trace_validation_rejects_missing_required_group_and_row() {
             .iter()
             .any(|error| error.contains("missing required constraint group: decision_consistency"))
     );
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.contains("missing required constraint: approved_claim_requires_no_failure_code"))
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.contains("missing required constraint: denied_claim_requires_failure_code"))
-    );
+    assert!(errors.iter().any(|error| {
+        error.contains("missing required constraint: approved_claim_requires_no_failure_code")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.contains("missing required constraint: denied_claim_requires_failure_code")
+    }));
 }
 
 #[test]

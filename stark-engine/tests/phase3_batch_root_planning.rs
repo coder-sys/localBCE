@@ -123,7 +123,10 @@ fn batch_root_plan_keeps_current_single_claim_public_inputs_direct() {
         .map(|field| field.target_field.as_str())
         .collect();
 
-    assert_eq!(direct_fields, vec!["claim_hash", "decision", "failure_code"]);
+    assert_eq!(
+        direct_fields,
+        vec!["claim_hash", "decision", "failure_code"]
+    );
 }
 
 #[test]
@@ -175,9 +178,11 @@ fn batch_root_plan_rejects_invalid_bridge_input() {
 
     let errors = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("proof_status.stark_proof_generated must be false")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("proof_status.stark_proof_generated must be false"))
+    );
 }
 
 #[test]
@@ -216,9 +221,11 @@ fn batch_root_plan_validation_rejects_bad_counts() {
 
     let errors = plan.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("counts must match target_fields classification")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("counts must match target_fields classification"))
+    );
 }
 
 #[test]
@@ -229,9 +236,11 @@ fn batch_root_plan_validation_rejects_runtime_like_status() {
 
     let errors = plan.validate().unwrap_err();
 
-    assert!(errors.iter().any(|error| error.contains(
-        "plan_status must be planning_only_no_root_generation"
-    )));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("plan_status must be planning_only_no_root_generation"))
+    );
 }
 
 #[test]
@@ -260,28 +269,40 @@ fn batch_root_gap_report_names_claim_oracle_fee_and_nullifier_gaps() {
     let plan = BatchRootCompatibilityPlan::from_bridge_input(&input).unwrap();
     let report = plan.to_gap_report().unwrap();
 
-    assert!(report
-        .partial_fields_requiring_normalization
-        .iter()
-        .any(|field| field.target_field == "claimSourceRoot"));
-    assert!(report
-        .unmapped_fields_requiring_source_data
-        .iter()
-        .any(|field| field.target_field == "oracleFactsRoot"));
-    assert!(report
-        .unmapped_fields_requiring_source_data
-        .iter()
-        .any(|field| field.target_field == "feeScheduleRoot"));
-    assert!(report
-        .unmapped_fields_requiring_source_data
-        .iter()
-        .any(|field| field.target_field == "nullifierRootBefore"));
-    assert!(report
-        .unsupported_root_generation_tasks
-        .contains(&"claim_source_merkle_root_generation".to_string()));
-    assert!(report
-        .unsupported_root_generation_tasks
-        .contains(&"nullifier_root_before_after_transition".to_string()));
+    assert!(
+        report
+            .partial_fields_requiring_normalization
+            .iter()
+            .any(|field| field.target_field == "claimSourceRoot")
+    );
+    assert!(
+        report
+            .unmapped_fields_requiring_source_data
+            .iter()
+            .any(|field| field.target_field == "oracleFactsRoot")
+    );
+    assert!(
+        report
+            .unmapped_fields_requiring_source_data
+            .iter()
+            .any(|field| field.target_field == "feeScheduleRoot")
+    );
+    assert!(
+        report
+            .unmapped_fields_requiring_source_data
+            .iter()
+            .any(|field| field.target_field == "nullifierRootBefore")
+    );
+    assert!(
+        report
+            .unsupported_root_generation_tasks
+            .contains(&"claim_source_merkle_root_generation".to_string())
+    );
+    assert!(
+        report
+            .unsupported_root_generation_tasks
+            .contains(&"nullifier_root_before_after_transition".to_string())
+    );
 }
 
 #[test]
@@ -307,6 +328,7 @@ fn batch_root_gap_report_validation_rejects_missing_gap_sections() {
 
     let errors = report.validate().unwrap_err();
 
-    assert!(errors.iter().any(|error| error
-        .contains("unmapped_fields_requiring_source_data must contain 9 fields")));
+    assert!(errors.iter().any(|error| {
+        error.contains("unmapped_fields_requiring_source_data must contain 9 fields")
+    }));
 }

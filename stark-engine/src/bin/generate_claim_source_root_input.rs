@@ -40,8 +40,11 @@ fn run() -> Result<(), Vec<String>> {
         .map_err(|err| vec![format!("invalid bridge input JSON: {err}")])?;
     let source = ClaimSourceRootInput::from_bridge_input(&input)?;
     source.validate()?;
-    let output_json = serde_json::to_string_pretty(&source)
-        .map_err(|err| vec![format!("could not serialize claim source root input JSON: {err}")])?;
+    let output_json = serde_json::to_string_pretty(&source).map_err(|err| {
+        vec![format!(
+            "could not serialize claim source root input JSON: {err}"
+        )]
+    })?;
 
     fs::write(&output_path, format!("{output_json}\n"))
         .map_err(|err| vec![format!("could not write {output_path}: {err}")])?;

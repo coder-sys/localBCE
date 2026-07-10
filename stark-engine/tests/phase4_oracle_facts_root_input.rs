@@ -150,6 +150,29 @@ fn oracle_facts_root_input_json_round_trips() {
 
     assert_eq!(round_tripped, oracle);
     assert_eq!(round_tripped.validate(), Ok(()));
+    assert_eq!(round_tripped.schema_version, "oracle-facts-root-input-v0");
+    assert_eq!(
+        round_tripped.input_status,
+        "source_schema_only_no_root_generation"
+    );
+    assert_eq!(round_tripped.root_generation_status, "not_generated");
+}
+
+#[test]
+fn oracle_facts_root_input_validation_accepts_cli_generated_shape() {
+    let input = sample_bridge_input();
+    let oracle = OracleFactsRootInput::from_bridge_input(&input).unwrap();
+
+    assert_eq!(oracle.validate(), Ok(()));
+    assert_eq!(oracle.schema_version, OracleFactsRootInput::SCHEMA_VERSION);
+    assert_eq!(oracle.input_status, OracleFactsRootInput::INPUT_STATUS);
+    assert_eq!(
+        oracle.root_generation_status,
+        OracleFactsRootInput::ROOT_GENERATION_STATUS
+    );
+    assert!(oracle.source_manifest_id.is_none());
+    assert!(oracle.facts.is_empty());
+    assert!(oracle.attestation_refs.is_empty());
 }
 
 #[test]
@@ -167,9 +190,11 @@ fn oracle_facts_root_input_rejects_http_source_url() {
 
     let errors = oracle.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("source_url must use https")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("source_url must use https"))
+    );
 }
 
 #[test]
@@ -187,21 +212,77 @@ fn oracle_facts_root_input_rejects_empty_fact_fields() {
 
     let errors = oracle.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("facts[0].fact_type must be present")));
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("facts[0].fact_key must be present")));
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("facts[0].fact_value must be present")));
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("facts[0].verification_status must be present")));
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("facts[0].source_label must be non-empty")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("facts[0].fact_type must be present"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("facts[0].fact_key must be present"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("facts[0].fact_value must be present"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("facts[0].verification_status must be present"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("facts[0].source_label must be non-empty"))
+    );
+}
+
+#[test]
+fn oracle_facts_root_input_rejects_invalid_input_status() {
+    let input = sample_bridge_input();
+    let mut oracle = OracleFactsRootInput::from_bridge_input(&input).unwrap();
+    oracle.input_status = "runtime_root_input".to_string();
+
+    let errors = oracle.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                .contains("input_status must be source_schema_only_no_root_generation"))
+    );
+}
+
+#[test]
+fn oracle_facts_root_input_rejects_empty_claim_id() {
+    let input = sample_bridge_input();
+    let mut oracle = OracleFactsRootInput::from_bridge_input(&input).unwrap();
+    oracle.claim_id = " ".to_string();
+
+    let errors = oracle.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("claim_id must be present"))
+    );
+}
+
+#[test]
+fn oracle_facts_root_input_rejects_empty_attestation_ref() {
+    let input = sample_bridge_input();
+    let mut oracle = OracleFactsRootInput::from_bridge_input(&input).unwrap();
+    oracle.attestation_refs = vec![" ".to_string()];
+
+    let errors = oracle.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("attestation_refs[0] must be non-empty"))
+    );
 }
 
 #[test]
@@ -212,7 +293,9 @@ fn oracle_facts_root_input_rejects_root_generation_status() {
 
     let errors = oracle.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("root_generation_status must be not_generated")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("root_generation_status must be not_generated"))
+    );
 }

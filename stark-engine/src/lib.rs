@@ -751,11 +751,15 @@ impl StarkMockTrace {
             }
 
             if row.constraint_group.trim().is_empty() {
-                errors.push(format!("row {expected_index} constraint_group must be present"));
+                errors.push(format!(
+                    "row {expected_index} constraint_group must be present"
+                ));
             }
 
             if row.constraint_name.trim().is_empty() {
-                errors.push(format!("row {expected_index} constraint_name must be present"));
+                errors.push(format!(
+                    "row {expected_index} constraint_name must be present"
+                ));
             }
 
             if !row.satisfied {
@@ -1173,13 +1177,16 @@ impl ClaimSourceRootInput {
 
         if let Some(provider_npi) = &self.provider_npi {
             if provider_npi.len() != 10 || !provider_npi.chars().all(|ch| ch.is_ascii_digit()) {
-                errors.push("provider_npi must be exactly 10 decimal digits when present".to_string());
+                errors.push(
+                    "provider_npi must be exactly 10 decimal digits when present".to_string(),
+                );
             }
         }
 
         if let Some(service_line_count) = self.service_line_count {
             if service_line_count == 0 {
-                errors.push("service_line_count must be greater than zero when present".to_string());
+                errors
+                    .push("service_line_count must be greater than zero when present".to_string());
             }
             if service_line_count as usize != self.procedure_codes.len()
                 && !self.procedure_codes.is_empty()

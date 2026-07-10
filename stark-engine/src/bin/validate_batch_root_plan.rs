@@ -12,9 +12,9 @@ fn main() {
 }
 
 fn run() -> Result<(), Vec<String>> {
-    let path = env::args()
-        .nth(1)
-        .ok_or_else(|| vec!["usage: validate_batch_root_plan <batch_root_plan.json>".to_string()])?;
+    let path = env::args().nth(1).ok_or_else(|| {
+        vec!["usage: validate_batch_root_plan <batch_root_plan.json>".to_string()]
+    })?;
 
     let input_json =
         fs::read_to_string(&path).map_err(|err| vec![format!("could not read {path}: {err}")])?;

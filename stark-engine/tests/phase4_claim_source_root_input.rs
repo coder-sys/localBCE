@@ -166,8 +166,12 @@ fn claim_source_root_input_rejects_invalid_input_status() {
 
     let errors = source.validate().unwrap_err();
 
-    assert!(errors.iter().any(|error| error
-        .contains("input_status must be source_schema_only_no_root_generation")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                .contains("input_status must be source_schema_only_no_root_generation"))
+    );
 }
 
 #[test]
@@ -178,9 +182,11 @@ fn claim_source_root_input_rejects_root_generation_status() {
 
     let errors = source.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("root_generation_status must be not_generated")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("root_generation_status must be not_generated"))
+    );
 }
 
 #[test]
@@ -191,9 +197,11 @@ fn claim_source_root_input_rejects_invalid_provider_npi() {
 
     let errors = source.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("provider_npi must be exactly 10 decimal digits")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("provider_npi must be exactly 10 decimal digits"))
+    );
 }
 
 #[test]
@@ -205,9 +213,11 @@ fn claim_source_root_input_rejects_service_line_count_mismatch() {
 
     let errors = source.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("service_line_count must match procedure_codes length")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("service_line_count must match procedure_codes length"))
+    );
 }
 
 #[test]
@@ -218,9 +228,11 @@ fn claim_source_root_input_rejects_bad_claim_hash() {
 
     let errors = source.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("claim_hash must be a 0x-prefixed 32-byte hex string")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("claim_hash must be a 0x-prefixed 32-byte hex string"))
+    );
 }
 
 #[test]
@@ -231,7 +243,9 @@ fn claim_source_root_input_validation_rejects_empty_claim_id() {
 
     let errors = source.validate().unwrap_err();
 
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("claim_id must be present")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("claim_id must be present"))
+    );
 }
