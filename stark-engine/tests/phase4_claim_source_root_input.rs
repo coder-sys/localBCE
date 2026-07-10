@@ -128,6 +128,35 @@ fn claim_source_root_input_accepts_future_enriched_source_data() {
 }
 
 #[test]
+fn claim_source_root_input_json_round_trips_for_cli_output() {
+    let input = sample_bridge_input();
+    let source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
+    let json = serde_json::to_string_pretty(&source).unwrap();
+    let round_tripped: ClaimSourceRootInput = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, source);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert_eq!(round_tripped.schema_version, "claim-source-root-input-v0");
+    assert_eq!(
+        round_tripped.input_status,
+        "source_schema_only_no_root_generation"
+    );
+    assert_eq!(round_tripped.root_generation_status, "not_generated");
+}
+
+#[test]
+fn claim_source_root_input_rejects_invalid_input_status() {
+    let input = sample_bridge_input();
+    let mut source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
+    source.input_status = "runtime_root_input".to_string();
+
+    let errors = source.validate().unwrap_err();
+
+    assert!(errors.iter().any(|error| error
+        .contains("input_status must be source_schema_only_no_root_generation")));
+}
+
+#[test]
 fn claim_source_root_input_rejects_root_generation_status() {
     let input = sample_bridge_input();
     let mut source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
