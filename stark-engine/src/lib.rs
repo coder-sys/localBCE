@@ -334,6 +334,39 @@ pub struct ClaimSourceRootInput {
     pub notes: Vec<String>,
 }
 
+/// One normalized oracle fact that can eventually feed an `oracleFactsRoot`.
+///
+/// These are source facts only. They are not trusted, committed, or proven by
+/// this crate until a future oracle attestation and root-generation phase.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OracleFactInput {
+    pub fact_type: String,
+    pub fact_key: String,
+    pub fact_value: String,
+    pub source_url: Option<String>,
+    pub source_label: Option<String>,
+    pub verification_status: String,
+}
+
+/// Typed source data for a future `oracleFactsRoot`.
+///
+/// This object is intentionally pre-root. It records the source shape needed by
+/// a future oracle-facts tree, but it does not fetch, attest, hash, or build a
+/// Merkle root.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OracleFactsRootInput {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub input_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub source_manifest_id: Option<String>,
+    pub facts: Vec<OracleFactInput>,
+    pub attestation_refs: Vec<String>,
+    pub root_generation_status: String,
+    pub notes: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1167,6 +1200,128 @@ impl ClaimSourceRootInput {
         for (index, diagnosis_code) in self.diagnosis_codes.iter().enumerate() {
             if diagnosis_code.trim().is_empty() {
                 errors.push(format!("diagnosis_codes[{index}] must be non-empty"));
+            }
+        }
+
+        if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
+            errors.push(format!(
+                "root_generation_status must be {}, got {}",
+                Self::ROOT_GENERATION_STATUS,
+                self.root_generation_status
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl OracleFactsRootInput {
+    pub const SCHEMA_VERSION: &'static str = "oracle-facts-root-input-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const INPUT_STATUS: &'static str = "source_schema_only_no_root_generation";
+    pub const ROOT_GENERATION_STATUS: &'static str = "not_generated";
+
+    pub fn from_bridge_input(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: input.schema_version.clone(),
+            input_status: Self::INPUT_STATUS.to_string(),
+            claim_id: input.claim.claim_id.clone(),
+            claim_hash: input.claim.claim_hash.clone(),
+            source_manifest_id: None,
+            facts: Vec::new(),
+            attestation_refs: Vec::new(),
+            root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
+            notes: vec![
+                "This input is a normalized source schema for future oracleFactsRoot work.".to_string(),
+                "The current rust-engine bridge exports adjudication flags, not source-backed oracle facts or attestations.".to_string(),
+                "No oracle fact leaf, hash, Merkle root, source fetch, attestation, or STARK proof is generated from this object.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.input_status != Self::INPUT_STATUS {
+            errors.push(format!(
+                "input_status must be {}, got {}",
+                Self::INPUT_STATUS,
+                self.input_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if let Some(source_manifest_id) = &self.source_manifest_id {
+            if source_manifest_id.trim().is_empty() {
+                errors.push("source_manifest_id must be non-empty when present".to_string());
+            }
+        }
+
+        for (index, fact) in self.facts.iter().enumerate() {
+            if fact.fact_type.trim().is_empty() {
+                errors.push(format!("facts[{index}].fact_type must be present"));
+            }
+            if fact.fact_key.trim().is_empty() {
+                errors.push(format!("facts[{index}].fact_key must be present"));
+            }
+            if fact.fact_value.trim().is_empty() {
+                errors.push(format!("facts[{index}].fact_value must be present"));
+            }
+            if fact.verification_status.trim().is_empty() {
+                errors.push(format!(
+                    "facts[{index}].verification_status must be present"
+                ));
+            }
+            if let Some(source_url) = &fact.source_url {
+                if !source_url.starts_with("https://") {
+                    errors.push(format!(
+                        "facts[{index}].source_url must use https when present"
+                    ));
+                }
+            }
+            if let Some(source_label) = &fact.source_label {
+                if source_label.trim().is_empty() {
+                    errors.push(format!(
+                        "facts[{index}].source_label must be non-empty when present"
+                    ));
+                }
+            }
+        }
+
+        for (index, attestation_ref) in self.attestation_refs.iter().enumerate() {
+            if attestation_ref.trim().is_empty() {
+                errors.push(format!("attestation_refs[{index}] must be non-empty"));
             }
         }
 
