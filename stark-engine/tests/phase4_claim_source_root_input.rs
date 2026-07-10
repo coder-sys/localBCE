@@ -145,6 +145,20 @@ fn claim_source_root_input_json_round_trips_for_cli_output() {
 }
 
 #[test]
+fn claim_source_root_input_validation_accepts_cli_generated_shape() {
+    let input = sample_bridge_input();
+    let source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
+
+    assert_eq!(source.validate(), Ok(()));
+    assert_eq!(source.schema_version, ClaimSourceRootInput::SCHEMA_VERSION);
+    assert_eq!(source.input_status, ClaimSourceRootInput::INPUT_STATUS);
+    assert_eq!(
+        source.root_generation_status,
+        ClaimSourceRootInput::ROOT_GENERATION_STATUS
+    );
+}
+
+#[test]
 fn claim_source_root_input_rejects_invalid_input_status() {
     let input = sample_bridge_input();
     let mut source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
@@ -207,4 +221,17 @@ fn claim_source_root_input_rejects_bad_claim_hash() {
     assert!(errors
         .iter()
         .any(|error| error.contains("claim_hash must be a 0x-prefixed 32-byte hex string")));
+}
+
+#[test]
+fn claim_source_root_input_validation_rejects_empty_claim_id() {
+    let input = sample_bridge_input();
+    let mut source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
+    source.claim_id = " ".to_string();
+
+    let errors = source.validate().unwrap_err();
+
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("claim_id must be present")));
 }
