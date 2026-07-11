@@ -742,6 +742,80 @@ fn winterfell_poc_feature_generates_adapter_preview_without_proof_generation() {
     assert!(!preview.proof_generation_enabled);
 }
 
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn winterfell_poc_feature_generates_settlement_boundary_artifact() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+
+    assert_eq!(artifact.validate(), Ok(()));
+    assert_eq!(
+        artifact.schema_version,
+        "stark-settlement-boundary-artifact-v0"
+    );
+    assert_eq!(
+        artifact.source_schema_version,
+        "winterfell-poc-proof-preview-v0"
+    );
+    assert_eq!(artifact.claim_id, preview.claim_id);
+    assert_eq!(artifact.claim_hash, preview.claim_hash);
+    assert_eq!(artifact.decision, preview.decision);
+    assert_eq!(artifact.failure_code, preview.failure_code);
+    assert!(artifact.proof_verified);
+    assert!(artifact.proof_size_bytes > 0);
+    assert!(!artifact.runtime_wired);
+    assert!(!artifact.on_chain_submission);
+    assert!(artifact.groth16_flow_unchanged);
+    assert!(!artifact.settlement_contract_ready);
+}
+
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn settlement_boundary_artifact_rejects_runtime_like_flags() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let mut artifact = preview.to_settlement_boundary_artifact().unwrap();
+
+    artifact.runtime_wired = true;
+    artifact.on_chain_submission = true;
+    artifact.groth16_flow_unchanged = false;
+    artifact.settlement_contract_ready = true;
+
+    let errors = artifact.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("runtime_wired must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("on_chain_submission must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("groth16_flow_unchanged must be true"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("settlement_contract_ready must remain false"))
+    );
+}
+
 #[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();

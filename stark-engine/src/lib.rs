@@ -1,8 +1,8 @@
 //! First-class STARK compatibility wrapper for localBCE.
 //!
-//! This crate is intentionally non-runtime today. It does not import the
-//! Winterfell proof-of-concept from `blind-ledger-app-layer/zk-stark`, and it is
-//! not wired into `rust-engine`.
+//! This crate is intentionally non-runtime today. The default build does not
+//! import the Winterfell proof-of-concept from `blind-ledger-app-layer/zk-stark`,
+//! and it is not wired into `rust-engine`.
 //!
 //! Its first job is to document and test the bridge assumptions between the
 //! active Rust adjudication model and the imported Winterfell STARK input model.
@@ -3600,6 +3600,32 @@ pub mod winterfell_poc_adapter {
         pub notes: Vec<String>,
     }
 
+    /// Settlement-boundary preview derived from a validated Winterfell proof
+    /// preview.
+    ///
+    /// This is the first object shaped like something a future settlement
+    /// contract or attestation anchor could consume. It intentionally excludes
+    /// proof bytes and does not imply on-chain verification.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct StarkSettlementBoundaryArtifact {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub artifact_status: String,
+        pub claim_id: String,
+        pub claim_hash: String,
+        pub decision: u32,
+        pub failure_code: u32,
+        pub proof_preview_status: String,
+        pub proof_verified: bool,
+        pub proof_size_bytes: usize,
+        pub verifier_target: String,
+        pub runtime_wired: bool,
+        pub on_chain_submission: bool,
+        pub groth16_flow_unchanged: bool,
+        pub settlement_contract_ready: bool,
+        pub notes: Vec<String>,
+    }
+
     impl WinterfellPocAdapterPreview {
         pub const SCHEMA_VERSION: &'static str = "winterfell-poc-adapter-preview-v0";
         pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-complete-witness-candidate-v0";
@@ -3819,6 +3845,128 @@ pub mod winterfell_poc_adapter {
 
             if self.on_chain_submission {
                 errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+
+        pub fn to_settlement_boundary_artifact(
+            &self,
+        ) -> Result<StarkSettlementBoundaryArtifact, Vec<String>> {
+            self.validate()?;
+
+            Ok(StarkSettlementBoundaryArtifact {
+                schema_version: StarkSettlementBoundaryArtifact::SCHEMA_VERSION.to_string(),
+                source_schema_version: self.schema_version.clone(),
+                artifact_status: StarkSettlementBoundaryArtifact::ARTIFACT_STATUS.to_string(),
+                claim_id: self.claim_id.clone(),
+                claim_hash: self.claim_hash.clone(),
+                decision: self.decision,
+                failure_code: self.failure_code,
+                proof_preview_status: self.proof_status.clone(),
+                proof_verified: self.verified,
+                proof_size_bytes: self.proof_size_bytes,
+                verifier_target: "future_stark_settlement_or_attestation_contract".to_string(),
+                runtime_wired: false,
+                on_chain_submission: false,
+                groth16_flow_unchanged: true,
+                settlement_contract_ready: false,
+                notes: vec![
+                    "This artifact is derived from a feature-gated Winterfell proof preview."
+                        .to_string(),
+                    "It is shaped for future settlement-boundary planning only.".to_string(),
+                    "It does not contain proof bytes and is not submitted on-chain.".to_string(),
+                    "The active Groth16 ClaimsRegistry path remains unchanged.".to_string(),
+                ],
+            })
+        }
+    }
+
+    impl StarkSettlementBoundaryArtifact {
+        pub const SCHEMA_VERSION: &'static str = "stark-settlement-boundary-artifact-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-poc-proof-preview-v0";
+        pub const ARTIFACT_STATUS: &'static str = "settlement_boundary_preview_not_runtime";
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}, got {}",
+                    Self::SOURCE_SCHEMA_VERSION,
+                    self.source_schema_version
+                ));
+            }
+
+            if self.artifact_status != Self::ARTIFACT_STATUS {
+                errors.push(format!(
+                    "artifact_status must be {}, got {}",
+                    Self::ARTIFACT_STATUS,
+                    self.artifact_status
+                ));
+            }
+
+            if self.claim_id.trim().is_empty() {
+                errors.push("claim_id must be present".to_string());
+            }
+
+            if !self.claim_hash.starts_with("0x") || self.claim_hash.len() != 66 {
+                errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+            }
+
+            if self.decision > 1 {
+                errors.push("decision must be 0 or 1".to_string());
+            }
+
+            if self.proof_preview_status != WinterfellPocProofPreview::PROOF_STATUS {
+                errors.push(format!(
+                    "proof_preview_status must be {}",
+                    WinterfellPocProofPreview::PROOF_STATUS
+                ));
+            }
+
+            if !self.proof_verified {
+                errors.push("proof_verified must be true".to_string());
+            }
+
+            if self.proof_size_bytes == 0 {
+                errors.push("proof_size_bytes must be greater than zero".to_string());
+            }
+
+            if self.verifier_target.trim().is_empty() {
+                errors.push("verifier_target must be present".to_string());
+            }
+
+            if self.runtime_wired {
+                errors.push("runtime_wired must remain false".to_string());
+            }
+
+            if self.on_chain_submission {
+                errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            if !self.groth16_flow_unchanged {
+                errors.push("groth16_flow_unchanged must be true".to_string());
+            }
+
+            if self.settlement_contract_ready {
+                errors.push("settlement_contract_ready must remain false".to_string());
             }
 
             if self.notes.is_empty() {
