@@ -360,6 +360,36 @@ pub struct WinterfellAdapterPublicInputBinding {
     pub note: String,
 }
 
+/// Deterministic witness candidate for the imported Winterfell PoC shape.
+///
+/// This is not a Winterfell witness and does not import Winterfell. It is the
+/// Phase 5B adapter staging object that makes missing source data explicit
+/// before a prover-specific witness generator exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellWitnessCandidate {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub candidate_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub fields: Vec<WinterfellWitnessCandidateField>,
+    pub counts: MappingCounts,
+    pub winterfell_dependency_imported: bool,
+    pub proof_generation_enabled: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellWitnessCandidateField {
+    pub winterfell_field: String,
+    pub value: Option<u64>,
+    pub value_status: String,
+    pub source_artifact: Option<String>,
+    pub source_field: Option<String>,
+    pub class: MappingClass,
+    pub note: String,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -1426,6 +1456,177 @@ impl WinterfellAdapterBoundaryPlan {
     }
 }
 
+impl WinterfellWitnessCandidate {
+    pub const SCHEMA_VERSION: &'static str = "winterfell-witness-candidate-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const CANDIDATE_STATUS: &'static str = "incomplete_needs_source_data_no_prover";
+
+    pub fn from_bridge_input(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        let fields = winterfell_witness_candidate_fields(input);
+        let counts = mapping_counts_for_winterfell_witness_candidate_fields(&fields);
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: input.schema_version.clone(),
+            candidate_status: Self::CANDIDATE_STATUS.to_string(),
+            claim_id: input.claim.claim_id.clone(),
+            claim_hash: input.claim.claim_hash.clone(),
+            fields,
+            counts,
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+            notes: vec![
+                "This is a deterministic candidate for the imported Winterfell PoC ClaimInput shape.".to_string(),
+                "Only direct bridge fields are populated today; partial and unmapped fields remain explicit None values.".to_string(),
+                "This is not a Winterfell witness, does not import Winterfell, and does not generate a STARK proof.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.candidate_status != Self::CANDIDATE_STATUS {
+            errors.push(format!(
+                "candidate_status must be {}, got {}",
+                Self::CANDIDATE_STATUS,
+                self.candidate_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.fields.len() != ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len() {
+            errors.push(format!(
+                "fields must contain {} Winterfell fields, got {}",
+                ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len(),
+                self.fields.len()
+            ));
+        }
+
+        for required_field in ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS {
+            if !self
+                .fields
+                .iter()
+                .any(|field| field.winterfell_field == required_field)
+            {
+                errors.push(format!(
+                    "missing Winterfell witness field: {required_field}"
+                ));
+            }
+        }
+
+        let actual_counts = mapping_counts_for_winterfell_witness_candidate_fields(&self.fields);
+        if self.counts != actual_counts {
+            errors.push("counts must match fields classification".to_string());
+        }
+
+        if self.counts
+            != (MappingCounts {
+                direct: 3,
+                partial: 4,
+                unmapped: 4,
+            })
+        {
+            errors.push("counts must be direct=3, partial=4, unmapped=4".to_string());
+        }
+
+        for field in &self.fields {
+            if field.winterfell_field.trim().is_empty() {
+                errors.push("winterfell_field must be present".to_string());
+            }
+
+            match field.class {
+                MappingClass::Direct => {
+                    if field.value.is_none() {
+                        errors.push(format!(
+                            "{} direct field must have a candidate value",
+                            field.winterfell_field
+                        ));
+                    }
+                    if field.value_status != "populated_direct" {
+                        errors.push(format!(
+                            "{} direct field value_status must be populated_direct",
+                            field.winterfell_field
+                        ));
+                    }
+                }
+                MappingClass::Partial => {
+                    if field.value.is_some() {
+                        errors.push(format!(
+                            "{} partial field must not be populated in Phase 5B",
+                            field.winterfell_field
+                        ));
+                    }
+                    if field.value_status != "needs_normalization" {
+                        errors.push(format!(
+                            "{} partial field value_status must be needs_normalization",
+                            field.winterfell_field
+                        ));
+                    }
+                }
+                MappingClass::Unmapped => {
+                    if field.value.is_some() {
+                        errors.push(format!(
+                            "{} unmapped field must not be populated in Phase 5B",
+                            field.winterfell_field
+                        ));
+                    }
+                    if field.value_status != "needs_source_data" {
+                        errors.push(format!(
+                            "{} unmapped field value_status must be needs_source_data",
+                            field.winterfell_field
+                        ));
+                    }
+                }
+            }
+        }
+
+        if self.winterfell_dependency_imported {
+            errors.push("winterfell_dependency_imported must be false in Phase 5B".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false in Phase 5B".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ClaimSourceRootInput {
     pub const SCHEMA_VERSION: &'static str = "claim-source-root-input-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
@@ -2125,6 +2326,56 @@ fn mapping_counts_for_winterfell_adapter_fields(
             .filter(|binding| binding.class == MappingClass::Unmapped)
             .count(),
     }
+}
+
+fn mapping_counts_for_winterfell_witness_candidate_fields(
+    fields: &[WinterfellWitnessCandidateField],
+) -> MappingCounts {
+    MappingCounts {
+        direct: fields
+            .iter()
+            .filter(|field| field.class == MappingClass::Direct)
+            .count(),
+        partial: fields
+            .iter()
+            .filter(|field| field.class == MappingClass::Partial)
+            .count(),
+        unmapped: fields
+            .iter()
+            .filter(|field| field.class == MappingClass::Unmapped)
+            .count(),
+    }
+}
+
+fn winterfell_witness_candidate_fields(
+    input: &StarkBridgeInput,
+) -> Vec<WinterfellWitnessCandidateField> {
+    winterfell_adapter_field_bindings()
+        .into_iter()
+        .map(|binding| {
+            let value = match binding.winterfell_field.as_str() {
+                "eligibility_active" => Some(input.active_rust_facts.eligibility_active as u64),
+                "provider_enrolled" => Some(input.active_rust_facts.provider_enrolled as u64),
+                "duplicate_flag" => Some(input.active_rust_facts.is_duplicate as u64),
+                _ => None,
+            };
+            let value_status = match binding.class {
+                MappingClass::Direct => "populated_direct",
+                MappingClass::Partial => "needs_normalization",
+                MappingClass::Unmapped => "needs_source_data",
+            };
+
+            WinterfellWitnessCandidateField {
+                winterfell_field: binding.winterfell_field,
+                value,
+                value_status: value_status.to_string(),
+                source_artifact: binding.phase4_source_artifact,
+                source_field: binding.phase4_source_field,
+                class: binding.class,
+                note: binding.note,
+            }
+        })
+        .collect()
 }
 
 fn winterfell_adapter_field_bindings() -> Vec<WinterfellAdapterFieldBinding> {
