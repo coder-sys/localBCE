@@ -55,6 +55,7 @@ WINTERFELL_SOURCE_DATA_FIXTURE="${TMP_DIR}/winterfell_source_data_fixture.json"
 COMPLETE_WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/complete_winterfell_witness_candidate.json"
 WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
 STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifact.json"
+STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_interface_plan.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -96,6 +97,12 @@ run_in_dir "Generate STARK settlement boundary artifact" "stark-engine" \
 
 run_in_dir "Validate STARK settlement boundary artifact" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_stark_settlement_boundary_artifact -- "${STARK_SETTLEMENT_BOUNDARY_ARTIFACT}"
+
+run_in_dir "Generate STARK Solidity verifier interface plan" "stark-engine" \
+  cargo run --features winterfell-poc --bin generate_stark_solidity_verifier_interface_plan -- "${STARK_SETTLEMENT_BOUNDARY_ARTIFACT}" "${STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN}"
+
+run_in_dir "Validate STARK Solidity verifier interface plan" "stark-engine" \
+  cargo run --features winterfell-poc --bin validate_stark_solidity_verifier_interface_plan -- "${STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN}"
 
 run_in_dir "Generate STARK claim source root input" "stark-engine" \
   cargo run --bin generate_claim_source_root_input -- "${BRIDGE_INPUT}" "${CLAIM_SOURCE_ROOT_INPUT}"

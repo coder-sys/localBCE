@@ -816,6 +816,82 @@ fn settlement_boundary_artifact_rejects_runtime_like_flags() {
     );
 }
 
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn settlement_boundary_artifact_generates_solidity_verifier_interface_plan() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+
+    assert_eq!(plan.validate(), Ok(()));
+    assert_eq!(
+        plan.schema_version,
+        "stark-solidity-verifier-interface-plan-v0"
+    );
+    assert_eq!(
+        plan.source_schema_version,
+        "stark-settlement-boundary-artifact-v0"
+    );
+    assert_eq!(
+        plan.interface_status,
+        "solidity_interface_plan_only_no_contract_changes"
+    );
+    assert_eq!(plan.interface_name, "IStarkClaimsVerifierPreview");
+    assert!(plan.function_signature.contains("verifyClaim("));
+    assert_eq!(
+        plan.solidity_inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["claimHash", "decision", "failureCode", "proofCommitment"]
+    );
+    assert!(!plan.contract_modification_allowed);
+    assert!(!plan.runtime_wired);
+    assert!(!plan.on_chain_submission);
+}
+
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn solidity_verifier_interface_plan_rejects_contract_activation_flags() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let mut plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+
+    plan.contract_modification_allowed = true;
+    plan.runtime_wired = true;
+    plan.on_chain_submission = true;
+
+    let errors = plan.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("contract_modification_allowed must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("runtime_wired must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("on_chain_submission must remain false"))
+    );
+}
+
 #[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();

@@ -3626,6 +3626,37 @@ pub mod winterfell_poc_adapter {
         pub notes: Vec<String>,
     }
 
+    /// Solidity-facing interface plan derived from a settlement-boundary
+    /// artifact.
+    ///
+    /// This is documentation-as-data for a future verifier/attestation
+    /// contract. It does not modify Solidity and does not declare a live
+    /// verifier interface.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct StarkSolidityVerifierInterfacePlan {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub interface_status: String,
+        pub interface_name: String,
+        pub function_signature: String,
+        pub solidity_inputs: Vec<SolidityVerifierInput>,
+        pub required_checks: Vec<String>,
+        pub unsupported_runtime_work: Vec<String>,
+        pub contract_modification_allowed: bool,
+        pub runtime_wired: bool,
+        pub on_chain_submission: bool,
+        pub notes: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct SolidityVerifierInput {
+        pub name: String,
+        pub solidity_type: String,
+        pub source_field: String,
+        pub value_preview: String,
+        pub status: String,
+    }
+
     impl WinterfellPocAdapterPreview {
         pub const SCHEMA_VERSION: &'static str = "winterfell-poc-adapter-preview-v0";
         pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-complete-witness-candidate-v0";
@@ -3967,6 +3998,177 @@ pub mod winterfell_poc_adapter {
 
             if self.settlement_contract_ready {
                 errors.push("settlement_contract_ready must remain false".to_string());
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+
+        pub fn to_solidity_verifier_interface_plan(
+            &self,
+        ) -> Result<StarkSolidityVerifierInterfacePlan, Vec<String>> {
+            self.validate()?;
+
+            Ok(StarkSolidityVerifierInterfacePlan {
+                schema_version: StarkSolidityVerifierInterfacePlan::SCHEMA_VERSION.to_string(),
+                source_schema_version: self.schema_version.clone(),
+                interface_status: StarkSolidityVerifierInterfacePlan::INTERFACE_STATUS.to_string(),
+                interface_name: "IStarkClaimsVerifierPreview".to_string(),
+                function_signature:
+                    "verifyClaim(bytes32 claimHash,uint8 decision,uint32 failureCode,bytes proofCommitment) external view returns (bool)"
+                        .to_string(),
+                solidity_inputs: vec![
+                    SolidityVerifierInput {
+                        name: "claimHash".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "claim_hash".to_string(),
+                        value_preview: self.claim_hash.clone(),
+                        status: "available_from_boundary_artifact".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "decision".to_string(),
+                        solidity_type: "uint8".to_string(),
+                        source_field: "decision".to_string(),
+                        value_preview: self.decision.to_string(),
+                        status: "available_from_boundary_artifact".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "failureCode".to_string(),
+                        solidity_type: "uint32".to_string(),
+                        source_field: "failure_code".to_string(),
+                        value_preview: self.failure_code.to_string(),
+                        status: "available_from_boundary_artifact".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "proofCommitment".to_string(),
+                        solidity_type: "bytes".to_string(),
+                        source_field: "future_stark_proof_or_attestation_commitment".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_real_verifier_artifact".to_string(),
+                    },
+                ],
+                required_checks: vec![
+                    "claimHash must match the adjudicated claim hash".to_string(),
+                    "decision must be 0 or 1".to_string(),
+                    "approved decisions require failureCode == 0".to_string(),
+                    "denied decisions require failureCode != 0".to_string(),
+                    "proofCommitment must bind to the verified STARK public inputs".to_string(),
+                    "verifier key or attestation authority must be governed".to_string(),
+                ],
+                unsupported_runtime_work: vec![
+                    "Solidity verifier contract implementation".to_string(),
+                    "Verifier artifact pinning and governance".to_string(),
+                    "Proof byte format and calldata encoding".to_string(),
+                    "ClaimsRegistry STARK settlement path".to_string(),
+                    "Replay/nullifier enforcement for STARK settlement".to_string(),
+                ],
+                contract_modification_allowed: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                notes: vec![
+                    "This plan is generated from a STARK settlement-boundary preview artifact."
+                        .to_string(),
+                    "It is a future Solidity interface sketch, not an active contract ABI."
+                        .to_string(),
+                    "Do not modify ClaimsRegistry or Verifier.sol from this artifact alone."
+                        .to_string(),
+                    "The active Groth16 settlement path remains unchanged.".to_string(),
+                ],
+            })
+        }
+    }
+
+    impl StarkSolidityVerifierInterfacePlan {
+        pub const SCHEMA_VERSION: &'static str = "stark-solidity-verifier-interface-plan-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-settlement-boundary-artifact-v0";
+        pub const INTERFACE_STATUS: &'static str =
+            "solidity_interface_plan_only_no_contract_changes";
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}, got {}",
+                    Self::SOURCE_SCHEMA_VERSION,
+                    self.source_schema_version
+                ));
+            }
+
+            if self.interface_status != Self::INTERFACE_STATUS {
+                errors.push(format!(
+                    "interface_status must be {}, got {}",
+                    Self::INTERFACE_STATUS,
+                    self.interface_status
+                ));
+            }
+
+            if self.interface_name.trim().is_empty() {
+                errors.push("interface_name must be present".to_string());
+            }
+
+            if !self.function_signature.contains("verifyClaim(") {
+                errors.push("function_signature must define verifyClaim".to_string());
+            }
+
+            for required_input in ["claimHash", "decision", "failureCode", "proofCommitment"] {
+                if !self
+                    .solidity_inputs
+                    .iter()
+                    .any(|input| input.name == required_input)
+                {
+                    errors.push(format!("missing Solidity verifier input: {required_input}"));
+                }
+            }
+
+            for input in &self.solidity_inputs {
+                if input.name.trim().is_empty() {
+                    errors.push("solidity input name must be present".to_string());
+                }
+                if input.solidity_type.trim().is_empty() {
+                    errors.push(format!("{} solidity_type must be present", input.name));
+                }
+                if input.source_field.trim().is_empty() {
+                    errors.push(format!("{} source_field must be present", input.name));
+                }
+                if input.status.trim().is_empty() {
+                    errors.push(format!("{} status must be present", input.name));
+                }
+            }
+
+            if self.required_checks.len() < 4 {
+                errors.push("required_checks must include settlement guard checks".to_string());
+            }
+
+            if self.unsupported_runtime_work.is_empty() {
+                errors.push("unsupported_runtime_work must be non-empty".to_string());
+            }
+
+            if self.contract_modification_allowed {
+                errors.push("contract_modification_allowed must remain false".to_string());
+            }
+
+            if self.runtime_wired {
+                errors.push("runtime_wired must remain false".to_string());
+            }
+
+            if self.on_chain_submission {
+                errors.push("on_chain_submission must remain false".to_string());
             }
 
             if self.notes.is_empty() {
