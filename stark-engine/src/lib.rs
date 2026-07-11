@@ -3657,6 +3657,28 @@ pub mod winterfell_poc_adapter {
         pub status: String,
     }
 
+    /// Gap report for moving from a Solidity verifier interface plan to an
+    /// active settlement integration.
+    ///
+    /// This report is still pre-contract. It exists to make the blockers
+    /// explicit before any Solidity files are modified.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct StarkSettlementIntegrationGapReport {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub report_status: String,
+        pub verifier_contract_gaps: Vec<String>,
+        pub claims_registry_integration_gaps: Vec<String>,
+        pub governance_gaps: Vec<String>,
+        pub calldata_public_input_gaps: Vec<String>,
+        pub test_requirements: Vec<String>,
+        pub recommended_next_steps: Vec<String>,
+        pub contract_modification_allowed: bool,
+        pub runtime_wired: bool,
+        pub on_chain_submission: bool,
+        pub notes: Vec<String>,
+    }
+
     impl WinterfellPocAdapterPreview {
         pub const SCHEMA_VERSION: &'static str = "winterfell-poc-adapter-preview-v0";
         pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-complete-witness-candidate-v0";
@@ -4157,6 +4179,142 @@ pub mod winterfell_poc_adapter {
 
             if self.unsupported_runtime_work.is_empty() {
                 errors.push("unsupported_runtime_work must be non-empty".to_string());
+            }
+
+            if self.contract_modification_allowed {
+                errors.push("contract_modification_allowed must remain false".to_string());
+            }
+
+            if self.runtime_wired {
+                errors.push("runtime_wired must remain false".to_string());
+            }
+
+            if self.on_chain_submission {
+                errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+
+        pub fn to_settlement_integration_gap_report(
+            &self,
+        ) -> Result<StarkSettlementIntegrationGapReport, Vec<String>> {
+            self.validate()?;
+
+            Ok(StarkSettlementIntegrationGapReport {
+                schema_version: StarkSettlementIntegrationGapReport::SCHEMA_VERSION.to_string(),
+                source_schema_version: self.schema_version.clone(),
+                report_status: StarkSettlementIntegrationGapReport::REPORT_STATUS.to_string(),
+                verifier_contract_gaps: vec![
+                    "Select verifier architecture: native verifier, verifier precompile, or governed attestation anchor.".to_string(),
+                    "Define proofCommitment bytes format and binding to STARK public inputs.".to_string(),
+                    "Pin verifier key or attestation authority through governed configuration.".to_string(),
+                    "Define verifier failure modes and revert/error surface.".to_string(),
+                ],
+                claims_registry_integration_gaps: vec![
+                    "Add a separate STARK settlement path without changing current Groth16 submission behavior.".to_string(),
+                    "Define event schema for STARK-verified adjudications.".to_string(),
+                    "Define replay/nullifier enforcement before accepting STARK settlement.".to_string(),
+                    "Preserve duplicate claim protection and fee behavior from ClaimsRegistry.".to_string(),
+                ],
+                governance_gaps: vec![
+                    "Add verifier artifact pinning policy.".to_string(),
+                    "Define upgrade and emergency pause controls for STARK settlement.".to_string(),
+                    "Define operator permissions for submitting STARK settlement artifacts.".to_string(),
+                ],
+                calldata_public_input_gaps: vec![
+                    "Freeze calldata encoding for claimHash, decision, failureCode, and proofCommitment.".to_string(),
+                    "Define public input root ordering once batch roots are real.".to_string(),
+                    "Define conversion from 0x-prefixed claim_hash string to Solidity bytes32.".to_string(),
+                    "Add negative tests for mismatched public inputs.".to_string(),
+                ],
+                test_requirements: vec![
+                    "Foundry interface-only tests before ClaimsRegistry changes.".to_string(),
+                    "Foundry mock verifier tests before real verifier wiring.".to_string(),
+                    "End-to-end dry run proving Groth16 path still passes unchanged.".to_string(),
+                    "Negative tests for invalid decision/failureCode/proofCommitment combinations.".to_string(),
+                ],
+                recommended_next_steps: vec![
+                    "Create a Solidity interface-only file or test fixture in a later explicit Solidity-scoped phase.".to_string(),
+                    "Add a mock STARK verifier contract only after this gap report is reviewed.".to_string(),
+                    "Keep ClaimsRegistry unchanged until mock verifier tests are green.".to_string(),
+                    "Keep Groth16 verifier and current ClaimsRegistry path as the compatibility baseline.".to_string(),
+                ],
+                contract_modification_allowed: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                notes: vec![
+                    "This report is generated from a Solidity verifier interface plan.".to_string(),
+                    "It is a blocker list, not an implementation approval.".to_string(),
+                    "No Solidity files are modified by this phase.".to_string(),
+                    "The active Groth16 runtime remains unchanged.".to_string(),
+                ],
+            })
+        }
+    }
+
+    impl StarkSettlementIntegrationGapReport {
+        pub const SCHEMA_VERSION: &'static str = "stark-settlement-integration-gap-report-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-solidity-verifier-interface-plan-v0";
+        pub const REPORT_STATUS: &'static str = "settlement_integration_gap_report_no_runtime";
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}, got {}",
+                    Self::SOURCE_SCHEMA_VERSION,
+                    self.source_schema_version
+                ));
+            }
+
+            if self.report_status != Self::REPORT_STATUS {
+                errors.push(format!(
+                    "report_status must be {}, got {}",
+                    Self::REPORT_STATUS,
+                    self.report_status
+                ));
+            }
+
+            if self.verifier_contract_gaps.is_empty() {
+                errors.push("verifier_contract_gaps must be non-empty".to_string());
+            }
+
+            if self.claims_registry_integration_gaps.is_empty() {
+                errors.push("claims_registry_integration_gaps must be non-empty".to_string());
+            }
+
+            if self.governance_gaps.is_empty() {
+                errors.push("governance_gaps must be non-empty".to_string());
+            }
+
+            if self.calldata_public_input_gaps.is_empty() {
+                errors.push("calldata_public_input_gaps must be non-empty".to_string());
+            }
+
+            if self.test_requirements.is_empty() {
+                errors.push("test_requirements must be non-empty".to_string());
+            }
+
+            if self.recommended_next_steps.is_empty() {
+                errors.push("recommended_next_steps must be non-empty".to_string());
             }
 
             if self.contract_modification_allowed {

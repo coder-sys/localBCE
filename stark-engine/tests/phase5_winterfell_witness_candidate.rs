@@ -892,6 +892,80 @@ fn solidity_verifier_interface_plan_rejects_contract_activation_flags() {
     );
 }
 
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn solidity_verifier_interface_plan_generates_settlement_gap_report() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+    let report = plan.to_settlement_integration_gap_report().unwrap();
+
+    assert_eq!(report.validate(), Ok(()));
+    assert_eq!(
+        report.schema_version,
+        "stark-settlement-integration-gap-report-v0"
+    );
+    assert_eq!(
+        report.source_schema_version,
+        "stark-solidity-verifier-interface-plan-v0"
+    );
+    assert_eq!(
+        report.report_status,
+        "settlement_integration_gap_report_no_runtime"
+    );
+    assert!(!report.verifier_contract_gaps.is_empty());
+    assert!(!report.claims_registry_integration_gaps.is_empty());
+    assert!(!report.governance_gaps.is_empty());
+    assert!(!report.calldata_public_input_gaps.is_empty());
+    assert!(!report.test_requirements.is_empty());
+    assert!(!report.contract_modification_allowed);
+    assert!(!report.runtime_wired);
+    assert!(!report.on_chain_submission);
+}
+
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn settlement_gap_report_rejects_contract_activation_flags() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+    let mut report = plan.to_settlement_integration_gap_report().unwrap();
+
+    report.contract_modification_allowed = true;
+    report.runtime_wired = true;
+    report.on_chain_submission = true;
+
+    let errors = report.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("contract_modification_allowed must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("runtime_wired must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("on_chain_submission must remain false"))
+    );
+}
+
 #[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();
