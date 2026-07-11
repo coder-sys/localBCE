@@ -70,6 +70,9 @@ from the active Groth16 prototype toward deterministic rules, STARK bridge
 hardening, batch roots, native STARK settlement, app-layer integration, and
 production ops.
 
+See `STARK_PHASE4_CHECKPOINT.md` for the completed Phase 4 STARK bridge
+checkpoint and smoke-test summary.
+
 ---
 
 # Project Structure
@@ -134,6 +137,17 @@ cargo run -- stark-bridge-input-dry-run
 
 cd ../stark-engine
 cargo run --bin validate_bridge_input -- ../rust-engine/stark_bridge_input.json
+cargo run --bin generate_claim_source_root_input -- ../rust-engine/stark_bridge_input.json claim_source_root_input.json
+cargo run --bin validate_claim_source_root_input -- claim_source_root_input.json
+cargo run --bin generate_oracle_facts_root_input -- ../rust-engine/stark_bridge_input.json oracle_facts_root_input.json
+cargo run --bin validate_oracle_facts_root_input -- oracle_facts_root_input.json
+cargo run --bin generate_fee_schedule_root_input -- ../rust-engine/stark_bridge_input.json fee_schedule_root_input.json
+cargo run --bin validate_fee_schedule_root_input -- fee_schedule_root_input.json
+cargo run --bin generate_nullifier_root_transition_input -- ../rust-engine/stark_bridge_input.json nullifier_root_transition_input.json
+cargo run --bin validate_nullifier_root_transition_input -- nullifier_root_transition_input.json
+cargo run --bin generate_batch_root_plan -- ../rust-engine/stark_bridge_input.json batch_root_plan.json
+cargo run --bin validate_batch_root_plan -- batch_root_plan.json
+cargo run --bin generate_batch_root_gap_report -- batch_root_plan.json batch_root_gap_report.json
 cargo run --bin generate_proof_intent -- ../rust-engine/stark_bridge_input.json proof_intent.json
 cargo run --bin generate_witness_plan -- proof_intent.json witness_plan.json
 cargo run --bin validate_witness_plan -- witness_plan.json
@@ -144,6 +158,12 @@ cargo run --bin generate_winterfell_gap_plan -- winterfell_compat_report.json wi
 ```
 
 This chain validates and normalizes the future STARK path, then produces a mock trace, Winterfell PoC compatibility report, and adapter gap plan. It does not import Winterfell, generate a real STARK proof, replace Groth16, or submit on-chain.
+
+The full STARK bridge smoke chain is also available from the repo root:
+
+```bash
+bash scripts/validate_stark_bridge_chain.sh
+```
 
 Schema details for the STARK bridge artifacts are documented in:
 
@@ -189,6 +209,17 @@ stark-engine/SCHEMA.md
 - stark-engine/SCHEMA.md
 - stark-engine/src/lib.rs
 - stark-engine/src/bin/validate_bridge_input.rs
+- stark-engine/src/bin/generate_claim_source_root_input.rs
+- stark-engine/src/bin/validate_claim_source_root_input.rs
+- stark-engine/src/bin/generate_oracle_facts_root_input.rs
+- stark-engine/src/bin/validate_oracle_facts_root_input.rs
+- stark-engine/src/bin/generate_fee_schedule_root_input.rs
+- stark-engine/src/bin/validate_fee_schedule_root_input.rs
+- stark-engine/src/bin/generate_nullifier_root_transition_input.rs
+- stark-engine/src/bin/validate_nullifier_root_transition_input.rs
+- stark-engine/src/bin/generate_batch_root_plan.rs
+- stark-engine/src/bin/validate_batch_root_plan.rs
+- stark-engine/src/bin/generate_batch_root_gap_report.rs
 - stark-engine/src/bin/generate_proof_intent.rs
 - stark-engine/src/bin/generate_witness_plan.rs
 - stark-engine/src/bin/validate_witness_plan.rs
@@ -197,6 +228,10 @@ stark-engine/SCHEMA.md
 - stark-engine/src/bin/generate_winterfell_compat_report.rs
 - stark-engine/src/bin/generate_winterfell_gap_plan.rs
 - stark-engine/tests/compatibility.rs
+- stark-engine/tests/phase4_claim_source_root_input.rs
+- stark-engine/tests/phase4_oracle_facts_root_input.rs
+- stark-engine/tests/phase4_fee_schedule_root_input.rs
+- stark-engine/tests/phase4_nullifier_root_transition_input.rs
 
 ## Imported App and Audit Layer
 
