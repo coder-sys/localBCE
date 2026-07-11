@@ -466,6 +466,37 @@ pub struct WinterfellSourceDataFixture {
     pub notes: Vec<String>,
 }
 
+/// Complete adapter-ready candidate assembled from the base Winterfell witness
+/// candidate plus fixture-only source data.
+///
+/// This is still not a Winterfell witness. It is a deterministic pre-prover
+/// artifact that proves every imported PoC field can be populated once the
+/// Phase 5G source-data fixture exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellCompleteWitnessCandidate {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub candidate_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub fields: Vec<WinterfellCompleteWitnessField>,
+    pub field_count: usize,
+    pub all_fields_populated: bool,
+    pub winterfell_dependency_imported: bool,
+    pub proof_generation_enabled: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellCompleteWitnessField {
+    pub winterfell_field: String,
+    pub value: u64,
+    pub value_status: String,
+    pub source_artifact: String,
+    pub source_field: String,
+    pub note: String,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -2158,6 +2189,173 @@ impl WinterfellSourceDataFixture {
             Err(errors)
         }
     }
+
+    pub fn to_complete_witness_candidate(
+        &self,
+        candidate: &WinterfellWitnessCandidate,
+    ) -> Result<WinterfellCompleteWitnessCandidate, Vec<String>> {
+        self.validate()?;
+        candidate.validate()?;
+
+        if self.claim_id != candidate.claim_id {
+            return Err(vec![format!(
+                "fixture claim_id {} must match candidate claim_id {}",
+                self.claim_id, candidate.claim_id
+            )]);
+        }
+
+        if self.claim_hash != candidate.claim_hash {
+            return Err(vec![format!(
+                "fixture claim_hash {} must match candidate claim_hash {}",
+                self.claim_hash, candidate.claim_hash
+            )]);
+        }
+
+        let fields = ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS
+            .iter()
+            .map(|field| complete_winterfell_field(field, candidate, self))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(WinterfellCompleteWitnessCandidate {
+            schema_version: WinterfellCompleteWitnessCandidate::SCHEMA_VERSION.to_string(),
+            source_schema_version:
+                WinterfellCompleteWitnessCandidate::SOURCE_SCHEMA_VERSION.to_string(),
+            candidate_status: WinterfellCompleteWitnessCandidate::CANDIDATE_STATUS.to_string(),
+            claim_id: self.claim_id.clone(),
+            claim_hash: self.claim_hash.clone(),
+            field_count: fields.len(),
+            all_fields_populated: fields.len() == ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len(),
+            fields,
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+            notes: vec![
+                "This complete candidate is assembled from a base Winterfell witness candidate and Phase 5G fixture data.".to_string(),
+                "It is adapter-ready test data only; it is not a Winterfell witness and does not generate a proof.".to_string(),
+                "The active Groth16 runtime remains unchanged.".to_string(),
+            ],
+        })
+    }
+}
+
+impl WinterfellCompleteWitnessCandidate {
+    pub const SCHEMA_VERSION: &'static str = "winterfell-complete-witness-candidate-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "winterfell-witness-candidate-v0+winterfell-source-data-fixture-v0";
+    pub const CANDIDATE_STATUS: &'static str =
+        "complete_adapter_ready_fixture_no_winterfell_import";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.candidate_status != Self::CANDIDATE_STATUS {
+            errors.push(format!(
+                "candidate_status must be {}, got {}",
+                Self::CANDIDATE_STATUS,
+                self.candidate_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.fields.len() != ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len() {
+            errors.push(format!(
+                "fields must contain {} Winterfell fields, got {}",
+                ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len(),
+                self.fields.len()
+            ));
+        }
+
+        if self.field_count != self.fields.len() {
+            errors.push("field_count must match fields length".to_string());
+        }
+
+        if !self.all_fields_populated {
+            errors.push("all_fields_populated must be true".to_string());
+        }
+
+        for required_field in ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS {
+            if !self
+                .fields
+                .iter()
+                .any(|field| field.winterfell_field == required_field)
+            {
+                errors.push(format!(
+                    "missing complete Winterfell field: {required_field}"
+                ));
+            }
+        }
+
+        for field in &self.fields {
+            if field.winterfell_field.trim().is_empty() {
+                errors.push("winterfell_field must be present".to_string());
+            }
+
+            if field.value_status != "populated_adapter_ready_fixture" {
+                errors.push(format!(
+                    "{} value_status must be populated_adapter_ready_fixture",
+                    field.winterfell_field
+                ));
+            }
+
+            if field.source_artifact.trim().is_empty() {
+                errors.push(format!(
+                    "{} source_artifact must be present",
+                    field.winterfell_field
+                ));
+            }
+
+            if field.source_field.trim().is_empty() {
+                errors.push(format!(
+                    "{} source_field must be present",
+                    field.winterfell_field
+                ));
+            }
+
+            if field.note.trim().is_empty() {
+                errors.push(format!("{} note must be present", field.winterfell_field));
+            }
+        }
+
+        if self.winterfell_dependency_imported {
+            errors.push("winterfell_dependency_imported must be false in Phase 5H".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false in Phase 5H".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 impl ClaimSourceRootInput {
@@ -2663,6 +2861,111 @@ fn is_0x_32_byte_hex(value: &str) -> bool {
 
 fn is_10_digit_npi(value: &str) -> bool {
     value.len() == 10 && value.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn complete_winterfell_field(
+    field: &str,
+    candidate: &WinterfellWitnessCandidate,
+    fixture: &WinterfellSourceDataFixture,
+) -> Result<WinterfellCompleteWitnessField, Vec<String>> {
+    let candidate_field = candidate
+        .fields
+        .iter()
+        .find(|candidate_field| candidate_field.winterfell_field == field);
+
+    let (value, source_artifact, source_field, note) = match field {
+        "member_id" => (
+            stable_fixture_string_to_u64(&fixture.member_id),
+            "WinterfellSourceDataFixture",
+            "member_id",
+            "Fixture member_id is deterministically normalized into a u64 adapter value.",
+        ),
+        "provider_npi" => (
+            fixture.provider_npi.parse::<u64>().map_err(|err| {
+                vec![format!(
+                    "provider_npi must parse to u64 for complete candidate: {err}"
+                )]
+            })?,
+            "WinterfellSourceDataFixture",
+            "provider_npi",
+            "Fixture provider_npi is parsed as the numeric PoC adapter value.",
+        ),
+        "eligibility_active" | "provider_enrolled" | "duplicate_flag" => {
+            let Some(candidate_field) = candidate_field else {
+                return Err(vec![format!("base candidate missing direct field {field}")]);
+            };
+            let Some(value) = candidate_field.value else {
+                return Err(vec![format!(
+                    "base candidate direct field {field} is not populated"
+                )]);
+            };
+            (
+                value,
+                candidate_field
+                    .source_artifact
+                    .as_deref()
+                    .unwrap_or("WinterfellWitnessCandidate"),
+                candidate_field.source_field.as_deref().unwrap_or(field),
+                "Direct field is carried forward from the validated base witness candidate.",
+            )
+        }
+        "service_line_count" => (
+            fixture.service_line_count,
+            "WinterfellSourceDataFixture",
+            "service_line_count",
+            "Fixture service_line_count satisfies the deterministic normalization requirement.",
+        ),
+        "diagnosis_count" => (
+            fixture.diagnosis_count,
+            "WinterfellSourceDataFixture",
+            "diagnosis_count",
+            "Fixture diagnosis_count satisfies the missing source-data requirement.",
+        ),
+        "prior_auth_ok" => (
+            fixture.prior_auth_ok as u64,
+            "WinterfellSourceDataFixture",
+            "prior_auth_ok",
+            "Fixture prior_auth_ok satisfies the deterministic normalization requirement.",
+        ),
+        "charge_cents" => (
+            fixture.charge_cents,
+            "WinterfellSourceDataFixture",
+            "charge_cents",
+            "Fixture charge_cents satisfies the deterministic normalization requirement.",
+        ),
+        "max_charge_cents" => (
+            fixture.max_charge_cents,
+            "WinterfellSourceDataFixture",
+            "max_charge_cents",
+            "Fixture max_charge_cents satisfies the missing source-data requirement.",
+        ),
+        "program_integrity_hold" => (
+            fixture.program_integrity_hold as u64,
+            "WinterfellSourceDataFixture",
+            "program_integrity_hold",
+            "Fixture program_integrity_hold satisfies the deterministic normalization requirement.",
+        ),
+        _ => {
+            return Err(vec![format!(
+                "unsupported Winterfell complete witness field: {field}"
+            )]);
+        }
+    };
+
+    Ok(WinterfellCompleteWitnessField {
+        winterfell_field: field.to_string(),
+        value,
+        value_status: "populated_adapter_ready_fixture".to_string(),
+        source_artifact: source_artifact.to_string(),
+        source_field: source_field.to_string(),
+        note: note.to_string(),
+    })
+}
+
+fn stable_fixture_string_to_u64(value: &str) -> u64 {
+    value.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+        hash ^ (byte as u64).wrapping_mul(0x100000001b3)
+    })
 }
 
 fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCompatibility> {

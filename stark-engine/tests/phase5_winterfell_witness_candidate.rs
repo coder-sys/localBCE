@@ -1,6 +1,6 @@
 use stark_engine::{
-    ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellSourceDataFixture,
-    WinterfellSourceDataRequirements, WinterfellWitnessCandidate,
+    ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellCompleteWitnessCandidate,
+    WinterfellSourceDataFixture, WinterfellSourceDataRequirements, WinterfellWitnessCandidate,
     WinterfellWitnessImplementationGapReport,
 };
 
@@ -537,6 +537,130 @@ fn winterfell_source_data_fixture_rejects_runtime_like_flags() {
     fixture.proof_generation_enabled = true;
 
     let errors = fixture.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("winterfell_dependency_imported must be false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("proof_generation_enabled must be false"))
+    );
+}
+
+fn sample_source_data_fixture() -> WinterfellSourceDataFixture {
+    let requirements = sample_source_data_requirements();
+    WinterfellSourceDataFixture::demo_from_requirements(&requirements).unwrap()
+}
+
+#[test]
+fn complete_winterfell_witness_candidate_merges_candidate_and_fixture() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+
+    assert_eq!(complete.validate(), Ok(()));
+    assert_eq!(
+        complete.schema_version,
+        WinterfellCompleteWitnessCandidate::SCHEMA_VERSION
+    );
+    assert_eq!(
+        complete.candidate_status,
+        WinterfellCompleteWitnessCandidate::CANDIDATE_STATUS
+    );
+    assert_eq!(complete.field_count, 11);
+    assert!(complete.all_fields_populated);
+    assert!(!complete.winterfell_dependency_imported);
+    assert!(!complete.proof_generation_enabled);
+}
+
+#[test]
+fn complete_winterfell_witness_candidate_populates_all_imported_fields() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+
+    assert_eq!(
+        complete
+            .fields
+            .iter()
+            .map(|field| field.winterfell_field.as_str())
+            .collect::<Vec<_>>(),
+        ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.to_vec()
+    );
+    assert!(
+        complete
+            .fields
+            .iter()
+            .all(|field| field.value_status == "populated_adapter_ready_fixture")
+    );
+    assert_eq!(
+        complete
+            .fields
+            .iter()
+            .find(|field| field.winterfell_field == "provider_npi")
+            .unwrap()
+            .value,
+        1_234_567_893
+    );
+    assert_eq!(
+        complete
+            .fields
+            .iter()
+            .find(|field| field.winterfell_field == "charge_cents")
+            .unwrap()
+            .value,
+        100_000
+    );
+}
+
+#[test]
+fn complete_winterfell_witness_candidate_json_round_trips() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let json = serde_json::to_string_pretty(&complete).unwrap();
+    let round_tripped: WinterfellCompleteWitnessCandidate = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, complete);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("winterfell-complete-witness-candidate-v0"));
+    assert!(!json.contains("proof_generation_enabled\": true"));
+}
+
+#[test]
+fn complete_winterfell_witness_candidate_rejects_mismatched_fixture() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let mut fixture = sample_source_data_fixture();
+    fixture.claim_id = "OTHER-CLAIM".to_string();
+
+    let errors = fixture
+        .to_complete_witness_candidate(&candidate)
+        .unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("fixture claim_id"))
+    );
+}
+
+#[test]
+fn complete_winterfell_witness_candidate_rejects_runtime_like_flags() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let mut complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    complete.winterfell_dependency_imported = true;
+    complete.proof_generation_enabled = true;
+
+    let errors = complete.validate().unwrap_err();
 
     assert!(
         errors
