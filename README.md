@@ -71,7 +71,10 @@ hardening, batch roots, native STARK settlement, app-layer integration, and
 production ops.
 
 See `STARK_PHASE4_CHECKPOINT.md` for the completed Phase 4 STARK bridge
-checkpoint and smoke-test summary.
+checkpoint and initial smoke-test summary.
+
+See `STARK_PHASE6_CHECKPOINT.md` for the feature-gated Winterfell proof-preview
+checkpoint. This is still isolated from the active Groth16 runtime.
 
 ---
 
@@ -125,45 +128,25 @@ localBCE/
 - stark-engine/ is a first-class localBCE crate for STARK compatibility modeling.
 - blind-ledger-app-layer/zk-stark/ remains the imported Winterfell reference/audit source.
 - rust-engine/ remains the active Groth16 runtime.
+- A feature-gated Winterfell PoC proof preview exists in stark-engine/ and is
+  covered by the STARK smoke chain.
 - No STARK prover is wired into runtime yet.
 - No STARK verifier is wired into ClaimsRegistry yet.
-- No real STARK proof is generated yet.
+- No STARK proof is submitted on-chain yet.
 
 Current STARK pre-prover planning workflow:
 
 ```bash
-cd rust-engine
-cargo run -- stark-bridge-input-dry-run
-
-cd ../stark-engine
-cargo run --bin validate_bridge_input -- ../rust-engine/stark_bridge_input.json
-cargo run --bin generate_claim_source_root_input -- ../rust-engine/stark_bridge_input.json claim_source_root_input.json
-cargo run --bin validate_claim_source_root_input -- claim_source_root_input.json
-cargo run --bin generate_oracle_facts_root_input -- ../rust-engine/stark_bridge_input.json oracle_facts_root_input.json
-cargo run --bin validate_oracle_facts_root_input -- oracle_facts_root_input.json
-cargo run --bin generate_fee_schedule_root_input -- ../rust-engine/stark_bridge_input.json fee_schedule_root_input.json
-cargo run --bin validate_fee_schedule_root_input -- fee_schedule_root_input.json
-cargo run --bin generate_nullifier_root_transition_input -- ../rust-engine/stark_bridge_input.json nullifier_root_transition_input.json
-cargo run --bin validate_nullifier_root_transition_input -- nullifier_root_transition_input.json
-cargo run --bin generate_batch_root_plan -- ../rust-engine/stark_bridge_input.json batch_root_plan.json
-cargo run --bin validate_batch_root_plan -- batch_root_plan.json
-cargo run --bin generate_batch_root_gap_report -- batch_root_plan.json batch_root_gap_report.json
-cargo run --bin generate_proof_intent -- ../rust-engine/stark_bridge_input.json proof_intent.json
-cargo run --bin generate_witness_plan -- proof_intent.json witness_plan.json
-cargo run --bin validate_witness_plan -- witness_plan.json
-cargo run --bin generate_mock_trace -- witness_plan.json mock_trace.json
-cargo run --bin validate_mock_trace -- mock_trace.json
-cargo run --bin generate_winterfell_compat_report -- mock_trace.json winterfell_compat_report.json
-cargo run --bin generate_winterfell_gap_plan -- winterfell_compat_report.json winterfell_gap_plan.json
-```
-
-This chain validates and normalizes the future STARK path, then produces a mock trace, Winterfell PoC compatibility report, and adapter gap plan. It does not import Winterfell, generate a real STARK proof, replace Groth16, or submit on-chain.
-
-The full STARK bridge smoke chain is also available from the repo root:
-
-```bash
 bash scripts/validate_stark_bridge_chain.sh
 ```
+
+This chain validates and normalizes the future STARK path, then produces root
+input plans, a mock trace, Winterfell PoC compatibility artifacts, and a
+feature-gated Winterfell proof preview. It does not replace Groth16 or submit
+STARK proofs on-chain.
+
+The script writes temporary artifacts under `/tmp`, removes generated runtime
+artifacts on exit, and is the source of truth for command ordering.
 
 Schema details for the STARK bridge artifacts are documented in:
 
