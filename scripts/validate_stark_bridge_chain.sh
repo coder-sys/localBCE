@@ -80,6 +80,9 @@ run_in_dir "Generate Winterfell source data fixture" "stark-engine" \
 run_in_dir "Generate complete Winterfell witness candidate" "stark-engine" \
   cargo run --bin generate_complete_winterfell_witness_candidate -- "${WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_SOURCE_DATA_FIXTURE}" "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
 
+run_in_dir "Validate complete Winterfell witness candidate" "stark-engine" \
+  cargo run --bin validate_complete_winterfell_witness_candidate -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
+
 run_in_dir "Generate STARK claim source root input" "stark-engine" \
   cargo run --bin generate_claim_source_root_input -- "${BRIDGE_INPUT}" "${CLAIM_SOURCE_ROOT_INPUT}"
 

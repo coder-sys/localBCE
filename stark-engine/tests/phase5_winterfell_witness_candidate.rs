@@ -634,6 +634,26 @@ fn complete_winterfell_witness_candidate_json_round_trips() {
 }
 
 #[test]
+fn complete_winterfell_witness_candidate_phase5i_validator_contract_is_stable() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let round_tripped: WinterfellCompleteWitnessCandidate =
+        serde_json::from_value(serde_json::to_value(&complete).unwrap()).unwrap();
+
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert_eq!(round_tripped.field_count, 11);
+    assert!(round_tripped.all_fields_populated);
+    assert_eq!(
+        round_tripped.candidate_status,
+        WinterfellCompleteWitnessCandidate::CANDIDATE_STATUS
+    );
+    assert!(!round_tripped.winterfell_dependency_imported);
+    assert!(!round_tripped.proof_generation_enabled);
+}
+
+#[test]
 fn complete_winterfell_witness_candidate_rejects_mismatched_fixture() {
     let input = sample_bridge_input();
     let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
