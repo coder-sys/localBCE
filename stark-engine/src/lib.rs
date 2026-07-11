@@ -311,6 +311,55 @@ pub struct BatchRootGapReport {
     pub recommended_next_steps: Vec<String>,
 }
 
+/// First Phase 5 boundary between completed Phase 4 schemas and the imported
+/// Winterfell proof-of-concept.
+///
+/// This is not a prover adapter. It names the exact imported PoC shape and the
+/// source artifacts a future adapter would need before importing Winterfell.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellAdapterBoundaryPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub imported_poc: WinterfellPocShape,
+    pub required_phase4_artifacts: Vec<String>,
+    pub field_bindings: Vec<WinterfellAdapterFieldBinding>,
+    pub public_input_bindings: Vec<WinterfellAdapterPublicInputBinding>,
+    pub unsupported_constraint_groups: Vec<String>,
+    pub winterfell_dependency_imported: bool,
+    pub proof_generation_enabled: bool,
+    pub recommended_next_steps: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellPocShape {
+    pub crate_path: String,
+    pub claim_input_fields: Vec<String>,
+    pub public_inputs: Vec<String>,
+    pub gate_count: usize,
+    pub trace_width: usize,
+    pub trace_length: usize,
+    pub commitment_strategy: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellAdapterFieldBinding {
+    pub winterfell_field: String,
+    pub phase4_source_artifact: Option<String>,
+    pub phase4_source_field: Option<String>,
+    pub class: MappingClass,
+    pub note: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellAdapterPublicInputBinding {
+    pub winterfell_public_input: String,
+    pub phase4_source_artifact: Option<String>,
+    pub phase4_source_field: Option<String>,
+    pub class: MappingClass,
+    pub note: String,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -1160,6 +1209,223 @@ impl BatchRootGapReport {
     }
 }
 
+impl WinterfellAdapterBoundaryPlan {
+    pub const SCHEMA_VERSION: &'static str = "winterfell-adapter-boundary-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-phase4-checkpoint-v0";
+    pub const PLAN_STATUS: &'static str = "adapter_boundary_only_no_winterfell_import";
+
+    pub fn phase5a() -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            plan_status: Self::PLAN_STATUS.to_string(),
+            imported_poc: WinterfellPocShape {
+                crate_path: "blind-ledger-app-layer/zk-stark".to_string(),
+                claim_input_fields: ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
+                public_inputs: vec![
+                    "commitment".to_string(),
+                    "decision".to_string(),
+                    "failure_code".to_string(),
+                ],
+                gate_count: 10,
+                trace_width: 172,
+                trace_length: 16,
+                commitment_strategy:
+                    "local AIR-bound algebraic PoC commitment, not production root/hash"
+                        .to_string(),
+            },
+            required_phase4_artifacts: vec![
+                "StarkBridgeInput".to_string(),
+                "ClaimSourceRootInput".to_string(),
+                "OracleFactsRootInput".to_string(),
+                "FeeScheduleRootInput".to_string(),
+                "NullifierRootTransitionInput".to_string(),
+                "BatchRootCompatibilityPlan".to_string(),
+                "BatchRootGapReport".to_string(),
+                "StarkProofIntent".to_string(),
+                "StarkWitnessPlan".to_string(),
+                "StarkMockTrace".to_string(),
+            ],
+            field_bindings: winterfell_adapter_field_bindings(),
+            public_input_bindings: winterfell_adapter_public_input_bindings(),
+            unsupported_constraint_groups: vec![
+                "member_id_nonzero_inverse_witness".to_string(),
+                "provider_npi_nonzero_inverse_witness".to_string(),
+                "service_line_count_nonzero_inverse_witness".to_string(),
+                "diagnosis_count_nonzero_inverse_witness".to_string(),
+                "charge_cents_positive_inverse_witness".to_string(),
+                "charge_and_max_charge_bit_decomposition".to_string(),
+                "charge_lte_max_charge_comparison_witness".to_string(),
+                "winterfell_commitment_hash_chain".to_string(),
+                "trace_width_172_and_trace_length_16_generation".to_string(),
+                "public_commitment_binding_to_phase4_roots".to_string(),
+            ],
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+            recommended_next_steps: vec![
+                "Keep Winterfell in blind-ledger-app-layer/zk-stark as a reference until adapter inputs are deterministic.".to_string(),
+                "Build a test-only normalized Winterfell witness candidate from Phase 4 artifacts before importing the Winterfell crate.".to_string(),
+                "Resolve partial fields with deterministic source data: service_line_count, prior_auth_ok, charge_cents, and program_integrity_hold.".to_string(),
+                "Resolve unmapped fields or remove them from the first adapter target: member_id, provider_npi, diagnosis_count, and max_charge_cents.".to_string(),
+                "Replace the PoC commitment with a production public-input binding strategy before any real proof path.".to_string(),
+            ],
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.plan_status != Self::PLAN_STATUS {
+            errors.push(format!(
+                "plan_status must be {}, got {}",
+                Self::PLAN_STATUS,
+                self.plan_status
+            ));
+        }
+
+        if self.imported_poc.crate_path != "blind-ledger-app-layer/zk-stark" {
+            errors.push(
+                "imported_poc.crate_path must point to blind-ledger-app-layer/zk-stark".to_string(),
+            );
+        }
+
+        if self.imported_poc.claim_input_fields
+            != ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect::<Vec<_>>()
+        {
+            errors.push("imported_poc.claim_input_fields must match the imported Winterfell PoC ClaimInput order".to_string());
+        }
+
+        if self.imported_poc.public_inputs != ["commitment", "decision", "failure_code"] {
+            errors.push(
+                "imported_poc.public_inputs must be commitment, decision, failure_code".to_string(),
+            );
+        }
+
+        if self.imported_poc.gate_count != 10 {
+            errors.push(format!(
+                "imported_poc.gate_count must be 10, got {}",
+                self.imported_poc.gate_count
+            ));
+        }
+
+        if self.imported_poc.trace_width != 172 {
+            errors.push(format!(
+                "imported_poc.trace_width must be 172, got {}",
+                self.imported_poc.trace_width
+            ));
+        }
+
+        if self.imported_poc.trace_length != 16 {
+            errors.push(format!(
+                "imported_poc.trace_length must be 16, got {}",
+                self.imported_poc.trace_length
+            ));
+        }
+
+        if self.required_phase4_artifacts.len() < 10 {
+            errors.push(
+                "required_phase4_artifacts must include the Phase 4 artifact chain".to_string(),
+            );
+        }
+
+        if self.field_bindings.len() != ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len() {
+            errors.push(format!(
+                "field_bindings must contain {} fields, got {}",
+                ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS.len(),
+                self.field_bindings.len()
+            ));
+        }
+
+        for required_field in ActiveClaimToStarkBridge::IMPORTED_STARK_FIELDS {
+            if !self
+                .field_bindings
+                .iter()
+                .any(|binding| binding.winterfell_field == required_field)
+            {
+                errors.push(format!(
+                    "missing Winterfell field binding: {required_field}"
+                ));
+            }
+        }
+
+        let counts = mapping_counts_for_winterfell_adapter_fields(&self.field_bindings);
+        if counts
+            != (MappingCounts {
+                direct: 3,
+                partial: 4,
+                unmapped: 4,
+            })
+        {
+            errors.push(
+                "field_bindings must classify as direct=3, partial=4, unmapped=4".to_string(),
+            );
+        }
+
+        if self.public_input_bindings.len() != 3 {
+            errors.push(format!(
+                "public_input_bindings must contain 3 public inputs, got {}",
+                self.public_input_bindings.len()
+            ));
+        }
+
+        for required_public_input in ["commitment", "decision", "failure_code"] {
+            if !self
+                .public_input_bindings
+                .iter()
+                .any(|binding| binding.winterfell_public_input == required_public_input)
+            {
+                errors.push(format!(
+                    "missing Winterfell public input binding: {required_public_input}"
+                ));
+            }
+        }
+
+        if self.unsupported_constraint_groups.is_empty() {
+            errors.push("unsupported_constraint_groups must be non-empty".to_string());
+        }
+
+        if self.winterfell_dependency_imported {
+            errors.push("winterfell_dependency_imported must be false in Phase 5A".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false in Phase 5A".to_string());
+        }
+
+        if self.recommended_next_steps.is_empty() {
+            errors.push("recommended_next_steps must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ClaimSourceRootInput {
     pub const SCHEMA_VERSION: &'static str = "claim-source-root-input-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
@@ -1840,6 +2106,136 @@ fn mapping_counts_for_batch_root_fields(fields: &[BatchRootFieldMapping]) -> Map
             .filter(|mapping| mapping.class == MappingClass::Unmapped)
             .count(),
     }
+}
+
+fn mapping_counts_for_winterfell_adapter_fields(
+    fields: &[WinterfellAdapterFieldBinding],
+) -> MappingCounts {
+    MappingCounts {
+        direct: fields
+            .iter()
+            .filter(|binding| binding.class == MappingClass::Direct)
+            .count(),
+        partial: fields
+            .iter()
+            .filter(|binding| binding.class == MappingClass::Partial)
+            .count(),
+        unmapped: fields
+            .iter()
+            .filter(|binding| binding.class == MappingClass::Unmapped)
+            .count(),
+    }
+}
+
+fn winterfell_adapter_field_bindings() -> Vec<WinterfellAdapterFieldBinding> {
+    vec![
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "member_id".to_string(),
+            phase4_source_artifact: Some("ClaimSourceRootInput".to_string()),
+            phase4_source_field: Some("member_id".to_string()),
+            class: MappingClass::Unmapped,
+            note: "Phase 4 schema can carry member_id, but active rust-engine does not export it."
+                .to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "provider_npi".to_string(),
+            phase4_source_artifact: Some("ClaimSourceRootInput".to_string()),
+            phase4_source_field: Some("provider_npi".to_string()),
+            class: MappingClass::Unmapped,
+            note: "Phase 4 schema can carry provider_npi, but active rust-engine does not export it.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "eligibility_active".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("active_rust_facts.eligibility_active".to_string()),
+            class: MappingClass::Direct,
+            note: "Direct boolean field in both active Rust and imported Winterfell PoC."
+                .to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "provider_enrolled".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("active_rust_facts.provider_enrolled".to_string()),
+            class: MappingClass::Direct,
+            note: "Direct boolean field in both active Rust and imported Winterfell PoC."
+                .to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "service_line_count".to_string(),
+            phase4_source_artifact: Some("ClaimSourceRootInput".to_string()),
+            phase4_source_field: Some("service_line_count".to_string()),
+            class: MappingClass::Partial,
+            note: "Phase 4 schema has optional service_line_count; active bridge only has billing_code_valid and units_valid.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "diagnosis_count".to_string(),
+            phase4_source_artifact: Some("ClaimSourceRootInput".to_string()),
+            phase4_source_field: Some("diagnosis_codes.len".to_string()),
+            class: MappingClass::Unmapped,
+            note: "Phase 4 can derive a count from diagnosis_codes only after upstream source data exists.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "prior_auth_ok".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("active_rust_facts.physician_certification_valid".to_string()),
+            class: MappingClass::Partial,
+            note: "Physician certification may support authorization but is not equivalent to prior_auth_ok.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "charge_cents".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("claim.claim_amount".to_string()),
+            class: MappingClass::Partial,
+            note: "Claim amount needs currency, unit, and fee schedule normalization before it can be Winterfell charge_cents.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "max_charge_cents".to_string(),
+            phase4_source_artifact: Some("FeeScheduleRootInput".to_string()),
+            phase4_source_field: Some("entries.unit_amount_cents".to_string()),
+            class: MappingClass::Unmapped,
+            note: "Phase 4 fee schedule schema exists, but active bridge has no fee schedule row or max allowed charge.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "duplicate_flag".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("active_rust_facts.is_duplicate".to_string()),
+            class: MappingClass::Direct,
+            note: "Same duplicate fact; Winterfell gate proves duplicate_flag == 0 for approval.".to_string(),
+        },
+        WinterfellAdapterFieldBinding {
+            winterfell_field: "program_integrity_hold".to_string(),
+            phase4_source_artifact: Some("OracleFactsRootInput".to_string()),
+            phase4_source_field: Some("facts".to_string()),
+            class: MappingClass::Partial,
+            note: "Active Rust has related validity flags, but no canonical program integrity hold source fact.".to_string(),
+        },
+    ]
+}
+
+fn winterfell_adapter_public_input_bindings() -> Vec<WinterfellAdapterPublicInputBinding> {
+    vec![
+        WinterfellAdapterPublicInputBinding {
+            winterfell_public_input: "commitment".to_string(),
+            phase4_source_artifact: Some("BatchRootCompatibilityPlan".to_string()),
+            phase4_source_field: Some("combinedPublicInputVector".to_string()),
+            class: MappingClass::Partial,
+            note: "PoC commitment is an AIR-bound algebraic hash; Phase 4 roots need a production commitment strategy.".to_string(),
+        },
+        WinterfellAdapterPublicInputBinding {
+            winterfell_public_input: "decision".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("public_inputs.decision".to_string()),
+            class: MappingClass::Direct,
+            note: "Decision is a direct public adjudication input.".to_string(),
+        },
+        WinterfellAdapterPublicInputBinding {
+            winterfell_public_input: "failure_code".to_string(),
+            phase4_source_artifact: Some("StarkBridgeInput".to_string()),
+            phase4_source_field: Some("public_inputs.failure_code".to_string()),
+            class: MappingClass::Direct,
+            note: "Failure code is a direct public adjudication input.".to_string(),
+        },
+    ]
 }
 
 fn push_mock_trace_row(
