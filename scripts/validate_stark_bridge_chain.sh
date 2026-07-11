@@ -53,6 +53,7 @@ WINTERFELL_WITNESS_GAP_REPORT="${TMP_DIR}/winterfell_witness_gap_report.json"
 WINTERFELL_SOURCE_DATA_REQUIREMENTS="${TMP_DIR}/winterfell_source_data_requirements.json"
 WINTERFELL_SOURCE_DATA_FIXTURE="${TMP_DIR}/winterfell_source_data_fixture.json"
 COMPLETE_WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/complete_winterfell_witness_candidate.json"
+WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -82,6 +83,12 @@ run_in_dir "Generate complete Winterfell witness candidate" "stark-engine" \
 
 run_in_dir "Validate complete Winterfell witness candidate" "stark-engine" \
   cargo run --bin validate_complete_winterfell_witness_candidate -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
+
+run_in_dir "Generate Winterfell proof preview" "stark-engine" \
+  cargo run --features winterfell-poc --bin generate_winterfell_proof_preview -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_PROOF_PREVIEW}"
+
+run_in_dir "Validate Winterfell proof preview" "stark-engine" \
+  cargo run --features winterfell-poc --bin validate_winterfell_proof_preview -- "${WINTERFELL_PROOF_PREVIEW}"
 
 run_in_dir "Generate STARK claim source root input" "stark-engine" \
   cargo run --bin generate_claim_source_root_input -- "${BRIDGE_INPUT}" "${CLAIM_SOURCE_ROOT_INPUT}"
