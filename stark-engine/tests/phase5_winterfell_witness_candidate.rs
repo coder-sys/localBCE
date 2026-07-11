@@ -183,6 +183,29 @@ fn winterfell_witness_candidate_json_round_trips() {
 }
 
 #[test]
+fn winterfell_witness_candidate_phase5c_output_contract_is_stable() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let value = serde_json::to_value(&candidate).unwrap();
+
+    assert_eq!(
+        value["schema_version"],
+        WinterfellWitnessCandidate::SCHEMA_VERSION
+    );
+    assert_eq!(value["source_schema_version"], "stark-bridge-input-v0");
+    assert_eq!(
+        value["candidate_status"],
+        WinterfellWitnessCandidate::CANDIDATE_STATUS
+    );
+    assert_eq!(value["counts"]["direct"], 3);
+    assert_eq!(value["counts"]["partial"], 4);
+    assert_eq!(value["counts"]["unmapped"], 4);
+    assert_eq!(value["winterfell_dependency_imported"], false);
+    assert_eq!(value["proof_generation_enabled"], false);
+    assert_eq!(value["fields"].as_array().unwrap().len(), 11);
+}
+
+#[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();
     let mut candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
