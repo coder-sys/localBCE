@@ -411,6 +411,35 @@ pub struct WinterfellWitnessImplementationGapReport {
     pub proof_generation_enabled: bool,
 }
 
+/// Upstream data contract required before the Winterfell witness candidate can
+/// become a complete prover witness.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellSourceDataRequirements {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub requirements_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub normalized_field_requirements: Vec<WinterfellSourceDataRequirement>,
+    pub source_data_requirements: Vec<WinterfellSourceDataRequirement>,
+    pub required_fields_total: usize,
+    pub normalized_fields_total: usize,
+    pub source_data_fields_total: usize,
+    pub recommended_next_steps: Vec<String>,
+    pub winterfell_dependency_imported: bool,
+    pub proof_generation_enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellSourceDataRequirement {
+    pub winterfell_field: String,
+    pub requirement_type: String,
+    pub source_artifact: Option<String>,
+    pub source_field: Option<String>,
+    pub required_before: String,
+    pub note: String,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -1798,6 +1827,151 @@ impl WinterfellWitnessImplementationGapReport {
             Err(errors)
         }
     }
+
+    pub fn to_source_data_requirements(
+        &self,
+    ) -> Result<WinterfellSourceDataRequirements, Vec<String>> {
+        self.validate()?;
+
+        let normalized_field_requirements = self
+            .partial_fields_requiring_normalization
+            .iter()
+            .map(|field| winterfell_source_data_requirement(field, "deterministic_normalization"))
+            .collect::<Vec<_>>();
+        let source_data_requirements = self
+            .unmapped_fields_requiring_source_data
+            .iter()
+            .map(|field| winterfell_source_data_requirement(field, "missing_source_data"))
+            .collect::<Vec<_>>();
+
+        Ok(WinterfellSourceDataRequirements {
+            schema_version: WinterfellSourceDataRequirements::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            requirements_status:
+                WinterfellSourceDataRequirements::REQUIREMENTS_STATUS.to_string(),
+            claim_id: self.claim_id.clone(),
+            claim_hash: self.claim_hash.clone(),
+            required_fields_total: normalized_field_requirements.len()
+                + source_data_requirements.len(),
+            normalized_fields_total: normalized_field_requirements.len(),
+            source_data_fields_total: source_data_requirements.len(),
+            normalized_field_requirements,
+            source_data_requirements,
+            recommended_next_steps: vec![
+                "Choose an owning upstream source for member_id, provider_npi, diagnosis_count, and max_charge_cents.".to_string(),
+                "Define deterministic normalization formulas for service_line_count, prior_auth_ok, charge_cents, and program_integrity_hold.".to_string(),
+                "Add fixtures for every required field before a Winterfell adapter imports prover code.".to_string(),
+                "Keep the active Groth16 runtime unchanged until the source-data contract is satisfied and a real STARK proof verifies.".to_string(),
+            ],
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+        })
+    }
+}
+
+impl WinterfellSourceDataRequirements {
+    pub const SCHEMA_VERSION: &'static str = "winterfell-source-data-requirements-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "winterfell-witness-implementation-gap-report-v0";
+    pub const REQUIREMENTS_STATUS: &'static str =
+        "source_data_requirements_planning_only_no_winterfell_import";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.requirements_status != Self::REQUIREMENTS_STATUS {
+            errors.push(format!(
+                "requirements_status must be {}, got {}",
+                Self::REQUIREMENTS_STATUS,
+                self.requirements_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.normalized_field_requirements.len() != 4 {
+            errors.push(format!(
+                "normalized_field_requirements must contain 4 fields, got {}",
+                self.normalized_field_requirements.len()
+            ));
+        }
+
+        if self.source_data_requirements.len() != 4 {
+            errors.push(format!(
+                "source_data_requirements must contain 4 fields, got {}",
+                self.source_data_requirements.len()
+            ));
+        }
+
+        if self.normalized_fields_total != self.normalized_field_requirements.len() {
+            errors.push("normalized_fields_total must match normalized requirements".to_string());
+        }
+
+        if self.source_data_fields_total != self.source_data_requirements.len() {
+            errors.push("source_data_fields_total must match source-data requirements".to_string());
+        }
+
+        if self.required_fields_total
+            != self.normalized_field_requirements.len() + self.source_data_requirements.len()
+        {
+            errors.push(
+                "required_fields_total must equal normalized plus source-data requirements"
+                    .to_string(),
+            );
+        }
+
+        for requirement in &self.normalized_field_requirements {
+            validate_winterfell_source_requirement(
+                requirement,
+                "deterministic_normalization",
+                &mut errors,
+            );
+        }
+
+        for requirement in &self.source_data_requirements {
+            validate_winterfell_source_requirement(requirement, "missing_source_data", &mut errors);
+        }
+
+        if self.recommended_next_steps.is_empty() {
+            errors.push("recommended_next_steps must be non-empty".to_string());
+        }
+
+        if self.winterfell_dependency_imported {
+            errors.push("winterfell_dependency_imported must be false in Phase 5F".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false in Phase 5F".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 impl ClaimSourceRootInput {
@@ -2530,6 +2704,51 @@ fn winterfell_candidate_fields_for_class(
         .filter(|field| field.class == class)
         .cloned()
         .collect()
+}
+
+fn winterfell_source_data_requirement(
+    field: &WinterfellWitnessCandidateField,
+    requirement_type: &str,
+) -> WinterfellSourceDataRequirement {
+    WinterfellSourceDataRequirement {
+        winterfell_field: field.winterfell_field.clone(),
+        requirement_type: requirement_type.to_string(),
+        source_artifact: field.source_artifact.clone(),
+        source_field: field.source_field.clone(),
+        required_before: "real_winterfell_witness_generation".to_string(),
+        note: field.note.clone(),
+    }
+}
+
+fn validate_winterfell_source_requirement(
+    requirement: &WinterfellSourceDataRequirement,
+    expected_type: &str,
+    errors: &mut Vec<String>,
+) {
+    if requirement.winterfell_field.trim().is_empty() {
+        errors.push("winterfell_field must be present".to_string());
+    }
+
+    if requirement.requirement_type != expected_type {
+        errors.push(format!(
+            "{} requirement_type must be {}, got {}",
+            requirement.winterfell_field, expected_type, requirement.requirement_type
+        ));
+    }
+
+    if requirement.required_before != "real_winterfell_witness_generation" {
+        errors.push(format!(
+            "{} required_before must be real_winterfell_witness_generation",
+            requirement.winterfell_field
+        ));
+    }
+
+    if requirement.note.trim().is_empty() {
+        errors.push(format!(
+            "{} requirement note must be present",
+            requirement.winterfell_field
+        ));
+    }
 }
 
 fn winterfell_unsupported_constraint_tasks() -> Vec<String> {

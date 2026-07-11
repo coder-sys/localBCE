@@ -1,6 +1,6 @@
 use stark_engine::{
-    ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellWitnessCandidate,
-    WinterfellWitnessImplementationGapReport,
+    ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellSourceDataRequirements,
+    WinterfellWitnessCandidate, WinterfellWitnessImplementationGapReport,
 };
 
 fn sample_bridge_input_json() -> &'static str {
@@ -316,6 +316,120 @@ fn winterfell_witness_gap_report_rejects_runtime_like_flags() {
 
     let errors = report.validate().unwrap_err();
 
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("winterfell_dependency_imported must be false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("proof_generation_enabled must be false"))
+    );
+}
+
+#[test]
+fn winterfell_source_data_requirements_capture_all_missing_upstream_fields() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let gap_report = candidate.to_implementation_gap_report().unwrap();
+    let requirements = gap_report.to_source_data_requirements().unwrap();
+
+    assert_eq!(requirements.validate(), Ok(()));
+    assert_eq!(
+        requirements.schema_version,
+        WinterfellSourceDataRequirements::SCHEMA_VERSION
+    );
+    assert_eq!(
+        requirements.source_schema_version,
+        WinterfellWitnessImplementationGapReport::SCHEMA_VERSION
+    );
+    assert_eq!(requirements.required_fields_total, 8);
+    assert_eq!(requirements.normalized_fields_total, 4);
+    assert_eq!(requirements.source_data_fields_total, 4);
+    assert!(!requirements.winterfell_dependency_imported);
+    assert!(!requirements.proof_generation_enabled);
+}
+
+#[test]
+fn winterfell_source_data_requirements_name_normalized_and_source_fields() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let gap_report = candidate.to_implementation_gap_report().unwrap();
+    let requirements = gap_report.to_source_data_requirements().unwrap();
+
+    assert_eq!(
+        requirements
+            .normalized_field_requirements
+            .iter()
+            .map(|requirement| requirement.winterfell_field.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "service_line_count",
+            "prior_auth_ok",
+            "charge_cents",
+            "program_integrity_hold"
+        ]
+    );
+    assert_eq!(
+        requirements
+            .source_data_requirements
+            .iter()
+            .map(|requirement| requirement.winterfell_field.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "member_id",
+            "provider_npi",
+            "diagnosis_count",
+            "max_charge_cents"
+        ]
+    );
+    assert!(
+        requirements
+            .normalized_field_requirements
+            .iter()
+            .all(|requirement| requirement.requirement_type == "deterministic_normalization")
+    );
+    assert!(
+        requirements
+            .source_data_requirements
+            .iter()
+            .all(|requirement| requirement.requirement_type == "missing_source_data")
+    );
+}
+
+#[test]
+fn winterfell_source_data_requirements_json_round_trips() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let gap_report = candidate.to_implementation_gap_report().unwrap();
+    let requirements = gap_report.to_source_data_requirements().unwrap();
+    let json = serde_json::to_string_pretty(&requirements).unwrap();
+    let round_tripped: WinterfellSourceDataRequirements = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, requirements);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("winterfell-source-data-requirements-v0"));
+    assert!(!json.contains("proof_generation_enabled\": true"));
+}
+
+#[test]
+fn winterfell_source_data_requirements_reject_bad_totals_and_runtime_flags() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let gap_report = candidate.to_implementation_gap_report().unwrap();
+    let mut requirements = gap_report.to_source_data_requirements().unwrap();
+    requirements.required_fields_total = 99;
+    requirements.winterfell_dependency_imported = true;
+    requirements.proof_generation_enabled = true;
+
+    let errors = requirements.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("required_fields_total must equal"))
+    );
     assert!(
         errors
             .iter()
