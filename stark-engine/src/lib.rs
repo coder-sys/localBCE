@@ -367,6 +367,40 @@ pub struct OracleFactsRootInput {
     pub notes: Vec<String>,
 }
 
+/// One normalized fee schedule row that can eventually feed a
+/// `feeScheduleRoot`.
+///
+/// These rows are source data only. They are not committed, sorted, hashed, or
+/// proven by this crate until a future root-generation phase.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FeeScheduleEntryInput {
+    pub fee_code: String,
+    pub unit_amount_cents: u64,
+    pub currency: String,
+    pub effective_from: u64,
+    pub effective_thru: Option<u64>,
+    pub source_url: Option<String>,
+    pub verification_status: String,
+}
+
+/// Typed source data for a future `feeScheduleRoot`.
+///
+/// This object is intentionally pre-root. It records the source shape needed by
+/// a future fee schedule tree, but it does not fetch, price, hash, or build a
+/// Merkle root.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FeeScheduleRootInput {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub input_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub fee_schedule_id: Option<String>,
+    pub entries: Vec<FeeScheduleEntryInput>,
+    pub root_generation_status: String,
+    pub notes: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1329,6 +1363,133 @@ impl OracleFactsRootInput {
         for (index, attestation_ref) in self.attestation_refs.iter().enumerate() {
             if attestation_ref.trim().is_empty() {
                 errors.push(format!("attestation_refs[{index}] must be non-empty"));
+            }
+        }
+
+        if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
+            errors.push(format!(
+                "root_generation_status must be {}, got {}",
+                Self::ROOT_GENERATION_STATUS,
+                self.root_generation_status
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl FeeScheduleRootInput {
+    pub const SCHEMA_VERSION: &'static str = "fee-schedule-root-input-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const INPUT_STATUS: &'static str = "source_schema_only_no_root_generation";
+    pub const ROOT_GENERATION_STATUS: &'static str = "not_generated";
+
+    pub fn from_bridge_input(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: input.schema_version.clone(),
+            input_status: Self::INPUT_STATUS.to_string(),
+            claim_id: input.claim.claim_id.clone(),
+            claim_hash: input.claim.claim_hash.clone(),
+            fee_schedule_id: None,
+            entries: Vec::new(),
+            root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
+            notes: vec![
+                "This input is a normalized source schema for future feeScheduleRoot work."
+                    .to_string(),
+                "The current rust-engine bridge exports claim amount and billing validity flags, not source-backed fee schedule entries.".to_string(),
+                "No fee schedule leaf, hash, Merkle root, pricing calculation, or STARK proof is generated from this object.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.input_status != Self::INPUT_STATUS {
+            errors.push(format!(
+                "input_status must be {}, got {}",
+                Self::INPUT_STATUS,
+                self.input_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if let Some(fee_schedule_id) = &self.fee_schedule_id {
+            if fee_schedule_id.trim().is_empty() {
+                errors.push("fee_schedule_id must be non-empty when present".to_string());
+            }
+        }
+
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.fee_code.trim().is_empty() {
+                errors.push(format!("entries[{index}].fee_code must be present"));
+            }
+
+            if entry.unit_amount_cents == 0 {
+                errors.push(format!(
+                    "entries[{index}].unit_amount_cents must be greater than zero"
+                ));
+            }
+
+            if entry.currency.len() != 3
+                || !entry.currency.chars().all(|ch| ch.is_ascii_uppercase())
+            {
+                errors.push(format!(
+                    "entries[{index}].currency must be a 3-letter uppercase code"
+                ));
+            }
+
+            if let Some(effective_thru) = entry.effective_thru {
+                if effective_thru < entry.effective_from {
+                    errors.push(format!(
+                        "entries[{index}].effective_thru must be greater than or equal to effective_from"
+                    ));
+                }
+            }
+
+            if let Some(source_url) = &entry.source_url {
+                if !source_url.starts_with("https://") {
+                    errors.push(format!(
+                        "entries[{index}].source_url must use https when present"
+                    ));
+                }
+            }
+
+            if entry.verification_status.trim().is_empty() {
+                errors.push(format!(
+                    "entries[{index}].verification_status must be present"
+                ));
             }
         }
 

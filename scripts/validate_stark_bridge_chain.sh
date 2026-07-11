@@ -39,6 +39,7 @@ run_in_dir() {
 BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
 CLAIM_SOURCE_ROOT_INPUT="${TMP_DIR}/claim_source_root_input.json"
 ORACLE_FACTS_ROOT_INPUT="${TMP_DIR}/oracle_facts_root_input.json"
+FEE_SCHEDULE_ROOT_INPUT="${TMP_DIR}/fee_schedule_root_input.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -66,6 +67,12 @@ run_in_dir "Generate STARK oracle facts root input" "stark-engine" \
 
 run_in_dir "Validate STARK oracle facts root input" "stark-engine" \
   cargo run --bin validate_oracle_facts_root_input -- "${ORACLE_FACTS_ROOT_INPUT}"
+
+run_in_dir "Generate STARK fee schedule root input" "stark-engine" \
+  cargo run --bin generate_fee_schedule_root_input -- "${BRIDGE_INPUT}" "${FEE_SCHEDULE_ROOT_INPUT}"
+
+run_in_dir "Validate STARK fee schedule root input" "stark-engine" \
+  cargo run --bin validate_fee_schedule_root_input -- "${FEE_SCHEDULE_ROOT_INPUT}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"
