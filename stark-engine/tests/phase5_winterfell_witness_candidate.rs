@@ -694,6 +694,54 @@ fn complete_winterfell_witness_candidate_rejects_runtime_like_flags() {
     );
 }
 
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn winterfell_poc_feature_maps_complete_candidate_into_imported_claim_input() {
+    use stark_engine::winterfell_poc_adapter::to_poc_claim_input;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let poc_input = to_poc_claim_input(&complete).unwrap();
+
+    assert_eq!(poc_input.eligibility_active, 1);
+    assert_eq!(poc_input.provider_enrolled, 1);
+    assert_eq!(poc_input.duplicate_flag, 0);
+    assert_eq!(
+        poc_input.service_line_count,
+        fixture.service_line_count as u32
+    );
+    assert_eq!(poc_input.diagnosis_count, fixture.diagnosis_count as u32);
+    assert_eq!(poc_input.prior_auth_ok, fixture.prior_auth_ok as u32);
+    assert_eq!(poc_input.charge_cents, fixture.charge_cents as u32);
+    assert_eq!(poc_input.max_charge_cents, fixture.max_charge_cents as u32);
+    assert_eq!(
+        poc_input.program_integrity_hold,
+        fixture.program_integrity_hold as u32
+    );
+}
+
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn winterfell_poc_feature_generates_adapter_preview_without_proof_generation() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocAdapterPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocAdapterPreview::from_complete_candidate(&complete).unwrap();
+
+    assert_eq!(preview.validate(), Ok(()));
+    assert_eq!(preview.poc_decision, 1);
+    assert_eq!(preview.poc_failure_code, 0);
+    assert_eq!(preview.poc_gates, [1; 10]);
+    assert_eq!(preview.field_count, 11);
+    assert!(preview.winterfell_dependency_imported);
+    assert!(!preview.proof_generation_enabled);
+}
+
 #[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();
