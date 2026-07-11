@@ -1,5 +1,6 @@
 use stark_engine::{
     ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellWitnessCandidate,
+    WinterfellWitnessImplementationGapReport,
 };
 
 fn sample_bridge_input_json() -> &'static str {
@@ -227,6 +228,104 @@ fn winterfell_witness_candidate_phase5d_validator_contract_is_stable() {
     );
     assert!(!round_tripped.winterfell_dependency_imported);
     assert!(!round_tripped.proof_generation_enabled);
+}
+
+#[test]
+fn winterfell_witness_gap_report_groups_implementation_work() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let report = candidate.to_implementation_gap_report().unwrap();
+
+    assert_eq!(report.validate(), Ok(()));
+    assert_eq!(
+        report.schema_version,
+        WinterfellWitnessImplementationGapReport::SCHEMA_VERSION
+    );
+    assert_eq!(
+        report.source_schema_version,
+        WinterfellWitnessCandidate::SCHEMA_VERSION
+    );
+    assert_eq!(report.direct_ready_fields.len(), 3);
+    assert_eq!(report.partial_fields_requiring_normalization.len(), 4);
+    assert_eq!(report.unmapped_fields_requiring_source_data.len(), 4);
+    assert_eq!(
+        report.unsupported_constraints_requiring_prover_work.len(),
+        11
+    );
+    assert_eq!(report.recommended_next_steps.len(), 5);
+    assert!(!report.winterfell_dependency_imported);
+    assert!(!report.proof_generation_enabled);
+}
+
+#[test]
+fn winterfell_witness_gap_report_names_ready_normalization_and_source_gaps() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let report = candidate.to_implementation_gap_report().unwrap();
+
+    assert_eq!(
+        report
+            .direct_ready_fields
+            .iter()
+            .map(|field| field.winterfell_field.as_str())
+            .collect::<Vec<_>>(),
+        vec!["eligibility_active", "provider_enrolled", "duplicate_flag"]
+    );
+    assert!(
+        report
+            .partial_fields_requiring_normalization
+            .iter()
+            .any(|field| field.winterfell_field == "charge_cents")
+    );
+    assert!(
+        report
+            .unmapped_fields_requiring_source_data
+            .iter()
+            .any(|field| field.winterfell_field == "member_id")
+    );
+    assert!(
+        report
+            .unsupported_constraints_requiring_prover_work
+            .iter()
+            .any(|task| task == "trace_width_172_and_trace_length_16")
+    );
+}
+
+#[test]
+fn winterfell_witness_gap_report_json_round_trips() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let report = candidate.to_implementation_gap_report().unwrap();
+    let json = serde_json::to_string_pretty(&report).unwrap();
+    let round_tripped: WinterfellWitnessImplementationGapReport =
+        serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, report);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("winterfell-witness-implementation-gap-report-v0"));
+    assert!(!json.contains("proof_generation_enabled\": true"));
+}
+
+#[test]
+fn winterfell_witness_gap_report_rejects_runtime_like_flags() {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let mut report = candidate.to_implementation_gap_report().unwrap();
+    report.winterfell_dependency_imported = true;
+    report.proof_generation_enabled = true;
+
+    let errors = report.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("winterfell_dependency_imported must be false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("proof_generation_enabled must be false"))
+    );
 }
 
 #[test]

@@ -49,6 +49,7 @@ MOCK_TRACE="${TMP_DIR}/mock_trace.json"
 WINTERFELL_REPORT="${TMP_DIR}/winterfell_compat_report.json"
 WINTERFELL_GAP_PLAN="${TMP_DIR}/winterfell_gap_plan.json"
 WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/winterfell_witness_candidate.json"
+WINTERFELL_WITNESS_GAP_REPORT="${TMP_DIR}/winterfell_witness_gap_report.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -63,6 +64,9 @@ run_in_dir "Generate Winterfell witness candidate" "stark-engine" \
 
 run_in_dir "Validate Winterfell witness candidate" "stark-engine" \
   cargo run --bin validate_winterfell_witness_candidate -- "${WINTERFELL_WITNESS_CANDIDATE}"
+
+run_in_dir "Generate Winterfell witness gap report" "stark-engine" \
+  cargo run --bin generate_winterfell_witness_gap_report -- "${WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_WITNESS_GAP_REPORT}"
 
 run_in_dir "Generate STARK claim source root input" "stark-engine" \
   cargo run --bin generate_claim_source_root_input -- "${BRIDGE_INPUT}" "${CLAIM_SOURCE_ROOT_INPUT}"

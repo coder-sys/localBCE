@@ -390,6 +390,27 @@ pub struct WinterfellWitnessCandidateField {
     pub note: String,
 }
 
+/// Implementation gap report derived from a Winterfell witness candidate.
+///
+/// This is the Phase 5E handoff artifact between deterministic candidate
+/// shaping and any future prover-specific adapter. It remains planning-only:
+/// no Winterfell dependency is imported and no proof is generated.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellWitnessImplementationGapReport {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub report_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub direct_ready_fields: Vec<WinterfellWitnessCandidateField>,
+    pub partial_fields_requiring_normalization: Vec<WinterfellWitnessCandidateField>,
+    pub unmapped_fields_requiring_source_data: Vec<WinterfellWitnessCandidateField>,
+    pub unsupported_constraints_requiring_prover_work: Vec<String>,
+    pub recommended_next_steps: Vec<String>,
+    pub winterfell_dependency_imported: bool,
+    pub proof_generation_enabled: bool,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -1625,6 +1646,158 @@ impl WinterfellWitnessCandidate {
             Err(errors)
         }
     }
+
+    pub fn to_implementation_gap_report(
+        &self,
+    ) -> Result<WinterfellWitnessImplementationGapReport, Vec<String>> {
+        self.validate()?;
+
+        Ok(WinterfellWitnessImplementationGapReport {
+            schema_version: WinterfellWitnessImplementationGapReport::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            report_status: WinterfellWitnessImplementationGapReport::REPORT_STATUS.to_string(),
+            claim_id: self.claim_id.clone(),
+            claim_hash: self.claim_hash.clone(),
+            direct_ready_fields: winterfell_candidate_fields_for_class(self, MappingClass::Direct),
+            partial_fields_requiring_normalization: winterfell_candidate_fields_for_class(
+                self,
+                MappingClass::Partial,
+            ),
+            unmapped_fields_requiring_source_data: winterfell_candidate_fields_for_class(
+                self,
+                MappingClass::Unmapped,
+            ),
+            unsupported_constraints_requiring_prover_work:
+                winterfell_unsupported_constraint_tasks(),
+            recommended_next_steps: vec![
+                "Freeze the populated direct witness fields: eligibility_active, provider_enrolled, and duplicate_flag.".to_string(),
+                "Define deterministic normalization for service_line_count, prior_auth_ok, charge_cents, and program_integrity_hold before populating partial fields.".to_string(),
+                "Add source-data export paths for member_id, provider_npi, diagnosis_count, and max_charge_cents before treating the candidate as a full Winterfell witness.".to_string(),
+                "Implement inverse, comparison, bit-decomposition, commitment, trace-width, and trace-length constraints only after all source fields are available.".to_string(),
+                "Keep this report outside active Groth16 runtime until a real STARK prover and verifier path exists.".to_string(),
+            ],
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+        })
+    }
+}
+
+impl WinterfellWitnessImplementationGapReport {
+    pub const SCHEMA_VERSION: &'static str = "winterfell-witness-implementation-gap-report-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-witness-candidate-v0";
+    pub const REPORT_STATUS: &'static str =
+        "implementation_gap_report_planning_only_no_winterfell_import";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.report_status != Self::REPORT_STATUS {
+            errors.push(format!(
+                "report_status must be {}, got {}",
+                Self::REPORT_STATUS,
+                self.report_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.direct_ready_fields.len() != 3 {
+            errors.push(format!(
+                "direct_ready_fields must contain 3 fields, got {}",
+                self.direct_ready_fields.len()
+            ));
+        }
+
+        if self.partial_fields_requiring_normalization.len() != 4 {
+            errors.push(format!(
+                "partial_fields_requiring_normalization must contain 4 fields, got {}",
+                self.partial_fields_requiring_normalization.len()
+            ));
+        }
+
+        if self.unmapped_fields_requiring_source_data.len() != 4 {
+            errors.push(format!(
+                "unmapped_fields_requiring_source_data must contain 4 fields, got {}",
+                self.unmapped_fields_requiring_source_data.len()
+            ));
+        }
+
+        for field in &self.direct_ready_fields {
+            if field.class != MappingClass::Direct || field.value.is_none() {
+                errors.push(format!(
+                    "{} direct_ready_fields entry must be direct and populated",
+                    field.winterfell_field
+                ));
+            }
+        }
+
+        for field in &self.partial_fields_requiring_normalization {
+            if field.class != MappingClass::Partial || field.value.is_some() {
+                errors.push(format!(
+                    "{} partial_fields_requiring_normalization entry must be partial and unpopulated",
+                    field.winterfell_field
+                ));
+            }
+        }
+
+        for field in &self.unmapped_fields_requiring_source_data {
+            if field.class != MappingClass::Unmapped || field.value.is_some() {
+                errors.push(format!(
+                    "{} unmapped_fields_requiring_source_data entry must be unmapped and unpopulated",
+                    field.winterfell_field
+                ));
+            }
+        }
+
+        if self
+            .unsupported_constraints_requiring_prover_work
+            .is_empty()
+        {
+            errors.push(
+                "unsupported_constraints_requiring_prover_work must be non-empty".to_string(),
+            );
+        }
+
+        if self.recommended_next_steps.is_empty() {
+            errors.push("recommended_next_steps must be non-empty".to_string());
+        }
+
+        if self.winterfell_dependency_imported {
+            errors.push("winterfell_dependency_imported must be false in Phase 5E".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false in Phase 5E".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 impl ClaimSourceRootInput {
@@ -2345,6 +2518,34 @@ fn mapping_counts_for_winterfell_witness_candidate_fields(
             .filter(|field| field.class == MappingClass::Unmapped)
             .count(),
     }
+}
+
+fn winterfell_candidate_fields_for_class(
+    candidate: &WinterfellWitnessCandidate,
+    class: MappingClass,
+) -> Vec<WinterfellWitnessCandidateField> {
+    candidate
+        .fields
+        .iter()
+        .filter(|field| field.class == class)
+        .cloned()
+        .collect()
+}
+
+fn winterfell_unsupported_constraint_tasks() -> Vec<String> {
+    vec![
+        "member_id_nonzero_inverse_witness".to_string(),
+        "provider_npi_nonzero_inverse_witness".to_string(),
+        "service_line_count_nonzero_inverse_witness".to_string(),
+        "diagnosis_count_nonzero_inverse_witness".to_string(),
+        "charge_cents_positive_inverse_witness".to_string(),
+        "prior_auth_ok_gate_equivalence".to_string(),
+        "program_integrity_hold_inverse_gate".to_string(),
+        "charge_and_max_charge_bit_decomposition".to_string(),
+        "charge_lte_max_charge_comparison_witness".to_string(),
+        "winterfell_commitment_hash_chain".to_string(),
+        "trace_width_172_and_trace_length_16".to_string(),
+    ]
 }
 
 fn winterfell_witness_candidate_fields(
