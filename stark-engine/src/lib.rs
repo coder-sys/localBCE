@@ -3679,6 +3679,37 @@ pub mod winterfell_poc_adapter {
         pub notes: Vec<String>,
     }
 
+    /// Planning-only implementation sequence for closing settlement integration
+    /// gaps.
+    ///
+    /// This is intentionally not a contract spec. It gives the safe order of
+    /// operations for later Solidity-scoped phases while keeping Groth16 as the
+    /// active runtime path.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct StarkSettlementIntegrationImplementationPlan {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub plan_status: String,
+        pub phases: Vec<SettlementIntegrationPhase>,
+        pub blocked_by: Vec<String>,
+        pub required_artifacts: Vec<String>,
+        pub safety_invariants: Vec<String>,
+        pub contract_modification_allowed: bool,
+        pub runtime_wired: bool,
+        pub on_chain_submission: bool,
+        pub notes: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct SettlementIntegrationPhase {
+        pub phase_id: String,
+        pub title: String,
+        pub source_gap_category: String,
+        pub allowed_scope: String,
+        pub actions: Vec<String>,
+        pub completion_gate: String,
+    }
+
     impl WinterfellPocAdapterPreview {
         pub const SCHEMA_VERSION: &'static str = "winterfell-poc-adapter-preview-v0";
         pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-complete-witness-candidate-v0";
@@ -4315,6 +4346,229 @@ pub mod winterfell_poc_adapter {
 
             if self.recommended_next_steps.is_empty() {
                 errors.push("recommended_next_steps must be non-empty".to_string());
+            }
+
+            if self.contract_modification_allowed {
+                errors.push("contract_modification_allowed must remain false".to_string());
+            }
+
+            if self.runtime_wired {
+                errors.push("runtime_wired must remain false".to_string());
+            }
+
+            if self.on_chain_submission {
+                errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+
+        pub fn to_settlement_implementation_plan(
+            &self,
+        ) -> Result<StarkSettlementIntegrationImplementationPlan, Vec<String>> {
+            self.validate()?;
+
+            Ok(StarkSettlementIntegrationImplementationPlan {
+                schema_version: StarkSettlementIntegrationImplementationPlan::SCHEMA_VERSION
+                    .to_string(),
+                source_schema_version: self.schema_version.clone(),
+                plan_status: StarkSettlementIntegrationImplementationPlan::PLAN_STATUS.to_string(),
+                phases: vec![
+                    SettlementIntegrationPhase {
+                        phase_id: "phase_1_interface_fixtures".to_string(),
+                        title: "Add interface-only Solidity fixtures".to_string(),
+                        source_gap_category: "verifier_contract_gaps".to_string(),
+                        allowed_scope: "tests_and_interfaces_only".to_string(),
+                        actions: vec![
+                            "Create an interface-only STARK verifier fixture in a Solidity-scoped phase.".to_string(),
+                            "Freeze verifyClaim input names and types from the interface plan.".to_string(),
+                            "Add Foundry tests that compile the interface without touching ClaimsRegistry.".to_string(),
+                        ],
+                        completion_gate:
+                            "Foundry build and interface-only tests pass with ClaimsRegistry unchanged."
+                                .to_string(),
+                    },
+                    SettlementIntegrationPhase {
+                        phase_id: "phase_2_mock_verifier_harness".to_string(),
+                        title: "Add mock verifier behavior tests".to_string(),
+                        source_gap_category: "verifier_contract_gaps".to_string(),
+                        allowed_scope: "test_contracts_only".to_string(),
+                        actions: vec![
+                            "Add a mock STARK verifier that accepts deterministic preview artifacts.".to_string(),
+                            "Test valid and invalid proofCommitment/public-input combinations.".to_string(),
+                            "Keep the mock verifier outside the production deployment path.".to_string(),
+                        ],
+                        completion_gate:
+                            "Mock verifier tests cover success, rejection, malformed proofCommitment, and mismatched public inputs."
+                                .to_string(),
+                    },
+                    SettlementIntegrationPhase {
+                        phase_id: "phase_3_claims_registry_adapter_plan".to_string(),
+                        title: "Plan a separate ClaimsRegistry STARK settlement adapter".to_string(),
+                        source_gap_category: "claims_registry_integration_gaps".to_string(),
+                        allowed_scope: "planning_and_tests_only".to_string(),
+                        actions: vec![
+                            "Define a separate STARK submission function or adapter path.".to_string(),
+                            "Preserve current Groth16 submit path and fee behavior as the compatibility baseline.".to_string(),
+                            "Specify STARK event fields without changing the deployed contract yet.".to_string(),
+                        ],
+                        completion_gate:
+                            "Adapter plan proves Groth16 behavior remains unchanged and documents every new STARK event/public input."
+                                .to_string(),
+                    },
+                    SettlementIntegrationPhase {
+                        phase_id: "phase_4_governance_and_artifact_pinning".to_string(),
+                        title: "Define governance and verifier artifact pinning".to_string(),
+                        source_gap_category: "governance_gaps".to_string(),
+                        allowed_scope: "ops_docs_and_inactive_config_only".to_string(),
+                        actions: vec![
+                            "Map verifier artifact pins to ops governance scaffolding.".to_string(),
+                            "Define emergency pause and upgrade review gates before runtime wiring.".to_string(),
+                            "Require production_usable=false until a real verifier is reviewed.".to_string(),
+                        ],
+                        completion_gate:
+                            "Ops scaffolding identifies verifier artifacts, owners, review gates, and rollback behavior."
+                                .to_string(),
+                    },
+                    SettlementIntegrationPhase {
+                        phase_id: "phase_5_runtime_cutover_readiness".to_string(),
+                        title: "Gate any runtime cutover behind end-to-end evidence".to_string(),
+                        source_gap_category: "test_requirements".to_string(),
+                        allowed_scope: "readiness_report_only".to_string(),
+                        actions: vec![
+                            "Run Groth16 regression, STARK smoke chain, Foundry tests, and settlement mock tests together.".to_string(),
+                            "Require an explicit human decision before modifying ClaimsRegistry runtime behavior.".to_string(),
+                            "Document rollback criteria and known unsupported STARK production risks.".to_string(),
+                        ],
+                        completion_gate:
+                            "A readiness report passes all checks and still marks runtime_wired=false until a separate implementation phase."
+                                .to_string(),
+                    },
+                ],
+                blocked_by: vec![
+                    "No production STARK Solidity verifier has been selected or audited.".to_string(),
+                    "proofCommitment bytes format is not production-final.".to_string(),
+                    "Verifier key or attestation authority governance is not active.".to_string(),
+                    "ClaimsRegistry STARK settlement path has not been designed or tested.".to_string(),
+                ],
+                required_artifacts: vec![
+                    "stark_settlement_boundary_artifact.json".to_string(),
+                    "stark_solidity_verifier_interface_plan.json".to_string(),
+                    "stark_settlement_integration_gap_report.json".to_string(),
+                    "future_mock_stark_verifier_foundry_tests".to_string(),
+                    "future_stark_settlement_readiness_report".to_string(),
+                ],
+                safety_invariants: vec![
+                    "The active Groth16 workflow remains unchanged.".to_string(),
+                    "No Solidity contract is modified by this implementation plan.".to_string(),
+                    "No on-chain STARK submission occurs in planning phases.".to_string(),
+                    "ClaimsRegistry fee and duplicate-claim behavior remain the baseline.".to_string(),
+                ],
+                contract_modification_allowed: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                notes: vec![
+                    "This implementation plan is derived from the settlement integration gap report."
+                        .to_string(),
+                    "It is an ordering and safety artifact, not permission to modify contracts."
+                        .to_string(),
+                    "Each runtime-affecting step must be requested as a separate explicit phase."
+                        .to_string(),
+                ],
+            })
+        }
+    }
+
+    impl StarkSettlementIntegrationImplementationPlan {
+        pub const SCHEMA_VERSION: &'static str =
+            "stark-settlement-integration-implementation-plan-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str =
+            "stark-settlement-integration-gap-report-v0";
+        pub const PLAN_STATUS: &'static str =
+            "settlement_integration_implementation_plan_no_runtime";
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}, got {}",
+                    Self::SOURCE_SCHEMA_VERSION,
+                    self.source_schema_version
+                ));
+            }
+
+            if self.plan_status != Self::PLAN_STATUS {
+                errors.push(format!(
+                    "plan_status must be {}, got {}",
+                    Self::PLAN_STATUS,
+                    self.plan_status
+                ));
+            }
+
+            if self.phases.len() < 5 {
+                errors.push("phases must include at least five ordered steps".to_string());
+            }
+
+            for phase in &self.phases {
+                if phase.phase_id.trim().is_empty() {
+                    errors.push("phase_id must be present".to_string());
+                }
+                if phase.title.trim().is_empty() {
+                    errors.push(format!("{} title must be present", phase.phase_id));
+                }
+                if phase.source_gap_category.trim().is_empty() {
+                    errors.push(format!(
+                        "{} source_gap_category must be present",
+                        phase.phase_id
+                    ));
+                }
+                if phase.allowed_scope.trim().is_empty() {
+                    errors.push(format!("{} allowed_scope must be present", phase.phase_id));
+                }
+                if phase.actions.is_empty() {
+                    errors.push(format!("{} actions must be non-empty", phase.phase_id));
+                }
+                if phase.completion_gate.trim().is_empty() {
+                    errors.push(format!(
+                        "{} completion_gate must be present",
+                        phase.phase_id
+                    ));
+                }
+            }
+
+            if self.blocked_by.is_empty() {
+                errors.push("blocked_by must be non-empty".to_string());
+            }
+
+            if self.required_artifacts.is_empty() {
+                errors.push("required_artifacts must be non-empty".to_string());
+            }
+
+            if !self
+                .safety_invariants
+                .iter()
+                .any(|invariant| invariant.contains("Groth16 workflow remains unchanged"))
+            {
+                errors.push(
+                    "safety_invariants must preserve the active Groth16 workflow".to_string(),
+                );
             }
 
             if self.contract_modification_allowed {

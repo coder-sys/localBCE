@@ -966,6 +966,94 @@ fn settlement_gap_report_rejects_contract_activation_flags() {
     );
 }
 
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn settlement_gap_report_generates_implementation_plan() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let interface_plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+    let gap_report = interface_plan
+        .to_settlement_integration_gap_report()
+        .unwrap();
+    let implementation_plan = gap_report.to_settlement_implementation_plan().unwrap();
+
+    assert_eq!(implementation_plan.validate(), Ok(()));
+    assert_eq!(
+        implementation_plan.schema_version,
+        "stark-settlement-integration-implementation-plan-v0"
+    );
+    assert_eq!(
+        implementation_plan.source_schema_version,
+        "stark-settlement-integration-gap-report-v0"
+    );
+    assert_eq!(
+        implementation_plan.plan_status,
+        "settlement_integration_implementation_plan_no_runtime"
+    );
+    assert_eq!(implementation_plan.phases.len(), 5);
+    assert!(
+        implementation_plan
+            .phases
+            .iter()
+            .any(|phase| phase.phase_id == "phase_1_interface_fixtures")
+    );
+    assert!(
+        implementation_plan
+            .safety_invariants
+            .iter()
+            .any(|invariant| invariant.contains("Groth16 workflow remains unchanged"))
+    );
+    assert!(!implementation_plan.contract_modification_allowed);
+    assert!(!implementation_plan.runtime_wired);
+    assert!(!implementation_plan.on_chain_submission);
+}
+
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn settlement_implementation_plan_rejects_runtime_like_flags() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let interface_plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+    let gap_report = interface_plan
+        .to_settlement_integration_gap_report()
+        .unwrap();
+    let mut implementation_plan = gap_report.to_settlement_implementation_plan().unwrap();
+
+    implementation_plan.contract_modification_allowed = true;
+    implementation_plan.runtime_wired = true;
+    implementation_plan.on_chain_submission = true;
+
+    let errors = implementation_plan.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("contract_modification_allowed must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("runtime_wired must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("on_chain_submission must remain false"))
+    );
+}
+
 #[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();
