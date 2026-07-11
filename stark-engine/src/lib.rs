@@ -401,6 +401,28 @@ pub struct FeeScheduleRootInput {
     pub notes: Vec<String>,
 }
 
+/// Typed source data for a future `nullifierRootBefore` ->
+/// `nullifierRootAfter` transition.
+///
+/// This object is intentionally pre-root. It records the state-transition shape
+/// needed by a future duplicate-spend/replay-prevention tree, but it does not
+/// derive a nullifier, check tree membership, update a tree, or build Merkle
+/// roots.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NullifierRootTransitionInput {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub input_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub nullifier_candidate: Option<String>,
+    pub nullifier_root_before: Option<String>,
+    pub nullifier_root_after: Option<String>,
+    pub transition_status: String,
+    pub root_generation_status: String,
+    pub notes: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1491,6 +1513,123 @@ impl FeeScheduleRootInput {
                     "entries[{index}].verification_status must be present"
                 ));
             }
+        }
+
+        if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
+            errors.push(format!(
+                "root_generation_status must be {}, got {}",
+                Self::ROOT_GENERATION_STATUS,
+                self.root_generation_status
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl NullifierRootTransitionInput {
+    pub const SCHEMA_VERSION: &'static str = "nullifier-root-transition-input-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const INPUT_STATUS: &'static str = "transition_schema_only_no_root_generation";
+    pub const TRANSITION_STATUS: &'static str = "not_applied";
+    pub const ROOT_GENERATION_STATUS: &'static str = "not_generated";
+
+    pub fn from_bridge_input(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: input.schema_version.clone(),
+            input_status: Self::INPUT_STATUS.to_string(),
+            claim_id: input.claim.claim_id.clone(),
+            claim_hash: input.claim.claim_hash.clone(),
+            nullifier_candidate: None,
+            nullifier_root_before: None,
+            nullifier_root_after: None,
+            transition_status: Self::TRANSITION_STATUS.to_string(),
+            root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
+            notes: vec![
+                "This input is a normalized transition schema for future nullifierRoot work."
+                    .to_string(),
+                "The current rust-engine bridge exports claim_hash and duplicate flag, not privacy-preserving nullifier source material or tree state.".to_string(),
+                "No nullifier derivation, membership check, root transition, Merkle root, or STARK proof is generated from this object.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.input_status != Self::INPUT_STATUS {
+            errors.push(format!(
+                "input_status must be {}, got {}",
+                Self::INPUT_STATUS,
+                self.input_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if let Some(nullifier_candidate) = &self.nullifier_candidate {
+            if !is_0x_32_byte_hex(nullifier_candidate) {
+                errors.push(
+                    "nullifier_candidate must be a 0x-prefixed 32-byte hex string when present"
+                        .to_string(),
+                );
+            }
+        }
+
+        if let Some(nullifier_root_before) = &self.nullifier_root_before {
+            if !is_0x_32_byte_hex(nullifier_root_before) {
+                errors.push(
+                    "nullifier_root_before must be a 0x-prefixed 32-byte hex string when present"
+                        .to_string(),
+                );
+            }
+        }
+
+        if let Some(nullifier_root_after) = &self.nullifier_root_after {
+            if !is_0x_32_byte_hex(nullifier_root_after) {
+                errors.push(
+                    "nullifier_root_after must be a 0x-prefixed 32-byte hex string when present"
+                        .to_string(),
+                );
+            }
+        }
+
+        if self.transition_status != Self::TRANSITION_STATUS {
+            errors.push(format!(
+                "transition_status must be {}, got {}",
+                Self::TRANSITION_STATUS,
+                self.transition_status
+            ));
         }
 
         if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
