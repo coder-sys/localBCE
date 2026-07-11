@@ -35,6 +35,7 @@ run_in_dir "Rust engine check" "rust-engine" cargo check
 run_in_dir "STARK engine tests" "stark-engine" cargo test
 run_in_dir "STARK engine check" "stark-engine" cargo check
 run_step "STARK bridge CLI chain smoke test" bash "${ROOT_DIR}/scripts/validate_stark_bridge_chain.sh"
+run_step "STARK Solidity preview tests" bash "${ROOT_DIR}/scripts/validate_stark_solidity_preview.sh"
 
 run_in_dir "Foundry tests" "blind-ledger" forge test
 run_in_dir "Foundry build" "blind-ledger" forge build
