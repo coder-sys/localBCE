@@ -1054,6 +1054,89 @@ fn settlement_implementation_plan_rejects_runtime_like_flags() {
     );
 }
 
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn settlement_implementation_plan_generates_runtime_readiness_report() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let interface_plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+    let gap_report = interface_plan
+        .to_settlement_integration_gap_report()
+        .unwrap();
+    let implementation_plan = gap_report.to_settlement_implementation_plan().unwrap();
+    let readiness_report = implementation_plan.to_runtime_readiness_report().unwrap();
+
+    assert_eq!(readiness_report.validate(), Ok(()));
+    assert_eq!(
+        readiness_report.schema_version,
+        "stark-settlement-runtime-readiness-report-v0"
+    );
+    assert_eq!(
+        readiness_report.source_schema_version,
+        "stark-settlement-integration-implementation-plan-v0"
+    );
+    assert_eq!(
+        readiness_report.readiness_status,
+        "not_ready_runtime_cutover_blocked"
+    );
+    assert!(!readiness_report.ready_for_runtime);
+    assert!(!readiness_report.ready_for_contract_changes);
+    assert!(!readiness_report.ready_for_on_chain_submission);
+    assert!(!readiness_report.satisfied_gates.is_empty());
+    assert!(!readiness_report.unsatisfied_gates.is_empty());
+    assert!(readiness_report.groth16_regression_required);
+    assert!(readiness_report.stark_smoke_chain_required);
+    assert!(readiness_report.foundry_regression_required);
+    assert!(readiness_report.human_approval_required);
+}
+
+#[cfg(feature = "winterfell-poc")]
+#[test]
+fn runtime_readiness_report_rejects_cutover_flags() {
+    use stark_engine::winterfell_poc_adapter::WinterfellPocProofPreview;
+
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let fixture = sample_source_data_fixture();
+    let complete = fixture.to_complete_witness_candidate(&candidate).unwrap();
+    let preview = WinterfellPocProofPreview::from_complete_candidate(&complete).unwrap();
+    let artifact = preview.to_settlement_boundary_artifact().unwrap();
+    let interface_plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+    let gap_report = interface_plan
+        .to_settlement_integration_gap_report()
+        .unwrap();
+    let implementation_plan = gap_report.to_settlement_implementation_plan().unwrap();
+    let mut readiness_report = implementation_plan.to_runtime_readiness_report().unwrap();
+
+    readiness_report.ready_for_runtime = true;
+    readiness_report.ready_for_contract_changes = true;
+    readiness_report.ready_for_on_chain_submission = true;
+
+    let errors = readiness_report.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("ready_for_runtime must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("ready_for_contract_changes must remain false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("ready_for_on_chain_submission must remain false"))
+    );
+}
+
 #[test]
 fn winterfell_witness_candidate_rejects_partial_field_value() {
     let input = sample_bridge_input();

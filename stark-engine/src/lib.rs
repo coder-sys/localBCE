@@ -3710,6 +3710,30 @@ pub mod winterfell_poc_adapter {
         pub completion_gate: String,
     }
 
+    /// Runtime cutover readiness report for STARK settlement.
+    ///
+    /// This is intentionally conservative: it converts the implementation plan
+    /// into explicit gates and keeps runtime readiness false until later
+    /// contract/prover/governance phases satisfy those gates.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct StarkSettlementRuntimeReadinessReport {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub readiness_status: String,
+        pub ready_for_runtime: bool,
+        pub ready_for_contract_changes: bool,
+        pub ready_for_on_chain_submission: bool,
+        pub satisfied_gates: Vec<String>,
+        pub unsatisfied_gates: Vec<String>,
+        pub required_evidence: Vec<String>,
+        pub next_review_actions: Vec<String>,
+        pub groth16_regression_required: bool,
+        pub stark_smoke_chain_required: bool,
+        pub foundry_regression_required: bool,
+        pub human_approval_required: bool,
+        pub notes: Vec<String>,
+    }
+
     impl WinterfellPocAdapterPreview {
         pub const SCHEMA_VERSION: &'static str = "winterfell-poc-adapter-preview-v0";
         pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-complete-witness-candidate-v0";
@@ -4581,6 +4605,153 @@ pub mod winterfell_poc_adapter {
 
             if self.on_chain_submission {
                 errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+
+        pub fn to_runtime_readiness_report(
+            &self,
+        ) -> Result<StarkSettlementRuntimeReadinessReport, Vec<String>> {
+            self.validate()?;
+
+            Ok(StarkSettlementRuntimeReadinessReport {
+                schema_version: StarkSettlementRuntimeReadinessReport::SCHEMA_VERSION.to_string(),
+                source_schema_version: self.schema_version.clone(),
+                readiness_status: StarkSettlementRuntimeReadinessReport::READINESS_STATUS
+                    .to_string(),
+                ready_for_runtime: false,
+                ready_for_contract_changes: false,
+                ready_for_on_chain_submission: false,
+                satisfied_gates: vec![
+                    "STARK settlement implementation plan exists and validates.".to_string(),
+                    "Active Groth16 runtime remains the compatibility baseline.".to_string(),
+                    "Planning artifacts explicitly keep runtime_wired=false.".to_string(),
+                ],
+                unsatisfied_gates: vec![
+                    "Production STARK verifier contract is not selected, audited, or deployed."
+                        .to_string(),
+                    "proofCommitment/public-input calldata format is not production-final."
+                        .to_string(),
+                    "ClaimsRegistry STARK adapter path is not implemented or tested.".to_string(),
+                    "Verifier artifact governance and emergency controls are not active."
+                        .to_string(),
+                    "End-to-end Groth16 plus STARK plus Foundry regression bundle has not been approved for cutover."
+                        .to_string(),
+                ],
+                required_evidence: vec![
+                    "cargo test and cargo check in rust-engine".to_string(),
+                    "cargo test, cargo check, and feature-gated Winterfell checks in stark-engine"
+                        .to_string(),
+                    "bash scripts/validate_stark_bridge_chain.sh".to_string(),
+                    "forge test and forge build in blind-ledger".to_string(),
+                    "human review of verifier artifact pinning and rollback plan".to_string(),
+                ],
+                next_review_actions: vec![
+                    "Review interface-only Solidity fixture scope before any contract file changes."
+                        .to_string(),
+                    "Add mock verifier tests in a later Solidity-scoped phase.".to_string(),
+                    "Keep ClaimsRegistry unchanged until mock verifier behavior is green.".to_string(),
+                    "Document the exact decision point for enabling any runtime STARK path."
+                        .to_string(),
+                ],
+                groth16_regression_required: true,
+                stark_smoke_chain_required: true,
+                foundry_regression_required: true,
+                human_approval_required: true,
+                notes: vec![
+                    "This report is generated from the STARK settlement implementation plan."
+                        .to_string(),
+                    "It is a readiness gate, not a runtime activation artifact.".to_string(),
+                    "The active Groth16 ClaimsRegistry path remains unchanged.".to_string(),
+                ],
+            })
+        }
+    }
+
+    impl StarkSettlementRuntimeReadinessReport {
+        pub const SCHEMA_VERSION: &'static str = "stark-settlement-runtime-readiness-report-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str =
+            "stark-settlement-integration-implementation-plan-v0";
+        pub const READINESS_STATUS: &'static str = "not_ready_runtime_cutover_blocked";
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}, got {}",
+                    Self::SOURCE_SCHEMA_VERSION,
+                    self.source_schema_version
+                ));
+            }
+
+            if self.readiness_status != Self::READINESS_STATUS {
+                errors.push(format!(
+                    "readiness_status must be {}, got {}",
+                    Self::READINESS_STATUS,
+                    self.readiness_status
+                ));
+            }
+
+            if self.ready_for_runtime {
+                errors.push("ready_for_runtime must remain false".to_string());
+            }
+
+            if self.ready_for_contract_changes {
+                errors.push("ready_for_contract_changes must remain false".to_string());
+            }
+
+            if self.ready_for_on_chain_submission {
+                errors.push("ready_for_on_chain_submission must remain false".to_string());
+            }
+
+            if self.satisfied_gates.is_empty() {
+                errors.push("satisfied_gates must be non-empty".to_string());
+            }
+
+            if self.unsatisfied_gates.is_empty() {
+                errors.push("unsatisfied_gates must be non-empty".to_string());
+            }
+
+            if self.required_evidence.len() < 4 {
+                errors.push("required_evidence must include regression evidence".to_string());
+            }
+
+            if self.next_review_actions.is_empty() {
+                errors.push("next_review_actions must be non-empty".to_string());
+            }
+
+            if !self.groth16_regression_required {
+                errors.push("groth16_regression_required must be true".to_string());
+            }
+
+            if !self.stark_smoke_chain_required {
+                errors.push("stark_smoke_chain_required must be true".to_string());
+            }
+
+            if !self.foundry_regression_required {
+                errors.push("foundry_regression_required must be true".to_string());
+            }
+
+            if !self.human_approval_required {
+                errors.push("human_approval_required must be true".to_string());
             }
 
             if self.notes.is_empty() {

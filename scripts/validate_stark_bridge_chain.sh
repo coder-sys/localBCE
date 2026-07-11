@@ -58,6 +58,7 @@ STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifac
 STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_interface_plan.json"
 STARK_SETTLEMENT_INTEGRATION_GAP_REPORT="${TMP_DIR}/stark_settlement_integration_gap_report.json"
 STARK_SETTLEMENT_IMPLEMENTATION_PLAN="${TMP_DIR}/stark_settlement_implementation_plan.json"
+STARK_SETTLEMENT_RUNTIME_READINESS_REPORT="${TMP_DIR}/stark_settlement_runtime_readiness_report.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -117,6 +118,12 @@ run_in_dir "Generate STARK settlement implementation plan" "stark-engine" \
 
 run_in_dir "Validate STARK settlement implementation plan" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_stark_settlement_implementation_plan -- "${STARK_SETTLEMENT_IMPLEMENTATION_PLAN}"
+
+run_in_dir "Generate STARK settlement runtime readiness report" "stark-engine" \
+  cargo run --features winterfell-poc --bin generate_stark_settlement_runtime_readiness_report -- "${STARK_SETTLEMENT_IMPLEMENTATION_PLAN}" "${STARK_SETTLEMENT_RUNTIME_READINESS_REPORT}"
+
+run_in_dir "Validate STARK settlement runtime readiness report" "stark-engine" \
+  cargo run --features winterfell-poc --bin validate_stark_settlement_runtime_readiness_report -- "${STARK_SETTLEMENT_RUNTIME_READINESS_REPORT}"
 
 run_in_dir "Generate STARK claim source root input" "stark-engine" \
   cargo run --bin generate_claim_source_root_input -- "${BRIDGE_INPUT}" "${CLAIM_SOURCE_ROOT_INPUT}"
