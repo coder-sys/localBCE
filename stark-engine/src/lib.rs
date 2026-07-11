@@ -440,6 +440,32 @@ pub struct WinterfellSourceDataRequirement {
     pub note: String,
 }
 
+/// Fixture-only source data that satisfies the Phase 5F requirements.
+///
+/// This is not active claim intake. It is a deterministic test fixture for
+/// future adapter work, so the missing Winterfell PoC fields can be validated
+/// before any prover dependency is introduced.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WinterfellSourceDataFixture {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub fixture_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub member_id: String,
+    pub provider_npi: String,
+    pub diagnosis_count: u64,
+    pub max_charge_cents: u64,
+    pub service_line_count: u64,
+    pub prior_auth_ok: u8,
+    pub charge_cents: u64,
+    pub program_integrity_hold: u8,
+    pub source_requirements_satisfied: Vec<String>,
+    pub winterfell_dependency_imported: bool,
+    pub proof_generation_enabled: bool,
+    pub notes: Vec<String>,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -1974,6 +2000,166 @@ impl WinterfellSourceDataRequirements {
     }
 }
 
+impl WinterfellSourceDataFixture {
+    pub const SCHEMA_VERSION: &'static str = "winterfell-source-data-fixture-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "winterfell-source-data-requirements-v0";
+    pub const FIXTURE_STATUS: &'static str =
+        "fixture_only_satisfies_phase5f_requirements_no_winterfell_import";
+    pub const REQUIRED_FIELDS: [&'static str; 8] = [
+        "member_id",
+        "provider_npi",
+        "diagnosis_count",
+        "max_charge_cents",
+        "service_line_count",
+        "prior_auth_ok",
+        "charge_cents",
+        "program_integrity_hold",
+    ];
+
+    pub fn demo_from_requirements(
+        requirements: &WinterfellSourceDataRequirements,
+    ) -> Result<Self, Vec<String>> {
+        requirements.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: requirements.schema_version.clone(),
+            fixture_status: Self::FIXTURE_STATUS.to_string(),
+            claim_id: requirements.claim_id.clone(),
+            claim_hash: requirements.claim_hash.clone(),
+            member_id: "MEMBER-FIXTURE-001".to_string(),
+            provider_npi: "1234567893".to_string(),
+            diagnosis_count: 1,
+            max_charge_cents: 150_000,
+            service_line_count: 1,
+            prior_auth_ok: 1,
+            charge_cents: 100_000,
+            program_integrity_hold: 0,
+            source_requirements_satisfied: Self::REQUIRED_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+            notes: vec![
+                "This is deterministic fixture data for Phase 5 adapter tests only.".to_string(),
+                "It is not produced by rust-engine and is not used by the active Groth16 runtime."
+                    .to_string(),
+                "No Winterfell dependency is imported and no STARK proof is generated.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.fixture_status != Self::FIXTURE_STATUS {
+            errors.push(format!(
+                "fixture_status must be {}, got {}",
+                Self::FIXTURE_STATUS,
+                self.fixture_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.member_id.trim().is_empty() {
+            errors.push("member_id must be present".to_string());
+        }
+
+        if !is_10_digit_npi(&self.provider_npi) {
+            errors.push("provider_npi must be a 10-digit numeric string".to_string());
+        }
+
+        if self.diagnosis_count == 0 {
+            errors.push("diagnosis_count must be greater than 0".to_string());
+        }
+
+        if self.max_charge_cents == 0 {
+            errors.push("max_charge_cents must be greater than 0".to_string());
+        }
+
+        if self.service_line_count == 0 {
+            errors.push("service_line_count must be greater than 0".to_string());
+        }
+
+        if self.charge_cents == 0 {
+            errors.push("charge_cents must be greater than 0".to_string());
+        }
+
+        if self.charge_cents > self.max_charge_cents {
+            errors.push("charge_cents must be less than or equal to max_charge_cents".to_string());
+        }
+
+        validate_boolean_fact("prior_auth_ok", self.prior_auth_ok, &mut errors);
+        validate_boolean_fact(
+            "program_integrity_hold",
+            self.program_integrity_hold,
+            &mut errors,
+        );
+
+        for required_field in Self::REQUIRED_FIELDS {
+            if !self
+                .source_requirements_satisfied
+                .iter()
+                .any(|field| field == required_field)
+            {
+                errors.push(format!(
+                    "source_requirements_satisfied missing {required_field}"
+                ));
+            }
+        }
+
+        if self.source_requirements_satisfied.len() != Self::REQUIRED_FIELDS.len() {
+            errors.push(format!(
+                "source_requirements_satisfied must contain {} fields, got {}",
+                Self::REQUIRED_FIELDS.len(),
+                self.source_requirements_satisfied.len()
+            ));
+        }
+
+        if self.winterfell_dependency_imported {
+            errors.push("winterfell_dependency_imported must be false in Phase 5G".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false in Phase 5G".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ClaimSourceRootInput {
     pub const SCHEMA_VERSION: &'static str = "claim-source-root-input-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
@@ -2473,6 +2659,10 @@ fn is_0x_32_byte_hex(value: &str) -> bool {
         return false;
     };
     hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn is_10_digit_npi(value: &str) -> bool {
+    value.len() == 10 && value.chars().all(|ch| ch.is_ascii_digit())
 }
 
 fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCompatibility> {

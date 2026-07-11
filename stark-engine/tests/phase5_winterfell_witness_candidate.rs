@@ -1,6 +1,7 @@
 use stark_engine::{
-    ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellSourceDataRequirements,
-    WinterfellWitnessCandidate, WinterfellWitnessImplementationGapReport,
+    ActiveClaimToStarkBridge, MappingClass, StarkBridgeInput, WinterfellSourceDataFixture,
+    WinterfellSourceDataRequirements, WinterfellWitnessCandidate,
+    WinterfellWitnessImplementationGapReport,
 };
 
 fn sample_bridge_input_json() -> &'static str {
@@ -430,6 +431,113 @@ fn winterfell_source_data_requirements_reject_bad_totals_and_runtime_flags() {
             .iter()
             .any(|error| error.contains("required_fields_total must equal"))
     );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("winterfell_dependency_imported must be false"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("proof_generation_enabled must be false"))
+    );
+}
+
+fn sample_source_data_requirements() -> WinterfellSourceDataRequirements {
+    let input = sample_bridge_input();
+    let candidate = WinterfellWitnessCandidate::from_bridge_input(&input).unwrap();
+    let gap_report = candidate.to_implementation_gap_report().unwrap();
+    gap_report.to_source_data_requirements().unwrap()
+}
+
+#[test]
+fn winterfell_source_data_fixture_satisfies_phase5f_requirements() {
+    let requirements = sample_source_data_requirements();
+    let fixture = WinterfellSourceDataFixture::demo_from_requirements(&requirements).unwrap();
+
+    assert_eq!(fixture.validate(), Ok(()));
+    assert_eq!(
+        fixture.schema_version,
+        WinterfellSourceDataFixture::SCHEMA_VERSION
+    );
+    assert_eq!(
+        fixture.source_schema_version,
+        WinterfellSourceDataRequirements::SCHEMA_VERSION
+    );
+    assert_eq!(
+        fixture.source_requirements_satisfied,
+        WinterfellSourceDataFixture::REQUIRED_FIELDS
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(fixture.member_id, "MEMBER-FIXTURE-001");
+    assert_eq!(fixture.provider_npi, "1234567893");
+    assert_eq!(fixture.diagnosis_count, 1);
+    assert_eq!(fixture.service_line_count, 1);
+    assert_eq!(fixture.prior_auth_ok, 1);
+    assert_eq!(fixture.charge_cents, 100_000);
+    assert_eq!(fixture.max_charge_cents, 150_000);
+    assert_eq!(fixture.program_integrity_hold, 0);
+    assert!(!fixture.winterfell_dependency_imported);
+    assert!(!fixture.proof_generation_enabled);
+}
+
+#[test]
+fn winterfell_source_data_fixture_json_round_trips() {
+    let requirements = sample_source_data_requirements();
+    let fixture = WinterfellSourceDataFixture::demo_from_requirements(&requirements).unwrap();
+    let json = serde_json::to_string_pretty(&fixture).unwrap();
+    let round_tripped: WinterfellSourceDataFixture = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, fixture);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("winterfell-source-data-fixture-v0"));
+    assert!(!json.contains("proof_generation_enabled\": true"));
+}
+
+#[test]
+fn winterfell_source_data_fixture_rejects_invalid_values() {
+    let requirements = sample_source_data_requirements();
+    let mut fixture = WinterfellSourceDataFixture::demo_from_requirements(&requirements).unwrap();
+    fixture.provider_npi = "BAD-NPI".to_string();
+    fixture.charge_cents = fixture.max_charge_cents + 1;
+    fixture.prior_auth_ok = 2;
+    fixture.source_requirements_satisfied.pop();
+
+    let errors = fixture.validate().unwrap_err();
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("provider_npi must be a 10-digit"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("charge_cents must be less than or equal"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("prior_auth_ok must be 0 or 1"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("source_requirements_satisfied missing"))
+    );
+}
+
+#[test]
+fn winterfell_source_data_fixture_rejects_runtime_like_flags() {
+    let requirements = sample_source_data_requirements();
+    let mut fixture = WinterfellSourceDataFixture::demo_from_requirements(&requirements).unwrap();
+    fixture.winterfell_dependency_imported = true;
+    fixture.proof_generation_enabled = true;
+
+    let errors = fixture.validate().unwrap_err();
+
     assert!(
         errors
             .iter()
