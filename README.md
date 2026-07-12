@@ -76,6 +76,10 @@ checkpoint and initial smoke-test summary.
 See `STARK_PHASE6_CHECKPOINT.md` for the feature-gated Winterfell proof-preview
 checkpoint. This is still isolated from the active Groth16 runtime.
 
+See `STARK_SOLIDITY_PREVIEW_CHECKPOINT.md` for the preview-only Solidity STARK
+verifier and ClaimsRegistry adapter interface lane. These interfaces and tests
+are not wired into the active Groth16 `ClaimsRegistry.sol`.
+
 ---
 
 # Project Structure
@@ -161,6 +165,7 @@ stark-engine/SCHEMA.md
 - On-chain approved claim recording
 - Active Foundry tests for ClaimsRegistry.sol
 - Deployment JSON smoke test for deployment.json
+- Preview-only STARK verifier and adapter interfaces/tests
 
 ---
 
