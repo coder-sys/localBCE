@@ -45,10 +45,10 @@ Done:
 - STARK ClaimsRegistry adapter preview interface
 - event/accounting compatibility tests
 - focused Solidity preview validation script
+- production STARK verifier ABI candidate interface and tests
 
 Remaining:
 
-- document the production ABI candidate
 - define proof commitment encoding requirements
 - define public input root encoding requirements
 - define adapter failure modes and event semantics

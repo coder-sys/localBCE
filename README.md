@@ -84,6 +84,9 @@ See `STARK_TRANSITION_REMAINING.md` for the remaining transition sequence from
 preview interfaces and proof previews to real STARK prover, verifier,
 settlement, runtime selection, and ops gates.
 
+See `STARK_VERIFIER_ABI_CANDIDATE.md` for the current preview-only production
+STARK verifier ABI candidate and public-input expectations.
+
 ---
 
 # Project Structure
@@ -170,6 +173,7 @@ stark-engine/SCHEMA.md
 - Active Foundry tests for ClaimsRegistry.sol
 - Deployment JSON smoke test for deployment.json
 - Preview-only STARK verifier and adapter interfaces/tests
+- Preview-only STARK verifier V1 ABI candidate
 
 ---
 
