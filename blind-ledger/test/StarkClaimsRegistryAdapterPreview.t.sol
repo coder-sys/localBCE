@@ -85,11 +85,6 @@ contract StarkClaimsRegistryAdapterPreview is IStarkClaimsRegistryAdapterPreview
     uint256 public totalValueReviewed;
     uint256 public denialFeeBps = 2000;
 
-    event StarkClaimApproved(bytes32 claimHash, bytes32 publicInputRoot);
-    event StarkClaimDenied(bytes32 claimHash, uint32 failureCode, bytes32 publicInputRoot);
-    event StarkProofRejected(bytes32 claimHash);
-    event StarkClaimRecorded(bytes32 claimHash, bool approved, uint256 claimAmount, uint256 fee);
-
     constructor(address _treasury, address _verifier) {
         treasury = _treasury;
         verifier = IStarkClaimsVerifierWithRootPreview(_verifier);
@@ -213,6 +208,21 @@ contract StarkClaimsRegistryAdapterPreviewTest is Test {
         assertEq(StarkClaimsRegistryAdapterPreview(address(adapter)).approvedStarkClaims(), 1);
     }
 
+    function test_AdapterEmitsApprovedSettlementEvents() public {
+        StarkClaimsRegistryAdapterPreview adapter = approvedAdapter(CLAIM_HASH);
+
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit IStarkClaimsRegistryAdapterPreview.StarkClaimApproved(CLAIM_HASH, PUBLIC_INPUT_ROOT);
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit IStarkClaimsRegistryAdapterPreview.StarkClaimRecorded(
+            CLAIM_HASH, true, 1000, 0.001 ether
+        );
+
+        adapter.submitStarkClaim{value: 0.001 ether}(
+            CLAIM_HASH, 1, 0, PUBLIC_INPUT_ROOT, proofCommitment, 1000
+        );
+    }
+
     function test_AdapterRequiresFeeForApprovedStarkClaim() public {
         StarkClaimsRegistryAdapterPreview adapter = approvedAdapter(CLAIM_HASH);
 
@@ -252,6 +262,17 @@ contract StarkClaimsRegistryAdapterPreviewTest is Test {
         assertEq(proofCommitmentHash, keccak256(proofCommitment));
     }
 
+    function test_AdapterEmitsDeniedSettlementEvents() public {
+        StarkClaimsRegistryAdapterPreview adapter = deniedAdapter(CLAIM_HASH);
+
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit IStarkClaimsRegistryAdapterPreview.StarkClaimDenied(CLAIM_HASH, 7, PUBLIC_INPUT_ROOT);
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit IStarkClaimsRegistryAdapterPreview.StarkClaimRecorded(CLAIM_HASH, false, 5000, 1000);
+
+        adapter.submitStarkClaim(CLAIM_HASH, 0, 7, PUBLIC_INPUT_ROOT, proofCommitment, 5000);
+    }
+
     function test_AdapterRejectsDuplicateRecordedStarkClaim() public {
         StarkClaimsRegistryAdapterPreview adapter = approvedAdapter(CLAIM_HASH);
 
@@ -267,6 +288,9 @@ contract StarkClaimsRegistryAdapterPreviewTest is Test {
 
     function test_AdapterRejectsInvalidProofWithoutRecordingClaim() public {
         StarkClaimsRegistryAdapterPreview adapter = approvedAdapter(CLAIM_HASH);
+
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit IStarkClaimsRegistryAdapterPreview.StarkProofRejected(CLAIM_HASH);
 
         adapter.submitStarkClaim(CLAIM_HASH, 1, 0, keccak256("wrong-root"), proofCommitment, 1000);
 
