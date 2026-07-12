@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {IStarkClaimsRegistryAdapterPreview} from "../src/IStarkClaimsRegistryAdapterPreview.sol";
 import {IStarkClaimsVerifierWithRootPreview} from "../src/IStarkClaimsVerifierWithRootPreview.sol";
 
 contract MockStarkClaimsVerifierWithRoot is IStarkClaimsVerifierWithRootPreview {
@@ -59,7 +60,7 @@ contract MockStarkClaimsVerifierWithRoot is IStarkClaimsVerifierWithRootPreview 
     }
 }
 
-contract StarkClaimsRegistryAdapterPreview {
+contract StarkClaimsRegistryAdapterPreview is IStarkClaimsRegistryAdapterPreview {
     struct StarkClaimRecord {
         bool recorded;
         bool approved;
@@ -200,6 +201,16 @@ contract StarkClaimsRegistryAdapterPreviewTest is Test {
         assertEq(failureCode, 0);
         assertEq(publicInputRoot, PUBLIC_INPUT_ROOT);
         assertEq(proofCommitmentHash, keccak256(proofCommitment));
+    }
+
+    function test_AdapterCanBeCalledThroughPreviewInterface() public {
+        IStarkClaimsRegistryAdapterPreview adapter = approvedAdapter(CLAIM_HASH);
+
+        adapter.submitStarkClaim{value: 0.001 ether}(
+            CLAIM_HASH, 1, 0, PUBLIC_INPUT_ROOT, proofCommitment, 1000
+        );
+
+        assertEq(StarkClaimsRegistryAdapterPreview(address(adapter)).approvedStarkClaims(), 1);
     }
 
     function test_AdapterRequiresFeeForApprovedStarkClaim() public {
