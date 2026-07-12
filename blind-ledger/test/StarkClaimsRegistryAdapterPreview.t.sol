@@ -2,18 +2,9 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {IStarkClaimsVerifierWithRootPreview} from "../src/IStarkClaimsVerifierWithRootPreview.sol";
 
-interface IStarkClaimsVerifierWithRoot {
-    function verifyClaimWithPublicInputRoot(
-        bytes32 claimHash,
-        uint8 decision,
-        uint32 failureCode,
-        bytes32 publicInputRoot,
-        bytes calldata proofCommitment
-    ) external view returns (bool);
-}
-
-contract MockStarkClaimsVerifierWithRoot is IStarkClaimsVerifierWithRoot {
+contract MockStarkClaimsVerifierWithRoot is IStarkClaimsVerifierWithRootPreview {
     bytes32 public expectedClaimHash;
     uint8 public expectedDecision;
     uint32 public expectedFailureCode;
@@ -82,7 +73,7 @@ contract StarkClaimsRegistryAdapterPreview {
 
     mapping(bytes32 => StarkClaimRecord) public starkClaims;
 
-    IStarkClaimsVerifierWithRoot public verifier;
+    IStarkClaimsVerifierWithRootPreview public verifier;
     address public treasury;
 
     uint256 public approvedStarkClaims;
@@ -100,7 +91,7 @@ contract StarkClaimsRegistryAdapterPreview {
 
     constructor(address _treasury, address _verifier) {
         treasury = _treasury;
-        verifier = IStarkClaimsVerifierWithRoot(_verifier);
+        verifier = IStarkClaimsVerifierWithRootPreview(_verifier);
     }
 
     function submitStarkClaim(

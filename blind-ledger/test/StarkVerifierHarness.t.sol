@@ -3,8 +3,9 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IStarkClaimsVerifierPreview} from "../src/IStarkClaimsVerifierPreview.sol";
+import {IStarkClaimsVerifierWithRootPreview} from "../src/IStarkClaimsVerifierWithRootPreview.sol";
 
-contract StarkVerifierHarness is IStarkClaimsVerifierPreview {
+contract StarkVerifierHarness is IStarkClaimsVerifierPreview, IStarkClaimsVerifierWithRootPreview {
     struct PublicInputs {
         bytes32 claimHash;
         uint8 decision;
