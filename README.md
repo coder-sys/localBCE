@@ -80,6 +80,10 @@ See `STARK_SOLIDITY_PREVIEW_CHECKPOINT.md` for the preview-only Solidity STARK
 verifier and ClaimsRegistry adapter interface lane. These interfaces and tests
 are not wired into the active Groth16 `ClaimsRegistry.sol`.
 
+See `STARK_TRANSITION_REMAINING.md` for the remaining transition sequence from
+preview interfaces and proof previews to real STARK prover, verifier,
+settlement, runtime selection, and ops gates.
+
 ---
 
 # Project Structure

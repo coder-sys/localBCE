@@ -148,12 +148,18 @@ Exit criteria:
 
 ## Phase 4: Native STARK Prover Adapter
 
-Status: deferred.
+Status: proof-preview scaffolded.
 
 Goal: replace mock traces with a real proof-producing adapter while preserving
 the active Groth16 path until the STARK path is proven.
 
-Safe sequence:
+Progress:
+
+- `stark-engine/` has a feature-gated Winterfell PoC proof-preview lane.
+- The smoke chain can generate and validate proof-preview artifacts.
+- The active runtime still does not generate or submit STARK proofs.
+
+Remaining safe sequence:
 
 1. Choose the prover lane: Winterfell, Cairo/STARK, or another audited target.
 2. Add a separate adapter crate/module, not a rewrite of `rust-engine/`.
@@ -171,12 +177,20 @@ Exit criteria:
 
 ## Phase 5: Native Settlement Contracts
 
-Status: reference-only target.
+Status: preview interfaces scaffolded.
 
 Goal: introduce native STARK settlement without breaking the current
 ClaimsRegistry/Groth16 demo.
 
-Safe sequence:
+Progress:
+
+- Preview-only STARK verifier interfaces exist in `blind-ledger/src/`.
+- Preview-only STARK ClaimsRegistry adapter interface exists in `blind-ledger/src/`.
+- Focused Foundry tests cover verifier, public-input-root, adapter, accounting,
+  and event compatibility behavior.
+- The active `ClaimsRegistry.sol` remains Groth16-only.
+
+Remaining safe sequence:
 
 1. Keep `blind-ledger/src/ClaimsRegistry.sol` as active until replacement is
    explicitly deployed and tested.
@@ -245,8 +259,10 @@ Exit criteria:
 
 Implement the next safe non-runtime integration:
 
-1. Keep fixture-based STARK bridge end-to-end tests for approved and denied
-   examples green.
-2. Keep Groth16 validation green with `bash scripts/validate_localbce.sh`.
-3. Use `stark-engine/SCHEMA.md` as the bridge artifact contract before adding
-   prover-specific adapters.
+1. Use `STARK_TRANSITION_REMAINING.md` as the source of truth for remaining
+   STARK migration phases.
+2. Define the production STARK verifier ABI candidate before modifying active
+   settlement contracts.
+3. Keep Groth16 validation green with `bash scripts/validate_localbce.sh`.
+4. Keep `stark-engine/SCHEMA.md` as the bridge artifact contract before adding
+   runtime prover-specific adapters.
