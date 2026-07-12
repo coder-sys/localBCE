@@ -60,9 +60,10 @@ The candidate behavior is covered by:
 
 ```text
 blind-ledger/test/StarkClaimsVerifierV1Candidate.t.sol
+stark-engine/tests/phase7_solidity_abi_candidate_alignment.rs
 ```
 
-The tests cover:
+The Solidity tests cover:
 
 - approved public inputs
 - denied public inputs
@@ -73,6 +74,29 @@ The tests cover:
 - mismatched public input root
 - mismatched proof bytes
 - disabled verifier behavior
+
+The `stark-engine` alignment tests cover:
+
+- generated Solidity interface plan name
+- generated function signature expectation
+- exact V1 candidate public input field names
+- exact Solidity types for every field
+- future root fields marked unavailable until root generation exists
+- validator rejection when a V1 candidate field is missing
+
+The generated planning object is:
+
+```text
+stark_solidity_verifier_interface_plan.json
+```
+
+It is produced by:
+
+```bash
+cd stark-engine
+cargo run --features winterfell-poc --bin generate_stark_solidity_verifier_interface_plan -- \
+  stark_settlement_boundary_artifact.json stark_solidity_verifier_interface_plan.json
+```
 
 ## Non-Claims
 

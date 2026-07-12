@@ -4097,9 +4097,9 @@ pub mod winterfell_poc_adapter {
                 schema_version: StarkSolidityVerifierInterfacePlan::SCHEMA_VERSION.to_string(),
                 source_schema_version: self.schema_version.clone(),
                 interface_status: StarkSolidityVerifierInterfacePlan::INTERFACE_STATUS.to_string(),
-                interface_name: "IStarkClaimsVerifierPreview".to_string(),
+                interface_name: "IStarkClaimsVerifierV1Candidate".to_string(),
                 function_signature:
-                    "verifyClaim(bytes32 claimHash,uint8 decision,uint32 failureCode,bytes proofCommitment) external view returns (bool)"
+                    "verifyStarkClaim((bytes32,uint8,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32) publicInputs,bytes proof) external view returns (bool)"
                         .to_string(),
                 solidity_inputs: vec![
                     SolidityVerifierInput {
@@ -4124,9 +4124,58 @@ pub mod winterfell_poc_adapter {
                         status: "available_from_boundary_artifact".to_string(),
                     },
                     SolidityVerifierInput {
-                        name: "proofCommitment".to_string(),
+                        name: "publicInputRoot".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_public_input_root".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "claimSourceRoot".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_claim_source_root".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "oracleFactsRoot".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_oracle_facts_root".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "feeScheduleRoot".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_fee_schedule_root".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "nullifierRootBefore".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_nullifier_root_before".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "nullifierRootAfter".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_nullifier_root_after".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "batchRoot".to_string(),
+                        solidity_type: "bytes32".to_string(),
+                        source_field: "future_batch_root".to_string(),
+                        value_preview: "unavailable_in_preview".to_string(),
+                        status: "requires_root_generation".to_string(),
+                    },
+                    SolidityVerifierInput {
+                        name: "proof".to_string(),
                         solidity_type: "bytes".to_string(),
-                        source_field: "future_stark_proof_or_attestation_commitment".to_string(),
+                        source_field: "future_stark_proof_bytes_or_attestation_payload".to_string(),
                         value_preview: "unavailable_in_preview".to_string(),
                         status: "requires_real_verifier_artifact".to_string(),
                     },
@@ -4136,7 +4185,9 @@ pub mod winterfell_poc_adapter {
                     "decision must be 0 or 1".to_string(),
                     "approved decisions require failureCode == 0".to_string(),
                     "denied decisions require failureCode != 0".to_string(),
-                    "proofCommitment must bind to the verified STARK public inputs".to_string(),
+                    "all V1 root fields must be nonzero before production verification"
+                        .to_string(),
+                    "proof bytes must bind to the verified STARK public inputs".to_string(),
                     "verifier key or attestation authority must be governed".to_string(),
                 ],
                 unsupported_runtime_work: vec![
@@ -4199,11 +4250,29 @@ pub mod winterfell_poc_adapter {
                 errors.push("interface_name must be present".to_string());
             }
 
-            if !self.function_signature.contains("verifyClaim(") {
-                errors.push("function_signature must define verifyClaim".to_string());
+            if self.interface_name != "IStarkClaimsVerifierV1Candidate" {
+                errors.push(
+                    "interface_name must be IStarkClaimsVerifierV1Candidate".to_string(),
+                );
             }
 
-            for required_input in ["claimHash", "decision", "failureCode", "proofCommitment"] {
+            if !self.function_signature.contains("verifyStarkClaim(") {
+                errors.push("function_signature must define verifyStarkClaim".to_string());
+            }
+
+            for required_input in [
+                "claimHash",
+                "decision",
+                "failureCode",
+                "publicInputRoot",
+                "claimSourceRoot",
+                "oracleFactsRoot",
+                "feeScheduleRoot",
+                "nullifierRootBefore",
+                "nullifierRootAfter",
+                "batchRoot",
+                "proof",
+            ] {
                 if !self
                     .solidity_inputs
                     .iter()
