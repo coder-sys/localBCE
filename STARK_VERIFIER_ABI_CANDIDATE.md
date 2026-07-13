@@ -98,6 +98,20 @@ cargo run --features winterfell-poc --bin generate_stark_solidity_verifier_inter
   stark_settlement_boundary_artifact.json stark_solidity_verifier_interface_plan.json
 ```
 
+The strict ABI-candidate alignment validator is:
+
+```bash
+cd stark-engine
+cargo run --features winterfell-poc --bin validate_stark_verifier_abi_candidate_alignment -- \
+  stark_solidity_verifier_interface_plan.json
+```
+
+The full STARK smoke chain runs this validator automatically through:
+
+```bash
+bash scripts/validate_stark_bridge_chain.sh
+```
+
 ## Non-Claims
 
 This ABI candidate does not mean:

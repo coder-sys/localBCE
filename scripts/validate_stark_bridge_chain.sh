@@ -107,6 +107,9 @@ run_in_dir "Generate STARK Solidity verifier interface plan" "stark-engine" \
 run_in_dir "Validate STARK Solidity verifier interface plan" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_stark_solidity_verifier_interface_plan -- "${STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN}"
 
+run_in_dir "Validate STARK verifier ABI candidate alignment" "stark-engine" \
+  cargo run --features winterfell-poc --bin validate_stark_verifier_abi_candidate_alignment -- "${STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN}"
+
 run_in_dir "Generate STARK settlement integration gap report" "stark-engine" \
   cargo run --features winterfell-poc --bin generate_stark_settlement_integration_gap_report -- "${STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN}" "${STARK_SETTLEMENT_INTEGRATION_GAP_REPORT}"
 

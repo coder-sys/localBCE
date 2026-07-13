@@ -4218,6 +4218,20 @@ pub mod winterfell_poc_adapter {
         pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-settlement-boundary-artifact-v0";
         pub const INTERFACE_STATUS: &'static str =
             "solidity_interface_plan_only_no_contract_changes";
+        pub const V1_CANDIDATE_INTERFACE_NAME: &'static str = "IStarkClaimsVerifierV1Candidate";
+        pub const V1_CANDIDATE_INPUTS: [(&'static str, &'static str); 11] = [
+            ("claimHash", "bytes32"),
+            ("decision", "uint8"),
+            ("failureCode", "uint32"),
+            ("publicInputRoot", "bytes32"),
+            ("claimSourceRoot", "bytes32"),
+            ("oracleFactsRoot", "bytes32"),
+            ("feeScheduleRoot", "bytes32"),
+            ("nullifierRootBefore", "bytes32"),
+            ("nullifierRootAfter", "bytes32"),
+            ("batchRoot", "bytes32"),
+            ("proof", "bytes"),
+        ];
 
         pub fn validate(&self) -> Result<(), Vec<String>> {
             let mut errors = Vec::new();
@@ -4319,6 +4333,109 @@ pub mod winterfell_poc_adapter {
 
             if self.notes.is_empty() {
                 errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+
+        pub fn validate_v1_candidate_alignment(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if let Err(validation_errors) = self.validate() {
+                errors.extend(validation_errors);
+            }
+
+            if self.interface_name != Self::V1_CANDIDATE_INTERFACE_NAME {
+                errors.push(format!(
+                    "interface_name must match V1 candidate {}, got {}",
+                    Self::V1_CANDIDATE_INTERFACE_NAME,
+                    self.interface_name
+                ));
+            }
+
+            if !self.function_signature.contains("verifyStarkClaim(") {
+                errors.push(
+                    "function_signature must use V1 candidate verifyStarkClaim".to_string(),
+                );
+            }
+
+            if self.solidity_inputs.len() != Self::V1_CANDIDATE_INPUTS.len() {
+                errors.push(format!(
+                    "solidity_inputs must contain exactly {} V1 candidate inputs, got {}",
+                    Self::V1_CANDIDATE_INPUTS.len(),
+                    self.solidity_inputs.len()
+                ));
+            }
+
+            for (index, (expected_name, expected_type)) in
+                Self::V1_CANDIDATE_INPUTS.iter().enumerate()
+            {
+                let Some(input) = self.solidity_inputs.get(index) else {
+                    errors.push(format!("missing V1 candidate input at index {index}"));
+                    continue;
+                };
+
+                if input.name != *expected_name {
+                    errors.push(format!(
+                        "solidity_inputs[{index}].name must be {expected_name}, got {}",
+                        input.name
+                    ));
+                }
+
+                if input.solidity_type != *expected_type {
+                    errors.push(format!(
+                        "solidity_inputs[{index}].solidity_type for {} must be {expected_type}, got {}",
+                        input.name, input.solidity_type
+                    ));
+                }
+            }
+
+            for root_name in [
+                "publicInputRoot",
+                "claimSourceRoot",
+                "oracleFactsRoot",
+                "feeScheduleRoot",
+                "nullifierRootBefore",
+                "nullifierRootAfter",
+                "batchRoot",
+            ] {
+                match self
+                    .solidity_inputs
+                    .iter()
+                    .find(|input| input.name == root_name)
+                {
+                    Some(input) => {
+                        if input.value_preview != "unavailable_in_preview" {
+                            errors.push(format!(
+                                "{root_name} value_preview must be unavailable_in_preview"
+                            ));
+                        }
+                        if input.status != "requires_root_generation" {
+                            errors.push(format!(
+                                "{root_name} status must be requires_root_generation"
+                            ));
+                        }
+                    }
+                    None => errors.push(format!("missing V1 candidate root input {root_name}")),
+                }
+            }
+
+            match self.solidity_inputs.iter().find(|input| input.name == "proof") {
+                Some(input) => {
+                    if input.value_preview != "unavailable_in_preview" {
+                        errors.push("proof value_preview must be unavailable_in_preview".to_string());
+                    }
+                    if input.status != "requires_real_verifier_artifact" {
+                        errors.push(
+                            "proof status must be requires_real_verifier_artifact".to_string(),
+                        );
+                    }
+                }
+                None => errors.push("missing V1 candidate proof input".to_string()),
             }
 
             if errors.is_empty() {

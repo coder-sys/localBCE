@@ -33,6 +33,7 @@ fn solidity_interface_plan_matches_v1_candidate_public_inputs() {
     let plan = artifact.to_solidity_verifier_interface_plan().unwrap();
 
     assert_eq!(plan.validate(), Ok(()));
+    assert_eq!(plan.validate_v1_candidate_alignment(), Ok(()));
     assert_eq!(
         plan.interface_name,
         "IStarkClaimsVerifierV1Candidate"
@@ -124,12 +125,38 @@ fn solidity_interface_plan_validator_rejects_missing_candidate_field() {
     );
 }
 
+#[test]
+fn solidity_interface_plan_alignment_validator_rejects_wrong_type() {
+    let artifact = sample_settlement_boundary_artifact();
+    let mut plan = artifact.to_solidity_verifier_interface_plan().unwrap();
+
+    find_input_mut(&mut plan, "decision").solidity_type = "uint256".to_string();
+
+    let errors = plan.validate_v1_candidate_alignment().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("decision") && error.contains("uint8")),
+        "{errors:?}"
+    );
+}
+
 fn find_input<'a>(
     plan: &'a StarkSolidityVerifierInterfacePlan,
     name: &str,
 ) -> &'a SolidityVerifierInput {
     plan.solidity_inputs
         .iter()
+        .find(|input| input.name == name)
+        .unwrap_or_else(|| panic!("missing input {name}"))
+}
+
+fn find_input_mut<'a>(
+    plan: &'a mut StarkSolidityVerifierInterfacePlan,
+    name: &str,
+) -> &'a mut SolidityVerifierInput {
+    plan.solidity_inputs
+        .iter_mut()
         .find(|input| input.name == name)
         .unwrap_or_else(|| panic!("missing input {name}"))
 }
