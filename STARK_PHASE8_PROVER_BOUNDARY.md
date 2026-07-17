@@ -219,6 +219,49 @@ generate_public_input_root_digest_candidate
 validate_public_input_root_digest_candidate
 ```
 
+## Source Root Digest Candidates
+
+The source-root planning object is:
+
+```text
+SourceRootDigestCandidate
+```
+
+It creates deterministic candidate digests for the Phase 4 source-root inputs:
+
+```text
+claim_source_root
+oracle_facts_root
+fee_schedule_root
+nullifier_root_transition
+```
+
+Each candidate uses:
+
+```text
+hash_algorithm = sha2_256_candidate_not_production_hash
+canonical_encoding = canonical_json_preimage_v0
+root_generation_status = candidate_generated_not_runtime
+production_hash_selected = false
+runtime_wiring_allowed = false
+groth16_flow_unchanged = true
+```
+
+This is still not production source-root generation:
+
+- it does not build Merkle trees
+- it does not select Poseidon/Poseidon2 root semantics
+- it does not make oracle, fee, claim-source, or nullifier roots legally verified
+- it does not feed the active Groth16 runtime
+- it does not submit anything on-chain
+
+The shared source-root digest CLI pair is:
+
+```text
+generate_source_root_digest_candidate
+validate_source_root_digest_candidate
+```
+
 ## Proof Commitment Preimage Plan
 
 The next planning object is:

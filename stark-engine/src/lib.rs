@@ -755,6 +755,30 @@ pub struct PublicInputRootDigestField {
     pub value_status: String,
 }
 
+/// First deterministic candidate digest for the source roots that will
+/// eventually feed `public_input_root`.
+///
+/// This is not production root generation. It hashes the canonical serialized
+/// source-root input with SHA-256 so the bridge chain can test stable artifact
+/// movement while the production tree/hash strategy remains explicitly
+/// unselected.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceRootDigestCandidate {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub source_root_kind: String,
+    pub candidate_status: String,
+    pub hash_algorithm: String,
+    pub canonical_encoding: String,
+    pub canonical_preimage: String,
+    pub source_root_candidate: String,
+    pub root_generation_status: String,
+    pub production_hash_selected: bool,
+    pub runtime_wiring_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
 /// Deterministic preimage plan for the future `proof_commitment`.
 ///
 /// This does not hash proof bytes and does not create a commitment. It locks
@@ -1878,6 +1902,113 @@ impl PublicInputRootDigestCandidate {
     }
 }
 
+impl SourceRootDigestCandidate {
+    pub const SCHEMA_VERSION: &'static str = "source-root-digest-candidate-v0";
+    pub const CANDIDATE_STATUS: &'static str = "candidate_digest_from_source_input_only_no_runtime";
+    pub const HASH_ALGORITHM: &'static str = "sha2_256_candidate_not_production_hash";
+    pub const CANONICAL_ENCODING: &'static str = "canonical_json_preimage_v0";
+    pub const ROOT_GENERATION_STATUS: &'static str = "candidate_generated_not_runtime";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        match expected_source_root_schema_version(&self.source_root_kind) {
+            Some(expected_schema_version) => {
+                if self.source_schema_version != expected_schema_version {
+                    errors.push(format!(
+                        "{} source_schema_version must be {}, got {}",
+                        self.source_root_kind, expected_schema_version, self.source_schema_version
+                    ));
+                }
+            }
+            None => errors.push(format!(
+                "source_root_kind is unsupported: {}",
+                self.source_root_kind
+            )),
+        }
+
+        if self.candidate_status != Self::CANDIDATE_STATUS {
+            errors.push(format!(
+                "candidate_status must be {}, got {}",
+                Self::CANDIDATE_STATUS,
+                self.candidate_status
+            ));
+        }
+
+        if self.hash_algorithm != Self::HASH_ALGORITHM {
+            errors.push(format!(
+                "hash_algorithm must be {}, got {}",
+                Self::HASH_ALGORITHM,
+                self.hash_algorithm
+            ));
+        }
+
+        if self.canonical_encoding != Self::CANONICAL_ENCODING {
+            errors.push(format!(
+                "canonical_encoding must be {}, got {}",
+                Self::CANONICAL_ENCODING,
+                self.canonical_encoding
+            ));
+        }
+
+        if self.canonical_preimage.trim().is_empty() {
+            errors.push("canonical_preimage must be present".to_string());
+        }
+
+        validate_0x_32_byte_hex(
+            "source_root_candidate",
+            &self.source_root_candidate,
+            &mut errors,
+        );
+
+        if !self.canonical_preimage.trim().is_empty() {
+            let expected_digest = sha256_hex(&self.canonical_preimage);
+            if self.source_root_candidate != expected_digest {
+                errors.push(
+                    "source_root_candidate must equal sha2_256(canonical_preimage)".to_string(),
+                );
+            }
+        }
+
+        if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
+            errors.push(format!(
+                "root_generation_status must be {}",
+                Self::ROOT_GENERATION_STATUS
+            ));
+        }
+
+        if self.production_hash_selected {
+            errors.push("production_hash_selected must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ProofCommitmentPreimagePlan {
     pub const SCHEMA_VERSION: &'static str = "proof-commitment-preimage-plan-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
@@ -2337,6 +2468,64 @@ fn build_public_input_root_candidate_preimage(
         )
     }));
     lines.join("\n")
+}
+
+fn expected_source_root_schema_version(source_root_kind: &str) -> Option<&'static str> {
+    match source_root_kind {
+        "claim_source_root" => Some(ClaimSourceRootInput::SCHEMA_VERSION),
+        "oracle_facts_root" => Some(OracleFactsRootInput::SCHEMA_VERSION),
+        "fee_schedule_root" => Some(FeeScheduleRootInput::SCHEMA_VERSION),
+        "nullifier_root_transition" => Some(NullifierRootTransitionInput::SCHEMA_VERSION),
+        _ => None,
+    }
+}
+
+fn source_root_digest_candidate_from_source<T: Serialize>(
+    source_schema_version: &str,
+    source_root_kind: &str,
+    source: &T,
+    notes: Vec<String>,
+) -> Result<SourceRootDigestCandidate, Vec<String>> {
+    let source_json = serde_json::to_string(source)
+        .map_err(|err| vec![format!("could not serialize source root input: {err}")])?;
+    let canonical_preimage = build_source_root_candidate_preimage(
+        source_schema_version,
+        source_root_kind,
+        SourceRootDigestCandidate::CANONICAL_ENCODING,
+        &source_json,
+    );
+    let source_root_candidate = sha256_hex(&canonical_preimage);
+
+    Ok(SourceRootDigestCandidate {
+        schema_version: SourceRootDigestCandidate::SCHEMA_VERSION.to_string(),
+        source_schema_version: source_schema_version.to_string(),
+        source_root_kind: source_root_kind.to_string(),
+        candidate_status: SourceRootDigestCandidate::CANDIDATE_STATUS.to_string(),
+        hash_algorithm: SourceRootDigestCandidate::HASH_ALGORITHM.to_string(),
+        canonical_encoding: SourceRootDigestCandidate::CANONICAL_ENCODING.to_string(),
+        canonical_preimage,
+        source_root_candidate,
+        root_generation_status: SourceRootDigestCandidate::ROOT_GENERATION_STATUS.to_string(),
+        production_hash_selected: false,
+        runtime_wiring_allowed: false,
+        groth16_flow_unchanged: true,
+        notes,
+    })
+}
+
+fn build_source_root_candidate_preimage(
+    source_schema_version: &str,
+    source_root_kind: &str,
+    canonical_encoding: &str,
+    source_json: &str,
+) -> String {
+    [
+        format!("source_schema_version:{source_schema_version}"),
+        format!("source_root_kind:{source_root_kind}"),
+        format!("canonical_encoding:{canonical_encoding}"),
+        format!("source_json:{source_json}"),
+    ]
+    .join("\n")
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -4094,6 +4283,22 @@ impl ClaimSourceRootInput {
         })
     }
 
+    pub fn to_digest_candidate(&self) -> Result<SourceRootDigestCandidate, Vec<String>> {
+        self.validate()?;
+        source_root_digest_candidate_from_source(
+            Self::SCHEMA_VERSION,
+            "claim_source_root",
+            self,
+            vec![
+                "This candidate hashes claim source root input source data only.".to_string(),
+                "It is not a production claimSourceRoot and does not build a Merkle tree."
+                    .to_string(),
+                "Production hash/root strategy remains unselected.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        )
+    }
+
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
@@ -4210,6 +4415,22 @@ impl OracleFactsRootInput {
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],
         })
+    }
+
+    pub fn to_digest_candidate(&self) -> Result<SourceRootDigestCandidate, Vec<String>> {
+        self.validate()?;
+        source_root_digest_candidate_from_source(
+            Self::SCHEMA_VERSION,
+            "oracle_facts_root",
+            self,
+            vec![
+                "This candidate hashes oracle facts root input source data only.".to_string(),
+                "It is not a production oracleFactsRoot and does not build a Merkle tree."
+                    .to_string(),
+                "Production hash/root strategy remains unselected.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        )
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
@@ -4332,6 +4553,22 @@ impl FeeScheduleRootInput {
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],
         })
+    }
+
+    pub fn to_digest_candidate(&self) -> Result<SourceRootDigestCandidate, Vec<String>> {
+        self.validate()?;
+        source_root_digest_candidate_from_source(
+            Self::SCHEMA_VERSION,
+            "fee_schedule_root",
+            self,
+            vec![
+                "This candidate hashes fee schedule root input source data only.".to_string(),
+                "It is not a production feeScheduleRoot and does not build a Merkle tree."
+                    .to_string(),
+                "Production hash/root strategy remains unselected.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        )
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
@@ -4462,6 +4699,23 @@ impl NullifierRootTransitionInput {
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],
         })
+    }
+
+    pub fn to_digest_candidate(&self) -> Result<SourceRootDigestCandidate, Vec<String>> {
+        self.validate()?;
+        source_root_digest_candidate_from_source(
+            Self::SCHEMA_VERSION,
+            "nullifier_root_transition",
+            self,
+            vec![
+                "This candidate hashes nullifier root transition input source data only."
+                    .to_string(),
+                "It is not a production nullifier root transition and does not build or update a Merkle tree."
+                    .to_string(),
+                "Production hash/root strategy remains unselected.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        )
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
