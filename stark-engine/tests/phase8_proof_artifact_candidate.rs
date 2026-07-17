@@ -1,6 +1,7 @@
 use stark_engine::{
     ProofArtifactFixtureExpectationSet, ProofCommitmentPreimagePlan, PublicInputRootAssemblyPlan,
-    StarkBridgeInput, StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
+    SelectedProverByteEncodingPlan, StarkBridgeInput, StarkProofArtifactV1BoundarySpec,
+    StarkProofArtifactV1Candidate,
 };
 
 fn sample_bridge_input_json(decision: u8, failure_code: u32) -> String {
@@ -863,4 +864,139 @@ fn fixture_expectations_json_round_trips() {
     assert!(json.contains("\"schema_version\": \"proof-artifact-fixture-expectations-v0\""));
     assert!(json.contains("\"fixture_id\": \"approved_claim\""));
     assert!(json.contains("\"fixture_id\": \"denied_claim\""));
+}
+
+#[test]
+fn phase8_boundary_spec_generates_selected_prover_byte_encoding_plan() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec
+        .to_selected_prover_byte_encoding_plan()
+        .unwrap();
+
+    assert_eq!(plan.validate(), Ok(()));
+    assert_eq!(
+        plan.schema_version,
+        SelectedProverByteEncodingPlan::SCHEMA_VERSION
+    );
+    assert_eq!(
+        plan.source_schema_version,
+        StarkProofArtifactV1BoundarySpec::SCHEMA_VERSION
+    );
+    assert_eq!(
+        plan.plan_status,
+        SelectedProverByteEncodingPlan::PLAN_STATUS
+    );
+    assert_eq!(plan.selected_prover, "winterfell_poc_preview");
+    assert_eq!(
+        plan.proof_bytes_encoding,
+        "0x_prefixed_canonical_stark_proof_bytes"
+    );
+    assert_eq!(
+        plan.proof_bytes_status,
+        "not_generated_encoding_contract_only"
+    );
+    assert!(!plan.runtime_wiring_allowed);
+    assert!(plan.groth16_flow_unchanged);
+}
+
+#[test]
+fn selected_prover_byte_encoding_plan_locks_commitment_binding_order() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec
+        .to_selected_prover_byte_encoding_plan()
+        .unwrap();
+
+    assert_eq!(
+        plan.commitment_binding_fields,
+        vec![
+            "selected_prover",
+            "proof_bytes_encoding",
+            "canonical_byte_order",
+            "serialization_format",
+            "proof_bytes",
+        ]
+    );
+    assert_eq!(plan.expected_binding_field_count, 5);
+}
+
+#[test]
+fn selected_prover_byte_encoding_plan_rejects_runtime_or_generated_claims() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut plan = boundary_spec
+        .to_selected_prover_byte_encoding_plan()
+        .unwrap();
+
+    plan.proof_bytes_status = "generated".to_string();
+    plan.runtime_wiring_allowed = true;
+    plan.groth16_flow_unchanged = false;
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "proof_bytes_status must be not_generated_encoding_contract_only"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "groth16_flow_unchanged must be true"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn selected_prover_byte_encoding_plan_rejects_binding_reorder() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut plan = boundary_spec
+        .to_selected_prover_byte_encoding_plan()
+        .unwrap();
+
+    plan.commitment_binding_fields.swap(0, 1);
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "commitment_binding_fields[0] must be selected_prover"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "commitment_binding_fields[1] must be proof_bytes_encoding"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn selected_prover_byte_encoding_plan_json_round_trips() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec
+        .to_selected_prover_byte_encoding_plan()
+        .unwrap();
+    let json = serde_json::to_string_pretty(&plan).unwrap();
+    let round_tripped: SelectedProverByteEncodingPlan = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, plan);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"selected-prover-byte-encoding-plan-v0\""));
+    assert!(json.contains("\"selected_prover\": \"winterfell_poc_preview\""));
+    assert!(json.contains("\"proof_bytes_status\": \"not_generated_encoding_contract_only\""));
 }

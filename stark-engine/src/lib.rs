@@ -778,6 +778,29 @@ pub struct ProofArtifactFixtureExpectation {
     pub runtime_wiring_allowed: bool,
 }
 
+/// Byte encoding plan for the selected future STARK prover.
+///
+/// This does not select a runtime prover and does not produce proof bytes. It
+/// locks the first canonical byte-contract that future prover, local verifier,
+/// proof commitment, and Solidity calldata layers must agree on.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SelectedProverByteEncodingPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub selected_prover: String,
+    pub proof_bytes_encoding: String,
+    pub proof_bytes_status: String,
+    pub canonical_byte_order: String,
+    pub serialization_format: String,
+    pub compression_status: String,
+    pub commitment_binding_fields: Vec<String>,
+    pub expected_binding_field_count: usize,
+    pub runtime_wiring_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1463,6 +1486,39 @@ impl StarkProofArtifactV1BoundarySpec {
             ],
         })
     }
+
+    pub fn to_selected_prover_byte_encoding_plan(
+        &self,
+    ) -> Result<SelectedProverByteEncodingPlan, Vec<String>> {
+        self.validate()?;
+
+        Ok(SelectedProverByteEncodingPlan {
+            schema_version: SelectedProverByteEncodingPlan::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            plan_status: SelectedProverByteEncodingPlan::PLAN_STATUS.to_string(),
+            selected_prover: "winterfell_poc_preview".to_string(),
+            proof_bytes_encoding: "0x_prefixed_canonical_stark_proof_bytes".to_string(),
+            proof_bytes_status: "not_generated_encoding_contract_only".to_string(),
+            canonical_byte_order: "prover_native_bytes_preserved_no_reordering".to_string(),
+            serialization_format: "opaque_bytes_for_contract_boundary_v1".to_string(),
+            compression_status: "no_additional_compression_selected".to_string(),
+            commitment_binding_fields: SelectedProverByteEncodingPlan::REQUIRED_BINDING_FIELDS
+                .iter()
+                .map(|field| field.to_string())
+                .collect(),
+            expected_binding_field_count: SelectedProverByteEncodingPlan::REQUIRED_BINDING_FIELDS
+                .len(),
+            runtime_wiring_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This plan defines the proof byte encoding contract only.".to_string(),
+                "It does not generate proof bytes or select a production prover.".to_string(),
+                "The proof commitment must bind the selected prover and canonical proof bytes."
+                    .to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        })
+    }
 }
 
 impl PublicInputRootAssemblyPlan {
@@ -1889,6 +1945,125 @@ impl ProofArtifactFixtureExpectation {
                 "{}.runtime_wiring_allowed must be false",
                 self.fixture_id
             ));
+        }
+    }
+}
+
+impl SelectedProverByteEncodingPlan {
+    pub const SCHEMA_VERSION: &'static str = "selected-prover-byte-encoding-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
+    pub const PLAN_STATUS: &'static str = "planning_only_no_proof_bytes";
+    pub const REQUIRED_BINDING_FIELDS: [&'static str; 5] = [
+        "selected_prover",
+        "proof_bytes_encoding",
+        "canonical_byte_order",
+        "serialization_format",
+        "proof_bytes",
+    ];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.plan_status != Self::PLAN_STATUS {
+            errors.push(format!(
+                "plan_status must be {}, got {}",
+                Self::PLAN_STATUS,
+                self.plan_status
+            ));
+        }
+
+        if self.selected_prover != "winterfell_poc_preview" {
+            errors.push("selected_prover must be winterfell_poc_preview".to_string());
+        }
+
+        if self.proof_bytes_encoding != "0x_prefixed_canonical_stark_proof_bytes" {
+            errors.push(
+                "proof_bytes_encoding must be 0x_prefixed_canonical_stark_proof_bytes".to_string(),
+            );
+        }
+
+        if self.proof_bytes_status != "not_generated_encoding_contract_only" {
+            errors.push(
+                "proof_bytes_status must be not_generated_encoding_contract_only".to_string(),
+            );
+        }
+
+        if self.canonical_byte_order != "prover_native_bytes_preserved_no_reordering" {
+            errors.push(
+                "canonical_byte_order must be prover_native_bytes_preserved_no_reordering"
+                    .to_string(),
+            );
+        }
+
+        if self.serialization_format != "opaque_bytes_for_contract_boundary_v1" {
+            errors.push(
+                "serialization_format must be opaque_bytes_for_contract_boundary_v1".to_string(),
+            );
+        }
+
+        if self.compression_status != "no_additional_compression_selected" {
+            errors
+                .push("compression_status must be no_additional_compression_selected".to_string());
+        }
+
+        if self.expected_binding_field_count != Self::REQUIRED_BINDING_FIELDS.len() {
+            errors.push(format!(
+                "expected_binding_field_count must be {}",
+                Self::REQUIRED_BINDING_FIELDS.len()
+            ));
+        }
+
+        if self.commitment_binding_fields.len() != Self::REQUIRED_BINDING_FIELDS.len() {
+            errors.push(format!(
+                "commitment_binding_fields must contain exactly {} fields",
+                Self::REQUIRED_BINDING_FIELDS.len()
+            ));
+        }
+
+        for (index, expected_field) in Self::REQUIRED_BINDING_FIELDS.iter().enumerate() {
+            match self.commitment_binding_fields.get(index) {
+                Some(field) if field == expected_field => {}
+                Some(_) => errors.push(format!(
+                    "commitment_binding_fields[{index}] must be {expected_field}"
+                )),
+                None => errors.push(format!(
+                    "commitment_binding_fields missing position {index}: {expected_field}"
+                )),
+            }
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }
