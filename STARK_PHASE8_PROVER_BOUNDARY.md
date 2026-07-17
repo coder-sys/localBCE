@@ -504,12 +504,55 @@ generate_phase8_real_prover_implementation_checklist
 validate_phase8_real_prover_implementation_checklist
 ```
 
+## Test-Only Prover Harness Plan
+
+The next Phase 8 planning object is:
+
+```text
+Phase8TestOnlyProverHarnessPlan
+```
+
+It is generated from the real prover implementation checklist and defines the
+first allowed local proof-generation harness boundary:
+
+- selected preview prover: `winterfell_poc_preview`
+- execution mode: `local_feature_gated_test_only_no_contract_writes`
+- required inputs:
+  - `complete_winterfell_witness_candidate`
+  - `selected_prover_byte_encoding_plan`
+  - `phase8_real_prover_implementation_checklist`
+- expected outputs:
+  - `winterfell_proof_preview`
+  - `stark_proof_artifact_v1_candidate`
+  - `stark_settlement_boundary_artifact`
+  - `phase8_harness_execution_log`
+
+The harness plan keeps:
+
+```text
+feature_gate_required = true
+test_only_proof_generation_allowed = true
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+This is still not production proof wiring. It allows only a local,
+feature-gated proving experiment and explicitly blocks contract writes,
+ClaimsRegistry cutover, and on-chain STARK submission.
+
+The harness plan CLI pair is:
+
+```text
+generate_phase8_test_only_prover_harness_plan
+validate_phase8_test_only_prover_harness_plan
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to choose the first test-only prover execution
-boundary and produce a non-runtime proof-generation harness plan:
+The next safe Phase 8 step is to add a dry-run harness execution report:
 
-- identify exactly which existing Winterfell preview path can be called safely
-- define input/output files for a test-only proof generation harness
-- keep the proof artifact off-chain until local verification passes
-- keep Groth16 active until the completion gate is satisfied
+- read the harness plan and complete Winterfell witness candidate
+- run only the feature-gated local proof preview
+- emit an execution report with proof size/timing/verification metadata
+- keep the report off-chain and keep Groth16 active

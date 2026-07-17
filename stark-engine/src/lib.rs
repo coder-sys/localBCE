@@ -953,6 +953,38 @@ pub struct Phase8RealProverWorkItem {
     pub blocks_runtime_cutover: bool,
 }
 
+/// Test-only harness boundary for the first prover execution lane.
+///
+/// This plan permits a feature-gated/local proof-generation experiment, but it
+/// does not approve runtime cutover, Solidity verifier wiring, or replacement
+/// of the active Groth16 flow.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8TestOnlyProverHarnessPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub harness_status: String,
+    pub selected_preview_prover: String,
+    pub execution_mode: String,
+    pub required_inputs: Vec<Phase8HarnessArtifact>,
+    pub expected_input_count: usize,
+    pub expected_outputs: Vec<Phase8HarnessArtifact>,
+    pub expected_output_count: usize,
+    pub feature_gate_required: bool,
+    pub test_only_proof_generation_allowed: bool,
+    pub runtime_cutover_allowed: bool,
+    pub on_chain_submission_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8HarnessArtifact {
+    pub artifact_id: String,
+    pub schema_version: String,
+    pub path_hint: String,
+    pub requirement_status: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -3241,6 +3273,213 @@ impl Phase8RealProverWorkItem {
     }
 }
 
+impl Phase8TestOnlyProverHarnessPlan {
+    pub const SCHEMA_VERSION: &'static str = "phase8-test-only-prover-harness-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "phase8-real-prover-implementation-checklist-v0";
+    pub const HARNESS_STATUS: &'static str = "test_only_harness_boundary_no_runtime_cutover";
+    pub const SELECTED_PREVIEW_PROVER: &'static str = "winterfell_poc_preview";
+    pub const EXECUTION_MODE: &'static str = "local_feature_gated_test_only_no_contract_writes";
+    pub const REQUIRED_INPUT_IDS: [&'static str; 3] = [
+        "complete_winterfell_witness_candidate",
+        "selected_prover_byte_encoding_plan",
+        "phase8_real_prover_implementation_checklist",
+    ];
+    pub const EXPECTED_OUTPUT_IDS: [&'static str; 4] = [
+        "winterfell_proof_preview",
+        "stark_proof_artifact_v1_candidate",
+        "stark_settlement_boundary_artifact",
+        "phase8_harness_execution_log",
+    ];
+
+    pub fn from_checklist(
+        checklist: &Phase8RealProverImplementationChecklist,
+    ) -> Result<Self, Vec<String>> {
+        checklist.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: checklist.schema_version.clone(),
+            harness_status: Self::HARNESS_STATUS.to_string(),
+            selected_preview_prover: Self::SELECTED_PREVIEW_PROVER.to_string(),
+            execution_mode: Self::EXECUTION_MODE.to_string(),
+            required_inputs: vec![
+                Phase8HarnessArtifact::required_input(
+                    "complete_winterfell_witness_candidate",
+                    WinterfellCompleteWitnessCandidate::SCHEMA_VERSION,
+                    "complete_winterfell_witness_candidate.json",
+                ),
+                Phase8HarnessArtifact::required_input(
+                    "selected_prover_byte_encoding_plan",
+                    SelectedProverByteEncodingPlan::SCHEMA_VERSION,
+                    "selected_prover_byte_encoding_plan.json",
+                ),
+                Phase8HarnessArtifact::required_input(
+                    "phase8_real_prover_implementation_checklist",
+                    Self::SOURCE_SCHEMA_VERSION,
+                    "phase8_real_prover_implementation_checklist.json",
+                ),
+            ],
+            expected_input_count: Self::REQUIRED_INPUT_IDS.len(),
+            expected_outputs: vec![
+                Phase8HarnessArtifact::expected_output(
+                    "winterfell_proof_preview",
+                    "winterfell-poc-proof-preview-v0",
+                    "winterfell_proof_preview.json",
+                ),
+                Phase8HarnessArtifact::expected_output(
+                    "stark_proof_artifact_v1_candidate",
+                    StarkProofArtifactV1Candidate::SCHEMA_VERSION,
+                    "stark_proof_artifact_v1_candidate.json",
+                ),
+                Phase8HarnessArtifact::expected_output(
+                    "stark_settlement_boundary_artifact",
+                    "stark-settlement-boundary-artifact-v0",
+                    "stark_settlement_boundary_artifact.json",
+                ),
+                Phase8HarnessArtifact::expected_output(
+                    "phase8_harness_execution_log",
+                    "phase8-harness-execution-log-v0",
+                    "phase8_harness_execution_log.json",
+                ),
+            ],
+            expected_output_count: Self::EXPECTED_OUTPUT_IDS.len(),
+            feature_gate_required: true,
+            test_only_proof_generation_allowed: true,
+            runtime_cutover_allowed: false,
+            on_chain_submission_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This plan defines the first feature-gated prover harness boundary.".to_string(),
+                "It permits local/test-only proof generation through the Winterfell preview path."
+                    .to_string(),
+                "It does not permit runtime cutover, contract writes, or on-chain submission."
+                    .to_string(),
+                "Groth16 remains the active production prototype flow.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.harness_status != Self::HARNESS_STATUS {
+            errors.push(format!(
+                "harness_status must be {}, got {}",
+                Self::HARNESS_STATUS,
+                self.harness_status
+            ));
+        }
+
+        if self.selected_preview_prover != Self::SELECTED_PREVIEW_PROVER {
+            errors.push(format!(
+                "selected_preview_prover must be {}",
+                Self::SELECTED_PREVIEW_PROVER
+            ));
+        }
+
+        if self.execution_mode != Self::EXECUTION_MODE {
+            errors.push(format!("execution_mode must be {}", Self::EXECUTION_MODE));
+        }
+
+        validate_harness_artifacts(
+            "required_inputs",
+            &self.required_inputs,
+            &Self::REQUIRED_INPUT_IDS,
+            "required_before_test_only_harness_execution",
+            &mut errors,
+        );
+
+        if self.expected_input_count != Self::REQUIRED_INPUT_IDS.len() {
+            errors.push(format!(
+                "expected_input_count must be {}",
+                Self::REQUIRED_INPUT_IDS.len()
+            ));
+        }
+
+        validate_harness_artifacts(
+            "expected_outputs",
+            &self.expected_outputs,
+            &Self::EXPECTED_OUTPUT_IDS,
+            "expected_from_test_only_harness_execution",
+            &mut errors,
+        );
+
+        if self.expected_output_count != Self::EXPECTED_OUTPUT_IDS.len() {
+            errors.push(format!(
+                "expected_output_count must be {}",
+                Self::EXPECTED_OUTPUT_IDS.len()
+            ));
+        }
+
+        if !self.feature_gate_required {
+            errors.push("feature_gate_required must be true".to_string());
+        }
+
+        if !self.test_only_proof_generation_allowed {
+            errors.push("test_only_proof_generation_allowed must be true".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.on_chain_submission_allowed {
+            errors.push("on_chain_submission_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl Phase8HarnessArtifact {
+    fn required_input(artifact_id: &str, schema_version: &str, path_hint: &str) -> Self {
+        Self {
+            artifact_id: artifact_id.to_string(),
+            schema_version: schema_version.to_string(),
+            path_hint: path_hint.to_string(),
+            requirement_status: "required_before_test_only_harness_execution".to_string(),
+        }
+    }
+
+    fn expected_output(artifact_id: &str, schema_version: &str, path_hint: &str) -> Self {
+        Self {
+            artifact_id: artifact_id.to_string(),
+            schema_version: schema_version.to_string(),
+            path_hint: path_hint.to_string(),
+            requirement_status: "expected_from_test_only_harness_execution".to_string(),
+        }
+    }
+}
+
 fn validate_fixture_dependency_status(
     fixture_id: &str,
     field_name: &str,
@@ -3266,6 +3505,45 @@ fn collect_validation_errors(
                 .into_iter()
                 .map(|error| format!("{artifact_id}: {error}")),
         );
+    }
+}
+
+fn validate_harness_artifacts(
+    collection_name: &str,
+    artifacts: &[Phase8HarnessArtifact],
+    expected_ids: &[&str],
+    expected_status: &str,
+    errors: &mut Vec<String>,
+) {
+    if artifacts.len() != expected_ids.len() {
+        errors.push(format!(
+            "{collection_name} must contain exactly {} artifacts",
+            expected_ids.len()
+        ));
+    }
+
+    for (position, expected_id) in expected_ids.iter().enumerate() {
+        match artifacts.get(position) {
+            Some(artifact) => {
+                if artifact.artifact_id != *expected_id {
+                    errors.push(format!(
+                        "{collection_name}[{position}].artifact_id must be {expected_id}"
+                    ));
+                }
+                if artifact.schema_version.trim().is_empty() {
+                    errors.push(format!("{expected_id}.schema_version must be present"));
+                }
+                if artifact.path_hint.trim().is_empty() {
+                    errors.push(format!("{expected_id}.path_hint must be present"));
+                }
+                if artifact.requirement_status != expected_status {
+                    errors.push(format!(
+                        "{expected_id}.requirement_status must be {expected_status}"
+                    ));
+                }
+            }
+            None => errors.push(format!("{collection_name} missing artifact: {expected_id}")),
+        }
     }
 }
 
@@ -6766,7 +7044,7 @@ pub mod winterfell_poc_adapter {
             self.validate()?;
 
             Ok(StarkSettlementBoundaryArtifact {
-                schema_version: StarkSettlementBoundaryArtifact::SCHEMA_VERSION.to_string(),
+                schema_version: "stark-settlement-boundary-artifact-v0".to_string(),
                 source_schema_version: self.schema_version.clone(),
                 artifact_status: StarkSettlementBoundaryArtifact::ARTIFACT_STATUS.to_string(),
                 claim_id: self.claim_id.clone(),
