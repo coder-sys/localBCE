@@ -40,6 +40,7 @@ BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
 STARK_PROOF_ARTIFACT_V1_CANDIDATE="${TMP_DIR}/stark_proof_artifact_v1_candidate.json"
 STARK_PROOF_ARTIFACT_V1_BOUNDARY_SPEC="${TMP_DIR}/stark_proof_artifact_v1_boundary_spec.json"
 PUBLIC_INPUT_ROOT_ASSEMBLY_PLAN="${TMP_DIR}/public_input_root_assembly_plan.json"
+PROOF_COMMITMENT_PREIMAGE_PLAN="${TMP_DIR}/proof_commitment_preimage_plan.json"
 CLAIM_SOURCE_ROOT_INPUT="${TMP_DIR}/claim_source_root_input.json"
 ORACLE_FACTS_ROOT_INPUT="${TMP_DIR}/oracle_facts_root_input.json"
 FEE_SCHEDULE_ROOT_INPUT="${TMP_DIR}/fee_schedule_root_input.json"
@@ -88,6 +89,12 @@ run_in_dir "Generate public input root assembly plan" "stark-engine" \
 
 run_in_dir "Validate public input root assembly plan" "stark-engine" \
   cargo run --bin validate_public_input_root_assembly_plan -- "${PUBLIC_INPUT_ROOT_ASSEMBLY_PLAN}"
+
+run_in_dir "Generate proof commitment preimage plan" "stark-engine" \
+  cargo run --bin generate_proof_commitment_preimage_plan -- "${STARK_PROOF_ARTIFACT_V1_BOUNDARY_SPEC}" "${PROOF_COMMITMENT_PREIMAGE_PLAN}"
+
+run_in_dir "Validate proof commitment preimage plan" "stark-engine" \
+  cargo run --bin validate_proof_commitment_preimage_plan -- "${PROOF_COMMITMENT_PREIMAGE_PLAN}"
 
 run_in_dir "Generate Winterfell witness candidate" "stark-engine" \
   cargo run --bin generate_winterfell_witness_candidate -- "${BRIDGE_INPUT}" "${WINTERFELL_WITNESS_CANDIDATE}"

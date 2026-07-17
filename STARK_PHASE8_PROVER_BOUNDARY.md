@@ -178,11 +178,46 @@ generate_public_input_root_assembly_plan
 validate_public_input_root_assembly_plan
 ```
 
+## Proof Commitment Preimage Plan
+
+The next planning object is:
+
+```text
+ProofCommitmentPreimagePlan
+```
+
+It defines the canonical preimage order for the future `proof_commitment`:
+
+```text
+0. target_artifact_schema_version
+1. solidity_abi_candidate
+2. prover
+3. proof_bytes
+4. public_input_root
+5. claim_hash
+6. decision
+7. failure_code
+```
+
+This is still planning-only:
+
+- no proof bytes are generated
+- no prover is selected for runtime
+- no public input root is generated
+- no proof commitment is generated
+- Groth16 remains the active runtime path
+
+The proof commitment preimage CLI pair is:
+
+```text
+generate_proof_commitment_preimage_plan
+validate_proof_commitment_preimage_plan
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to start replacing the root placeholders with
 deterministic pre-root commitments, still without runtime wiring:
 
-- deterministic proof commitment preimage rules
 - approved/denied fixture expectations
 - selected prover byte encoding

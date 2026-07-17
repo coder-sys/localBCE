@@ -722,6 +722,35 @@ pub struct PublicInputRootField {
     pub value_status: String,
 }
 
+/// Deterministic preimage plan for the future `proof_commitment`.
+///
+/// This does not hash proof bytes and does not create a commitment. It locks
+/// the canonical metadata/proof field order that a future prover adapter must
+/// use before a proof artifact can be considered settlement-ready.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProofCommitmentPreimagePlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub hash_strategy: String,
+    pub canonical_encoding: String,
+    pub ordered_components: Vec<ProofCommitmentPreimageComponent>,
+    pub expected_component_count: usize,
+    pub proof_commitment: Option<String>,
+    pub commitment_generation_status: String,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProofCommitmentPreimageComponent {
+    pub position: usize,
+    pub component_name: String,
+    pub encoding: String,
+    pub source: String,
+    pub value_status: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1342,6 +1371,45 @@ impl StarkProofArtifactV1BoundarySpec {
             ],
         })
     }
+
+    pub fn to_proof_commitment_preimage_plan(
+        &self,
+    ) -> Result<ProofCommitmentPreimagePlan, Vec<String>> {
+        self.validate()?;
+
+        Ok(ProofCommitmentPreimagePlan {
+            schema_version: ProofCommitmentPreimagePlan::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            plan_status: ProofCommitmentPreimagePlan::PLAN_STATUS.to_string(),
+            hash_strategy: "canonical_preimage_defined_hash_not_selected".to_string(),
+            canonical_encoding:
+                "ordered_component_name_colon_canonical_value_utf8_joined_by_newline".to_string(),
+            ordered_components: ProofCommitmentPreimagePlan::REQUIRED_ORDERED_COMPONENTS
+                .iter()
+                .enumerate()
+                .map(
+                    |(position, component_name)| ProofCommitmentPreimageComponent {
+                        position,
+                        component_name: component_name.to_string(),
+                        encoding: proof_commitment_component_encoding(component_name).to_string(),
+                        source: proof_commitment_component_source(component_name).to_string(),
+                        value_status: proof_commitment_component_status(component_name).to_string(),
+                    },
+                )
+                .collect(),
+            expected_component_count: ProofCommitmentPreimagePlan::REQUIRED_ORDERED_COMPONENTS
+                .len(),
+            proof_commitment: None,
+            commitment_generation_status: "not_generated".to_string(),
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This plan defines proof commitment preimage order only.".to_string(),
+                "It does not hash, generate, or verify proof_commitment.".to_string(),
+                "Proof bytes and public_input_root remain future dependencies.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        })
+    }
 }
 
 impl PublicInputRootAssemblyPlan {
@@ -1468,6 +1536,188 @@ impl PublicInputRootAssemblyPlan {
         } else {
             Err(errors)
         }
+    }
+}
+
+impl ProofCommitmentPreimagePlan {
+    pub const SCHEMA_VERSION: &'static str = "proof-commitment-preimage-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
+    pub const PLAN_STATUS: &'static str = "planning_only_no_commitment_generation";
+    pub const REQUIRED_ORDERED_COMPONENTS: [&'static str; 8] = [
+        "target_artifact_schema_version",
+        "solidity_abi_candidate",
+        "prover",
+        "proof_bytes",
+        "public_input_root",
+        "claim_hash",
+        "decision",
+        "failure_code",
+    ];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.plan_status != Self::PLAN_STATUS {
+            errors.push(format!(
+                "plan_status must be {}, got {}",
+                Self::PLAN_STATUS,
+                self.plan_status
+            ));
+        }
+
+        if self.hash_strategy.trim().is_empty() {
+            errors.push("hash_strategy must be present".to_string());
+        }
+
+        if self.canonical_encoding.trim().is_empty() {
+            errors.push("canonical_encoding must be present".to_string());
+        }
+
+        if self.expected_component_count != Self::REQUIRED_ORDERED_COMPONENTS.len() {
+            errors.push(format!(
+                "expected_component_count must be {}",
+                Self::REQUIRED_ORDERED_COMPONENTS.len()
+            ));
+        }
+
+        if self.ordered_components.len() != Self::REQUIRED_ORDERED_COMPONENTS.len() {
+            errors.push(format!(
+                "ordered_components must contain exactly {} components",
+                Self::REQUIRED_ORDERED_COMPONENTS.len()
+            ));
+        }
+
+        for (expected_position, expected_name) in
+            Self::REQUIRED_ORDERED_COMPONENTS.iter().enumerate()
+        {
+            match self.ordered_components.get(expected_position) {
+                Some(component) => {
+                    if component.position != expected_position {
+                        errors.push(format!(
+                            "ordered_components[{expected_position}].position must be {expected_position}"
+                        ));
+                    }
+                    if component.component_name != *expected_name {
+                        errors.push(format!(
+                            "ordered_components[{expected_position}] must be {expected_name}"
+                        ));
+                    }
+                    if component.encoding.trim().is_empty() {
+                        errors.push(format!(
+                            "{}.encoding must be present",
+                            component.component_name
+                        ));
+                    }
+                    if component.source.trim().is_empty() {
+                        errors.push(format!(
+                            "{}.source must be present",
+                            component.component_name
+                        ));
+                    }
+                    if !matches!(
+                        component.value_status.as_str(),
+                        "available_from_boundary_spec"
+                            | "available_from_future_artifact_public_inputs"
+                            | "requires_selected_prover"
+                            | "requires_real_proof_bytes"
+                            | "requires_public_input_root_generation"
+                    ) {
+                        errors.push(format!(
+                            "{}.value_status is invalid",
+                            component.component_name
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "ordered_components missing position {expected_position}: {expected_name}"
+                )),
+            }
+        }
+
+        if self.proof_commitment.is_some() {
+            errors.push(
+                "proof_commitment must remain absent until commitment generation exists"
+                    .to_string(),
+            );
+        }
+
+        if self.commitment_generation_status != "not_generated" {
+            errors.push("commitment_generation_status must be not_generated".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn proof_commitment_component_encoding(component_name: &str) -> &'static str {
+    match component_name {
+        "target_artifact_schema_version" | "solidity_abi_candidate" | "prover" => {
+            "string_identifier"
+        }
+        "proof_bytes" => "0x_prefixed_bytes",
+        "public_input_root" | "claim_hash" => "0x_prefixed_32_byte_hex",
+        "decision" => "u8_boolean_0_or_1",
+        "failure_code" => "u32",
+        _ => "unknown",
+    }
+}
+
+fn proof_commitment_component_source(component_name: &str) -> &'static str {
+    match component_name {
+        "target_artifact_schema_version" => {
+            "stark_proof_artifact_v1_boundary_spec.target_artifact_schema_version"
+        }
+        "solidity_abi_candidate" => "stark_proof_artifact_v1_boundary_spec.solidity_abi_candidate",
+        "prover" => "selected_stark_prover",
+        "proof_bytes" => "selected_stark_prover.proof_bytes",
+        "public_input_root" => "public_input_root_generation",
+        "claim_hash" => "future_stark_proof_artifact.public_inputs.claim_hash",
+        "decision" => "future_stark_proof_artifact.public_inputs.decision",
+        "failure_code" => "future_stark_proof_artifact.public_inputs.failure_code",
+        _ => "unknown",
+    }
+}
+
+fn proof_commitment_component_status(component_name: &str) -> &'static str {
+    match component_name {
+        "target_artifact_schema_version" | "solidity_abi_candidate" => {
+            "available_from_boundary_spec"
+        }
+        "prover" => "requires_selected_prover",
+        "proof_bytes" => "requires_real_proof_bytes",
+        "public_input_root" => "requires_public_input_root_generation",
+        "claim_hash" | "decision" | "failure_code" => {
+            "available_from_future_artifact_public_inputs"
+        }
+        _ => "unknown",
     }
 }
 

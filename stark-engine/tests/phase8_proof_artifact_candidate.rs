@@ -1,6 +1,6 @@
 use stark_engine::{
-    PublicInputRootAssemblyPlan, StarkBridgeInput, StarkProofArtifactV1BoundarySpec,
-    StarkProofArtifactV1Candidate,
+    ProofCommitmentPreimagePlan, PublicInputRootAssemblyPlan, StarkBridgeInput,
+    StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
 };
 
 fn sample_bridge_input_json(decision: u8, failure_code: u32) -> String {
@@ -531,4 +531,163 @@ fn public_input_root_assembly_plan_json_round_trips() {
     assert_eq!(round_tripped.validate(), Ok(()));
     assert!(json.contains("\"schema_version\": \"public-input-root-assembly-plan-v0\""));
     assert!(json.contains("\"root_generation_status\": \"not_generated\""));
+}
+
+#[test]
+fn phase8_boundary_spec_generates_proof_commitment_preimage_plan() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_proof_commitment_preimage_plan().unwrap();
+
+    assert_eq!(plan.validate(), Ok(()));
+    assert_eq!(
+        plan.schema_version,
+        ProofCommitmentPreimagePlan::SCHEMA_VERSION
+    );
+    assert_eq!(
+        plan.source_schema_version,
+        StarkProofArtifactV1BoundarySpec::SCHEMA_VERSION
+    );
+    assert_eq!(plan.plan_status, ProofCommitmentPreimagePlan::PLAN_STATUS);
+    assert_eq!(plan.expected_component_count, 8);
+    assert_eq!(plan.ordered_components.len(), 8);
+    assert_eq!(plan.proof_commitment, None);
+    assert_eq!(plan.commitment_generation_status, "not_generated");
+    assert!(plan.groth16_flow_unchanged);
+}
+
+#[test]
+fn proof_commitment_preimage_plan_locks_canonical_component_order() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_proof_commitment_preimage_plan().unwrap();
+    let ordered_names: Vec<&str> = plan
+        .ordered_components
+        .iter()
+        .map(|component| component.component_name.as_str())
+        .collect();
+
+    assert_eq!(
+        ordered_names,
+        vec![
+            "target_artifact_schema_version",
+            "solidity_abi_candidate",
+            "prover",
+            "proof_bytes",
+            "public_input_root",
+            "claim_hash",
+            "decision",
+            "failure_code",
+        ]
+    );
+
+    for (index, component) in plan.ordered_components.iter().enumerate() {
+        assert_eq!(component.position, index);
+        assert!(!component.encoding.is_empty());
+        assert!(!component.source.is_empty());
+    }
+}
+
+#[test]
+fn proof_commitment_preimage_plan_marks_available_and_future_components() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_proof_commitment_preimage_plan().unwrap();
+
+    for component in &plan.ordered_components {
+        match component.component_name.as_str() {
+            "target_artifact_schema_version" | "solidity_abi_candidate" => {
+                assert_eq!(component.value_status, "available_from_boundary_spec");
+            }
+            "prover" => assert_eq!(component.value_status, "requires_selected_prover"),
+            "proof_bytes" => assert_eq!(component.value_status, "requires_real_proof_bytes"),
+            "public_input_root" => {
+                assert_eq!(
+                    component.value_status,
+                    "requires_public_input_root_generation"
+                );
+            }
+            "claim_hash" | "decision" | "failure_code" => {
+                assert_eq!(
+                    component.value_status,
+                    "available_from_future_artifact_public_inputs"
+                );
+            }
+            other => panic!("unexpected component: {other}"),
+        }
+    }
+}
+
+#[test]
+fn proof_commitment_preimage_plan_rejects_commitment_generation_claims() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut plan = boundary_spec.to_proof_commitment_preimage_plan().unwrap();
+
+    plan.proof_commitment =
+        Some("0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef".to_string());
+    plan.commitment_generation_status = "generated".to_string();
+    plan.groth16_flow_unchanged = false;
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors.iter().any(|error| error
+            == "proof_commitment must remain absent until commitment generation exists"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "commitment_generation_status must be not_generated"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "groth16_flow_unchanged must be true"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn proof_commitment_preimage_plan_rejects_reordered_components() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut plan = boundary_spec.to_proof_commitment_preimage_plan().unwrap();
+
+    plan.ordered_components.swap(0, 1);
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "ordered_components[0] must be target_artifact_schema_version"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "ordered_components[1] must be solidity_abi_candidate"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn proof_commitment_preimage_plan_json_round_trips() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_proof_commitment_preimage_plan().unwrap();
+    let json = serde_json::to_string_pretty(&plan).unwrap();
+    let round_tripped: ProofCommitmentPreimagePlan = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, plan);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"proof-commitment-preimage-plan-v0\""));
+    assert!(json.contains("\"commitment_generation_status\": \"not_generated\""));
 }
