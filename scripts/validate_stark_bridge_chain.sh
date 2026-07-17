@@ -52,6 +52,7 @@ FEE_SCHEDULE_ROOT_INPUT="${TMP_DIR}/fee_schedule_root_input.json"
 FEE_SCHEDULE_ROOT_DIGEST_CANDIDATE="${TMP_DIR}/fee_schedule_root_digest_candidate.json"
 NULLIFIER_ROOT_TRANSITION_INPUT="${TMP_DIR}/nullifier_root_transition_input.json"
 NULLIFIER_ROOT_TRANSITION_DIGEST_CANDIDATE="${TMP_DIR}/nullifier_root_transition_digest_candidate.json"
+SOURCE_ROOT_AGGREGATION_PLAN="${TMP_DIR}/source_root_aggregation_plan.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -228,6 +229,16 @@ run_in_dir "Generate STARK nullifier root transition digest candidate" "stark-en
 
 run_in_dir "Validate STARK nullifier root transition digest candidate" "stark-engine" \
   cargo run --bin validate_source_root_digest_candidate -- "${NULLIFIER_ROOT_TRANSITION_DIGEST_CANDIDATE}"
+
+run_in_dir "Generate STARK source root aggregation plan" "stark-engine" \
+  cargo run --bin generate_source_root_aggregation_plan -- "${PUBLIC_INPUT_ROOT_DIGEST_CANDIDATE}" "${SOURCE_ROOT_AGGREGATION_PLAN}" \
+    "${CLAIM_SOURCE_ROOT_DIGEST_CANDIDATE}" \
+    "${ORACLE_FACTS_ROOT_DIGEST_CANDIDATE}" \
+    "${FEE_SCHEDULE_ROOT_DIGEST_CANDIDATE}" \
+    "${NULLIFIER_ROOT_TRANSITION_DIGEST_CANDIDATE}"
+
+run_in_dir "Validate STARK source root aggregation plan" "stark-engine" \
+  cargo run --bin validate_source_root_aggregation_plan -- "${SOURCE_ROOT_AGGREGATION_PLAN}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"

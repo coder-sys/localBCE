@@ -779,6 +779,39 @@ pub struct SourceRootDigestCandidate {
     pub notes: Vec<String>,
 }
 
+/// Planning-only aggregation of source-root digest candidates into the future
+/// `public_input_root` field set.
+///
+/// This does not recompute `public_input_root` and does not select production
+/// Merkle/hash semantics. It records how the current source-root candidates
+/// would bind to public-input fields once real root generation exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceRootAggregationPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub public_input_root_candidate: String,
+    pub public_input_root_candidate_status: String,
+    pub source_root_bindings: Vec<SourceRootAggregationBinding>,
+    pub expected_source_root_count: usize,
+    pub all_source_roots_bound: bool,
+    pub root_generation_status: String,
+    pub production_hash_selected: bool,
+    pub runtime_wiring_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceRootAggregationBinding {
+    pub position: usize,
+    pub source_root_kind: String,
+    pub public_input_fields: Vec<String>,
+    pub source_schema_version: String,
+    pub source_root_candidate: String,
+    pub binding_status: String,
+}
+
 /// Deterministic preimage plan for the future `proof_commitment`.
 ///
 /// This does not hash proof bytes and does not create a commitment. It locks
@@ -2009,6 +2042,234 @@ impl SourceRootDigestCandidate {
     }
 }
 
+impl SourceRootAggregationPlan {
+    pub const SCHEMA_VERSION: &'static str = "source-root-aggregation-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "public-input-root-digest-candidate-v0+source-root-digest-candidate-v0";
+    pub const PLAN_STATUS: &'static str = "planning_only_source_roots_bound_no_public_root_rewrite";
+    pub const PUBLIC_INPUT_ROOT_CANDIDATE_STATUS: &'static str =
+        "public_input_root_digest_candidate_preserved";
+    pub const BINDING_STATUS: &'static str = "source_root_candidate_bound_to_public_input_fields";
+    pub const ROOT_GENERATION_STATUS: &'static str = "not_generated_binding_plan_only";
+    pub const REQUIRED_SOURCE_ROOT_KINDS: [&'static str; 4] = [
+        "claim_source_root",
+        "oracle_facts_root",
+        "fee_schedule_root",
+        "nullifier_root_transition",
+    ];
+
+    pub fn from_candidates(
+        public_input_root: &PublicInputRootDigestCandidate,
+        source_roots: &[SourceRootDigestCandidate],
+    ) -> Result<Self, Vec<String>> {
+        public_input_root.validate()?;
+        let mut errors = Vec::new();
+
+        if source_roots.len() != Self::REQUIRED_SOURCE_ROOT_KINDS.len() {
+            errors.push(format!(
+                "source_roots must contain exactly {} candidates",
+                Self::REQUIRED_SOURCE_ROOT_KINDS.len()
+            ));
+        }
+
+        let mut bindings = Vec::with_capacity(Self::REQUIRED_SOURCE_ROOT_KINDS.len());
+        for (position, expected_kind) in Self::REQUIRED_SOURCE_ROOT_KINDS.iter().enumerate() {
+            let matches: Vec<&SourceRootDigestCandidate> = source_roots
+                .iter()
+                .filter(|candidate| candidate.source_root_kind == *expected_kind)
+                .collect();
+
+            match matches.as_slice() {
+                [candidate] => {
+                    if let Err(candidate_errors) = candidate.validate() {
+                        errors.extend(candidate_errors);
+                    }
+                    bindings.push(SourceRootAggregationBinding {
+                        position,
+                        source_root_kind: candidate.source_root_kind.clone(),
+                        public_input_fields: source_root_public_input_fields(expected_kind)
+                            .iter()
+                            .map(|field| (*field).to_string())
+                            .collect(),
+                        source_schema_version: candidate.source_schema_version.clone(),
+                        source_root_candidate: candidate.source_root_candidate.clone(),
+                        binding_status: Self::BINDING_STATUS.to_string(),
+                    });
+                }
+                [] => errors.push(format!("missing source root candidate: {expected_kind}")),
+                _ => errors.push(format!(
+                    "source root candidate must be unique: {expected_kind}"
+                )),
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            plan_status: Self::PLAN_STATUS.to_string(),
+            public_input_root_candidate: public_input_root.public_input_root_candidate.clone(),
+            public_input_root_candidate_status: Self::PUBLIC_INPUT_ROOT_CANDIDATE_STATUS
+                .to_string(),
+            expected_source_root_count: bindings.len(),
+            source_root_bindings: bindings,
+            all_source_roots_bound: true,
+            root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
+            production_hash_selected: false,
+            runtime_wiring_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This plan binds source-root digest candidates into the public-input-root field set."
+                    .to_string(),
+                "It preserves the existing public_input_root digest candidate and does not recompute it."
+                    .to_string(),
+                "Production hash/root semantics remain unselected.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.plan_status != Self::PLAN_STATUS {
+            errors.push(format!(
+                "plan_status must be {}, got {}",
+                Self::PLAN_STATUS,
+                self.plan_status
+            ));
+        }
+
+        validate_0x_32_byte_hex(
+            "public_input_root_candidate",
+            &self.public_input_root_candidate,
+            &mut errors,
+        );
+
+        if self.public_input_root_candidate_status != Self::PUBLIC_INPUT_ROOT_CANDIDATE_STATUS {
+            errors.push(format!(
+                "public_input_root_candidate_status must be {}",
+                Self::PUBLIC_INPUT_ROOT_CANDIDATE_STATUS
+            ));
+        }
+
+        if self.expected_source_root_count != Self::REQUIRED_SOURCE_ROOT_KINDS.len() {
+            errors.push(format!(
+                "expected_source_root_count must be {}",
+                Self::REQUIRED_SOURCE_ROOT_KINDS.len()
+            ));
+        }
+
+        if self.source_root_bindings.len() != Self::REQUIRED_SOURCE_ROOT_KINDS.len() {
+            errors.push(format!(
+                "source_root_bindings must contain exactly {} bindings",
+                Self::REQUIRED_SOURCE_ROOT_KINDS.len()
+            ));
+        }
+
+        for (position, expected_kind) in Self::REQUIRED_SOURCE_ROOT_KINDS.iter().enumerate() {
+            match self.source_root_bindings.get(position) {
+                Some(binding) => {
+                    if binding.position != position {
+                        errors.push(format!(
+                            "source_root_bindings[{position}].position must be {position}"
+                        ));
+                    }
+                    if binding.source_root_kind != *expected_kind {
+                        errors.push(format!(
+                            "source_root_bindings[{position}].source_root_kind must be {expected_kind}"
+                        ));
+                    }
+                    let expected_fields: Vec<String> =
+                        source_root_public_input_fields(expected_kind)
+                            .iter()
+                            .map(|field| (*field).to_string())
+                            .collect();
+                    if binding.public_input_fields != expected_fields {
+                        errors.push(format!(
+                            "source_root_bindings[{position}].public_input_fields must match {expected_kind}"
+                        ));
+                    }
+                    match expected_source_root_schema_version(expected_kind) {
+                        Some(expected_schema_version)
+                            if binding.source_schema_version == expected_schema_version => {}
+                        Some(expected_schema_version) => errors.push(format!(
+                            "source_root_bindings[{position}].source_schema_version must be {expected_schema_version}"
+                        )),
+                        None => errors.push(format!("unsupported source root kind: {expected_kind}")),
+                    }
+                    validate_0x_32_byte_hex(
+                        &format!("source_root_bindings[{position}].source_root_candidate"),
+                        &binding.source_root_candidate,
+                        &mut errors,
+                    );
+                    if binding.binding_status != Self::BINDING_STATUS {
+                        errors.push(format!(
+                            "source_root_bindings[{position}].binding_status must be {}",
+                            Self::BINDING_STATUS
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "source_root_bindings missing position {position}: {expected_kind}"
+                )),
+            }
+        }
+
+        if !self.all_source_roots_bound {
+            errors.push("all_source_roots_bound must be true".to_string());
+        }
+
+        if self.root_generation_status != Self::ROOT_GENERATION_STATUS {
+            errors.push(format!(
+                "root_generation_status must be {}",
+                Self::ROOT_GENERATION_STATUS
+            ));
+        }
+
+        if self.production_hash_selected {
+            errors.push("production_hash_selected must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ProofCommitmentPreimagePlan {
     pub const SCHEMA_VERSION: &'static str = "proof-commitment-preimage-plan-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
@@ -2477,6 +2738,16 @@ fn expected_source_root_schema_version(source_root_kind: &str) -> Option<&'stati
         "fee_schedule_root" => Some(FeeScheduleRootInput::SCHEMA_VERSION),
         "nullifier_root_transition" => Some(NullifierRootTransitionInput::SCHEMA_VERSION),
         _ => None,
+    }
+}
+
+fn source_root_public_input_fields(source_root_kind: &str) -> &'static [&'static str] {
+    match source_root_kind {
+        "claim_source_root" => &["claim_source_root"],
+        "oracle_facts_root" => &["oracle_facts_root"],
+        "fee_schedule_root" => &["fee_schedule_root"],
+        "nullifier_root_transition" => &["nullifier_root_before", "nullifier_root_after"],
+        _ => &[],
     }
 }
 

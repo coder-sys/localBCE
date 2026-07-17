@@ -262,6 +262,42 @@ generate_source_root_digest_candidate
 validate_source_root_digest_candidate
 ```
 
+## Source Root Aggregation Plan
+
+The source-root aggregation planning object is:
+
+```text
+SourceRootAggregationPlan
+```
+
+It binds the four source-root digest candidates into the future
+`public_input_root` field set:
+
+```text
+claim_source_root -> claim_source_root
+oracle_facts_root -> oracle_facts_root
+fee_schedule_root -> fee_schedule_root
+nullifier_root_transition -> nullifier_root_before, nullifier_root_after
+```
+
+This object preserves the existing `PublicInputRootDigestCandidate`; it does
+not recompute or replace it.
+
+The aggregation remains planning-only:
+
+- no production hash is selected
+- no Merkle tree is built
+- no real public input root is generated
+- no Solidity or runtime wiring is enabled
+- Groth16 remains the active runtime path
+
+The aggregation CLI pair is:
+
+```text
+generate_source_root_aggregation_plan
+validate_source_root_aggregation_plan
+```
+
 ## Proof Commitment Preimage Plan
 
 The next planning object is:
