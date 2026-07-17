@@ -100,13 +100,52 @@ it, and are included in the STARK smoke chain without generating a real proof:
 bash scripts/validate_stark_bridge_chain.sh
 ```
 
+## Real Artifact Boundary Spec
+
+The next planning object is:
+
+```text
+StarkProofArtifactV1BoundarySpec
+```
+
+It defines the exact fields required before a first real artifact can exist:
+
+- public inputs:
+  - `claim_hash`
+  - `decision`
+  - `failure_code`
+  - `public_input_root`
+  - `claim_source_root`
+  - `oracle_facts_root`
+  - `fee_schedule_root`
+  - `nullifier_root_before`
+  - `nullifier_root_after`
+  - `batch_root`
+- proof fields:
+  - `proof_bytes`
+  - `proof_commitment`
+  - `prover`
+- local verification fields:
+  - `verified`
+  - `verification_status`
+  - `verifier`
+
+The boundary spec is still planning-only. It does not generate roots, proof
+bytes, proof commitments, or local verification results.
+
+The boundary spec CLI pair is:
+
+```text
+generate_stark_proof_artifact_v1_boundary_spec
+validate_stark_proof_artifact_v1_boundary_spec
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to define the exact transition from this candidate
-artifact to a real proof artifact:
+The next safe Phase 8 step is to start filling this boundary from real
+pre-prover inputs, still without runtime wiring:
 
-- proof byte encoding
-- proof commitment encoding
-- public input root generation
-- local verifier result schema
-- deterministic approved/denied fixture proof requirements
+- deterministic public-input root assembly
+- deterministic proof commitment preimage rules
+- approved/denied fixture expectations
+- selected prover byte encoding

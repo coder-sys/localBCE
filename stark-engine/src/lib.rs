@@ -665,6 +665,34 @@ pub struct StarkProofArtifactLocalVerification {
     pub verifier: Option<String>,
 }
 
+/// Phase 8 schema boundary for the future real STARK proof artifact.
+///
+/// This is still not a proof artifact. It is a deterministic contract that
+/// names the fields, encodings, and source responsibilities the first real
+/// artifact must satisfy before runtime or Solidity verifier wiring.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkProofArtifactV1BoundarySpec {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub target_artifact_schema_version: String,
+    pub boundary_status: String,
+    pub required_public_inputs: Vec<StarkProofArtifactFieldRequirement>,
+    pub required_proof_fields: Vec<StarkProofArtifactFieldRequirement>,
+    pub required_local_verification_fields: Vec<StarkProofArtifactFieldRequirement>,
+    pub solidity_abi_candidate: String,
+    pub runtime_wiring_status: String,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkProofArtifactFieldRequirement {
+    pub field_name: String,
+    pub encoding: String,
+    pub source: String,
+    pub requirement_status: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -932,7 +960,9 @@ impl StarkProofArtifactV1Candidate {
             ("batch_root", &self.public_inputs.batch_root),
         ] {
             if value.is_some() {
-                errors.push(format!("{name} must remain absent until root generation exists"));
+                errors.push(format!(
+                    "{name} must remain absent until root generation exists"
+                ));
             }
         }
 
@@ -1007,6 +1037,263 @@ impl StarkProofArtifactV1Candidate {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+
+    pub fn to_v1_boundary_spec(&self) -> Result<StarkProofArtifactV1BoundarySpec, Vec<String>> {
+        self.validate()?;
+
+        Ok(StarkProofArtifactV1BoundarySpec {
+            schema_version: StarkProofArtifactV1BoundarySpec::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            target_artifact_schema_version: "stark-proof-artifact-v1".to_string(),
+            boundary_status: StarkProofArtifactV1BoundarySpec::BOUNDARY_STATUS.to_string(),
+            required_public_inputs: vec![
+                required_field(
+                    "claim_hash",
+                    "0x_prefixed_32_byte_hex",
+                    "stark_bridge_input.public_inputs.claim_hash",
+                ),
+                required_field(
+                    "decision",
+                    "u8_boolean_0_or_1",
+                    "stark_bridge_input.public_inputs.decision",
+                ),
+                required_field(
+                    "failure_code",
+                    "u32",
+                    "stark_bridge_input.public_inputs.failure_code",
+                ),
+                required_field(
+                    "public_input_root",
+                    "0x_prefixed_32_byte_hex",
+                    "root_generation.public_inputs",
+                ),
+                required_field(
+                    "claim_source_root",
+                    "0x_prefixed_32_byte_hex",
+                    "claim_source_root_input",
+                ),
+                required_field(
+                    "oracle_facts_root",
+                    "0x_prefixed_32_byte_hex",
+                    "oracle_facts_root_input",
+                ),
+                required_field(
+                    "fee_schedule_root",
+                    "0x_prefixed_32_byte_hex",
+                    "fee_schedule_root_input",
+                ),
+                required_field(
+                    "nullifier_root_before",
+                    "0x_prefixed_32_byte_hex",
+                    "nullifier_root_transition_input",
+                ),
+                required_field(
+                    "nullifier_root_after",
+                    "0x_prefixed_32_byte_hex",
+                    "nullifier_root_transition_input",
+                ),
+                required_field(
+                    "batch_root",
+                    "0x_prefixed_32_byte_hex",
+                    "batch_root_generation",
+                ),
+            ],
+            required_proof_fields: vec![
+                required_field("proof_bytes", "0x_prefixed_bytes", "selected_stark_prover"),
+                required_field(
+                    "proof_commitment",
+                    "0x_prefixed_32_byte_hex",
+                    "hash_of_canonical_proof_bytes",
+                ),
+                required_field("prover", "string_identifier", "selected_stark_prover"),
+            ],
+            required_local_verification_fields: vec![
+                required_field(
+                    "verified",
+                    "bool_true_after_local_verification",
+                    "selected_stark_verifier",
+                ),
+                required_field(
+                    "verification_status",
+                    "verified_real_stark_proof",
+                    "selected_stark_verifier",
+                ),
+                required_field("verifier", "string_identifier", "selected_stark_verifier"),
+            ],
+            solidity_abi_candidate: Self::SOLIDITY_ABI_CANDIDATE.to_string(),
+            runtime_wiring_status: "not_wired_boundary_only".to_string(),
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This boundary spec defines the first real STARK proof artifact contract."
+                    .to_string(),
+                "It does not contain proof bytes, roots, or local verification output.".to_string(),
+                "All listed root fields must be generated before any runtime wiring.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+}
+
+impl StarkProofArtifactV1BoundarySpec {
+    pub const SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-candidate";
+    pub const TARGET_ARTIFACT_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1";
+    pub const BOUNDARY_STATUS: &'static str = "schema_boundary_only_no_real_proof";
+    pub const REQUIRED_PUBLIC_INPUT_FIELDS: [&'static str; 10] = [
+        "claim_hash",
+        "decision",
+        "failure_code",
+        "public_input_root",
+        "claim_source_root",
+        "oracle_facts_root",
+        "fee_schedule_root",
+        "nullifier_root_before",
+        "nullifier_root_after",
+        "batch_root",
+    ];
+    pub const REQUIRED_PROOF_FIELDS: [&'static str; 3] =
+        ["proof_bytes", "proof_commitment", "prover"];
+    pub const REQUIRED_LOCAL_VERIFICATION_FIELDS: [&'static str; 3] =
+        ["verified", "verification_status", "verifier"];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.target_artifact_schema_version != Self::TARGET_ARTIFACT_SCHEMA_VERSION {
+            errors.push(format!(
+                "target_artifact_schema_version must be {}, got {}",
+                Self::TARGET_ARTIFACT_SCHEMA_VERSION,
+                self.target_artifact_schema_version
+            ));
+        }
+
+        if self.boundary_status != Self::BOUNDARY_STATUS {
+            errors.push(format!(
+                "boundary_status must be {}, got {}",
+                Self::BOUNDARY_STATUS,
+                self.boundary_status
+            ));
+        }
+
+        validate_required_field_names(
+            "required_public_inputs",
+            &self.required_public_inputs,
+            &Self::REQUIRED_PUBLIC_INPUT_FIELDS,
+            &mut errors,
+        );
+        validate_required_field_names(
+            "required_proof_fields",
+            &self.required_proof_fields,
+            &Self::REQUIRED_PROOF_FIELDS,
+            &mut errors,
+        );
+        validate_required_field_names(
+            "required_local_verification_fields",
+            &self.required_local_verification_fields,
+            &Self::REQUIRED_LOCAL_VERIFICATION_FIELDS,
+            &mut errors,
+        );
+
+        for requirement in self
+            .required_public_inputs
+            .iter()
+            .chain(self.required_proof_fields.iter())
+            .chain(self.required_local_verification_fields.iter())
+        {
+            if requirement.encoding.trim().is_empty() {
+                errors.push(format!(
+                    "{}.encoding must be present",
+                    requirement.field_name
+                ));
+            }
+            if requirement.source.trim().is_empty() {
+                errors.push(format!("{}.source must be present", requirement.field_name));
+            }
+            if requirement.requirement_status != "required_before_runtime_wiring" {
+                errors.push(format!(
+                    "{}.requirement_status must be required_before_runtime_wiring",
+                    requirement.field_name
+                ));
+            }
+        }
+
+        if self.solidity_abi_candidate != StarkProofArtifactV1Candidate::SOLIDITY_ABI_CANDIDATE {
+            errors.push(format!(
+                "solidity_abi_candidate must be {}",
+                StarkProofArtifactV1Candidate::SOLIDITY_ABI_CANDIDATE
+            ));
+        }
+
+        if self.runtime_wiring_status != "not_wired_boundary_only" {
+            errors.push("runtime_wiring_status must be not_wired_boundary_only".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn required_field(
+    field_name: &str,
+    encoding: &str,
+    source: &str,
+) -> StarkProofArtifactFieldRequirement {
+    StarkProofArtifactFieldRequirement {
+        field_name: field_name.to_string(),
+        encoding: encoding.to_string(),
+        source: source.to_string(),
+        requirement_status: "required_before_runtime_wiring".to_string(),
+    }
+}
+
+fn validate_required_field_names(
+    collection_name: &str,
+    requirements: &[StarkProofArtifactFieldRequirement],
+    expected_names: &[&str],
+    errors: &mut Vec<String>,
+) {
+    if requirements.len() != expected_names.len() {
+        errors.push(format!(
+            "{collection_name} must contain exactly {} fields",
+            expected_names.len()
+        ));
+    }
+
+    for expected_name in expected_names {
+        if !requirements
+            .iter()
+            .any(|requirement| requirement.field_name == *expected_name)
+        {
+            errors.push(format!("{collection_name} missing field: {expected_name}"));
         }
     }
 }
@@ -4556,9 +4843,7 @@ pub mod winterfell_poc_adapter {
             }
 
             if self.interface_name != "IStarkClaimsVerifierV1Candidate" {
-                errors.push(
-                    "interface_name must be IStarkClaimsVerifierV1Candidate".to_string(),
-                );
+                errors.push("interface_name must be IStarkClaimsVerifierV1Candidate".to_string());
             }
 
             if !self.function_signature.contains("verifyStarkClaim(") {
@@ -4649,9 +4934,8 @@ pub mod winterfell_poc_adapter {
             }
 
             if !self.function_signature.contains("verifyStarkClaim(") {
-                errors.push(
-                    "function_signature must use V1 candidate verifyStarkClaim".to_string(),
-                );
+                errors
+                    .push("function_signature must use V1 candidate verifyStarkClaim".to_string());
             }
 
             if self.solidity_inputs.len() != Self::V1_CANDIDATE_INPUTS.len() {
@@ -4715,10 +4999,15 @@ pub mod winterfell_poc_adapter {
                 }
             }
 
-            match self.solidity_inputs.iter().find(|input| input.name == "proof") {
+            match self
+                .solidity_inputs
+                .iter()
+                .find(|input| input.name == "proof")
+            {
                 Some(input) => {
                     if input.value_preview != "unavailable_in_preview" {
-                        errors.push("proof value_preview must be unavailable_in_preview".to_string());
+                        errors
+                            .push("proof value_preview must be unavailable_in_preview".to_string());
                     }
                     if input.status != "requires_real_verifier_artifact" {
                         errors.push(

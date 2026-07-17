@@ -1,4 +1,6 @@
-use stark_engine::{StarkBridgeInput, StarkProofArtifactV1Candidate};
+use stark_engine::{
+    StarkBridgeInput, StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
+};
 
 fn sample_bridge_input_json(decision: u8, failure_code: u32) -> String {
     format!(
@@ -123,7 +125,10 @@ fn phase8_candidate_keeps_roots_and_proof_absent_until_real_generation() {
     let input = sample_bridge_input(1, 0);
     let artifact = input.to_proof_artifact_v1_candidate().unwrap();
 
-    assert_eq!(artifact.public_inputs.root_status, "requires_root_generation");
+    assert_eq!(
+        artifact.public_inputs.root_status,
+        "requires_root_generation"
+    );
     assert_eq!(artifact.public_inputs.public_input_root, None);
     assert_eq!(artifact.public_inputs.claim_source_root, None);
     assert_eq!(artifact.public_inputs.oracle_facts_root, None);
@@ -158,7 +163,9 @@ fn phase8_candidate_rejects_runtime_like_artifacts() {
 
     let errors = artifact.validate().unwrap_err();
     assert!(
-        errors.iter().any(|error| error == "runtime_wired must remain false"),
+        errors
+            .iter()
+            .any(|error| error == "runtime_wired must remain false"),
         "{errors:?}"
     );
     assert!(
@@ -209,4 +216,167 @@ fn phase8_candidate_json_round_trips() {
     assert_eq!(round_tripped.validate(), Ok(()));
     assert!(json.contains("\"schema_version\": \"stark-proof-artifact-v1-candidate\""));
     assert!(json.contains("\"solidity_abi_candidate\": \"IStarkClaimsVerifierV1Candidate\""));
+}
+
+#[test]
+fn phase8_candidate_generates_real_artifact_boundary_spec() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+
+    assert_eq!(boundary_spec.validate(), Ok(()));
+    assert_eq!(
+        boundary_spec.schema_version,
+        StarkProofArtifactV1BoundarySpec::SCHEMA_VERSION
+    );
+    assert_eq!(
+        boundary_spec.source_schema_version,
+        StarkProofArtifactV1Candidate::SCHEMA_VERSION
+    );
+    assert_eq!(
+        boundary_spec.target_artifact_schema_version,
+        StarkProofArtifactV1BoundarySpec::TARGET_ARTIFACT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        boundary_spec.boundary_status,
+        StarkProofArtifactV1BoundarySpec::BOUNDARY_STATUS
+    );
+    assert_eq!(boundary_spec.required_public_inputs.len(), 10);
+    assert_eq!(boundary_spec.required_proof_fields.len(), 3);
+    assert_eq!(boundary_spec.required_local_verification_fields.len(), 3);
+    assert_eq!(
+        boundary_spec.solidity_abi_candidate,
+        StarkProofArtifactV1Candidate::SOLIDITY_ABI_CANDIDATE
+    );
+    assert_eq!(
+        boundary_spec.runtime_wiring_status,
+        "not_wired_boundary_only"
+    );
+    assert!(boundary_spec.groth16_flow_unchanged);
+}
+
+#[test]
+fn phase8_boundary_spec_requires_all_real_artifact_public_inputs() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let public_input_names: Vec<&str> = boundary_spec
+        .required_public_inputs
+        .iter()
+        .map(|requirement| requirement.field_name.as_str())
+        .collect();
+
+    assert_eq!(
+        public_input_names,
+        vec![
+            "claim_hash",
+            "decision",
+            "failure_code",
+            "public_input_root",
+            "claim_source_root",
+            "oracle_facts_root",
+            "fee_schedule_root",
+            "nullifier_root_before",
+            "nullifier_root_after",
+            "batch_root",
+        ]
+    );
+
+    for requirement in &boundary_spec.required_public_inputs {
+        assert!(!requirement.encoding.is_empty());
+        assert!(!requirement.source.is_empty());
+        assert_eq!(
+            requirement.requirement_status,
+            "required_before_runtime_wiring"
+        );
+    }
+}
+
+#[test]
+fn phase8_boundary_spec_requires_proof_and_local_verification_fields() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let proof_field_names: Vec<&str> = boundary_spec
+        .required_proof_fields
+        .iter()
+        .map(|requirement| requirement.field_name.as_str())
+        .collect();
+    let local_verification_names: Vec<&str> = boundary_spec
+        .required_local_verification_fields
+        .iter()
+        .map(|requirement| requirement.field_name.as_str())
+        .collect();
+
+    assert_eq!(
+        proof_field_names,
+        vec!["proof_bytes", "proof_commitment", "prover"]
+    );
+    assert_eq!(
+        local_verification_names,
+        vec!["verified", "verification_status", "verifier"]
+    );
+}
+
+#[test]
+fn phase8_boundary_spec_rejects_runtime_wiring_claims() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let mut boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+
+    boundary_spec.runtime_wiring_status = "wired".to_string();
+    boundary_spec.groth16_flow_unchanged = false;
+
+    let errors = boundary_spec.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_status must be not_wired_boundary_only"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "groth16_flow_unchanged must be true"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn phase8_boundary_spec_rejects_missing_required_fields() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let mut boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+
+    boundary_spec
+        .required_public_inputs
+        .retain(|requirement| requirement.field_name != "batch_root");
+    boundary_spec.required_proof_fields[0].requirement_status = "optional".to_string();
+
+    let errors = boundary_spec.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "required_public_inputs missing field: batch_root"),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|error| error
+            == "proof_bytes.requirement_status must be required_before_runtime_wiring"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn phase8_boundary_spec_json_round_trips() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let json = serde_json::to_string_pretty(&boundary_spec).unwrap();
+    let round_tripped: StarkProofArtifactV1BoundarySpec = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, boundary_spec);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"stark-proof-artifact-v1-boundary-spec\""));
+    assert!(json.contains("\"target_artifact_schema_version\": \"stark-proof-artifact-v1\""));
 }

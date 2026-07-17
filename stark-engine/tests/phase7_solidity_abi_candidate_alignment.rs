@@ -34,10 +34,7 @@ fn solidity_interface_plan_matches_v1_candidate_public_inputs() {
 
     assert_eq!(plan.validate(), Ok(()));
     assert_eq!(plan.validate_v1_candidate_alignment(), Ok(()));
-    assert_eq!(
-        plan.interface_name,
-        "IStarkClaimsVerifierV1Candidate"
-    );
+    assert_eq!(plan.interface_name, "IStarkClaimsVerifierV1Candidate");
     assert!(plan.function_signature.contains("verifyStarkClaim("));
 
     assert_eq!(
