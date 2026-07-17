@@ -425,9 +425,52 @@ generate_selected_prover_byte_encoding_plan
 validate_selected_prover_byte_encoding_plan
 ```
 
+## Phase 8 Pre-Prover Bundle Checkpoint
+
+The current Phase 8 bundle checkpoint is:
+
+```text
+Phase8PreProverBundleCheckpoint
+```
+
+It validates the current pre-prover boundary artifacts together:
+
+- `StarkProofArtifactV1BoundarySpec`
+- `PublicInputRootDigestCandidate`
+- `SourceRootAggregationPlan`
+- `ProofCommitmentPreimagePlan`
+- `ProofArtifactFixtureExpectationSet`
+- `SelectedProverByteEncodingPlan`
+
+The checkpoint confirms:
+
+```text
+all_artifacts_validated = true
+all_source_roots_bound = true
+production_hash_selected = false
+runtime_wiring_allowed = false
+proof_generation_enabled = false
+groth16_flow_unchanged = true
+```
+
+This is still not a real STARK proof and not runtime wiring. It is the
+pre-prover handoff manifest that shows the candidate roots, byte encoding,
+fixture expectations, and proof-commitment plan are internally coherent before
+real prover implementation starts.
+
+The checkpoint CLI pair is:
+
+```text
+generate_phase8_pre_prover_bundle_checkpoint
+validate_phase8_pre_prover_bundle_checkpoint
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to start replacing the root placeholders with
-deterministic pre-root commitments, still without runtime wiring:
+The next safe Phase 8 step is to turn the checkpoint into a real prover
+implementation checklist, still without runtime wiring:
 
-- claim/oracle/fee/nullifier source-root digest candidates
+- choose the first real prover target and proof byte boundary
+- replace SHA-256 candidate digests with the selected production hash/root plan
+- generate a real local proof artifact behind a test-only path
+- keep Groth16 active until local STARK verification passes end to end

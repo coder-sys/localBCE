@@ -53,6 +53,7 @@ FEE_SCHEDULE_ROOT_DIGEST_CANDIDATE="${TMP_DIR}/fee_schedule_root_digest_candidat
 NULLIFIER_ROOT_TRANSITION_INPUT="${TMP_DIR}/nullifier_root_transition_input.json"
 NULLIFIER_ROOT_TRANSITION_DIGEST_CANDIDATE="${TMP_DIR}/nullifier_root_transition_digest_candidate.json"
 SOURCE_ROOT_AGGREGATION_PLAN="${TMP_DIR}/source_root_aggregation_plan.json"
+PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT="${TMP_DIR}/phase8_pre_prover_bundle_checkpoint.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -239,6 +240,19 @@ run_in_dir "Generate STARK source root aggregation plan" "stark-engine" \
 
 run_in_dir "Validate STARK source root aggregation plan" "stark-engine" \
   cargo run --bin validate_source_root_aggregation_plan -- "${SOURCE_ROOT_AGGREGATION_PLAN}"
+
+run_in_dir "Generate Phase 8 pre-prover bundle checkpoint" "stark-engine" \
+  cargo run --bin generate_phase8_pre_prover_bundle_checkpoint -- \
+    "${STARK_PROOF_ARTIFACT_V1_BOUNDARY_SPEC}" \
+    "${PUBLIC_INPUT_ROOT_DIGEST_CANDIDATE}" \
+    "${SOURCE_ROOT_AGGREGATION_PLAN}" \
+    "${PROOF_COMMITMENT_PREIMAGE_PLAN}" \
+    "${PROOF_ARTIFACT_FIXTURE_EXPECTATIONS}" \
+    "${SELECTED_PROVER_BYTE_ENCODING_PLAN}" \
+    "${PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT}"
+
+run_in_dir "Validate Phase 8 pre-prover bundle checkpoint" "stark-engine" \
+  cargo run --bin validate_phase8_pre_prover_bundle_checkpoint -- "${PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"

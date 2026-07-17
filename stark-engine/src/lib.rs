@@ -891,6 +891,37 @@ pub struct SelectedProverByteEncodingPlan {
     pub notes: Vec<String>,
 }
 
+/// Phase 8 checkpoint bundle for all pre-prover boundary artifacts.
+///
+/// This is a planning-only manifest. It does not generate a proof, does not
+/// select production root/hash semantics, and does not allow runtime wiring.
+/// Its job is to prove the current pre-prover artifacts are internally
+/// coherent before real prover work begins.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8PreProverBundleCheckpoint {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub checkpoint_status: String,
+    pub artifacts: Vec<Phase8CheckpointArtifact>,
+    pub expected_artifact_count: usize,
+    pub all_artifacts_validated: bool,
+    pub all_source_roots_bound: bool,
+    pub production_hash_selected: bool,
+    pub runtime_wiring_allowed: bool,
+    pub proof_generation_enabled: bool,
+    pub groth16_flow_unchanged: bool,
+    pub recommended_next_steps: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8CheckpointArtifact {
+    pub artifact_id: String,
+    pub schema_version: String,
+    pub status: String,
+    pub validation_status: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -2690,6 +2721,269 @@ impl SelectedProverByteEncodingPlan {
     }
 }
 
+impl Phase8PreProverBundleCheckpoint {
+    pub const SCHEMA_VERSION: &'static str = "phase8-pre-prover-bundle-checkpoint-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "stark-proof-artifact-v1-boundary-spec+phase8-planning-artifacts";
+    pub const CHECKPOINT_STATUS: &'static str =
+        "pre_prover_bundle_validated_planning_only_no_real_proof";
+    pub const EXPECTED_ARTIFACT_IDS: [&'static str; 6] = [
+        "stark_proof_artifact_v1_boundary_spec",
+        "public_input_root_digest_candidate",
+        "source_root_aggregation_plan",
+        "proof_commitment_preimage_plan",
+        "proof_artifact_fixture_expectations",
+        "selected_prover_byte_encoding_plan",
+    ];
+
+    pub fn from_artifacts(
+        boundary_spec: &StarkProofArtifactV1BoundarySpec,
+        public_input_root_digest_candidate: &PublicInputRootDigestCandidate,
+        source_root_aggregation_plan: &SourceRootAggregationPlan,
+        proof_commitment_preimage_plan: &ProofCommitmentPreimagePlan,
+        proof_artifact_fixture_expectations: &ProofArtifactFixtureExpectationSet,
+        selected_prover_byte_encoding_plan: &SelectedProverByteEncodingPlan,
+    ) -> Result<Self, Vec<String>> {
+        let mut errors = Vec::new();
+
+        collect_validation_errors(
+            "stark_proof_artifact_v1_boundary_spec",
+            boundary_spec.validate(),
+            &mut errors,
+        );
+        collect_validation_errors(
+            "public_input_root_digest_candidate",
+            public_input_root_digest_candidate.validate(),
+            &mut errors,
+        );
+        collect_validation_errors(
+            "source_root_aggregation_plan",
+            source_root_aggregation_plan.validate(),
+            &mut errors,
+        );
+        collect_validation_errors(
+            "proof_commitment_preimage_plan",
+            proof_commitment_preimage_plan.validate(),
+            &mut errors,
+        );
+        collect_validation_errors(
+            "proof_artifact_fixture_expectations",
+            proof_artifact_fixture_expectations.validate(),
+            &mut errors,
+        );
+        collect_validation_errors(
+            "selected_prover_byte_encoding_plan",
+            selected_prover_byte_encoding_plan.validate(),
+            &mut errors,
+        );
+
+        if public_input_root_digest_candidate.public_input_root_candidate
+            != source_root_aggregation_plan.public_input_root_candidate
+        {
+            errors.push(
+                "public_input_root_digest_candidate must match source_root_aggregation_plan"
+                    .to_string(),
+            );
+        }
+
+        if proof_commitment_preimage_plan.source_schema_version != boundary_spec.schema_version {
+            errors.push(
+                "proof_commitment_preimage_plan must be derived from the boundary spec".to_string(),
+            );
+        }
+
+        if proof_artifact_fixture_expectations.source_schema_version != boundary_spec.schema_version
+        {
+            errors.push(
+                "proof_artifact_fixture_expectations must be derived from the boundary spec"
+                    .to_string(),
+            );
+        }
+
+        if selected_prover_byte_encoding_plan.source_schema_version != boundary_spec.schema_version
+        {
+            errors.push(
+                "selected_prover_byte_encoding_plan must be derived from the boundary spec"
+                    .to_string(),
+            );
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            checkpoint_status: Self::CHECKPOINT_STATUS.to_string(),
+            artifacts: vec![
+                Phase8CheckpointArtifact::new(
+                    "stark_proof_artifact_v1_boundary_spec",
+                    &boundary_spec.schema_version,
+                    &boundary_spec.boundary_status,
+                ),
+                Phase8CheckpointArtifact::new(
+                    "public_input_root_digest_candidate",
+                    &public_input_root_digest_candidate.schema_version,
+                    &public_input_root_digest_candidate.candidate_status,
+                ),
+                Phase8CheckpointArtifact::new(
+                    "source_root_aggregation_plan",
+                    &source_root_aggregation_plan.schema_version,
+                    &source_root_aggregation_plan.plan_status,
+                ),
+                Phase8CheckpointArtifact::new(
+                    "proof_commitment_preimage_plan",
+                    &proof_commitment_preimage_plan.schema_version,
+                    &proof_commitment_preimage_plan.plan_status,
+                ),
+                Phase8CheckpointArtifact::new(
+                    "proof_artifact_fixture_expectations",
+                    &proof_artifact_fixture_expectations.schema_version,
+                    &proof_artifact_fixture_expectations.expectation_set_status,
+                ),
+                Phase8CheckpointArtifact::new(
+                    "selected_prover_byte_encoding_plan",
+                    &selected_prover_byte_encoding_plan.schema_version,
+                    &selected_prover_byte_encoding_plan.plan_status,
+                ),
+            ],
+            expected_artifact_count: Self::EXPECTED_ARTIFACT_IDS.len(),
+            all_artifacts_validated: true,
+            all_source_roots_bound: source_root_aggregation_plan.all_source_roots_bound,
+            production_hash_selected: false,
+            runtime_wiring_allowed: false,
+            proof_generation_enabled: false,
+            groth16_flow_unchanged: true,
+            recommended_next_steps: vec![
+                "Select production root/hash semantics before replacing candidate digests.".to_string(),
+                "Generate real prover witness data only after the source-root and public-input contracts are frozen.".to_string(),
+                "Replace planning-only proof bytes and proof commitment placeholders with real prover output.".to_string(),
+                "Keep Groth16 active until local STARK verification and settlement adapter tests pass with real artifacts.".to_string(),
+            ],
+            notes: vec![
+                "This checkpoint validates Phase 8 pre-prover planning artifacts as a bundle.".to_string(),
+                "It does not generate a STARK proof, public input root, source root, or proof commitment.".to_string(),
+                "It does not permit runtime or on-chain wiring.".to_string(),
+                "The active Groth16 workflow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.checkpoint_status != Self::CHECKPOINT_STATUS {
+            errors.push(format!(
+                "checkpoint_status must be {}, got {}",
+                Self::CHECKPOINT_STATUS,
+                self.checkpoint_status
+            ));
+        }
+
+        if self.expected_artifact_count != Self::EXPECTED_ARTIFACT_IDS.len() {
+            errors.push(format!(
+                "expected_artifact_count must be {}",
+                Self::EXPECTED_ARTIFACT_IDS.len()
+            ));
+        }
+
+        if self.artifacts.len() != Self::EXPECTED_ARTIFACT_IDS.len() {
+            errors.push(format!(
+                "artifacts must contain exactly {} entries",
+                Self::EXPECTED_ARTIFACT_IDS.len()
+            ));
+        }
+
+        for (position, expected_id) in Self::EXPECTED_ARTIFACT_IDS.iter().enumerate() {
+            match self.artifacts.get(position) {
+                Some(artifact) => {
+                    if artifact.artifact_id != *expected_id {
+                        errors.push(format!(
+                            "artifacts[{position}].artifact_id must be {expected_id}"
+                        ));
+                    }
+                    if artifact.schema_version.trim().is_empty() {
+                        errors.push(format!("{expected_id}.schema_version must be present"));
+                    }
+                    if artifact.status.trim().is_empty() {
+                        errors.push(format!("{expected_id}.status must be present"));
+                    }
+                    if artifact.validation_status != "validated" {
+                        errors.push(format!("{expected_id}.validation_status must be validated"));
+                    }
+                }
+                None => errors.push(format!("missing checkpoint artifact: {expected_id}")),
+            }
+        }
+
+        if !self.all_artifacts_validated {
+            errors.push("all_artifacts_validated must be true".to_string());
+        }
+
+        if !self.all_source_roots_bound {
+            errors.push("all_source_roots_bound must be true".to_string());
+        }
+
+        if self.production_hash_selected {
+            errors.push("production_hash_selected must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.proof_generation_enabled {
+            errors.push("proof_generation_enabled must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.recommended_next_steps.is_empty() {
+            errors.push("recommended_next_steps must be non-empty".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl Phase8CheckpointArtifact {
+    fn new(artifact_id: &str, schema_version: &str, status: &str) -> Self {
+        Self {
+            artifact_id: artifact_id.to_string(),
+            schema_version: schema_version.to_string(),
+            status: status.to_string(),
+            validation_status: "validated".to_string(),
+        }
+    }
+}
+
 fn validate_fixture_dependency_status(
     fixture_id: &str,
     field_name: &str,
@@ -2701,6 +2995,20 @@ fn validate_fixture_dependency_status(
             "{fixture_id}.{field_name} must be {}",
             ProofArtifactFixtureExpectation::REQUIRED_DEPENDENCY_STATUS
         ));
+    }
+}
+
+fn collect_validation_errors(
+    artifact_id: &str,
+    result: Result<(), Vec<String>>,
+    errors: &mut Vec<String>,
+) {
+    if let Err(validation_errors) = result {
+        errors.extend(
+            validation_errors
+                .into_iter()
+                .map(|error| format!("{artifact_id}: {error}")),
+        );
     }
 }
 
