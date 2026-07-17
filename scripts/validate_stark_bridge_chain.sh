@@ -37,6 +37,7 @@ run_in_dir() {
 }
 
 BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
+STARK_PROOF_ARTIFACT_V1_CANDIDATE="${TMP_DIR}/stark_proof_artifact_v1_candidate.json"
 CLAIM_SOURCE_ROOT_INPUT="${TMP_DIR}/claim_source_root_input.json"
 ORACLE_FACTS_ROOT_INPUT="${TMP_DIR}/oracle_facts_root_input.json"
 FEE_SCHEDULE_ROOT_INPUT="${TMP_DIR}/fee_schedule_root_input.json"
@@ -67,6 +68,12 @@ mv "${ROOT_DIR}/rust-engine/stark_bridge_input.json" "${BRIDGE_INPUT}"
 
 run_in_dir "Validate STARK bridge input" "stark-engine" \
   cargo run --bin validate_bridge_input -- "${BRIDGE_INPUT}"
+
+run_in_dir "Generate STARK proof artifact V1 candidate" "stark-engine" \
+  cargo run --bin generate_stark_proof_artifact_v1_candidate -- "${BRIDGE_INPUT}" "${STARK_PROOF_ARTIFACT_V1_CANDIDATE}"
+
+run_in_dir "Validate STARK proof artifact V1 candidate" "stark-engine" \
+  cargo run --bin validate_stark_proof_artifact_v1_candidate -- "${STARK_PROOF_ARTIFACT_V1_CANDIDATE}"
 
 run_in_dir "Generate Winterfell witness candidate" "stark-engine" \
   cargo run --bin generate_winterfell_witness_candidate -- "${BRIDGE_INPUT}" "${WINTERFELL_WITNESS_CANDIDATE}"

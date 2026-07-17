@@ -84,15 +84,29 @@ The tests cover:
 - decision/failure-code consistency
 - JSON round-trip stability
 
-## Next Safe Step
+## CLI Commands
 
-The next safe Phase 8 step is a CLI pair:
+The Phase 8 candidate CLI pair is:
 
 ```text
 generate_stark_proof_artifact_v1_candidate
 validate_stark_proof_artifact_v1_candidate
 ```
 
-Those commands should read `stark_bridge_input.json`, write the candidate JSON,
-validate it, and add it to the STARK smoke chain without generating a real
-proof.
+The commands read `stark_bridge_input.json`, write the candidate JSON, validate
+it, and are included in the STARK smoke chain without generating a real proof:
+
+```bash
+bash scripts/validate_stark_bridge_chain.sh
+```
+
+## Next Safe Step
+
+The next safe Phase 8 step is to define the exact transition from this candidate
+artifact to a real proof artifact:
+
+- proof byte encoding
+- proof commitment encoding
+- public input root generation
+- local verifier result schema
+- deterministic approved/denied fixture proof requirements
