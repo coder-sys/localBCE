@@ -214,10 +214,48 @@ generate_proof_commitment_preimage_plan
 validate_proof_commitment_preimage_plan
 ```
 
+## Proof Artifact Fixture Expectations
+
+The next planning object is:
+
+```text
+ProofArtifactFixtureExpectationSet
+```
+
+It defines the minimum approved and denied fixture shapes the first real STARK
+proof artifact must satisfy before runtime wiring:
+
+- `approved_claim`
+  - `decision = 1`
+  - `failure_code = 0`
+- `denied_claim`
+  - `decision = 0`
+  - `failure_code != 0`
+
+Both fixture shapes require these dependencies before runtime wiring:
+
+- generated public input root
+- real proof bytes
+- generated proof commitment
+- local verification result
+
+The expectation set keeps:
+
+```text
+runtime_wiring_allowed = false
+groth16_flow_unchanged = true
+```
+
+The proof artifact fixture expectation CLI pair is:
+
+```text
+generate_proof_artifact_fixture_expectations
+validate_proof_artifact_fixture_expectations
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to start replacing the root placeholders with
 deterministic pre-root commitments, still without runtime wiring:
 
-- approved/denied fixture expectations
 - selected prover byte encoding

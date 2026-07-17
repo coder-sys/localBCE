@@ -751,6 +751,33 @@ pub struct ProofCommitmentPreimageComponent {
     pub value_status: String,
 }
 
+/// Fixture expectations for the first real STARK proof artifact.
+///
+/// This is still planning-only. It locks the approved/denied shapes that a
+/// future real prover artifact must satisfy before local verification,
+/// Solidity verifier wiring, or ClaimsRegistry adapter wiring can be enabled.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProofArtifactFixtureExpectationSet {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub expectation_set_status: String,
+    pub expected_fixtures: Vec<ProofArtifactFixtureExpectation>,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProofArtifactFixtureExpectation {
+    pub fixture_id: String,
+    pub decision: u8,
+    pub failure_code: u32,
+    pub required_public_input_root_status: String,
+    pub required_proof_bytes_status: String,
+    pub required_proof_commitment_status: String,
+    pub required_local_verification_status: String,
+    pub runtime_wiring_allowed: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1410,6 +1437,32 @@ impl StarkProofArtifactV1BoundarySpec {
             ],
         })
     }
+
+    pub fn to_fixture_expectation_set(
+        &self,
+    ) -> Result<ProofArtifactFixtureExpectationSet, Vec<String>> {
+        self.validate()?;
+
+        Ok(ProofArtifactFixtureExpectationSet {
+            schema_version: ProofArtifactFixtureExpectationSet::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            expectation_set_status: ProofArtifactFixtureExpectationSet::EXPECTATION_SET_STATUS
+                .to_string(),
+            expected_fixtures: vec![
+                ProofArtifactFixtureExpectation::approved_claim(),
+                ProofArtifactFixtureExpectation::denied_claim(),
+            ],
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "These fixture expectations define approved and denied shapes for future real STARK proof artifacts."
+                    .to_string(),
+                "They require roots, proof bytes, proof commitments, and local verification before runtime wiring."
+                    .to_string(),
+                "They do not generate a real proof and do not replace the active Groth16 flow."
+                    .to_string(),
+            ],
+        })
+    }
 }
 
 impl PublicInputRootAssemblyPlan {
@@ -1674,6 +1727,183 @@ impl ProofCommitmentPreimagePlan {
         } else {
             Err(errors)
         }
+    }
+}
+
+impl ProofArtifactFixtureExpectationSet {
+    pub const SCHEMA_VERSION: &'static str = "proof-artifact-fixture-expectations-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
+    pub const EXPECTATION_SET_STATUS: &'static str = "planning_only_no_real_proof";
+    pub const EXPECTED_FIXTURE_IDS: [&'static str; 2] = ["approved_claim", "denied_claim"];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.expectation_set_status != Self::EXPECTATION_SET_STATUS {
+            errors.push(format!(
+                "expectation_set_status must be {}, got {}",
+                Self::EXPECTATION_SET_STATUS,
+                self.expectation_set_status
+            ));
+        }
+
+        if self.expected_fixtures.len() != Self::EXPECTED_FIXTURE_IDS.len() {
+            errors.push(format!(
+                "expected_fixtures must contain exactly {} fixtures",
+                Self::EXPECTED_FIXTURE_IDS.len()
+            ));
+        }
+
+        for fixture_id in Self::EXPECTED_FIXTURE_IDS {
+            if !self.has_fixture(fixture_id) {
+                errors.push(format!("missing expected fixture: {fixture_id}"));
+            }
+        }
+
+        for fixture in &self.expected_fixtures {
+            fixture.validate(&mut errors);
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn has_fixture(&self, fixture_id: &str) -> bool {
+        self.expected_fixtures
+            .iter()
+            .any(|fixture| fixture.fixture_id == fixture_id)
+    }
+}
+
+impl ProofArtifactFixtureExpectation {
+    const REQUIRED_DEPENDENCY_STATUS: &'static str = "required_before_runtime_wiring";
+
+    fn approved_claim() -> Self {
+        Self {
+            fixture_id: "approved_claim".to_string(),
+            decision: 1,
+            failure_code: 0,
+            required_public_input_root_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            required_proof_bytes_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            required_proof_commitment_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            required_local_verification_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            runtime_wiring_allowed: false,
+        }
+    }
+
+    fn denied_claim() -> Self {
+        Self {
+            fixture_id: "denied_claim".to_string(),
+            decision: 0,
+            failure_code: 7,
+            required_public_input_root_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            required_proof_bytes_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            required_proof_commitment_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            required_local_verification_status: Self::REQUIRED_DEPENDENCY_STATUS.to_string(),
+            runtime_wiring_allowed: false,
+        }
+    }
+
+    fn validate(&self, errors: &mut Vec<String>) {
+        if !matches!(self.fixture_id.as_str(), "approved_claim" | "denied_claim") {
+            errors.push(format!(
+                "{}.fixture_id must be approved_claim or denied_claim",
+                self.fixture_id
+            ));
+        }
+
+        match self.fixture_id.as_str() {
+            "approved_claim" => {
+                if self.decision != 1 {
+                    errors.push("approved_claim decision must be 1".to_string());
+                }
+                if self.failure_code != 0 {
+                    errors.push("approved_claim failure_code must be 0".to_string());
+                }
+            }
+            "denied_claim" => {
+                if self.decision != 0 {
+                    errors.push("denied_claim decision must be 0".to_string());
+                }
+                if self.failure_code == 0 {
+                    errors.push("denied_claim failure_code must be non-zero".to_string());
+                }
+            }
+            _ => {}
+        }
+
+        validate_fixture_dependency_status(
+            &self.fixture_id,
+            "required_public_input_root_status",
+            &self.required_public_input_root_status,
+            errors,
+        );
+        validate_fixture_dependency_status(
+            &self.fixture_id,
+            "required_proof_bytes_status",
+            &self.required_proof_bytes_status,
+            errors,
+        );
+        validate_fixture_dependency_status(
+            &self.fixture_id,
+            "required_proof_commitment_status",
+            &self.required_proof_commitment_status,
+            errors,
+        );
+        validate_fixture_dependency_status(
+            &self.fixture_id,
+            "required_local_verification_status",
+            &self.required_local_verification_status,
+            errors,
+        );
+
+        if self.runtime_wiring_allowed {
+            errors.push(format!(
+                "{}.runtime_wiring_allowed must be false",
+                self.fixture_id
+            ));
+        }
+    }
+}
+
+fn validate_fixture_dependency_status(
+    fixture_id: &str,
+    field_name: &str,
+    value: &str,
+    errors: &mut Vec<String>,
+) {
+    if value != ProofArtifactFixtureExpectation::REQUIRED_DEPENDENCY_STATUS {
+        errors.push(format!(
+            "{fixture_id}.{field_name} must be {}",
+            ProofArtifactFixtureExpectation::REQUIRED_DEPENDENCY_STATUS
+        ));
     }
 }
 

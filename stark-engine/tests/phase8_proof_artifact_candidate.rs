@@ -1,6 +1,6 @@
 use stark_engine::{
-    ProofCommitmentPreimagePlan, PublicInputRootAssemblyPlan, StarkBridgeInput,
-    StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
+    ProofArtifactFixtureExpectationSet, ProofCommitmentPreimagePlan, PublicInputRootAssemblyPlan,
+    StarkBridgeInput, StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
 };
 
 fn sample_bridge_input_json(decision: u8, failure_code: u32) -> String {
@@ -690,4 +690,177 @@ fn proof_commitment_preimage_plan_json_round_trips() {
     assert_eq!(round_tripped.validate(), Ok(()));
     assert!(json.contains("\"schema_version\": \"proof-commitment-preimage-plan-v0\""));
     assert!(json.contains("\"commitment_generation_status\": \"not_generated\""));
+}
+
+#[test]
+fn phase8_boundary_spec_generates_fixture_expectation_set() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let expectations = boundary_spec.to_fixture_expectation_set().unwrap();
+
+    assert_eq!(expectations.validate(), Ok(()));
+    assert_eq!(
+        expectations.schema_version,
+        ProofArtifactFixtureExpectationSet::SCHEMA_VERSION
+    );
+    assert_eq!(
+        expectations.source_schema_version,
+        StarkProofArtifactV1BoundarySpec::SCHEMA_VERSION
+    );
+    assert_eq!(
+        expectations.expectation_set_status,
+        ProofArtifactFixtureExpectationSet::EXPECTATION_SET_STATUS
+    );
+    assert_eq!(expectations.expected_fixtures.len(), 2);
+    assert!(expectations.groth16_flow_unchanged);
+}
+
+#[test]
+fn fixture_expectations_require_approved_and_denied_shapes() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let expectations = boundary_spec.to_fixture_expectation_set().unwrap();
+
+    let approved = expectations
+        .expected_fixtures
+        .iter()
+        .find(|fixture| fixture.fixture_id == "approved_claim")
+        .unwrap();
+    let denied = expectations
+        .expected_fixtures
+        .iter()
+        .find(|fixture| fixture.fixture_id == "denied_claim")
+        .unwrap();
+
+    assert_eq!(approved.decision, 1);
+    assert_eq!(approved.failure_code, 0);
+    assert_eq!(denied.decision, 0);
+    assert_ne!(denied.failure_code, 0);
+}
+
+#[test]
+fn fixture_expectations_require_all_real_artifact_dependencies() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let expectations = boundary_spec.to_fixture_expectation_set().unwrap();
+
+    for fixture in &expectations.expected_fixtures {
+        assert_eq!(
+            fixture.required_public_input_root_status,
+            "required_before_runtime_wiring"
+        );
+        assert_eq!(
+            fixture.required_proof_bytes_status,
+            "required_before_runtime_wiring"
+        );
+        assert_eq!(
+            fixture.required_proof_commitment_status,
+            "required_before_runtime_wiring"
+        );
+        assert_eq!(
+            fixture.required_local_verification_status,
+            "required_before_runtime_wiring"
+        );
+        assert!(!fixture.runtime_wiring_allowed);
+    }
+}
+
+#[test]
+fn fixture_expectations_reject_runtime_wiring_claims() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut expectations = boundary_spec.to_fixture_expectation_set().unwrap();
+
+    expectations.groth16_flow_unchanged = false;
+    expectations.expected_fixtures[0].runtime_wiring_allowed = true;
+    expectations.expected_fixtures[0].required_proof_bytes_status = "generated".to_string();
+
+    let errors = expectations.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "groth16_flow_unchanged must be true"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "approved_claim.runtime_wiring_allowed must be false"),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|error| error
+            == "approved_claim.required_proof_bytes_status must be required_before_runtime_wiring"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn fixture_expectations_reject_bad_decision_failure_code_shapes() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut expectations = boundary_spec.to_fixture_expectation_set().unwrap();
+
+    let approved = expectations
+        .expected_fixtures
+        .iter_mut()
+        .find(|fixture| fixture.fixture_id == "approved_claim")
+        .unwrap();
+    approved.decision = 0;
+    approved.failure_code = 7;
+
+    let denied = expectations
+        .expected_fixtures
+        .iter_mut()
+        .find(|fixture| fixture.fixture_id == "denied_claim")
+        .unwrap();
+    denied.decision = 1;
+    denied.failure_code = 0;
+
+    let errors = expectations.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "approved_claim decision must be 1"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "approved_claim failure_code must be 0"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "denied_claim decision must be 0"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "denied_claim failure_code must be non-zero"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn fixture_expectations_json_round_trips() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let expectations = boundary_spec.to_fixture_expectation_set().unwrap();
+    let json = serde_json::to_string_pretty(&expectations).unwrap();
+    let round_tripped: ProofArtifactFixtureExpectationSet = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, expectations);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"proof-artifact-fixture-expectations-v0\""));
+    assert!(json.contains("\"fixture_id\": \"approved_claim\""));
+    assert!(json.contains("\"fixture_id\": \"denied_claim\""));
 }
