@@ -1,5 +1,6 @@
 use stark_engine::{
-    StarkBridgeInput, StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
+    PublicInputRootAssemblyPlan, StarkBridgeInput, StarkProofArtifactV1BoundarySpec,
+    StarkProofArtifactV1Candidate,
 };
 
 fn sample_bridge_input_json(decision: u8, failure_code: u32) -> String {
@@ -379,4 +380,155 @@ fn phase8_boundary_spec_json_round_trips() {
     assert_eq!(round_tripped.validate(), Ok(()));
     assert!(json.contains("\"schema_version\": \"stark-proof-artifact-v1-boundary-spec\""));
     assert!(json.contains("\"target_artifact_schema_version\": \"stark-proof-artifact-v1\""));
+}
+
+#[test]
+fn phase8_boundary_spec_generates_public_input_root_assembly_plan() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+
+    assert_eq!(plan.validate(), Ok(()));
+    assert_eq!(
+        plan.schema_version,
+        PublicInputRootAssemblyPlan::SCHEMA_VERSION
+    );
+    assert_eq!(
+        plan.source_schema_version,
+        StarkProofArtifactV1BoundarySpec::SCHEMA_VERSION
+    );
+    assert_eq!(plan.plan_status, PublicInputRootAssemblyPlan::PLAN_STATUS);
+    assert_eq!(plan.expected_field_count, 10);
+    assert_eq!(plan.ordered_fields.len(), 10);
+    assert_eq!(plan.public_input_root, None);
+    assert_eq!(plan.root_generation_status, "not_generated");
+    assert!(plan.groth16_flow_unchanged);
+}
+
+#[test]
+fn public_input_root_assembly_plan_locks_canonical_field_order() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let ordered_names: Vec<&str> = plan
+        .ordered_fields
+        .iter()
+        .map(|field| field.field_name.as_str())
+        .collect();
+
+    assert_eq!(
+        ordered_names,
+        vec![
+            "claim_hash",
+            "decision",
+            "failure_code",
+            "public_input_root",
+            "claim_source_root",
+            "oracle_facts_root",
+            "fee_schedule_root",
+            "nullifier_root_before",
+            "nullifier_root_after",
+            "batch_root",
+        ]
+    );
+
+    for (index, field) in plan.ordered_fields.iter().enumerate() {
+        assert_eq!(field.position, index);
+        assert!(!field.encoding.is_empty());
+        assert!(!field.source.is_empty());
+    }
+}
+
+#[test]
+fn public_input_root_assembly_plan_marks_available_and_future_fields() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+
+    for field in &plan.ordered_fields {
+        if matches!(
+            field.field_name.as_str(),
+            "claim_hash" | "decision" | "failure_code"
+        ) {
+            assert_eq!(field.value_status, "available_from_bridge_input");
+        } else {
+            assert_eq!(field.value_status, "requires_future_root_generation");
+        }
+    }
+}
+
+#[test]
+fn public_input_root_assembly_plan_rejects_root_generation_claims() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+
+    plan.public_input_root =
+        Some("0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd".to_string());
+    plan.root_generation_status = "generated".to_string();
+    plan.groth16_flow_unchanged = false;
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                == "public_input_root must remain absent until root generation exists"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "root_generation_status must be not_generated"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "groth16_flow_unchanged must be true"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn public_input_root_assembly_plan_rejects_reordered_fields() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let mut plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+
+    plan.ordered_fields.swap(0, 1);
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "ordered_fields[0] must be claim_hash"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "ordered_fields[1] must be decision"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn public_input_root_assembly_plan_json_round_trips() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let json = serde_json::to_string_pretty(&plan).unwrap();
+    let round_tripped: PublicInputRootAssemblyPlan = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, plan);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"public-input-root-assembly-plan-v0\""));
+    assert!(json.contains("\"root_generation_status\": \"not_generated\""));
 }

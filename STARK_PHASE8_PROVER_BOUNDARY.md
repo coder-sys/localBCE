@@ -140,12 +140,49 @@ generate_stark_proof_artifact_v1_boundary_spec
 validate_stark_proof_artifact_v1_boundary_spec
 ```
 
+## Public Input Root Assembly Plan
+
+The next planning object is:
+
+```text
+PublicInputRootAssemblyPlan
+```
+
+It defines the canonical public-input preimage order for the future
+`public_input_root`:
+
+```text
+0. claim_hash
+1. decision
+2. failure_code
+3. public_input_root
+4. claim_source_root
+5. oracle_facts_root
+6. fee_schedule_root
+7. nullifier_root_before
+8. nullifier_root_after
+9. batch_root
+```
+
+This is still planning-only:
+
+- no hash strategy is selected for production
+- no public input root is generated
+- root fields still require future root generation
+- Groth16 remains the active runtime path
+
+The public-input root assembly CLI pair is:
+
+```text
+generate_public_input_root_assembly_plan
+validate_public_input_root_assembly_plan
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to start filling this boundary from real
-pre-prover inputs, still without runtime wiring:
+The next safe Phase 8 step is to start replacing the root placeholders with
+deterministic pre-root commitments, still without runtime wiring:
 
-- deterministic public-input root assembly
 - deterministic proof commitment preimage rules
 - approved/denied fixture expectations
 - selected prover byte encoding

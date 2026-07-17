@@ -693,6 +693,35 @@ pub struct StarkProofArtifactFieldRequirement {
     pub requirement_status: String,
 }
 
+/// Deterministic assembly plan for the future `public_input_root`.
+///
+/// This is not root generation. It defines canonical field order and source
+/// requirements so the future root preimage cannot drift between prover,
+/// verifier, and settlement layers.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicInputRootAssemblyPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub plan_status: String,
+    pub hash_strategy: String,
+    pub canonical_encoding: String,
+    pub ordered_fields: Vec<PublicInputRootField>,
+    pub expected_field_count: usize,
+    pub public_input_root: Option<String>,
+    pub root_generation_status: String,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicInputRootField {
+    pub position: usize,
+    pub field_name: String,
+    pub encoding: String,
+    pub source: String,
+    pub value_status: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -1244,6 +1273,186 @@ impl StarkProofArtifactV1BoundarySpec {
 
         if self.runtime_wiring_status != "not_wired_boundary_only" {
             errors.push("runtime_wiring_status must be not_wired_boundary_only".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn to_public_input_root_assembly_plan(
+        &self,
+    ) -> Result<PublicInputRootAssemblyPlan, Vec<String>> {
+        self.validate()?;
+
+        let ordered_fields = Self::REQUIRED_PUBLIC_INPUT_FIELDS
+            .iter()
+            .enumerate()
+            .map(|(index, field_name)| {
+                let requirement = self
+                    .required_public_inputs
+                    .iter()
+                    .find(|requirement| requirement.field_name == *field_name)
+                    .expect("boundary spec validation guarantees required public input field");
+
+                PublicInputRootField {
+                    position: index,
+                    field_name: requirement.field_name.clone(),
+                    encoding: requirement.encoding.clone(),
+                    source: requirement.source.clone(),
+                    value_status: if matches!(
+                        requirement.field_name.as_str(),
+                        "claim_hash" | "decision" | "failure_code"
+                    ) {
+                        "available_from_bridge_input".to_string()
+                    } else {
+                        "requires_future_root_generation".to_string()
+                    },
+                }
+            })
+            .collect();
+
+        Ok(PublicInputRootAssemblyPlan {
+            schema_version: PublicInputRootAssemblyPlan::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            plan_status: PublicInputRootAssemblyPlan::PLAN_STATUS.to_string(),
+            hash_strategy: "canonical_preimage_defined_hash_not_selected".to_string(),
+            canonical_encoding: "ordered_field_name_colon_canonical_value_utf8_joined_by_newline"
+                .to_string(),
+            ordered_fields,
+            expected_field_count: Self::REQUIRED_PUBLIC_INPUT_FIELDS.len(),
+            public_input_root: None,
+            root_generation_status: "not_generated".to_string(),
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This plan defines public input root preimage order only.".to_string(),
+                "It does not hash, generate, or verify a public_input_root.".to_string(),
+                "The first three fields are available from StarkBridgeInput.".to_string(),
+                "Root fields remain future generated dependencies.".to_string(),
+            ],
+        })
+    }
+}
+
+impl PublicInputRootAssemblyPlan {
+    pub const SCHEMA_VERSION: &'static str = "public-input-root-assembly-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-boundary-spec";
+    pub const PLAN_STATUS: &'static str = "planning_only_no_root_generation";
+    pub const REQUIRED_ORDERED_FIELDS: [&'static str; 10] = [
+        "claim_hash",
+        "decision",
+        "failure_code",
+        "public_input_root",
+        "claim_source_root",
+        "oracle_facts_root",
+        "fee_schedule_root",
+        "nullifier_root_before",
+        "nullifier_root_after",
+        "batch_root",
+    ];
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.plan_status != Self::PLAN_STATUS {
+            errors.push(format!(
+                "plan_status must be {}, got {}",
+                Self::PLAN_STATUS,
+                self.plan_status
+            ));
+        }
+
+        if self.hash_strategy.trim().is_empty() {
+            errors.push("hash_strategy must be present".to_string());
+        }
+
+        if self.canonical_encoding.trim().is_empty() {
+            errors.push("canonical_encoding must be present".to_string());
+        }
+
+        if self.expected_field_count != Self::REQUIRED_ORDERED_FIELDS.len() {
+            errors.push(format!(
+                "expected_field_count must be {}",
+                Self::REQUIRED_ORDERED_FIELDS.len()
+            ));
+        }
+
+        if self.ordered_fields.len() != Self::REQUIRED_ORDERED_FIELDS.len() {
+            errors.push(format!(
+                "ordered_fields must contain exactly {} fields",
+                Self::REQUIRED_ORDERED_FIELDS.len()
+            ));
+        }
+
+        for (expected_position, expected_name) in Self::REQUIRED_ORDERED_FIELDS.iter().enumerate() {
+            match self.ordered_fields.get(expected_position) {
+                Some(field) => {
+                    if field.position != expected_position {
+                        errors.push(format!(
+                            "ordered_fields[{expected_position}].position must be {expected_position}"
+                        ));
+                    }
+                    if field.field_name != *expected_name {
+                        errors.push(format!(
+                            "ordered_fields[{expected_position}] must be {expected_name}"
+                        ));
+                    }
+                    if field.encoding.trim().is_empty() {
+                        errors.push(format!("{}.encoding must be present", field.field_name));
+                    }
+                    if field.source.trim().is_empty() {
+                        errors.push(format!("{}.source must be present", field.field_name));
+                    }
+                    if !matches!(
+                        field.value_status.as_str(),
+                        "available_from_bridge_input" | "requires_future_root_generation"
+                    ) {
+                        errors.push(format!(
+                            "{}.value_status must be available_from_bridge_input or requires_future_root_generation",
+                            field.field_name
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "ordered_fields missing position {expected_position}: {expected_name}"
+                )),
+            }
+        }
+
+        if self.public_input_root.is_some() {
+            errors.push(
+                "public_input_root must remain absent until root generation exists".to_string(),
+            );
+        }
+
+        if self.root_generation_status != "not_generated" {
+            errors.push("root_generation_status must be not_generated".to_string());
         }
 
         if !self.groth16_flow_unchanged {
