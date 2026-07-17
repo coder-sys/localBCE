@@ -465,12 +465,51 @@ generate_phase8_pre_prover_bundle_checkpoint
 validate_phase8_pre_prover_bundle_checkpoint
 ```
 
+## Real Prover Implementation Checklist
+
+The next Phase 8 planning object is:
+
+```text
+Phase8RealProverImplementationChecklist
+```
+
+It is generated from the validated pre-prover bundle checkpoint and names the
+remaining blockers before a real STARK cutover:
+
+- select production hash/root semantics
+- generate real source roots
+- generate the real public input root
+- generate a real STARK witness
+- generate real STARK proof bytes
+- generate and bind the proof commitment
+- locally verify the real STARK artifact before Solidity or ClaimsRegistry
+  cutover
+
+The checklist keeps:
+
+```text
+runtime_cutover_allowed = false
+groth16_flow_unchanged = true
+completion_gate = all_work_items_complete_and_real_stark_artifact_locally_verified
+```
+
+This is still planning-only. It does not generate roots, witnesses, proof
+bytes, commitments, local verification results, Solidity verifier output, or
+runtime wiring.
+
+The checklist CLI pair is:
+
+```text
+generate_phase8_real_prover_implementation_checklist
+validate_phase8_real_prover_implementation_checklist
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to turn the checkpoint into a real prover
-implementation checklist, still without runtime wiring:
+The next safe Phase 8 step is to choose the first test-only prover execution
+boundary and produce a non-runtime proof-generation harness plan:
 
-- choose the first real prover target and proof byte boundary
-- replace SHA-256 candidate digests with the selected production hash/root plan
-- generate a real local proof artifact behind a test-only path
-- keep Groth16 active until local STARK verification passes end to end
+- identify exactly which existing Winterfell preview path can be called safely
+- define input/output files for a test-only proof generation harness
+- keep the proof artifact off-chain until local verification passes
+- keep Groth16 active until the completion gate is satisfied

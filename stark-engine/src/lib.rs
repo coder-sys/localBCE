@@ -922,6 +922,37 @@ pub struct Phase8CheckpointArtifact {
     pub validation_status: String,
 }
 
+/// Planning-only checklist for converting the validated Phase 8 pre-prover
+/// bundle into a real prover implementation.
+///
+/// This checklist is deliberately not a proof implementation. It is the
+/// implementation-control artifact that names the remaining blockers before
+/// any STARK runtime cutover can be considered.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8RealProverImplementationChecklist {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub checklist_status: String,
+    pub source_checkpoint_status: String,
+    pub work_items: Vec<Phase8RealProverWorkItem>,
+    pub expected_work_item_count: usize,
+    pub all_pre_prover_artifacts_validated: bool,
+    pub runtime_cutover_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub completion_gate: String,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8RealProverWorkItem {
+    pub item_id: String,
+    pub category: String,
+    pub description: String,
+    pub required_before: String,
+    pub current_status: String,
+    pub blocks_runtime_cutover: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -2980,6 +3011,232 @@ impl Phase8CheckpointArtifact {
             schema_version: schema_version.to_string(),
             status: status.to_string(),
             validation_status: "validated".to_string(),
+        }
+    }
+}
+
+impl Phase8RealProverImplementationChecklist {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-implementation-checklist-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "phase8-pre-prover-bundle-checkpoint-v0";
+    pub const CHECKLIST_STATUS: &'static str =
+        "implementation_checklist_only_no_real_proof_no_runtime_cutover";
+    pub const COMPLETION_GATE: &'static str =
+        "all_work_items_complete_and_real_stark_artifact_locally_verified";
+    pub const EXPECTED_WORK_ITEM_IDS: [&'static str; 7] = [
+        "select_production_hash_and_root_semantics",
+        "generate_real_source_roots",
+        "generate_real_public_input_root",
+        "generate_real_stark_witness",
+        "generate_real_stark_proof_bytes",
+        "generate_and_bind_proof_commitment",
+        "verify_real_stark_artifact_locally_before_solidity_cutover",
+    ];
+
+    pub fn from_checkpoint(
+        checkpoint: &Phase8PreProverBundleCheckpoint,
+    ) -> Result<Self, Vec<String>> {
+        checkpoint.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: checkpoint.schema_version.clone(),
+            checklist_status: Self::CHECKLIST_STATUS.to_string(),
+            source_checkpoint_status: checkpoint.checkpoint_status.clone(),
+            work_items: vec![
+                Phase8RealProverWorkItem::new(
+                    "select_production_hash_and_root_semantics",
+                    "root_hash_strategy",
+                    "Choose the production hash/root strategy for public input, source roots, and proof commitment.",
+                    "real_root_generation",
+                    "pending_candidate_sha256_only",
+                ),
+                Phase8RealProverWorkItem::new(
+                    "generate_real_source_roots",
+                    "source_roots",
+                    "Replace source-root digest candidates with real claim/oracle/fee/nullifier roots.",
+                    "public_input_root_generation",
+                    "pending_source_digest_candidates_only",
+                ),
+                Phase8RealProverWorkItem::new(
+                    "generate_real_public_input_root",
+                    "public_inputs",
+                    "Generate the real public_input_root from frozen public-input and source-root semantics.",
+                    "real_stark_proof_artifact",
+                    "pending_public_input_digest_candidate_only",
+                ),
+                Phase8RealProverWorkItem::new(
+                    "generate_real_stark_witness",
+                    "witness",
+                    "Convert validated bridge inputs and root source data into a real prover witness.",
+                    "real_stark_proof_bytes",
+                    "pending_witness_plan_only",
+                ),
+                Phase8RealProverWorkItem::new(
+                    "generate_real_stark_proof_bytes",
+                    "proof",
+                    "Generate opaque 0x-prefixed proof bytes using the selected prover boundary.",
+                    "local_verification",
+                    "pending_no_real_proof_bytes",
+                ),
+                Phase8RealProverWorkItem::new(
+                    "generate_and_bind_proof_commitment",
+                    "proof_commitment",
+                    "Generate the proof commitment over prover identity, proof bytes, public input root, claim_hash, decision, and failure_code.",
+                    "settlement_boundary_artifact",
+                    "pending_preimage_plan_only",
+                ),
+                Phase8RealProverWorkItem::new(
+                    "verify_real_stark_artifact_locally_before_solidity_cutover",
+                    "verification",
+                    "Run local verification against the real artifact before Solidity verifier or ClaimsRegistry cutover.",
+                    "runtime_cutover",
+                    "pending_no_local_real_stark_verification",
+                ),
+            ],
+            expected_work_item_count: Self::EXPECTED_WORK_ITEM_IDS.len(),
+            all_pre_prover_artifacts_validated: checkpoint.all_artifacts_validated
+                && checkpoint.all_source_roots_bound,
+            runtime_cutover_allowed: false,
+            groth16_flow_unchanged: true,
+            completion_gate: Self::COMPLETION_GATE.to_string(),
+            notes: vec![
+                "This checklist is generated from the validated Phase 8 pre-prover bundle checkpoint."
+                    .to_string(),
+                "It does not generate roots, witnesses, proof bytes, proof commitments, or Solidity verifier output."
+                    .to_string(),
+                "Every work item currently blocks runtime cutover.".to_string(),
+                "Groth16 remains the active production prototype path until the completion gate is satisfied."
+                    .to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.checklist_status != Self::CHECKLIST_STATUS {
+            errors.push(format!(
+                "checklist_status must be {}, got {}",
+                Self::CHECKLIST_STATUS,
+                self.checklist_status
+            ));
+        }
+
+        if self.source_checkpoint_status != Phase8PreProverBundleCheckpoint::CHECKPOINT_STATUS {
+            errors.push(format!(
+                "source_checkpoint_status must be {}",
+                Phase8PreProverBundleCheckpoint::CHECKPOINT_STATUS
+            ));
+        }
+
+        if self.expected_work_item_count != Self::EXPECTED_WORK_ITEM_IDS.len() {
+            errors.push(format!(
+                "expected_work_item_count must be {}",
+                Self::EXPECTED_WORK_ITEM_IDS.len()
+            ));
+        }
+
+        if self.work_items.len() != Self::EXPECTED_WORK_ITEM_IDS.len() {
+            errors.push(format!(
+                "work_items must contain exactly {} items",
+                Self::EXPECTED_WORK_ITEM_IDS.len()
+            ));
+        }
+
+        for (position, expected_id) in Self::EXPECTED_WORK_ITEM_IDS.iter().enumerate() {
+            match self.work_items.get(position) {
+                Some(item) => {
+                    if item.item_id != *expected_id {
+                        errors.push(format!(
+                            "work_items[{position}].item_id must be {expected_id}"
+                        ));
+                    }
+                    item.validate(expected_id, &mut errors);
+                }
+                None => errors.push(format!("missing work item: {expected_id}")),
+            }
+        }
+
+        if !self.all_pre_prover_artifacts_validated {
+            errors.push("all_pre_prover_artifacts_validated must be true".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.completion_gate != Self::COMPLETION_GATE {
+            errors.push(format!("completion_gate must be {}", Self::COMPLETION_GATE));
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl Phase8RealProverWorkItem {
+    fn new(
+        item_id: &str,
+        category: &str,
+        description: &str,
+        required_before: &str,
+        current_status: &str,
+    ) -> Self {
+        Self {
+            item_id: item_id.to_string(),
+            category: category.to_string(),
+            description: description.to_string(),
+            required_before: required_before.to_string(),
+            current_status: current_status.to_string(),
+            blocks_runtime_cutover: true,
+        }
+    }
+
+    fn validate(&self, expected_id: &str, errors: &mut Vec<String>) {
+        if self.item_id != expected_id {
+            errors.push(format!("work item id must be {expected_id}"));
+        }
+        if self.category.trim().is_empty() {
+            errors.push(format!("{expected_id}.category must be present"));
+        }
+        if self.description.trim().is_empty() {
+            errors.push(format!("{expected_id}.description must be present"));
+        }
+        if self.required_before.trim().is_empty() {
+            errors.push(format!("{expected_id}.required_before must be present"));
+        }
+        if self.current_status.trim().is_empty() {
+            errors.push(format!("{expected_id}.current_status must be present"));
+        }
+        if !self.blocks_runtime_cutover {
+            errors.push(format!("{expected_id}.blocks_runtime_cutover must be true"));
         }
     }
 }

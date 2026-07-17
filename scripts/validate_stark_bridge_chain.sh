@@ -54,6 +54,7 @@ NULLIFIER_ROOT_TRANSITION_INPUT="${TMP_DIR}/nullifier_root_transition_input.json
 NULLIFIER_ROOT_TRANSITION_DIGEST_CANDIDATE="${TMP_DIR}/nullifier_root_transition_digest_candidate.json"
 SOURCE_ROOT_AGGREGATION_PLAN="${TMP_DIR}/source_root_aggregation_plan.json"
 PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT="${TMP_DIR}/phase8_pre_prover_bundle_checkpoint.json"
+PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST="${TMP_DIR}/phase8_real_prover_implementation_checklist.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -253,6 +254,12 @@ run_in_dir "Generate Phase 8 pre-prover bundle checkpoint" "stark-engine" \
 
 run_in_dir "Validate Phase 8 pre-prover bundle checkpoint" "stark-engine" \
   cargo run --bin validate_phase8_pre_prover_bundle_checkpoint -- "${PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT}"
+
+run_in_dir "Generate Phase 8 real prover implementation checklist" "stark-engine" \
+  cargo run --bin generate_phase8_real_prover_implementation_checklist -- "${PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT}" "${PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST}"
+
+run_in_dir "Validate Phase 8 real prover implementation checklist" "stark-engine" \
+  cargo run --bin validate_phase8_real_prover_implementation_checklist -- "${PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"
