@@ -609,6 +609,62 @@ pub struct NullifierRootTransitionInput {
     pub notes: Vec<String>,
 }
 
+/// Phase 8 planning artifact for the future real STARK proof boundary.
+///
+/// This is not a real proof artifact yet. It defines the exact fields a future
+/// prover output must satisfy before Solidity V1 verifier integration can be
+/// considered.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkProofArtifactV1Candidate {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub artifact_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub decision: u8,
+    pub failure_code: u32,
+    pub public_inputs: StarkProofArtifactPublicInputs,
+    pub proof: StarkProofArtifactProof,
+    pub local_verification: StarkProofArtifactLocalVerification,
+    pub solidity_abi_candidate: String,
+    pub runtime_wired: bool,
+    pub on_chain_submission: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkProofArtifactPublicInputs {
+    pub claim_hash: String,
+    pub decision: u8,
+    pub failure_code: u32,
+    pub public_input_root: Option<String>,
+    pub claim_source_root: Option<String>,
+    pub oracle_facts_root: Option<String>,
+    pub fee_schedule_root: Option<String>,
+    pub nullifier_root_before: Option<String>,
+    pub nullifier_root_after: Option<String>,
+    pub batch_root: Option<String>,
+    pub root_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkProofArtifactProof {
+    pub proof_bytes: Option<String>,
+    pub proof_bytes_status: String,
+    pub proof_commitment: Option<String>,
+    pub proof_commitment_status: String,
+    pub prover: Option<String>,
+    pub prover_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StarkProofArtifactLocalVerification {
+    pub verified: bool,
+    pub verification_status: String,
+    pub verifier: Option<String>,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -727,6 +783,241 @@ impl StarkBridgeInput {
                 on_chain_submission: false,
             },
         })
+    }
+
+    pub fn to_proof_artifact_v1_candidate(
+        &self,
+    ) -> Result<StarkProofArtifactV1Candidate, Vec<String>> {
+        self.validate()?;
+
+        Ok(StarkProofArtifactV1Candidate {
+            schema_version: StarkProofArtifactV1Candidate::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            artifact_status: StarkProofArtifactV1Candidate::ARTIFACT_STATUS.to_string(),
+            claim_id: self.claim.claim_id.clone(),
+            claim_hash: self.claim.claim_hash.clone(),
+            decision: self.adjudication.decision,
+            failure_code: self.adjudication.failure_code,
+            public_inputs: StarkProofArtifactPublicInputs {
+                claim_hash: self.public_inputs.claim_hash.clone(),
+                decision: self.public_inputs.decision,
+                failure_code: self.public_inputs.failure_code,
+                public_input_root: None,
+                claim_source_root: None,
+                oracle_facts_root: None,
+                fee_schedule_root: None,
+                nullifier_root_before: None,
+                nullifier_root_after: None,
+                batch_root: None,
+                root_status: "requires_root_generation".to_string(),
+            },
+            proof: StarkProofArtifactProof {
+                proof_bytes: None,
+                proof_bytes_status: "not_generated".to_string(),
+                proof_commitment: None,
+                proof_commitment_status: "not_generated".to_string(),
+                prover: None,
+                prover_status: "not_selected".to_string(),
+            },
+            local_verification: StarkProofArtifactLocalVerification {
+                verified: false,
+                verification_status: "not_verified_no_real_proof".to_string(),
+                verifier: None,
+            },
+            solidity_abi_candidate: "IStarkClaimsVerifierV1Candidate".to_string(),
+            runtime_wired: false,
+            on_chain_submission: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "Phase 8 candidate only: no real STARK proof bytes are included.".to_string(),
+                "Root fields are intentionally absent until root generation is implemented."
+                    .to_string(),
+                "This artifact is shaped to match the Solidity V1 verifier ABI candidate."
+                    .to_string(),
+                "The active Groth16 runtime remains unchanged.".to_string(),
+            ],
+        })
+    }
+}
+
+impl StarkProofArtifactV1Candidate {
+    pub const SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1-candidate";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const ARTIFACT_STATUS: &'static str = "candidate_schema_only_no_real_proof";
+    pub const SOLIDITY_ABI_CANDIDATE: &'static str = "IStarkClaimsVerifierV1Candidate";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.artifact_status != Self::ARTIFACT_STATUS {
+            errors.push(format!(
+                "artifact_status must be {}, got {}",
+                Self::ARTIFACT_STATUS,
+                self.artifact_status
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        validate_0x_32_byte_hex("claim_hash", &self.claim_hash, &mut errors);
+        validate_0x_32_byte_hex(
+            "public_inputs.claim_hash",
+            &self.public_inputs.claim_hash,
+            &mut errors,
+        );
+
+        if self.claim_hash != self.public_inputs.claim_hash {
+            errors.push("claim_hash must match public_inputs.claim_hash".to_string());
+        }
+
+        if self.decision > 1 {
+            errors.push("decision must be 0 or 1".to_string());
+        }
+
+        if self.public_inputs.decision > 1 {
+            errors.push("public_inputs.decision must be 0 or 1".to_string());
+        }
+
+        if self.decision != self.public_inputs.decision {
+            errors.push("decision must match public_inputs.decision".to_string());
+        }
+
+        if self.failure_code != self.public_inputs.failure_code {
+            errors.push("failure_code must match public_inputs.failure_code".to_string());
+        }
+
+        if self.decision == 1 && self.failure_code != 0 {
+            errors.push("approved proof artifact candidate requires failure_code = 0".to_string());
+        }
+
+        if self.decision == 0 && self.failure_code == 0 {
+            errors.push("denied proof artifact candidate requires failure_code != 0".to_string());
+        }
+
+        if self.public_inputs.root_status != "requires_root_generation" {
+            errors.push("public_inputs.root_status must be requires_root_generation".to_string());
+        }
+
+        for (name, value) in [
+            ("public_input_root", &self.public_inputs.public_input_root),
+            ("claim_source_root", &self.public_inputs.claim_source_root),
+            ("oracle_facts_root", &self.public_inputs.oracle_facts_root),
+            ("fee_schedule_root", &self.public_inputs.fee_schedule_root),
+            (
+                "nullifier_root_before",
+                &self.public_inputs.nullifier_root_before,
+            ),
+            (
+                "nullifier_root_after",
+                &self.public_inputs.nullifier_root_after,
+            ),
+            ("batch_root", &self.public_inputs.batch_root),
+        ] {
+            if value.is_some() {
+                errors.push(format!("{name} must remain absent until root generation exists"));
+            }
+        }
+
+        if self.proof.proof_bytes.is_some() {
+            errors.push("proof.proof_bytes must remain absent in candidate artifact".to_string());
+        }
+
+        if self.proof.proof_bytes_status != "not_generated" {
+            errors.push("proof.proof_bytes_status must be not_generated".to_string());
+        }
+
+        if self.proof.proof_commitment.is_some() {
+            errors.push(
+                "proof.proof_commitment must remain absent in candidate artifact".to_string(),
+            );
+        }
+
+        if self.proof.proof_commitment_status != "not_generated" {
+            errors.push("proof.proof_commitment_status must be not_generated".to_string());
+        }
+
+        if self.proof.prover.is_some() {
+            errors.push("proof.prover must remain absent until prover selection".to_string());
+        }
+
+        if self.proof.prover_status != "not_selected" {
+            errors.push("proof.prover_status must be not_selected".to_string());
+        }
+
+        if self.local_verification.verified {
+            errors.push("local_verification.verified must be false before real proof".to_string());
+        }
+
+        if self.local_verification.verification_status != "not_verified_no_real_proof" {
+            errors.push(
+                "local_verification.verification_status must be not_verified_no_real_proof"
+                    .to_string(),
+            );
+        }
+
+        if self.local_verification.verifier.is_some() {
+            errors.push(
+                "local_verification.verifier must remain absent before verifier selection"
+                    .to_string(),
+            );
+        }
+
+        if self.solidity_abi_candidate != Self::SOLIDITY_ABI_CANDIDATE {
+            errors.push(format!(
+                "solidity_abi_candidate must be {}",
+                Self::SOLIDITY_ABI_CANDIDATE
+            ));
+        }
+
+        if self.runtime_wired {
+            errors.push("runtime_wired must remain false".to_string());
+        }
+
+        if self.on_chain_submission {
+            errors.push("on_chain_submission must remain false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn validate_0x_32_byte_hex(name: &str, value: &str, errors: &mut Vec<String>) {
+    let trimmed = value.trim();
+    if trimmed.len() != 66
+        || !trimmed.starts_with("0x")
+        || !trimmed[2..].chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        errors.push(format!("{name} must be a 0x-prefixed 32-byte hex string"));
     }
 }
 

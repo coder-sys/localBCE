@@ -87,6 +87,10 @@ settlement, runtime selection, and ops gates.
 See `STARK_VERIFIER_ABI_CANDIDATE.md` for the current preview-only production
 STARK verifier ABI candidate and public-input expectations.
 
+See `STARK_PHASE8_PROVER_BOUNDARY.md` for the planning-only real-prover
+boundary candidate that maps validated bridge input toward the Solidity V1 ABI
+without generating real proof bytes.
+
 ---
 
 # Project Structure

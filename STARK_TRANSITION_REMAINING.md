@@ -63,7 +63,7 @@ Exit criteria:
 
 ### Phase 8: Real Prover Boundary
 
-Status: next major engineering phase.
+Status: started as planning-only boundary.
 
 Goal:
 
@@ -85,6 +85,14 @@ Exit criteria:
 - local verifier accepts the proof
 - invalid witness/proof fails closed
 - output artifact schema is stable
+
+Current Phase 8 scaffold:
+
+- `StarkProofArtifactV1Candidate`
+- `stark-engine/tests/phase8_proof_artifact_candidate.rs`
+- `STARK_PHASE8_PROVER_BOUNDARY.md`
+
+This scaffold still does not generate real proof bytes.
 
 ### Phase 9: Solidity Verifier Integration
 
