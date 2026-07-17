@@ -8,6 +8,7 @@
 //! active Rust adjudication model and the imported Winterfell STARK input model.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
@@ -719,6 +720,38 @@ pub struct PublicInputRootField {
     pub field_name: String,
     pub encoding: String,
     pub source: String,
+    pub value_status: String,
+}
+
+/// First deterministic candidate digest for `public_input_root`.
+///
+/// This is not the final production public input root. It hashes the current
+/// assembly-plan preimage with SHA-256 so later prover/verifier layers have a
+/// stable candidate contract to test against while the production hash/root
+/// strategy remains explicitly unselected.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicInputRootDigestCandidate {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub candidate_status: String,
+    pub hash_algorithm: String,
+    pub canonical_encoding: String,
+    pub ordered_fields: Vec<PublicInputRootDigestField>,
+    pub expected_field_count: usize,
+    pub canonical_preimage: String,
+    pub public_input_root_candidate: String,
+    pub root_generation_status: String,
+    pub production_hash_selected: bool,
+    pub runtime_wiring_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicInputRootDigestField {
+    pub position: usize,
+    pub field_name: String,
+    pub encoded_value: String,
     pub value_status: String,
 }
 
@@ -1646,6 +1679,203 @@ impl PublicInputRootAssemblyPlan {
             Err(errors)
         }
     }
+
+    pub fn to_digest_candidate(&self) -> Result<PublicInputRootDigestCandidate, Vec<String>> {
+        self.validate()?;
+
+        let ordered_fields: Vec<PublicInputRootDigestField> = self
+            .ordered_fields
+            .iter()
+            .map(|field| PublicInputRootDigestField {
+                position: field.position,
+                field_name: field.field_name.clone(),
+                encoded_value: public_input_root_candidate_value(field),
+                value_status: field.value_status.clone(),
+            })
+            .collect();
+        let canonical_preimage =
+            build_public_input_root_candidate_preimage(&ordered_fields, &self.canonical_encoding);
+        let public_input_root_candidate = sha256_hex(&canonical_preimage);
+
+        Ok(PublicInputRootDigestCandidate {
+            schema_version: PublicInputRootDigestCandidate::SCHEMA_VERSION.to_string(),
+            source_schema_version: self.schema_version.clone(),
+            candidate_status: PublicInputRootDigestCandidate::CANDIDATE_STATUS.to_string(),
+            hash_algorithm: PublicInputRootDigestCandidate::HASH_ALGORITHM.to_string(),
+            canonical_encoding: self.canonical_encoding.clone(),
+            expected_field_count: ordered_fields.len(),
+            ordered_fields,
+            canonical_preimage,
+            public_input_root_candidate,
+            root_generation_status: "candidate_generated_not_runtime".to_string(),
+            production_hash_selected: false,
+            runtime_wiring_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This digest candidate hashes the public input root assembly plan placeholders."
+                    .to_string(),
+                "It is deterministic test scaffolding, not a production public_input_root."
+                    .to_string(),
+                "Production hash/root strategy remains unselected.".to_string(),
+                "The active Groth16 flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+}
+
+impl PublicInputRootDigestCandidate {
+    pub const SCHEMA_VERSION: &'static str = "public-input-root-digest-candidate-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "public-input-root-assembly-plan-v0";
+    pub const CANDIDATE_STATUS: &'static str = "candidate_digest_from_plan_only_no_runtime";
+    pub const HASH_ALGORITHM: &'static str = "sha2_256_candidate_not_production_hash";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.candidate_status != Self::CANDIDATE_STATUS {
+            errors.push(format!(
+                "candidate_status must be {}, got {}",
+                Self::CANDIDATE_STATUS,
+                self.candidate_status
+            ));
+        }
+
+        if self.hash_algorithm != Self::HASH_ALGORITHM {
+            errors.push(format!(
+                "hash_algorithm must be {}, got {}",
+                Self::HASH_ALGORITHM,
+                self.hash_algorithm
+            ));
+        }
+
+        if self.canonical_encoding.trim().is_empty() {
+            errors.push("canonical_encoding must be present".to_string());
+        }
+
+        if self.expected_field_count != PublicInputRootAssemblyPlan::REQUIRED_ORDERED_FIELDS.len() {
+            errors.push(format!(
+                "expected_field_count must be {}",
+                PublicInputRootAssemblyPlan::REQUIRED_ORDERED_FIELDS.len()
+            ));
+        }
+
+        if self.ordered_fields.len() != PublicInputRootAssemblyPlan::REQUIRED_ORDERED_FIELDS.len() {
+            errors.push(format!(
+                "ordered_fields must contain exactly {} fields",
+                PublicInputRootAssemblyPlan::REQUIRED_ORDERED_FIELDS.len()
+            ));
+        }
+
+        for (expected_position, expected_name) in
+            PublicInputRootAssemblyPlan::REQUIRED_ORDERED_FIELDS
+                .iter()
+                .enumerate()
+        {
+            match self.ordered_fields.get(expected_position) {
+                Some(field) => {
+                    if field.position != expected_position {
+                        errors.push(format!(
+                            "ordered_fields[{expected_position}].position must be {expected_position}"
+                        ));
+                    }
+                    if field.field_name != *expected_name {
+                        errors.push(format!(
+                            "ordered_fields[{expected_position}] must be {expected_name}"
+                        ));
+                    }
+                    if field.encoded_value.trim().is_empty() {
+                        errors.push(format!(
+                            "{}.encoded_value must be present",
+                            field.field_name
+                        ));
+                    }
+                    if !matches!(
+                        field.value_status.as_str(),
+                        "available_from_bridge_input" | "requires_future_root_generation"
+                    ) {
+                        errors.push(format!(
+                            "{}.value_status must be available_from_bridge_input or requires_future_root_generation",
+                            field.field_name
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "ordered_fields missing position {expected_position}: {expected_name}"
+                )),
+            }
+        }
+
+        if self.canonical_preimage.trim().is_empty() {
+            errors.push("canonical_preimage must be present".to_string());
+        } else {
+            let expected_preimage = build_public_input_root_candidate_preimage(
+                &self.ordered_fields,
+                &self.canonical_encoding,
+            );
+            if self.canonical_preimage != expected_preimage {
+                errors.push("canonical_preimage must match ordered_fields".to_string());
+            }
+        }
+
+        validate_0x_32_byte_hex(
+            "public_input_root_candidate",
+            &self.public_input_root_candidate,
+            &mut errors,
+        );
+
+        if !self.canonical_preimage.trim().is_empty() {
+            let expected_digest = sha256_hex(&self.canonical_preimage);
+            if self.public_input_root_candidate != expected_digest {
+                errors.push(
+                    "public_input_root_candidate must equal sha2_256(canonical_preimage)"
+                        .to_string(),
+                );
+            }
+        }
+
+        if self.root_generation_status != "candidate_generated_not_runtime" {
+            errors
+                .push("root_generation_status must be candidate_generated_not_runtime".to_string());
+        }
+
+        if self.production_hash_selected {
+            errors.push("production_hash_selected must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 impl ProofCommitmentPreimagePlan {
@@ -2080,6 +2310,38 @@ fn validate_fixture_dependency_status(
             ProofArtifactFixtureExpectation::REQUIRED_DEPENDENCY_STATUS
         ));
     }
+}
+
+fn public_input_root_candidate_value(field: &PublicInputRootField) -> String {
+    match field.value_status.as_str() {
+        "available_from_bridge_input" => {
+            format!("__available_from_bridge_input__::{}", field.field_name)
+        }
+        "requires_future_root_generation" => {
+            format!("__requires_future_root_generation__::{}", field.field_name)
+        }
+        _ => format!("__invalid_value_status__::{}", field.field_name),
+    }
+}
+
+fn build_public_input_root_candidate_preimage(
+    ordered_fields: &[PublicInputRootDigestField],
+    canonical_encoding: &str,
+) -> String {
+    let mut lines = Vec::with_capacity(ordered_fields.len() + 1);
+    lines.push(format!("canonical_encoding:{canonical_encoding}"));
+    lines.extend(ordered_fields.iter().map(|field| {
+        format!(
+            "{}:{}:{}:{}",
+            field.position, field.field_name, field.value_status, field.encoded_value
+        )
+    }));
+    lines.join("\n")
+}
+
+fn sha256_hex(input: &str) -> String {
+    let digest = Sha256::digest(input.as_bytes());
+    format!("0x{digest:x}")
 }
 
 fn proof_commitment_component_encoding(component_name: &str) -> &'static str {

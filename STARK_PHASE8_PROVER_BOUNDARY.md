@@ -178,6 +178,47 @@ generate_public_input_root_assembly_plan
 validate_public_input_root_assembly_plan
 ```
 
+## Public Input Root Digest Candidate
+
+The next planning object is:
+
+```text
+PublicInputRootDigestCandidate
+```
+
+It creates the first deterministic candidate digest from the assembly-plan
+preimage:
+
+```text
+hash_algorithm = sha2_256_candidate_not_production_hash
+root_generation_status = candidate_generated_not_runtime
+production_hash_selected = false
+runtime_wiring_allowed = false
+groth16_flow_unchanged = true
+```
+
+The candidate preimage uses the locked assembly order and explicit placeholders
+for values that are not available yet:
+
+```text
+__available_from_bridge_input__::<field>
+__requires_future_root_generation__::<field>
+```
+
+This is still not the production `public_input_root`:
+
+- it does not select Poseidon/Poseidon2/Merkle root semantics
+- it does not bind real claim/oracle/fee/nullifier/batch roots
+- it does not enable Solidity or runtime wiring
+- Groth16 remains the active runtime path
+
+The digest candidate CLI pair is:
+
+```text
+generate_public_input_root_digest_candidate
+validate_public_input_root_digest_candidate
+```
+
 ## Proof Commitment Preimage Plan
 
 The next planning object is:
@@ -310,4 +351,4 @@ validate_selected_prover_byte_encoding_plan
 The next safe Phase 8 step is to start replacing the root placeholders with
 deterministic pre-root commitments, still without runtime wiring:
 
-- first deterministic root digest candidate for `public_input_root`
+- claim/oracle/fee/nullifier source-root digest candidates

@@ -1,7 +1,7 @@
 use stark_engine::{
     ProofArtifactFixtureExpectationSet, ProofCommitmentPreimagePlan, PublicInputRootAssemblyPlan,
-    SelectedProverByteEncodingPlan, StarkBridgeInput, StarkProofArtifactV1BoundarySpec,
-    StarkProofArtifactV1Candidate,
+    PublicInputRootDigestCandidate, SelectedProverByteEncodingPlan, StarkBridgeInput,
+    StarkProofArtifactV1BoundarySpec, StarkProofArtifactV1Candidate,
 };
 
 fn sample_bridge_input_json(decision: u8, failure_code: u32) -> String {
@@ -999,4 +999,159 @@ fn selected_prover_byte_encoding_plan_json_round_trips() {
     assert!(json.contains("\"schema_version\": \"selected-prover-byte-encoding-plan-v0\""));
     assert!(json.contains("\"selected_prover\": \"winterfell_poc_preview\""));
     assert!(json.contains("\"proof_bytes_status\": \"not_generated_encoding_contract_only\""));
+}
+
+#[test]
+fn public_input_root_assembly_plan_generates_digest_candidate() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let candidate = plan.to_digest_candidate().unwrap();
+
+    assert_eq!(candidate.validate(), Ok(()));
+    assert_eq!(
+        candidate.schema_version,
+        PublicInputRootDigestCandidate::SCHEMA_VERSION
+    );
+    assert_eq!(
+        candidate.source_schema_version,
+        PublicInputRootAssemblyPlan::SCHEMA_VERSION
+    );
+    assert_eq!(
+        candidate.candidate_status,
+        PublicInputRootDigestCandidate::CANDIDATE_STATUS
+    );
+    assert_eq!(
+        candidate.hash_algorithm,
+        PublicInputRootDigestCandidate::HASH_ALGORITHM
+    );
+    assert_eq!(candidate.ordered_fields.len(), 10);
+    assert_eq!(candidate.expected_field_count, 10);
+    assert_eq!(candidate.public_input_root_candidate.len(), 66);
+    assert!(candidate.public_input_root_candidate.starts_with("0x"));
+    assert_eq!(
+        candidate.root_generation_status,
+        "candidate_generated_not_runtime"
+    );
+    assert!(!candidate.production_hash_selected);
+    assert!(!candidate.runtime_wiring_allowed);
+    assert!(candidate.groth16_flow_unchanged);
+}
+
+#[test]
+fn public_input_root_digest_candidate_is_stable_for_same_plan() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+
+    let first = plan.to_digest_candidate().unwrap();
+    let second = plan.to_digest_candidate().unwrap();
+
+    assert_eq!(
+        first.public_input_root_candidate,
+        second.public_input_root_candidate
+    );
+    assert_eq!(first.canonical_preimage, second.canonical_preimage);
+}
+
+#[test]
+fn public_input_root_digest_candidate_locks_canonical_preimage_order() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let candidate = plan.to_digest_candidate().unwrap();
+
+    assert!(candidate.canonical_preimage.starts_with(
+        "canonical_encoding:ordered_field_name_colon_canonical_value_utf8_joined_by_newline"
+    ));
+    assert!(candidate.canonical_preimage.contains(
+        "0:claim_hash:available_from_bridge_input:__available_from_bridge_input__::claim_hash"
+    ));
+    assert!(candidate.canonical_preimage.contains(
+        "3:public_input_root:requires_future_root_generation:__requires_future_root_generation__::public_input_root"
+    ));
+    assert!(candidate.canonical_preimage.contains(
+        "9:batch_root:requires_future_root_generation:__requires_future_root_generation__::batch_root"
+    ));
+}
+
+#[test]
+fn public_input_root_digest_candidate_rejects_tampered_digest() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let mut candidate = plan.to_digest_candidate().unwrap();
+
+    candidate.public_input_root_candidate =
+        "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+
+    let errors = candidate.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                == "public_input_root_candidate must equal sha2_256(canonical_preimage)"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn public_input_root_digest_candidate_rejects_runtime_or_production_claims() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let mut candidate = plan.to_digest_candidate().unwrap();
+
+    candidate.root_generation_status = "production_generated".to_string();
+    candidate.production_hash_selected = true;
+    candidate.runtime_wiring_allowed = true;
+    candidate.groth16_flow_unchanged = false;
+
+    let errors = candidate.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "root_generation_status must be candidate_generated_not_runtime"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "production_hash_selected must be false"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "groth16_flow_unchanged must be true"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn public_input_root_digest_candidate_json_round_trips() {
+    let input = sample_bridge_input(1, 0);
+    let artifact = input.to_proof_artifact_v1_candidate().unwrap();
+    let boundary_spec = artifact.to_v1_boundary_spec().unwrap();
+    let plan = boundary_spec.to_public_input_root_assembly_plan().unwrap();
+    let candidate = plan.to_digest_candidate().unwrap();
+    let json = serde_json::to_string_pretty(&candidate).unwrap();
+    let round_tripped: PublicInputRootDigestCandidate = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_tripped, candidate);
+    assert_eq!(round_tripped.validate(), Ok(()));
+    assert!(json.contains("\"schema_version\": \"public-input-root-digest-candidate-v0\""));
+    assert!(json.contains("\"hash_algorithm\": \"sha2_256_candidate_not_production_hash\""));
+    assert!(json.contains("\"root_generation_status\": \"candidate_generated_not_runtime\""));
 }

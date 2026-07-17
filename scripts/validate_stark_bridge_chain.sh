@@ -40,6 +40,7 @@ BRIDGE_INPUT="${TMP_DIR}/stark_bridge_input.json"
 STARK_PROOF_ARTIFACT_V1_CANDIDATE="${TMP_DIR}/stark_proof_artifact_v1_candidate.json"
 STARK_PROOF_ARTIFACT_V1_BOUNDARY_SPEC="${TMP_DIR}/stark_proof_artifact_v1_boundary_spec.json"
 PUBLIC_INPUT_ROOT_ASSEMBLY_PLAN="${TMP_DIR}/public_input_root_assembly_plan.json"
+PUBLIC_INPUT_ROOT_DIGEST_CANDIDATE="${TMP_DIR}/public_input_root_digest_candidate.json"
 PROOF_COMMITMENT_PREIMAGE_PLAN="${TMP_DIR}/proof_commitment_preimage_plan.json"
 PROOF_ARTIFACT_FIXTURE_EXPECTATIONS="${TMP_DIR}/proof_artifact_fixture_expectations.json"
 SELECTED_PROVER_BYTE_ENCODING_PLAN="${TMP_DIR}/selected_prover_byte_encoding_plan.json"
@@ -91,6 +92,12 @@ run_in_dir "Generate public input root assembly plan" "stark-engine" \
 
 run_in_dir "Validate public input root assembly plan" "stark-engine" \
   cargo run --bin validate_public_input_root_assembly_plan -- "${PUBLIC_INPUT_ROOT_ASSEMBLY_PLAN}"
+
+run_in_dir "Generate public input root digest candidate" "stark-engine" \
+  cargo run --bin generate_public_input_root_digest_candidate -- "${PUBLIC_INPUT_ROOT_ASSEMBLY_PLAN}" "${PUBLIC_INPUT_ROOT_DIGEST_CANDIDATE}"
+
+run_in_dir "Validate public input root digest candidate" "stark-engine" \
+  cargo run --bin validate_public_input_root_digest_candidate -- "${PUBLIC_INPUT_ROOT_DIGEST_CANDIDATE}"
 
 run_in_dir "Generate proof commitment preimage plan" "stark-engine" \
   cargo run --bin generate_proof_commitment_preimage_plan -- "${STARK_PROOF_ARTIFACT_V1_BOUNDARY_SPEC}" "${PROOF_COMMITMENT_PREIMAGE_PLAN}"
