@@ -548,11 +548,66 @@ generate_phase8_test_only_prover_harness_plan
 validate_phase8_test_only_prover_harness_plan
 ```
 
+## Test-Only Prover Harness Execution Report
+
+The next Phase 8 test-only report is:
+
+```text
+Phase8TestOnlyProverHarnessExecutionReport
+```
+
+It is generated from the harness plan plus the already-generated Phase 8
+preview artifacts:
+
+- `complete_winterfell_witness_candidate`
+- `selected_prover_byte_encoding_plan`
+- `phase8_real_prover_implementation_checklist`
+- `winterfell_proof_preview`
+- `stark_proof_artifact_v1_candidate`
+- `stark_settlement_boundary_artifact`
+
+The report records:
+
+- selected preview prover
+- feature gate usage
+- proof preview status
+- proof size
+- local prove/verify timing
+- local verification status
+- proof bytes status
+- runtime/on-chain disablement
+- Groth16 preservation
+
+The report keeps:
+
+```text
+execution_status = test_only_harness_execution_report_no_runtime_cutover
+feature_gate_used = true
+local_verification_status = winterfell_preview_verified_locally
+proof_bytes_status = preview_bytes_observed_not_production_artifact
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+This is still not production STARK proof wiring. It reports that the local,
+feature-gated preview path produced and verified a proof preview, but it does
+not make that proof usable by runtime contracts or settlement.
+
+The harness execution report CLI pair is:
+
+```text
+generate_phase8_test_only_prover_harness_execution_report
+validate_phase8_test_only_prover_harness_execution_report
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add a dry-run harness execution report:
+The next safe Phase 8 step is to add a real prover implementation boundary
+that stays feature-gated:
 
-- read the harness plan and complete Winterfell witness candidate
-- run only the feature-gated local proof preview
-- emit an execution report with proof size/timing/verification metadata
-- keep the report off-chain and keep Groth16 active
+- consume the harness execution report
+- define what moves from preview proof bytes to a real proof artifact candidate
+- preserve local-only verification
+- keep Solidity and ClaimsRegistry unchanged
+- keep Groth16 active until an explicit cutover phase

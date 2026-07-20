@@ -56,6 +56,7 @@ SOURCE_ROOT_AGGREGATION_PLAN="${TMP_DIR}/source_root_aggregation_plan.json"
 PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT="${TMP_DIR}/phase8_pre_prover_bundle_checkpoint.json"
 PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST="${TMP_DIR}/phase8_real_prover_implementation_checklist.json"
 PHASE8_TEST_ONLY_PROVER_HARNESS_PLAN="${TMP_DIR}/phase8_test_only_prover_harness_plan.json"
+PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT="${TMP_DIR}/phase8_test_only_prover_harness_execution_report.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -267,6 +268,20 @@ run_in_dir "Generate Phase 8 test-only prover harness plan" "stark-engine" \
 
 run_in_dir "Validate Phase 8 test-only prover harness plan" "stark-engine" \
   cargo run --bin validate_phase8_test_only_prover_harness_plan -- "${PHASE8_TEST_ONLY_PROVER_HARNESS_PLAN}"
+
+run_in_dir "Generate Phase 8 test-only prover harness execution report" "stark-engine" \
+  cargo run --bin generate_phase8_test_only_prover_harness_execution_report -- \
+    "${PHASE8_TEST_ONLY_PROVER_HARNESS_PLAN}" \
+    "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" \
+    "${SELECTED_PROVER_BYTE_ENCODING_PLAN}" \
+    "${PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST}" \
+    "${WINTERFELL_PROOF_PREVIEW}" \
+    "${STARK_PROOF_ARTIFACT_V1_CANDIDATE}" \
+    "${STARK_SETTLEMENT_BOUNDARY_ARTIFACT}" \
+    "${PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT}"
+
+run_in_dir "Validate Phase 8 test-only prover harness execution report" "stark-engine" \
+  cargo run --bin validate_phase8_test_only_prover_harness_execution_report -- "${PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"
