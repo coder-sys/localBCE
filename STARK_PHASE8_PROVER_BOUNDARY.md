@@ -791,12 +791,49 @@ generate_phase8_implementation_evidence_slots
 validate_phase8_implementation_evidence_slots
 ```
 
+## Evidence Readiness Report
+
+The next Phase 8 planning object is:
+
+```text
+Phase8EvidenceReadinessReport
+```
+
+It is generated from `Phase8ImplementationEvidenceSlots` and summarizes the
+missing implementation evidence for every planned transformation. This is a
+negative readiness report: it makes the blockers explicit and keeps the real
+proof path disabled.
+
+The report keeps:
+
+```text
+report_status = not_ready_missing_implementation_evidence
+populated_slot_count = 0
+missing_slot_count = 7
+missing_evidence_total = 28
+ready_transformation_count = 0
+blocked_transformation_count = 7
+real_proof_generation_allowed = false
+real_artifact_emission_allowed = false
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+The evidence readiness report CLI pair is:
+
+```text
+generate_phase8_evidence_readiness_report
+validate_phase8_evidence_readiness_report
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add an evidence readiness report:
+The next safe Phase 8 step is to add real prover implementation source
+scaffolds as inactive module boundaries:
 
-- summarize missing evidence by transformation
-- keep every readiness gate blocked until evidence is populated and validated
+- create empty module boundaries for the planned implementation sources
+- keep them disconnected from runtime execution
 - do not generate real proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase
