@@ -888,13 +888,55 @@ The full STARK bridge smoke chain now generates and validates this placeholder
 after `WinterfellCompleteWitnessCandidate` and before the feature-gated
 Winterfell proof preview.
 
+## Real Prover Evidence Record
+
+The first real prover evidence record schema now exists:
+
+```text
+real_prover::RealProverEvidenceRecord
+```
+
+It is generated from `TestOnlyProofBytes`, but the test-only bytes are
+explicitly not accepted as implementation evidence.
+
+The record keeps:
+
+```text
+evidence_status = real_prover_evidence_missing
+populated_evidence_count = 0
+missing_evidence_count = 4
+implementation_satisfied = false
+test_only_bytes_are_evidence = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+accepted_as_implementation_evidence = false
+```
+
+The required evidence slots are:
+
+- `real_prover_code_path`
+- `real_proof_bytes_fixture`
+- `real_prover_unit_tests`
+- `local_real_proof_validation_log`
+
+The real prover evidence record CLI pair is:
+
+```text
+generate_phase8_real_prover_evidence_record
+validate_phase8_real_prover_evidence_record
+```
+
+This is the last planning-only checkpoint before real prover implementation
+work begins.
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to define the first real prover evidence record
-schema:
+The next safe Phase 8 step is to begin real prover implementation work behind a
+non-runtime API:
 
-- point at future implementation code, fixture, tests, and local validation log
-- keep the evidence record empty or unsatisfied until real artifacts exist
+- implement a real prover adapter function behind strict local tests
+- generate a real proof bytes fixture only after local verification exists
+- keep the evidence record unsatisfied until code, fixture, tests, and log exist
 - do not emit production proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase
