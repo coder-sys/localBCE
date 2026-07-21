@@ -57,6 +57,7 @@ PHASE8_PRE_PROVER_BUNDLE_CHECKPOINT="${TMP_DIR}/phase8_pre_prover_bundle_checkpo
 PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST="${TMP_DIR}/phase8_real_prover_implementation_checklist.json"
 PHASE8_TEST_ONLY_PROVER_HARNESS_PLAN="${TMP_DIR}/phase8_test_only_prover_harness_plan.json"
 PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT="${TMP_DIR}/phase8_test_only_prover_harness_execution_report.json"
+PHASE8_REAL_PROVER_BOUNDARY_ADAPTER_PLAN="${TMP_DIR}/phase8_real_prover_boundary_adapter_plan.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -282,6 +283,12 @@ run_in_dir "Generate Phase 8 test-only prover harness execution report" "stark-e
 
 run_in_dir "Validate Phase 8 test-only prover harness execution report" "stark-engine" \
   cargo run --bin validate_phase8_test_only_prover_harness_execution_report -- "${PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT}"
+
+run_in_dir "Generate Phase 8 real prover boundary adapter plan" "stark-engine" \
+  cargo run --bin generate_phase8_real_prover_boundary_adapter_plan -- "${PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT}" "${PHASE8_REAL_PROVER_BOUNDARY_ADAPTER_PLAN}"
+
+run_in_dir "Validate Phase 8 real prover boundary adapter plan" "stark-engine" \
+  cargo run --bin validate_phase8_real_prover_boundary_adapter_plan -- "${PHASE8_REAL_PROVER_BOUNDARY_ADAPTER_PLAN}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"

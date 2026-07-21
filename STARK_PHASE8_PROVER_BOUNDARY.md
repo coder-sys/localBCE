@@ -601,13 +601,66 @@ generate_phase8_test_only_prover_harness_execution_report
 validate_phase8_test_only_prover_harness_execution_report
 ```
 
+## Real Prover Boundary Adapter Plan
+
+The next Phase 8 boundary object is:
+
+```text
+Phase8RealProverBoundaryAdapterPlan
+```
+
+It is generated from the test-only prover harness execution report and defines
+the exact transformations required before a preview proof lane can emit a real
+`stark-proof-artifact-v1`:
+
+- replace preview proof bytes with real proof bytes
+- select production hash and root semantics
+- bind the final public input root
+- bind source roots
+- generate a proof commitment from canonical proof bytes
+- locally verify the real STARK proof
+- emit a complete `stark-proof-artifact-v1`
+
+The adapter plan keeps:
+
+```text
+adapter_status = preview_to_real_prover_boundary_adapter_no_runtime_cutover
+target_prover_status = production_prover_not_selected_real_proof_not_generated
+target_artifact_schema_version = stark-proof-artifact-v1
+preview_artifact_reusable_for_runtime = false
+real_proof_generation_allowed = false
+local_verification_required = true
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+The adapter also records runtime blockers:
+
+- production prover not selected
+- real proof bytes not generated
+- production public input root not generated
+- source roots not production ready
+- real proof not locally verified
+- Solidity verifier not runtime integrated
+
+This is still not production STARK proof generation. It is a deterministic
+handoff contract between the test-only preview lane and the future real proof
+artifact lane.
+
+The real prover boundary adapter CLI pair is:
+
+```text
+generate_phase8_real_prover_boundary_adapter_plan
+validate_phase8_real_prover_boundary_adapter_plan
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add a real prover implementation boundary
-that stays feature-gated:
+The next safe Phase 8 step is to add a real proof artifact readiness gate:
 
-- consume the harness execution report
-- define what moves from preview proof bytes to a real proof artifact candidate
-- preserve local-only verification
+- consume the real prover boundary adapter plan
+- check whether each required transformation has an implementation source
+- keep proof generation blocked until all readiness gates are satisfied
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase

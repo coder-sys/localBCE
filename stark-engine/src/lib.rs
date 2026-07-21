@@ -1014,6 +1014,43 @@ pub struct Phase8TestOnlyProverHarnessExecutionReport {
     pub notes: Vec<String>,
 }
 
+/// Boundary adapter plan from feature-gated proof preview to a future real
+/// STARK proof artifact.
+///
+/// This object is not a prover and not a proof. It defines the exact
+/// transformations that must happen before the preview lane can produce a real
+/// `stark-proof-artifact-v1` candidate.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8RealProverBoundaryAdapterPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub adapter_status: String,
+    pub source_execution_status: String,
+    pub source_preview_prover: String,
+    pub target_prover_status: String,
+    pub target_artifact_schema_version: String,
+    pub required_transformations: Vec<Phase8RealProverBoundaryTransformation>,
+    pub expected_transformation_count: usize,
+    pub blocked_runtime_cutover_conditions: Vec<String>,
+    pub expected_blocker_count: usize,
+    pub preview_artifact_reusable_for_runtime: bool,
+    pub real_proof_generation_allowed: bool,
+    pub local_verification_required: bool,
+    pub runtime_cutover_allowed: bool,
+    pub on_chain_submission_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8RealProverBoundaryTransformation {
+    pub transformation_id: String,
+    pub source_artifact: String,
+    pub target_field: String,
+    pub requirement: String,
+    pub status: String,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -3847,6 +3884,245 @@ impl Phase8TestOnlyProverHarnessExecutionReport {
     }
 }
 
+impl Phase8RealProverBoundaryAdapterPlan {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-boundary-adapter-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "phase8-test-only-prover-harness-execution-report-v0";
+    pub const ADAPTER_STATUS: &'static str =
+        "preview_to_real_prover_boundary_adapter_no_runtime_cutover";
+    pub const TARGET_PROVER_STATUS: &'static str =
+        "production_prover_not_selected_real_proof_not_generated";
+    pub const TARGET_ARTIFACT_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1";
+    pub const TRANSFORMATION_STATUS: &'static str = "required_before_real_artifact_generation";
+    pub const REQUIRED_TRANSFORMATION_IDS: [&'static str; 7] = [
+        "replace_preview_proof_bytes_with_real_proof_bytes",
+        "select_production_hash_and_root_semantics",
+        "bind_public_input_root",
+        "bind_source_roots",
+        "generate_proof_commitment_from_canonical_bytes",
+        "locally_verify_real_stark_proof",
+        "emit_stark_proof_artifact_v1",
+    ];
+    pub const BLOCKED_RUNTIME_CUTOVER_CONDITIONS: [&'static str; 6] = [
+        "production_prover_not_selected",
+        "real_proof_bytes_not_generated",
+        "production_public_input_root_not_generated",
+        "source_roots_not_production_ready",
+        "real_proof_not_locally_verified",
+        "solidity_verifier_not_runtime_integrated",
+    ];
+
+    pub fn from_execution_report(
+        report: &Phase8TestOnlyProverHarnessExecutionReport,
+    ) -> Result<Self, Vec<String>> {
+        report.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: report.schema_version.clone(),
+            adapter_status: Self::ADAPTER_STATUS.to_string(),
+            source_execution_status: report.execution_status.clone(),
+            source_preview_prover: report.selected_preview_prover.clone(),
+            target_prover_status: Self::TARGET_PROVER_STATUS.to_string(),
+            target_artifact_schema_version: Self::TARGET_ARTIFACT_SCHEMA_VERSION.to_string(),
+            required_transformations: vec![
+                Phase8RealProverBoundaryTransformation::new(
+                    "replace_preview_proof_bytes_with_real_proof_bytes",
+                    "winterfell_proof_preview",
+                    "proof.proof_bytes",
+                    "Preview bytes cannot be reused for runtime; generate real proof bytes with the selected production prover.",
+                ),
+                Phase8RealProverBoundaryTransformation::new(
+                    "select_production_hash_and_root_semantics",
+                    "phase8_pre_prover_bundle_checkpoint",
+                    "public_inputs.public_input_root",
+                    "Replace candidate SHA-256 planning roots with selected production root semantics.",
+                ),
+                Phase8RealProverBoundaryTransformation::new(
+                    "bind_public_input_root",
+                    "public_input_root_assembly_plan",
+                    "public_inputs.public_input_root",
+                    "Bind the final public input root to the exact public input field order.",
+                ),
+                Phase8RealProverBoundaryTransformation::new(
+                    "bind_source_roots",
+                    "source_root_aggregation_plan",
+                    "public_inputs.claim_source_root+oracle_facts_root+fee_schedule_root+nullifier_roots",
+                    "Bind all source roots used by the proof and settlement interface.",
+                ),
+                Phase8RealProverBoundaryTransformation::new(
+                    "generate_proof_commitment_from_canonical_bytes",
+                    "selected_prover_byte_encoding_plan",
+                    "proof.proof_commitment",
+                    "Commit to canonical real proof bytes using the selected production commitment scheme.",
+                ),
+                Phase8RealProverBoundaryTransformation::new(
+                    "locally_verify_real_stark_proof",
+                    "selected_stark_verifier",
+                    "local_verification",
+                    "Verify the generated real proof against the final public inputs before any settlement work.",
+                ),
+                Phase8RealProverBoundaryTransformation::new(
+                    "emit_stark_proof_artifact_v1",
+                    "real_stark_prover_output",
+                    "stark-proof-artifact-v1",
+                    "Emit a complete artifact with proof bytes, proof commitment, public roots, and local verification.",
+                ),
+            ],
+            expected_transformation_count: Self::REQUIRED_TRANSFORMATION_IDS.len(),
+            blocked_runtime_cutover_conditions: Self::BLOCKED_RUNTIME_CUTOVER_CONDITIONS
+                .iter()
+                .map(|condition| (*condition).to_string())
+                .collect(),
+            expected_blocker_count: Self::BLOCKED_RUNTIME_CUTOVER_CONDITIONS.len(),
+            preview_artifact_reusable_for_runtime: false,
+            real_proof_generation_allowed: false,
+            local_verification_required: true,
+            runtime_cutover_allowed: false,
+            on_chain_submission_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This adapter plan converts the test-only preview report into real prover implementation requirements.".to_string(),
+                "It does not permit preview proof bytes to be reused as runtime proof bytes.".to_string(),
+                "Real proof generation remains blocked until production prover, hash, root, and verification choices are complete.".to_string(),
+                "Groth16 remains the active runtime path.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.adapter_status != Self::ADAPTER_STATUS {
+            errors.push(format!(
+                "adapter_status must be {}, got {}",
+                Self::ADAPTER_STATUS,
+                self.adapter_status
+            ));
+        }
+
+        if self.source_execution_status
+            != Phase8TestOnlyProverHarnessExecutionReport::EXECUTION_STATUS
+        {
+            errors.push(format!(
+                "source_execution_status must be {}",
+                Phase8TestOnlyProverHarnessExecutionReport::EXECUTION_STATUS
+            ));
+        }
+
+        if self.source_preview_prover != Phase8TestOnlyProverHarnessPlan::SELECTED_PREVIEW_PROVER {
+            errors.push(format!(
+                "source_preview_prover must be {}",
+                Phase8TestOnlyProverHarnessPlan::SELECTED_PREVIEW_PROVER
+            ));
+        }
+
+        if self.target_prover_status != Self::TARGET_PROVER_STATUS {
+            errors.push(format!(
+                "target_prover_status must be {}",
+                Self::TARGET_PROVER_STATUS
+            ));
+        }
+
+        if self.target_artifact_schema_version != Self::TARGET_ARTIFACT_SCHEMA_VERSION {
+            errors.push(format!(
+                "target_artifact_schema_version must be {}",
+                Self::TARGET_ARTIFACT_SCHEMA_VERSION
+            ));
+        }
+
+        validate_real_prover_transformations(&self.required_transformations, &mut errors);
+
+        if self.expected_transformation_count != Self::REQUIRED_TRANSFORMATION_IDS.len() {
+            errors.push(format!(
+                "expected_transformation_count must be {}",
+                Self::REQUIRED_TRANSFORMATION_IDS.len()
+            ));
+        }
+
+        validate_ordered_strings(
+            "blocked_runtime_cutover_conditions",
+            &self.blocked_runtime_cutover_conditions,
+            &Self::BLOCKED_RUNTIME_CUTOVER_CONDITIONS,
+            &mut errors,
+        );
+
+        if self.expected_blocker_count != Self::BLOCKED_RUNTIME_CUTOVER_CONDITIONS.len() {
+            errors.push(format!(
+                "expected_blocker_count must be {}",
+                Self::BLOCKED_RUNTIME_CUTOVER_CONDITIONS.len()
+            ));
+        }
+
+        if self.preview_artifact_reusable_for_runtime {
+            errors.push("preview_artifact_reusable_for_runtime must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if !self.local_verification_required {
+            errors.push("local_verification_required must be true".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.on_chain_submission_allowed {
+            errors.push("on_chain_submission_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl Phase8RealProverBoundaryTransformation {
+    fn new(
+        transformation_id: &str,
+        source_artifact: &str,
+        target_field: &str,
+        requirement: &str,
+    ) -> Self {
+        Self {
+            transformation_id: transformation_id.to_string(),
+            source_artifact: source_artifact.to_string(),
+            target_field: target_field.to_string(),
+            requirement: requirement.to_string(),
+            status: Phase8RealProverBoundaryAdapterPlan::TRANSFORMATION_STATUS.to_string(),
+        }
+    }
+}
+
 fn validate_fixture_dependency_status(
     fixture_id: &str,
     field_name: &str,
@@ -4009,6 +4285,79 @@ fn validate_harness_artifacts(
                 }
             }
             None => errors.push(format!("{collection_name} missing artifact: {expected_id}")),
+        }
+    }
+}
+
+fn validate_real_prover_transformations(
+    transformations: &[Phase8RealProverBoundaryTransformation],
+    errors: &mut Vec<String>,
+) {
+    if transformations.len()
+        != Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+    {
+        errors.push(format!(
+            "required_transformations must contain exactly {} transformations",
+            Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+        ));
+    }
+
+    for (position, expected_id) in Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS
+        .iter()
+        .enumerate()
+    {
+        match transformations.get(position) {
+            Some(transformation) => {
+                if transformation.transformation_id != *expected_id {
+                    errors.push(format!(
+                        "required_transformations[{position}].transformation_id must be {expected_id}"
+                    ));
+                }
+                if transformation.source_artifact.trim().is_empty() {
+                    errors.push(format!("{expected_id}.source_artifact must be present"));
+                }
+                if transformation.target_field.trim().is_empty() {
+                    errors.push(format!("{expected_id}.target_field must be present"));
+                }
+                if transformation.requirement.trim().is_empty() {
+                    errors.push(format!("{expected_id}.requirement must be present"));
+                }
+                if transformation.status
+                    != Phase8RealProverBoundaryAdapterPlan::TRANSFORMATION_STATUS
+                {
+                    errors.push(format!(
+                        "{expected_id}.status must be {}",
+                        Phase8RealProverBoundaryAdapterPlan::TRANSFORMATION_STATUS
+                    ));
+                }
+            }
+            None => errors.push(format!(
+                "required_transformations missing transformation: {expected_id}"
+            )),
+        }
+    }
+}
+
+fn validate_ordered_strings(
+    collection_name: &str,
+    values: &[String],
+    expected_values: &[&str],
+    errors: &mut Vec<String>,
+) {
+    if values.len() != expected_values.len() {
+        errors.push(format!(
+            "{collection_name} must contain exactly {} values",
+            expected_values.len()
+        ));
+    }
+
+    for (position, expected_value) in expected_values.iter().enumerate() {
+        match values.get(position) {
+            Some(value) if value == expected_value => {}
+            Some(_) => errors.push(format!(
+                "{collection_name}[{position}] must be {expected_value}"
+            )),
+            None => errors.push(format!("{collection_name} missing value: {expected_value}")),
         }
     }
 }
