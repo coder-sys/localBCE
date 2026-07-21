@@ -10,6 +10,14 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod local_verifier;
+pub mod proof_artifact;
+pub mod proof_commitment;
+pub mod public_inputs;
+pub mod real_prover;
+pub mod root_semantics;
+pub mod source_roots;
+
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

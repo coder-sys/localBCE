@@ -827,13 +827,38 @@ generate_phase8_evidence_readiness_report
 validate_phase8_evidence_readiness_report
 ```
 
+## Inactive Real Prover Source Scaffolds
+
+The planned real prover implementation source scaffolds now exist as inactive
+module boundaries:
+
+- `stark-engine/src/real_prover.rs`
+- `stark-engine/src/root_semantics.rs`
+- `stark-engine/src/public_inputs.rs`
+- `stark-engine/src/source_roots.rs`
+- `stark-engine/src/proof_commitment.rs`
+- `stark-engine/src/local_verifier.rs`
+- `stark-engine/src/proof_artifact.rs`
+
+Each module currently exposes only scaffold constants:
+
+```text
+implementation_status = scaffold_only_not_implemented
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+The scaffold tests confirm these modules match the Phase 8 implementation
+source registry and required evidence slots. They do not satisfy the evidence
+readiness report yet.
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add real prover implementation source
-scaffolds as inactive module boundaries:
+The next safe Phase 8 step is to start the first real prover module behind a
+test-only API:
 
-- create empty module boundaries for the planned implementation sources
-- keep them disconnected from runtime execution
-- do not generate real proof bytes yet
+- add a deterministic test-only function under `stark-engine/src/real_prover.rs`
+- keep it feature/local-test scoped
+- do not emit production proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase
