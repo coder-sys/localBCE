@@ -59,6 +59,7 @@ PHASE8_TEST_ONLY_PROVER_HARNESS_PLAN="${TMP_DIR}/phase8_test_only_prover_harness
 PHASE8_TEST_ONLY_PROVER_HARNESS_EXECUTION_REPORT="${TMP_DIR}/phase8_test_only_prover_harness_execution_report.json"
 PHASE8_REAL_PROVER_BOUNDARY_ADAPTER_PLAN="${TMP_DIR}/phase8_real_prover_boundary_adapter_plan.json"
 PHASE8_REAL_PROOF_ARTIFACT_READINESS_GATE="${TMP_DIR}/phase8_real_proof_artifact_readiness_gate.json"
+PHASE8_IMPLEMENTATION_SOURCE_REGISTRY="${TMP_DIR}/phase8_implementation_source_registry.json"
 BATCH_ROOT_PLAN="${TMP_DIR}/batch_root_plan.json"
 BATCH_ROOT_GAP_REPORT="${TMP_DIR}/batch_root_gap_report.json"
 PROOF_INTENT="${TMP_DIR}/proof_intent.json"
@@ -296,6 +297,12 @@ run_in_dir "Generate Phase 8 real proof artifact readiness gate" "stark-engine" 
 
 run_in_dir "Validate Phase 8 real proof artifact readiness gate" "stark-engine" \
   cargo run --bin validate_phase8_real_proof_artifact_readiness_gate -- "${PHASE8_REAL_PROOF_ARTIFACT_READINESS_GATE}"
+
+run_in_dir "Generate Phase 8 implementation source registry" "stark-engine" \
+  cargo run --bin generate_phase8_implementation_source_registry -- "${PHASE8_REAL_PROOF_ARTIFACT_READINESS_GATE}" "${PHASE8_IMPLEMENTATION_SOURCE_REGISTRY}"
+
+run_in_dir "Validate Phase 8 implementation source registry" "stark-engine" \
+  cargo run --bin validate_phase8_implementation_source_registry -- "${PHASE8_IMPLEMENTATION_SOURCE_REGISTRY}"
 
 run_in_dir "Generate STARK batch root compatibility plan" "stark-engine" \
   cargo run --bin generate_batch_root_plan -- "${BRIDGE_INPUT}" "${BATCH_ROOT_PLAN}"

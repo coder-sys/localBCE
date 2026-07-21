@@ -701,12 +701,60 @@ generate_phase8_real_proof_artifact_readiness_gate
 validate_phase8_real_proof_artifact_readiness_gate
 ```
 
+## Implementation Source Registry
+
+The next Phase 8 planning object is:
+
+```text
+Phase8ImplementationSourceRegistry
+```
+
+It is generated from the real proof artifact readiness gate and maps each
+required transformation to a planned implementation module. This is only a
+source-routing plan; it is not implementation evidence and does not mark any
+readiness gate as satisfied.
+
+The registry keeps:
+
+```text
+registry_status = planned_sources_only_real_proof_generation_blocked
+implementation_evidence_status = planned_not_implemented_no_evidence
+satisfied_gate_count = 0
+unsatisfied_gate_count = 7
+real_proof_generation_allowed = false
+real_artifact_emission_allowed = false
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+The planned modules are:
+
+- `stark-engine/src/real_prover.rs`
+- `stark-engine/src/root_semantics.rs`
+- `stark-engine/src/public_inputs.rs`
+- `stark-engine/src/source_roots.rs`
+- `stark-engine/src/proof_commitment.rs`
+- `stark-engine/src/local_verifier.rs`
+- `stark-engine/src/proof_artifact.rs`
+
+These files are planned implementation boundaries, not active runtime modules
+yet. Real proof generation remains blocked until a later phase adds
+implementation evidence and local validation for every transformation.
+
+The implementation source registry CLI pair is:
+
+```text
+generate_phase8_implementation_source_registry
+validate_phase8_implementation_source_registry
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add an implementation-source registry:
+The next safe Phase 8 step is to add implementation evidence slots:
 
-- map each required transformation to a planned production implementation file/module
-- keep every readiness gate blocked until implementation evidence exists
+- define the required evidence fields for each planned implementation module
+- keep every readiness gate blocked until evidence is populated and validated
 - do not generate real proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase

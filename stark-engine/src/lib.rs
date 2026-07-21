@@ -1084,6 +1084,41 @@ pub struct Phase8ReadinessTransformationGate {
     pub blocks_real_proof_generation: bool,
 }
 
+/// Planned implementation-source registry for the real proof artifact
+/// readiness gate.
+///
+/// This registry is a routing plan, not implementation evidence. It documents
+/// where each blocked transformation should eventually be implemented while
+/// keeping real proof generation disabled.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8ImplementationSourceRegistry {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub registry_status: String,
+    pub target_artifact_schema_version: String,
+    pub planned_sources: Vec<Phase8ImplementationSourceEntry>,
+    pub expected_source_count: usize,
+    pub implementation_evidence_status: String,
+    pub satisfied_gate_count: usize,
+    pub unsatisfied_gate_count: usize,
+    pub real_proof_generation_allowed: bool,
+    pub real_artifact_emission_allowed: bool,
+    pub runtime_cutover_allowed: bool,
+    pub on_chain_submission_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8ImplementationSourceEntry {
+    pub transformation_id: String,
+    pub planned_module: String,
+    pub planned_owner: String,
+    pub implementation_status: String,
+    pub evidence_required: String,
+    pub blocks_real_proof_generation: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -4310,6 +4345,188 @@ impl Phase8RealProofArtifactReadinessGate {
     }
 }
 
+impl Phase8ImplementationSourceRegistry {
+    pub const SCHEMA_VERSION: &'static str = "phase8-implementation-source-registry-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        Phase8RealProofArtifactReadinessGate::SCHEMA_VERSION;
+    pub const REGISTRY_STATUS: &'static str = "planned_sources_only_real_proof_generation_blocked";
+    pub const IMPLEMENTATION_EVIDENCE_STATUS: &'static str = "planned_not_implemented_no_evidence";
+    pub const IMPLEMENTATION_STATUS: &'static str = "planned_not_implemented";
+    pub const EVIDENCE_REQUIRED: &'static str =
+        "implemented_code_tests_and_local_validation_required";
+    pub const PLANNED_SOURCES: [(&'static str, &'static str, &'static str); 7] = [
+        (
+            "replace_preview_proof_bytes_with_real_proof_bytes",
+            "stark-engine/src/real_prover.rs",
+            "stark-engine",
+        ),
+        (
+            "select_production_hash_and_root_semantics",
+            "stark-engine/src/root_semantics.rs",
+            "stark-engine",
+        ),
+        (
+            "bind_public_input_root",
+            "stark-engine/src/public_inputs.rs",
+            "stark-engine",
+        ),
+        (
+            "bind_source_roots",
+            "stark-engine/src/source_roots.rs",
+            "stark-engine",
+        ),
+        (
+            "generate_proof_commitment_from_canonical_bytes",
+            "stark-engine/src/proof_commitment.rs",
+            "stark-engine",
+        ),
+        (
+            "locally_verify_real_stark_proof",
+            "stark-engine/src/local_verifier.rs",
+            "stark-engine",
+        ),
+        (
+            "emit_stark_proof_artifact_v1",
+            "stark-engine/src/proof_artifact.rs",
+            "stark-engine",
+        ),
+    ];
+
+    pub fn from_readiness_gate(
+        gate: &Phase8RealProofArtifactReadinessGate,
+    ) -> Result<Self, Vec<String>> {
+        gate.validate()?;
+
+        let planned_sources = Self::PLANNED_SOURCES
+            .iter()
+            .map(|(transformation_id, planned_module, planned_owner)| {
+                Phase8ImplementationSourceEntry {
+                    transformation_id: (*transformation_id).to_string(),
+                    planned_module: (*planned_module).to_string(),
+                    planned_owner: (*planned_owner).to_string(),
+                    implementation_status: Self::IMPLEMENTATION_STATUS.to_string(),
+                    evidence_required: Self::EVIDENCE_REQUIRED.to_string(),
+                    blocks_real_proof_generation: true,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: gate.schema_version.clone(),
+            registry_status: Self::REGISTRY_STATUS.to_string(),
+            target_artifact_schema_version: gate.target_artifact_schema_version.clone(),
+            expected_source_count: planned_sources.len(),
+            planned_sources,
+            implementation_evidence_status: Self::IMPLEMENTATION_EVIDENCE_STATUS.to_string(),
+            satisfied_gate_count: 0,
+            unsatisfied_gate_count: gate.unsatisfied_gate_count,
+            real_proof_generation_allowed: false,
+            real_artifact_emission_allowed: false,
+            runtime_cutover_allowed: false,
+            on_chain_submission_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This registry names planned implementation modules only.".to_string(),
+                "No implementation source is treated as complete by this artifact.".to_string(),
+                "Real STARK proof generation remains blocked until evidence is added in a later phase.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.registry_status != Self::REGISTRY_STATUS {
+            errors.push(format!("registry_status must be {}", Self::REGISTRY_STATUS));
+        }
+
+        if self.target_artifact_schema_version
+            != Phase8RealProverBoundaryAdapterPlan::TARGET_ARTIFACT_SCHEMA_VERSION
+        {
+            errors.push(format!(
+                "target_artifact_schema_version must be {}",
+                Phase8RealProverBoundaryAdapterPlan::TARGET_ARTIFACT_SCHEMA_VERSION
+            ));
+        }
+
+        validate_implementation_source_entries(&self.planned_sources, &mut errors);
+
+        if self.expected_source_count != Self::PLANNED_SOURCES.len() {
+            errors.push(format!(
+                "expected_source_count must be {}",
+                Self::PLANNED_SOURCES.len()
+            ));
+        }
+
+        if self.implementation_evidence_status != Self::IMPLEMENTATION_EVIDENCE_STATUS {
+            errors.push(format!(
+                "implementation_evidence_status must be {}",
+                Self::IMPLEMENTATION_EVIDENCE_STATUS
+            ));
+        }
+
+        if self.satisfied_gate_count != 0 {
+            errors.push("satisfied_gate_count must be 0".to_string());
+        }
+
+        if self.unsatisfied_gate_count
+            != Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+        {
+            errors.push(format!(
+                "unsatisfied_gate_count must be {}",
+                Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+            ));
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.real_artifact_emission_allowed {
+            errors.push("real_artifact_emission_allowed must be false".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.on_chain_submission_allowed {
+            errors.push("on_chain_submission_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 fn validate_fixture_dependency_status(
     fixture_id: &str,
     field_name: &str,
@@ -4565,6 +4782,65 @@ fn validate_readiness_transformation_gates(
                 }
             }
             None => errors.push(format!("transformation_gates missing gate: {expected_id}")),
+        }
+    }
+}
+
+fn validate_implementation_source_entries(
+    entries: &[Phase8ImplementationSourceEntry],
+    errors: &mut Vec<String>,
+) {
+    if entries.len() != Phase8ImplementationSourceRegistry::PLANNED_SOURCES.len() {
+        errors.push(format!(
+            "planned_sources must contain exactly {} entries",
+            Phase8ImplementationSourceRegistry::PLANNED_SOURCES.len()
+        ));
+    }
+
+    for (position, (expected_id, expected_module, expected_owner)) in
+        Phase8ImplementationSourceRegistry::PLANNED_SOURCES
+            .iter()
+            .enumerate()
+    {
+        match entries.get(position) {
+            Some(entry) => {
+                if entry.transformation_id != *expected_id {
+                    errors.push(format!(
+                        "planned_sources[{position}].transformation_id must be {expected_id}"
+                    ));
+                }
+                if entry.planned_module != *expected_module {
+                    errors.push(format!(
+                        "{expected_id}.planned_module must be {expected_module}"
+                    ));
+                }
+                if entry.planned_owner != *expected_owner {
+                    errors.push(format!(
+                        "{expected_id}.planned_owner must be {expected_owner}"
+                    ));
+                }
+                if entry.implementation_status
+                    != Phase8ImplementationSourceRegistry::IMPLEMENTATION_STATUS
+                {
+                    errors.push(format!(
+                        "{expected_id}.implementation_status must be {}",
+                        Phase8ImplementationSourceRegistry::IMPLEMENTATION_STATUS
+                    ));
+                }
+                if entry.evidence_required != Phase8ImplementationSourceRegistry::EVIDENCE_REQUIRED
+                {
+                    errors.push(format!(
+                        "{expected_id}.evidence_required must be {}",
+                        Phase8ImplementationSourceRegistry::EVIDENCE_REQUIRED
+                    ));
+                }
+                if !entry.blocks_real_proof_generation {
+                    errors.push(format!(
+                        "{expected_id}.blocks_real_proof_generation must be true"
+                    ));
+                }
+            }
+            None => errors.push(format!("planned_sources missing entry: {expected_id}")),
         }
     }
 }
