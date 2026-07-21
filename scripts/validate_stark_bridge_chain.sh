@@ -74,6 +74,7 @@ WINTERFELL_WITNESS_GAP_REPORT="${TMP_DIR}/winterfell_witness_gap_report.json"
 WINTERFELL_SOURCE_DATA_REQUIREMENTS="${TMP_DIR}/winterfell_source_data_requirements.json"
 WINTERFELL_SOURCE_DATA_FIXTURE="${TMP_DIR}/winterfell_source_data_fixture.json"
 COMPLETE_WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/complete_winterfell_witness_candidate.json"
+PHASE8_TEST_ONLY_PROOF_BYTES="${TMP_DIR}/phase8_test_only_proof_bytes.json"
 WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
 STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifact.json"
 STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_interface_plan.json"
@@ -151,6 +152,12 @@ run_in_dir "Generate complete Winterfell witness candidate" "stark-engine" \
 
 run_in_dir "Validate complete Winterfell witness candidate" "stark-engine" \
   cargo run --bin validate_complete_winterfell_witness_candidate -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
+
+run_in_dir "Generate Phase 8 test-only proof bytes" "stark-engine" \
+  cargo run --bin generate_phase8_test_only_proof_bytes -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${PHASE8_TEST_ONLY_PROOF_BYTES}"
+
+run_in_dir "Validate Phase 8 test-only proof bytes" "stark-engine" \
+  cargo run --bin validate_phase8_test_only_proof_bytes -- "${PHASE8_TEST_ONLY_PROOF_BYTES}"
 
 run_in_dir "Generate Winterfell proof preview" "stark-engine" \
   cargo run --features winterfell-poc --bin generate_winterfell_proof_preview -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_PROOF_PREVIEW}"

@@ -877,14 +877,24 @@ These bytes are useful for adapter tests, but they are not a real STARK proof,
 not a production artifact, and not enough to satisfy the Phase 8 evidence
 readiness report.
 
+The test-only proof bytes CLI pair is:
+
+```text
+generate_phase8_test_only_proof_bytes
+validate_phase8_test_only_proof_bytes
+```
+
+The full STARK bridge smoke chain now generates and validates this placeholder
+after `WinterfellCompleteWitnessCandidate` and before the feature-gated
+Winterfell proof preview.
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add a CLI/validator pair for the test-only
-proof byte package:
+The next safe Phase 8 step is to define the first real prover evidence record
+schema:
 
-- read `WinterfellCompleteWitnessCandidate`
-- generate `TestOnlyProofBytes`
-- validate that it remains test-only and blocked from runtime use
+- point at future implementation code, fixture, tests, and local validation log
+- keep the evidence record empty or unsatisfied until real artifacts exist
 - do not emit production proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase
