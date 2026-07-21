@@ -1051,6 +1051,39 @@ pub struct Phase8RealProverBoundaryTransformation {
     pub status: String,
 }
 
+/// Readiness gate for producing a real `stark-proof-artifact-v1`.
+///
+/// This is the final conservative boundary before real proof generation work.
+/// It must remain blocked until every required transformation has an explicit
+/// implementation source and has been promoted by a later phase.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8RealProofArtifactReadinessGate {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub readiness_status: String,
+    pub target_artifact_schema_version: String,
+    pub transformation_gates: Vec<Phase8ReadinessTransformationGate>,
+    pub expected_transformation_gate_count: usize,
+    pub satisfied_gate_count: usize,
+    pub unsatisfied_gate_count: usize,
+    pub blockers: Vec<String>,
+    pub expected_blocker_count: usize,
+    pub real_proof_generation_allowed: bool,
+    pub real_artifact_emission_allowed: bool,
+    pub runtime_cutover_allowed: bool,
+    pub on_chain_submission_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8ReadinessTransformationGate {
+    pub transformation_id: String,
+    pub implementation_source: Option<String>,
+    pub readiness_status: String,
+    pub blocks_real_proof_generation: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -4123,6 +4156,160 @@ impl Phase8RealProverBoundaryTransformation {
     }
 }
 
+impl Phase8RealProofArtifactReadinessGate {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-proof-artifact-readiness-gate-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        Phase8RealProverBoundaryAdapterPlan::SCHEMA_VERSION;
+    pub const READINESS_STATUS: &'static str = "not_ready_real_proof_generation_blocked";
+    pub const TRANSFORMATION_GATE_STATUS: &'static str = "implementation_source_missing";
+
+    pub fn from_boundary_adapter_plan(
+        plan: &Phase8RealProverBoundaryAdapterPlan,
+    ) -> Result<Self, Vec<String>> {
+        plan.validate()?;
+
+        let transformation_gates: Vec<Phase8ReadinessTransformationGate> = plan
+            .required_transformations
+            .iter()
+            .map(|transformation| Phase8ReadinessTransformationGate {
+                transformation_id: transformation.transformation_id.clone(),
+                implementation_source: None,
+                readiness_status: Self::TRANSFORMATION_GATE_STATUS.to_string(),
+                blocks_real_proof_generation: true,
+            })
+            .collect();
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: plan.schema_version.clone(),
+            readiness_status: Self::READINESS_STATUS.to_string(),
+            target_artifact_schema_version: plan.target_artifact_schema_version.clone(),
+            expected_transformation_gate_count: transformation_gates.len(),
+            satisfied_gate_count: 0,
+            unsatisfied_gate_count: transformation_gates.len(),
+            transformation_gates,
+            blockers: plan.blocked_runtime_cutover_conditions.clone(),
+            expected_blocker_count: plan.blocked_runtime_cutover_conditions.len(),
+            real_proof_generation_allowed: false,
+            real_artifact_emission_allowed: false,
+            runtime_cutover_allowed: false,
+            on_chain_submission_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This readiness gate intentionally blocks real STARK proof generation.".to_string(),
+                "Every transformation must get an explicit implementation source before a real artifact can be emitted.".to_string(),
+                "Groth16 remains the active runtime path while this gate is unsatisfied.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.readiness_status != Self::READINESS_STATUS {
+            errors.push(format!(
+                "readiness_status must be {}",
+                Self::READINESS_STATUS
+            ));
+        }
+
+        if self.target_artifact_schema_version
+            != Phase8RealProverBoundaryAdapterPlan::TARGET_ARTIFACT_SCHEMA_VERSION
+        {
+            errors.push(format!(
+                "target_artifact_schema_version must be {}",
+                Phase8RealProverBoundaryAdapterPlan::TARGET_ARTIFACT_SCHEMA_VERSION
+            ));
+        }
+
+        validate_readiness_transformation_gates(&self.transformation_gates, &mut errors);
+
+        if self.expected_transformation_gate_count
+            != Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+        {
+            errors.push(format!(
+                "expected_transformation_gate_count must be {}",
+                Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+            ));
+        }
+
+        if self.satisfied_gate_count != 0 {
+            errors.push("satisfied_gate_count must be 0".to_string());
+        }
+
+        if self.unsatisfied_gate_count
+            != Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+        {
+            errors.push(format!(
+                "unsatisfied_gate_count must be {}",
+                Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+            ));
+        }
+
+        validate_ordered_strings(
+            "blockers",
+            &self.blockers,
+            &Phase8RealProverBoundaryAdapterPlan::BLOCKED_RUNTIME_CUTOVER_CONDITIONS,
+            &mut errors,
+        );
+
+        if self.expected_blocker_count
+            != Phase8RealProverBoundaryAdapterPlan::BLOCKED_RUNTIME_CUTOVER_CONDITIONS.len()
+        {
+            errors.push(format!(
+                "expected_blocker_count must be {}",
+                Phase8RealProverBoundaryAdapterPlan::BLOCKED_RUNTIME_CUTOVER_CONDITIONS.len()
+            ));
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.real_artifact_emission_allowed {
+            errors.push("real_artifact_emission_allowed must be false".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.on_chain_submission_allowed {
+            errors.push("on_chain_submission_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 fn validate_fixture_dependency_status(
     fixture_id: &str,
     field_name: &str,
@@ -4334,6 +4521,50 @@ fn validate_real_prover_transformations(
             None => errors.push(format!(
                 "required_transformations missing transformation: {expected_id}"
             )),
+        }
+    }
+}
+
+fn validate_readiness_transformation_gates(
+    gates: &[Phase8ReadinessTransformationGate],
+    errors: &mut Vec<String>,
+) {
+    if gates.len() != Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len() {
+        errors.push(format!(
+            "transformation_gates must contain exactly {} gates",
+            Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS.len()
+        ));
+    }
+
+    for (position, expected_id) in Phase8RealProverBoundaryAdapterPlan::REQUIRED_TRANSFORMATION_IDS
+        .iter()
+        .enumerate()
+    {
+        match gates.get(position) {
+            Some(gate) => {
+                if gate.transformation_id != *expected_id {
+                    errors.push(format!(
+                        "transformation_gates[{position}].transformation_id must be {expected_id}"
+                    ));
+                }
+                if gate.implementation_source.is_some() {
+                    errors.push(format!("{expected_id}.implementation_source must be null"));
+                }
+                if gate.readiness_status
+                    != Phase8RealProofArtifactReadinessGate::TRANSFORMATION_GATE_STATUS
+                {
+                    errors.push(format!(
+                        "{expected_id}.readiness_status must be {}",
+                        Phase8RealProofArtifactReadinessGate::TRANSFORMATION_GATE_STATUS
+                    ));
+                }
+                if !gate.blocks_real_proof_generation {
+                    errors.push(format!(
+                        "{expected_id}.blocks_real_proof_generation must be true"
+                    ));
+                }
+            }
+            None => errors.push(format!("transformation_gates missing gate: {expected_id}")),
         }
     }
 }

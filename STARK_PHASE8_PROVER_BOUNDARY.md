@@ -655,12 +655,58 @@ generate_phase8_real_prover_boundary_adapter_plan
 validate_phase8_real_prover_boundary_adapter_plan
 ```
 
+## Real Proof Artifact Readiness Gate
+
+The next Phase 8 boundary object is:
+
+```text
+Phase8RealProofArtifactReadinessGate
+```
+
+It is generated from the real prover boundary adapter plan and turns the
+required transformations into explicit readiness gates. Every gate starts as
+unsatisfied because no production implementation source has been selected yet.
+
+The readiness gate keeps:
+
+```text
+readiness_status = not_ready_real_proof_generation_blocked
+target_artifact_schema_version = stark-proof-artifact-v1
+satisfied_gate_count = 0
+unsatisfied_gate_count = 7
+real_proof_generation_allowed = false
+real_artifact_emission_allowed = false
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+Each transformation gate has:
+
+```text
+implementation_source = null
+readiness_status = implementation_source_missing
+blocks_real_proof_generation = true
+```
+
+This is still not production STARK proof generation. It is a safety latch that
+prevents the preview lane from emitting a real proof artifact until every
+required transformation has an explicit implementation source and later
+validation evidence.
+
+The real proof artifact readiness gate CLI pair is:
+
+```text
+generate_phase8_real_proof_artifact_readiness_gate
+validate_phase8_real_proof_artifact_readiness_gate
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add a real proof artifact readiness gate:
+The next safe Phase 8 step is to add an implementation-source registry:
 
-- consume the real prover boundary adapter plan
-- check whether each required transformation has an implementation source
-- keep proof generation blocked until all readiness gates are satisfied
+- map each required transformation to a planned production implementation file/module
+- keep every readiness gate blocked until implementation evidence exists
+- do not generate real proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase
