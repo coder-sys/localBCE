@@ -852,13 +852,39 @@ The scaffold tests confirm these modules match the Phase 8 implementation
 source registry and required evidence slots. They do not satisfy the evidence
 readiness report yet.
 
+## Test-Only Real Prover Placeholder Bytes
+
+The first inactive real prover module now has a deterministic test-only byte
+package:
+
+```text
+real_prover::TestOnlyProofBytes
+```
+
+It is generated from a validated `WinterfellCompleteWitnessCandidate` and uses a
+deterministic digest of that candidate as placeholder bytes.
+
+This object keeps:
+
+```text
+byte_status = test_only_deterministic_placeholder_not_real_proof
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+accepted_as_implementation_evidence = false
+```
+
+These bytes are useful for adapter tests, but they are not a real STARK proof,
+not a production artifact, and not enough to satisfy the Phase 8 evidence
+readiness report.
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to start the first real prover module behind a
-test-only API:
+The next safe Phase 8 step is to add a CLI/validator pair for the test-only
+proof byte package:
 
-- add a deterministic test-only function under `stark-engine/src/real_prover.rs`
-- keep it feature/local-test scoped
+- read `WinterfellCompleteWitnessCandidate`
+- generate `TestOnlyProofBytes`
+- validate that it remains test-only and blocked from runtime use
 - do not emit production proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged
 - keep Groth16 active until an explicit cutover phase
