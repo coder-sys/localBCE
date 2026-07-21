@@ -749,11 +749,53 @@ generate_phase8_implementation_source_registry
 validate_phase8_implementation_source_registry
 ```
 
+## Implementation Evidence Slots
+
+The next Phase 8 planning object is:
+
+```text
+Phase8ImplementationEvidenceSlots
+```
+
+It is generated from the implementation source registry and defines the
+evidence each planned module must eventually provide before it can satisfy a
+readiness gate. The slots are intentionally empty.
+
+The evidence slots keep:
+
+```text
+evidence_status = evidence_slots_empty_real_proof_generation_blocked
+populated_slot_count = 0
+missing_slot_count = 7
+real_proof_generation_allowed = false
+real_artifact_emission_allowed = false
+runtime_cutover_allowed = false
+on_chain_submission_allowed = false
+groth16_flow_unchanged = true
+```
+
+Each slot requires evidence such as:
+
+- implementation code path
+- deterministic fixtures
+- unit/integration tests
+- local validation logs
+
+No slot currently contains implementation evidence. This keeps the real proof
+artifact path blocked while making the future evidence contract explicit.
+
+The implementation evidence slots CLI pair is:
+
+```text
+generate_phase8_implementation_evidence_slots
+validate_phase8_implementation_evidence_slots
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to add implementation evidence slots:
+The next safe Phase 8 step is to add an evidence readiness report:
 
-- define the required evidence fields for each planned implementation module
+- summarize missing evidence by transformation
 - keep every readiness gate blocked until evidence is populated and validated
 - do not generate real proof bytes yet
 - keep Solidity and ClaimsRegistry unchanged

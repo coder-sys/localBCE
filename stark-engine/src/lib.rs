@@ -1119,6 +1119,40 @@ pub struct Phase8ImplementationSourceEntry {
     pub blocks_real_proof_generation: bool,
 }
 
+/// Evidence slots required before a planned implementation source can satisfy
+/// a real proof artifact readiness gate.
+///
+/// This object intentionally contains empty evidence. It defines the evidence
+/// contract for a later implementation phase while keeping proof generation
+/// and runtime cutover blocked.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8ImplementationEvidenceSlots {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub evidence_status: String,
+    pub target_artifact_schema_version: String,
+    pub evidence_slots: Vec<Phase8ImplementationEvidenceSlot>,
+    pub expected_slot_count: usize,
+    pub populated_slot_count: usize,
+    pub missing_slot_count: usize,
+    pub real_proof_generation_allowed: bool,
+    pub real_artifact_emission_allowed: bool,
+    pub runtime_cutover_allowed: bool,
+    pub on_chain_submission_allowed: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8ImplementationEvidenceSlot {
+    pub transformation_id: String,
+    pub planned_module: String,
+    pub required_evidence: Vec<String>,
+    pub evidence_artifacts: Vec<String>,
+    pub evidence_status: String,
+    pub blocks_real_proof_generation: bool,
+}
+
 impl StarkBridgeInput {
     pub const SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
     pub const PRODUCER: &'static str = "rust-engine";
@@ -4527,6 +4561,208 @@ impl Phase8ImplementationSourceRegistry {
     }
 }
 
+impl Phase8ImplementationEvidenceSlots {
+    pub const SCHEMA_VERSION: &'static str = "phase8-implementation-evidence-slots-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        Phase8ImplementationSourceRegistry::SCHEMA_VERSION;
+    pub const EVIDENCE_STATUS: &'static str = "evidence_slots_empty_real_proof_generation_blocked";
+    pub const SLOT_EVIDENCE_STATUS: &'static str = "evidence_missing";
+    pub const REQUIRED_EVIDENCE: [(&'static str, [&'static str; 4]); 7] = [
+        (
+            "replace_preview_proof_bytes_with_real_proof_bytes",
+            [
+                "real_prover_code_path",
+                "real_proof_bytes_fixture",
+                "real_prover_unit_tests",
+                "local_real_proof_validation_log",
+            ],
+        ),
+        (
+            "select_production_hash_and_root_semantics",
+            [
+                "hash_semantics_code_path",
+                "root_semantics_spec",
+                "hash_semantics_tests",
+                "production_hash_selection_record",
+            ],
+        ),
+        (
+            "bind_public_input_root",
+            [
+                "public_input_binding_code_path",
+                "canonical_public_input_order_tests",
+                "public_input_root_fixture",
+                "root_binding_validation_log",
+            ],
+        ),
+        (
+            "bind_source_roots",
+            [
+                "source_root_binding_code_path",
+                "claim_oracle_fee_nullifier_root_tests",
+                "source_root_fixture",
+                "source_root_validation_log",
+            ],
+        ),
+        (
+            "generate_proof_commitment_from_canonical_bytes",
+            [
+                "proof_commitment_code_path",
+                "canonical_proof_byte_encoding_tests",
+                "proof_commitment_fixture",
+                "commitment_validation_log",
+            ],
+        ),
+        (
+            "locally_verify_real_stark_proof",
+            [
+                "local_verifier_code_path",
+                "valid_real_proof_verification_test",
+                "invalid_real_proof_rejection_test",
+                "local_verification_log",
+            ],
+        ),
+        (
+            "emit_stark_proof_artifact_v1",
+            [
+                "artifact_emitter_code_path",
+                "stark_proof_artifact_v1_fixture",
+                "artifact_schema_validation_tests",
+                "artifact_round_trip_validation_log",
+            ],
+        ),
+    ];
+
+    pub fn from_registry(
+        registry: &Phase8ImplementationSourceRegistry,
+    ) -> Result<Self, Vec<String>> {
+        registry.validate()?;
+
+        let evidence_slots = registry
+            .planned_sources
+            .iter()
+            .zip(Self::REQUIRED_EVIDENCE.iter())
+            .map(|(source, (transformation_id, required_evidence))| {
+                Phase8ImplementationEvidenceSlot {
+                    transformation_id: (*transformation_id).to_string(),
+                    planned_module: source.planned_module.clone(),
+                    required_evidence: required_evidence
+                        .iter()
+                        .map(|evidence| (*evidence).to_string())
+                        .collect(),
+                    evidence_artifacts: Vec::new(),
+                    evidence_status: Self::SLOT_EVIDENCE_STATUS.to_string(),
+                    blocks_real_proof_generation: true,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: registry.schema_version.clone(),
+            evidence_status: Self::EVIDENCE_STATUS.to_string(),
+            target_artifact_schema_version: registry.target_artifact_schema_version.clone(),
+            expected_slot_count: evidence_slots.len(),
+            populated_slot_count: 0,
+            missing_slot_count: evidence_slots.len(),
+            evidence_slots,
+            real_proof_generation_allowed: false,
+            real_artifact_emission_allowed: false,
+            runtime_cutover_allowed: false,
+            on_chain_submission_allowed: false,
+            groth16_flow_unchanged: true,
+            notes: vec![
+                "This artifact defines evidence slots only; no implementation evidence is populated.".to_string(),
+                "Every evidence slot blocks real STARK proof generation until a later phase provides artifacts.".to_string(),
+                "Groth16 remains the active runtime path.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+
+        if self.evidence_status != Self::EVIDENCE_STATUS {
+            errors.push(format!("evidence_status must be {}", Self::EVIDENCE_STATUS));
+        }
+
+        if self.target_artifact_schema_version
+            != Phase8RealProverBoundaryAdapterPlan::TARGET_ARTIFACT_SCHEMA_VERSION
+        {
+            errors.push(format!(
+                "target_artifact_schema_version must be {}",
+                Phase8RealProverBoundaryAdapterPlan::TARGET_ARTIFACT_SCHEMA_VERSION
+            ));
+        }
+
+        validate_implementation_evidence_slots(&self.evidence_slots, &mut errors);
+
+        if self.expected_slot_count != Self::REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "expected_slot_count must be {}",
+                Self::REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if self.populated_slot_count != 0 {
+            errors.push("populated_slot_count must be 0".to_string());
+        }
+
+        if self.missing_slot_count != Self::REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "missing_slot_count must be {}",
+                Self::REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.real_artifact_emission_allowed {
+            errors.push("real_artifact_emission_allowed must be false".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.on_chain_submission_allowed {
+            errors.push("on_chain_submission_allowed must be false".to_string());
+        }
+
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 fn validate_fixture_dependency_status(
     fixture_id: &str,
     field_name: &str,
@@ -4841,6 +5077,71 @@ fn validate_implementation_source_entries(
                 }
             }
             None => errors.push(format!("planned_sources missing entry: {expected_id}")),
+        }
+    }
+}
+
+fn validate_implementation_evidence_slots(
+    slots: &[Phase8ImplementationEvidenceSlot],
+    errors: &mut Vec<String>,
+) {
+    if slots.len() != Phase8ImplementationEvidenceSlots::REQUIRED_EVIDENCE.len() {
+        errors.push(format!(
+            "evidence_slots must contain exactly {} slots",
+            Phase8ImplementationEvidenceSlots::REQUIRED_EVIDENCE.len()
+        ));
+    }
+
+    for (position, (expected_id, expected_evidence)) in
+        Phase8ImplementationEvidenceSlots::REQUIRED_EVIDENCE
+            .iter()
+            .enumerate()
+    {
+        match slots.get(position) {
+            Some(slot) => {
+                if slot.transformation_id != *expected_id {
+                    errors.push(format!(
+                        "evidence_slots[{position}].transformation_id must be {expected_id}"
+                    ));
+                }
+
+                match Phase8ImplementationSourceRegistry::PLANNED_SOURCES.get(position) {
+                    Some((_, expected_module, _)) if slot.planned_module == *expected_module => {}
+                    Some((_, expected_module, _)) => errors.push(format!(
+                        "{expected_id}.planned_module must be {expected_module}"
+                    )),
+                    None => errors.push(format!("{expected_id}.planned_module has no source plan")),
+                }
+
+                let actual_evidence = slot
+                    .required_evidence
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                if actual_evidence != expected_evidence {
+                    errors.push(format!(
+                        "{expected_id}.required_evidence must match the required evidence contract"
+                    ));
+                }
+
+                if !slot.evidence_artifacts.is_empty() {
+                    errors.push(format!("{expected_id}.evidence_artifacts must be empty"));
+                }
+
+                if slot.evidence_status != Phase8ImplementationEvidenceSlots::SLOT_EVIDENCE_STATUS {
+                    errors.push(format!(
+                        "{expected_id}.evidence_status must be {}",
+                        Phase8ImplementationEvidenceSlots::SLOT_EVIDENCE_STATUS
+                    ));
+                }
+
+                if !slot.blocks_real_proof_generation {
+                    errors.push(format!(
+                        "{expected_id}.blocks_real_proof_generation must be true"
+                    ));
+                }
+            }
+            None => errors.push(format!("evidence_slots missing slot: {expected_id}")),
         }
     }
 }
