@@ -926,15 +926,51 @@ generate_phase8_real_prover_evidence_record
 validate_phase8_real_prover_evidence_record
 ```
 
-This is the last planning-only checkpoint before real prover implementation
-work begins.
+## Real Prover Attempt Artifact
+
+The first non-runtime real prover attempt artifact schema now exists:
+
+```text
+real_prover::RealProverAttemptArtifact
+```
+
+This artifact is generated from the unsatisfied `RealProverEvidenceRecord`.
+It records that real prover execution is blocked because implementation
+evidence is still missing.
+
+The artifact keeps:
+
+```text
+attempt_status = blocked_missing_real_prover_evidence_no_attempt_made
+blocker_status = real_prover_evidence_record_unsatisfied
+missing_evidence_count = 4
+populated_evidence_count = 0
+implementation_satisfied = false
+attempted_real_proof_generation = false
+emitted_real_proof_bytes = false
+local_real_proof_verified = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+accepted_as_implementation_evidence = false
+```
+
+The real prover attempt artifact CLI pair is:
+
+```text
+generate_phase8_real_prover_attempt_artifact
+validate_phase8_real_prover_attempt_artifact
+```
+
+This is still a planning/protection artifact. It does not call Winterfell,
+does not generate proof bytes, does not emit a production artifact, and does
+not alter the active Groth16 runtime.
 
 ## Next Safe Step
 
-The next safe Phase 8 step is to begin real prover implementation work behind a
-non-runtime API:
+The next safe Phase 8 step is to begin a real prover implementation source path
+behind a non-runtime API:
 
-- implement a real prover adapter function behind strict local tests
+- add a feature-gated real prover adapter entrypoint that is disabled by default
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist
 - do not emit production proof bytes yet

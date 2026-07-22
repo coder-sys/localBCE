@@ -224,3 +224,126 @@ fn real_prover_evidence_record_rejects_test_only_bytes_as_evidence() {
             .any(|error| error == "accepted_as_implementation_evidence must be false")
     );
 }
+
+fn real_prover_evidence_record() -> real_prover::RealProverEvidenceRecord {
+    real_prover::RealProverEvidenceRecord::from_test_only_proof_bytes(&test_only_proof_bytes())
+        .unwrap()
+}
+
+#[test]
+fn real_prover_attempt_artifact_is_blocked_by_missing_evidence() {
+    let record = real_prover_evidence_record();
+    let artifact = real_prover::RealProverAttemptArtifact::blocked_from_evidence_record(&record)
+        .expect("blocked attempt artifact should generate from valid evidence record");
+
+    artifact.validate().unwrap();
+    assert_eq!(
+        artifact.schema_version,
+        real_prover::RealProverAttemptArtifact::SCHEMA_VERSION
+    );
+    assert_eq!(
+        artifact.source_schema_version,
+        real_prover::RealProverEvidenceRecord::SCHEMA_VERSION
+    );
+    assert_eq!(
+        artifact.attempt_status,
+        real_prover::RealProverAttemptArtifact::ATTEMPT_STATUS
+    );
+    assert_eq!(
+        artifact.blocker_status,
+        real_prover::RealProverAttemptArtifact::BLOCKER_STATUS
+    );
+    assert_eq!(artifact.missing_evidence, real_prover::REQUIRED_EVIDENCE);
+    assert_eq!(artifact.missing_evidence_count, 4);
+    assert_eq!(artifact.populated_evidence_count, 0);
+    assert!(!artifact.implementation_satisfied);
+    assert!(!artifact.attempted_real_proof_generation);
+    assert!(!artifact.emitted_real_proof_bytes);
+    assert!(!artifact.local_real_proof_verified);
+    assert!(!artifact.runtime_wiring_allowed);
+    assert!(!artifact.real_proof_generation_allowed);
+    assert!(!artifact.accepted_as_implementation_evidence);
+}
+
+#[test]
+fn real_prover_attempt_artifact_json_round_trips() {
+    let artifact = real_prover::RealProverAttemptArtifact::blocked_from_evidence_record(
+        &real_prover_evidence_record(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let decoded: real_prover::RealProverAttemptArtifact = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, artifact);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn real_prover_attempt_artifact_rejects_fake_success() {
+    let mut artifact = real_prover::RealProverAttemptArtifact::blocked_from_evidence_record(
+        &real_prover_evidence_record(),
+    )
+    .unwrap();
+    artifact.missing_evidence.clear();
+    artifact.missing_evidence_count = 0;
+    artifact.populated_evidence_count = 4;
+    artifact.implementation_satisfied = true;
+    artifact.attempted_real_proof_generation = true;
+    artifact.emitted_real_proof_bytes = true;
+    artifact.local_real_proof_verified = true;
+    artifact.runtime_wiring_allowed = true;
+    artifact.real_proof_generation_allowed = true;
+    artifact.accepted_as_implementation_evidence = true;
+
+    let errors = artifact.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "missing_evidence must match the real prover evidence contract")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "missing_evidence_count must be 4")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "populated_evidence_count must be 0")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "attempted_real_proof_generation must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "emitted_real_proof_bytes must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_implementation_evidence must be false")
+    );
+}

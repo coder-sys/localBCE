@@ -68,6 +68,32 @@ pub struct RealProverEvidenceRecord {
     pub notes: Vec<String>,
 }
 
+/// Non-runtime record that a real prover attempt was considered but blocked.
+///
+/// This is intentionally not a proof attempt result. It exists to keep Phase 8
+/// honest: until the real prover evidence record is satisfied, no real prover
+/// execution is allowed and no proof bytes can be emitted.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProverAttemptArtifact {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub attempt_status: String,
+    pub transformation_id: String,
+    pub planned_module: String,
+    pub blocker_status: String,
+    pub missing_evidence: Vec<String>,
+    pub missing_evidence_count: usize,
+    pub populated_evidence_count: usize,
+    pub implementation_satisfied: bool,
+    pub attempted_real_proof_generation: bool,
+    pub emitted_real_proof_bytes: bool,
+    pub local_real_proof_verified: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub accepted_as_implementation_evidence: bool,
+    pub notes: Vec<String>,
+}
+
 impl TestOnlyProofBytes {
     pub const SCHEMA_VERSION: &'static str = "phase8-test-only-proof-bytes-v0";
     pub const BYTE_STATUS: &'static str = "test_only_deterministic_placeholder_not_real_proof";
@@ -292,6 +318,141 @@ impl RealProverEvidenceRecord {
 
         if self.test_only_bytes_are_evidence {
             errors.push("test_only_bytes_are_evidence must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.accepted_as_implementation_evidence {
+            errors.push("accepted_as_implementation_evidence must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProverAttemptArtifact {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-attempt-artifact-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = RealProverEvidenceRecord::SCHEMA_VERSION;
+    pub const ATTEMPT_STATUS: &'static str = "blocked_missing_real_prover_evidence_no_attempt_made";
+    pub const BLOCKER_STATUS: &'static str = "real_prover_evidence_record_unsatisfied";
+
+    pub fn blocked_from_evidence_record(
+        record: &RealProverEvidenceRecord,
+    ) -> Result<Self, Vec<String>> {
+        record.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: record.schema_version.clone(),
+            attempt_status: Self::ATTEMPT_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            planned_module: MODULE_PATH.to_string(),
+            blocker_status: Self::BLOCKER_STATUS.to_string(),
+            missing_evidence: record.required_evidence.clone(),
+            missing_evidence_count: record.missing_evidence_count,
+            populated_evidence_count: record.populated_evidence_count,
+            implementation_satisfied: record.implementation_satisfied,
+            attempted_real_proof_generation: false,
+            emitted_real_proof_bytes: false,
+            local_real_proof_verified: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            accepted_as_implementation_evidence: false,
+            notes: vec![
+                "Real prover execution is blocked because implementation evidence is missing."
+                    .to_string(),
+                "This artifact records a blocked non-runtime attempt boundary, not a proof."
+                    .to_string(),
+                "No real proof bytes were generated or emitted.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.attempt_status != Self::ATTEMPT_STATUS {
+            errors.push(format!("attempt_status must be {}", Self::ATTEMPT_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.planned_module != MODULE_PATH {
+            errors.push(format!("planned_module must be {MODULE_PATH}"));
+        }
+
+        if self.blocker_status != Self::BLOCKER_STATUS {
+            errors.push(format!("blocker_status must be {}", Self::BLOCKER_STATUS));
+        }
+
+        let expected_evidence = REQUIRED_EVIDENCE.to_vec();
+        let actual_evidence = self
+            .missing_evidence
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_evidence != expected_evidence {
+            errors
+                .push("missing_evidence must match the real prover evidence contract".to_string());
+        }
+
+        if self.missing_evidence_count != REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "missing_evidence_count must be {}",
+                REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if self.populated_evidence_count != 0 {
+            errors.push("populated_evidence_count must be 0".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.attempted_real_proof_generation {
+            errors.push("attempted_real_proof_generation must be false".to_string());
+        }
+
+        if self.emitted_real_proof_bytes {
+            errors.push("emitted_real_proof_bytes must be false".to_string());
+        }
+
+        if self.local_real_proof_verified {
+            errors.push("local_real_proof_verified must be false".to_string());
         }
 
         if self.runtime_wiring_allowed {
