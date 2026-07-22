@@ -923,6 +923,43 @@ generate_phase8_test_only_real_proof_bytes_fixture
 validate_phase8_test_only_real_proof_bytes_fixture
 ```
 
+## Test-Only Local Real Proof Validation Log Fixture
+
+The paired test-only validation-log-shaped artifact now exists:
+
+```text
+real_prover::TestOnlyLocalRealProofValidationLogFixture
+```
+
+It is generated from `TestOnlyRealProofBytesFixture` and uses the future local
+verification log path:
+
+```text
+log_path = stark-engine/reports/local_real_proof_validation.log
+log_status = test_only_validation_log_shape_validated_not_real_proof_verification
+prover_name = test_only_phase8_fixture_prover
+proof_artifact_schema_version = stark-proof-artifact-v1
+local_verification_status = test_only_shape_validated_real_verification_not_performed
+verification_timestamp = 1970-01-01T00:00:00Z
+test_only_fixture = true
+local_real_proof_verified = false
+accepted_as_complete_evidence = false
+implementation_satisfied = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+This validates the future local verification log shape and required fields. It
+does not satisfy the `local_real_proof_validation_log` evidence slot, does not
+claim a production proof was verified, and does not unlock runtime cutover.
+
+The test-only validation log fixture CLI pair is:
+
+```text
+generate_phase8_test_only_local_real_proof_validation_log_fixture
+validate_phase8_test_only_local_real_proof_validation_log_fixture
+```
+
 ## Real Prover Evidence Record
 
 The first real prover evidence record schema now exists:

@@ -230,6 +230,129 @@ fn test_only_real_proof_bytes_fixture_rejects_real_evidence_flags() {
     );
 }
 
+fn test_only_real_proof_bytes_fixture() -> real_prover::TestOnlyRealProofBytesFixture {
+    real_prover::TestOnlyRealProofBytesFixture::from_test_only_proof_bytes(&test_only_proof_bytes())
+        .unwrap()
+}
+
+#[test]
+fn test_only_local_real_proof_validation_log_fixture_has_future_log_shape() {
+    let fixture = test_only_real_proof_bytes_fixture();
+    let log_fixture =
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::from_test_only_fixture(&fixture)
+            .expect("test-only validation log fixture should generate from fixture-shaped bytes");
+
+    log_fixture.validate().unwrap();
+    assert_eq!(
+        log_fixture.schema_version,
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::SCHEMA_VERSION
+    );
+    assert_eq!(
+        log_fixture.source_schema_version,
+        real_prover::TestOnlyRealProofBytesFixture::SCHEMA_VERSION
+    );
+    assert_eq!(
+        log_fixture.log_status,
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::LOG_STATUS
+    );
+    assert_eq!(
+        log_fixture.log_path,
+        real_prover::LOCAL_REAL_PROOF_VALIDATION_LOG_PATH
+    );
+    assert_eq!(
+        log_fixture.expected_log_path,
+        real_prover::LOCAL_REAL_PROOF_VALIDATION_LOG_PATH
+    );
+    assert!(log_fixture.path_matches_expected);
+    assert_eq!(
+        log_fixture.prover_name,
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::PROVER_NAME
+    );
+    assert_eq!(
+        log_fixture.proof_artifact_schema_version,
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::PROOF_ARTIFACT_SCHEMA_VERSION
+    );
+    assert_eq!(log_fixture.proof_bytes_digest, fixture.proof_bytes_digest);
+    assert_eq!(
+        log_fixture.local_verification_status,
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::LOCAL_VERIFICATION_STATUS
+    );
+    assert_eq!(
+        log_fixture.verification_timestamp,
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::VERIFICATION_TIMESTAMP
+    );
+    assert_eq!(log_fixture.claim_id, fixture.claim_id);
+    assert_eq!(log_fixture.claim_hash, fixture.claim_hash);
+    assert!(log_fixture.test_only_fixture);
+    assert!(!log_fixture.local_real_proof_verified);
+    assert!(!log_fixture.accepted_as_complete_evidence);
+    assert!(!log_fixture.implementation_satisfied);
+    assert!(!log_fixture.runtime_wiring_allowed);
+    assert!(!log_fixture.real_proof_generation_allowed);
+}
+
+#[test]
+fn test_only_local_real_proof_validation_log_fixture_json_round_trips() {
+    let log_fixture =
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::from_test_only_fixture(
+            &test_only_real_proof_bytes_fixture(),
+        )
+        .unwrap();
+    let json = serde_json::to_string_pretty(&log_fixture).unwrap();
+    let decoded: real_prover::TestOnlyLocalRealProofValidationLogFixture =
+        serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, log_fixture);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn test_only_local_real_proof_validation_log_fixture_rejects_real_verification_flags() {
+    let mut log_fixture =
+        real_prover::TestOnlyLocalRealProofValidationLogFixture::from_test_only_fixture(
+            &test_only_real_proof_bytes_fixture(),
+        )
+        .unwrap();
+    log_fixture.test_only_fixture = false;
+    log_fixture.local_real_proof_verified = true;
+    log_fixture.accepted_as_complete_evidence = true;
+    log_fixture.implementation_satisfied = true;
+    log_fixture.runtime_wiring_allowed = true;
+    log_fixture.real_proof_generation_allowed = true;
+
+    let errors = log_fixture.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "test_only_fixture must be true")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}
+
 #[test]
 fn real_prover_evidence_record_generates_unsatisfied_contract() {
     let bytes = test_only_proof_bytes();

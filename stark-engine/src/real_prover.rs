@@ -80,6 +80,35 @@ pub struct TestOnlyRealProofBytesFixture {
     pub notes: Vec<String>,
 }
 
+/// Test-only validation-log-shaped artifact for the future local proof check.
+///
+/// This validates the log contract that a real prover must satisfy later. It
+/// does not claim local verification of a production STARK proof.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TestOnlyLocalRealProofValidationLogFixture {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub log_status: String,
+    pub transformation_id: String,
+    pub log_path: String,
+    pub expected_log_path: String,
+    pub path_matches_expected: bool,
+    pub prover_name: String,
+    pub proof_artifact_schema_version: String,
+    pub proof_bytes_digest: String,
+    pub local_verification_status: String,
+    pub verification_timestamp: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub test_only_fixture: bool,
+    pub local_real_proof_verified: bool,
+    pub accepted_as_complete_evidence: bool,
+    pub implementation_satisfied: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub notes: Vec<String>,
+}
+
 /// First real-prover implementation evidence record.
 ///
 /// This record is intentionally unsatisfied until a later phase provides real
@@ -518,6 +547,170 @@ impl TestOnlyRealProofBytesFixture {
 
         if !self.test_only_fixture {
             errors.push("test_only_fixture must be true".to_string());
+        }
+
+        if self.accepted_as_complete_evidence {
+            errors.push("accepted_as_complete_evidence must be false".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl TestOnlyLocalRealProofValidationLogFixture {
+    pub const SCHEMA_VERSION: &'static str =
+        "phase8-test-only-local-real-proof-validation-log-fixture-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = TestOnlyRealProofBytesFixture::SCHEMA_VERSION;
+    pub const LOG_STATUS: &'static str =
+        "test_only_validation_log_shape_validated_not_real_proof_verification";
+    pub const PROVER_NAME: &'static str = "test_only_phase8_fixture_prover";
+    pub const PROOF_ARTIFACT_SCHEMA_VERSION: &'static str = "stark-proof-artifact-v1";
+    pub const LOCAL_VERIFICATION_STATUS: &'static str =
+        "test_only_shape_validated_real_verification_not_performed";
+    pub const VERIFICATION_TIMESTAMP: &'static str = "1970-01-01T00:00:00Z";
+
+    pub fn from_test_only_fixture(
+        fixture: &TestOnlyRealProofBytesFixture,
+    ) -> Result<Self, Vec<String>> {
+        fixture.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: fixture.schema_version.clone(),
+            log_status: Self::LOG_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            log_path: LOCAL_REAL_PROOF_VALIDATION_LOG_PATH.to_string(),
+            expected_log_path: LOCAL_REAL_PROOF_VALIDATION_LOG_PATH.to_string(),
+            path_matches_expected: true,
+            prover_name: Self::PROVER_NAME.to_string(),
+            proof_artifact_schema_version: Self::PROOF_ARTIFACT_SCHEMA_VERSION.to_string(),
+            proof_bytes_digest: fixture.proof_bytes_digest.clone(),
+            local_verification_status: Self::LOCAL_VERIFICATION_STATUS.to_string(),
+            verification_timestamp: Self::VERIFICATION_TIMESTAMP.to_string(),
+            claim_id: fixture.claim_id.clone(),
+            claim_hash: fixture.claim_hash.clone(),
+            test_only_fixture: true,
+            local_real_proof_verified: false,
+            accepted_as_complete_evidence: false,
+            implementation_satisfied: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            notes: vec![
+                "This artifact validates the future local real proof validation log shape."
+                    .to_string(),
+                "The source bytes are test-only fixture bytes, not production STARK proof bytes."
+                    .to_string(),
+                "No production proof was locally verified by this artifact.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.log_status != Self::LOG_STATUS {
+            errors.push(format!("log_status must be {}", Self::LOG_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.log_path != LOCAL_REAL_PROOF_VALIDATION_LOG_PATH {
+            errors.push(format!(
+                "log_path must be {LOCAL_REAL_PROOF_VALIDATION_LOG_PATH}"
+            ));
+        }
+
+        if self.expected_log_path != LOCAL_REAL_PROOF_VALIDATION_LOG_PATH {
+            errors.push(format!(
+                "expected_log_path must be {LOCAL_REAL_PROOF_VALIDATION_LOG_PATH}"
+            ));
+        }
+
+        if !self.path_matches_expected {
+            errors.push("path_matches_expected must be true".to_string());
+        }
+
+        if self.prover_name != Self::PROVER_NAME {
+            errors.push(format!("prover_name must be {}", Self::PROVER_NAME));
+        }
+
+        if self.proof_artifact_schema_version != Self::PROOF_ARTIFACT_SCHEMA_VERSION {
+            errors.push(format!(
+                "proof_artifact_schema_version must be {}",
+                Self::PROOF_ARTIFACT_SCHEMA_VERSION
+            ));
+        }
+
+        if !is_0x_32_byte_hex(&self.proof_bytes_digest) {
+            errors.push("proof_bytes_digest must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.local_verification_status != Self::LOCAL_VERIFICATION_STATUS {
+            errors.push(format!(
+                "local_verification_status must be {}",
+                Self::LOCAL_VERIFICATION_STATUS
+            ));
+        }
+
+        if self.verification_timestamp != Self::VERIFICATION_TIMESTAMP {
+            errors.push(format!(
+                "verification_timestamp must be {}",
+                Self::VERIFICATION_TIMESTAMP
+            ));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if !self.test_only_fixture {
+            errors.push("test_only_fixture must be true".to_string());
+        }
+
+        if self.local_real_proof_verified {
+            errors.push("local_real_proof_verified must be false".to_string());
         }
 
         if self.accepted_as_complete_evidence {
