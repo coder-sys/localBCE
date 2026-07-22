@@ -1156,12 +1156,50 @@ generate_phase8_real_proof_bytes_fixture_evidence
 validate_phase8_real_proof_bytes_fixture_evidence
 ```
 
+## Real Prover Evidence Summary
+
+The four individual evidence-slot validators are now aggregated by:
+
+```text
+real_prover::RealProverEvidenceSummary
+```
+
+The summary reports:
+
+```text
+summary_status = all_slots_declared_zero_slots_satisfied_runtime_blocked
+declared_slot_count = 4
+satisfied_slot_count = 0
+missing_or_unsatisfied_slot_count = 4
+all_slots_declared = true
+all_slots_satisfied = false
+implementation_satisfied = false
+runtime_cutover_allowed = false
+real_proof_generation_allowed = false
+real_proof_bytes_fixture_present = false
+local_real_proof_verified = false
+test_only_bytes_rejected = true
+```
+
+The current blockers are:
+
+- `real_proof_bytes_fixture_missing`
+- `local_real_proof_validation_log_missing`
+- `real_prover_implementation_not_satisfied`
+- `runtime_cutover_blocked`
+
+The summary CLI pair is:
+
+```text
+generate_phase8_real_prover_evidence_summary
+validate_phase8_real_prover_evidence_summary
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to aggregate the four evidence-slot candidates
-into a single Phase 8 evidence summary:
+The next safe Phase 8 step is to begin real prover implementation evidence:
 
-- summarize which slots are declared versus actually satisfied
+- create a non-runtime real proof fixture generation plan tied to the selected prover
 - keep the adapter blocked until all evidence slots are populated
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist

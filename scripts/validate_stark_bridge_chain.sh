@@ -82,6 +82,7 @@ PHASE8_REAL_PROVER_CODE_PATH_EVIDENCE="${TMP_DIR}/phase8_real_prover_code_path_e
 PHASE8_REAL_PROVER_UNIT_TESTS_EVIDENCE="${TMP_DIR}/phase8_real_prover_unit_tests_evidence.json"
 PHASE8_LOCAL_REAL_PROOF_VALIDATION_LOG_EVIDENCE="${TMP_DIR}/phase8_local_real_proof_validation_log_evidence.json"
 PHASE8_REAL_PROOF_BYTES_FIXTURE_EVIDENCE="${TMP_DIR}/phase8_real_proof_bytes_fixture_evidence.json"
+PHASE8_REAL_PROVER_EVIDENCE_SUMMARY="${TMP_DIR}/phase8_real_prover_evidence_summary.json"
 WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
 STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifact.json"
 STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_interface_plan.json"
@@ -207,6 +208,17 @@ run_in_dir "Generate Phase 8 real proof bytes fixture evidence" "stark-engine" \
 
 run_in_dir "Validate Phase 8 real proof bytes fixture evidence" "stark-engine" \
   cargo run --bin validate_phase8_real_proof_bytes_fixture_evidence -- "${PHASE8_REAL_PROOF_BYTES_FIXTURE_EVIDENCE}"
+
+run_in_dir "Generate Phase 8 real prover evidence summary" "stark-engine" \
+  cargo run --bin generate_phase8_real_prover_evidence_summary -- \
+    "${PHASE8_REAL_PROVER_CODE_PATH_EVIDENCE}" \
+    "${PHASE8_REAL_PROVER_UNIT_TESTS_EVIDENCE}" \
+    "${PHASE8_LOCAL_REAL_PROOF_VALIDATION_LOG_EVIDENCE}" \
+    "${PHASE8_REAL_PROOF_BYTES_FIXTURE_EVIDENCE}" \
+    "${PHASE8_REAL_PROVER_EVIDENCE_SUMMARY}"
+
+run_in_dir "Validate Phase 8 real prover evidence summary" "stark-engine" \
+  cargo run --bin validate_phase8_real_prover_evidence_summary -- "${PHASE8_REAL_PROVER_EVIDENCE_SUMMARY}"
 
 run_in_dir "Generate Winterfell proof preview" "stark-engine" \
   cargo run --features winterfell-poc --bin generate_winterfell_proof_preview -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_PROOF_PREVIEW}"

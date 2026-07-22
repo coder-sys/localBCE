@@ -234,6 +234,36 @@ pub struct RealProofBytesFixtureEvidence {
     pub notes: Vec<String>,
 }
 
+/// Aggregate checkpoint for all Phase 8 real-prover evidence slot candidates.
+///
+/// This summary is intentionally blocked today. It confirms that all four
+/// evidence slots are declared, while none are complete enough to satisfy real
+/// prover implementation evidence or runtime cutover.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProverEvidenceSummary {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub summary_status: String,
+    pub transformation_id: String,
+    pub declared_slots: Vec<String>,
+    pub declared_slot_count: usize,
+    pub satisfied_slots: Vec<String>,
+    pub satisfied_slot_count: usize,
+    pub missing_or_unsatisfied_slots: Vec<String>,
+    pub missing_or_unsatisfied_slot_count: usize,
+    pub blockers: Vec<String>,
+    pub blocker_count: usize,
+    pub all_slots_declared: bool,
+    pub all_slots_satisfied: bool,
+    pub implementation_satisfied: bool,
+    pub runtime_cutover_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub real_proof_bytes_fixture_present: bool,
+    pub local_real_proof_verified: bool,
+    pub test_only_bytes_rejected: bool,
+    pub notes: Vec<String>,
+}
+
 impl TestOnlyProofBytes {
     pub const SCHEMA_VERSION: &'static str = "phase8-test-only-proof-bytes-v0";
     pub const BYTE_STATUS: &'static str = "test_only_deterministic_placeholder_not_real_proof";
@@ -1331,6 +1361,193 @@ impl RealProofBytesFixtureEvidence {
                 "required_fixture_field_count must be {}",
                 Self::REQUIRED_FIXTURE_FIELDS.len()
             ));
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProverEvidenceSummary {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-evidence-summary-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "phase8-real-prover-evidence-slots-v0";
+    pub const SUMMARY_STATUS: &'static str =
+        "all_slots_declared_zero_slots_satisfied_runtime_blocked";
+    pub const BLOCKERS: [&'static str; 4] = [
+        "real_proof_bytes_fixture_missing",
+        "local_real_proof_validation_log_missing",
+        "real_prover_implementation_not_satisfied",
+        "runtime_cutover_blocked",
+    ];
+
+    pub fn from_evidence_slots(
+        code_path: &RealProverCodePathEvidence,
+        unit_tests: &RealProverUnitTestsEvidence,
+        validation_log: &LocalRealProofValidationLogEvidence,
+        proof_fixture: &RealProofBytesFixtureEvidence,
+    ) -> Result<Self, Vec<String>> {
+        code_path.validate()?;
+        unit_tests.validate()?;
+        validation_log.validate()?;
+        proof_fixture.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            summary_status: Self::SUMMARY_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            declared_slots: REQUIRED_EVIDENCE
+                .iter()
+                .map(|slot| (*slot).to_string())
+                .collect(),
+            declared_slot_count: REQUIRED_EVIDENCE.len(),
+            satisfied_slots: Vec::new(),
+            satisfied_slot_count: 0,
+            missing_or_unsatisfied_slots: REQUIRED_EVIDENCE
+                .iter()
+                .map(|slot| (*slot).to_string())
+                .collect(),
+            missing_or_unsatisfied_slot_count: REQUIRED_EVIDENCE.len(),
+            blockers: Self::BLOCKERS
+                .iter()
+                .map(|blocker| (*blocker).to_string())
+                .collect(),
+            blocker_count: Self::BLOCKERS.len(),
+            all_slots_declared: true,
+            all_slots_satisfied: false,
+            implementation_satisfied: false,
+            runtime_cutover_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            real_proof_bytes_fixture_present: proof_fixture.proof_bytes_present,
+            local_real_proof_verified: validation_log.local_real_proof_verified,
+            test_only_bytes_rejected: proof_fixture.test_only_bytes_rejected,
+            notes: vec![
+                "All four real prover evidence slots are declared.".to_string(),
+                "No evidence slot is satisfied by real prover implementation evidence yet."
+                    .to_string(),
+                "Real proof bytes and local real proof validation are still missing.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.summary_status != Self::SUMMARY_STATUS {
+            errors.push(format!("summary_status must be {}", Self::SUMMARY_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        let expected_slots = REQUIRED_EVIDENCE.to_vec();
+        let declared_slots = self
+            .declared_slots
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if declared_slots != expected_slots {
+            errors.push("declared_slots must match the real prover evidence contract".to_string());
+        }
+
+        if self.declared_slot_count != REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "declared_slot_count must be {}",
+                REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if !self.satisfied_slots.is_empty() {
+            errors.push("satisfied_slots must be empty".to_string());
+        }
+
+        if self.satisfied_slot_count != 0 {
+            errors.push("satisfied_slot_count must be 0".to_string());
+        }
+
+        let unsatisfied_slots = self
+            .missing_or_unsatisfied_slots
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if unsatisfied_slots != expected_slots {
+            errors.push(
+                "missing_or_unsatisfied_slots must match the real prover evidence contract"
+                    .to_string(),
+            );
+        }
+
+        if self.missing_or_unsatisfied_slot_count != REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "missing_or_unsatisfied_slot_count must be {}",
+                REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        let expected_blockers = Self::BLOCKERS.to_vec();
+        let actual_blockers = self.blockers.iter().map(String::as_str).collect::<Vec<_>>();
+        if actual_blockers != expected_blockers {
+            errors.push("blockers must match the Phase 8 evidence summary contract".to_string());
+        }
+
+        if self.blocker_count != Self::BLOCKERS.len() {
+            errors.push(format!("blocker_count must be {}", Self::BLOCKERS.len()));
+        }
+
+        if !self.all_slots_declared {
+            errors.push("all_slots_declared must be true".to_string());
+        }
+
+        if self.all_slots_satisfied {
+            errors.push("all_slots_satisfied must be false".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.real_proof_bytes_fixture_present {
+            errors.push("real_proof_bytes_fixture_present must be false".to_string());
+        }
+
+        if self.local_real_proof_verified {
+            errors.push("local_real_proof_verified must be false".to_string());
+        }
+
+        if !self.test_only_bytes_rejected {
+            errors.push("test_only_bytes_rejected must be true".to_string());
         }
 
         if self.notes.is_empty() {

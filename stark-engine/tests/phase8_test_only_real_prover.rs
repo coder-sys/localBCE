@@ -990,3 +990,160 @@ fn real_proof_bytes_fixture_evidence_rejects_fake_fixture_completion() {
             .any(|error| error == "real_proof_generation_allowed must be false")
     );
 }
+
+fn real_proof_bytes_fixture_evidence() -> real_prover::RealProofBytesFixtureEvidence {
+    real_prover::RealProofBytesFixtureEvidence::from_validation_log_evidence(
+        &local_real_proof_validation_log_evidence(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn real_prover_evidence_summary_reports_all_slots_declared_zero_satisfied() {
+    let summary = real_prover::RealProverEvidenceSummary::from_evidence_slots(
+        &real_prover_code_path_evidence(),
+        &real_prover_unit_tests_evidence(),
+        &local_real_proof_validation_log_evidence(),
+        &real_proof_bytes_fixture_evidence(),
+    )
+    .expect("summary should generate from valid slot evidence");
+
+    summary.validate().unwrap();
+    assert_eq!(
+        summary.schema_version,
+        real_prover::RealProverEvidenceSummary::SCHEMA_VERSION
+    );
+    assert_eq!(
+        summary.summary_status,
+        real_prover::RealProverEvidenceSummary::SUMMARY_STATUS
+    );
+    assert_eq!(summary.declared_slots, real_prover::REQUIRED_EVIDENCE);
+    assert_eq!(summary.declared_slot_count, 4);
+    assert!(summary.satisfied_slots.is_empty());
+    assert_eq!(summary.satisfied_slot_count, 0);
+    assert_eq!(
+        summary.missing_or_unsatisfied_slots,
+        real_prover::REQUIRED_EVIDENCE
+    );
+    assert_eq!(summary.missing_or_unsatisfied_slot_count, 4);
+    assert_eq!(
+        summary.blockers,
+        real_prover::RealProverEvidenceSummary::BLOCKERS
+    );
+    assert_eq!(summary.blocker_count, 4);
+    assert!(summary.all_slots_declared);
+    assert!(!summary.all_slots_satisfied);
+    assert!(!summary.implementation_satisfied);
+    assert!(!summary.runtime_cutover_allowed);
+    assert!(!summary.real_proof_generation_allowed);
+    assert!(!summary.real_proof_bytes_fixture_present);
+    assert!(!summary.local_real_proof_verified);
+    assert!(summary.test_only_bytes_rejected);
+}
+
+#[test]
+fn real_prover_evidence_summary_json_round_trips() {
+    let summary = real_prover::RealProverEvidenceSummary::from_evidence_slots(
+        &real_prover_code_path_evidence(),
+        &real_prover_unit_tests_evidence(),
+        &local_real_proof_validation_log_evidence(),
+        &real_proof_bytes_fixture_evidence(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&summary).unwrap();
+    let decoded: real_prover::RealProverEvidenceSummary = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, summary);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn real_prover_evidence_summary_rejects_fake_readiness() {
+    let mut summary = real_prover::RealProverEvidenceSummary::from_evidence_slots(
+        &real_prover_code_path_evidence(),
+        &real_prover_unit_tests_evidence(),
+        &local_real_proof_validation_log_evidence(),
+        &real_proof_bytes_fixture_evidence(),
+    )
+    .unwrap();
+    summary.satisfied_slots = real_prover::REQUIRED_EVIDENCE
+        .iter()
+        .map(|slot| (*slot).to_string())
+        .collect();
+    summary.satisfied_slot_count = 4;
+    summary.missing_or_unsatisfied_slots.clear();
+    summary.missing_or_unsatisfied_slot_count = 0;
+    summary.blockers.clear();
+    summary.blocker_count = 0;
+    summary.all_slots_satisfied = true;
+    summary.implementation_satisfied = true;
+    summary.runtime_cutover_allowed = true;
+    summary.real_proof_generation_allowed = true;
+    summary.real_proof_bytes_fixture_present = true;
+    summary.local_real_proof_verified = true;
+    summary.test_only_bytes_rejected = false;
+
+    let errors = summary.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "satisfied_slots must be empty")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "satisfied_slot_count must be 0")
+    );
+    assert!(errors.iter().any(|error| error
+        == "missing_or_unsatisfied_slots must match the real prover evidence contract"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "missing_or_unsatisfied_slot_count must be 4")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "blockers must match the Phase 8 evidence summary contract")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "blocker_count must be 4")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "all_slots_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_cutover_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_bytes_fixture_present must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "test_only_bytes_rejected must be true")
+    );
+}
