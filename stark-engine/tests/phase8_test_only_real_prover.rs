@@ -482,8 +482,8 @@ fn test_only_evidence_satisfaction_rehearsal_report_rejects_fake_completion() {
     );
 }
 
-fn test_only_evidence_satisfaction_rehearsal_report(
-) -> real_prover::TestOnlyEvidenceSatisfactionRehearsalReport {
+fn test_only_evidence_satisfaction_rehearsal_report()
+-> real_prover::TestOnlyEvidenceSatisfactionRehearsalReport {
     real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::from_test_only_fixtures(
         &test_only_real_proof_bytes_fixture(),
         &test_only_local_real_proof_validation_log_fixture(),
@@ -515,7 +515,10 @@ fn real_proof_bytes_fixture_promotion_plan_defines_future_gate_only() {
         plan.target_evidence_slot,
         real_prover::RealProofBytesFixturePromotionPlan::TARGET_EVIDENCE_SLOT
     );
-    assert_eq!(plan.target_fixture_path, real_prover::REAL_PROOF_BYTES_FIXTURE_PATH);
+    assert_eq!(
+        plan.target_fixture_path,
+        real_prover::REAL_PROOF_BYTES_FIXTURE_PATH
+    );
     assert_eq!(
         plan.required_conditions,
         real_prover::RealProofBytesFixturePromotionPlan::REQUIRED_CONDITIONS
@@ -551,6 +554,95 @@ fn real_proof_bytes_fixture_promotion_plan_json_round_trips() {
 #[test]
 fn real_proof_bytes_fixture_promotion_plan_rejects_runtime_cutover() {
     let mut plan = real_prover::RealProofBytesFixturePromotionPlan::from_rehearsal_report(
+        &test_only_evidence_satisfaction_rehearsal_report(),
+    )
+    .unwrap();
+    plan.slot_promotion_ready = true;
+    plan.runtime_cutover_allowed = true;
+    plan.real_proof_generation_allowed = true;
+
+    let errors = plan.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "slot_promotion_ready must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_cutover_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}
+
+#[test]
+fn local_real_proof_validation_log_promotion_plan_defines_future_gate_only() {
+    let plan = real_prover::LocalRealProofValidationLogPromotionPlan::from_rehearsal_report(
+        &test_only_evidence_satisfaction_rehearsal_report(),
+    )
+    .expect("promotion plan should generate from a valid rehearsal report");
+
+    plan.validate().unwrap();
+    assert_eq!(
+        plan.schema_version,
+        real_prover::LocalRealProofValidationLogPromotionPlan::SCHEMA_VERSION
+    );
+    assert_eq!(
+        plan.source_schema_version,
+        real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::SCHEMA_VERSION
+    );
+    assert_eq!(
+        plan.promotion_status,
+        real_prover::LocalRealProofValidationLogPromotionPlan::PROMOTION_STATUS
+    );
+    assert_eq!(
+        plan.target_evidence_slot,
+        real_prover::LocalRealProofValidationLogPromotionPlan::TARGET_EVIDENCE_SLOT
+    );
+    assert_eq!(
+        plan.target_log_path,
+        real_prover::LOCAL_REAL_PROOF_VALIDATION_LOG_PATH
+    );
+    assert_eq!(
+        plan.required_conditions,
+        real_prover::LocalRealProofValidationLogPromotionPlan::REQUIRED_CONDITIONS
+    );
+    assert_eq!(plan.required_condition_count, 6);
+    assert!(plan.current_validation_log_shape_present);
+    assert!(plan.current_digest_matches_fixture);
+    assert!(plan.current_claim_hash_matches_fixture);
+    assert!(plan.required_real_prover_name);
+    assert!(plan.required_real_proof_artifact_schema_version);
+    assert!(plan.required_proof_bytes_digest);
+    assert!(plan.required_local_verification_status_verified);
+    assert!(plan.required_verification_timestamp);
+    assert!(plan.required_matching_claim_hash);
+    assert!(!plan.slot_promotion_ready);
+    assert!(!plan.runtime_cutover_allowed);
+    assert!(!plan.real_proof_generation_allowed);
+}
+
+#[test]
+fn local_real_proof_validation_log_promotion_plan_json_round_trips() {
+    let plan = real_prover::LocalRealProofValidationLogPromotionPlan::from_rehearsal_report(
+        &test_only_evidence_satisfaction_rehearsal_report(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&plan).unwrap();
+    let decoded: real_prover::LocalRealProofValidationLogPromotionPlan =
+        serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, plan);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn local_real_proof_validation_log_promotion_plan_rejects_runtime_cutover() {
+    let mut plan = real_prover::LocalRealProofValidationLogPromotionPlan::from_rehearsal_report(
         &test_only_evidence_satisfaction_rehearsal_report(),
     )
     .unwrap();

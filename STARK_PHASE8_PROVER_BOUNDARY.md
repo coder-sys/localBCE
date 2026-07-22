@@ -1045,6 +1045,50 @@ generate_phase8_real_proof_bytes_fixture_promotion_plan
 validate_phase8_real_proof_bytes_fixture_promotion_plan
 ```
 
+## Local Real Proof Validation Log Promotion Plan
+
+The second real evidence-slot promotion plan now exists:
+
+```text
+real_prover::LocalRealProofValidationLogPromotionPlan
+```
+
+It consumes `TestOnlyEvidenceSatisfactionRehearsalReport` and defines the exact
+future gate for promoting the `local_real_proof_validation_log` slot.
+
+Required future conditions:
+
+```text
+real_prover_name = true
+real_proof_artifact_schema_version = true
+proof_bytes_digest = true
+local_verification_status_verified = true
+verification_timestamp = true
+matching_claim_hash = true
+```
+
+Current status remains blocked:
+
+```text
+promotion_status = promotion_plan_only_validation_log_shape_ready_real_evidence_blocked
+current_validation_log_shape_present = true
+current_digest_matches_fixture = true
+current_claim_hash_matches_fixture = true
+slot_promotion_ready = false
+runtime_cutover_allowed = false
+real_proof_generation_allowed = false
+```
+
+This plan defines how the local verification log becomes real evidence later.
+It does not flip the evidence slot yet and does not allow runtime cutover.
+
+The promotion plan CLI pair is:
+
+```text
+generate_phase8_local_real_proof_validation_log_promotion_plan
+validate_phase8_local_real_proof_validation_log_promotion_plan
+```
+
 ## Real Prover Evidence Record
 
 The first real prover evidence record schema now exists:

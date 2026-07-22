@@ -79,6 +79,7 @@ PHASE8_TEST_ONLY_REAL_PROOF_BYTES_FIXTURE="${TMP_DIR}/phase8_test_only_real_proo
 PHASE8_TEST_ONLY_LOCAL_REAL_PROOF_VALIDATION_LOG_FIXTURE="${TMP_DIR}/phase8_test_only_local_real_proof_validation_log_fixture.json"
 PHASE8_TEST_ONLY_EVIDENCE_SATISFACTION_REHEARSAL_REPORT="${TMP_DIR}/phase8_test_only_evidence_satisfaction_rehearsal_report.json"
 PHASE8_REAL_PROOF_BYTES_FIXTURE_PROMOTION_PLAN="${TMP_DIR}/phase8_real_proof_bytes_fixture_promotion_plan.json"
+PHASE8_LOCAL_REAL_PROOF_VALIDATION_LOG_PROMOTION_PLAN="${TMP_DIR}/phase8_local_real_proof_validation_log_promotion_plan.json"
 PHASE8_REAL_PROVER_EVIDENCE_RECORD="${TMP_DIR}/phase8_real_prover_evidence_record.json"
 PHASE8_REAL_PROVER_ATTEMPT_ARTIFACT="${TMP_DIR}/phase8_real_prover_attempt_artifact.json"
 PHASE8_REAL_PROVER_ADAPTER_INVOCATION="${TMP_DIR}/phase8_real_prover_adapter_invocation.json"
@@ -194,6 +195,12 @@ run_in_dir "Generate Phase 8 real proof bytes fixture promotion plan" "stark-eng
 
 run_in_dir "Validate Phase 8 real proof bytes fixture promotion plan" "stark-engine" \
   cargo run --bin validate_phase8_real_proof_bytes_fixture_promotion_plan -- "${PHASE8_REAL_PROOF_BYTES_FIXTURE_PROMOTION_PLAN}"
+
+run_in_dir "Generate Phase 8 local real proof validation log promotion plan" "stark-engine" \
+  cargo run --bin generate_phase8_local_real_proof_validation_log_promotion_plan -- "${PHASE8_TEST_ONLY_EVIDENCE_SATISFACTION_REHEARSAL_REPORT}" "${PHASE8_LOCAL_REAL_PROOF_VALIDATION_LOG_PROMOTION_PLAN}"
+
+run_in_dir "Validate Phase 8 local real proof validation log promotion plan" "stark-engine" \
+  cargo run --bin validate_phase8_local_real_proof_validation_log_promotion_plan -- "${PHASE8_LOCAL_REAL_PROOF_VALIDATION_LOG_PROMOTION_PLAN}"
 
 run_in_dir "Generate Phase 8 real prover evidence record" "stark-engine" \
   cargo run --bin generate_phase8_real_prover_evidence_record -- "${PHASE8_TEST_ONLY_PROOF_BYTES}" "${PHASE8_REAL_PROVER_EVIDENCE_RECORD}"

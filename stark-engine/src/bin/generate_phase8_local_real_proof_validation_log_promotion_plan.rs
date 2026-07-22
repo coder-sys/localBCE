@@ -1,7 +1,7 @@
 use std::{env, fs, process};
 
 use stark_engine::real_prover::{
-    RealProofBytesFixturePromotionPlan, TestOnlyEvidenceSatisfactionRehearsalReport,
+    LocalRealProofValidationLogPromotionPlan, TestOnlyEvidenceSatisfactionRehearsalReport,
 };
 
 fn main() {
@@ -32,12 +32,12 @@ fn run() -> Result<(), Vec<String>> {
             )]
         })?;
 
-    let plan = RealProofBytesFixturePromotionPlan::from_rehearsal_report(&report)?;
+    let plan = LocalRealProofValidationLogPromotionPlan::from_rehearsal_report(&report)?;
     plan.validate()?;
 
     let output_json = serde_json::to_string_pretty(&plan).map_err(|err| {
         vec![format!(
-            "could not serialize Phase 8 real proof bytes fixture promotion plan JSON: {err}"
+            "could not serialize Phase 8 local real proof validation log promotion plan JSON: {err}"
         )]
     })?;
     fs::write(&output_path, format!("{output_json}\n"))
@@ -46,7 +46,7 @@ fn run() -> Result<(), Vec<String>> {
     println!(
         "{}",
         serde_json::json!({
-            "event": "phase8_real_proof_bytes_fixture_promotion_plan_generation",
+            "event": "phase8_local_real_proof_validation_log_promotion_plan_generation",
             "status": "ok",
             "input": rehearsal_report_path,
             "output": output_path,
@@ -54,9 +54,9 @@ fn run() -> Result<(), Vec<String>> {
             "promotion_status": plan.promotion_status,
             "target_evidence_slot": plan.target_evidence_slot,
             "required_condition_count": plan.required_condition_count,
-            "current_fixture_shape_present": plan.current_fixture_shape_present,
             "current_validation_log_shape_present": plan.current_validation_log_shape_present,
-            "current_digest_matches_log": plan.current_digest_matches_log,
+            "current_digest_matches_fixture": plan.current_digest_matches_fixture,
+            "current_claim_hash_matches_fixture": plan.current_claim_hash_matches_fixture,
             "slot_promotion_ready": plan.slot_promotion_ready,
             "runtime_cutover_allowed": plan.runtime_cutover_allowed,
             "real_proof_generation_allowed": plan.real_proof_generation_allowed,
@@ -68,7 +68,7 @@ fn run() -> Result<(), Vec<String>> {
 
 fn usage() -> Vec<String> {
     vec![
-        "usage: generate_phase8_real_proof_bytes_fixture_promotion_plan <phase8_test_only_evidence_satisfaction_rehearsal_report.json> <phase8_real_proof_bytes_fixture_promotion_plan.json>"
+        "usage: generate_phase8_local_real_proof_validation_log_promotion_plan <phase8_test_only_evidence_satisfaction_rehearsal_report.json> <phase8_local_real_proof_validation_log_promotion_plan.json>"
             .to_string(),
     ]
 }
