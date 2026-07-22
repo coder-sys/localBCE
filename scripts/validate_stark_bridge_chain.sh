@@ -77,6 +77,7 @@ COMPLETE_WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/complete_winterfell_witness_ca
 PHASE8_TEST_ONLY_PROOF_BYTES="${TMP_DIR}/phase8_test_only_proof_bytes.json"
 PHASE8_TEST_ONLY_REAL_PROOF_BYTES_FIXTURE="${TMP_DIR}/phase8_test_only_real_proof_bytes_fixture.json"
 PHASE8_TEST_ONLY_LOCAL_REAL_PROOF_VALIDATION_LOG_FIXTURE="${TMP_DIR}/phase8_test_only_local_real_proof_validation_log_fixture.json"
+PHASE8_TEST_ONLY_EVIDENCE_SATISFACTION_REHEARSAL_REPORT="${TMP_DIR}/phase8_test_only_evidence_satisfaction_rehearsal_report.json"
 PHASE8_REAL_PROVER_EVIDENCE_RECORD="${TMP_DIR}/phase8_real_prover_evidence_record.json"
 PHASE8_REAL_PROVER_ATTEMPT_ARTIFACT="${TMP_DIR}/phase8_real_prover_attempt_artifact.json"
 PHASE8_REAL_PROVER_ADAPTER_INVOCATION="${TMP_DIR}/phase8_real_prover_adapter_invocation.json"
@@ -180,6 +181,12 @@ run_in_dir "Generate Phase 8 test-only local real proof validation log fixture" 
 
 run_in_dir "Validate Phase 8 test-only local real proof validation log fixture" "stark-engine" \
   cargo run --bin validate_phase8_test_only_local_real_proof_validation_log_fixture -- "${PHASE8_TEST_ONLY_LOCAL_REAL_PROOF_VALIDATION_LOG_FIXTURE}"
+
+run_in_dir "Generate Phase 8 test-only evidence satisfaction rehearsal report" "stark-engine" \
+  cargo run --bin generate_phase8_test_only_evidence_satisfaction_rehearsal_report -- "${PHASE8_TEST_ONLY_REAL_PROOF_BYTES_FIXTURE}" "${PHASE8_TEST_ONLY_LOCAL_REAL_PROOF_VALIDATION_LOG_FIXTURE}" "${PHASE8_TEST_ONLY_EVIDENCE_SATISFACTION_REHEARSAL_REPORT}"
+
+run_in_dir "Validate Phase 8 test-only evidence satisfaction rehearsal report" "stark-engine" \
+  cargo run --bin validate_phase8_test_only_evidence_satisfaction_rehearsal_report -- "${PHASE8_TEST_ONLY_EVIDENCE_SATISFACTION_REHEARSAL_REPORT}"
 
 run_in_dir "Generate Phase 8 real prover evidence record" "stark-engine" \
   cargo run --bin generate_phase8_real_prover_evidence_record -- "${PHASE8_TEST_ONLY_PROOF_BYTES}" "${PHASE8_REAL_PROVER_EVIDENCE_RECORD}"

@@ -109,6 +109,33 @@ pub struct TestOnlyLocalRealProofValidationLogFixture {
     pub notes: Vec<String>,
 }
 
+/// Test-only rehearsal report for the future real-prover evidence path.
+///
+/// This report confirms that both fixture-shaped artifacts exist and agree,
+/// while preserving the hard boundary that no real evidence slot is satisfied.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TestOnlyEvidenceSatisfactionRehearsalReport {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub rehearsal_status: String,
+    pub transformation_id: String,
+    pub proof_bytes_fixture_shape_present: bool,
+    pub validation_log_shape_present: bool,
+    pub proof_bytes_digest_matches_log: bool,
+    pub claim_hash_matches: bool,
+    pub test_only_fixtures: bool,
+    pub real_proof_verified: bool,
+    pub real_evidence_slots_satisfied: bool,
+    pub satisfied_real_evidence_slots: Vec<String>,
+    pub satisfied_real_evidence_slot_count: usize,
+    pub blocked_real_evidence_slots: Vec<String>,
+    pub blocked_real_evidence_slot_count: usize,
+    pub runtime_cutover_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub accepted_as_complete_evidence: bool,
+    pub notes: Vec<String>,
+}
+
 /// First real-prover implementation evidence record.
 ///
 /// This record is intentionally unsatisfied until a later phase provides real
@@ -727,6 +754,169 @@ impl TestOnlyLocalRealProofValidationLogFixture {
 
         if self.real_proof_generation_allowed {
             errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl TestOnlyEvidenceSatisfactionRehearsalReport {
+    pub const SCHEMA_VERSION: &'static str =
+        "phase8-test-only-evidence-satisfaction-rehearsal-report-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "phase8-test-only-fixtures-v0";
+    pub const REHEARSAL_STATUS: &'static str =
+        "test_only_fixture_shapes_present_real_evidence_still_blocked";
+
+    pub fn from_test_only_fixtures(
+        proof_fixture: &TestOnlyRealProofBytesFixture,
+        validation_log: &TestOnlyLocalRealProofValidationLogFixture,
+    ) -> Result<Self, Vec<String>> {
+        proof_fixture.validate()?;
+        validation_log.validate()?;
+
+        let proof_bytes_digest_matches_log =
+            proof_fixture.proof_bytes_digest == validation_log.proof_bytes_digest;
+        let claim_hash_matches = proof_fixture.claim_hash == validation_log.claim_hash;
+        let test_only_fixtures =
+            proof_fixture.test_only_fixture && validation_log.test_only_fixture;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            rehearsal_status: Self::REHEARSAL_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            proof_bytes_fixture_shape_present: proof_fixture.proof_bytes_present,
+            validation_log_shape_present: true,
+            proof_bytes_digest_matches_log,
+            claim_hash_matches,
+            test_only_fixtures,
+            real_proof_verified: false,
+            real_evidence_slots_satisfied: false,
+            satisfied_real_evidence_slots: Vec::new(),
+            satisfied_real_evidence_slot_count: 0,
+            blocked_real_evidence_slots: REQUIRED_EVIDENCE
+                .iter()
+                .map(|slot| (*slot).to_string())
+                .collect(),
+            blocked_real_evidence_slot_count: REQUIRED_EVIDENCE.len(),
+            runtime_cutover_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            accepted_as_complete_evidence: false,
+            notes: vec![
+                "The test-only proof bytes fixture shape is present.".to_string(),
+                "The test-only local validation log shape is present.".to_string(),
+                "Fixture digest and claim hash agreement are rehearsed without real verification."
+                    .to_string(),
+                "No real prover evidence slot is satisfied by these test-only artifacts."
+                    .to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.rehearsal_status != Self::REHEARSAL_STATUS {
+            errors.push(format!(
+                "rehearsal_status must be {}",
+                Self::REHEARSAL_STATUS
+            ));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if !self.proof_bytes_fixture_shape_present {
+            errors.push("proof_bytes_fixture_shape_present must be true".to_string());
+        }
+
+        if !self.validation_log_shape_present {
+            errors.push("validation_log_shape_present must be true".to_string());
+        }
+
+        if !self.proof_bytes_digest_matches_log {
+            errors.push("proof_bytes_digest_matches_log must be true".to_string());
+        }
+
+        if !self.claim_hash_matches {
+            errors.push("claim_hash_matches must be true".to_string());
+        }
+
+        if !self.test_only_fixtures {
+            errors.push("test_only_fixtures must be true".to_string());
+        }
+
+        if self.real_proof_verified {
+            errors.push("real_proof_verified must be false".to_string());
+        }
+
+        if self.real_evidence_slots_satisfied {
+            errors.push("real_evidence_slots_satisfied must be false".to_string());
+        }
+
+        if !self.satisfied_real_evidence_slots.is_empty() {
+            errors.push("satisfied_real_evidence_slots must be empty".to_string());
+        }
+
+        if self.satisfied_real_evidence_slot_count != 0 {
+            errors.push("satisfied_real_evidence_slot_count must be 0".to_string());
+        }
+
+        let expected_blocked_slots = REQUIRED_EVIDENCE.to_vec();
+        let actual_blocked_slots = self
+            .blocked_real_evidence_slots
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_blocked_slots != expected_blocked_slots {
+            errors.push(
+                "blocked_real_evidence_slots must match the real prover evidence contract"
+                    .to_string(),
+            );
+        }
+
+        if self.blocked_real_evidence_slot_count != REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "blocked_real_evidence_slot_count must be {}",
+                REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.accepted_as_complete_evidence {
+            errors.push("accepted_as_complete_evidence must be false".to_string());
         }
 
         if self.notes.is_empty() {

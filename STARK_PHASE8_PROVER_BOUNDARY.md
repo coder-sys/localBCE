@@ -960,6 +960,47 @@ generate_phase8_test_only_local_real_proof_validation_log_fixture
 validate_phase8_test_only_local_real_proof_validation_log_fixture
 ```
 
+## Test-Only Evidence Satisfaction Rehearsal Report
+
+The test-only fixture path now has an aggregate rehearsal report:
+
+```text
+real_prover::TestOnlyEvidenceSatisfactionRehearsalReport
+```
+
+It consumes:
+
+- `TestOnlyRealProofBytesFixture`
+- `TestOnlyLocalRealProofValidationLogFixture`
+
+The report confirms the fixture path is internally coherent:
+
+```text
+proof_bytes_fixture_shape_present = true
+validation_log_shape_present = true
+proof_bytes_digest_matches_log = true
+claim_hash_matches = true
+test_only_fixtures = true
+real_proof_verified = false
+real_evidence_slots_satisfied = false
+satisfied_real_evidence_slot_count = 0
+blocked_real_evidence_slot_count = 4
+runtime_cutover_allowed = false
+real_proof_generation_allowed = false
+accepted_as_complete_evidence = false
+```
+
+This is a rehearsal report only. It proves that the future evidence path has a
+coherent fixture/log shape, while explicitly keeping every real prover evidence
+slot blocked.
+
+The rehearsal report CLI pair is:
+
+```text
+generate_phase8_test_only_evidence_satisfaction_rehearsal_report
+validate_phase8_test_only_evidence_satisfaction_rehearsal_report
+```
+
 ## Real Prover Evidence Record
 
 The first real prover evidence record schema now exists:

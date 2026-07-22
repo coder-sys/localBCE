@@ -353,6 +353,135 @@ fn test_only_local_real_proof_validation_log_fixture_rejects_real_verification_f
     );
 }
 
+fn test_only_local_real_proof_validation_log_fixture()
+-> real_prover::TestOnlyLocalRealProofValidationLogFixture {
+    real_prover::TestOnlyLocalRealProofValidationLogFixture::from_test_only_fixture(
+        &test_only_real_proof_bytes_fixture(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_only_evidence_satisfaction_rehearsal_report_keeps_real_evidence_blocked() {
+    let proof_fixture = test_only_real_proof_bytes_fixture();
+    let validation_log_fixture = test_only_local_real_proof_validation_log_fixture();
+    let report = real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::from_test_only_fixtures(
+        &proof_fixture,
+        &validation_log_fixture,
+    )
+    .expect("rehearsal report should generate from matching test-only fixtures");
+
+    report.validate().unwrap();
+    assert_eq!(
+        report.schema_version,
+        real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::SCHEMA_VERSION
+    );
+    assert_eq!(
+        report.rehearsal_status,
+        real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::REHEARSAL_STATUS
+    );
+    assert!(report.proof_bytes_fixture_shape_present);
+    assert!(report.validation_log_shape_present);
+    assert!(report.proof_bytes_digest_matches_log);
+    assert!(report.claim_hash_matches);
+    assert!(report.test_only_fixtures);
+    assert!(!report.real_proof_verified);
+    assert!(!report.real_evidence_slots_satisfied);
+    assert!(report.satisfied_real_evidence_slots.is_empty());
+    assert_eq!(report.satisfied_real_evidence_slot_count, 0);
+    assert_eq!(
+        report.blocked_real_evidence_slots,
+        real_prover::REQUIRED_EVIDENCE
+    );
+    assert_eq!(report.blocked_real_evidence_slot_count, 4);
+    assert!(!report.runtime_cutover_allowed);
+    assert!(!report.real_proof_generation_allowed);
+    assert!(!report.accepted_as_complete_evidence);
+}
+
+#[test]
+fn test_only_evidence_satisfaction_rehearsal_report_json_round_trips() {
+    let report = real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::from_test_only_fixtures(
+        &test_only_real_proof_bytes_fixture(),
+        &test_only_local_real_proof_validation_log_fixture(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&report).unwrap();
+    let decoded: real_prover::TestOnlyEvidenceSatisfactionRehearsalReport =
+        serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, report);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn test_only_evidence_satisfaction_rehearsal_report_rejects_fake_completion() {
+    let mut report =
+        real_prover::TestOnlyEvidenceSatisfactionRehearsalReport::from_test_only_fixtures(
+            &test_only_real_proof_bytes_fixture(),
+            &test_only_local_real_proof_validation_log_fixture(),
+        )
+        .unwrap();
+    report.real_proof_verified = true;
+    report.real_evidence_slots_satisfied = true;
+    report.satisfied_real_evidence_slots = real_prover::REQUIRED_EVIDENCE
+        .iter()
+        .map(|slot| (*slot).to_string())
+        .collect();
+    report.satisfied_real_evidence_slot_count = 4;
+    report.blocked_real_evidence_slots.clear();
+    report.blocked_real_evidence_slot_count = 0;
+    report.runtime_cutover_allowed = true;
+    report.real_proof_generation_allowed = true;
+    report.accepted_as_complete_evidence = true;
+
+    let errors = report.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_verified must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_evidence_slots_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "satisfied_real_evidence_slots must be empty")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "satisfied_real_evidence_slot_count must be 0")
+    );
+    assert!(
+        errors.iter().any(|error| error
+            == "blocked_real_evidence_slots must match the real prover evidence contract")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "blocked_real_evidence_slot_count must be 4")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_cutover_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+}
+
 #[test]
 fn real_prover_evidence_record_generates_unsatisfied_contract() {
     let bytes = test_only_proof_bytes();
