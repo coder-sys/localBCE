@@ -834,3 +834,159 @@ fn local_real_proof_validation_log_evidence_rejects_fake_verification() {
             .any(|error| error == "real_proof_generation_allowed must be false")
     );
 }
+
+fn local_real_proof_validation_log_evidence() -> real_prover::LocalRealProofValidationLogEvidence {
+    real_prover::LocalRealProofValidationLogEvidence::from_unit_tests_evidence(
+        &real_prover_unit_tests_evidence(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn real_proof_bytes_fixture_evidence_declares_missing_future_fixture_only() {
+    let evidence = real_prover::RealProofBytesFixtureEvidence::from_validation_log_evidence(
+        &local_real_proof_validation_log_evidence(),
+    )
+    .expect("fixture evidence should generate from valid validation-log evidence");
+
+    evidence.validate().unwrap();
+    assert_eq!(
+        evidence.schema_version,
+        real_prover::RealProofBytesFixtureEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.source_schema_version,
+        real_prover::LocalRealProofValidationLogEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.evidence_slot,
+        real_prover::RealProofBytesFixtureEvidence::EVIDENCE_SLOT
+    );
+    assert_eq!(
+        evidence.evidence_status,
+        real_prover::RealProofBytesFixtureEvidence::EVIDENCE_STATUS
+    );
+    assert_eq!(
+        evidence.candidate_fixture_path,
+        real_prover::REAL_PROOF_BYTES_FIXTURE_PATH
+    );
+    assert_eq!(
+        evidence.expected_fixture_path,
+        real_prover::REAL_PROOF_BYTES_FIXTURE_PATH
+    );
+    assert!(evidence.path_matches_expected);
+    assert_eq!(
+        evidence.fixture_status,
+        real_prover::RealProofBytesFixtureEvidence::FIXTURE_STATUS
+    );
+    assert!(!evidence.proof_bytes_present);
+    assert!(!evidence.proof_bytes_digest_present);
+    assert!(evidence.test_only_bytes_rejected);
+    assert!(!evidence.local_real_proof_verified);
+    assert_eq!(
+        evidence.required_fixture_fields,
+        real_prover::RealProofBytesFixtureEvidence::REQUIRED_FIXTURE_FIELDS
+    );
+    assert_eq!(evidence.required_fixture_field_count, 5);
+    assert!(!evidence.implementation_satisfied);
+    assert!(!evidence.accepted_as_complete_evidence);
+    assert!(!evidence.runtime_wiring_allowed);
+    assert!(!evidence.real_proof_generation_allowed);
+}
+
+#[test]
+fn real_proof_bytes_fixture_evidence_json_round_trips() {
+    let evidence = real_prover::RealProofBytesFixtureEvidence::from_validation_log_evidence(
+        &local_real_proof_validation_log_evidence(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&evidence).unwrap();
+    let decoded: real_prover::RealProofBytesFixtureEvidence = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, evidence);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn real_proof_bytes_fixture_evidence_rejects_fake_fixture_completion() {
+    let mut evidence = real_prover::RealProofBytesFixtureEvidence::from_validation_log_evidence(
+        &local_real_proof_validation_log_evidence(),
+    )
+    .unwrap();
+    evidence.candidate_fixture_path = "stark-engine/fixtures/test_only.bin".to_string();
+    evidence.path_matches_expected = false;
+    evidence.fixture_status = "fixture_present".to_string();
+    evidence.proof_bytes_present = true;
+    evidence.proof_bytes_digest_present = true;
+    evidence.test_only_bytes_rejected = false;
+    evidence.local_real_proof_verified = true;
+    evidence.required_fixture_fields.pop();
+    evidence.required_fixture_field_count = 4;
+    evidence.implementation_satisfied = true;
+    evidence.accepted_as_complete_evidence = true;
+    evidence.runtime_wiring_allowed = true;
+    evidence.real_proof_generation_allowed = true;
+
+    let errors = evidence.validate().unwrap_err();
+    assert!(errors.iter().any(|error| error
+        == "candidate_fixture_path must be stark-engine/fixtures/real_proof_bytes_fixture.bin"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "path_matches_expected must be true")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "fixture_status must be real_proof_bytes_fixture_missing")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "proof_bytes_present must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "proof_bytes_digest_present must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "test_only_bytes_rejected must be true")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(
+        errors.iter().any(|error| error
+            == "required_fixture_fields must match the real proof bytes fixture contract")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "required_fixture_field_count must be 5")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}

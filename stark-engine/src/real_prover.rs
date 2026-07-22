@@ -17,6 +17,8 @@ pub const REAL_PROVER_ADAPTER_FEATURE_ENABLED: bool = cfg!(feature = "real-prove
 pub const REAL_PROVER_UNIT_TEST_PATH: &str = "stark-engine/tests/phase8_test_only_real_prover.rs";
 pub const LOCAL_REAL_PROOF_VALIDATION_LOG_PATH: &str =
     "stark-engine/reports/local_real_proof_validation.log";
+pub const REAL_PROOF_BYTES_FIXTURE_PATH: &str =
+    "stark-engine/fixtures/real_proof_bytes_fixture.bin";
 pub const REQUIRED_REAL_PROVER_UNIT_TESTS: [&str; 3] = [
     "real_prover_evidence_record_generates_unsatisfied_contract",
     "real_prover_attempt_artifact_is_blocked_by_missing_evidence",
@@ -200,6 +202,35 @@ pub struct LocalRealProofValidationLogEvidence {
     pub real_proof_generation_allowed: bool,
     pub required_log_fields: Vec<String>,
     pub required_log_field_count: usize,
+    pub notes: Vec<String>,
+}
+
+/// Candidate validation for the `real_proof_bytes_fixture` evidence slot.
+///
+/// This declares the future fixture path and required metadata for real proof
+/// bytes. It explicitly rejects placeholder/test-only bytes by keeping the
+/// fixture status missing and all completion flags false.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProofBytesFixtureEvidence {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub evidence_slot: String,
+    pub evidence_status: String,
+    pub transformation_id: String,
+    pub candidate_fixture_path: String,
+    pub expected_fixture_path: String,
+    pub path_matches_expected: bool,
+    pub fixture_status: String,
+    pub proof_bytes_present: bool,
+    pub proof_bytes_digest_present: bool,
+    pub test_only_bytes_rejected: bool,
+    pub local_real_proof_verified: bool,
+    pub implementation_satisfied: bool,
+    pub accepted_as_complete_evidence: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub required_fixture_fields: Vec<String>,
+    pub required_fixture_field_count: usize,
     pub notes: Vec<String>,
 }
 
@@ -1132,6 +1163,173 @@ impl LocalRealProofValidationLogEvidence {
             errors.push(format!(
                 "required_log_field_count must be {}",
                 Self::REQUIRED_LOG_FIELDS.len()
+            ));
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProofBytesFixtureEvidence {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-proof-bytes-fixture-evidence-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        LocalRealProofValidationLogEvidence::SCHEMA_VERSION;
+    pub const EVIDENCE_SLOT: &'static str = "real_proof_bytes_fixture";
+    pub const EVIDENCE_STATUS: &'static str = "real_proof_bytes_fixture_declared_missing";
+    pub const FIXTURE_STATUS: &'static str = "real_proof_bytes_fixture_missing";
+    pub const REQUIRED_FIXTURE_FIELDS: [&'static str; 5] = [
+        "fixture_path",
+        "proof_artifact_schema_version",
+        "proof_bytes_digest",
+        "prover_name",
+        "local_verification_log_path",
+    ];
+
+    pub fn from_validation_log_evidence(
+        evidence: &LocalRealProofValidationLogEvidence,
+    ) -> Result<Self, Vec<String>> {
+        evidence.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: evidence.schema_version.clone(),
+            evidence_slot: Self::EVIDENCE_SLOT.to_string(),
+            evidence_status: Self::EVIDENCE_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            candidate_fixture_path: REAL_PROOF_BYTES_FIXTURE_PATH.to_string(),
+            expected_fixture_path: REAL_PROOF_BYTES_FIXTURE_PATH.to_string(),
+            path_matches_expected: true,
+            fixture_status: Self::FIXTURE_STATUS.to_string(),
+            proof_bytes_present: false,
+            proof_bytes_digest_present: false,
+            test_only_bytes_rejected: true,
+            local_real_proof_verified: false,
+            implementation_satisfied: false,
+            accepted_as_complete_evidence: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            required_fixture_fields: Self::REQUIRED_FIXTURE_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+            required_fixture_field_count: Self::REQUIRED_FIXTURE_FIELDS.len(),
+            notes: vec![
+                "The real proof bytes fixture path is declared for future evidence.".to_string(),
+                "No real proof bytes fixture exists in this artifact.".to_string(),
+                "Test-only placeholder bytes are explicitly rejected as real fixture evidence."
+                    .to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.evidence_slot != Self::EVIDENCE_SLOT {
+            errors.push(format!("evidence_slot must be {}", Self::EVIDENCE_SLOT));
+        }
+
+        if self.evidence_status != Self::EVIDENCE_STATUS {
+            errors.push(format!("evidence_status must be {}", Self::EVIDENCE_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.candidate_fixture_path != REAL_PROOF_BYTES_FIXTURE_PATH {
+            errors.push(format!(
+                "candidate_fixture_path must be {REAL_PROOF_BYTES_FIXTURE_PATH}"
+            ));
+        }
+
+        if self.expected_fixture_path != REAL_PROOF_BYTES_FIXTURE_PATH {
+            errors.push(format!(
+                "expected_fixture_path must be {REAL_PROOF_BYTES_FIXTURE_PATH}"
+            ));
+        }
+
+        if !self.path_matches_expected {
+            errors.push("path_matches_expected must be true".to_string());
+        }
+
+        if self.fixture_status != Self::FIXTURE_STATUS {
+            errors.push(format!("fixture_status must be {}", Self::FIXTURE_STATUS));
+        }
+
+        if self.proof_bytes_present {
+            errors.push("proof_bytes_present must be false".to_string());
+        }
+
+        if self.proof_bytes_digest_present {
+            errors.push("proof_bytes_digest_present must be false".to_string());
+        }
+
+        if !self.test_only_bytes_rejected {
+            errors.push("test_only_bytes_rejected must be true".to_string());
+        }
+
+        if self.local_real_proof_verified {
+            errors.push("local_real_proof_verified must be false".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.accepted_as_complete_evidence {
+            errors.push("accepted_as_complete_evidence must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        let expected_fields = Self::REQUIRED_FIXTURE_FIELDS.to_vec();
+        let actual_fields = self
+            .required_fixture_fields
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_fields != expected_fields {
+            errors.push(
+                "required_fixture_fields must match the real proof bytes fixture contract"
+                    .to_string(),
+            );
+        }
+
+        if self.required_fixture_field_count != Self::REQUIRED_FIXTURE_FIELDS.len() {
+            errors.push(format!(
+                "required_fixture_field_count must be {}",
+                Self::REQUIRED_FIXTURE_FIELDS.len()
             ));
         }
 

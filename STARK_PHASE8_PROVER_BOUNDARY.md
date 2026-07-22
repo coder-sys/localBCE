@@ -1112,12 +1112,56 @@ generate_phase8_local_real_proof_validation_log_evidence
 validate_phase8_local_real_proof_validation_log_evidence
 ```
 
+## Real Proof Bytes Fixture Evidence
+
+The fourth individual real-prover evidence slot validator now exists:
+
+```text
+real_prover::RealProofBytesFixtureEvidence
+```
+
+It validates only the `real_proof_bytes_fixture` candidate:
+
+```text
+evidence_slot = real_proof_bytes_fixture
+candidate_fixture_path = stark-engine/fixtures/real_proof_bytes_fixture.bin
+expected_fixture_path = stark-engine/fixtures/real_proof_bytes_fixture.bin
+fixture_status = real_proof_bytes_fixture_missing
+proof_bytes_present = false
+proof_bytes_digest_present = false
+test_only_bytes_rejected = true
+local_real_proof_verified = false
+implementation_satisfied = false
+accepted_as_complete_evidence = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+The required future fixture fields are:
+
+- `fixture_path`
+- `proof_artifact_schema_version`
+- `proof_bytes_digest`
+- `prover_name`
+- `local_verification_log_path`
+
+This completes the four individual evidence-slot validators, but the full real
+prover evidence record remains unsatisfied because no real proof bytes fixture
+or local real-proof validation log exists yet.
+
+The fixture evidence CLI pair is:
+
+```text
+generate_phase8_real_proof_bytes_fixture_evidence
+validate_phase8_real_proof_bytes_fixture_evidence
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to replace one placeholder with one real,
-locally-verifiable implementation evidence item:
+The next safe Phase 8 step is to aggregate the four evidence-slot candidates
+into a single Phase 8 evidence summary:
 
-- add the next individual evidence validator for `real_proof_bytes_fixture`
+- summarize which slots are declared versus actually satisfied
 - keep the adapter blocked until all evidence slots are populated
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist
