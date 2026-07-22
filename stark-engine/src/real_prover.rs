@@ -136,6 +136,35 @@ pub struct TestOnlyEvidenceSatisfactionRehearsalReport {
     pub notes: Vec<String>,
 }
 
+/// Plan-only gate for promoting the real proof bytes fixture evidence slot.
+///
+/// This artifact defines the exact future conditions required for the
+/// `real_proof_bytes_fixture` slot to become satisfied, without marking the
+/// current test-only fixtures as complete evidence.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProofBytesFixturePromotionPlan {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub promotion_status: String,
+    pub transformation_id: String,
+    pub target_evidence_slot: String,
+    pub target_fixture_path: String,
+    pub required_conditions: Vec<String>,
+    pub required_condition_count: usize,
+    pub current_fixture_shape_present: bool,
+    pub current_validation_log_shape_present: bool,
+    pub current_digest_matches_log: bool,
+    pub required_proof_bytes_present: bool,
+    pub required_proof_bytes_digest_present: bool,
+    pub required_test_only_bytes_rejected: bool,
+    pub required_local_real_proof_verified: bool,
+    pub required_accepted_as_complete_evidence: bool,
+    pub slot_promotion_ready: bool,
+    pub runtime_cutover_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub notes: Vec<String>,
+}
+
 /// First real-prover implementation evidence record.
 ///
 /// This record is intentionally unsatisfied until a later phase provides real
@@ -917,6 +946,180 @@ impl TestOnlyEvidenceSatisfactionRehearsalReport {
 
         if self.accepted_as_complete_evidence {
             errors.push("accepted_as_complete_evidence must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProofBytesFixturePromotionPlan {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-proof-bytes-fixture-promotion-plan-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        TestOnlyEvidenceSatisfactionRehearsalReport::SCHEMA_VERSION;
+    pub const PROMOTION_STATUS: &'static str =
+        "promotion_plan_only_fixture_shape_ready_real_evidence_blocked";
+    pub const TARGET_EVIDENCE_SLOT: &'static str = "real_proof_bytes_fixture";
+    pub const REQUIRED_CONDITIONS: [&'static str; 5] = [
+        "proof_bytes_present",
+        "proof_bytes_digest_present",
+        "test_only_bytes_rejected",
+        "local_real_proof_verified",
+        "accepted_as_complete_evidence",
+    ];
+
+    pub fn from_rehearsal_report(
+        report: &TestOnlyEvidenceSatisfactionRehearsalReport,
+    ) -> Result<Self, Vec<String>> {
+        report.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: report.schema_version.clone(),
+            promotion_status: Self::PROMOTION_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            target_evidence_slot: Self::TARGET_EVIDENCE_SLOT.to_string(),
+            target_fixture_path: REAL_PROOF_BYTES_FIXTURE_PATH.to_string(),
+            required_conditions: Self::REQUIRED_CONDITIONS
+                .iter()
+                .map(|condition| (*condition).to_string())
+                .collect(),
+            required_condition_count: Self::REQUIRED_CONDITIONS.len(),
+            current_fixture_shape_present: report.proof_bytes_fixture_shape_present,
+            current_validation_log_shape_present: report.validation_log_shape_present,
+            current_digest_matches_log: report.proof_bytes_digest_matches_log,
+            required_proof_bytes_present: true,
+            required_proof_bytes_digest_present: true,
+            required_test_only_bytes_rejected: true,
+            required_local_real_proof_verified: true,
+            required_accepted_as_complete_evidence: true,
+            slot_promotion_ready: false,
+            runtime_cutover_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            notes: vec![
+                "This plan defines the future gate for promoting real_proof_bytes_fixture evidence."
+                    .to_string(),
+                "Current test-only fixtures prove shape only and do not satisfy the evidence slot."
+                    .to_string(),
+                "Promotion requires real proof bytes plus a local real proof verification log."
+                    .to_string(),
+                "Runtime cutover remains blocked after this plan.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.promotion_status != Self::PROMOTION_STATUS {
+            errors.push(format!(
+                "promotion_status must be {}",
+                Self::PROMOTION_STATUS
+            ));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.target_evidence_slot != Self::TARGET_EVIDENCE_SLOT {
+            errors.push(format!(
+                "target_evidence_slot must be {}",
+                Self::TARGET_EVIDENCE_SLOT
+            ));
+        }
+
+        if self.target_fixture_path != REAL_PROOF_BYTES_FIXTURE_PATH {
+            errors.push(format!(
+                "target_fixture_path must be {REAL_PROOF_BYTES_FIXTURE_PATH}"
+            ));
+        }
+
+        let expected_conditions = Self::REQUIRED_CONDITIONS.to_vec();
+        let actual_conditions = self
+            .required_conditions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_conditions != expected_conditions {
+            errors.push(
+                "required_conditions must match the real proof bytes fixture promotion gate"
+                    .to_string(),
+            );
+        }
+
+        if self.required_condition_count != Self::REQUIRED_CONDITIONS.len() {
+            errors.push(format!(
+                "required_condition_count must be {}",
+                Self::REQUIRED_CONDITIONS.len()
+            ));
+        }
+
+        if !self.current_fixture_shape_present {
+            errors.push("current_fixture_shape_present must be true".to_string());
+        }
+
+        if !self.current_validation_log_shape_present {
+            errors.push("current_validation_log_shape_present must be true".to_string());
+        }
+
+        if !self.current_digest_matches_log {
+            errors.push("current_digest_matches_log must be true".to_string());
+        }
+
+        if !self.required_proof_bytes_present {
+            errors.push("required_proof_bytes_present must be true".to_string());
+        }
+
+        if !self.required_proof_bytes_digest_present {
+            errors.push("required_proof_bytes_digest_present must be true".to_string());
+        }
+
+        if !self.required_test_only_bytes_rejected {
+            errors.push("required_test_only_bytes_rejected must be true".to_string());
+        }
+
+        if !self.required_local_real_proof_verified {
+            errors.push("required_local_real_proof_verified must be true".to_string());
+        }
+
+        if !self.required_accepted_as_complete_evidence {
+            errors.push("required_accepted_as_complete_evidence must be true".to_string());
+        }
+
+        if self.slot_promotion_ready {
+            errors.push("slot_promotion_ready must be false".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
         }
 
         if self.notes.is_empty() {

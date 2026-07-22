@@ -1001,6 +1001,50 @@ generate_phase8_test_only_evidence_satisfaction_rehearsal_report
 validate_phase8_test_only_evidence_satisfaction_rehearsal_report
 ```
 
+## Real Proof Bytes Fixture Promotion Plan
+
+The first real evidence-slot promotion plan now exists:
+
+```text
+real_prover::RealProofBytesFixturePromotionPlan
+```
+
+It consumes `TestOnlyEvidenceSatisfactionRehearsalReport` and defines the exact
+future gate for promoting the `real_proof_bytes_fixture` slot.
+
+Required future conditions:
+
+```text
+proof_bytes_present = true
+proof_bytes_digest_present = true
+test_only_bytes_rejected = true
+local_real_proof_verified = true
+accepted_as_complete_evidence = true
+```
+
+Current status remains blocked:
+
+```text
+promotion_status = promotion_plan_only_fixture_shape_ready_real_evidence_blocked
+current_fixture_shape_present = true
+current_validation_log_shape_present = true
+current_digest_matches_log = true
+slot_promotion_ready = false
+runtime_cutover_allowed = false
+real_proof_generation_allowed = false
+```
+
+This plan is the first bridge from rehearsal artifacts to real evidence
+promotion. It does not flip the evidence slot yet and does not allow runtime
+cutover.
+
+The promotion plan CLI pair is:
+
+```text
+generate_phase8_real_proof_bytes_fixture_promotion_plan
+validate_phase8_real_proof_bytes_fixture_promotion_plan
+```
+
 ## Real Prover Evidence Record
 
 The first real prover evidence record schema now exists:
