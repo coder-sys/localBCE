@@ -14,6 +14,12 @@ pub const IMPLEMENTATION_STATUS: &str = "scaffold_only_not_implemented";
 pub const RUNTIME_WIRING_ALLOWED: bool = false;
 pub const REAL_PROOF_GENERATION_ALLOWED: bool = false;
 pub const REAL_PROVER_ADAPTER_FEATURE_ENABLED: bool = cfg!(feature = "real-prover-adapter");
+pub const REAL_PROVER_UNIT_TEST_PATH: &str = "stark-engine/tests/phase8_test_only_real_prover.rs";
+pub const REQUIRED_REAL_PROVER_UNIT_TESTS: [&str; 3] = [
+    "real_prover_evidence_record_generates_unsatisfied_contract",
+    "real_prover_attempt_artifact_is_blocked_by_missing_evidence",
+    "real_prover_adapter_invocation_is_default_blocked",
+];
 pub const REQUIRED_EVIDENCE: [&str; 4] = [
     "real_prover_code_path",
     "real_proof_bytes_fixture",
@@ -137,6 +143,31 @@ pub struct RealProverCodePathEvidence {
     pub expected_code_path: String,
     pub path_matches_expected: bool,
     pub source_module_status: String,
+    pub implementation_satisfied: bool,
+    pub accepted_as_complete_evidence: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub notes: Vec<String>,
+}
+
+/// Candidate validation for the `real_prover_unit_tests` evidence slot.
+///
+/// This confirms the expected focused test file and required test coverage
+/// names for the guarded real prover boundary, but it still does not satisfy
+/// the complete real prover evidence contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProverUnitTestsEvidence {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub evidence_slot: String,
+    pub evidence_status: String,
+    pub transformation_id: String,
+    pub candidate_test_path: String,
+    pub expected_test_path: String,
+    pub path_matches_expected: bool,
+    pub required_tests: Vec<String>,
+    pub required_test_count: usize,
+    pub coverage_status: String,
     pub implementation_satisfied: bool,
     pub accepted_as_complete_evidence: bool,
     pub runtime_wiring_allowed: bool,
@@ -765,6 +796,145 @@ impl RealProverCodePathEvidence {
             errors.push(format!(
                 "source_module_status must be {IMPLEMENTATION_STATUS}"
             ));
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.accepted_as_complete_evidence {
+            errors.push("accepted_as_complete_evidence must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProverUnitTestsEvidence {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-unit-tests-evidence-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = RealProverCodePathEvidence::SCHEMA_VERSION;
+    pub const EVIDENCE_SLOT: &'static str = "real_prover_unit_tests";
+    pub const EVIDENCE_STATUS: &'static str = "unit_tests_candidate_validated_not_sufficient";
+    pub const COVERAGE_STATUS: &'static str = "focused_boundary_tests_declared";
+
+    pub fn from_code_path_evidence(
+        evidence: &RealProverCodePathEvidence,
+    ) -> Result<Self, Vec<String>> {
+        evidence.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: evidence.schema_version.clone(),
+            evidence_slot: Self::EVIDENCE_SLOT.to_string(),
+            evidence_status: Self::EVIDENCE_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            candidate_test_path: REAL_PROVER_UNIT_TEST_PATH.to_string(),
+            expected_test_path: REAL_PROVER_UNIT_TEST_PATH.to_string(),
+            path_matches_expected: true,
+            required_tests: REQUIRED_REAL_PROVER_UNIT_TESTS
+                .iter()
+                .map(|test| (*test).to_string())
+                .collect(),
+            required_test_count: REQUIRED_REAL_PROVER_UNIT_TESTS.len(),
+            coverage_status: Self::COVERAGE_STATUS.to_string(),
+            implementation_satisfied: false,
+            accepted_as_complete_evidence: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            notes: vec![
+                "The focused Phase 8 test file is the declared unit-test evidence candidate."
+                    .to_string(),
+                "These tests cover blocked real prover evidence, attempt, and adapter boundaries."
+                    .to_string(),
+                "This validates only one evidence slot candidate.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.evidence_slot != Self::EVIDENCE_SLOT {
+            errors.push(format!("evidence_slot must be {}", Self::EVIDENCE_SLOT));
+        }
+
+        if self.evidence_status != Self::EVIDENCE_STATUS {
+            errors.push(format!("evidence_status must be {}", Self::EVIDENCE_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.candidate_test_path != REAL_PROVER_UNIT_TEST_PATH {
+            errors.push(format!(
+                "candidate_test_path must be {REAL_PROVER_UNIT_TEST_PATH}"
+            ));
+        }
+
+        if self.expected_test_path != REAL_PROVER_UNIT_TEST_PATH {
+            errors.push(format!(
+                "expected_test_path must be {REAL_PROVER_UNIT_TEST_PATH}"
+            ));
+        }
+
+        if !self.path_matches_expected {
+            errors.push("path_matches_expected must be true".to_string());
+        }
+
+        let expected_tests = REQUIRED_REAL_PROVER_UNIT_TESTS.to_vec();
+        let actual_tests = self
+            .required_tests
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_tests != expected_tests {
+            errors.push(
+                "required_tests must match the real prover boundary test contract".to_string(),
+            );
+        }
+
+        if self.required_test_count != REQUIRED_REAL_PROVER_UNIT_TESTS.len() {
+            errors.push(format!(
+                "required_test_count must be {}",
+                REQUIRED_REAL_PROVER_UNIT_TESTS.len()
+            ));
+        }
+
+        if self.coverage_status != Self::COVERAGE_STATUS {
+            errors.push(format!("coverage_status must be {}", Self::COVERAGE_STATUS));
         }
 
         if self.implementation_satisfied {

@@ -1032,12 +1032,50 @@ generate_phase8_real_prover_code_path_evidence
 validate_phase8_real_prover_code_path_evidence
 ```
 
+## Real Prover Unit Tests Evidence
+
+The second individual real-prover evidence slot validator now exists:
+
+```text
+real_prover::RealProverUnitTestsEvidence
+```
+
+It validates only the `real_prover_unit_tests` candidate:
+
+```text
+evidence_slot = real_prover_unit_tests
+candidate_test_path = stark-engine/tests/phase8_test_only_real_prover.rs
+expected_test_path = stark-engine/tests/phase8_test_only_real_prover.rs
+required_test_count = 3
+coverage_status = focused_boundary_tests_declared
+implementation_satisfied = false
+accepted_as_complete_evidence = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+The required focused boundary tests are:
+
+- `real_prover_evidence_record_generates_unsatisfied_contract`
+- `real_prover_attempt_artifact_is_blocked_by_missing_evidence`
+- `real_prover_adapter_invocation_is_default_blocked`
+
+This is not enough to satisfy the full real prover evidence record. It proves
+only that the focused unit-test evidence candidate is declared and constrained.
+
+The unit-tests evidence CLI pair is:
+
+```text
+generate_phase8_real_prover_unit_tests_evidence
+validate_phase8_real_prover_unit_tests_evidence
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to replace one placeholder with one real,
 locally-verifiable implementation evidence item:
 
-- add the next individual evidence validator for `real_prover_unit_tests`
+- add the next individual evidence validator for `local_real_proof_validation_log`
 - keep the adapter blocked until all evidence slots are populated
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist

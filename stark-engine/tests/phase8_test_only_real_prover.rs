@@ -570,3 +570,132 @@ fn real_prover_code_path_evidence_rejects_wrong_path_or_fake_completion() {
             .any(|error| error == "real_proof_generation_allowed must be false")
     );
 }
+
+fn real_prover_code_path_evidence() -> real_prover::RealProverCodePathEvidence {
+    real_prover::RealProverCodePathEvidence::from_adapter_invocation(
+        &real_prover_adapter_invocation(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn real_prover_unit_tests_evidence_declares_focused_boundary_tests_only() {
+    let evidence = real_prover::RealProverUnitTestsEvidence::from_code_path_evidence(
+        &real_prover_code_path_evidence(),
+    )
+    .expect("unit-test evidence should generate from valid code-path evidence");
+
+    evidence.validate().unwrap();
+    assert_eq!(
+        evidence.schema_version,
+        real_prover::RealProverUnitTestsEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.source_schema_version,
+        real_prover::RealProverCodePathEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.evidence_slot,
+        real_prover::RealProverUnitTestsEvidence::EVIDENCE_SLOT
+    );
+    assert_eq!(
+        evidence.evidence_status,
+        real_prover::RealProverUnitTestsEvidence::EVIDENCE_STATUS
+    );
+    assert_eq!(
+        evidence.candidate_test_path,
+        real_prover::REAL_PROVER_UNIT_TEST_PATH
+    );
+    assert_eq!(
+        evidence.expected_test_path,
+        real_prover::REAL_PROVER_UNIT_TEST_PATH
+    );
+    assert!(evidence.path_matches_expected);
+    assert_eq!(
+        evidence.required_tests,
+        real_prover::REQUIRED_REAL_PROVER_UNIT_TESTS
+    );
+    assert_eq!(evidence.required_test_count, 3);
+    assert_eq!(
+        evidence.coverage_status,
+        real_prover::RealProverUnitTestsEvidence::COVERAGE_STATUS
+    );
+    assert!(!evidence.implementation_satisfied);
+    assert!(!evidence.accepted_as_complete_evidence);
+    assert!(!evidence.runtime_wiring_allowed);
+    assert!(!evidence.real_proof_generation_allowed);
+}
+
+#[test]
+fn real_prover_unit_tests_evidence_json_round_trips() {
+    let evidence = real_prover::RealProverUnitTestsEvidence::from_code_path_evidence(
+        &real_prover_code_path_evidence(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&evidence).unwrap();
+    let decoded: real_prover::RealProverUnitTestsEvidence = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, evidence);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn real_prover_unit_tests_evidence_rejects_missing_tests_or_fake_completion() {
+    let mut evidence = real_prover::RealProverUnitTestsEvidence::from_code_path_evidence(
+        &real_prover_code_path_evidence(),
+    )
+    .unwrap();
+    evidence.candidate_test_path = "stark-engine/tests/wrong.rs".to_string();
+    evidence.path_matches_expected = false;
+    evidence.required_tests.pop();
+    evidence.required_test_count = 2;
+    evidence.coverage_status = "complete".to_string();
+    evidence.implementation_satisfied = true;
+    evidence.accepted_as_complete_evidence = true;
+    evidence.runtime_wiring_allowed = true;
+    evidence.real_proof_generation_allowed = true;
+
+    let errors = evidence.validate().unwrap_err();
+    assert!(errors.iter().any(|error| error
+        == "candidate_test_path must be stark-engine/tests/phase8_test_only_real_prover.rs"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "path_matches_expected must be true")
+    );
+    assert!(
+        errors.iter().any(
+            |error| error == "required_tests must match the real prover boundary test contract"
+        )
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "required_test_count must be 3")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "coverage_status must be focused_boundary_tests_declared")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}
