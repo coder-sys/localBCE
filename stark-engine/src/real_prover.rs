@@ -52,6 +52,34 @@ pub struct TestOnlyProofBytes {
     pub notes: Vec<String>,
 }
 
+/// Test-only fixture-shaped artifact for the future real proof bytes slot.
+///
+/// This proves the fixture schema and digest plumbing can be exercised without
+/// claiming that the bytes came from a real STARK prover.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TestOnlyRealProofBytesFixture {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub fixture_status: String,
+    pub transformation_id: String,
+    pub fixture_path: String,
+    pub expected_fixture_path: String,
+    pub path_matches_expected: bool,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub proof_bytes_digest: String,
+    pub proof_bytes_hex: String,
+    pub proof_bytes_length: usize,
+    pub proof_bytes_present: bool,
+    pub local_real_proof_verified: bool,
+    pub test_only_fixture: bool,
+    pub accepted_as_complete_evidence: bool,
+    pub implementation_satisfied: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub notes: Vec<String>,
+}
+
 /// First real-prover implementation evidence record.
 ///
 /// This record is intentionally unsatisfied until a later phase provides real
@@ -361,6 +389,151 @@ impl TestOnlyProofBytes {
 
         if self.accepted_as_implementation_evidence {
             errors.push("accepted_as_implementation_evidence must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl TestOnlyRealProofBytesFixture {
+    pub const SCHEMA_VERSION: &'static str = "phase8-test-only-real-proof-bytes-fixture-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = TestOnlyProofBytes::SCHEMA_VERSION;
+    pub const FIXTURE_STATUS: &'static str =
+        "test_only_fixture_shape_validated_not_real_proof_evidence";
+
+    pub fn from_test_only_proof_bytes(bytes: &TestOnlyProofBytes) -> Result<Self, Vec<String>> {
+        bytes.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: bytes.schema_version.clone(),
+            fixture_status: Self::FIXTURE_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            fixture_path: REAL_PROOF_BYTES_FIXTURE_PATH.to_string(),
+            expected_fixture_path: REAL_PROOF_BYTES_FIXTURE_PATH.to_string(),
+            path_matches_expected: true,
+            claim_id: bytes.claim_id.clone(),
+            claim_hash: bytes.claim_hash.clone(),
+            proof_bytes_digest: bytes.deterministic_digest.clone(),
+            proof_bytes_hex: bytes.bytes_hex.clone(),
+            proof_bytes_length: bytes.byte_length,
+            proof_bytes_present: true,
+            local_real_proof_verified: false,
+            test_only_fixture: true,
+            accepted_as_complete_evidence: false,
+            implementation_satisfied: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            notes: vec![
+                "This artifact validates the future real proof bytes fixture shape.".to_string(),
+                "The bytes are deterministic test-only bytes, not production STARK proof bytes."
+                    .to_string(),
+                "This fixture must not satisfy the real_proof_bytes_fixture evidence slot."
+                    .to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.fixture_status != Self::FIXTURE_STATUS {
+            errors.push(format!("fixture_status must be {}", Self::FIXTURE_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.fixture_path != REAL_PROOF_BYTES_FIXTURE_PATH {
+            errors.push(format!(
+                "fixture_path must be {REAL_PROOF_BYTES_FIXTURE_PATH}"
+            ));
+        }
+
+        if self.expected_fixture_path != REAL_PROOF_BYTES_FIXTURE_PATH {
+            errors.push(format!(
+                "expected_fixture_path must be {REAL_PROOF_BYTES_FIXTURE_PATH}"
+            ));
+        }
+
+        if !self.path_matches_expected {
+            errors.push("path_matches_expected must be true".to_string());
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.proof_bytes_digest) {
+            errors.push("proof_bytes_digest must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.proof_bytes_hex != self.proof_bytes_digest {
+            errors.push("proof_bytes_hex must match proof_bytes_digest".to_string());
+        }
+
+        if self.proof_bytes_length != TestOnlyProofBytes::BYTE_LENGTH {
+            errors.push(format!(
+                "proof_bytes_length must be {}",
+                TestOnlyProofBytes::BYTE_LENGTH
+            ));
+        }
+
+        if !self.proof_bytes_present {
+            errors.push("proof_bytes_present must be true".to_string());
+        }
+
+        if self.local_real_proof_verified {
+            errors.push("local_real_proof_verified must be false".to_string());
+        }
+
+        if !self.test_only_fixture {
+            errors.push("test_only_fixture must be true".to_string());
+        }
+
+        if self.accepted_as_complete_evidence {
+            errors.push("accepted_as_complete_evidence must be false".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
         }
 
         if self.notes.is_empty() {

@@ -888,6 +888,41 @@ The full STARK bridge smoke chain now generates and validates this placeholder
 after `WinterfellCompleteWitnessCandidate` and before the feature-gated
 Winterfell proof preview.
 
+## Test-Only Real Proof Bytes Fixture
+
+The first fixture-shaped artifact for the future real proof bytes slot now
+exists:
+
+```text
+real_prover::TestOnlyRealProofBytesFixture
+```
+
+It is generated from `TestOnlyProofBytes` and uses the future fixture path:
+
+```text
+fixture_path = stark-engine/fixtures/real_proof_bytes_fixture.bin
+fixture_status = test_only_fixture_shape_validated_not_real_proof_evidence
+proof_bytes_present = true
+proof_bytes_length = 32
+test_only_fixture = true
+local_real_proof_verified = false
+accepted_as_complete_evidence = false
+implementation_satisfied = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+This validates fixture shape and digest plumbing only. It does not satisfy the
+`real_proof_bytes_fixture` evidence slot, does not prove local verification,
+and does not unlock runtime cutover.
+
+The test-only fixture CLI pair is:
+
+```text
+generate_phase8_test_only_real_proof_bytes_fixture
+validate_phase8_test_only_real_proof_bytes_fixture
+```
+
 ## Real Prover Evidence Record
 
 The first real prover evidence record schema now exists:

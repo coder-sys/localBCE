@@ -130,6 +130,107 @@ fn test_only_proof_bytes() -> real_prover::TestOnlyProofBytes {
 }
 
 #[test]
+fn test_only_real_proof_bytes_fixture_has_future_fixture_shape() {
+    let bytes = test_only_proof_bytes();
+    let fixture = real_prover::TestOnlyRealProofBytesFixture::from_test_only_proof_bytes(&bytes)
+        .expect("test-only fixture should generate from valid test-only proof bytes");
+
+    fixture.validate().unwrap();
+    assert_eq!(
+        fixture.schema_version,
+        real_prover::TestOnlyRealProofBytesFixture::SCHEMA_VERSION
+    );
+    assert_eq!(
+        fixture.source_schema_version,
+        real_prover::TestOnlyProofBytes::SCHEMA_VERSION
+    );
+    assert_eq!(
+        fixture.fixture_status,
+        real_prover::TestOnlyRealProofBytesFixture::FIXTURE_STATUS
+    );
+    assert_eq!(
+        fixture.fixture_path,
+        real_prover::REAL_PROOF_BYTES_FIXTURE_PATH
+    );
+    assert_eq!(
+        fixture.expected_fixture_path,
+        real_prover::REAL_PROOF_BYTES_FIXTURE_PATH
+    );
+    assert!(fixture.path_matches_expected);
+    assert_eq!(fixture.claim_id, bytes.claim_id);
+    assert_eq!(fixture.claim_hash, bytes.claim_hash);
+    assert_eq!(fixture.proof_bytes_digest, bytes.deterministic_digest);
+    assert_eq!(fixture.proof_bytes_hex, bytes.bytes_hex);
+    assert_eq!(fixture.proof_bytes_length, bytes.byte_length);
+    assert!(fixture.proof_bytes_present);
+    assert!(fixture.test_only_fixture);
+    assert!(!fixture.local_real_proof_verified);
+    assert!(!fixture.accepted_as_complete_evidence);
+    assert!(!fixture.implementation_satisfied);
+    assert!(!fixture.runtime_wiring_allowed);
+    assert!(!fixture.real_proof_generation_allowed);
+}
+
+#[test]
+fn test_only_real_proof_bytes_fixture_json_round_trips() {
+    let fixture = real_prover::TestOnlyRealProofBytesFixture::from_test_only_proof_bytes(
+        &test_only_proof_bytes(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&fixture).unwrap();
+    let decoded: real_prover::TestOnlyRealProofBytesFixture = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, fixture);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn test_only_real_proof_bytes_fixture_rejects_real_evidence_flags() {
+    let mut fixture = real_prover::TestOnlyRealProofBytesFixture::from_test_only_proof_bytes(
+        &test_only_proof_bytes(),
+    )
+    .unwrap();
+    fixture.local_real_proof_verified = true;
+    fixture.test_only_fixture = false;
+    fixture.accepted_as_complete_evidence = true;
+    fixture.implementation_satisfied = true;
+    fixture.runtime_wiring_allowed = true;
+    fixture.real_proof_generation_allowed = true;
+
+    let errors = fixture.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "test_only_fixture must be true")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}
+
+#[test]
 fn real_prover_evidence_record_generates_unsatisfied_contract() {
     let bytes = test_only_proof_bytes();
     let record = real_prover::RealProverEvidenceRecord::from_test_only_proof_bytes(&bytes)
