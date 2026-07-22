@@ -699,3 +699,138 @@ fn real_prover_unit_tests_evidence_rejects_missing_tests_or_fake_completion() {
             .any(|error| error == "real_proof_generation_allowed must be false")
     );
 }
+
+fn real_prover_unit_tests_evidence() -> real_prover::RealProverUnitTestsEvidence {
+    real_prover::RealProverUnitTestsEvidence::from_code_path_evidence(
+        &real_prover_code_path_evidence(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn local_real_proof_validation_log_evidence_declares_required_future_log_only() {
+    let evidence = real_prover::LocalRealProofValidationLogEvidence::from_unit_tests_evidence(
+        &real_prover_unit_tests_evidence(),
+    )
+    .expect("validation-log evidence should generate from valid unit-tests evidence");
+
+    evidence.validate().unwrap();
+    assert_eq!(
+        evidence.schema_version,
+        real_prover::LocalRealProofValidationLogEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.source_schema_version,
+        real_prover::RealProverUnitTestsEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.evidence_slot,
+        real_prover::LocalRealProofValidationLogEvidence::EVIDENCE_SLOT
+    );
+    assert_eq!(
+        evidence.evidence_status,
+        real_prover::LocalRealProofValidationLogEvidence::EVIDENCE_STATUS
+    );
+    assert_eq!(
+        evidence.candidate_log_path,
+        real_prover::LOCAL_REAL_PROOF_VALIDATION_LOG_PATH
+    );
+    assert_eq!(
+        evidence.expected_log_path,
+        real_prover::LOCAL_REAL_PROOF_VALIDATION_LOG_PATH
+    );
+    assert!(evidence.path_matches_expected);
+    assert_eq!(
+        evidence.validation_log_status,
+        real_prover::LocalRealProofValidationLogEvidence::VALIDATION_LOG_STATUS
+    );
+    assert!(!evidence.local_real_proof_verified);
+    assert_eq!(
+        evidence.required_log_fields,
+        real_prover::LocalRealProofValidationLogEvidence::REQUIRED_LOG_FIELDS
+    );
+    assert_eq!(evidence.required_log_field_count, 5);
+    assert!(!evidence.implementation_satisfied);
+    assert!(!evidence.accepted_as_complete_evidence);
+    assert!(!evidence.runtime_wiring_allowed);
+    assert!(!evidence.real_proof_generation_allowed);
+}
+
+#[test]
+fn local_real_proof_validation_log_evidence_json_round_trips() {
+    let evidence = real_prover::LocalRealProofValidationLogEvidence::from_unit_tests_evidence(
+        &real_prover_unit_tests_evidence(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&evidence).unwrap();
+    let decoded: real_prover::LocalRealProofValidationLogEvidence =
+        serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, evidence);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn local_real_proof_validation_log_evidence_rejects_fake_verification() {
+    let mut evidence = real_prover::LocalRealProofValidationLogEvidence::from_unit_tests_evidence(
+        &real_prover_unit_tests_evidence(),
+    )
+    .unwrap();
+    evidence.candidate_log_path = "stark-engine/reports/fake.log".to_string();
+    evidence.path_matches_expected = false;
+    evidence.validation_log_status = "verified".to_string();
+    evidence.local_real_proof_verified = true;
+    evidence.required_log_fields.pop();
+    evidence.required_log_field_count = 4;
+    evidence.implementation_satisfied = true;
+    evidence.accepted_as_complete_evidence = true;
+    evidence.runtime_wiring_allowed = true;
+    evidence.real_proof_generation_allowed = true;
+
+    let errors = evidence.validate().unwrap_err();
+    assert!(errors.iter().any(|error| error
+        == "candidate_log_path must be stark-engine/reports/local_real_proof_validation.log"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "path_matches_expected must be true")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                == "validation_log_status must be real_proof_validation_log_missing")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(errors.iter().any(|error| error
+        == "required_log_fields must match the local real proof validation log contract"));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "required_log_field_count must be 5")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}

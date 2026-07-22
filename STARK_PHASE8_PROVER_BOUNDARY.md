@@ -1070,12 +1070,54 @@ generate_phase8_real_prover_unit_tests_evidence
 validate_phase8_real_prover_unit_tests_evidence
 ```
 
+## Local Real Proof Validation Log Evidence
+
+The third individual real-prover evidence slot validator now exists:
+
+```text
+real_prover::LocalRealProofValidationLogEvidence
+```
+
+It validates only the `local_real_proof_validation_log` candidate:
+
+```text
+evidence_slot = local_real_proof_validation_log
+candidate_log_path = stark-engine/reports/local_real_proof_validation.log
+expected_log_path = stark-engine/reports/local_real_proof_validation.log
+validation_log_status = real_proof_validation_log_missing
+local_real_proof_verified = false
+required_log_field_count = 5
+implementation_satisfied = false
+accepted_as_complete_evidence = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+The required future log fields are:
+
+- `prover_name`
+- `proof_artifact_schema_version`
+- `proof_bytes_digest`
+- `local_verification_status`
+- `verification_timestamp`
+
+This is not enough to satisfy the full real prover evidence record. It declares
+the expected local verification log contract without claiming that a real proof
+has been generated or verified.
+
+The validation-log evidence CLI pair is:
+
+```text
+generate_phase8_local_real_proof_validation_log_evidence
+validate_phase8_local_real_proof_validation_log_evidence
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to replace one placeholder with one real,
 locally-verifiable implementation evidence item:
 
-- add the next individual evidence validator for `local_real_proof_validation_log`
+- add the next individual evidence validator for `real_proof_bytes_fixture`
 - keep the adapter blocked until all evidence slots are populated
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist
