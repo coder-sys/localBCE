@@ -122,6 +122,28 @@ pub struct RealProverAdapterInvocation {
     pub notes: Vec<String>,
 }
 
+/// Candidate validation for the `real_prover_code_path` evidence slot.
+///
+/// This validates the planned source path for the future real prover adapter,
+/// but it does not satisfy the full real prover evidence contract by itself.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProverCodePathEvidence {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub evidence_slot: String,
+    pub evidence_status: String,
+    pub transformation_id: String,
+    pub candidate_code_path: String,
+    pub expected_code_path: String,
+    pub path_matches_expected: bool,
+    pub source_module_status: String,
+    pub implementation_satisfied: bool,
+    pub accepted_as_complete_evidence: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub notes: Vec<String>,
+}
+
 impl TestOnlyProofBytes {
     pub const SCHEMA_VERSION: &'static str = "phase8-test-only-proof-bytes-v0";
     pub const BYTE_STATUS: &'static str = "test_only_deterministic_placeholder_not_real_proof";
@@ -648,6 +670,117 @@ impl RealProverAdapterInvocation {
 
         if self.accepted_as_implementation_evidence {
             errors.push("accepted_as_implementation_evidence must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProverCodePathEvidence {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-code-path-evidence-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = RealProverAdapterInvocation::SCHEMA_VERSION;
+    pub const EVIDENCE_SLOT: &'static str = "real_prover_code_path";
+    pub const EVIDENCE_STATUS: &'static str = "code_path_candidate_validated_not_sufficient";
+
+    pub fn from_adapter_invocation(
+        invocation: &RealProverAdapterInvocation,
+    ) -> Result<Self, Vec<String>> {
+        invocation.validate()?;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: invocation.schema_version.clone(),
+            evidence_slot: Self::EVIDENCE_SLOT.to_string(),
+            evidence_status: Self::EVIDENCE_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            candidate_code_path: MODULE_PATH.to_string(),
+            expected_code_path: MODULE_PATH.to_string(),
+            path_matches_expected: true,
+            source_module_status: IMPLEMENTATION_STATUS.to_string(),
+            implementation_satisfied: false,
+            accepted_as_complete_evidence: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            notes: vec![
+                "The real prover code path points at the intended source module.".to_string(),
+                "This validates only one evidence slot candidate.".to_string(),
+                "The module remains scaffold-only and does not generate real proof bytes."
+                    .to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.evidence_slot != Self::EVIDENCE_SLOT {
+            errors.push(format!("evidence_slot must be {}", Self::EVIDENCE_SLOT));
+        }
+
+        if self.evidence_status != Self::EVIDENCE_STATUS {
+            errors.push(format!("evidence_status must be {}", Self::EVIDENCE_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.candidate_code_path != MODULE_PATH {
+            errors.push(format!("candidate_code_path must be {MODULE_PATH}"));
+        }
+
+        if self.expected_code_path != MODULE_PATH {
+            errors.push(format!("expected_code_path must be {MODULE_PATH}"));
+        }
+
+        if !self.path_matches_expected {
+            errors.push("path_matches_expected must be true".to_string());
+        }
+
+        if self.source_module_status != IMPLEMENTATION_STATUS {
+            errors.push(format!(
+                "source_module_status must be {IMPLEMENTATION_STATUS}"
+            ));
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.accepted_as_complete_evidence {
+            errors.push("accepted_as_complete_evidence must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
         }
 
         if self.notes.is_empty() {

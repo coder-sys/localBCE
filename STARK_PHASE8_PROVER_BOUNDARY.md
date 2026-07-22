@@ -999,12 +999,45 @@ generate_phase8_real_prover_adapter_invocation
 validate_phase8_real_prover_adapter_invocation
 ```
 
+## Real Prover Code Path Evidence
+
+The first individual real-prover evidence slot validator now exists:
+
+```text
+real_prover::RealProverCodePathEvidence
+```
+
+It validates only the `real_prover_code_path` candidate:
+
+```text
+evidence_slot = real_prover_code_path
+candidate_code_path = stark-engine/src/real_prover.rs
+expected_code_path = stark-engine/src/real_prover.rs
+path_matches_expected = true
+source_module_status = scaffold_only_not_implemented
+implementation_satisfied = false
+accepted_as_complete_evidence = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+```
+
+This is not enough to satisfy the real prover evidence record. It proves only
+that the intended source module path is present and intentionally still
+scaffold-only.
+
+The code-path evidence CLI pair is:
+
+```text
+generate_phase8_real_prover_code_path_evidence
+validate_phase8_real_prover_code_path_evidence
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to replace one placeholder with one real,
 locally-verifiable implementation evidence item:
 
-- add a dedicated test fixture path for real prover code evidence
+- add the next individual evidence validator for `real_prover_unit_tests`
 - keep the adapter blocked until all evidence slots are populated
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist

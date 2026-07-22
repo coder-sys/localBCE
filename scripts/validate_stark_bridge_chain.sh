@@ -78,6 +78,7 @@ PHASE8_TEST_ONLY_PROOF_BYTES="${TMP_DIR}/phase8_test_only_proof_bytes.json"
 PHASE8_REAL_PROVER_EVIDENCE_RECORD="${TMP_DIR}/phase8_real_prover_evidence_record.json"
 PHASE8_REAL_PROVER_ATTEMPT_ARTIFACT="${TMP_DIR}/phase8_real_prover_attempt_artifact.json"
 PHASE8_REAL_PROVER_ADAPTER_INVOCATION="${TMP_DIR}/phase8_real_prover_adapter_invocation.json"
+PHASE8_REAL_PROVER_CODE_PATH_EVIDENCE="${TMP_DIR}/phase8_real_prover_code_path_evidence.json"
 WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
 STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifact.json"
 STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_interface_plan.json"
@@ -179,6 +180,12 @@ run_in_dir "Generate Phase 8 real prover adapter invocation" "stark-engine" \
 
 run_in_dir "Validate Phase 8 real prover adapter invocation" "stark-engine" \
   cargo run --bin validate_phase8_real_prover_adapter_invocation -- "${PHASE8_REAL_PROVER_ADAPTER_INVOCATION}"
+
+run_in_dir "Generate Phase 8 real prover code path evidence" "stark-engine" \
+  cargo run --bin generate_phase8_real_prover_code_path_evidence -- "${PHASE8_REAL_PROVER_ADAPTER_INVOCATION}" "${PHASE8_REAL_PROVER_CODE_PATH_EVIDENCE}"
+
+run_in_dir "Validate Phase 8 real prover code path evidence" "stark-engine" \
+  cargo run --bin validate_phase8_real_prover_code_path_evidence -- "${PHASE8_REAL_PROVER_CODE_PATH_EVIDENCE}"
 
 run_in_dir "Generate Winterfell proof preview" "stark-engine" \
   cargo run --features winterfell-poc --bin generate_winterfell_proof_preview -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_PROOF_PREVIEW}"

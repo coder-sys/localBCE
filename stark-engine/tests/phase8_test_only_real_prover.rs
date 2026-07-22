@@ -463,3 +463,110 @@ fn real_prover_adapter_invocation_rejects_fake_success() {
             .any(|error| error == "accepted_as_implementation_evidence must be false")
     );
 }
+
+fn real_prover_adapter_invocation() -> real_prover::RealProverAdapterInvocation {
+    real_prover::RealProverAdapterInvocation::from_attempt_artifact(&real_prover_attempt_artifact())
+        .unwrap()
+}
+
+#[test]
+fn real_prover_code_path_evidence_validates_planned_source_path_only() {
+    let evidence = real_prover::RealProverCodePathEvidence::from_adapter_invocation(
+        &real_prover_adapter_invocation(),
+    )
+    .expect("code path evidence should generate from a valid adapter invocation");
+
+    evidence.validate().unwrap();
+    assert_eq!(
+        evidence.schema_version,
+        real_prover::RealProverCodePathEvidence::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.source_schema_version,
+        real_prover::RealProverAdapterInvocation::SCHEMA_VERSION
+    );
+    assert_eq!(
+        evidence.evidence_slot,
+        real_prover::RealProverCodePathEvidence::EVIDENCE_SLOT
+    );
+    assert_eq!(
+        evidence.evidence_status,
+        real_prover::RealProverCodePathEvidence::EVIDENCE_STATUS
+    );
+    assert_eq!(evidence.candidate_code_path, real_prover::MODULE_PATH);
+    assert_eq!(evidence.expected_code_path, real_prover::MODULE_PATH);
+    assert!(evidence.path_matches_expected);
+    assert_eq!(
+        evidence.source_module_status,
+        real_prover::IMPLEMENTATION_STATUS
+    );
+    assert!(!evidence.implementation_satisfied);
+    assert!(!evidence.accepted_as_complete_evidence);
+    assert!(!evidence.runtime_wiring_allowed);
+    assert!(!evidence.real_proof_generation_allowed);
+}
+
+#[test]
+fn real_prover_code_path_evidence_json_round_trips() {
+    let evidence = real_prover::RealProverCodePathEvidence::from_adapter_invocation(
+        &real_prover_adapter_invocation(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&evidence).unwrap();
+    let decoded: real_prover::RealProverCodePathEvidence = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, evidence);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn real_prover_code_path_evidence_rejects_wrong_path_or_fake_completion() {
+    let mut evidence = real_prover::RealProverCodePathEvidence::from_adapter_invocation(
+        &real_prover_adapter_invocation(),
+    )
+    .unwrap();
+    evidence.candidate_code_path = "stark-engine/src/not_real_prover.rs".to_string();
+    evidence.path_matches_expected = false;
+    evidence.source_module_status = "implemented".to_string();
+    evidence.implementation_satisfied = true;
+    evidence.accepted_as_complete_evidence = true;
+    evidence.runtime_wiring_allowed = true;
+    evidence.real_proof_generation_allowed = true;
+
+    let errors = evidence.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "candidate_code_path must be stark-engine/src/real_prover.rs")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "path_matches_expected must be true")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "source_module_status must be scaffold_only_not_implemented")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_complete_evidence must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+}
