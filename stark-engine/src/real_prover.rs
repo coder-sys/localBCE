@@ -13,6 +13,7 @@ pub const MODULE_PATH: &str = "stark-engine/src/real_prover.rs";
 pub const IMPLEMENTATION_STATUS: &str = "scaffold_only_not_implemented";
 pub const RUNTIME_WIRING_ALLOWED: bool = false;
 pub const REAL_PROOF_GENERATION_ALLOWED: bool = false;
+pub const REAL_PROVER_ADAPTER_FEATURE_ENABLED: bool = cfg!(feature = "real-prover-adapter");
 pub const REQUIRED_EVIDENCE: [&str; 4] = [
     "real_prover_code_path",
     "real_proof_bytes_fixture",
@@ -84,6 +85,33 @@ pub struct RealProverAttemptArtifact {
     pub missing_evidence: Vec<String>,
     pub missing_evidence_count: usize,
     pub populated_evidence_count: usize,
+    pub implementation_satisfied: bool,
+    pub attempted_real_proof_generation: bool,
+    pub emitted_real_proof_bytes: bool,
+    pub local_real_proof_verified: bool,
+    pub runtime_wiring_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub accepted_as_implementation_evidence: bool,
+    pub notes: Vec<String>,
+}
+
+/// Feature-gated real prover adapter invocation.
+///
+/// This is the first implementation source path for a real prover adapter, but
+/// it is still non-runtime and non-emitting. In the default build it is blocked
+/// by the disabled feature gate. If the feature is enabled before evidence is
+/// satisfied, it remains blocked by the unsatisfied evidence contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealProverAdapterInvocation {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub adapter_status: String,
+    pub transformation_id: String,
+    pub planned_module: String,
+    pub feature_gate: String,
+    pub feature_enabled: bool,
+    pub blocker_status: String,
+    pub source_attempt_status: String,
     pub implementation_satisfied: bool,
     pub attempted_real_proof_generation: bool,
     pub emitted_real_proof_bytes: bool,
@@ -437,6 +465,161 @@ impl RealProverAttemptArtifact {
 
         if self.populated_evidence_count != 0 {
             errors.push("populated_evidence_count must be 0".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.attempted_real_proof_generation {
+            errors.push("attempted_real_proof_generation must be false".to_string());
+        }
+
+        if self.emitted_real_proof_bytes {
+            errors.push("emitted_real_proof_bytes must be false".to_string());
+        }
+
+        if self.local_real_proof_verified {
+            errors.push("local_real_proof_verified must be false".to_string());
+        }
+
+        if self.runtime_wiring_allowed {
+            errors.push("runtime_wiring_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        if self.accepted_as_implementation_evidence {
+            errors.push("accepted_as_implementation_evidence must be false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl RealProverAdapterInvocation {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-adapter-invocation-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = RealProverAttemptArtifact::SCHEMA_VERSION;
+    pub const FEATURE_GATE: &'static str = "real-prover-adapter";
+    pub const ADAPTER_STATUS_FEATURE_DISABLED: &'static str =
+        "blocked_real_prover_adapter_feature_disabled";
+    pub const ADAPTER_STATUS_EVIDENCE_MISSING: &'static str =
+        "blocked_real_prover_evidence_missing";
+
+    pub fn from_attempt_artifact(
+        artifact: &RealProverAttemptArtifact,
+    ) -> Result<Self, Vec<String>> {
+        artifact.validate()?;
+
+        let adapter_status = if REAL_PROVER_ADAPTER_FEATURE_ENABLED {
+            Self::ADAPTER_STATUS_EVIDENCE_MISSING
+        } else {
+            Self::ADAPTER_STATUS_FEATURE_DISABLED
+        };
+
+        let blocker_status = if REAL_PROVER_ADAPTER_FEATURE_ENABLED {
+            RealProverAttemptArtifact::BLOCKER_STATUS
+        } else {
+            "real_prover_adapter_feature_disabled"
+        };
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: artifact.schema_version.clone(),
+            adapter_status: adapter_status.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            planned_module: MODULE_PATH.to_string(),
+            feature_gate: Self::FEATURE_GATE.to_string(),
+            feature_enabled: REAL_PROVER_ADAPTER_FEATURE_ENABLED,
+            blocker_status: blocker_status.to_string(),
+            source_attempt_status: artifact.attempt_status.clone(),
+            implementation_satisfied: artifact.implementation_satisfied,
+            attempted_real_proof_generation: false,
+            emitted_real_proof_bytes: false,
+            local_real_proof_verified: false,
+            runtime_wiring_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            accepted_as_implementation_evidence: false,
+            notes: vec![
+                "Real prover adapter invocation is a non-runtime guarded source path.".to_string(),
+                "The adapter refuses to emit proof bytes while feature or evidence gates are blocked."
+                    .to_string(),
+                "No production STARK proof was generated.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        let expected_status = if self.feature_enabled {
+            Self::ADAPTER_STATUS_EVIDENCE_MISSING
+        } else {
+            Self::ADAPTER_STATUS_FEATURE_DISABLED
+        };
+        if self.adapter_status != expected_status {
+            errors.push(format!("adapter_status must be {expected_status}"));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.planned_module != MODULE_PATH {
+            errors.push(format!("planned_module must be {MODULE_PATH}"));
+        }
+
+        if self.feature_gate != Self::FEATURE_GATE {
+            errors.push(format!("feature_gate must be {}", Self::FEATURE_GATE));
+        }
+
+        if self.feature_enabled != REAL_PROVER_ADAPTER_FEATURE_ENABLED {
+            errors.push(format!(
+                "feature_enabled must match compiled feature state {}",
+                REAL_PROVER_ADAPTER_FEATURE_ENABLED
+            ));
+        }
+
+        let expected_blocker = if self.feature_enabled {
+            RealProverAttemptArtifact::BLOCKER_STATUS
+        } else {
+            "real_prover_adapter_feature_disabled"
+        };
+        if self.blocker_status != expected_blocker {
+            errors.push(format!("blocker_status must be {expected_blocker}"));
+        }
+
+        if self.source_attempt_status != RealProverAttemptArtifact::ATTEMPT_STATUS {
+            errors.push(format!(
+                "source_attempt_status must be {}",
+                RealProverAttemptArtifact::ATTEMPT_STATUS
+            ));
         }
 
         if self.implementation_satisfied {

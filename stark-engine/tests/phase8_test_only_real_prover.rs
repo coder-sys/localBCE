@@ -347,3 +347,119 @@ fn real_prover_attempt_artifact_rejects_fake_success() {
             .any(|error| error == "accepted_as_implementation_evidence must be false")
     );
 }
+
+fn real_prover_attempt_artifact() -> real_prover::RealProverAttemptArtifact {
+    real_prover::RealProverAttemptArtifact::blocked_from_evidence_record(
+        &real_prover_evidence_record(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn real_prover_adapter_invocation_is_default_blocked() {
+    let artifact = real_prover_attempt_artifact();
+    let invocation = real_prover::RealProverAdapterInvocation::from_attempt_artifact(&artifact)
+        .expect("adapter invocation should generate from a valid blocked attempt artifact");
+
+    invocation.validate().unwrap();
+    assert_eq!(
+        invocation.schema_version,
+        real_prover::RealProverAdapterInvocation::SCHEMA_VERSION
+    );
+    assert_eq!(
+        invocation.source_schema_version,
+        real_prover::RealProverAttemptArtifact::SCHEMA_VERSION
+    );
+    assert_eq!(
+        invocation.feature_gate,
+        real_prover::RealProverAdapterInvocation::FEATURE_GATE
+    );
+    assert_eq!(
+        invocation.feature_enabled,
+        real_prover::REAL_PROVER_ADAPTER_FEATURE_ENABLED
+    );
+    assert_eq!(
+        invocation.adapter_status,
+        real_prover::RealProverAdapterInvocation::ADAPTER_STATUS_FEATURE_DISABLED
+    );
+    assert_eq!(
+        invocation.blocker_status,
+        "real_prover_adapter_feature_disabled"
+    );
+    assert_eq!(
+        invocation.source_attempt_status,
+        real_prover::RealProverAttemptArtifact::ATTEMPT_STATUS
+    );
+    assert!(!invocation.implementation_satisfied);
+    assert!(!invocation.attempted_real_proof_generation);
+    assert!(!invocation.emitted_real_proof_bytes);
+    assert!(!invocation.local_real_proof_verified);
+    assert!(!invocation.runtime_wiring_allowed);
+    assert!(!invocation.real_proof_generation_allowed);
+    assert!(!invocation.accepted_as_implementation_evidence);
+}
+
+#[test]
+fn real_prover_adapter_invocation_json_round_trips() {
+    let invocation = real_prover::RealProverAdapterInvocation::from_attempt_artifact(
+        &real_prover_attempt_artifact(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&invocation).unwrap();
+    let decoded: real_prover::RealProverAdapterInvocation = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, invocation);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn real_prover_adapter_invocation_rejects_fake_success() {
+    let mut invocation = real_prover::RealProverAdapterInvocation::from_attempt_artifact(
+        &real_prover_attempt_artifact(),
+    )
+    .unwrap();
+    invocation.implementation_satisfied = true;
+    invocation.attempted_real_proof_generation = true;
+    invocation.emitted_real_proof_bytes = true;
+    invocation.local_real_proof_verified = true;
+    invocation.runtime_wiring_allowed = true;
+    invocation.real_proof_generation_allowed = true;
+    invocation.accepted_as_implementation_evidence = true;
+
+    let errors = invocation.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "attempted_real_proof_generation must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "emitted_real_proof_bytes must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "local_real_proof_verified must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_wiring_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "accepted_as_implementation_evidence must be false")
+    );
+}

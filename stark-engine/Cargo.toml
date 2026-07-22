@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = []
+real-prover-adapter = []
 winterfell-poc = ["dep:blind-ledger-stark"]
 
 [dependencies]

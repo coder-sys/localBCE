@@ -965,12 +965,47 @@ This is still a planning/protection artifact. It does not call Winterfell,
 does not generate proof bytes, does not emit a production artifact, and does
 not alter the active Groth16 runtime.
 
+## Real Prover Adapter Invocation
+
+The first real prover adapter source path now exists behind a default-disabled
+feature gate:
+
+```text
+feature = real-prover-adapter
+real_prover::RealProverAdapterInvocation
+```
+
+In the default build, the adapter invocation records:
+
+```text
+adapter_status = blocked_real_prover_adapter_feature_disabled
+feature_enabled = false
+attempted_real_proof_generation = false
+emitted_real_proof_bytes = false
+local_real_proof_verified = false
+runtime_wiring_allowed = false
+real_proof_generation_allowed = false
+accepted_as_implementation_evidence = false
+```
+
+If the feature is enabled before the evidence record is satisfied, the adapter
+still remains blocked by missing real prover evidence. It is not a runtime
+entrypoint and does not emit proof bytes.
+
+The real prover adapter invocation CLI pair is:
+
+```text
+generate_phase8_real_prover_adapter_invocation
+validate_phase8_real_prover_adapter_invocation
+```
+
 ## Next Safe Step
 
-The next safe Phase 8 step is to begin a real prover implementation source path
-behind a non-runtime API:
+The next safe Phase 8 step is to replace one placeholder with one real,
+locally-verifiable implementation evidence item:
 
-- add a feature-gated real prover adapter entrypoint that is disabled by default
+- add a dedicated test fixture path for real prover code evidence
+- keep the adapter blocked until all evidence slots are populated
 - generate a real proof bytes fixture only after local verification exists
 - keep the evidence record unsatisfied until code, fixture, tests, and log exist
 - do not emit production proof bytes yet
