@@ -407,6 +407,37 @@ pub struct RealProverEvidenceSummary {
     pub notes: Vec<String>,
 }
 
+/// Phase 8 top-level readiness rollup for real-prover cutover.
+///
+/// This combines the promotion plans and evidence-slot summary into one
+/// non-runtime checkpoint. It intentionally remains blocked until real proof
+/// bytes, real local verification, and implementation evidence replace the
+/// current test-only fixtures.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Phase8RealProverReadinessRollup {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub rollup_status: String,
+    pub transformation_id: String,
+    pub evidence_slots_declared: usize,
+    pub evidence_slots_satisfied: usize,
+    pub evidence_slots_blocked: usize,
+    pub fixture_promotion_plan_present: bool,
+    pub validation_log_promotion_plan_present: bool,
+    pub fixture_promotion_ready: bool,
+    pub validation_log_promotion_ready: bool,
+    pub test_only_shapes_present: bool,
+    pub real_evidence_complete: bool,
+    pub implementation_satisfied: bool,
+    pub runtime_cutover_allowed: bool,
+    pub real_proof_generation_allowed: bool,
+    pub remaining_blockers: Vec<String>,
+    pub remaining_blocker_count: usize,
+    pub next_required_actions: Vec<String>,
+    pub next_required_action_count: usize,
+    pub notes: Vec<String>,
+}
+
 impl TestOnlyProofBytes {
     pub const SCHEMA_VERSION: &'static str = "phase8-test-only-proof-bytes-v0";
     pub const BYTE_STATUS: &'static str = "test_only_deterministic_placeholder_not_real_proof";
@@ -2518,6 +2549,209 @@ impl RealProverEvidenceSummary {
 
         if !self.test_only_bytes_rejected {
             errors.push("test_only_bytes_rejected must be true".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl Phase8RealProverReadinessRollup {
+    pub const SCHEMA_VERSION: &'static str = "phase8-real-prover-readiness-rollup-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "phase8-real-prover-readiness-inputs-v0";
+    pub const ROLLUP_STATUS: &'static str =
+        "test_only_shapes_present_real_evidence_blocked_runtime_cutover_blocked";
+    pub const REMAINING_BLOCKERS: [&'static str; 7] = [
+        "real_proof_bytes_fixture_missing",
+        "local_real_proof_validation_log_missing",
+        "real_prover_implementation_not_satisfied",
+        "runtime_cutover_blocked",
+        "real_proof_bytes_fixture_promotion_not_ready",
+        "local_real_proof_validation_log_promotion_not_ready",
+        "real_prover_cutover_not_allowed",
+    ];
+    pub const NEXT_REQUIRED_ACTIONS: [&'static str; 5] = [
+        "replace_test_only_proof_bytes_with_real_prover_output",
+        "write_real_proof_bytes_fixture_from_selected_prover",
+        "write_local_real_proof_validation_log_with_verified_status",
+        "satisfy_all_four_real_prover_evidence_slots",
+        "keep_groth16_runtime_active_until_explicit_cutover",
+    ];
+
+    pub fn from_inputs(
+        evidence_summary: &RealProverEvidenceSummary,
+        fixture_plan: &RealProofBytesFixturePromotionPlan,
+        validation_log_plan: &LocalRealProofValidationLogPromotionPlan,
+    ) -> Result<Self, Vec<String>> {
+        evidence_summary.validate()?;
+        fixture_plan.validate()?;
+        validation_log_plan.validate()?;
+
+        let test_only_shapes_present = fixture_plan.current_fixture_shape_present
+            && fixture_plan.current_validation_log_shape_present
+            && fixture_plan.current_digest_matches_log
+            && validation_log_plan.current_validation_log_shape_present
+            && validation_log_plan.current_digest_matches_fixture
+            && validation_log_plan.current_claim_hash_matches_fixture;
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            rollup_status: Self::ROLLUP_STATUS.to_string(),
+            transformation_id: TRANSFORMATION_ID.to_string(),
+            evidence_slots_declared: evidence_summary.declared_slot_count,
+            evidence_slots_satisfied: evidence_summary.satisfied_slot_count,
+            evidence_slots_blocked: evidence_summary.missing_or_unsatisfied_slot_count,
+            fixture_promotion_plan_present: true,
+            validation_log_promotion_plan_present: true,
+            fixture_promotion_ready: fixture_plan.slot_promotion_ready,
+            validation_log_promotion_ready: validation_log_plan.slot_promotion_ready,
+            test_only_shapes_present,
+            real_evidence_complete: false,
+            implementation_satisfied: evidence_summary.implementation_satisfied,
+            runtime_cutover_allowed: RUNTIME_WIRING_ALLOWED,
+            real_proof_generation_allowed: REAL_PROOF_GENERATION_ALLOWED,
+            remaining_blockers: Self::REMAINING_BLOCKERS
+                .iter()
+                .map(|blocker| (*blocker).to_string())
+                .collect(),
+            remaining_blocker_count: Self::REMAINING_BLOCKERS.len(),
+            next_required_actions: Self::NEXT_REQUIRED_ACTIONS
+                .iter()
+                .map(|action| (*action).to_string())
+                .collect(),
+            next_required_action_count: Self::NEXT_REQUIRED_ACTIONS.len(),
+            notes: vec![
+                "This is a Phase 8 readiness rollup, not a proof artifact.".to_string(),
+                "Test-only fixture shapes are present, but no real evidence slot is satisfied."
+                    .to_string(),
+                "Runtime cutover and real proof generation remain blocked.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.rollup_status != Self::ROLLUP_STATUS {
+            errors.push(format!("rollup_status must be {}", Self::ROLLUP_STATUS));
+        }
+
+        if self.transformation_id != TRANSFORMATION_ID {
+            errors.push(format!("transformation_id must be {TRANSFORMATION_ID}"));
+        }
+
+        if self.evidence_slots_declared != REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "evidence_slots_declared must be {}",
+                REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if self.evidence_slots_satisfied != 0 {
+            errors.push("evidence_slots_satisfied must be 0".to_string());
+        }
+
+        if self.evidence_slots_blocked != REQUIRED_EVIDENCE.len() {
+            errors.push(format!(
+                "evidence_slots_blocked must be {}",
+                REQUIRED_EVIDENCE.len()
+            ));
+        }
+
+        if !self.fixture_promotion_plan_present {
+            errors.push("fixture_promotion_plan_present must be true".to_string());
+        }
+
+        if !self.validation_log_promotion_plan_present {
+            errors.push("validation_log_promotion_plan_present must be true".to_string());
+        }
+
+        if self.fixture_promotion_ready {
+            errors.push("fixture_promotion_ready must be false".to_string());
+        }
+
+        if self.validation_log_promotion_ready {
+            errors.push("validation_log_promotion_ready must be false".to_string());
+        }
+
+        if !self.test_only_shapes_present {
+            errors.push("test_only_shapes_present must be true".to_string());
+        }
+
+        if self.real_evidence_complete {
+            errors.push("real_evidence_complete must be false".to_string());
+        }
+
+        if self.implementation_satisfied {
+            errors.push("implementation_satisfied must be false".to_string());
+        }
+
+        if self.runtime_cutover_allowed {
+            errors.push("runtime_cutover_allowed must be false".to_string());
+        }
+
+        if self.real_proof_generation_allowed {
+            errors.push("real_proof_generation_allowed must be false".to_string());
+        }
+
+        let expected_blockers = Self::REMAINING_BLOCKERS.to_vec();
+        let actual_blockers = self
+            .remaining_blockers
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_blockers != expected_blockers {
+            errors.push("remaining_blockers must match the Phase 8 readiness contract".to_string());
+        }
+
+        if self.remaining_blocker_count != Self::REMAINING_BLOCKERS.len() {
+            errors.push(format!(
+                "remaining_blocker_count must be {}",
+                Self::REMAINING_BLOCKERS.len()
+            ));
+        }
+
+        let expected_actions = Self::NEXT_REQUIRED_ACTIONS.to_vec();
+        let actual_actions = self
+            .next_required_actions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_actions != expected_actions {
+            errors.push(
+                "next_required_actions must match the Phase 8 readiness contract".to_string(),
+            );
+        }
+
+        if self.next_required_action_count != Self::NEXT_REQUIRED_ACTIONS.len() {
+            errors.push(format!(
+                "next_required_action_count must be {}",
+                Self::NEXT_REQUIRED_ACTIONS.len()
+            ));
         }
 
         if self.notes.is_empty() {

@@ -1537,6 +1537,31 @@ fn real_proof_bytes_fixture_evidence() -> real_prover::RealProofBytesFixtureEvid
     .unwrap()
 }
 
+fn real_proof_bytes_fixture_promotion_plan() -> real_prover::RealProofBytesFixturePromotionPlan {
+    real_prover::RealProofBytesFixturePromotionPlan::from_rehearsal_report(
+        &test_only_evidence_satisfaction_rehearsal_report(),
+    )
+    .unwrap()
+}
+
+fn local_real_proof_validation_log_promotion_plan()
+-> real_prover::LocalRealProofValidationLogPromotionPlan {
+    real_prover::LocalRealProofValidationLogPromotionPlan::from_rehearsal_report(
+        &test_only_evidence_satisfaction_rehearsal_report(),
+    )
+    .unwrap()
+}
+
+fn real_prover_evidence_summary() -> real_prover::RealProverEvidenceSummary {
+    real_prover::RealProverEvidenceSummary::from_evidence_slots(
+        &real_prover_code_path_evidence(),
+        &real_prover_unit_tests_evidence(),
+        &local_real_proof_validation_log_evidence(),
+        &real_proof_bytes_fixture_evidence(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn real_prover_evidence_summary_reports_all_slots_declared_zero_satisfied() {
     let summary = real_prover::RealProverEvidenceSummary::from_evidence_slots(
@@ -1684,5 +1709,145 @@ fn real_prover_evidence_summary_rejects_fake_readiness() {
         errors
             .iter()
             .any(|error| error == "test_only_bytes_rejected must be true")
+    );
+}
+
+#[test]
+fn phase8_real_prover_readiness_rollup_reports_blocked_cutover() {
+    let rollup = real_prover::Phase8RealProverReadinessRollup::from_inputs(
+        &real_prover_evidence_summary(),
+        &real_proof_bytes_fixture_promotion_plan(),
+        &local_real_proof_validation_log_promotion_plan(),
+    )
+    .expect("readiness rollup should generate from valid Phase 8 inputs");
+
+    rollup.validate().unwrap();
+    assert_eq!(
+        rollup.schema_version,
+        real_prover::Phase8RealProverReadinessRollup::SCHEMA_VERSION
+    );
+    assert_eq!(
+        rollup.rollup_status,
+        real_prover::Phase8RealProverReadinessRollup::ROLLUP_STATUS
+    );
+    assert_eq!(rollup.evidence_slots_declared, 4);
+    assert_eq!(rollup.evidence_slots_satisfied, 0);
+    assert_eq!(rollup.evidence_slots_blocked, 4);
+    assert!(rollup.fixture_promotion_plan_present);
+    assert!(rollup.validation_log_promotion_plan_present);
+    assert!(!rollup.fixture_promotion_ready);
+    assert!(!rollup.validation_log_promotion_ready);
+    assert!(rollup.test_only_shapes_present);
+    assert!(!rollup.real_evidence_complete);
+    assert!(!rollup.implementation_satisfied);
+    assert!(!rollup.runtime_cutover_allowed);
+    assert!(!rollup.real_proof_generation_allowed);
+    assert_eq!(
+        rollup.remaining_blockers,
+        real_prover::Phase8RealProverReadinessRollup::REMAINING_BLOCKERS
+    );
+    assert_eq!(rollup.remaining_blocker_count, 7);
+    assert_eq!(
+        rollup.next_required_actions,
+        real_prover::Phase8RealProverReadinessRollup::NEXT_REQUIRED_ACTIONS
+    );
+    assert_eq!(rollup.next_required_action_count, 5);
+}
+
+#[test]
+fn phase8_real_prover_readiness_rollup_json_round_trips() {
+    let rollup = real_prover::Phase8RealProverReadinessRollup::from_inputs(
+        &real_prover_evidence_summary(),
+        &real_proof_bytes_fixture_promotion_plan(),
+        &local_real_proof_validation_log_promotion_plan(),
+    )
+    .unwrap();
+    let json = serde_json::to_string_pretty(&rollup).unwrap();
+    let decoded: real_prover::Phase8RealProverReadinessRollup =
+        serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, rollup);
+    decoded.validate().unwrap();
+}
+
+#[test]
+fn phase8_real_prover_readiness_rollup_rejects_fake_completion() {
+    let mut rollup = real_prover::Phase8RealProverReadinessRollup::from_inputs(
+        &real_prover_evidence_summary(),
+        &real_proof_bytes_fixture_promotion_plan(),
+        &local_real_proof_validation_log_promotion_plan(),
+    )
+    .unwrap();
+    rollup.evidence_slots_satisfied = 4;
+    rollup.evidence_slots_blocked = 0;
+    rollup.fixture_promotion_ready = true;
+    rollup.validation_log_promotion_ready = true;
+    rollup.real_evidence_complete = true;
+    rollup.implementation_satisfied = true;
+    rollup.runtime_cutover_allowed = true;
+    rollup.real_proof_generation_allowed = true;
+    rollup.remaining_blockers.clear();
+    rollup.remaining_blocker_count = 0;
+    rollup.next_required_actions.clear();
+    rollup.next_required_action_count = 0;
+
+    let errors = rollup.validate().unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "evidence_slots_satisfied must be 0")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "evidence_slots_blocked must be 4")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "fixture_promotion_ready must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "validation_log_promotion_ready must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_evidence_complete must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "implementation_satisfied must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "runtime_cutover_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "real_proof_generation_allowed must be false")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "remaining_blockers must match the Phase 8 readiness contract")
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "remaining_blocker_count must be 7")
+    );
+    assert!(errors.iter().any(
+        |error| error == "next_required_actions must match the Phase 8 readiness contract"
+    ));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "next_required_action_count must be 5")
     );
 }

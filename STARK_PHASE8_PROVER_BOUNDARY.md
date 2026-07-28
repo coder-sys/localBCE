@@ -1396,6 +1396,67 @@ generate_phase8_real_prover_evidence_summary
 validate_phase8_real_prover_evidence_summary
 ```
 
+## Phase 8 Real Prover Readiness Rollup
+
+The top-level Phase 8 readiness checkpoint now exists:
+
+```text
+real_prover::Phase8RealProverReadinessRollup
+```
+
+It combines:
+
+- `RealProverEvidenceSummary`
+- `RealProofBytesFixturePromotionPlan`
+- `LocalRealProofValidationLogPromotionPlan`
+
+The rollup reports:
+
+```text
+rollup_status = test_only_shapes_present_real_evidence_blocked_runtime_cutover_blocked
+evidence_slots_declared = 4
+evidence_slots_satisfied = 0
+evidence_slots_blocked = 4
+fixture_promotion_plan_present = true
+validation_log_promotion_plan_present = true
+fixture_promotion_ready = false
+validation_log_promotion_ready = false
+test_only_shapes_present = true
+real_evidence_complete = false
+implementation_satisfied = false
+runtime_cutover_allowed = false
+real_proof_generation_allowed = false
+```
+
+The remaining blockers are:
+
+- `real_proof_bytes_fixture_missing`
+- `local_real_proof_validation_log_missing`
+- `real_prover_implementation_not_satisfied`
+- `runtime_cutover_blocked`
+- `real_proof_bytes_fixture_promotion_not_ready`
+- `local_real_proof_validation_log_promotion_not_ready`
+- `real_prover_cutover_not_allowed`
+
+The next required actions are:
+
+- `replace_test_only_proof_bytes_with_real_prover_output`
+- `write_real_proof_bytes_fixture_from_selected_prover`
+- `write_local_real_proof_validation_log_with_verified_status`
+- `satisfy_all_four_real_prover_evidence_slots`
+- `keep_groth16_runtime_active_until_explicit_cutover`
+
+The rollup CLI pair is:
+
+```text
+generate_phase8_real_prover_readiness_rollup
+validate_phase8_real_prover_readiness_rollup
+```
+
+This is still not a STARK proof. It is a machine-readable readiness gate that
+keeps runtime cutover blocked until real prover output replaces the test-only
+fixture artifacts.
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to begin real prover implementation evidence:
