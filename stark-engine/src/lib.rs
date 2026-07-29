@@ -8674,6 +8674,42 @@ pub mod winterfell_poc_adapter {
         pub notes: Vec<String>,
     }
 
+    /// Normalization evidence for every current semantic gap between active
+    /// localBCE bridge inputs and the imported Winterfell PoC field model.
+    ///
+    /// This can resolve partial adapter fields deterministically, but it keeps
+    /// unmapped fields source-fixture-only until active runtime sources exist.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct WinterfellPocSemanticGapNormalizationReport {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub report_status: String,
+        pub partial_fields: Vec<SemanticGapFieldEvidence>,
+        pub unmapped_fields: Vec<SemanticGapFieldEvidence>,
+        pub partial_field_count: usize,
+        pub partial_fields_resolved: bool,
+        pub unmapped_field_count: usize,
+        pub unmapped_source_data_populated: bool,
+        pub unmapped_semantics_resolved: bool,
+        pub all_poc_fields_populated: bool,
+        pub production_semantics_complete: bool,
+        pub accepted_as_runtime_evidence: bool,
+        pub runtime_wired: bool,
+        pub on_chain_submission: bool,
+        pub notes: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct SemanticGapFieldEvidence {
+        pub winterfell_field: String,
+        pub active_sources: Vec<String>,
+        pub normalized_value: u64,
+        pub complete_candidate_value: u64,
+        pub value_matches_candidate: bool,
+        pub evidence_status: String,
+        pub runtime_equivalent: bool,
+    }
+
     /// Settlement-boundary preview derived from a validated Winterfell proof
     /// preview.
     ///
@@ -9445,6 +9481,274 @@ pub mod winterfell_poc_adapter {
                 Ok(())
             } else {
                 Err(errors)
+            }
+        }
+    }
+
+    impl WinterfellPocSemanticGapNormalizationReport {
+        pub const SCHEMA_VERSION: &'static str =
+            "winterfell-poc-semantic-gap-normalization-report-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0+winterfell-complete-witness-candidate-v0+winterfell-poc-semantic-equivalence-report-v0";
+        pub const REPORT_STATUS: &'static str =
+            "partial_fields_normalized_unmapped_fields_source_fixture_only";
+
+        pub fn from_inputs(
+            bridge: &StarkBridgeInput,
+            complete: &WinterfellCompleteWitnessCandidate,
+            equivalence: &WinterfellPocSemanticEquivalenceReport,
+        ) -> Result<Self, Vec<String>> {
+            bridge.validate()?;
+            complete.validate()?;
+            equivalence.validate()?;
+
+            if bridge.claim.claim_id != complete.claim_id {
+                return Err(vec![
+                    "bridge claim_id must match complete witness candidate claim_id".to_string(),
+                ]);
+            }
+
+            if bridge.claim.claim_hash != complete.claim_hash {
+                return Err(vec![
+                    "bridge claim_hash must match complete witness candidate claim_hash"
+                        .to_string(),
+                ]);
+            }
+
+            let partial_fields = vec![
+                SemanticGapFieldEvidence::new(
+                    "service_line_count",
+                    vec!["billing_code_valid", "units_valid"],
+                    u64::from(
+                        bridge.active_rust_facts.billing_code_valid == 1
+                            && bridge.active_rust_facts.units_valid == 1,
+                    ),
+                    complete_value(complete, "service_line_count")?,
+                    "normalized_from_active_billing_and_units",
+                    true,
+                ),
+                SemanticGapFieldEvidence::new(
+                    "prior_auth_ok",
+                    vec!["physician_certification_valid"],
+                    u64::from(bridge.active_rust_facts.physician_certification_valid == 1),
+                    complete_value(complete, "prior_auth_ok")?,
+                    "normalized_from_active_physician_certification",
+                    true,
+                ),
+                SemanticGapFieldEvidence::new(
+                    "charge_cents",
+                    vec!["claim_amount"],
+                    bridge.claim.claim_amount,
+                    complete_value(complete, "charge_cents")?,
+                    "normalized_from_active_claim_amount",
+                    true,
+                ),
+                SemanticGapFieldEvidence::new(
+                    "program_integrity_hold",
+                    vec!["disability_determination_valid", "recipient_not_deceased"],
+                    u64::from(
+                        !(bridge.active_rust_facts.disability_determination_valid == 1
+                            && bridge.active_rust_facts.recipient_not_deceased == 1),
+                    ),
+                    complete_value(complete, "program_integrity_hold")?,
+                    "normalized_from_active_integrity_facts",
+                    true,
+                ),
+            ];
+
+            let unmapped_fields = vec![
+                SemanticGapFieldEvidence::new(
+                    "member_id",
+                    vec!["winterfell_source_data_fixture.member_id"],
+                    complete_value(complete, "member_id")?,
+                    complete_value(complete, "member_id")?,
+                    "source_fixture_only_no_active_runtime_equivalent",
+                    false,
+                ),
+                SemanticGapFieldEvidence::new(
+                    "provider_npi",
+                    vec!["winterfell_source_data_fixture.provider_npi"],
+                    complete_value(complete, "provider_npi")?,
+                    complete_value(complete, "provider_npi")?,
+                    "source_fixture_only_no_active_runtime_equivalent",
+                    false,
+                ),
+                SemanticGapFieldEvidence::new(
+                    "diagnosis_count",
+                    vec!["winterfell_source_data_fixture.diagnosis_count"],
+                    complete_value(complete, "diagnosis_count")?,
+                    complete_value(complete, "diagnosis_count")?,
+                    "source_fixture_only_no_active_runtime_equivalent",
+                    false,
+                ),
+                SemanticGapFieldEvidence::new(
+                    "max_charge_cents",
+                    vec!["winterfell_source_data_fixture.max_charge_cents"],
+                    complete_value(complete, "max_charge_cents")?,
+                    complete_value(complete, "max_charge_cents")?,
+                    "source_fixture_only_no_active_runtime_equivalent",
+                    false,
+                ),
+            ];
+
+            let partial_fields_resolved = partial_fields
+                .iter()
+                .all(|field| field.value_matches_candidate && field.runtime_equivalent);
+            let unmapped_source_data_populated = unmapped_fields
+                .iter()
+                .all(|field| field.value_matches_candidate);
+
+            Ok(Self {
+                schema_version: Self::SCHEMA_VERSION.to_string(),
+                source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+                report_status: Self::REPORT_STATUS.to_string(),
+                partial_field_count: partial_fields.len(),
+                partial_fields_resolved,
+                unmapped_field_count: unmapped_fields.len(),
+                unmapped_source_data_populated,
+                unmapped_semantics_resolved: false,
+                all_poc_fields_populated: complete.all_fields_populated,
+                production_semantics_complete: false,
+                accepted_as_runtime_evidence: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                partial_fields,
+                unmapped_fields,
+                notes: vec![
+                    "All partial Winterfell PoC fields have deterministic adapter evidence."
+                        .to_string(),
+                    "Unmapped PoC fields are populated only from source fixture data today."
+                        .to_string(),
+                    "Source fixture population is not active runtime semantic equivalence."
+                        .to_string(),
+                    "The active Groth16 runtime flow remains unchanged.".to_string(),
+                ],
+            })
+        }
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}",
+                    Self::SOURCE_SCHEMA_VERSION
+                ));
+            }
+
+            if self.report_status != Self::REPORT_STATUS {
+                errors.push(format!("report_status must be {}", Self::REPORT_STATUS));
+            }
+
+            if self.partial_field_count != 4 || self.partial_fields.len() != 4 {
+                errors.push("partial fields must contain exactly 4 entries".to_string());
+            }
+
+            if !self.partial_fields_resolved {
+                errors.push("partial_fields_resolved must be true".to_string());
+            }
+
+            if self.unmapped_field_count != 4 || self.unmapped_fields.len() != 4 {
+                errors.push("unmapped fields must contain exactly 4 entries".to_string());
+            }
+
+            if !self.unmapped_source_data_populated {
+                errors.push("unmapped_source_data_populated must be true".to_string());
+            }
+
+            if self.unmapped_semantics_resolved {
+                errors.push("unmapped_semantics_resolved must remain false".to_string());
+            }
+
+            if !self.all_poc_fields_populated {
+                errors.push("all_poc_fields_populated must be true".to_string());
+            }
+
+            if self.production_semantics_complete {
+                errors.push("production_semantics_complete must remain false".to_string());
+            }
+
+            if self.accepted_as_runtime_evidence {
+                errors.push("accepted_as_runtime_evidence must remain false".to_string());
+            }
+
+            if self.runtime_wired {
+                errors.push("runtime_wired must remain false".to_string());
+            }
+
+            if self.on_chain_submission {
+                errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            for field in &self.partial_fields {
+                if !field.value_matches_candidate {
+                    errors.push(format!(
+                        "{} must match complete candidate value",
+                        field.winterfell_field
+                    ));
+                }
+                if !field.runtime_equivalent {
+                    errors.push(format!(
+                        "{} partial field must be runtime equivalent",
+                        field.winterfell_field
+                    ));
+                }
+            }
+
+            for field in &self.unmapped_fields {
+                if !field.value_matches_candidate {
+                    errors.push(format!(
+                        "{} must match complete candidate value",
+                        field.winterfell_field
+                    ));
+                }
+                if field.runtime_equivalent {
+                    errors.push(format!(
+                        "{} unmapped field must remain non-runtime-equivalent",
+                        field.winterfell_field
+                    ));
+                }
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+    }
+
+    impl SemanticGapFieldEvidence {
+        fn new(
+            winterfell_field: &str,
+            active_sources: Vec<&str>,
+            normalized_value: u64,
+            complete_candidate_value: u64,
+            evidence_status: &str,
+            runtime_equivalent: bool,
+        ) -> Self {
+            Self {
+                winterfell_field: winterfell_field.to_string(),
+                active_sources: active_sources
+                    .into_iter()
+                    .map(|source| source.to_string())
+                    .collect(),
+                normalized_value,
+                complete_candidate_value,
+                value_matches_candidate: normalized_value == complete_candidate_value,
+                evidence_status: evidence_status.to_string(),
+                runtime_equivalent,
             }
         }
     }
@@ -10464,6 +10768,13 @@ pub mod winterfell_poc_adapter {
             .iter()
             .find(|field| field.winterfell_field == field_name)
             .ok_or_else(|| vec![format!("complete witness candidate missing {field_name}")])
+    }
+
+    fn complete_value(
+        candidate: &WinterfellCompleteWitnessCandidate,
+        field_name: &str,
+    ) -> Result<u64, Vec<String>> {
+        Ok(required_field(candidate, field_name)?.value)
     }
 
     fn hex_lower(bytes: &[u8]) -> String {

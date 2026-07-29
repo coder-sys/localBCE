@@ -1565,6 +1565,61 @@ generate_winterfell_poc_semantic_equivalence_report
 validate_winterfell_poc_semantic_equivalence_report
 ```
 
+## Winterfell PoC Semantic Gap Normalization Report
+
+The all-gap normalization artifact now exists:
+
+```text
+winterfell_poc_adapter::WinterfellPocSemanticGapNormalizationReport
+```
+
+It covers every currently unresolved PoC semantic gap.
+
+The partial fields are deterministically normalized:
+
+- `service_line_count` from `billing_code_valid` and `units_valid`
+- `prior_auth_ok` from `physician_certification_valid`
+- `charge_cents` from `claim_amount`
+- `program_integrity_hold` from `disability_determination_valid` and `recipient_not_deceased`
+
+The report requires:
+
+```text
+partial_field_count = 4
+partial_fields_resolved = true
+```
+
+The unmapped fields are populated from source fixture data only:
+
+- `member_id`
+- `provider_npi`
+- `diagnosis_count`
+- `max_charge_cents`
+
+The report requires:
+
+```text
+unmapped_field_count = 4
+unmapped_source_data_populated = true
+unmapped_semantics_resolved = false
+```
+
+It still blocks production equivalence:
+
+```text
+production_semantics_complete = false
+accepted_as_runtime_evidence = false
+runtime_wired = false
+on_chain_submission = false
+```
+
+The CLI pair is:
+
+```text
+generate_winterfell_poc_semantic_gap_normalization_report
+validate_winterfell_poc_semantic_gap_normalization_report
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to begin real prover implementation evidence:
