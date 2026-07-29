@@ -8553,7 +8553,9 @@ impl ActiveClaimToStarkBridge {
 
 #[cfg(feature = "winterfell-poc")]
 pub mod winterfell_poc_adapter {
-    use super::{WinterfellCompleteWitnessCandidate, WinterfellCompleteWitnessField};
+    use super::{
+        StarkBridgeInput, WinterfellCompleteWitnessCandidate, WinterfellCompleteWitnessField,
+    };
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
 
@@ -8636,6 +8638,39 @@ pub mod winterfell_poc_adapter {
         pub runtime_wired: bool,
         pub on_chain_submission: bool,
         pub accepted_as_runtime_evidence: bool,
+        pub notes: Vec<String>,
+    }
+
+    /// Semantic equivalence report between active localBCE bridge inputs and a
+    /// feature-gated Winterfell PoC proof fixture.
+    ///
+    /// This report is intentionally conservative. It confirms exact matches
+    /// where the current bridge has direct semantics, and keeps production
+    /// equivalence false while partial/unmapped PoC fields remain unresolved.
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    pub struct WinterfellPocSemanticEquivalenceReport {
+        pub schema_version: String,
+        pub source_schema_version: String,
+        pub report_status: String,
+        pub claim_id_matches: bool,
+        pub claim_hash_matches: bool,
+        pub decision_matches: bool,
+        pub failure_code_matches: bool,
+        pub direct_eligibility_gate_matches: bool,
+        pub direct_provider_gate_matches: bool,
+        pub direct_duplicate_gate_matches: bool,
+        pub public_inputs_match: bool,
+        pub direct_semantics_match: bool,
+        pub partial_semantics_resolved: bool,
+        pub unmapped_semantics_resolved: bool,
+        pub proof_fixture_verified: bool,
+        pub production_semantics_complete: bool,
+        pub accepted_as_runtime_evidence: bool,
+        pub runtime_wired: bool,
+        pub on_chain_submission: bool,
+        pub unresolved_partial_fields: Vec<String>,
+        pub unresolved_unmapped_fields: Vec<String>,
+        pub blocker_count: usize,
         pub notes: Vec<String>,
     }
 
@@ -9195,6 +9230,211 @@ pub mod winterfell_poc_adapter {
 
             if self.accepted_as_runtime_evidence {
                 errors.push("accepted_as_runtime_evidence must remain false".to_string());
+            }
+
+            if self.notes.is_empty() {
+                errors.push("notes must be non-empty".to_string());
+            }
+
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors)
+            }
+        }
+    }
+
+    impl WinterfellPocSemanticEquivalenceReport {
+        pub const SCHEMA_VERSION: &'static str = "winterfell-poc-semantic-equivalence-report-v0";
+        pub const SOURCE_SCHEMA_VERSION: &'static str =
+            "stark-bridge-input-v0+winterfell-poc-real-proof-fixture-v0";
+        pub const REPORT_STATUS: &'static str =
+            "direct_semantics_match_partial_and_unmapped_semantics_unresolved";
+        pub const UNRESOLVED_PARTIAL_FIELDS: [&'static str; 4] = [
+            "service_line_count",
+            "prior_auth_ok",
+            "charge_cents",
+            "program_integrity_hold",
+        ];
+        pub const UNRESOLVED_UNMAPPED_FIELDS: [&'static str; 4] = [
+            "member_id",
+            "provider_npi",
+            "diagnosis_count",
+            "max_charge_cents",
+        ];
+
+        pub fn from_bridge_and_fixture(
+            bridge: &StarkBridgeInput,
+            fixture: &WinterfellPocRealProofFixture,
+        ) -> Result<Self, Vec<String>> {
+            bridge.validate()?;
+            fixture.validate()?;
+
+            let claim_id_matches = bridge.claim.claim_id == fixture.claim_id;
+            let claim_hash_matches = bridge.claim.claim_hash == fixture.claim_hash
+                && bridge.public_inputs.claim_hash == fixture.claim_hash;
+            let decision_matches = u32::from(bridge.adjudication.decision) == fixture.decision
+                && u32::from(bridge.public_inputs.decision) == fixture.decision;
+            let failure_code_matches = bridge.adjudication.failure_code == fixture.failure_code
+                && bridge.public_inputs.failure_code == fixture.failure_code;
+            let direct_eligibility_gate_matches =
+                u32::from(bridge.winterfell_poc_mapping.direct.eligibility_active)
+                    == fixture.gates[1];
+            let direct_provider_gate_matches =
+                u32::from(bridge.winterfell_poc_mapping.direct.provider_enrolled)
+                    == fixture.gates[3];
+            let direct_duplicate_gate_matches =
+                u32::from(bridge.winterfell_poc_mapping.direct.duplicate_flag == 0)
+                    == fixture.gates[8];
+            let public_inputs_match =
+                claim_hash_matches && decision_matches && failure_code_matches;
+            let direct_semantics_match = direct_eligibility_gate_matches
+                && direct_provider_gate_matches
+                && direct_duplicate_gate_matches;
+
+            Ok(Self {
+                schema_version: Self::SCHEMA_VERSION.to_string(),
+                source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+                report_status: Self::REPORT_STATUS.to_string(),
+                claim_id_matches,
+                claim_hash_matches,
+                decision_matches,
+                failure_code_matches,
+                direct_eligibility_gate_matches,
+                direct_provider_gate_matches,
+                direct_duplicate_gate_matches,
+                public_inputs_match,
+                direct_semantics_match,
+                partial_semantics_resolved: false,
+                unmapped_semantics_resolved: false,
+                proof_fixture_verified: fixture.verified,
+                production_semantics_complete: false,
+                accepted_as_runtime_evidence: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                unresolved_partial_fields: Self::UNRESOLVED_PARTIAL_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
+                unresolved_unmapped_fields: Self::UNRESOLVED_UNMAPPED_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
+                blocker_count: Self::UNRESOLVED_PARTIAL_FIELDS.len()
+                    + Self::UNRESOLVED_UNMAPPED_FIELDS.len(),
+                notes: vec![
+                    "Public inputs and direct bridge semantics are checked against the Winterfell PoC fixture.".to_string(),
+                    "Partial and unmapped PoC fields remain unresolved against the active Rust engine.".to_string(),
+                    "This report does not accept the PoC proof fixture as runtime evidence.".to_string(),
+                    "The active Groth16 runtime flow remains unchanged.".to_string(),
+                ],
+            })
+        }
+
+        pub fn validate(&self) -> Result<(), Vec<String>> {
+            let mut errors = Vec::new();
+
+            if self.schema_version != Self::SCHEMA_VERSION {
+                errors.push(format!(
+                    "schema_version must be {}, got {}",
+                    Self::SCHEMA_VERSION,
+                    self.schema_version
+                ));
+            }
+
+            if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+                errors.push(format!(
+                    "source_schema_version must be {}",
+                    Self::SOURCE_SCHEMA_VERSION
+                ));
+            }
+
+            if self.report_status != Self::REPORT_STATUS {
+                errors.push(format!("report_status must be {}", Self::REPORT_STATUS));
+            }
+
+            for (field, value) in [
+                ("claim_id_matches", self.claim_id_matches),
+                ("claim_hash_matches", self.claim_hash_matches),
+                ("decision_matches", self.decision_matches),
+                ("failure_code_matches", self.failure_code_matches),
+                (
+                    "direct_eligibility_gate_matches",
+                    self.direct_eligibility_gate_matches,
+                ),
+                (
+                    "direct_provider_gate_matches",
+                    self.direct_provider_gate_matches,
+                ),
+                (
+                    "direct_duplicate_gate_matches",
+                    self.direct_duplicate_gate_matches,
+                ),
+                ("public_inputs_match", self.public_inputs_match),
+                ("direct_semantics_match", self.direct_semantics_match),
+                ("proof_fixture_verified", self.proof_fixture_verified),
+            ] {
+                if !value {
+                    errors.push(format!("{field} must be true"));
+                }
+            }
+
+            if self.partial_semantics_resolved {
+                errors.push("partial_semantics_resolved must remain false".to_string());
+            }
+
+            if self.unmapped_semantics_resolved {
+                errors.push("unmapped_semantics_resolved must remain false".to_string());
+            }
+
+            if self.production_semantics_complete {
+                errors.push("production_semantics_complete must remain false".to_string());
+            }
+
+            if self.accepted_as_runtime_evidence {
+                errors.push("accepted_as_runtime_evidence must remain false".to_string());
+            }
+
+            if self.runtime_wired {
+                errors.push("runtime_wired must remain false".to_string());
+            }
+
+            if self.on_chain_submission {
+                errors.push("on_chain_submission must remain false".to_string());
+            }
+
+            let expected_partial = Self::UNRESOLVED_PARTIAL_FIELDS.to_vec();
+            let actual_partial = self
+                .unresolved_partial_fields
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if actual_partial != expected_partial {
+                errors.push(
+                    "unresolved_partial_fields must match the PoC semantic gap contract"
+                        .to_string(),
+                );
+            }
+
+            let expected_unmapped = Self::UNRESOLVED_UNMAPPED_FIELDS.to_vec();
+            let actual_unmapped = self
+                .unresolved_unmapped_fields
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if actual_unmapped != expected_unmapped {
+                errors.push(
+                    "unresolved_unmapped_fields must match the PoC semantic gap contract"
+                        .to_string(),
+                );
+            }
+
+            if self.blocker_count
+                != Self::UNRESOLVED_PARTIAL_FIELDS.len() + Self::UNRESOLVED_UNMAPPED_FIELDS.len()
+            {
+                errors.push(
+                    "blocker_count must equal unresolved partial plus unmapped fields".to_string(),
+                );
             }
 
             if self.notes.is_empty() {
@@ -10350,6 +10590,186 @@ pub mod winterfell_poc_adapter {
                     .iter()
                     .any(|error| error == "accepted_as_runtime_evidence must remain false")
             );
+        }
+
+        #[test]
+        fn semantic_equivalence_report_confirms_direct_matches_only() {
+            let bridge = sample_bridge_input();
+            let candidate = sample_complete_candidate();
+            let fixture =
+                WinterfellPocRealProofFixture::from_complete_candidate(&candidate).unwrap();
+            let report =
+                WinterfellPocSemanticEquivalenceReport::from_bridge_and_fixture(&bridge, &fixture)
+                    .unwrap();
+
+            assert_eq!(report.validate(), Ok(()));
+            assert!(report.claim_id_matches);
+            assert!(report.claim_hash_matches);
+            assert!(report.decision_matches);
+            assert!(report.failure_code_matches);
+            assert!(report.direct_eligibility_gate_matches);
+            assert!(report.direct_provider_gate_matches);
+            assert!(report.direct_duplicate_gate_matches);
+            assert!(report.public_inputs_match);
+            assert!(report.direct_semantics_match);
+            assert!(!report.partial_semantics_resolved);
+            assert!(!report.unmapped_semantics_resolved);
+            assert!(report.proof_fixture_verified);
+            assert!(!report.production_semantics_complete);
+            assert!(!report.accepted_as_runtime_evidence);
+            assert!(!report.runtime_wired);
+            assert!(!report.on_chain_submission);
+            assert_eq!(
+                report.unresolved_partial_fields,
+                WinterfellPocSemanticEquivalenceReport::UNRESOLVED_PARTIAL_FIELDS
+            );
+            assert_eq!(
+                report.unresolved_unmapped_fields,
+                WinterfellPocSemanticEquivalenceReport::UNRESOLVED_UNMAPPED_FIELDS
+            );
+            assert_eq!(report.blocker_count, 8);
+        }
+
+        #[test]
+        fn semantic_equivalence_report_rejects_fake_production_completion() {
+            let bridge = sample_bridge_input();
+            let candidate = sample_complete_candidate();
+            let fixture =
+                WinterfellPocRealProofFixture::from_complete_candidate(&candidate).unwrap();
+            let mut report =
+                WinterfellPocSemanticEquivalenceReport::from_bridge_and_fixture(&bridge, &fixture)
+                    .unwrap();
+            report.partial_semantics_resolved = true;
+            report.unmapped_semantics_resolved = true;
+            report.production_semantics_complete = true;
+            report.accepted_as_runtime_evidence = true;
+            report.runtime_wired = true;
+            report.on_chain_submission = true;
+            report.unresolved_partial_fields.clear();
+            report.unresolved_unmapped_fields.clear();
+            report.blocker_count = 0;
+
+            let errors = report.validate().unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "partial_semantics_resolved must remain false")
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "unmapped_semantics_resolved must remain false")
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "production_semantics_complete must remain false")
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "accepted_as_runtime_evidence must remain false")
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "runtime_wired must remain false")
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "on_chain_submission must remain false")
+            );
+            assert!(errors.iter().any(|error| error
+                == "unresolved_partial_fields must match the PoC semantic gap contract"));
+            assert!(errors.iter().any(|error| error
+                == "unresolved_unmapped_fields must match the PoC semantic gap contract"));
+            assert!(
+                errors.iter().any(|error| error
+                    == "blocker_count must equal unresolved partial plus unmapped fields")
+            );
+        }
+
+        fn sample_bridge_input() -> StarkBridgeInput {
+            serde_json::from_value(serde_json::json!({
+              "schema_version": "stark-bridge-input-v0",
+              "producer": "rust-engine",
+              "purpose": "stark_engine_compatibility_input",
+              "runtime_mode": "dry_run_or_optional_sidecar",
+              "claim": {
+                "claim_id": "CLAIM-DEMO-011",
+                "claim_amount": 100000,
+                "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607"
+              },
+              "adjudication": {
+                "decision": 1,
+                "failure_code": 0,
+                "failure_reason": null,
+                "ruleset_id": "current_g1_g10_denial_reason"
+              },
+              "active_rust_facts": {
+                "eligibility_active": 1,
+                "aid_code": 53,
+                "benefit_level_exists": 1,
+                "date_of_service_from": 20000,
+                "eligibility_period_from": 19900,
+                "eligibility_period_thru": 21000,
+                "soc_amount": 0,
+                "soc_met": 1,
+                "provider_enrolled": 1,
+                "provider_type_valid": 1,
+                "billing_code_valid": 1,
+                "units_valid": 1,
+                "is_duplicate": 0,
+                "disability_determination_valid": 1,
+                "recipient_not_deceased": 1,
+                "physician_certification_valid": 1
+              },
+              "winterfell_poc_mapping": {
+                "direct": {
+                  "eligibility_active": 1,
+                  "provider_enrolled": 1,
+                  "duplicate_flag": 0
+                },
+                "partial": {
+                  "service_line_count": {
+                    "source": ["billing_code_valid", "units_valid"],
+                    "status": "not_equivalent"
+                  },
+                  "prior_auth_ok": {
+                    "source": ["physician_certification_valid"],
+                    "status": "not_equivalent"
+                  },
+                  "charge_cents": {
+                    "source": ["claim_amount"],
+                    "status": "requires_unit_normalization"
+                  },
+                  "program_integrity_hold": {
+                    "source": ["disability_determination_valid", "recipient_not_deceased"],
+                    "status": "not_equivalent"
+                  }
+                },
+                "unmapped": {
+                  "member_id": null,
+                  "provider_npi": null,
+                  "diagnosis_count": null,
+                  "max_charge_cents": null
+                }
+              },
+              "public_inputs": {
+                "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607",
+                "decision": 1,
+                "failure_code": 0,
+                "ruleset_id": "current_g1_g10_denial_reason"
+              },
+              "proof_status": {
+                "stark_proof_generated": false,
+                "winterfell_poc_compatible": false,
+                "groth16_flow_unchanged": true,
+                "on_chain_submission": false
+              }
+            }))
+            .unwrap()
         }
 
         fn sample_complete_candidate() -> WinterfellCompleteWitnessCandidate {

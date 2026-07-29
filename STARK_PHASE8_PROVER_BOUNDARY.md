@@ -1503,6 +1503,68 @@ generate_winterfell_poc_real_proof_fixture
 validate_winterfell_poc_real_proof_fixture
 ```
 
+## Winterfell PoC Semantic Equivalence Report
+
+The semantic equivalence gate now exists:
+
+```text
+winterfell_poc_adapter::WinterfellPocSemanticEquivalenceReport
+```
+
+It compares:
+
+- active `StarkBridgeInput`
+- `WinterfellPocRealProofFixture`
+- active public inputs
+- direct Winterfell PoC gates
+
+The report requires these to match:
+
+```text
+claim_id_matches = true
+claim_hash_matches = true
+decision_matches = true
+failure_code_matches = true
+direct_eligibility_gate_matches = true
+direct_provider_gate_matches = true
+direct_duplicate_gate_matches = true
+public_inputs_match = true
+direct_semantics_match = true
+proof_fixture_verified = true
+```
+
+It still blocks production equivalence:
+
+```text
+partial_semantics_resolved = false
+unmapped_semantics_resolved = false
+production_semantics_complete = false
+accepted_as_runtime_evidence = false
+runtime_wired = false
+on_chain_submission = false
+```
+
+The unresolved partial fields are:
+
+- `service_line_count`
+- `prior_auth_ok`
+- `charge_cents`
+- `program_integrity_hold`
+
+The unresolved unmapped fields are:
+
+- `member_id`
+- `provider_npi`
+- `diagnosis_count`
+- `max_charge_cents`
+
+The CLI pair is:
+
+```text
+generate_winterfell_poc_semantic_equivalence_report
+validate_winterfell_poc_semantic_equivalence_report
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to begin real prover implementation evidence:
