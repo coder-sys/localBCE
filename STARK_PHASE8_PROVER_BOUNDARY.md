@@ -1457,6 +1457,52 @@ This is still not a STARK proof. It is a machine-readable readiness gate that
 keeps runtime cutover blocked until real prover output replaces the test-only
 fixture artifacts.
 
+## Winterfell PoC Real Proof Fixture
+
+The first feature-gated real local proof fixture now exists:
+
+```text
+winterfell_poc_adapter::WinterfellPocRealProofFixture
+```
+
+It is available only with:
+
+```text
+--features winterfell-poc
+```
+
+The fixture is generated from a validated `WinterfellCompleteWitnessCandidate`
+and calls the imported `blind-ledger-app-layer/zk-stark` Winterfell PoC prover.
+It records:
+
+- `prover_name = winterfell-poc`
+- `prover_version = 0.13.1`
+- real Winterfell PoC `proof_bytes_hex`
+- `proof_bytes_sha256`
+- formatted public inputs
+- `local_verification_status = verified`
+- `verified = true`
+
+It also keeps the production/runtime flags blocked:
+
+```text
+production_semantics_complete = false
+runtime_wired = false
+on_chain_submission = false
+accepted_as_runtime_evidence = false
+```
+
+This is a real local Winterfell PoC proof fixture, not yet production localBCE
+STARK evidence. The PoC AIR still has semantic gaps against the active Rust
+engine and there is no on-chain STARK verifier.
+
+The CLI pair is:
+
+```text
+generate_winterfell_poc_real_proof_fixture
+validate_winterfell_poc_real_proof_fixture
+```
+
 ## Next Safe Step
 
 The next safe Phase 8 step is to begin real prover implementation evidence:

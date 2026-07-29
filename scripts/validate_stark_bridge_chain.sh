@@ -90,6 +90,7 @@ PHASE8_REAL_PROOF_BYTES_FIXTURE_EVIDENCE="${TMP_DIR}/phase8_real_proof_bytes_fix
 PHASE8_REAL_PROVER_EVIDENCE_SUMMARY="${TMP_DIR}/phase8_real_prover_evidence_summary.json"
 PHASE8_REAL_PROVER_READINESS_ROLLUP="${TMP_DIR}/phase8_real_prover_readiness_rollup.json"
 WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
+WINTERFELL_POC_REAL_PROOF_FIXTURE="${TMP_DIR}/winterfell_poc_real_proof_fixture.json"
 STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifact.json"
 STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_interface_plan.json"
 STARK_SETTLEMENT_INTEGRATION_GAP_REPORT="${TMP_DIR}/stark_settlement_integration_gap_report.json"
@@ -271,6 +272,12 @@ run_in_dir "Generate Winterfell proof preview" "stark-engine" \
 
 run_in_dir "Validate Winterfell proof preview" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_winterfell_proof_preview -- "${WINTERFELL_PROOF_PREVIEW}"
+
+run_in_dir "Generate Winterfell PoC real proof fixture" "stark-engine" \
+  cargo run --features winterfell-poc --bin generate_winterfell_poc_real_proof_fixture -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_POC_REAL_PROOF_FIXTURE}"
+
+run_in_dir "Validate Winterfell PoC real proof fixture" "stark-engine" \
+  cargo run --features winterfell-poc --bin validate_winterfell_poc_real_proof_fixture -- "${WINTERFELL_POC_REAL_PROOF_FIXTURE}"
 
 run_in_dir "Generate STARK settlement boundary artifact" "stark-engine" \
   cargo run --features winterfell-poc --bin generate_stark_settlement_boundary_artifact -- "${WINTERFELL_PROOF_PREVIEW}" "${STARK_SETTLEMENT_BOUNDARY_ARTIFACT}"
