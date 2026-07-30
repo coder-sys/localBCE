@@ -75,6 +75,7 @@ WINTERFELL_WITNESS_GAP_REPORT="${TMP_DIR}/winterfell_witness_gap_report.json"
 WINTERFELL_SOURCE_DATA_REQUIREMENTS="${TMP_DIR}/winterfell_source_data_requirements.json"
 WINTERFELL_SOURCE_DATA_FIXTURE="${TMP_DIR}/winterfell_source_data_fixture.json"
 COMPLETE_WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/complete_winterfell_witness_candidate.json"
+BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE="${TMP_DIR}/bridge_backed_complete_winterfell_witness_candidate.json"
 PHASE8_TEST_ONLY_PROOF_BYTES="${TMP_DIR}/phase8_test_only_proof_bytes.json"
 PHASE8_TEST_ONLY_REAL_PROOF_BYTES_FIXTURE="${TMP_DIR}/phase8_test_only_real_proof_bytes_fixture.json"
 PHASE8_TEST_ONLY_LOCAL_REAL_PROOF_VALIDATION_LOG_FIXTURE="${TMP_DIR}/phase8_test_only_local_real_proof_validation_log_fixture.json"
@@ -171,8 +172,14 @@ run_in_dir "Generate complete Winterfell witness candidate" "stark-engine" \
 run_in_dir "Validate complete Winterfell witness candidate" "stark-engine" \
   cargo run --bin validate_complete_winterfell_witness_candidate -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
 
+run_in_dir "Generate bridge-backed complete Winterfell witness candidate" "stark-engine" \
+  cargo run --bin generate_bridge_backed_complete_winterfell_witness_candidate -- "${BRIDGE_INPUT}" "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
+
+run_in_dir "Validate bridge-backed complete Winterfell witness candidate" "stark-engine" \
+  cargo run --bin validate_bridge_backed_complete_winterfell_witness_candidate -- "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}"
+
 run_in_dir "Generate Phase 8 test-only proof bytes" "stark-engine" \
-  cargo run --bin generate_phase8_test_only_proof_bytes -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${PHASE8_TEST_ONLY_PROOF_BYTES}"
+  cargo run --bin generate_phase8_test_only_proof_bytes -- "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${PHASE8_TEST_ONLY_PROOF_BYTES}"
 
 run_in_dir "Validate Phase 8 test-only proof bytes" "stark-engine" \
   cargo run --bin validate_phase8_test_only_proof_bytes -- "${PHASE8_TEST_ONLY_PROOF_BYTES}"
@@ -271,13 +278,13 @@ run_in_dir "Validate Phase 8 real prover readiness rollup" "stark-engine" \
   cargo run --bin validate_phase8_real_prover_readiness_rollup -- "${PHASE8_REAL_PROVER_READINESS_ROLLUP}"
 
 run_in_dir "Generate Winterfell proof preview" "stark-engine" \
-  cargo run --features winterfell-poc --bin generate_winterfell_proof_preview -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_PROOF_PREVIEW}"
+  cargo run --features winterfell-poc --bin generate_winterfell_proof_preview -- "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_PROOF_PREVIEW}"
 
 run_in_dir "Validate Winterfell proof preview" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_winterfell_proof_preview -- "${WINTERFELL_PROOF_PREVIEW}"
 
 run_in_dir "Generate Winterfell PoC real proof fixture" "stark-engine" \
-  cargo run --features winterfell-poc --bin generate_winterfell_poc_real_proof_fixture -- "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_POC_REAL_PROOF_FIXTURE}"
+  cargo run --features winterfell-poc --bin generate_winterfell_poc_real_proof_fixture -- "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_POC_REAL_PROOF_FIXTURE}"
 
 run_in_dir "Validate Winterfell PoC real proof fixture" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_winterfell_poc_real_proof_fixture -- "${WINTERFELL_POC_REAL_PROOF_FIXTURE}"
@@ -289,7 +296,7 @@ run_in_dir "Validate Winterfell PoC semantic equivalence report" "stark-engine" 
   cargo run --features winterfell-poc --bin validate_winterfell_poc_semantic_equivalence_report -- "${WINTERFELL_POC_SEMANTIC_EQUIVALENCE_REPORT}"
 
 run_in_dir "Generate Winterfell PoC semantic gap normalization report" "stark-engine" \
-  cargo run --features winterfell-poc --bin generate_winterfell_poc_semantic_gap_normalization_report -- "${BRIDGE_INPUT}" "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_POC_SEMANTIC_EQUIVALENCE_REPORT}" "${WINTERFELL_POC_SEMANTIC_GAP_NORMALIZATION_REPORT}"
+  cargo run --features winterfell-poc --bin generate_winterfell_poc_semantic_gap_normalization_report -- "${BRIDGE_INPUT}" "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_POC_SEMANTIC_EQUIVALENCE_REPORT}" "${WINTERFELL_POC_SEMANTIC_GAP_NORMALIZATION_REPORT}"
 
 run_in_dir "Validate Winterfell PoC semantic gap normalization report" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_winterfell_poc_semantic_gap_normalization_report -- "${WINTERFELL_POC_SEMANTIC_GAP_NORMALIZATION_REPORT}"
@@ -334,7 +341,7 @@ run_in_dir "Validate STARK claim source root input" "stark-engine" \
   cargo run --bin validate_claim_source_root_input -- "${CLAIM_SOURCE_ROOT_INPUT}"
 
 run_in_dir "Generate claim source identity evidence" "stark-engine" \
-  cargo run --bin generate_claim_source_identity_evidence -- "${CLAIM_SOURCE_ROOT_INPUT}" "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${CLAIM_SOURCE_IDENTITY_EVIDENCE}"
+  cargo run --bin generate_claim_source_identity_evidence -- "${CLAIM_SOURCE_ROOT_INPUT}" "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${CLAIM_SOURCE_IDENTITY_EVIDENCE}"
 
 run_in_dir "Validate claim source identity evidence" "stark-engine" \
   cargo run --bin validate_claim_source_identity_evidence -- "${CLAIM_SOURCE_IDENTITY_EVIDENCE}"
@@ -419,7 +426,7 @@ run_in_dir "Validate Phase 8 test-only prover harness plan" "stark-engine" \
 run_in_dir "Generate Phase 8 test-only prover harness execution report" "stark-engine" \
   cargo run --bin generate_phase8_test_only_prover_harness_execution_report -- \
     "${PHASE8_TEST_ONLY_PROVER_HARNESS_PLAN}" \
-    "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" \
+    "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" \
     "${SELECTED_PROVER_BYTE_ENCODING_PLAN}" \
     "${PHASE8_REAL_PROVER_IMPLEMENTATION_CHECKLIST}" \
     "${WINTERFELL_PROOF_PREVIEW}" \

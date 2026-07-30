@@ -1663,17 +1663,45 @@ generate_winterfell_poc_semantic_gap_normalization_report
 validate_winterfell_poc_semantic_gap_normalization_report
 ```
 
+## Strict Bridge-Backed Complete Witness Candidate
+
+The non-runtime rehearsal chain can now construct all 11 imported Winterfell
+PoC fields directly from validated `StarkBridgeInput` data:
+
+```text
+generate_bridge_backed_complete_winterfell_witness_candidate
+validate_bridge_backed_complete_winterfell_witness_candidate
+```
+
+This path:
+
+- requires `member_id`, `provider_npi`, `diagnosis_count`, and
+  `max_charge_cents`
+- checks raw identity values against their deterministic numeric bridge
+  mappings
+- checks direct Winterfell mapping values against their active Rust facts
+- rejects invalid boolean facts and charge conversion overflow
+- normalizes the four partial compatibility fields deterministically
+- marks all fields as sourced from `StarkBridgeInput`
+- performs no fixture substitution
+
+The legacy fixture assembly path remains available for compatibility testing,
+but downstream proof rehearsal in `scripts/validate_stark_bridge_chain.sh` now
+uses the strict bridge-backed candidate.
+
+This still does not make partial mappings equivalent to production
+adjudication rules, enable runtime STARK proof generation, or change Groth16.
+
 ## Next Safe Step
 
-The next safe Phase 8 step is a non-runtime bridge-to-witness adapter:
+The next safe Phase 8 step is a non-runtime bridge-backed proof evidence
+artifact:
 
-- populate a complete Winterfell witness directly from validated bridge-backed
-  values where they are available
-- retain explicit normalization evidence for partial adjudication fields
-- reject missing or mismatched bridge source values instead of silently
-  substituting fixture values on this new path
-- keep the existing fixture path available as a compatibility test lane
-- locally generate and verify the Winterfell PoC proof from the direct witness
-- keep production semantic equivalence, runtime wiring, and on-chain submission
-  blocked
+- hash the exact validated bridge input and strict complete witness candidate
+- generate and locally verify the imported Winterfell PoC proof from that
+  candidate
+- bind the proof bytes hash to both source artifact hashes
+- reject any fixture-backed candidate on this evidence path
+- retain explicit blockers for unresolved production AIR semantics
+- keep runtime wiring and on-chain submission disabled
 - keep Solidity, ClaimsRegistry, and the active Groth16 runtime unchanged

@@ -31,6 +31,170 @@ pub enum MappingClass {
     Unmapped,
 }
 
+#[cfg(test)]
+mod bridge_backed_complete_witness_tests {
+    use super::*;
+
+    #[test]
+    fn strict_bridge_input_generates_complete_candidate_without_fixture_values() {
+        let input = sample_bridge_input();
+        let candidate =
+            WinterfellCompleteWitnessCandidate::from_bridge_input_strict(&input).unwrap();
+
+        assert_eq!(candidate.validate_bridge_backed(), Ok(()));
+        assert_eq!(
+            candidate.source_schema_version,
+            WinterfellCompleteWitnessCandidate::BRIDGE_SOURCE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            candidate.candidate_status,
+            WinterfellCompleteWitnessCandidate::BRIDGE_CANDIDATE_STATUS
+        );
+        assert_eq!(candidate.field_count, 11);
+        assert!(candidate.all_fields_populated);
+        assert!(candidate.fields.iter().all(|field| {
+            field.source_artifact == "StarkBridgeInput"
+                && field.value_status == "populated_adapter_ready_bridge_source"
+        }));
+        assert_eq!(
+            candidate_value(&candidate, "member_id"),
+            14_696_086_592_462_976_221
+        );
+        assert_eq!(candidate_value(&candidate, "provider_npi"), 1_234_567_893);
+        assert_eq!(candidate_value(&candidate, "diagnosis_count"), 1);
+        assert_eq!(candidate_value(&candidate, "charge_cents"), 100_000);
+        assert_eq!(candidate_value(&candidate, "max_charge_cents"), 150_000);
+    }
+
+    #[test]
+    fn strict_bridge_input_rejects_missing_source_values() {
+        let mut input = sample_bridge_input();
+        input.claim.diagnosis_count = None;
+        input.winterfell_poc_mapping.unmapped.diagnosis_count = None;
+
+        let errors =
+            WinterfellCompleteWitnessCandidate::from_bridge_input_strict(&input).unwrap_err();
+
+        assert!(errors.iter().any(|error| {
+            error == "claim.diagnosis_count must be present for a bridge-backed witness"
+        }));
+    }
+
+    #[test]
+    fn strict_bridge_input_rejects_normalized_identity_mismatch() {
+        let mut input = sample_bridge_input();
+        input.winterfell_poc_mapping.unmapped.member_id = input
+            .winterfell_poc_mapping
+            .unmapped
+            .member_id
+            .map(|value| value + 1);
+
+        let errors =
+            WinterfellCompleteWitnessCandidate::from_bridge_input_strict(&input).unwrap_err();
+
+        assert!(errors.iter().any(|error| {
+            error.contains(
+                "winterfell_poc_mapping.unmapped.member_id must match normalized claim.member_id",
+            )
+        }));
+    }
+
+    fn candidate_value(candidate: &WinterfellCompleteWitnessCandidate, field_name: &str) -> u64 {
+        candidate
+            .fields
+            .iter()
+            .find(|field| field.winterfell_field == field_name)
+            .unwrap()
+            .value
+    }
+
+    fn sample_bridge_input() -> StarkBridgeInput {
+        serde_json::from_value(serde_json::json!({
+          "schema_version": "stark-bridge-input-v0",
+          "producer": "rust-engine",
+          "purpose": "stark_engine_compatibility_input",
+          "runtime_mode": "dry_run_or_optional_sidecar",
+          "claim": {
+            "claim_id": "CLAIM-DEMO-011",
+            "claim_amount": 1000,
+            "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607",
+            "member_id": "MEMBER-FIXTURE-001",
+            "provider_npi": "1234567893",
+            "diagnosis_count": 1,
+            "max_charge_cents": 150000
+          },
+          "adjudication": {
+            "decision": 1,
+            "failure_code": 0,
+            "failure_reason": null,
+            "ruleset_id": "current_g1_g10_denial_reason"
+          },
+          "active_rust_facts": {
+            "eligibility_active": 1,
+            "aid_code": 53,
+            "benefit_level_exists": 1,
+            "date_of_service_from": 20000,
+            "eligibility_period_from": 19900,
+            "eligibility_period_thru": 21000,
+            "soc_amount": 0,
+            "soc_met": 1,
+            "provider_enrolled": 1,
+            "provider_type_valid": 1,
+            "billing_code_valid": 1,
+            "units_valid": 1,
+            "is_duplicate": 0,
+            "disability_determination_valid": 1,
+            "recipient_not_deceased": 1,
+            "physician_certification_valid": 1
+          },
+          "winterfell_poc_mapping": {
+            "direct": {
+              "eligibility_active": 1,
+              "provider_enrolled": 1,
+              "duplicate_flag": 0
+            },
+            "partial": {
+              "service_line_count": {
+                "source": ["billing_code_valid", "units_valid"],
+                "status": "not_equivalent"
+              },
+              "prior_auth_ok": {
+                "source": ["physician_certification_valid"],
+                "status": "not_equivalent"
+              },
+              "charge_cents": {
+                "source": ["claim_amount"],
+                "status": "requires_unit_normalization"
+              },
+              "program_integrity_hold": {
+                "source": ["disability_determination_valid", "recipient_not_deceased"],
+                "status": "not_equivalent"
+              }
+            },
+            "unmapped": {
+              "member_id": 14696086592462976221u64,
+              "provider_npi": 1234567893,
+              "diagnosis_count": 1,
+              "max_charge_cents": 150000
+            }
+          },
+          "public_inputs": {
+            "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607",
+            "decision": 1,
+            "failure_code": 0,
+            "ruleset_id": "current_g1_g10_denial_reason"
+          },
+          "proof_status": {
+            "stark_proof_generated": false,
+            "winterfell_poc_compatible": false,
+            "groth16_flow_unchanged": true,
+            "on_chain_submission": false
+          }
+        }))
+        .unwrap()
+    }
+}
+
 /// One bridge row from an imported Winterfell STARK input field to the current
 /// active Rust adjudication source field or fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -479,12 +643,12 @@ pub struct WinterfellSourceDataFixture {
     pub notes: Vec<String>,
 }
 
-/// Complete adapter-ready candidate assembled from the base Winterfell witness
-/// candidate plus fixture-only source data.
+/// Complete adapter-ready candidate assembled from either the legacy fixture
+/// lane or a strict, validated `StarkBridgeInput`.
 ///
 /// This is still not a Winterfell witness. It is a deterministic pre-prover
-/// artifact that proves every imported PoC field can be populated once the
-/// Phase 5G source-data fixture exists.
+/// artifact that proves every imported PoC field can be populated before a
+/// prover-specific witness is generated.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WinterfellCompleteWitnessCandidate {
     pub schema_version: String,
@@ -7229,6 +7393,242 @@ impl WinterfellCompleteWitnessCandidate {
         "winterfell-witness-candidate-v0+winterfell-source-data-fixture-v0";
     pub const CANDIDATE_STATUS: &'static str =
         "complete_adapter_ready_fixture_no_winterfell_import";
+    pub const BRIDGE_SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const BRIDGE_CANDIDATE_STATUS: &'static str =
+        "complete_adapter_ready_bridge_backed_no_fixture";
+
+    pub fn from_bridge_input_strict(input: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        input.validate()?;
+
+        let mut errors = Vec::new();
+        let member_id = normalized_bridge_member_id(input, &mut errors);
+        let provider_npi = normalized_bridge_provider_npi(input, &mut errors);
+        let diagnosis_count = matched_optional_bridge_value(
+            input.claim.diagnosis_count,
+            input.winterfell_poc_mapping.unmapped.diagnosis_count,
+            "claim.diagnosis_count",
+            "winterfell_poc_mapping.unmapped.diagnosis_count",
+            &mut errors,
+        );
+        let max_charge_cents = matched_optional_bridge_value(
+            input.claim.max_charge_cents,
+            input.winterfell_poc_mapping.unmapped.max_charge_cents,
+            "claim.max_charge_cents",
+            "winterfell_poc_mapping.unmapped.max_charge_cents",
+            &mut errors,
+        );
+
+        for (path, value) in [
+            (
+                "active_rust_facts.eligibility_active",
+                input.active_rust_facts.eligibility_active,
+            ),
+            (
+                "active_rust_facts.provider_enrolled",
+                input.active_rust_facts.provider_enrolled,
+            ),
+            (
+                "active_rust_facts.billing_code_valid",
+                input.active_rust_facts.billing_code_valid,
+            ),
+            (
+                "active_rust_facts.units_valid",
+                input.active_rust_facts.units_valid,
+            ),
+            (
+                "active_rust_facts.physician_certification_valid",
+                input.active_rust_facts.physician_certification_valid,
+            ),
+            (
+                "active_rust_facts.disability_determination_valid",
+                input.active_rust_facts.disability_determination_valid,
+            ),
+            (
+                "active_rust_facts.recipient_not_deceased",
+                input.active_rust_facts.recipient_not_deceased,
+            ),
+            (
+                "active_rust_facts.is_duplicate",
+                input.active_rust_facts.is_duplicate,
+            ),
+        ] {
+            if value > 1 {
+                errors.push(format!("{path} must be 0 or 1, got {value}"));
+            }
+        }
+
+        for (path, mapped, active) in [
+            (
+                "winterfell_poc_mapping.direct.eligibility_active",
+                input.winterfell_poc_mapping.direct.eligibility_active,
+                input.active_rust_facts.eligibility_active,
+            ),
+            (
+                "winterfell_poc_mapping.direct.provider_enrolled",
+                input.winterfell_poc_mapping.direct.provider_enrolled,
+                input.active_rust_facts.provider_enrolled,
+            ),
+            (
+                "winterfell_poc_mapping.direct.duplicate_flag",
+                input.winterfell_poc_mapping.direct.duplicate_flag,
+                input.active_rust_facts.is_duplicate,
+            ),
+        ] {
+            if mapped != active {
+                errors.push(format!(
+                    "{path} must match its active Rust source value {active}, got {mapped}"
+                ));
+            }
+        }
+
+        let charge_cents = match input.claim.claim_amount.checked_mul(100) {
+            Some(value) => value,
+            None => {
+                errors.push(
+                    "claim.claim_amount must fit in u64 after conversion to charge_cents"
+                        .to_string(),
+                );
+                0
+            }
+        };
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let fields = vec![
+            bridge_backed_complete_field(
+                "member_id",
+                member_id,
+                "claim.member_id+winterfell_poc_mapping.unmapped.member_id",
+                "deterministically normalized member identity from the active bridge",
+            ),
+            bridge_backed_complete_field(
+                "provider_npi",
+                provider_npi,
+                "claim.provider_npi+winterfell_poc_mapping.unmapped.provider_npi",
+                "validated and normalized 10-digit provider NPI from the active bridge",
+            ),
+            bridge_backed_complete_field(
+                "eligibility_active",
+                u64::from(input.active_rust_facts.eligibility_active),
+                "active_rust_facts.eligibility_active",
+                "direct active Rust eligibility fact",
+            ),
+            bridge_backed_complete_field(
+                "provider_enrolled",
+                u64::from(input.active_rust_facts.provider_enrolled),
+                "active_rust_facts.provider_enrolled",
+                "direct active Rust provider enrollment fact",
+            ),
+            bridge_backed_complete_field(
+                "service_line_count",
+                u64::from(
+                    input.active_rust_facts.billing_code_valid == 1
+                        && input.active_rust_facts.units_valid == 1,
+                ),
+                "active_rust_facts.billing_code_valid+active_rust_facts.units_valid",
+                "deterministic compatibility normalization, not runtime semantic equivalence",
+            ),
+            bridge_backed_complete_field(
+                "diagnosis_count",
+                diagnosis_count,
+                "claim.diagnosis_count+winterfell_poc_mapping.unmapped.diagnosis_count",
+                "optional diagnosis count supplied by the active bridge",
+            ),
+            bridge_backed_complete_field(
+                "prior_auth_ok",
+                u64::from(input.active_rust_facts.physician_certification_valid == 1),
+                "active_rust_facts.physician_certification_valid",
+                "deterministic compatibility normalization, not runtime semantic equivalence",
+            ),
+            bridge_backed_complete_field(
+                "charge_cents",
+                charge_cents,
+                "claim.claim_amount",
+                "claim amount normalized from dollars to cents",
+            ),
+            bridge_backed_complete_field(
+                "max_charge_cents",
+                max_charge_cents,
+                "claim.max_charge_cents+winterfell_poc_mapping.unmapped.max_charge_cents",
+                "optional maximum charge supplied by the active bridge",
+            ),
+            bridge_backed_complete_field(
+                "duplicate_flag",
+                u64::from(input.active_rust_facts.is_duplicate),
+                "active_rust_facts.is_duplicate",
+                "direct active Rust duplicate fact",
+            ),
+            bridge_backed_complete_field(
+                "program_integrity_hold",
+                u64::from(
+                    !(input.active_rust_facts.disability_determination_valid == 1
+                        && input.active_rust_facts.recipient_not_deceased == 1),
+                ),
+                "active_rust_facts.disability_determination_valid+active_rust_facts.recipient_not_deceased",
+                "deterministic compatibility normalization, not runtime semantic equivalence",
+            ),
+        ];
+
+        let candidate = Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::BRIDGE_SOURCE_SCHEMA_VERSION.to_string(),
+            candidate_status: Self::BRIDGE_CANDIDATE_STATUS.to_string(),
+            claim_id: input.claim.claim_id.clone(),
+            claim_hash: input.claim.claim_hash.clone(),
+            field_count: fields.len(),
+            all_fields_populated: true,
+            fields,
+            winterfell_dependency_imported: false,
+            proof_generation_enabled: false,
+            notes: vec![
+                "This complete candidate was generated strictly from validated StarkBridgeInput data without fixture substitution.".to_string(),
+                "Partial-field normalizations remain compatibility mappings, not active adjudication semantic equivalence.".to_string(),
+                "This artifact does not generate a STARK proof or change the active Groth16 runtime.".to_string(),
+            ],
+        };
+        candidate.validate_bridge_backed()?;
+        Ok(candidate)
+    }
+
+    pub fn validate_bridge_backed(&self) -> Result<(), Vec<String>> {
+        self.validate()?;
+        let mut errors = Vec::new();
+
+        if self.source_schema_version != Self::BRIDGE_SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "bridge-backed source_schema_version must be {}",
+                Self::BRIDGE_SOURCE_SCHEMA_VERSION
+            ));
+        }
+        if self.candidate_status != Self::BRIDGE_CANDIDATE_STATUS {
+            errors.push(format!(
+                "bridge-backed candidate_status must be {}",
+                Self::BRIDGE_CANDIDATE_STATUS
+            ));
+        }
+        for field in &self.fields {
+            if field.value_status != "populated_adapter_ready_bridge_source" {
+                errors.push(format!(
+                    "{} must use bridge-backed value_status",
+                    field.winterfell_field
+                ));
+            }
+            if field.source_artifact != "StarkBridgeInput" {
+                errors.push(format!(
+                    "{} source_artifact must be StarkBridgeInput",
+                    field.winterfell_field
+                ));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
@@ -7241,21 +7641,21 @@ impl WinterfellCompleteWitnessCandidate {
             ));
         }
 
-        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
-            errors.push(format!(
-                "source_schema_version must be {}, got {}",
-                Self::SOURCE_SCHEMA_VERSION,
-                self.source_schema_version
-            ));
-        }
-
-        if self.candidate_status != Self::CANDIDATE_STATUS {
-            errors.push(format!(
-                "candidate_status must be {}, got {}",
-                Self::CANDIDATE_STATUS,
-                self.candidate_status
-            ));
-        }
+        let expected_value_status = if self.source_schema_version == Self::SOURCE_SCHEMA_VERSION
+            && self.candidate_status == Self::CANDIDATE_STATUS
+        {
+            Some("populated_adapter_ready_fixture")
+        } else if self.source_schema_version == Self::BRIDGE_SOURCE_SCHEMA_VERSION
+            && self.candidate_status == Self::BRIDGE_CANDIDATE_STATUS
+        {
+            Some("populated_adapter_ready_bridge_source")
+        } else {
+            errors.push(
+                "source_schema_version and candidate_status must identify either the fixture or strict bridge-backed candidate mode"
+                    .to_string(),
+            );
+            None
+        };
 
         if self.claim_id.trim().is_empty() {
             errors.push("claim_id must be present".to_string());
@@ -7298,11 +7698,13 @@ impl WinterfellCompleteWitnessCandidate {
                 errors.push("winterfell_field must be present".to_string());
             }
 
-            if field.value_status != "populated_adapter_ready_fixture" {
-                errors.push(format!(
-                    "{} value_status must be populated_adapter_ready_fixture",
-                    field.winterfell_field
-                ));
+            if let Some(expected_value_status) = expected_value_status {
+                if field.value_status != expected_value_status {
+                    errors.push(format!(
+                        "{} value_status must be {expected_value_status}",
+                        field.winterfell_field
+                    ));
+                }
             }
 
             if field.source_artifact.trim().is_empty() {
@@ -8343,6 +8745,112 @@ fn stable_fixture_string_to_u64(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
         hash ^ (byte as u64).wrapping_mul(0x100000001b3)
     })
+}
+
+fn normalized_bridge_member_id(input: &StarkBridgeInput, errors: &mut Vec<String>) -> u64 {
+    let normalized = match input.claim.member_id.as_deref() {
+        Some(value) if !value.trim().is_empty() => stable_fixture_string_to_u64(value),
+        _ => {
+            errors.push("claim.member_id must be present for a bridge-backed witness".to_string());
+            0
+        }
+    };
+
+    match input.winterfell_poc_mapping.unmapped.member_id {
+        Some(mapped) if mapped != normalized => errors.push(format!(
+            "winterfell_poc_mapping.unmapped.member_id must match normalized claim.member_id {normalized}, got {mapped}"
+        )),
+        None => errors.push(
+            "winterfell_poc_mapping.unmapped.member_id must be present for a bridge-backed witness"
+                .to_string(),
+        ),
+        _ => {}
+    }
+
+    normalized
+}
+
+fn normalized_bridge_provider_npi(input: &StarkBridgeInput, errors: &mut Vec<String>) -> u64 {
+    let normalized = match input.claim.provider_npi.as_deref() {
+        Some(value) if is_10_digit_npi(value) => match value.parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                errors.push(format!("claim.provider_npi must parse to u64: {err}"));
+                0
+            }
+        },
+        Some(_) => {
+            errors.push(
+                "claim.provider_npi must be a 10-digit numeric string for a bridge-backed witness"
+                    .to_string(),
+            );
+            0
+        }
+        None => {
+            errors
+                .push("claim.provider_npi must be present for a bridge-backed witness".to_string());
+            0
+        }
+    };
+
+    match input.winterfell_poc_mapping.unmapped.provider_npi {
+        Some(mapped) if mapped != normalized => errors.push(format!(
+            "winterfell_poc_mapping.unmapped.provider_npi must match normalized claim.provider_npi {normalized}, got {mapped}"
+        )),
+        None => errors.push(
+            "winterfell_poc_mapping.unmapped.provider_npi must be present for a bridge-backed witness"
+                .to_string(),
+        ),
+        _ => {}
+    }
+
+    normalized
+}
+
+fn matched_optional_bridge_value(
+    claim_value: Option<u64>,
+    mapped_value: Option<u64>,
+    claim_path: &str,
+    mapped_path: &str,
+    errors: &mut Vec<String>,
+) -> u64 {
+    match (claim_value, mapped_value) {
+        (Some(claim), Some(mapped)) if claim == mapped => claim,
+        (Some(claim), Some(mapped)) => {
+            errors.push(format!(
+                "{mapped_path} must match {claim_path} value {claim}, got {mapped}"
+            ));
+            claim
+        }
+        (None, _) => {
+            errors.push(format!(
+                "{claim_path} must be present for a bridge-backed witness"
+            ));
+            0
+        }
+        (_, None) => {
+            errors.push(format!(
+                "{mapped_path} must be present for a bridge-backed witness"
+            ));
+            0
+        }
+    }
+}
+
+fn bridge_backed_complete_field(
+    winterfell_field: &str,
+    value: u64,
+    source_field: &str,
+    note: &str,
+) -> WinterfellCompleteWitnessField {
+    WinterfellCompleteWitnessField {
+        winterfell_field: winterfell_field.to_string(),
+        value,
+        value_status: "populated_adapter_ready_bridge_source".to_string(),
+        source_artifact: "StarkBridgeInput".to_string(),
+        source_field: source_field.to_string(),
+        note: note.to_string(),
+    }
 }
 
 fn compatibility_rows_for_class(class: MappingClass) -> Vec<WinterfellPocFieldCompatibility> {
@@ -11411,19 +11919,8 @@ pub mod winterfell_poc_adapter {
             bridge.winterfell_poc_mapping.unmapped.diagnosis_count = Some(1);
             bridge.winterfell_poc_mapping.unmapped.max_charge_cents = Some(150_000);
 
-            let mut candidate = sample_complete_candidate();
-            candidate
-                .fields
-                .iter_mut()
-                .find(|field| field.winterfell_field == "member_id")
-                .unwrap()
-                .value = crate::stable_fixture_string_to_u64("MEMBER-FIXTURE-001");
-            candidate
-                .fields
-                .iter_mut()
-                .find(|field| field.winterfell_field == "provider_npi")
-                .unwrap()
-                .value = 1_234_567_893;
+            let candidate =
+                WinterfellCompleteWitnessCandidate::from_bridge_input_strict(&bridge).unwrap();
             let fixture =
                 WinterfellPocRealProofFixture::from_complete_candidate(&candidate).unwrap();
             let equivalence =
