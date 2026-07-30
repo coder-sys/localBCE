@@ -414,7 +414,7 @@ impl ProductionAirSemanticsTraceV1 {
     }
 }
 
-fn evaluate_outcome(facts: &ProductionAirFactsV1) -> ProductionAirOutcomeV1 {
+pub(crate) fn evaluate_outcome(facts: &ProductionAirFactsV1) -> ProductionAirOutcomeV1 {
     evaluate_gates(facts)
         .into_iter()
         .find(|gate| !gate.satisfied)

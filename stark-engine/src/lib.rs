@@ -21,6 +21,9 @@ pub mod source_roots;
 #[cfg(feature = "production-air")]
 pub mod production_air;
 
+#[cfg(feature = "production-air-winterfell")]
+pub mod production_air_winterfell;
+
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

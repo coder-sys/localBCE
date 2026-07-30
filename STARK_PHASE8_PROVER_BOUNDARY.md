@@ -1752,12 +1752,47 @@ flow remains unchanged.
 
 ## Next Safe Step
 
-Translate `ProductionAirSemanticsTraceV1` into a feature-gated Winterfell trace
-layout and AIR transition constraints:
+The G1-G10 semantics now have a separate Winterfell 0.13 trace and AIR behind
+the disabled-by-default `production-air-winterfell` feature:
 
-- choose trace columns for all facts, gate satisfaction, first-failure
-  selection, decision, and failure code
-- constrain boolean facts and ordered first-failure selection algebraically
-- add approved and all G1-G10 denied proof fixtures
-- locally prove and verify those fixtures before any runtime integration
-- keep Solidity, ClaimsRegistry, and the active Groth16 runtime unchanged
+```text
+cargo test --lib --features production-air-winterfell \
+  production_air_winterfell::tests --jobs 1
+```
+
+The trace contains:
+
+- all active G1-G10 Rust facts
+- four public claim-hash limbs
+- 13 ordered gate results
+- 13 first-failure prefix values
+- date comparison witnesses with 64-bit decompositions
+- share-of-cost and aid-code inverse witnesses
+- public decision and failure code
+
+The AIR constrains boolean facts, supported aid codes, service-date bounds,
+share-of-cost behavior, all direct gates, first-failure ordering, decision,
+failure code, and trace-row consistency. Approved and denied proofs are
+generated and verified locally in feature-gated tests. The proof suite covers
+the approved outcome, all 13 ordered denial outcomes, and rejection of a
+tampered public claim-hash limb.
+
+This is not runtime-ready. The public claim hash is exposed as four limbs but
+is not yet cryptographically derived from the private fact columns. Therefore:
+
+```text
+claim_fact_binding_complete = false
+runtime_wired = false
+on_chain_submission = false
+groth16_flow_unchanged = true
+```
+
+## Next Safe Step
+
+Add the production claim-to-fact commitment inside the AIR:
+
+- select and version the STARK-native hash
+- define canonical fact encoding and domain separation
+- constrain the private facts to the public claim commitment
+- add mutation and public-input tamper rejection tests
+- only then package production proof bytes for the Solidity verifier lane
