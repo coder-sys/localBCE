@@ -1,6 +1,8 @@
 {
   "claim_id": "CLAIM-DEMO-011",
   "claim_amount": 1000,
+  "member_id": "MEMBER-FIXTURE-001",
+  "provider_npi": "1234567893",
 
   "eligibility_active": 1,
   "aid_code": 53,
@@ -21,6 +23,6 @@
 
   "is_duplicate": 0,
   "disability_determination_valid": 1,
-"recipient_not_deceased": 1,
-"physician_certification_valid": 1
+  "recipient_not_deceased": 1,
+  "physician_certification_valid": 1
 }
