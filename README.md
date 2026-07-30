@@ -87,9 +87,10 @@ settlement, runtime selection, and ops gates.
 See `STARK_VERIFIER_ABI_CANDIDATE.md` for the current preview-only production
 STARK verifier ABI candidate and public-input expectations.
 
-See `STARK_PHASE8_PROVER_BOUNDARY.md` for the planning-only real-prover
-boundary candidate that maps validated bridge input toward the Solidity V1 ABI
-without generating real proof bytes.
+See `STARK_PHASE8_PROVER_BOUNDARY.md` for the feature-gated production G1-G10
+Winterfell AIR, its Rescue-Prime claim-to-fact commitment, and the remaining
+proof-artifact and runtime-integration work. This lane generates and verifies
+local STARK proofs in tests but is not wired into runtime or Solidity.
 
 ---
 
@@ -137,6 +138,8 @@ localBCE/
 - Groth16 proving
 - Solidity verifier generation
 - Optional STARK sidecar artifact generation from rust-engine dry-run path
+- Feature-gated Winterfell G1-G10 proofs with a constrained Rescue-Prime
+  claim-to-fact commitment
 
 ## STARK Bridge
 

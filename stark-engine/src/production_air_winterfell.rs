@@ -3,18 +3,54 @@ use winterfell::{
     CompositionPoly, CompositionPolyTrace, DefaultConstraintCommitment, DefaultConstraintEvaluator,
     DefaultTraceLde, EvaluationFrame, FieldExtension, PartitionOptions, Proof, ProofOptions,
     Prover, StarkDomain, TraceInfo, TracePolyTable, TraceTable, TransitionConstraintDegree,
-    crypto::{DefaultRandomCoin, MerkleTree, hashers::Blake3_256},
-    math::{FieldElement, ToElements, fields::f128::BaseElement},
+    crypto::{
+        DefaultRandomCoin, ElementHasher, MerkleTree,
+        hashers::{Blake3_256, Rp64_256},
+    },
+    math::{FieldElement, ToElements, fields::f64::BaseElement},
     matrix::ColMatrix,
 };
 
-use crate::production_air::{
-    ProductionAirInputV1, ProductionAirSemanticsTraceV1, evaluate_outcome,
-};
+use crate::production_air::{ProductionAirInputV1, ProductionAirSemanticsTraceV1};
 
 pub type ProductionFelt = BaseElement;
 
-pub const TRACE_LENGTH: usize = 16;
+pub const TRACE_LENGTH: usize = 32;
+
+pub const FACT_COMMITMENT_SCHEMA_VERSION: &str = "stark-claim-fact-commitment-v1";
+pub const FACT_COMMITMENT_HASH_FUNCTION: &str = "winterfell-rp64-256";
+pub const FACT_COMMITMENT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCFACT\0");
+pub const FACT_COMMITMENT_RULESET_TAG: u64 = u64::from_le_bytes(*b"G1G10V1\0");
+pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
+    "eligibility_active",
+    "aid_code",
+    "benefit_level_exists",
+    "date_of_service_from",
+    "eligibility_period_from",
+    "eligibility_period_thru",
+    "soc_amount",
+    "soc_met",
+    "provider_enrolled",
+    "provider_type_valid",
+    "billing_code_valid",
+    "units_valid",
+    "is_duplicate",
+    "disability_determination_valid",
+    "recipient_not_deceased",
+    "physician_certification_valid",
+];
+
+const CLAIM_HASH_LIMB_COUNT: usize = 8;
+const FACT_COMMITMENT_WIDTH: usize = 4;
+const FACT_COMMITMENT_PREIMAGE_LENGTH: usize = 28;
+const FACT_COUNT: u64 = 16;
+const RESCUE_STATE_WIDTH: usize = 12;
+const RESCUE_RATE_START: usize = 4;
+const RESCUE_RATE_WIDTH: usize = 8;
+const RESCUE_ROUND_COUNT: usize = 7;
+const HASH_ROUND_SELECTOR_COUNT: usize = RESCUE_ROUND_COUNT;
+const HASH_ABSORB_SELECTOR_COUNT: usize = 3;
+const HASH_PERIODIC_COLUMN_COUNT: usize = HASH_ROUND_SELECTOR_COUNT + HASH_ABSORB_SELECTOR_COUNT;
 
 const COL_ELIGIBILITY_ACTIVE: usize = 0;
 const COL_AID_CODE: usize = 1;
@@ -34,25 +70,32 @@ const COL_RECIPIENT_NOT_DECEASED: usize = 14;
 const COL_PHYSICIAN_CERTIFICATION_VALID: usize = 15;
 
 const CLAIM_HASH_LIMBS_START: usize = 16;
-const GATES_START: usize = 20;
-const PREFIXES_START: usize = 33;
-const COL_DATE_GE_FROM: usize = 46;
-const COL_DATE_LE_THRU: usize = 47;
-const COL_DATE_GE_DIFF: usize = 48;
-const COL_DATE_LE_DIFF: usize = 49;
-const COL_SOC_ZERO: usize = 50;
-const COL_SOC_INVERSE: usize = 51;
-const COL_AID_PRODUCT_INVERSE: usize = 52;
-const COL_DECISION: usize = 53;
-const COL_FAILURE_CODE: usize = 54;
-const DATE_GE_DIFF_BITS_START: usize = 55;
-const DATE_LE_DIFF_BITS_START: usize = 119;
-const COL_CLOCK: usize = 183;
+const GATES_START: usize = 24;
+const PREFIXES_START: usize = 37;
+const COL_DATE_GE_FROM: usize = 50;
+const COL_DATE_LE_THRU: usize = 51;
+const COL_DATE_GE_DIFF: usize = 52;
+const COL_DATE_LE_DIFF: usize = 53;
+const COL_SOC_ZERO: usize = 54;
+const COL_SOC_INVERSE: usize = 55;
+const COL_AID_PRODUCT_INVERSE: usize = 56;
+const COL_DECISION: usize = 57;
+const COL_FAILURE_CODE: usize = 58;
+const DATE_GE_DIFF_BITS_START: usize = 59;
+const DATE_LE_DIFF_BITS_START: usize = 91;
+const COL_CLOCK: usize = 123;
+const HASH_STATE_START: usize = 124;
 
-pub const TRACE_WIDTH: usize = 184;
+pub const TRACE_WIDTH: usize = 136;
 const GATE_COUNT: usize = 13;
-const U64_BITS: usize = 64;
-const SEMANTIC_CONSTRAINT_COUNT: usize = 193;
+const RANGE_BITS: usize = 32;
+const SEMANTIC_CONSTRAINT_COUNT: usize = 129;
+const COMMITMENT_BOUND_COLUMN_COUNT: usize = 16 + CLAIM_HASH_LIMB_COUNT;
+const HASH_CONSTRAINT_COUNT: usize = RESCUE_STATE_WIDTH;
+const TRANSITION_CONSTRAINT_COUNT: usize =
+    SEMANTIC_CONSTRAINT_COUNT + COMMITMENT_BOUND_COLUMN_COUNT + HASH_CONSTRAINT_COUNT + 1;
+const PUBLIC_ASSERTION_COUNT: usize =
+    CLAIM_HASH_LIMB_COUNT + 2 + 1 + RESCUE_STATE_WIDTH + FACT_COMMITMENT_WIDTH;
 
 const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
     COL_ELIGIBILITY_ACTIVE,
@@ -72,7 +115,8 @@ const FAILURE_CODES: [u32; GATE_COUNT] = [1, 201, 202, 3, 4, 501, 502, 601, 602,
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProductionAirPublicInputsV1 {
-    pub claim_hash_limbs: [ProductionFelt; 4],
+    pub claim_hash_limbs: [ProductionFelt; CLAIM_HASH_LIMB_COUNT],
+    pub fact_commitment: [ProductionFelt; FACT_COMMITMENT_WIDTH],
     pub decision: ProductionFelt,
     pub failure_code: ProductionFelt,
 }
@@ -80,6 +124,7 @@ pub struct ProductionAirPublicInputsV1 {
 impl ToElements<ProductionFelt> for ProductionAirPublicInputsV1 {
     fn to_elements(&self) -> Vec<ProductionFelt> {
         let mut elements = self.claim_hash_limbs.to_vec();
+        elements.extend(self.fact_commitment);
         elements.push(self.decision);
         elements.push(self.failure_code);
         elements
@@ -102,7 +147,12 @@ impl Air for ProductionG1G10Air {
     ) -> Self {
         assert_eq!(TRACE_WIDTH, trace_info.width());
         Self {
-            context: AirContext::new(trace_info, transition_degrees(), 7, options),
+            context: AirContext::new(
+                trace_info,
+                transition_degrees(),
+                PUBLIC_ASSERTION_COUNT,
+                options,
+            ),
             public_inputs,
         }
     }
@@ -110,13 +160,14 @@ impl Air for ProductionG1G10Air {
     fn evaluate_transition<E: FieldElement + From<Self::BaseField>>(
         &self,
         frame: &EvaluationFrame<E>,
-        _periodic_values: &[E],
+        periodic_values: &[E],
         result: &mut [E],
     ) {
         let current = frame.current();
         let next = frame.next();
         let one = E::ONE;
         let mut index = 0;
+        debug_assert_eq!(periodic_values.len(), HASH_PERIODIC_COLUMN_COUNT);
 
         for column in boolean_columns() {
             let value = current[column];
@@ -125,7 +176,7 @@ impl Air for ProductionG1G10Air {
         }
 
         for bits_start in [DATE_GE_DIFF_BITS_START, DATE_LE_DIFF_BITS_START] {
-            for bit in 0..U64_BITS {
+            for bit in 0..RANGE_BITS {
                 let value = current[bits_start + bit];
                 result[index] = value * (value - one);
                 index += 1;
@@ -225,14 +276,62 @@ impl Air for ProductionG1G10Air {
             *value += degree_adjustment * E::from((constraint_index + 1) as u32);
         }
 
+        for (bound_index, column) in commitment_bound_columns().into_iter().enumerate() {
+            result[index] = next[column] - current[column]
+                + clock_transition * E::from((bound_index + 1) as u32);
+            index += 1;
+        }
+
+        let current_hash: [E; RESCUE_STATE_WIDTH] =
+            core::array::from_fn(|offset| current[HASH_STATE_START + offset]);
+        let next_hash: [E; RESCUE_STATE_WIDTH] =
+            core::array::from_fn(|offset| next[HASH_STATE_START + offset]);
+        let round_constraints: [[E; RESCUE_STATE_WIDTH]; RESCUE_ROUND_COUNT] =
+            core::array::from_fn(|round| {
+                rescue_round_constraints(&current_hash, &next_hash, round)
+            });
+        let absorption_blocks = [
+            commitment_absorption_block(current, 1),
+            commitment_absorption_block(current, 2),
+            commitment_absorption_block(current, 3),
+        ];
+
+        let mut hash_degree_adjustment = clock_transition;
+        for _ in 0..6 {
+            hash_degree_adjustment *= current[COL_CLOCK];
+        }
+        hash_degree_adjustment *= periodic_values[HASH_ROUND_SELECTOR_COUNT];
+
+        for state_index in 0..RESCUE_STATE_WIDTH {
+            let mut constraint = E::ZERO;
+            for round in 0..RESCUE_ROUND_COUNT {
+                constraint += periodic_values[round] * round_constraints[round][state_index];
+            }
+            for (block_index, block) in absorption_blocks.iter().enumerate() {
+                let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
+                    .contains(&state_index)
+                {
+                    block[state_index - RESCUE_RATE_START]
+                } else {
+                    E::ZERO
+                };
+                constraint += periodic_values[HASH_ROUND_SELECTOR_COUNT + block_index]
+                    * (next_hash[state_index] - current_hash[state_index] - absorbed);
+            }
+            constraint += hash_degree_adjustment * E::from((state_index + 1) as u32);
+            result[index] = constraint;
+            index += 1;
+        }
+
         result[index] = clock_transition;
         index += 1;
 
+        debug_assert_eq!(index, TRANSITION_CONSTRAINT_COUNT);
         debug_assert_eq!(index, result.len());
     }
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
-        let mut assertions = Vec::with_capacity(6);
+        let mut assertions = Vec::with_capacity(PUBLIC_ASSERTION_COUNT);
         for (limb, value) in self.public_inputs.claim_hash_limbs.iter().enumerate() {
             assertions.push(Assertion::single(CLAIM_HASH_LIMBS_START + limb, 0, *value));
         }
@@ -247,11 +346,31 @@ impl Air for ProductionG1G10Air {
             self.public_inputs.failure_code,
         ));
         assertions.push(Assertion::single(COL_CLOCK, 0, ProductionFelt::ZERO));
+
+        let first_claim_hash_limbs: [ProductionFelt; 4] = self.public_inputs.claim_hash_limbs[..4]
+            .try_into()
+            .expect("first four claim hash limbs");
+        let initial_hash_state = initial_commitment_hash_state(&first_claim_hash_limbs);
+        for (state_index, value) in initial_hash_state.into_iter().enumerate() {
+            assertions.push(Assertion::single(HASH_STATE_START + state_index, 0, value));
+        }
+        for (digest_index, value) in self.public_inputs.fact_commitment.iter().enumerate() {
+            assertions.push(Assertion::single(
+                HASH_STATE_START + RESCUE_RATE_START + digest_index,
+                TRACE_LENGTH - 1,
+                *value,
+            ));
+        }
+        debug_assert_eq!(assertions.len(), PUBLIC_ASSERTION_COUNT);
         assertions
     }
 
     fn context(&self) -> &AirContext<Self::BaseField> {
         &self.context
+    }
+
+    fn get_periodic_column_values(&self) -> Vec<Vec<Self::BaseField>> {
+        commitment_periodic_columns()
     }
 }
 
@@ -281,12 +400,15 @@ impl Prover for ProductionG1G10Prover {
 
     fn get_pub_inputs(&self, trace: &Self::Trace) -> ProductionAirPublicInputsV1 {
         ProductionAirPublicInputsV1 {
-            claim_hash_limbs: [
-                trace.get(CLAIM_HASH_LIMBS_START, 0),
-                trace.get(CLAIM_HASH_LIMBS_START + 1, 0),
-                trace.get(CLAIM_HASH_LIMBS_START + 2, 0),
-                trace.get(CLAIM_HASH_LIMBS_START + 3, 0),
-            ],
+            claim_hash_limbs: core::array::from_fn(|limb| {
+                trace.get(CLAIM_HASH_LIMBS_START + limb, 0)
+            }),
+            fact_commitment: core::array::from_fn(|limb| {
+                trace.get(
+                    HASH_STATE_START + RESCUE_RATE_START + limb,
+                    TRACE_LENGTH - 1,
+                )
+            }),
             decision: trace.get(COL_DECISION, 0),
             failure_code: trace.get(COL_FAILURE_CODE, 0),
         }
@@ -335,12 +457,15 @@ pub fn build_production_air_trace(
     input: &ProductionAirInputV1,
 ) -> Result<TraceTable<ProductionFelt>, Vec<String>> {
     input.validate()?;
-    let trace_inputs = trace_inputs(input);
+    validate_commitment_field_range(input)?;
+    let semantics = input.evaluate()?;
+    let commitment_preimage = canonical_claim_fact_commitment_preimage(input)?;
+    let hash_states = build_commitment_hash_states(&commitment_preimage);
     let mut rows = Vec::with_capacity(TRACE_LENGTH);
-    for (step, trace_input) in trace_inputs.into_iter().enumerate() {
-        let semantics = trace_input.evaluate()?;
-        let mut row = build_trace_row(&trace_input, &semantics)?;
+    for (step, hash_state) in hash_states.into_iter().enumerate() {
+        let mut row = build_trace_row(input, &semantics)?;
         row[COL_CLOCK] = ProductionFelt::from(step as u32);
+        row[HASH_STATE_START..HASH_STATE_START + RESCUE_STATE_WIDTH].copy_from_slice(&hash_state);
         rows.push(row);
     }
     let columns = (0..TRACE_WIDTH)
@@ -362,13 +487,19 @@ pub fn prove_production_air(
 }
 
 pub fn verify_production_air(proof: Proof, public_inputs: ProductionAirPublicInputsV1) -> bool {
+    verify_production_air_result(proof, public_inputs).is_ok()
+}
+
+pub fn verify_production_air_result(
+    proof: Proof,
+    public_inputs: ProductionAirPublicInputsV1,
+) -> Result<(), winterfell::VerifierError> {
     winterfell::verify::<
         ProductionG1G10Air,
         Blake3_256<ProductionFelt>,
         DefaultRandomCoin<Blake3_256<ProductionFelt>>,
         MerkleTree<Blake3_256<ProductionFelt>>,
     >(proof, public_inputs, &acceptable_options())
-    .is_ok()
 }
 
 pub fn default_options() -> ProofOptions {
@@ -376,7 +507,7 @@ pub fn default_options() -> ProofOptions {
         32,
         16,
         0,
-        FieldExtension::None,
+        FieldExtension::Quadratic,
         8,
         31,
         BatchingMethod::Linear,
@@ -386,6 +517,32 @@ pub fn default_options() -> ProofOptions {
 
 pub fn acceptable_options() -> AcceptableOptions {
     AcceptableOptions::MinConjecturedSecurity(80)
+}
+
+pub fn canonical_claim_fact_commitment_preimage(
+    input: &ProductionAirInputV1,
+) -> Result<[ProductionFelt; FACT_COMMITMENT_PREIMAGE_LENGTH], Vec<String>> {
+    input.validate()?;
+    validate_commitment_field_range(input)?;
+
+    let claim_hash_limbs = parse_claim_hash_limbs(&input.claim_hash)?;
+    let facts = canonical_fact_elements(input);
+    let mut elements = [ProductionFelt::ZERO; FACT_COMMITMENT_PREIMAGE_LENGTH];
+    elements[..4].copy_from_slice(&commitment_header());
+    elements[4..12].copy_from_slice(&claim_hash_limbs);
+    elements[12..].copy_from_slice(&facts);
+    Ok(elements)
+}
+
+pub fn compute_claim_fact_commitment(
+    input: &ProductionAirInputV1,
+) -> Result<[ProductionFelt; FACT_COMMITMENT_WIDTH], Vec<String>> {
+    let elements = canonical_claim_fact_commitment_preimage(input)?;
+    let digest = Rp64_256::hash_elements(&elements);
+    Ok(digest
+        .as_elements()
+        .try_into()
+        .expect("Rp64_256 digest must contain four field elements"))
 }
 
 fn build_trace_row(
@@ -435,7 +592,7 @@ fn build_trace_row(
     };
     row[COL_DATE_GE_FROM] = ProductionFelt::from(date_ge as u32);
     row[COL_DATE_GE_DIFF] = felt(date_ge_diff);
-    set_u64_bits(&mut row, DATE_GE_DIFF_BITS_START, date_ge_diff);
+    set_range_bits(&mut row, DATE_GE_DIFF_BITS_START, date_ge_diff);
 
     let date_le = facts.date_of_service_from <= facts.eligibility_period_thru;
     let date_le_diff = if date_le {
@@ -445,7 +602,7 @@ fn build_trace_row(
     };
     row[COL_DATE_LE_THRU] = ProductionFelt::from(date_le as u32);
     row[COL_DATE_LE_DIFF] = felt(date_le_diff);
-    set_u64_bits(&mut row, DATE_LE_DIFF_BITS_START, date_le_diff);
+    set_range_bits(&mut row, DATE_LE_DIFF_BITS_START, date_le_diff);
 
     let soc_zero = facts.soc_amount == 0;
     row[COL_SOC_ZERO] = ProductionFelt::from(soc_zero as u32);
@@ -461,120 +618,205 @@ fn build_trace_row(
 
 fn transition_degrees() -> Vec<TransitionConstraintDegree> {
     let mut degrees = vec![TransitionConstraintDegree::new(6); SEMANTIC_CONSTRAINT_COUNT];
+    degrees.extend((0..COMMITMENT_BOUND_COLUMN_COUNT).map(|_| TransitionConstraintDegree::new(1)));
+    degrees.extend(
+        (0..HASH_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(7, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
+    debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
 }
 
-fn trace_inputs(target: &ProductionAirInputV1) -> Vec<ProductionAirInputV1> {
-    let mut approved = target.clone();
-    approved.facts.eligibility_active = 1;
-    approved.facts.aid_code = 53;
-    approved.facts.benefit_level_exists = 1;
-    approved.facts.date_of_service_from = 20_000;
-    approved.facts.eligibility_period_from = 19_900;
-    approved.facts.eligibility_period_thru = 21_000;
-    approved.facts.soc_amount = 0;
-    approved.facts.soc_met = 1;
-    approved.facts.provider_enrolled = 1;
-    approved.facts.provider_type_valid = 1;
-    approved.facts.billing_code_valid = 1;
-    approved.facts.units_valid = 1;
-    approved.facts.is_duplicate = 0;
-    approved.facts.disability_determination_valid = 1;
-    approved.facts.recipient_not_deceased = 1;
-    approved.facts.physician_certification_valid = 1;
-    refresh_expected_outcome(&mut approved);
-
-    let mut approved_max_ge_diff = approved.clone();
-    approved_max_ge_diff.facts.aid_code = 104;
-    approved_max_ge_diff.facts.date_of_service_from = u64::MAX;
-    approved_max_ge_diff.facts.eligibility_period_from = 0;
-    approved_max_ge_diff.facts.eligibility_period_thru = u64::MAX;
-    approved_max_ge_diff.facts.soc_amount = 100;
-    approved_max_ge_diff.facts.soc_met = 1;
-    refresh_expected_outcome(&mut approved_max_ge_diff);
-
-    let mut rows = vec![target.clone(), approved_max_ge_diff];
-
-    let mut case = approved.clone();
-    case.facts.eligibility_active = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.aid_code = 999;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.benefit_level_exists = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.date_of_service_from = case.facts.eligibility_period_thru + 1;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.soc_amount = 100;
-    case.facts.soc_met = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.provider_enrolled = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.provider_type_valid = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.billing_code_valid = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.units_valid = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.is_duplicate = 1;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.disability_determination_valid = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.recipient_not_deceased = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut case = approved.clone();
-    case.facts.physician_certification_valid = 0;
-    refresh_expected_outcome(&mut case);
-    rows.push(case);
-
-    let mut date_before = approved;
-    date_before.facts.date_of_service_from = 0;
-    date_before.facts.eligibility_period_from = 1;
-    date_before.facts.eligibility_period_thru = u64::MAX;
-    refresh_expected_outcome(&mut date_before);
-    rows.push(date_before);
-
-    debug_assert_eq!(rows.len(), TRACE_LENGTH);
-    rows
+fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
+    let mut columns = vec![vec![ProductionFelt::ZERO; TRACE_LENGTH]; HASH_PERIODIC_COLUMN_COUNT];
+    for block in 0..4 {
+        for round in 0..RESCUE_ROUND_COUNT {
+            columns[round][block * 8 + round] = ProductionFelt::ONE;
+        }
+    }
+    for (selector, step) in [7usize, 15, 23].into_iter().enumerate() {
+        columns[HASH_ROUND_SELECTOR_COUNT + selector][step] = ProductionFelt::ONE;
+    }
+    columns
 }
 
-fn refresh_expected_outcome(input: &mut ProductionAirInputV1) {
-    input.expected_outcome = evaluate_outcome(&input.facts);
+fn commitment_bound_columns() -> Vec<usize> {
+    (COL_ELIGIBILITY_ACTIVE..=COL_PHYSICIAN_CERTIFICATION_VALID)
+        .chain(CLAIM_HASH_LIMBS_START..CLAIM_HASH_LIMBS_START + CLAIM_HASH_LIMB_COUNT)
+        .collect()
+}
+
+fn commitment_header() -> [ProductionFelt; 4] {
+    [
+        felt(FACT_COMMITMENT_DOMAIN_TAG),
+        felt(1),
+        felt(FACT_COMMITMENT_RULESET_TAG),
+        felt(FACT_COUNT),
+    ]
+}
+
+fn canonical_fact_elements(input: &ProductionAirInputV1) -> [ProductionFelt; 16] {
+    let facts = &input.facts;
+    [
+        felt(facts.eligibility_active as u64),
+        felt(facts.aid_code),
+        felt(facts.benefit_level_exists as u64),
+        felt(facts.date_of_service_from),
+        felt(facts.eligibility_period_from),
+        felt(facts.eligibility_period_thru),
+        felt(facts.soc_amount),
+        felt(facts.soc_met as u64),
+        felt(facts.provider_enrolled as u64),
+        felt(facts.provider_type_valid as u64),
+        felt(facts.billing_code_valid as u64),
+        felt(facts.units_valid as u64),
+        felt(facts.is_duplicate as u64),
+        felt(facts.disability_determination_valid as u64),
+        felt(facts.recipient_not_deceased as u64),
+        felt(facts.physician_certification_valid as u64),
+    ]
+}
+
+fn initial_commitment_hash_state(
+    first_claim_hash_limbs: &[ProductionFelt; 4],
+) -> [ProductionFelt; RESCUE_STATE_WIDTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(FACT_COMMITMENT_PREIMAGE_LENGTH as u64);
+    state[RESCUE_RATE_START..RESCUE_RATE_START + 4].copy_from_slice(&commitment_header());
+    state[RESCUE_RATE_START + 4..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(first_claim_hash_limbs);
+    state
+}
+
+fn build_commitment_hash_states(
+    elements: &[ProductionFelt; FACT_COMMITMENT_PREIMAGE_LENGTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; TRACE_LENGTH] {
+    let first_claim_hash_limbs: [ProductionFelt; 4] = elements[4..8]
+        .try_into()
+        .expect("canonical commitment contains four initial claim hash limbs");
+    let mut state = initial_commitment_hash_state(&first_claim_hash_limbs);
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; TRACE_LENGTH];
+    states[0] = state;
+    let mut step = 0;
+
+    for block in 0..4 {
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            step += 1;
+            states[step] = state;
+        }
+        if block < 3 {
+            let next_block_start = (block + 1) * RESCUE_RATE_WIDTH;
+            for rate_index in 0..RESCUE_RATE_WIDTH {
+                let element_index = next_block_start + rate_index;
+                if element_index < FACT_COMMITMENT_PREIMAGE_LENGTH {
+                    state[RESCUE_RATE_START + rate_index] += elements[element_index];
+                }
+            }
+            step += 1;
+            states[step] = state;
+        }
+    }
+
+    debug_assert_eq!(step, TRACE_LENGTH - 1);
+    states
+}
+
+fn commitment_absorption_block<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    block: usize,
+) -> [E; RESCUE_RATE_WIDTH] {
+    match block {
+        1 => [
+            row[CLAIM_HASH_LIMBS_START + 4],
+            row[CLAIM_HASH_LIMBS_START + 5],
+            row[CLAIM_HASH_LIMBS_START + 6],
+            row[CLAIM_HASH_LIMBS_START + 7],
+            row[COL_ELIGIBILITY_ACTIVE],
+            row[COL_AID_CODE],
+            row[COL_BENEFIT_LEVEL_EXISTS],
+            row[COL_DATE_OF_SERVICE_FROM],
+        ],
+        2 => [
+            row[COL_ELIGIBILITY_PERIOD_FROM],
+            row[COL_ELIGIBILITY_PERIOD_THRU],
+            row[COL_SOC_AMOUNT],
+            row[COL_SOC_MET],
+            row[COL_PROVIDER_ENROLLED],
+            row[COL_PROVIDER_TYPE_VALID],
+            row[COL_BILLING_CODE_VALID],
+            row[COL_UNITS_VALID],
+        ],
+        3 => [
+            row[COL_IS_DUPLICATE],
+            row[COL_DISABILITY_DETERMINATION_VALID],
+            row[COL_RECIPIENT_NOT_DECEASED],
+            row[COL_PHYSICIAN_CERTIFICATION_VALID],
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+        ],
+        _ => unreachable!("commitment absorption block must be 1, 2, or 3"),
+    }
+}
+
+fn rescue_round_constraints<E: FieldElement + From<ProductionFelt>>(
+    current: &[E; RESCUE_STATE_WIDTH],
+    next: &[E; RESCUE_STATE_WIDTH],
+    round: usize,
+) -> [E; RESCUE_STATE_WIDTH] {
+    let current_sboxed = core::array::from_fn(|index| exp7(current[index]));
+    let mut first_half = apply_rescue_matrix(&Rp64_256::MDS, &current_sboxed);
+    for (index, value) in first_half.iter_mut().enumerate() {
+        *value += E::from(Rp64_256::ARK1[round][index]);
+    }
+
+    let next_without_constants =
+        core::array::from_fn(|index| next[index] - E::from(Rp64_256::ARK2[round][index]));
+    let inverse_linear = apply_rescue_matrix(&Rp64_256::INV_MDS, &next_without_constants);
+    core::array::from_fn(|index| exp7(inverse_linear[index]) - first_half[index])
+}
+
+fn apply_rescue_matrix<E: FieldElement + From<ProductionFelt>>(
+    matrix: &[[ProductionFelt; RESCUE_STATE_WIDTH]; RESCUE_STATE_WIDTH],
+    vector: &[E; RESCUE_STATE_WIDTH],
+) -> [E; RESCUE_STATE_WIDTH] {
+    core::array::from_fn(|row| {
+        (0..RESCUE_STATE_WIDTH).fold(E::ZERO, |value, column| {
+            value + E::from(matrix[row][column]) * vector[column]
+        })
+    })
+}
+
+fn exp7<E: FieldElement>(value: E) -> E {
+    let squared = value.square();
+    let fourth = squared.square();
+    fourth * squared * value
+}
+
+fn validate_commitment_field_range(input: &ProductionAirInputV1) -> Result<(), Vec<String>> {
+    let facts = &input.facts;
+    let mut errors = Vec::new();
+    for (name, value) in [
+        ("aid_code", facts.aid_code),
+        ("date_of_service_from", facts.date_of_service_from),
+        ("eligibility_period_from", facts.eligibility_period_from),
+        ("eligibility_period_thru", facts.eligibility_period_thru),
+        ("soc_amount", facts.soc_amount),
+    ] {
+        if value > u32::MAX as u64 {
+            errors.push(format!(
+                "{name} must fit in 32 bits for lossless Rp64 commitment encoding and sound range checks"
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn boolean_columns() -> Vec<usize> {
@@ -599,19 +841,21 @@ fn supported_aid_product<E: FieldElement + From<ProductionFelt>>(aid_code: E) ->
 
 fn bits_to_value<E: FieldElement + From<ProductionFelt>>(row: &[E], start: usize) -> E {
     let mut value = E::ZERO;
-    for bit in 0..U64_BITS {
-        value += row[start + bit] * E::from(ProductionFelt::new(1u128 << bit));
+    for bit in 0..RANGE_BITS {
+        value += row[start + bit] * E::from(ProductionFelt::new(1u64 << bit));
     }
     value
 }
 
-fn set_u64_bits(row: &mut [ProductionFelt; TRACE_WIDTH], start: usize, value: u64) {
-    for bit in 0..U64_BITS {
+fn set_range_bits(row: &mut [ProductionFelt; TRACE_WIDTH], start: usize, value: u64) {
+    for bit in 0..RANGE_BITS {
         row[start + bit] = ProductionFelt::from(((value >> bit) & 1) as u32);
     }
 }
 
-fn parse_claim_hash_limbs(claim_hash: &str) -> Result<[ProductionFelt; 4], Vec<String>> {
+fn parse_claim_hash_limbs(
+    claim_hash: &str,
+) -> Result<[ProductionFelt; CLAIM_HASH_LIMB_COUNT], Vec<String>> {
     let hex = claim_hash.strip_prefix("0x").unwrap_or(claim_hash);
     if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(vec![
@@ -619,18 +863,18 @@ fn parse_claim_hash_limbs(claim_hash: &str) -> Result<[ProductionFelt; 4], Vec<S
         ]);
     }
 
-    let mut limbs = [ProductionFelt::ZERO; 4];
+    let mut limbs = [ProductionFelt::ZERO; CLAIM_HASH_LIMB_COUNT];
     for (index, limb) in limbs.iter_mut().enumerate() {
-        let start = index * 16;
-        let value = u64::from_str_radix(&hex[start..start + 16], 16)
+        let start = index * 8;
+        let value = u32::from_str_radix(&hex[start..start + 8], 16)
             .map_err(|error| vec![format!("invalid claim_hash limb {index}: {error}")])?;
-        *limb = felt(value);
+        *limb = ProductionFelt::from(value);
     }
     Ok(limbs)
 }
 
 fn felt(value: u64) -> ProductionFelt {
-    ProductionFelt::new(value as u128)
+    ProductionFelt::new(value)
 }
 
 fn inverse_or_zero(value: ProductionFelt) -> ProductionFelt {

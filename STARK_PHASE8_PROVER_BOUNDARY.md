@@ -1760,28 +1760,60 @@ cargo test --lib --features production-air-winterfell \
   production_air_winterfell::tests --jobs 1
 ```
 
-The trace contains:
+The trace now contains:
 
 - all active G1-G10 Rust facts
-- four public claim-hash limbs
+- eight lossless 32-bit limbs of the existing SHA-256 claim identity hash
+- a four-element public Rescue-Prime claim-to-fact commitment
 - 13 ordered gate results
 - 13 first-failure prefix values
-- date comparison witnesses with 64-bit decompositions
+- date comparison witnesses with sound 32-bit decompositions
 - share-of-cost and aid-code inverse witnesses
 - public decision and failure code
 
-The AIR constrains boolean facts, supported aid codes, service-date bounds,
-share-of-cost behavior, all direct gates, first-failure ordering, decision,
-failure code, and trace-row consistency. Approved and denied proofs are
-generated and verified locally in feature-gated tests. The proof suite covers
-the approved outcome, all 13 ordered denial outcomes, and rejection of a
-tampered public claim-hash limb.
-
-This is not runtime-ready. The public claim hash is exposed as four limbs but
-is not yet cryptographically derived from the private fact columns. Therefore:
+The AIR uses Winterfell's `Rp64_256` Rescue-Prime implementation over the
+64-bit STARK field. Proofs use a quadratic extension to retain the configured
+80-bit verifier security floor. The versioned commitment contract is:
 
 ```text
-claim_fact_binding_complete = false
+schema: stark-claim-fact-commitment-v1
+hash: winterfell-rp64-256
+preimage length: 28 field elements
+preimage:
+  domain tag
+  schema version
+  G1-G10 ruleset tag
+  fact count
+  claim_hash[0..8] as eight big-endian 32-bit limbs
+  all 16 G1-G10 facts in the documented canonical order
+```
+
+The 32-row AIR executes four seven-round Rescue permutations with three
+absorption transitions. It constrains the claim-hash limbs and all 16 facts to
+remain constant across the trace, binds the first hash state to the public
+claim identity, and binds the final four digest elements to public inputs.
+The v1 contract requires numeric adjudication facts to fit in 32 bits. This
+keeps field encoding lossless and prevents modular wraparound from weakening
+the service-date comparisons. Out-of-range values are rejected before trace
+construction.
+
+Feature-gated tests cover:
+
+- approved proof generation and local verification
+- all 13 ordered denial outcomes and exact failure codes
+- a fixed commitment regression vector
+- canonical domain, field ordering, and lossless claim-hash limb encoding
+- mutation rejection for every one of the 16 private facts
+- claim identity hash binding
+- tampered public claim-hash and fact-commitment rejection
+- field-range rejection
+
+This closes the production AIR's claim-to-fact binding gap, but does not make
+the STARK lane runtime-ready:
+
+```text
+claim_fact_binding_complete = true
+production_proof_artifact_packaging_complete = false
 runtime_wired = false
 on_chain_submission = false
 groth16_flow_unchanged = true
@@ -1789,10 +1821,7 @@ groth16_flow_unchanged = true
 
 ## Next Safe Step
 
-Add the production claim-to-fact commitment inside the AIR:
-
-- select and version the STARK-native hash
-- define canonical fact encoding and domain separation
-- constrain the private facts to the public claim commitment
-- add mutation and public-input tamper rejection tests
-- only then package production proof bytes for the Solidity verifier lane
+Package the feature-gated production AIR proof and its exact public inputs into
+a versioned, locally re-verifiable proof artifact. Keep it off-chain until the
+artifact bytes, public-input ordering, verifier parameters, and Solidity ABI
+all agree under negative tests.

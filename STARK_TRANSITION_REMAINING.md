@@ -63,21 +63,30 @@ Exit criteria:
 
 ### Phase 8: Real Prover Boundary
 
-Status: started as planning-only boundary.
+Status: feature-gated production AIR and local prover implemented; artifact
+packaging and runtime integration remain.
 
 Goal:
 
 Turn the current Winterfell proof preview into a real, deterministic prover
 boundary that can produce artifacts suitable for verification.
 
+Completed:
+
+- selected Winterfell 0.13 for the current production-direction AIR
+- implemented all ordered G1-G10 gates and first-failure semantics
+- generated and locally verified approved and all 13 denial proofs
+- locked a canonical 28-element claim-and-fact preimage
+- constrained a public `Rp64_256` Rescue-Prime commitment inside the AIR
+- rejected claim-hash, fact, and public-commitment tampering
+
 Remaining:
 
-- choose final prover lane for localBCE production direction
-- replace preview proof metadata with actual proof bytes/commitments
-- lock witness encoding from `StarkBridgeInput` through proof generation
-- add fixture proofs for approved and denied claims
-- validate proof determinism across repeated runs
-- document proof artifact versioning
+- serialize the production proof bytes and exact public-input order
+- add versioned approved and denied proof artifacts
+- validate artifact determinism and local re-verification
+- pin prover/verifier parameters and artifact digests
+- expose the artifact behind an explicit non-default CLI
 
 Exit criteria:
 
@@ -86,13 +95,16 @@ Exit criteria:
 - invalid witness/proof fails closed
 - output artifact schema is stable
 
-Current Phase 8 scaffold:
+Current Phase 8 implementation includes the earlier artifact candidates plus:
 
-- `StarkProofArtifactV1Candidate`
-- `stark-engine/tests/phase8_proof_artifact_candidate.rs`
+- `stark-engine/src/production_air.rs`
+- `stark-engine/src/production_air_winterfell.rs`
+- `stark-engine/src/production_air_winterfell_tests.rs`
 - `STARK_PHASE8_PROVER_BOUNDARY.md`
 
-This scaffold still does not generate real proof bytes.
+The feature-gated tests now generate real local Winterfell proofs. Those proof
+bytes are not yet exported as a stable production artifact or accepted by
+runtime or Solidity.
 
 ### Phase 9: Solidity Verifier Integration
 

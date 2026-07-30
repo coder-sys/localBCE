@@ -47,7 +47,10 @@ STARK-based adjudication proofs, batch roots, result roots, nullifier roots, and
 - stark-engine/ contains the first-class STARK bridge model and compatibility tests.
 - stark-engine/ now has planning-only source inputs for claimSourceRoot, oracleFactsRoot, feeScheduleRoot, and nullifier root transitions.
 - The STARK bridge chain smoke test is available at scripts/validate_stark_bridge_chain.sh.
-- A feature-gated Winterfell PoC proof preview can be generated and validated by the smoke chain.
+- Feature-gated Winterfell PoC proof previews remain available in the smoke chain.
+- A separate feature-gated production G1-G10 Winterfell AIR now generates and
+  locally verifies approved and denied proofs with a constrained Rescue-Prime
+  claim-to-fact commitment.
 - No STARK proof is submitted on-chain yet.
 
 ## Active ClaimsRegistry
@@ -85,7 +88,8 @@ It does not yet read rules_v9.json directly.
 - rust-engine/ remains the active Groth16 runtime and can generate a STARK sidecar artifact by explicit dry-run command.
 - stark-engine/ is the new first-class STARK bridge crate for active-claim to STARK compatibility modeling.
 - blind-ledger-app-layer/zk-stark/ remains the imported Winterfell reference/audit source.
-- stark-engine/ has a feature-gated Winterfell proof-preview path for compatibility testing.
+- stark-engine/ has both the imported-PoC compatibility path and a feature-gated
+  production G1-G10 Winterfell AIR; neither is wired into runtime.
 - No STARK prover is wired into the active runtime yet.
 - No STARK verifier is wired into ClaimsRegistry yet.
 - No STARK proof is submitted on-chain by localBCE today.
@@ -130,7 +134,9 @@ Current localBCE alignment is intentionally staged:
 
 - `rust-engine/`, `zk/`, and `blind-ledger/` are the active Groth16
   compatibility/demo path.
-- `stark-engine/` is a STARK pre-prover bridge and planning crate.
+- `stark-engine/` is the STARK bridge and feature-gated production AIR crate;
+  production proof artifacts, runtime selection, and on-chain verification
+  remain incomplete.
 - `blind-ledger-app-layer/` and `localBCE-codex-dev-hardened-20260616/` are
   reference/import lanes until explicitly ported.
 - `gov-rules-kg-prototype/` produces reviewed candidate rules, not active Rust
