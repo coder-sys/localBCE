@@ -1854,10 +1854,67 @@ cargo run --features production-air-winterfell \
 The claim ID remains metadata-only; the existing 32-byte claim hash is the
 identity value carried by the proof.
 
+## Production Verifier Handoff
+
+`stark-production-verifier-handoff-v1` embeds and re-validates the complete
+production proof artifact, then locks it to the exact field order and Solidity
+types in `IStarkClaimsVerifierV1Candidate`.
+
+The handoff records:
+
+- the exact candidate interface and canonical ABI signatures
+- all 11 candidate ABI fields in order
+- the 14-element AIR public-input order and digest
+- the proof byte length and SHA-256
+- a domain-separated digest binding the source artifact, proof, public inputs,
+  claim hash, decision, failure code, and ABI candidate
+- explicit call-readiness and runtime flags
+
+The current mapping is:
+
+```text
+claimHash       -> direct AIR claim-hash public input
+decision        -> direct AIR public input
+failureCode     -> direct AIR public input
+publicInputRoot -> SHA-256 handoff candidate over the 14 AIR inputs
+proof           -> locally verified Winterfell proof bytes
+
+claimSourceRoot    -> unresolved
+oracleFactsRoot    -> unresolved
+feeScheduleRoot    -> unresolved
+nullifierRootBefore -> unresolved
+nullifierRootAfter  -> unresolved
+batchRoot           -> unresolved
+```
+
+`publicInputRoot` is not yet an AIR-constrained or Solidity-adopted root. The
+six remaining roots are absent. Therefore:
+
+```text
+verifier_handoff_complete = true
+abi_field_alignment_complete = true
+abi_call_ready = false
+runtime_activation_allowed = false
+on_chain_verifier_wired = false
+groth16_flow_unchanged = true
+```
+
+Generate and validate the handoff with:
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_stark_verifier_handoff -- \
+  production_stark_proof_artifact.json production_stark_verifier_handoff.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_stark_verifier_handoff -- \
+  production_stark_verifier_handoff.json
+```
+
 ## Next Safe Step
 
-Generate a versioned verifier handoff envelope from the validated production
-artifact and prove that its proof bytes and 14 public inputs align exactly with
-the existing Solidity STARK verifier ABI candidate. Keep that handoff
-feature-gated and off-chain until a real Solidity verifier independently
-accepts valid proofs and rejects tampering.
+Resolve the public-input semantic mismatch before implementing calldata or a
+contract verifier. Either make a selected `publicInputRoot` an explicit,
+constrained AIR public input, or revise the candidate ABI to accept the 14
+native AIR field elements. Then add governed source/state roots and only mark
+the envelope call-ready after positive and negative verifier tests.

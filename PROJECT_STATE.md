@@ -136,7 +136,9 @@ Current localBCE alignment is intentionally staged:
   compatibility/demo path.
 - `stark-engine/` is the STARK bridge and feature-gated production AIR crate.
   Versioned production proof artifact generation and local re-verification are
-  implemented; runtime selection and on-chain verification remain incomplete.
+  implemented. A versioned handoff now locks the proof and 14 AIR inputs to the
+  Solidity ABI candidate, but remains non-call-ready because root semantics,
+  runtime selection, and on-chain verification are incomplete.
 - `blind-ledger-app-layer/` and `localBCE-codex-dev-hardened-20260616/` are
   reference/import lanes until explicitly ported.
 - `gov-rules-kg-prototype/` produces reviewed candidate rules, not active Rust
@@ -198,14 +200,15 @@ The long-term target architecture in rules_v9.json is broader and includes:
 ## Current Next Steps
 
 1. Keep the current Groth16 demo path green.
-2. Add a versioned verifier handoff envelope for the production STARK proof
-   artifact and align it with the existing Solidity ABI candidate.
-3. Implement and independently test real STARK verification before changing
+2. Resolve the `publicInputRoot` mismatch by either constraining the chosen root
+   inside the AIR or revising the candidate ABI to expose all 14 AIR inputs.
+3. Implement governed claim-source, oracle, fee, nullifier, and batch roots.
+4. Implement and independently test real STARK verification before changing
    ClaimsRegistry or runtime proof selection.
-4. Keep STARK generation feature-gated and off-chain until artifact bytes,
+5. Keep STARK generation feature-gated and off-chain until artifact bytes,
    public inputs, verifier parameters, and ABI encoding agree under negative
    tests.
-5. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into
+6. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into
    rust-engine/ as shadow tests before runtime use.
-6. Port hardened/app-layer assets only through explicit, reviewed integration
+7. Port hardened/app-layer assets only through explicit, reviewed integration
    steps.

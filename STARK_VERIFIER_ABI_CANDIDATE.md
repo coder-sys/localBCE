@@ -51,8 +51,19 @@ The candidate assumes:
 - `proof` is an opaque STARK proof byte payload
 - the verifier, not the adapter, owns proof validity
 
-The exact production encoding of `proof` is still blocked on the real prover
-boundary.
+The feature-gated production proof encoding is lower-case hex over canonical
+Winterfell 0.13.1 serialized proof bytes. Runtime use remains blocked on root
+semantics and a real Solidity verifier implementation.
+
+The feature-gated production AIR now emits real Winterfell proof bytes in
+`stark-production-proof-artifact-v1`. A separate
+`stark-production-verifier-handoff-v1` envelope aligns those bytes and the 14
+ordered AIR public inputs with this candidate interface.
+
+The handoff is intentionally not call-ready. Its `publicInputRoot` is a
+SHA-256 candidate over the canonical AIR public-input vector, not a root
+currently constrained by the AIR or adopted by a Solidity verifier. The six
+remaining source/state roots are also unavailable.
 
 ## Current Tests
 
@@ -124,5 +135,11 @@ This ABI candidate does not mean:
 
 ## Next Step
 
-Keep this candidate stable while Phase 8 real-prover work determines the actual
-proof bytes, verifier artifact, and public-input commitment requirements.
+Choose one production public-input contract before implementing the verifier:
+
+1. constrain an adopted `publicInputRoot` inside the AIR and keep this compact
+   ABI, or
+2. revise the candidate ABI to expose all 14 native AIR public inputs.
+
+Do not wire ClaimsRegistry until that choice, the six source/state roots, and a
+real Solidity verifier pass positive and negative proof tests.

@@ -184,12 +184,26 @@ cargo run --features production-air-winterfell \
 cargo run --features production-air-winterfell \
   --bin validate_production_stark_proof_artifact -- \
   production_stark_proof_artifact.json
+
+cargo run --features production-air-winterfell \
+  --bin generate_production_stark_verifier_handoff -- \
+  production_stark_proof_artifact.json production_stark_verifier_handoff.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_stark_verifier_handoff -- \
+  production_stark_verifier_handoff.json
 ```
 
 The artifact labels `claim_id` as metadata-only. The proof binds the existing
 32-byte claim hash, the Rescue-Prime G1-G10 fact commitment, decision, and
 failure code. Runtime wiring, a Solidity STARK verifier, and chain submission
 remain disabled.
+
+The verifier handoff locks the proof and 14 AIR inputs to the exact field order
+and Solidity types in `IStarkClaimsVerifierV1Candidate`. It intentionally
+remains non-call-ready: `publicInputRoot` is only a SHA-256 handoff candidate,
+not an adopted AIR/Solidity root semantic, and six source/state roots are not
+present in the production artifact.
 
 Schema details for the STARK bridge artifacts are documented in:
 
@@ -239,8 +253,11 @@ stark-engine/SCHEMA.md
 - stark-engine/src/production_air.rs
 - stark-engine/src/production_air_winterfell.rs
 - stark-engine/src/production_proof_artifact.rs
+- stark-engine/src/production_verifier_handoff.rs
 - stark-engine/src/bin/generate_production_stark_proof_artifact.rs
 - stark-engine/src/bin/validate_production_stark_proof_artifact.rs
+- stark-engine/src/bin/generate_production_stark_verifier_handoff.rs
+- stark-engine/src/bin/validate_production_stark_verifier_handoff.rs
 - stark-engine/src/bin/validate_bridge_input.rs
 - stark-engine/src/bin/generate_claim_source_root_input.rs
 - stark-engine/src/bin/validate_claim_source_root_input.rs
@@ -453,8 +470,10 @@ REDEPLOY_WORKFLOW.md
 Near-term next steps:
 
 - Keep Groth16 demo flow green.
-- Convert the production proof artifact into a versioned verifier handoff
-  aligned with the existing Solidity STARK verifier ABI candidate.
+- Decide and implement the production `publicInputRoot` semantic: either bind a
+  root in the AIR or revise the candidate ABI to expose the 14 AIR inputs.
+- Add real, governed source/state root generation before producing call-ready
+  STARK verifier calldata.
 - Implement and independently test a real STARK verifier before changing
   ClaimsRegistry or runtime proof selection.
 - Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.

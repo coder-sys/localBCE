@@ -193,8 +193,9 @@ deployment/operations controls.
 The next safest implementation step remains non-runtime:
 
 1. Convert `stark-production-proof-artifact-v1` into a versioned verifier
-   handoff envelope.
-2. Lock the envelope's proof bytes and 14 public inputs against the existing
-   Solidity STARK verifier ABI candidate with positive and negative tests.
-3. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
+   handoff envelope. Completed.
+2. Resolve the mismatch between the 14 native AIR inputs and the candidate
+   ABI's single `publicInputRoot`.
+3. Implement governed source/state roots and a real verifier.
+4. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
    Solidity STARK verifier exists and passes independent proof tests.
