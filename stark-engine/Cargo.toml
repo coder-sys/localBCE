@@ -21,3 +21,13 @@ winterfell = { version = "0.13.1", optional = true }
 name = "generate_bridge_backed_winterfell_proof_evidence"
 path = "src/bin/generate_bridge_backed_winterfell_proof_evidence.rs"
 required-features = ["winterfell-poc"]
+
+[[bin]]
+name = "generate_production_stark_proof_artifact"
+path = "src/bin/generate_production_stark_proof_artifact.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "validate_production_stark_proof_artifact"
+path = "src/bin/validate_production_stark_proof_artifact.rs"
+required-features = ["production-air-winterfell"]

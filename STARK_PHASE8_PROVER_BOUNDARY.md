@@ -1813,15 +1813,51 @@ the STARK lane runtime-ready:
 
 ```text
 claim_fact_binding_complete = true
-production_proof_artifact_packaging_complete = false
+production_proof_artifact_packaging_complete = true
+serialized_proof_local_reverification_complete = true
 runtime_wired = false
+on_chain_verifier_wired = false
 on_chain_submission = false
 groth16_flow_unchanged = true
 ```
 
+## Production Proof Artifact
+
+The feature-gated `stark-production-proof-artifact-v1` contract packages:
+
+- real Winterfell 0.13.1 proof bytes as lower-case hex
+- SHA-256 and exact byte length for the serialized proof
+- all 14 Winterfell public inputs in locked order as canonical decimal field
+  values
+- SHA-256 of the canonical 14 x 8-byte big-endian public-input encoding
+- the claim hash binding, fact commitment schema, AIR parameters, decision,
+  and failure code
+- explicit non-runtime, non-chain, Groth16-unchanged status flags
+
+`validate_production_stark_proof_artifact` checks the schema and hashes,
+deserializes the proof with `Proof::from_bytes`, reconstructs all public inputs,
+and invokes the production AIR verifier. Approved and denied artifact tests
+also reject proof-byte, public-input, and status tampering.
+
+The artifact is generated from a validated `StarkBridgeInput` with:
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_stark_proof_artifact -- \
+  ../rust-engine/stark_bridge_input.json production_stark_proof_artifact.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_stark_proof_artifact -- \
+  production_stark_proof_artifact.json
+```
+
+The claim ID remains metadata-only; the existing 32-byte claim hash is the
+identity value carried by the proof.
+
 ## Next Safe Step
 
-Package the feature-gated production AIR proof and its exact public inputs into
-a versioned, locally re-verifiable proof artifact. Keep it off-chain until the
-artifact bytes, public-input ordering, verifier parameters, and Solidity ABI
-all agree under negative tests.
+Generate a versioned verifier handoff envelope from the validated production
+artifact and prove that its proof bytes and 14 public inputs align exactly with
+the existing Solidity STARK verifier ABI candidate. Keep that handoff
+feature-gated and off-chain until a real Solidity verifier independently
+accepts valid proofs and rejects tampering.

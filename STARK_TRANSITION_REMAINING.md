@@ -180,19 +180,21 @@ Exit criteria:
 
 For the current prototype, the transition is roughly:
 
-- 70-75% complete for scaffolding and compatibility modeling
-- 45-55% complete for an end-to-end STARK technical migration
-- 20-30% complete for production-grade STARK settlement
+- 80-85% complete for scaffolding and compatibility modeling
+- 60-70% complete for an end-to-end STARK technical migration
+- 25-35% complete for production-grade STARK settlement
 
 The remaining work is harder than the earlier phases because it requires a real
-prover boundary, verifier artifact strategy, and runtime/deployment controls.
+on-chain verifier, settlement integration, runtime selection, and
+deployment/operations controls.
 
 ## Next Best Step
 
-The next safest implementation step is still non-runtime:
+The next safest implementation step remains non-runtime:
 
-1. Add a production ABI candidate document/test for STARK verifier public inputs.
-2. Keep the current preview interfaces unchanged unless the candidate reveals a
-   mismatch.
-3. Run `bash scripts/validate_localbce.sh` after every Solidity or STARK bridge
-   change.
+1. Convert `stark-production-proof-artifact-v1` into a versioned verifier
+   handoff envelope.
+2. Lock the envelope's proof bytes and 14 public inputs against the existing
+   Solidity STARK verifier ABI candidate with positive and negative tests.
+3. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
+   Solidity STARK verifier exists and passes independent proof tests.

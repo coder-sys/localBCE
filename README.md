@@ -148,6 +148,10 @@ localBCE/
 - rust-engine/ remains the active Groth16 runtime.
 - A feature-gated Winterfell PoC proof preview exists in stark-engine/ and is
   covered by the STARK smoke chain.
+- The feature-gated production G1-G10 AIR can package its real Winterfell proof
+  bytes and exact 14-element public input vector into a versioned JSON artifact.
+- The production artifact validator deserializes the saved proof bytes and
+  re-verifies them locally; it does not trust a stored success flag.
 - No STARK prover is wired into runtime yet.
 - No STARK verifier is wired into ClaimsRegistry yet.
 - No STARK proof is submitted on-chain yet.
@@ -165,6 +169,27 @@ STARK proofs on-chain.
 
 The script writes temporary artifacts under `/tmp`, removes generated runtime
 artifacts on exit, and is the source of truth for command ordering.
+
+Feature-gated production proof artifact path:
+
+```bash
+cd rust-engine
+cargo run -- stark-bridge-input-dry-run
+
+cd ../stark-engine
+cargo run --features production-air-winterfell \
+  --bin generate_production_stark_proof_artifact -- \
+  ../rust-engine/stark_bridge_input.json production_stark_proof_artifact.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_stark_proof_artifact -- \
+  production_stark_proof_artifact.json
+```
+
+The artifact labels `claim_id` as metadata-only. The proof binds the existing
+32-byte claim hash, the Rescue-Prime G1-G10 fact commitment, decision, and
+failure code. Runtime wiring, a Solidity STARK verifier, and chain submission
+remain disabled.
 
 Schema details for the STARK bridge artifacts are documented in:
 
@@ -211,6 +236,11 @@ stark-engine/SCHEMA.md
 - stark-engine/Cargo.toml
 - stark-engine/SCHEMA.md
 - stark-engine/src/lib.rs
+- stark-engine/src/production_air.rs
+- stark-engine/src/production_air_winterfell.rs
+- stark-engine/src/production_proof_artifact.rs
+- stark-engine/src/bin/generate_production_stark_proof_artifact.rs
+- stark-engine/src/bin/validate_production_stark_proof_artifact.rs
 - stark-engine/src/bin/validate_bridge_input.rs
 - stark-engine/src/bin/generate_claim_source_root_input.rs
 - stark-engine/src/bin/validate_claim_source_root_input.rs
@@ -423,7 +453,10 @@ REDEPLOY_WORKFLOW.md
 Near-term next steps:
 
 - Keep Groth16 demo flow green.
-- Use the Winterfell adapter gap plan to choose the first safe real-prover adapter work.
+- Convert the production proof artifact into a versioned verifier handoff
+  aligned with the existing Solidity STARK verifier ABI candidate.
+- Implement and independently test a real STARK verifier before changing
+  ClaimsRegistry or runtime proof selection.
 - Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.
 - Use ROADMAP_TO_TARGET_ARCHITECTURE.md to choose the next safe integration phase.
 - Port hardened/app-layer assets only through explicit reviewed integration steps.

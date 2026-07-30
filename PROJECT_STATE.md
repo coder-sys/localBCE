@@ -134,9 +134,9 @@ Current localBCE alignment is intentionally staged:
 
 - `rust-engine/`, `zk/`, and `blind-ledger/` are the active Groth16
   compatibility/demo path.
-- `stark-engine/` is the STARK bridge and feature-gated production AIR crate;
-  production proof artifacts, runtime selection, and on-chain verification
-  remain incomplete.
+- `stark-engine/` is the STARK bridge and feature-gated production AIR crate.
+  Versioned production proof artifact generation and local re-verification are
+  implemented; runtime selection and on-chain verification remain incomplete.
 - `blind-ledger-app-layer/` and `localBCE-codex-dev-hardened-20260616/` are
   reference/import lanes until explicitly ported.
 - `gov-rules-kg-prototype/` produces reviewed candidate rules, not active Rust
@@ -198,9 +198,14 @@ The long-term target architecture in rules_v9.json is broader and includes:
 ## Current Next Steps
 
 1. Keep the current Groth16 demo path green.
-2. Start Phase 5 with real prover-adapter planning against the Phase 4 schemas.
-3. Use ARCHITECTURE_ALIGNMENT.md to decide whether each reference component is active, scaffolded, reference-only, or deferred.
-4. Use ROADMAP_TO_TARGET_ARCHITECTURE.md to sequence integration phases.
-5. Port hardened/app-layer assets only through explicit, reviewed integration steps.
-6. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into rust-engine/ as shadow tests before runtime use.
-7. Document and test every cross-folder connection before replacing active behavior.
+2. Add a versioned verifier handoff envelope for the production STARK proof
+   artifact and align it with the existing Solidity ABI candidate.
+3. Implement and independently test real STARK verification before changing
+   ClaimsRegistry or runtime proof selection.
+4. Keep STARK generation feature-gated and off-chain until artifact bytes,
+   public inputs, verifier parameters, and ABI encoding agree under negative
+   tests.
+5. Bridge reviewed deterministic rules from gov-rules-kg-prototype/ into
+   rust-engine/ as shadow tests before runtime use.
+6. Port hardened/app-layer assets only through explicit, reviewed integration
+   steps.
