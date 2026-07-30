@@ -93,6 +93,7 @@ PHASE8_REAL_PROVER_EVIDENCE_SUMMARY="${TMP_DIR}/phase8_real_prover_evidence_summ
 PHASE8_REAL_PROVER_READINESS_ROLLUP="${TMP_DIR}/phase8_real_prover_readiness_rollup.json"
 WINTERFELL_PROOF_PREVIEW="${TMP_DIR}/winterfell_proof_preview.json"
 WINTERFELL_POC_REAL_PROOF_FIXTURE="${TMP_DIR}/winterfell_poc_real_proof_fixture.json"
+BRIDGE_BACKED_WINTERFELL_PROOF_EVIDENCE="${TMP_DIR}/bridge_backed_winterfell_proof_evidence.json"
 WINTERFELL_POC_SEMANTIC_EQUIVALENCE_REPORT="${TMP_DIR}/winterfell_poc_semantic_equivalence_report.json"
 WINTERFELL_POC_SEMANTIC_GAP_NORMALIZATION_REPORT="${TMP_DIR}/winterfell_poc_semantic_gap_normalization_report.json"
 STARK_SETTLEMENT_BOUNDARY_ARTIFACT="${TMP_DIR}/stark_settlement_boundary_artifact.json"
@@ -288,6 +289,12 @@ run_in_dir "Generate Winterfell PoC real proof fixture" "stark-engine" \
 
 run_in_dir "Validate Winterfell PoC real proof fixture" "stark-engine" \
   cargo run --features winterfell-poc --bin validate_winterfell_poc_real_proof_fixture -- "${WINTERFELL_POC_REAL_PROOF_FIXTURE}"
+
+run_in_dir "Generate bridge-backed Winterfell proof evidence" "stark-engine" \
+  cargo run --features winterfell-poc --bin generate_bridge_backed_winterfell_proof_evidence -- "${BRIDGE_INPUT}" "${BRIDGE_BACKED_COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${WINTERFELL_POC_REAL_PROOF_FIXTURE}" "${BRIDGE_BACKED_WINTERFELL_PROOF_EVIDENCE}"
+
+run_in_dir "Validate bridge-backed Winterfell proof evidence" "stark-engine" \
+  cargo run --bin validate_bridge_backed_winterfell_proof_evidence -- "${BRIDGE_BACKED_WINTERFELL_PROOF_EVIDENCE}"
 
 run_in_dir "Generate Winterfell PoC semantic equivalence report" "stark-engine" \
   cargo run --features winterfell-poc --bin generate_winterfell_poc_semantic_equivalence_report -- "${BRIDGE_INPUT}" "${WINTERFELL_POC_REAL_PROOF_FIXTURE}" "${WINTERFELL_POC_SEMANTIC_EQUIVALENCE_REPORT}"

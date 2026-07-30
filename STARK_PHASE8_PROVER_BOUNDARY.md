@@ -1692,16 +1692,51 @@ uses the strict bridge-backed candidate.
 This still does not make partial mappings equivalent to production
 adjudication rules, enable runtime STARK proof generation, or change Groth16.
 
+## Bridge-Backed Winterfell Proof Evidence
+
+The exact strict source artifacts can now be bound to a locally verified
+Winterfell PoC proof:
+
+```text
+generate_bridge_backed_winterfell_proof_evidence
+validate_bridge_backed_winterfell_proof_evidence
+```
+
+The evidence records SHA-256 digests of the raw bytes for:
+
+- validated `StarkBridgeInput`
+- strict bridge-backed complete witness candidate
+- locally verified Winterfell PoC proof fixture
+- serialized proof bytes
+
+Generation fails unless the candidate uses
+`complete_adapter_ready_bridge_backed_no_fixture`, all claim identifiers match,
+and the proof fixture reports successful local verification. The artifact
+always requires:
+
+```text
+fixture_substitution = false
+verified = true
+production_semantics_complete = false
+accepted_as_runtime_evidence = false
+runtime_wired = false
+on_chain_submission = false
+groth16_flow_unchanged = true
+```
+
+This binds the current PoC evidence chain. It does not promote the imported PoC
+AIR into the production localBCE rules proof.
+
 ## Next Safe Step
 
-The next safe Phase 8 step is a non-runtime bridge-backed proof evidence
-artifact:
+The next safe Phase 8 step is the first versioned production AIR semantics
+module:
 
-- hash the exact validated bridge input and strict complete witness candidate
-- generate and locally verify the imported Winterfell PoC proof from that
-  candidate
-- bind the proof bytes hash to both source artifact hashes
-- reject any fixture-backed candidate on this evidence path
-- retain explicit blockers for unresolved production AIR semantics
+- define the exact G1-G10 facts, decision, and failure-code constraints that the
+  production STARK must prove
+- separate production AIR semantics from the imported Winterfell PoC model
+- build approved and denied trace fixtures from strict bridge-backed inputs
+- prove local equivalence with `rust-engine::denial_reason()` across G1-G10
+- keep the new AIR test-only and feature-gated until real proofs verify locally
 - keep runtime wiring and on-chain submission disabled
 - keep Solidity, ClaimsRegistry, and the active Groth16 runtime unchanged

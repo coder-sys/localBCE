@@ -674,6 +674,33 @@ pub struct WinterfellCompleteWitnessField {
     pub note: String,
 }
 
+/// Non-runtime evidence binding an exact bridge input and strict complete
+/// witness candidate to a locally verified imported Winterfell PoC proof.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgeBackedWinterfellProofEvidence {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub evidence_status: String,
+    pub hash_algorithm: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub bridge_input_artifact_sha256: String,
+    pub complete_witness_candidate_artifact_sha256: String,
+    pub proof_fixture_artifact_sha256: String,
+    pub proof_bytes_sha256: String,
+    pub proof_bytes_len: usize,
+    pub complete_witness_candidate_status: String,
+    pub local_verification_status: String,
+    pub verified: bool,
+    pub fixture_substitution: bool,
+    pub production_semantics_complete: bool,
+    pub accepted_as_runtime_evidence: bool,
+    pub runtime_wired: bool,
+    pub on_chain_submission: bool,
+    pub groth16_flow_unchanged: bool,
+    pub notes: Vec<String>,
+}
+
 /// Typed source data for a future `claimSourceRoot`.
 ///
 /// This object is intentionally pre-root. It validates the source fields needed
@@ -7746,6 +7773,116 @@ impl WinterfellCompleteWitnessCandidate {
     }
 }
 
+impl BridgeBackedWinterfellProofEvidence {
+    pub const SCHEMA_VERSION: &'static str = "bridge-backed-winterfell-proof-evidence-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0+winterfell-complete-witness-candidate-v0+winterfell-poc-real-proof-fixture-v0";
+    pub const EVIDENCE_STATUS: &'static str =
+        "bridge_backed_winterfell_poc_proof_verified_non_runtime";
+    pub const HASH_ALGORITHM: &'static str = "sha256_raw_file_bytes_v1";
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}, got {}",
+                Self::SOURCE_SCHEMA_VERSION,
+                self.source_schema_version
+            ));
+        }
+        if self.evidence_status != Self::EVIDENCE_STATUS {
+            errors.push(format!(
+                "evidence_status must be {}, got {}",
+                Self::EVIDENCE_STATUS,
+                self.evidence_status
+            ));
+        }
+        if self.hash_algorithm != Self::HASH_ALGORITHM {
+            errors.push(format!(
+                "hash_algorithm must be {}, got {}",
+                Self::HASH_ALGORITHM,
+                self.hash_algorithm
+            ));
+        }
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+        for (field, value) in [
+            (
+                "bridge_input_artifact_sha256",
+                &self.bridge_input_artifact_sha256,
+            ),
+            (
+                "complete_witness_candidate_artifact_sha256",
+                &self.complete_witness_candidate_artifact_sha256,
+            ),
+            (
+                "proof_fixture_artifact_sha256",
+                &self.proof_fixture_artifact_sha256,
+            ),
+            ("proof_bytes_sha256", &self.proof_bytes_sha256),
+        ] {
+            if !is_0x_32_byte_hex(value) {
+                errors.push(format!("{field} must be a 0x-prefixed 32-byte hex string"));
+            }
+        }
+        if self.proof_bytes_len == 0 {
+            errors.push("proof_bytes_len must be greater than zero".to_string());
+        }
+        if self.complete_witness_candidate_status
+            != WinterfellCompleteWitnessCandidate::BRIDGE_CANDIDATE_STATUS
+        {
+            errors.push(format!(
+                "complete_witness_candidate_status must be {}",
+                WinterfellCompleteWitnessCandidate::BRIDGE_CANDIDATE_STATUS
+            ));
+        }
+        if self.local_verification_status != "verified" {
+            errors.push("local_verification_status must be verified".to_string());
+        }
+        if !self.verified {
+            errors.push("verified must be true".to_string());
+        }
+        if self.fixture_substitution {
+            errors.push("fixture_substitution must be false".to_string());
+        }
+        if self.production_semantics_complete {
+            errors.push("production_semantics_complete must remain false".to_string());
+        }
+        if self.accepted_as_runtime_evidence {
+            errors.push("accepted_as_runtime_evidence must remain false".to_string());
+        }
+        if self.runtime_wired {
+            errors.push("runtime_wired must remain false".to_string());
+        }
+        if self.on_chain_submission {
+            errors.push("on_chain_submission must remain false".to_string());
+        }
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must be true".to_string());
+        }
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ClaimSourceRootInput {
     pub const SCHEMA_VERSION: &'static str = "claim-source-root-input-v0";
     pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
@@ -9434,7 +9571,8 @@ impl ActiveClaimToStarkBridge {
 #[cfg(feature = "winterfell-poc")]
 pub mod winterfell_poc_adapter {
     use super::{
-        StarkBridgeInput, WinterfellCompleteWitnessCandidate, WinterfellCompleteWitnessField,
+        BridgeBackedWinterfellProofEvidence, StarkBridgeInput, WinterfellCompleteWitnessCandidate,
+        WinterfellCompleteWitnessField,
     };
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
@@ -10163,6 +10301,88 @@ pub mod winterfell_poc_adapter {
             } else {
                 Err(errors)
             }
+        }
+    }
+
+    impl BridgeBackedWinterfellProofEvidence {
+        pub fn from_verified_artifacts(
+            bridge: &StarkBridgeInput,
+            complete: &WinterfellCompleteWitnessCandidate,
+            proof_fixture: &WinterfellPocRealProofFixture,
+            bridge_input_artifact_sha256: &str,
+            complete_witness_candidate_artifact_sha256: &str,
+            proof_fixture_artifact_sha256: &str,
+        ) -> Result<Self, Vec<String>> {
+            bridge.validate()?;
+            complete.validate_bridge_backed()?;
+            proof_fixture.validate()?;
+
+            let mut errors = Vec::new();
+            if bridge.claim.claim_id != complete.claim_id
+                || bridge.claim.claim_id != proof_fixture.claim_id
+            {
+                errors.push(
+                    "bridge, complete witness candidate, and proof fixture claim_id must match"
+                        .to_string(),
+                );
+            }
+            if bridge.claim.claim_hash != complete.claim_hash
+                || bridge.claim.claim_hash != proof_fixture.claim_hash
+            {
+                errors.push(
+                    "bridge, complete witness candidate, and proof fixture claim_hash must match"
+                        .to_string(),
+                );
+            }
+            if !proof_fixture.verified || proof_fixture.local_verification_status != "verified" {
+                errors.push("proof fixture must be locally verified".to_string());
+            }
+            if proof_fixture.production_semantics_complete
+                || proof_fixture.accepted_as_runtime_evidence
+                || proof_fixture.runtime_wired
+                || proof_fixture.on_chain_submission
+            {
+                errors.push(
+                    "proof fixture must remain non-production, non-runtime, and off-chain"
+                        .to_string(),
+                );
+            }
+
+            if !errors.is_empty() {
+                return Err(errors);
+            }
+
+            let evidence = Self {
+                schema_version: Self::SCHEMA_VERSION.to_string(),
+                source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+                evidence_status: Self::EVIDENCE_STATUS.to_string(),
+                hash_algorithm: Self::HASH_ALGORITHM.to_string(),
+                claim_id: bridge.claim.claim_id.clone(),
+                claim_hash: bridge.claim.claim_hash.clone(),
+                bridge_input_artifact_sha256: bridge_input_artifact_sha256.to_string(),
+                complete_witness_candidate_artifact_sha256:
+                    complete_witness_candidate_artifact_sha256.to_string(),
+                proof_fixture_artifact_sha256: proof_fixture_artifact_sha256.to_string(),
+                proof_bytes_sha256: proof_fixture.proof_bytes_sha256.clone(),
+                proof_bytes_len: proof_fixture.proof_bytes_len,
+                complete_witness_candidate_status: complete.candidate_status.clone(),
+                local_verification_status: proof_fixture.local_verification_status.clone(),
+                verified: proof_fixture.verified,
+                fixture_substitution: false,
+                production_semantics_complete: false,
+                accepted_as_runtime_evidence: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                groth16_flow_unchanged: true,
+                notes: vec![
+                    "Raw-file SHA-256 digests bind the validated bridge input, strict complete witness candidate, and locally verified proof fixture.".to_string(),
+                    "The complete witness candidate is bridge-backed and rejects fixture substitution.".to_string(),
+                    "This evidence is limited to the imported Winterfell PoC AIR; production semantic equivalence remains unresolved.".to_string(),
+                    "The active Groth16 runtime remains unchanged.".to_string(),
+                ],
+            };
+            evidence.validate()?;
+            Ok(evidence)
         }
     }
 
@@ -11959,6 +12179,92 @@ pub mod winterfell_poc_adapter {
             assert_eq!(charge.normalized_value, 100_000);
             assert_eq!(charge.complete_candidate_value, 100_000);
             assert!(charge.value_matches_candidate);
+        }
+
+        #[test]
+        fn bridge_backed_proof_evidence_binds_verified_fixture_without_runtime_claims() {
+            let mut bridge = sample_bridge_input();
+            bridge.claim.claim_amount = 1_000;
+            bridge.claim.member_id = Some("MEMBER-FIXTURE-001".to_string());
+            bridge.claim.provider_npi = Some("1234567893".to_string());
+            bridge.claim.diagnosis_count = Some(1);
+            bridge.claim.max_charge_cents = Some(150_000);
+            bridge.winterfell_poc_mapping.unmapped.member_id =
+                Some(crate::stable_fixture_string_to_u64("MEMBER-FIXTURE-001"));
+            bridge.winterfell_poc_mapping.unmapped.provider_npi = Some(1_234_567_893);
+            bridge.winterfell_poc_mapping.unmapped.diagnosis_count = Some(1);
+            bridge.winterfell_poc_mapping.unmapped.max_charge_cents = Some(150_000);
+
+            let candidate =
+                WinterfellCompleteWitnessCandidate::from_bridge_input_strict(&bridge).unwrap();
+            let proof_fixture =
+                WinterfellPocRealProofFixture::from_complete_candidate(&candidate).unwrap();
+            let evidence = BridgeBackedWinterfellProofEvidence::from_verified_artifacts(
+                &bridge,
+                &candidate,
+                &proof_fixture,
+                &format!("0x{}", "11".repeat(32)),
+                &format!("0x{}", "22".repeat(32)),
+                &format!("0x{}", "33".repeat(32)),
+            )
+            .unwrap();
+
+            assert_eq!(evidence.validate(), Ok(()));
+            assert!(evidence.verified);
+            assert!(!evidence.fixture_substitution);
+            assert!(!evidence.production_semantics_complete);
+            assert!(!evidence.accepted_as_runtime_evidence);
+            assert!(!evidence.runtime_wired);
+            assert!(!evidence.on_chain_submission);
+            assert!(evidence.groth16_flow_unchanged);
+            assert_eq!(
+                evidence.complete_witness_candidate_status,
+                WinterfellCompleteWitnessCandidate::BRIDGE_CANDIDATE_STATUS
+            );
+            assert_eq!(
+                evidence.proof_bytes_sha256,
+                proof_fixture.proof_bytes_sha256
+            );
+        }
+
+        #[test]
+        fn bridge_backed_proof_evidence_rejects_fixture_substitution_claim() {
+            let mut evidence = BridgeBackedWinterfellProofEvidence {
+                schema_version: BridgeBackedWinterfellProofEvidence::SCHEMA_VERSION.to_string(),
+                source_schema_version: BridgeBackedWinterfellProofEvidence::SOURCE_SCHEMA_VERSION
+                    .to_string(),
+                evidence_status: BridgeBackedWinterfellProofEvidence::EVIDENCE_STATUS.to_string(),
+                hash_algorithm: BridgeBackedWinterfellProofEvidence::HASH_ALGORITHM.to_string(),
+                claim_id: "CLAIM-DEMO-011".to_string(),
+                claim_hash: "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607"
+                    .to_string(),
+                bridge_input_artifact_sha256: format!("0x{}", "11".repeat(32)),
+                complete_witness_candidate_artifact_sha256: format!("0x{}", "22".repeat(32)),
+                proof_fixture_artifact_sha256: format!("0x{}", "33".repeat(32)),
+                proof_bytes_sha256: format!("0x{}", "44".repeat(32)),
+                proof_bytes_len: 1,
+                complete_witness_candidate_status:
+                    WinterfellCompleteWitnessCandidate::BRIDGE_CANDIDATE_STATUS.to_string(),
+                local_verification_status: "verified".to_string(),
+                verified: true,
+                fixture_substitution: true,
+                production_semantics_complete: false,
+                accepted_as_runtime_evidence: false,
+                runtime_wired: false,
+                on_chain_submission: false,
+                groth16_flow_unchanged: true,
+                notes: vec!["unit test".to_string()],
+            };
+
+            let errors = evidence.validate().unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error == "fixture_substitution must be false")
+            );
+
+            evidence.fixture_substitution = false;
+            assert_eq!(evidence.validate(), Ok(()));
         }
 
         #[test]
