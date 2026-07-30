@@ -45,6 +45,7 @@ PROOF_COMMITMENT_PREIMAGE_PLAN="${TMP_DIR}/proof_commitment_preimage_plan.json"
 PROOF_ARTIFACT_FIXTURE_EXPECTATIONS="${TMP_DIR}/proof_artifact_fixture_expectations.json"
 SELECTED_PROVER_BYTE_ENCODING_PLAN="${TMP_DIR}/selected_prover_byte_encoding_plan.json"
 CLAIM_SOURCE_ROOT_INPUT="${TMP_DIR}/claim_source_root_input.json"
+CLAIM_SOURCE_IDENTITY_EVIDENCE="${TMP_DIR}/claim_source_identity_evidence.json"
 CLAIM_SOURCE_ROOT_DIGEST_CANDIDATE="${TMP_DIR}/claim_source_root_digest_candidate.json"
 ORACLE_FACTS_ROOT_INPUT="${TMP_DIR}/oracle_facts_root_input.json"
 ORACLE_FACTS_ROOT_DIGEST_CANDIDATE="${TMP_DIR}/oracle_facts_root_digest_candidate.json"
@@ -331,6 +332,12 @@ run_in_dir "Generate STARK claim source root input" "stark-engine" \
 
 run_in_dir "Validate STARK claim source root input" "stark-engine" \
   cargo run --bin validate_claim_source_root_input -- "${CLAIM_SOURCE_ROOT_INPUT}"
+
+run_in_dir "Generate claim source identity evidence" "stark-engine" \
+  cargo run --bin generate_claim_source_identity_evidence -- "${CLAIM_SOURCE_ROOT_INPUT}" "${COMPLETE_WINTERFELL_WITNESS_CANDIDATE}" "${CLAIM_SOURCE_IDENTITY_EVIDENCE}"
+
+run_in_dir "Validate claim source identity evidence" "stark-engine" \
+  cargo run --bin validate_claim_source_identity_evidence -- "${CLAIM_SOURCE_IDENTITY_EVIDENCE}"
 
 run_in_dir "Generate STARK claim source root digest candidate" "stark-engine" \
   cargo run --bin generate_source_root_digest_candidate -- "${CLAIM_SOURCE_ROOT_INPUT}" "${CLAIM_SOURCE_ROOT_DIGEST_CANDIDATE}"

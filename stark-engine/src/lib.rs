@@ -529,6 +529,48 @@ pub struct ClaimSourceRootInput {
     pub notes: Vec<String>,
 }
 
+/// Evidence that the future claim-source root lane can carry identity fields
+/// required by the imported Winterfell PoC witness model.
+///
+/// This is not runtime evidence. It is a pre-prover compatibility artifact that
+/// compares the claim-source input shape against the complete Winterfell witness
+/// candidate and keeps the gap explicit until rust-engine exports real identity
+/// source fields.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClaimSourceIdentityEvidence {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub evidence_status: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub fields: Vec<ClaimSourceIdentityFieldEvidence>,
+    pub field_count: usize,
+    pub source_fields_present: bool,
+    pub candidate_fields_present: bool,
+    pub identity_sources_match_candidate_values: bool,
+    pub production_semantics_complete: bool,
+    pub accepted_as_runtime_evidence: bool,
+    pub runtime_wired: bool,
+    pub on_chain_submission: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClaimSourceIdentityFieldEvidence {
+    pub field_name: String,
+    pub claim_source_field: String,
+    pub claim_source_value: Option<String>,
+    pub claim_source_value_status: String,
+    pub complete_candidate_value: u64,
+    pub complete_candidate_source_artifact: String,
+    pub complete_candidate_source_field: String,
+    pub candidate_value_status: String,
+    pub source_matches_candidate_value: bool,
+    pub binding_status: String,
+    pub runtime_equivalent: bool,
+    pub note: String,
+}
+
 /// One normalized oracle fact that can eventually feed an `oracleFactsRoot`.
 ///
 /// These are source facts only. They are not trusted, committed, or proven by
@@ -7433,6 +7475,332 @@ impl ClaimSourceRootInput {
         } else {
             Err(errors)
         }
+    }
+}
+
+impl ClaimSourceIdentityEvidence {
+    pub const SCHEMA_VERSION: &'static str = "claim-source-identity-evidence-v0";
+    pub const SOURCE_SCHEMA_VERSION: &'static str =
+        "claim-source-root-input-v0+winterfell-complete-witness-candidate-v0";
+    pub const EVIDENCE_STATUS: &'static str = "claim_source_identity_gap_open_no_runtime_wiring";
+    pub const REQUIRED_FIELDS: [&'static str; 2] = ["member_id", "provider_npi"];
+
+    pub fn from_claim_source_and_candidate(
+        source: &ClaimSourceRootInput,
+        complete: &WinterfellCompleteWitnessCandidate,
+    ) -> Result<Self, Vec<String>> {
+        source.validate()?;
+        complete.validate()?;
+
+        if source.claim_id != complete.claim_id {
+            return Err(vec![
+                "claim source claim_id must match complete witness candidate claim_id".to_string(),
+            ]);
+        }
+
+        if source.claim_hash != complete.claim_hash {
+            return Err(vec![
+                "claim source claim_hash must match complete witness candidate claim_hash"
+                    .to_string(),
+            ]);
+        }
+
+        let fields = vec![
+            claim_source_identity_field(
+                "member_id",
+                &source.member_id,
+                complete,
+                "ClaimSourceRootInput.member_id can carry the future member identity source, but active rust-engine does not export it yet.",
+            )?,
+            claim_source_identity_field(
+                "provider_npi",
+                &source.provider_npi,
+                complete,
+                "ClaimSourceRootInput.provider_npi can carry the future provider identity source, but active rust-engine does not export it yet.",
+            )?,
+        ];
+
+        let source_fields_present = fields
+            .iter()
+            .all(|field| field.claim_source_value.is_some());
+        let identity_sources_match_candidate_values = source_fields_present
+            && fields
+                .iter()
+                .all(|field| field.source_matches_candidate_value);
+
+        Ok(Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            evidence_status: Self::EVIDENCE_STATUS.to_string(),
+            claim_id: source.claim_id.clone(),
+            claim_hash: source.claim_hash.clone(),
+            field_count: fields.len(),
+            candidate_fields_present: true,
+            fields,
+            source_fields_present,
+            identity_sources_match_candidate_values,
+            production_semantics_complete: false,
+            accepted_as_runtime_evidence: false,
+            runtime_wired: false,
+            on_chain_submission: false,
+            notes: vec![
+                "This artifact checks claim-source identity field availability against the complete Winterfell witness candidate.".to_string(),
+                "The active rust-engine bridge currently leaves member_id and provider_npi absent, so this remains a source-data gap artifact.".to_string(),
+                "No claim-source root, real STARK proof, runtime wiring, or on-chain submission is produced.".to_string(),
+                "The active Groth16 runtime flow remains unchanged.".to_string(),
+            ],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.schema_version != Self::SCHEMA_VERSION {
+            errors.push(format!(
+                "schema_version must be {}, got {}",
+                Self::SCHEMA_VERSION,
+                self.schema_version
+            ));
+        }
+
+        if self.source_schema_version != Self::SOURCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "source_schema_version must be {}",
+                Self::SOURCE_SCHEMA_VERSION
+            ));
+        }
+
+        if self.evidence_status != Self::EVIDENCE_STATUS {
+            errors.push(format!("evidence_status must be {}", Self::EVIDENCE_STATUS));
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+
+        if !is_0x_32_byte_hex(&self.claim_hash) {
+            errors.push("claim_hash must be a 0x-prefixed 32-byte hex string".to_string());
+        }
+
+        if self.fields.len() != Self::REQUIRED_FIELDS.len() {
+            errors.push(format!(
+                "fields must contain exactly {} identity fields",
+                Self::REQUIRED_FIELDS.len()
+            ));
+        }
+
+        if self.field_count != self.fields.len() {
+            errors.push("field_count must match fields length".to_string());
+        }
+
+        for required_field in Self::REQUIRED_FIELDS {
+            if !self
+                .fields
+                .iter()
+                .any(|field| field.field_name == required_field)
+            {
+                errors.push(format!("missing identity evidence field: {required_field}"));
+            }
+        }
+
+        for field in &self.fields {
+            if field.field_name != field.claim_source_field {
+                errors.push(format!(
+                    "{} claim_source_field must match field_name",
+                    field.field_name
+                ));
+            }
+            if field.complete_candidate_source_artifact.trim().is_empty() {
+                errors.push(format!(
+                    "{} complete_candidate_source_artifact must be present",
+                    field.field_name
+                ));
+            }
+            if field.complete_candidate_source_field.trim().is_empty() {
+                errors.push(format!(
+                    "{} complete_candidate_source_field must be present",
+                    field.field_name
+                ));
+            }
+            if field.candidate_value_status != "populated_adapter_ready_fixture" {
+                errors.push(format!(
+                    "{} candidate_value_status must be populated_adapter_ready_fixture",
+                    field.field_name
+                ));
+            }
+            if field.claim_source_value.is_none()
+                && field.claim_source_value_status != "missing_from_active_bridge_export"
+            {
+                errors.push(format!(
+                    "{} missing source value must use missing_from_active_bridge_export",
+                    field.field_name
+                ));
+            }
+            if field.claim_source_value.is_some()
+                && field.claim_source_value_status != "present_in_claim_source_input"
+            {
+                errors.push(format!(
+                    "{} present source value must use present_in_claim_source_input",
+                    field.field_name
+                ));
+            }
+            if field.claim_source_value.is_none()
+                && field.binding_status != "claim_source_field_missing_active_bridge_export"
+            {
+                errors.push(format!(
+                    "{} missing binding_status is invalid",
+                    field.field_name
+                ));
+            }
+            if field.claim_source_value.is_some()
+                && !matches!(
+                    field.binding_status.as_str(),
+                    "source_value_matches_complete_candidate"
+                        | "source_value_present_candidate_fixture_differs"
+                )
+            {
+                errors.push(format!(
+                    "{} present binding_status is invalid",
+                    field.field_name
+                ));
+            }
+            if field.runtime_equivalent {
+                errors.push(format!(
+                    "{} runtime_equivalent must remain false",
+                    field.field_name
+                ));
+            }
+            if field.note.trim().is_empty() {
+                errors.push(format!("{} note must be present", field.field_name));
+            }
+        }
+
+        let expected_source_fields_present = self
+            .fields
+            .iter()
+            .all(|field| field.claim_source_value.is_some());
+        if self.source_fields_present != expected_source_fields_present {
+            errors.push("source_fields_present must match field value presence".to_string());
+        }
+
+        if !self.candidate_fields_present {
+            errors.push("candidate_fields_present must be true".to_string());
+        }
+
+        let expected_identity_match = expected_source_fields_present
+            && self
+                .fields
+                .iter()
+                .all(|field| field.source_matches_candidate_value);
+        if self.identity_sources_match_candidate_values != expected_identity_match {
+            errors.push(
+                "identity_sources_match_candidate_values must match per-field comparison"
+                    .to_string(),
+            );
+        }
+
+        if self.production_semantics_complete {
+            errors.push("production_semantics_complete must remain false".to_string());
+        }
+
+        if self.accepted_as_runtime_evidence {
+            errors.push("accepted_as_runtime_evidence must remain false".to_string());
+        }
+
+        if self.runtime_wired {
+            errors.push("runtime_wired must remain false".to_string());
+        }
+
+        if self.on_chain_submission {
+            errors.push("on_chain_submission must remain false".to_string());
+        }
+
+        if self.notes.is_empty() {
+            errors.push("notes must be non-empty".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn claim_source_identity_field(
+    field_name: &str,
+    source_value: &Option<String>,
+    complete: &WinterfellCompleteWitnessCandidate,
+    note: &str,
+) -> Result<ClaimSourceIdentityFieldEvidence, Vec<String>> {
+    let complete_field = complete_witness_required_field(complete, field_name)?;
+    let normalized_source_value = source_value
+        .as_ref()
+        .map(|value| normalize_claim_source_identity_value(field_name, value))
+        .transpose()?;
+    let source_matches_candidate_value = normalized_source_value == Some(complete_field.value);
+
+    Ok(ClaimSourceIdentityFieldEvidence {
+        field_name: field_name.to_string(),
+        claim_source_field: field_name.to_string(),
+        claim_source_value: source_value.clone(),
+        claim_source_value_status: if source_value.is_some() {
+            "present_in_claim_source_input".to_string()
+        } else {
+            "missing_from_active_bridge_export".to_string()
+        },
+        complete_candidate_value: complete_field.value,
+        complete_candidate_source_artifact: complete_field.source_artifact.clone(),
+        complete_candidate_source_field: complete_field.source_field.clone(),
+        candidate_value_status: complete_field.value_status.clone(),
+        source_matches_candidate_value,
+        binding_status: match (source_value.is_some(), source_matches_candidate_value) {
+            (false, _) => "claim_source_field_missing_active_bridge_export",
+            (true, true) => "source_value_matches_complete_candidate",
+            (true, false) => "source_value_present_candidate_fixture_differs",
+        }
+        .to_string(),
+        runtime_equivalent: false,
+        note: note.to_string(),
+    })
+}
+
+fn complete_witness_required_field<'a>(
+    complete: &'a WinterfellCompleteWitnessCandidate,
+    field_name: &str,
+) -> Result<&'a WinterfellCompleteWitnessField, Vec<String>> {
+    complete
+        .fields
+        .iter()
+        .find(|field| field.winterfell_field == field_name)
+        .ok_or_else(|| vec![format!("complete witness candidate missing {field_name}")])
+}
+
+fn normalize_claim_source_identity_value(
+    field_name: &str,
+    value: &str,
+) -> Result<u64, Vec<String>> {
+    match field_name {
+        "member_id" => {
+            if value.trim().is_empty() {
+                Err(vec!["member_id must be present when supplied".to_string()])
+            } else {
+                Ok(stable_fixture_string_to_u64(value))
+            }
+        }
+        "provider_npi" => {
+            if !is_10_digit_npi(value) {
+                return Err(vec![
+                    "provider_npi must be a 10-digit numeric string when supplied".to_string(),
+                ]);
+            }
+            value
+                .parse::<u64>()
+                .map_err(|err| vec![format!("provider_npi must parse to u64: {err}")])
+        }
+        _ => Err(vec![format!(
+            "unsupported claim source identity field: {field_name}"
+        )]),
     }
 }
 

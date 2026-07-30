@@ -100,6 +100,39 @@ it, and are included in the STARK smoke chain without generating a real proof:
 bash scripts/validate_stark_bridge_chain.sh
 ```
 
+## Claim Source Identity Evidence
+
+Phase 8 now includes a planning-only identity evidence artifact:
+
+```text
+ClaimSourceIdentityEvidence
+```
+
+It compares:
+
+- `ClaimSourceRootInput.member_id`
+- `ClaimSourceRootInput.provider_npi`
+- `WinterfellCompleteWitnessCandidate.member_id`
+- `WinterfellCompleteWitnessCandidate.provider_npi`
+
+Current active behavior remains conservative:
+
+- `rust-engine` does not export `member_id`
+- `rust-engine` does not export `provider_npi`
+- the evidence artifact records those fields as missing from active bridge export
+- fixture-backed Winterfell candidate values are still not accepted as runtime evidence
+- no claim-source root, proof, runtime wiring, or on-chain submission is generated
+
+This artifact is the bridge from fixture-only identity fields toward future
+active claim-source inputs. It does not claim production semantic equivalence.
+
+The CLI pair is:
+
+```text
+generate_claim_source_identity_evidence
+validate_claim_source_identity_evidence
+```
+
 ## Real Artifact Boundary Spec
 
 The next planning object is:
