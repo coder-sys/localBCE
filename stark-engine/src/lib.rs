@@ -18,6 +18,9 @@ pub mod real_prover;
 pub mod root_semantics;
 pub mod source_roots;
 
+#[cfg(feature = "production-air")]
+pub mod production_air;
+
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

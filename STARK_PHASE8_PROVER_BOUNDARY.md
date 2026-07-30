@@ -1729,14 +1729,35 @@ AIR into the production localBCE rules proof.
 
 ## Next Safe Step
 
-The next safe Phase 8 step is the first versioned production AIR semantics
-module:
+The first versioned production AIR semantics contract is now present behind
+the disabled-by-default `production-air` Cargo feature:
 
-- define the exact G1-G10 facts, decision, and failure-code constraints that the
-  production STARK must prove
-- separate production AIR semantics from the imported Winterfell PoC model
-- build approved and denied trace fixtures from strict bridge-backed inputs
-- prove local equivalence with `rust-engine::denial_reason()` across G1-G10
-- keep the new AIR test-only and feature-gated until real proofs verify locally
-- keep runtime wiring and on-chain submission disabled
+```text
+cargo test --lib --features production-air production_air::tests --jobs 1
+```
+
+It defines:
+
+- `ProductionAirInputV1`, containing every active Rust fact used by G1-G10
+- all 13 ordered failure checks used by `denial_reason()`
+- the exact failure reasons and failure codes
+- first-failure priority
+- `ProductionAirSemanticsTraceV1`, an approved or denied semantics evaluation
+- strict rejection when bridge adjudication disagrees with the G1-G10 result
+
+This trace is explicitly `semantics_evaluated_not_prover_trace`. It is not a
+Winterfell execution trace and does not generate a STARK proof. Runtime wiring,
+on-chain submission, and contract changes remain disabled. The active Groth16
+flow remains unchanged.
+
+## Next Safe Step
+
+Translate `ProductionAirSemanticsTraceV1` into a feature-gated Winterfell trace
+layout and AIR transition constraints:
+
+- choose trace columns for all facts, gate satisfaction, first-failure
+  selection, decision, and failure code
+- constrain boolean facts and ordered first-failure selection algebraically
+- add approved and all G1-G10 denied proof fixtures
+- locally prove and verify those fixtures before any runtime integration
 - keep Solidity, ClaimsRegistry, and the active Groth16 runtime unchanged
