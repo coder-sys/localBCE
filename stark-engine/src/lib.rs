@@ -78,6 +78,8 @@ pub struct BridgeClaim {
     pub claim_hash: String,
     pub member_id: Option<String>,
     pub provider_npi: Option<String>,
+    pub diagnosis_count: Option<u64>,
+    pub max_charge_cents: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -536,8 +538,8 @@ pub struct ClaimSourceRootInput {
 ///
 /// This is not runtime evidence. It is a pre-prover compatibility artifact that
 /// compares the claim-source input shape against the complete Winterfell witness
-/// candidate and keeps the gap explicit until rust-engine exports real identity
-/// source fields.
+/// candidate and keeps the gap explicit until the exported identities become
+/// governed runtime adjudication semantics.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ClaimSourceIdentityEvidence {
     pub schema_version: String,
@@ -7512,13 +7514,13 @@ impl ClaimSourceIdentityEvidence {
                 "member_id",
                 &source.member_id,
                 complete,
-                "ClaimSourceRootInput.member_id can carry the future member identity source, but active rust-engine does not export it yet.",
+                "ClaimSourceRootInput.member_id carries the optional rust-engine member identity source when supplied.",
             )?,
             claim_source_identity_field(
                 "provider_npi",
                 &source.provider_npi,
                 complete,
-                "ClaimSourceRootInput.provider_npi can carry the future provider identity source, but active rust-engine does not export it yet.",
+                "ClaimSourceRootInput.provider_npi carries the optional rust-engine provider identity source when supplied.",
             )?,
         ];
 
@@ -7547,7 +7549,7 @@ impl ClaimSourceIdentityEvidence {
             on_chain_submission: false,
             notes: vec![
                 "This artifact checks claim-source identity field availability against the complete Winterfell witness candidate.".to_string(),
-                "The active rust-engine bridge currently leaves member_id and provider_npi absent, so this remains a source-data gap artifact.".to_string(),
+                "The active bridge can export member_id and provider_npi, but they are not yet governed runtime adjudication semantics.".to_string(),
                 "No claim-source root, real STARK proof, runtime wiring, or on-chain submission is produced.".to_string(),
                 "The active Groth16 runtime flow remains unchanged.".to_string(),
             ],
@@ -9060,6 +9062,12 @@ pub mod winterfell_poc_adapter {
         pub partial_fields_resolved: bool,
         pub unmapped_field_count: usize,
         pub unmapped_source_data_populated: bool,
+        #[serde(default)]
+        pub active_bridge_source_backed_field_count: usize,
+        #[serde(default)]
+        pub fixture_backed_field_count: usize,
+        #[serde(default)]
+        pub all_unmapped_fields_source_backed: bool,
         pub unmapped_semantics_resolved: bool,
         pub all_poc_fields_populated: bool,
         pub production_semantics_complete: bool,
@@ -9861,6 +9869,8 @@ pub mod winterfell_poc_adapter {
         pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0+winterfell-complete-witness-candidate-v0+winterfell-poc-semantic-equivalence-report-v0";
         pub const REPORT_STATUS: &'static str =
             "partial_fields_normalized_unmapped_fields_source_fixture_only";
+        pub const SOURCE_BACKED_REPORT_STATUS: &'static str =
+            "partial_fields_normalized_unmapped_fields_active_bridge_source_backed";
 
         pub fn from_inputs(
             bridge: &StarkBridgeInput,
@@ -9907,9 +9917,14 @@ pub mod winterfell_poc_adapter {
                 SemanticGapFieldEvidence::new(
                     "charge_cents",
                     vec!["claim_amount"],
-                    bridge.claim.claim_amount,
+                    bridge.claim.claim_amount.checked_mul(100).ok_or_else(|| {
+                        vec![
+                            "claim_amount must fit in u64 after conversion to charge_cents"
+                                .to_string(),
+                        ]
+                    })?,
                     complete_value(complete, "charge_cents")?,
-                    "normalized_from_active_claim_amount",
+                    "normalized_from_active_claim_amount_dollars_to_cents",
                     true,
                 ),
                 SemanticGapFieldEvidence::new(
@@ -9926,37 +9941,29 @@ pub mod winterfell_poc_adapter {
             ];
 
             let unmapped_fields = vec![
-                SemanticGapFieldEvidence::new(
+                source_backed_or_fixture_field(
                     "member_id",
-                    vec!["winterfell_source_data_fixture.member_id"],
+                    bridge.winterfell_poc_mapping.unmapped.member_id,
                     complete_value(complete, "member_id")?,
-                    complete_value(complete, "member_id")?,
-                    "source_fixture_only_no_active_runtime_equivalent",
-                    false,
+                    "winterfell_poc_mapping.unmapped.member_id",
                 ),
-                SemanticGapFieldEvidence::new(
+                source_backed_or_fixture_field(
                     "provider_npi",
-                    vec!["winterfell_source_data_fixture.provider_npi"],
+                    bridge.winterfell_poc_mapping.unmapped.provider_npi,
                     complete_value(complete, "provider_npi")?,
-                    complete_value(complete, "provider_npi")?,
-                    "source_fixture_only_no_active_runtime_equivalent",
-                    false,
+                    "winterfell_poc_mapping.unmapped.provider_npi",
                 ),
-                SemanticGapFieldEvidence::new(
+                source_backed_or_fixture_field(
                     "diagnosis_count",
-                    vec!["winterfell_source_data_fixture.diagnosis_count"],
+                    bridge.winterfell_poc_mapping.unmapped.diagnosis_count,
                     complete_value(complete, "diagnosis_count")?,
-                    complete_value(complete, "diagnosis_count")?,
-                    "source_fixture_only_no_active_runtime_equivalent",
-                    false,
+                    "winterfell_poc_mapping.unmapped.diagnosis_count",
                 ),
-                SemanticGapFieldEvidence::new(
+                source_backed_or_fixture_field(
                     "max_charge_cents",
-                    vec!["winterfell_source_data_fixture.max_charge_cents"],
+                    bridge.winterfell_poc_mapping.unmapped.max_charge_cents,
                     complete_value(complete, "max_charge_cents")?,
-                    complete_value(complete, "max_charge_cents")?,
-                    "source_fixture_only_no_active_runtime_equivalent",
-                    false,
+                    "winterfell_poc_mapping.unmapped.max_charge_cents",
                 ),
             ];
 
@@ -9966,15 +9973,34 @@ pub mod winterfell_poc_adapter {
             let unmapped_source_data_populated = unmapped_fields
                 .iter()
                 .all(|field| field.value_matches_candidate);
+            let active_bridge_source_backed_field_count = unmapped_fields
+                .iter()
+                .filter(|field| {
+                    field.evidence_status
+                        == "active_bridge_source_backed_not_runtime_adjudication_equivalent"
+                })
+                .count();
+            let fixture_backed_field_count =
+                unmapped_fields.len() - active_bridge_source_backed_field_count;
+            let all_unmapped_fields_source_backed =
+                active_bridge_source_backed_field_count == unmapped_fields.len();
+            let report_status = if all_unmapped_fields_source_backed {
+                Self::SOURCE_BACKED_REPORT_STATUS
+            } else {
+                Self::REPORT_STATUS
+            };
 
             Ok(Self {
                 schema_version: Self::SCHEMA_VERSION.to_string(),
                 source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
-                report_status: Self::REPORT_STATUS.to_string(),
+                report_status: report_status.to_string(),
                 partial_field_count: partial_fields.len(),
                 partial_fields_resolved,
                 unmapped_field_count: unmapped_fields.len(),
                 unmapped_source_data_populated,
+                active_bridge_source_backed_field_count,
+                fixture_backed_field_count,
+                all_unmapped_fields_source_backed,
                 unmapped_semantics_resolved: false,
                 all_poc_fields_populated: complete.all_fields_populated,
                 production_semantics_complete: false,
@@ -9986,9 +10012,14 @@ pub mod winterfell_poc_adapter {
                 notes: vec![
                     "All partial Winterfell PoC fields have deterministic adapter evidence."
                         .to_string(),
-                    "Unmapped PoC fields are populated only from source fixture data today."
-                        .to_string(),
-                    "Source fixture population is not active runtime semantic equivalence."
+                    if all_unmapped_fields_source_backed {
+                        "All formerly unmapped PoC values are now present in the active bridge export and match the complete proof candidate."
+                            .to_string()
+                    } else {
+                        "Missing bridge values still fall back to source fixture data for compatibility."
+                            .to_string()
+                    },
+                    "Source-backed compatibility does not make these fields active adjudication semantics."
                         .to_string(),
                     "The active Groth16 runtime flow remains unchanged.".to_string(),
                 ],
@@ -10013,8 +10044,13 @@ pub mod winterfell_poc_adapter {
                 ));
             }
 
-            if self.report_status != Self::REPORT_STATUS {
-                errors.push(format!("report_status must be {}", Self::REPORT_STATUS));
+            let expected_report_status = if self.all_unmapped_fields_source_backed {
+                Self::SOURCE_BACKED_REPORT_STATUS
+            } else {
+                Self::REPORT_STATUS
+            };
+            if self.report_status != expected_report_status {
+                errors.push(format!("report_status must be {expected_report_status}"));
             }
 
             if self.partial_field_count != 4 || self.partial_fields.len() != 4 {
@@ -10031,6 +10067,30 @@ pub mod winterfell_poc_adapter {
 
             if !self.unmapped_source_data_populated {
                 errors.push("unmapped_source_data_populated must be true".to_string());
+            }
+
+            let legacy_source_counts_absent = self.report_status == Self::REPORT_STATUS
+                && self.active_bridge_source_backed_field_count == 0
+                && self.fixture_backed_field_count == 0
+                && !self.all_unmapped_fields_source_backed;
+
+            if !legacy_source_counts_absent
+                && self.active_bridge_source_backed_field_count + self.fixture_backed_field_count
+                    != self.unmapped_field_count
+            {
+                errors.push(
+                    "active bridge and fixture backed field counts must sum to unmapped_field_count"
+                        .to_string(),
+                );
+            }
+
+            if self.all_unmapped_fields_source_backed
+                != (self.active_bridge_source_backed_field_count == self.unmapped_field_count)
+            {
+                errors.push(
+                    "all_unmapped_fields_source_backed must match source-backed field counts"
+                        .to_string(),
+                );
             }
 
             if self.unmapped_semantics_resolved {
@@ -10120,6 +10180,32 @@ pub mod winterfell_poc_adapter {
                 evidence_status: evidence_status.to_string(),
                 runtime_equivalent,
             }
+        }
+    }
+
+    fn source_backed_or_fixture_field(
+        winterfell_field: &str,
+        bridge_value: Option<u64>,
+        complete_candidate_value: u64,
+        bridge_source: &str,
+    ) -> SemanticGapFieldEvidence {
+        match bridge_value {
+            Some(value) => SemanticGapFieldEvidence::new(
+                winterfell_field,
+                vec![bridge_source],
+                value,
+                complete_candidate_value,
+                "active_bridge_source_backed_not_runtime_adjudication_equivalent",
+                false,
+            ),
+            None => SemanticGapFieldEvidence::new(
+                winterfell_field,
+                vec!["winterfell_source_data_fixture"],
+                complete_candidate_value,
+                complete_candidate_value,
+                "source_fixture_only_no_active_runtime_equivalent",
+                false,
+            ),
         }
     }
 
@@ -11309,6 +11395,73 @@ pub mod winterfell_poc_adapter {
                 WinterfellPocSemanticEquivalenceReport::UNRESOLVED_UNMAPPED_FIELDS
             );
             assert_eq!(report.blocker_count, 8);
+        }
+
+        #[test]
+        fn semantic_gap_normalization_uses_all_source_backed_bridge_fields() {
+            let mut bridge = sample_bridge_input();
+            bridge.claim.claim_amount = 1_000;
+            bridge.claim.member_id = Some("MEMBER-FIXTURE-001".to_string());
+            bridge.claim.provider_npi = Some("1234567893".to_string());
+            bridge.claim.diagnosis_count = Some(1);
+            bridge.claim.max_charge_cents = Some(150_000);
+            bridge.winterfell_poc_mapping.unmapped.member_id =
+                Some(crate::stable_fixture_string_to_u64("MEMBER-FIXTURE-001"));
+            bridge.winterfell_poc_mapping.unmapped.provider_npi = Some(1_234_567_893);
+            bridge.winterfell_poc_mapping.unmapped.diagnosis_count = Some(1);
+            bridge.winterfell_poc_mapping.unmapped.max_charge_cents = Some(150_000);
+
+            let mut candidate = sample_complete_candidate();
+            candidate
+                .fields
+                .iter_mut()
+                .find(|field| field.winterfell_field == "member_id")
+                .unwrap()
+                .value = crate::stable_fixture_string_to_u64("MEMBER-FIXTURE-001");
+            candidate
+                .fields
+                .iter_mut()
+                .find(|field| field.winterfell_field == "provider_npi")
+                .unwrap()
+                .value = 1_234_567_893;
+            let fixture =
+                WinterfellPocRealProofFixture::from_complete_candidate(&candidate).unwrap();
+            let equivalence =
+                WinterfellPocSemanticEquivalenceReport::from_bridge_and_fixture(&bridge, &fixture)
+                    .unwrap();
+            let report = WinterfellPocSemanticGapNormalizationReport::from_inputs(
+                &bridge,
+                &candidate,
+                &equivalence,
+            )
+            .unwrap();
+
+            assert_eq!(report.validate(), Ok(()));
+            assert_eq!(
+                report.report_status,
+                WinterfellPocSemanticGapNormalizationReport::SOURCE_BACKED_REPORT_STATUS
+            );
+            assert_eq!(report.active_bridge_source_backed_field_count, 4);
+            assert_eq!(report.fixture_backed_field_count, 0);
+            assert!(report.all_unmapped_fields_source_backed);
+            assert!(report.unmapped_source_data_populated);
+            assert!(!report.unmapped_semantics_resolved);
+            assert!(!report.production_semantics_complete);
+            assert!(report.unmapped_fields.iter().all(|field| {
+                field.evidence_status
+                    == "active_bridge_source_backed_not_runtime_adjudication_equivalent"
+                    && field.value_matches_candidate
+                    && !field.runtime_equivalent
+            }));
+
+            let charge = report
+                .partial_fields
+                .iter()
+                .find(|field| field.winterfell_field == "charge_cents")
+                .unwrap();
+            assert_eq!(charge.normalized_value, 100_000);
+            assert_eq!(charge.complete_candidate_value, 100_000);
+            assert!(charge.value_matches_candidate);
         }
 
         #[test]

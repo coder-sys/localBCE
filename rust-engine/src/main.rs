@@ -56,6 +56,8 @@ struct ClaimInput {
     claim_amount: u64,
     member_id: Option<String>,
     provider_npi: Option<String>,
+    diagnosis_count: Option<u64>,
+    max_charge_cents: Option<u64>,
 
     eligibility_active: u8,
     aid_code: u64,
@@ -190,6 +192,8 @@ struct StarkBridgeClaim {
     claim_hash: String,
     member_id: Option<String>,
     provider_npi: Option<String>,
+    diagnosis_count: Option<u64>,
+    max_charge_cents: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +324,8 @@ impl StarkBridgeInput {
                 claim_hash: claim_hash.to_string(),
                 member_id: claim.member_id.clone(),
                 provider_npi: claim.provider_npi.clone(),
+                diagnosis_count: claim.diagnosis_count,
+                max_charge_cents: claim.max_charge_cents,
             },
             adjudication: StarkBridgeAdjudication {
                 decision,
@@ -375,8 +381,8 @@ impl StarkBridgeInput {
                         .as_deref()
                         .map(stable_identity_string_to_u64),
                     provider_npi: claim.provider_npi.as_deref().and_then(parse_10_digit_npi),
-                    diagnosis_count: None,
-                    max_charge_cents: None,
+                    diagnosis_count: claim.diagnosis_count,
+                    max_charge_cents: claim.max_charge_cents,
                 },
             },
             public_inputs: StarkBridgePublicInputs {
@@ -855,6 +861,8 @@ mod tests {
             claim_amount: 1000,
             member_id: None,
             provider_npi: None,
+            diagnosis_count: None,
+            max_charge_cents: None,
             eligibility_active: 1,
             aid_code: 53,
             benefit_level_exists: 1,
@@ -1087,15 +1095,15 @@ mod tests {
         vec![
             ImportedStarkFieldMapping {
                 imported_stark_field: "member_id",
-                active_rust_source: None,
-                class: ImportedStarkMappingClass::Unmapped,
-                note: "active claim input has claim_id string, not numeric member_id",
+                active_rust_source: Some("member_id"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "optional string source requires deterministic numeric normalization",
             },
             ImportedStarkFieldMapping {
                 imported_stark_field: "provider_npi",
-                active_rust_source: None,
-                class: ImportedStarkMappingClass::Unmapped,
-                note: "active input tracks enrollment/type validity, not NPI presence",
+                active_rust_source: Some("provider_npi"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "optional 10-digit source requires validation and numeric parsing",
             },
             ImportedStarkFieldMapping {
                 imported_stark_field: "eligibility_active",
@@ -1117,9 +1125,9 @@ mod tests {
             },
             ImportedStarkFieldMapping {
                 imported_stark_field: "diagnosis_count",
-                active_rust_source: None,
-                class: ImportedStarkMappingClass::Unmapped,
-                note: "active input has no diagnosis count",
+                active_rust_source: Some("diagnosis_count"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "optional source maps numerically but is not an active adjudication rule",
             },
             ImportedStarkFieldMapping {
                 imported_stark_field: "prior_auth_ok",
@@ -1135,9 +1143,9 @@ mod tests {
             },
             ImportedStarkFieldMapping {
                 imported_stark_field: "max_charge_cents",
-                active_rust_source: None,
-                class: ImportedStarkMappingClass::Unmapped,
-                note: "active input has no maximum allowed charge field",
+                active_rust_source: Some("max_charge_cents"),
+                class: ImportedStarkMappingClass::Partial,
+                note: "optional source maps numerically but is not an active fee-schedule rule",
             },
             ImportedStarkFieldMapping {
                 imported_stark_field: "duplicate_flag",
@@ -1575,6 +1583,8 @@ status                  1";
         assert_eq!(value["claim"]["claim_hash"], claim_hash);
         assert_eq!(value["claim"]["member_id"], Value::Null);
         assert_eq!(value["claim"]["provider_npi"], Value::Null);
+        assert_eq!(value["claim"]["diagnosis_count"], Value::Null);
+        assert_eq!(value["claim"]["max_charge_cents"], Value::Null);
         assert_eq!(value["adjudication"]["decision"], 1);
         assert_eq!(value["adjudication"]["failure_code"], 0);
         assert_eq!(value["adjudication"]["failure_reason"], Value::Null);
@@ -1628,12 +1638,16 @@ status                  1";
         let mut claim = valid_claim();
         claim.member_id = Some("MEMBER-FIXTURE-001".to_string());
         claim.provider_npi = Some("1234567893".to_string());
+        claim.diagnosis_count = Some(1);
+        claim.max_charge_cents = Some(150_000);
         let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
         let value =
             serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
 
         assert_eq!(value["claim"]["member_id"], "MEMBER-FIXTURE-001");
         assert_eq!(value["claim"]["provider_npi"], "1234567893");
+        assert_eq!(value["claim"]["diagnosis_count"], 1);
+        assert_eq!(value["claim"]["max_charge_cents"], 150_000);
         assert_eq!(
             value["winterfell_poc_mapping"]["unmapped"]["member_id"],
             stable_identity_string_to_u64("MEMBER-FIXTURE-001")
@@ -1641,6 +1655,14 @@ status                  1";
         assert_eq!(
             value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
             1_234_567_893
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["diagnosis_count"],
+            1
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["max_charge_cents"],
+            150_000
         );
         assert_eq!(value["proof_status"]["stark_proof_generated"], false);
         assert_eq!(value["proof_status"]["on_chain_submission"], false);
@@ -1709,14 +1731,14 @@ status                  1";
                 .iter()
                 .filter(|mapping| mapping.class == ImportedStarkMappingClass::Partial)
                 .count(),
-            4
+            8
         );
         assert_eq!(
             mappings
                 .iter()
                 .filter(|mapping| mapping.class == ImportedStarkMappingClass::Unmapped)
                 .count(),
-            4
+            0
         );
 
         for expected_field in [

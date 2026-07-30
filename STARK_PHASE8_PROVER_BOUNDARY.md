@@ -1622,20 +1622,30 @@ partial_field_count = 4
 partial_fields_resolved = true
 ```
 
-The unmapped fields are populated from source fixture data only:
+The four fields retained in the v0 `unmapped` compatibility group are now
+optionally exported by `rust-engine`:
 
 - `member_id`
 - `provider_npi`
 - `diagnosis_count`
 - `max_charge_cents`
 
-The report requires:
+When all four values are present and match the complete witness candidate, the
+report requires:
 
 ```text
 unmapped_field_count = 4
 unmapped_source_data_populated = true
+active_bridge_source_backed_field_count = 4
+fixture_backed_field_count = 0
+all_unmapped_fields_source_backed = true
 unmapped_semantics_resolved = false
 ```
+
+The v0 group name is preserved for schema compatibility. Source availability
+does not make these fields equivalent to active adjudication rules. In
+particular, `diagnosis_count` and `max_charge_cents` remain optional source
+facts and do not affect `denial_reason()`.
 
 It still blocks production equivalence:
 
@@ -1655,12 +1665,15 @@ validate_winterfell_poc_semantic_gap_normalization_report
 
 ## Next Safe Step
 
-The next safe Phase 8 step is to begin real prover implementation evidence:
+The next safe Phase 8 step is a non-runtime bridge-to-witness adapter:
 
-- create a non-runtime real proof fixture generation plan tied to the selected prover
-- keep the adapter blocked until all evidence slots are populated
-- generate a real proof bytes fixture only after local verification exists
-- keep the evidence record unsatisfied until code, fixture, tests, and log exist
-- do not emit production proof bytes yet
-- keep Solidity and ClaimsRegistry unchanged
-- keep Groth16 active until an explicit cutover phase
+- populate a complete Winterfell witness directly from validated bridge-backed
+  values where they are available
+- retain explicit normalization evidence for partial adjudication fields
+- reject missing or mismatched bridge source values instead of silently
+  substituting fixture values on this new path
+- keep the existing fixture path available as a compatibility test lane
+- locally generate and verify the Winterfell PoC proof from the direct witness
+- keep production semantic equivalence, runtime wiring, and on-chain submission
+  blocked
+- keep Solidity, ClaimsRegistry, and the active Groth16 runtime unchanged
