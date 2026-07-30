@@ -76,6 +76,8 @@ pub struct BridgeClaim {
     pub claim_id: String,
     pub claim_amount: u64,
     pub claim_hash: String,
+    pub member_id: Option<String>,
+    pub provider_npi: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -7356,8 +7358,8 @@ impl ClaimSourceRootInput {
             claim_id: input.claim.claim_id.clone(),
             claim_hash: input.claim.claim_hash.clone(),
             claim_amount: input.claim.claim_amount,
-            member_id: None,
-            provider_npi: None,
+            member_id: input.claim.member_id.clone(),
+            provider_npi: input.claim.provider_npi.clone(),
             service_date: Some(input.active_rust_facts.date_of_service_from),
             procedure_codes: Vec::new(),
             diagnosis_codes: Vec::new(),
@@ -7365,7 +7367,7 @@ impl ClaimSourceRootInput {
             root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
             notes: vec![
                 "This input is a normalized source schema for future claimSourceRoot work.".to_string(),
-                "member_id, provider_npi, procedure_codes, diagnosis_codes, and service_line_count are not exported by the current rust-engine bridge.".to_string(),
+                "member_id and provider_npi are carried when supplied by the current rust-engine bridge; procedure_codes, diagnosis_codes, and service_line_count are not exported yet.".to_string(),
                 "No claim-source leaf, hash, Merkle root, or STARK proof is generated from this object.".to_string(),
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],

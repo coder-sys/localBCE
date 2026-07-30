@@ -54,6 +54,8 @@ impl AdjudicationResult {
 struct ClaimInput {
     claim_id: String,
     claim_amount: u64,
+    member_id: Option<String>,
+    provider_npi: Option<String>,
 
     eligibility_active: u8,
     aid_code: u64,
@@ -186,6 +188,8 @@ struct StarkBridgeClaim {
     claim_id: String,
     claim_amount: u64,
     claim_hash: String,
+    member_id: Option<String>,
+    provider_npi: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -314,6 +318,8 @@ impl StarkBridgeInput {
                 claim_id: claim.claim_id.clone(),
                 claim_amount: claim.claim_amount,
                 claim_hash: claim_hash.to_string(),
+                member_id: claim.member_id.clone(),
+                provider_npi: claim.provider_npi.clone(),
             },
             adjudication: StarkBridgeAdjudication {
                 decision,
@@ -364,8 +370,11 @@ impl StarkBridgeInput {
                     },
                 },
                 unmapped: StarkBridgeUnmappedMapping {
-                    member_id: None,
-                    provider_npi: None,
+                    member_id: claim
+                        .member_id
+                        .as_deref()
+                        .map(stable_identity_string_to_u64),
+                    provider_npi: claim.provider_npi.as_deref().and_then(parse_10_digit_npi),
                     diagnosis_count: None,
                     max_charge_cents: None,
                 },
@@ -388,6 +397,20 @@ impl StarkBridgeInput {
 
 fn bool_u8(value: bool) -> u8 {
     if value { 1 } else { 0 }
+}
+
+fn stable_identity_string_to_u64(value: &str) -> u64 {
+    value.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+        hash ^ (byte as u64).wrapping_mul(0x100000001b3)
+    })
+}
+
+fn parse_10_digit_npi(value: &str) -> Option<u64> {
+    if value.len() == 10 && value.chars().all(|ch| ch.is_ascii_digit()) {
+        value.parse::<u64>().ok()
+    } else {
+        None
+    }
 }
 
 fn stark_failure_code(reason: &str) -> u32 {
@@ -830,6 +853,8 @@ mod tests {
         ClaimInput {
             claim_id: "CLAIM-TEST-001".to_string(),
             claim_amount: 1000,
+            member_id: None,
+            provider_npi: None,
             eligibility_active: 1,
             aid_code: 53,
             benefit_level_exists: 1,
@@ -1548,6 +1573,8 @@ status                  1";
         assert_eq!(value["claim"]["claim_id"], "CLAIM-TEST-001");
         assert_eq!(value["claim"]["claim_amount"], 1000);
         assert_eq!(value["claim"]["claim_hash"], claim_hash);
+        assert_eq!(value["claim"]["member_id"], Value::Null);
+        assert_eq!(value["claim"]["provider_npi"], Value::Null);
         assert_eq!(value["adjudication"]["decision"], 1);
         assert_eq!(value["adjudication"]["failure_code"], 0);
         assert_eq!(value["adjudication"]["failure_reason"], Value::Null);
@@ -1583,6 +1610,10 @@ status                  1";
             value["winterfell_poc_mapping"]["unmapped"]["member_id"],
             Value::Null
         );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
+            Value::Null
+        );
         assert_eq!(value["public_inputs"]["claim_hash"], claim_hash);
         assert_eq!(value["public_inputs"]["decision"], 1);
         assert_eq!(value["public_inputs"]["failure_code"], 0);
@@ -1590,6 +1621,44 @@ status                  1";
         assert_eq!(value["proof_status"]["winterfell_poc_compatible"], false);
         assert_eq!(value["proof_status"]["groth16_flow_unchanged"], true);
         assert_eq!(value["proof_status"]["on_chain_submission"], false);
+    }
+
+    #[test]
+    fn stark_bridge_input_serializes_optional_identity_source_fields() {
+        let mut claim = valid_claim();
+        claim.member_id = Some("MEMBER-FIXTURE-001".to_string());
+        claim.provider_npi = Some("1234567893".to_string());
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+        let value =
+            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
+
+        assert_eq!(value["claim"]["member_id"], "MEMBER-FIXTURE-001");
+        assert_eq!(value["claim"]["provider_npi"], "1234567893");
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["member_id"],
+            stable_identity_string_to_u64("MEMBER-FIXTURE-001")
+        );
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
+            1_234_567_893
+        );
+        assert_eq!(value["proof_status"]["stark_proof_generated"], false);
+        assert_eq!(value["proof_status"]["on_chain_submission"], false);
+    }
+
+    #[test]
+    fn stark_bridge_input_keeps_invalid_optional_npi_out_of_numeric_poc_mapping() {
+        let mut claim = valid_claim();
+        claim.provider_npi = Some("not-a-npi".to_string());
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+        let value =
+            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
+
+        assert_eq!(value["claim"]["provider_npi"], "not-a-npi");
+        assert_eq!(
+            value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
+            Value::Null
+        );
     }
 
     #[test]

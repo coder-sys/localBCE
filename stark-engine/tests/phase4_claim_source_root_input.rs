@@ -128,6 +128,20 @@ fn claim_source_root_input_accepts_future_enriched_source_data() {
 }
 
 #[test]
+fn claim_source_root_input_carries_optional_identity_fields_from_bridge_claim() {
+    let mut input = sample_bridge_input();
+    input.claim.member_id = Some("MEMBER-FIXTURE-001".to_string());
+    input.claim.provider_npi = Some("1234567893".to_string());
+
+    let source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
+
+    assert_eq!(source.validate(), Ok(()));
+    assert_eq!(source.member_id, Some("MEMBER-FIXTURE-001".to_string()));
+    assert_eq!(source.provider_npi, Some("1234567893".to_string()));
+    assert_eq!(source.root_generation_status, "not_generated");
+}
+
+#[test]
 fn claim_source_root_input_json_round_trips_for_cli_output() {
     let input = sample_bridge_input();
     let source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
