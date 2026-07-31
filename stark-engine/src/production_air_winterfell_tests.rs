@@ -6,10 +6,13 @@ use winterfell::{
 
 use super::{
     FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER, FACT_COMMITMENT_HASH_FUNCTION,
-    FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION, ProductionFelt, TRACE_LENGTH,
+    FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
+    PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
+    PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionFelt, TRACE_LENGTH,
     TRACE_WIDTH, build_production_air_trace, canonical_claim_fact_commitment_preimage,
-    compute_claim_fact_commitment, prove_production_air, verify_production_air,
-    verify_production_air_result,
+    canonical_public_input_root_preimage, compute_claim_fact_commitment, compute_public_input_root,
+    pack_public_input_root_bytes32, prove_production_air, unpack_public_input_root_bytes32,
+    verify_production_air, verify_production_air_result,
 };
 use crate::{
     StarkBridgeInput,
@@ -119,19 +122,8 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
     assert_eq!(public_inputs.decision, ProductionFelt::ONE);
     assert_eq!(public_inputs.failure_code, ProductionFelt::ZERO);
     assert_eq!(
-        public_inputs.fact_commitment,
-        compute_claim_fact_commitment(&input).unwrap()
-    );
-    assert_eq!(
-        public_inputs
-            .fact_commitment
-            .map(|element| element.as_int()),
-        [
-            16_061_359_094_615_131_833,
-            3_238_905_742_128_385_486,
-            15_582_228_309_714_766_258,
-            7_389_683_813_284_618_181,
-        ]
+        public_inputs.public_input_root,
+        compute_public_input_root(&input).unwrap()
     );
     let serialized_public_inputs = public_inputs.to_elements();
     assert_eq!(serialized_public_inputs.len(), 14);
@@ -141,7 +133,7 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
     );
     assert_eq!(
         &serialized_public_inputs[8..12],
-        &public_inputs.fact_commitment
+        &public_inputs.public_input_root
     );
     assert_eq!(serialized_public_inputs[12], public_inputs.decision);
     assert_eq!(serialized_public_inputs[13], public_inputs.failure_code);
@@ -231,10 +223,10 @@ fn tampered_public_claim_hash_limb_is_rejected() {
 }
 
 #[test]
-fn tampered_public_fact_commitment_is_rejected() {
+fn tampered_public_input_root_is_rejected() {
     let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
     let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
-    public_inputs.fact_commitment[0] += ProductionFelt::ONE;
+    public_inputs.public_input_root[0] += ProductionFelt::ONE;
 
     assert!(!verify_production_air(proof, public_inputs));
 }
@@ -315,7 +307,7 @@ fn refresh_outcome(input: &mut ProductionAirInputV1) {
 }
 
 #[test]
-fn every_g1_g10_fact_is_bound_to_the_public_fact_commitment() {
+fn every_g1_g10_fact_is_bound_to_the_public_input_root() {
     type Mutate = fn(&mut ProductionAirFactsV1);
     let mutations: [(&str, Mutate); 16] = [
         ("eligibility_active", |facts| facts.eligibility_active = 0),
@@ -351,7 +343,7 @@ fn every_g1_g10_fact_is_bound_to_the_public_fact_commitment() {
     ];
 
     let approved = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
-    let original_commitment = compute_claim_fact_commitment(&approved).unwrap();
+    let original_root = compute_public_input_root(&approved).unwrap();
 
     for (field, mutate) in mutations {
         let mut mutated = approved.clone();
@@ -360,16 +352,81 @@ fn every_g1_g10_fact_is_bound_to_the_public_fact_commitment() {
 
         let (proof, mut public_inputs) = prove_production_air(&mutated).unwrap();
         assert_ne!(
-            public_inputs.fact_commitment, original_commitment,
-            "{field} must change the fact commitment"
+            public_inputs.public_input_root, original_root,
+            "{field} must change the public input root"
         );
 
-        public_inputs.fact_commitment = original_commitment;
+        public_inputs.public_input_root = original_root;
         assert!(
             !verify_production_air(proof, public_inputs),
-            "{field} must not verify against the original fact commitment"
+            "{field} must not verify against the original public input root"
         );
     }
+}
+
+#[test]
+fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
+    let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let elements = canonical_public_input_root_preimage(&input).unwrap();
+    let fact_commitment = compute_claim_fact_commitment(&input).unwrap();
+    let root = compute_public_input_root(&input).unwrap();
+    let packed = pack_public_input_root_bytes32(&root);
+
+    assert_eq!(
+        root.map(|element| element.as_int()),
+        [
+            8_192_512_438_339_882_827,
+            5_162_194_282_442_774_812,
+            9_797_518_926_967_888_724,
+            3_847_378_501_583_702_865,
+        ]
+    );
+    assert_eq!(
+        PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
+        "stark-public-input-root-v1"
+    );
+    assert_eq!(PUBLIC_INPUT_ROOT_HASH_FUNCTION, "winterfell-rp64-256");
+    assert_eq!(
+        PUBLIC_INPUT_ROOT_ENCODING,
+        "bytes32-four-canonical-f64-big-endian"
+    );
+    assert_eq!(elements[0].as_int(), PUBLIC_INPUT_ROOT_DOMAIN_TAG);
+    assert_eq!(elements[1].as_int(), 1);
+    assert_eq!(elements[2].as_int(), PUBLIC_INPUT_ROOT_RULESET_TAG);
+    assert_eq!(elements[3].as_int(), 14);
+    assert_eq!(
+        PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
+        [
+            "claim_hash_be_u32_limb_0",
+            "claim_hash_be_u32_limb_1",
+            "claim_hash_be_u32_limb_2",
+            "claim_hash_be_u32_limb_3",
+            "claim_hash_be_u32_limb_4",
+            "claim_hash_be_u32_limb_5",
+            "claim_hash_be_u32_limb_6",
+            "claim_hash_be_u32_limb_7",
+            "fact_commitment_element_0",
+            "fact_commitment_element_1",
+            "fact_commitment_element_2",
+            "fact_commitment_element_3",
+            "decision",
+            "failure_code",
+        ]
+    );
+    assert_eq!(
+        elements[12..16]
+            .iter()
+            .map(|element| element.as_int())
+            .collect::<Vec<_>>(),
+        fact_commitment
+            .iter()
+            .map(|element| element.as_int())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(elements[16].as_int(), 1);
+    assert_eq!(elements[17].as_int(), 0);
+    assert_eq!(packed.len(), 66);
+    assert_eq!(unpack_public_input_root_bytes32(&packed).unwrap(), root);
 }
 
 #[test]

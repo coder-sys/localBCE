@@ -88,9 +88,9 @@ See `STARK_VERIFIER_ABI_CANDIDATE.md` for the current preview-only production
 STARK verifier ABI candidate and public-input expectations.
 
 See `STARK_PHASE8_PROVER_BOUNDARY.md` for the feature-gated production G1-G10
-Winterfell AIR, its Rescue-Prime claim-to-fact commitment, and the remaining
-proof-artifact and runtime-integration work. This lane generates and verifies
-local STARK proofs in tests but is not wired into runtime or Solidity.
+Winterfell AIR, its Rescue-Prime fact commitment and ABI-facing public-input
+root, and the remaining verifier/runtime integration work. This lane generates
+and verifies local STARK proofs but is not wired into runtime or Solidity.
 
 ---
 
@@ -139,7 +139,7 @@ localBCE/
 - Solidity verifier generation
 - Optional STARK sidecar artifact generation from rust-engine dry-run path
 - Feature-gated Winterfell G1-G10 proofs with a constrained Rescue-Prime
-  claim-to-fact commitment
+  claim-to-fact commitment and `publicInputRoot`
 
 ## STARK Bridge
 
@@ -192,18 +192,34 @@ cargo run --features production-air-winterfell \
 cargo run --features production-air-winterfell \
   --bin validate_production_stark_verifier_handoff -- \
   production_stark_verifier_handoff.json
+
+cargo run --features production-air-winterfell \
+  --bin generate_production_claim_source_root -- \
+  ../rust-engine/stark_bridge_input.json production_claim_source_root.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_claim_source_root -- \
+  production_claim_source_root.json
 ```
 
 The artifact labels `claim_id` as metadata-only. The proof binds the existing
-32-byte claim hash, the Rescue-Prime G1-G10 fact commitment, decision, and
-failure code. Runtime wiring, a Solidity STARK verifier, and chain submission
-remain disabled.
+32-byte claim hash, all G1-G10 facts through an internal Rescue-Prime
+commitment, decision, failure code, and a four-element Rescue-Prime
+`publicInputRoot`. The root is canonically packed as four big-endian 64-bit
+field elements into one Solidity `bytes32`. Runtime wiring, a Solidity STARK
+verifier, and chain submission remain disabled.
 
-The verifier handoff locks the proof and 14 AIR inputs to the exact field order
-and Solidity types in `IStarkClaimsVerifierV1Candidate`. It intentionally
-remains non-call-ready: `publicInputRoot` is only a SHA-256 handoff candidate,
-not an adopted AIR/Solidity root semantic, and six source/state roots are not
-present in the production artifact.
+The verifier handoff locks the proof, 14 AIR inputs, and AIR-constrained
+`publicInputRoot` to the exact field order and Solidity types in
+`IStarkClaimsVerifierV1Candidate`. It remains non-call-ready because six
+governed source/state roots are not present in the production artifact.
+
+The claim-source command builds and independently validates a canonical
+depth-10 `Rp64_256` Merkle opening from bridge-supplied member, provider,
+service-line, diagnosis, charge, and service-date facts. This is a local root
+candidate only: it is not AIR-bound, governed, runtime-wired, or accepted by
+the verifier handoff yet. The handoff therefore still reports all six
+source/state roots as unresolved.
 
 Schema details for the STARK bridge artifacts are documented in:
 
@@ -470,8 +486,6 @@ REDEPLOY_WORKFLOW.md
 Near-term next steps:
 
 - Keep Groth16 demo flow green.
-- Decide and implement the production `publicInputRoot` semantic: either bind a
-  root in the AIR or revise the candidate ABI to expose the 14 AIR inputs.
 - Add real, governed source/state root generation before producing call-ready
   STARK verifier calldata.
 - Implement and independently test a real STARK verifier before changing

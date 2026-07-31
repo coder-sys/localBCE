@@ -11,16 +11,23 @@ use winterfell::{
     matrix::ColMatrix,
 };
 
+use std::fmt::Write as _;
+
 use crate::production_air::{ProductionAirInputV1, ProductionAirSemanticsTraceV1};
 
 pub type ProductionFelt = BaseElement;
 
-pub const TRACE_LENGTH: usize = 32;
+pub const TRACE_LENGTH: usize = 64;
 
 pub const FACT_COMMITMENT_SCHEMA_VERSION: &str = "stark-claim-fact-commitment-v1";
 pub const FACT_COMMITMENT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const FACT_COMMITMENT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCFACT\0");
 pub const FACT_COMMITMENT_RULESET_TAG: u64 = u64::from_le_bytes(*b"G1G10V1\0");
+pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v1";
+pub const PUBLIC_INPUT_ROOT_HASH_FUNCTION: &str = "winterfell-rp64-256";
+pub const PUBLIC_INPUT_ROOT_ENCODING: &str = "bytes32-four-canonical-f64-big-endian";
+pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR01");
+pub const PUBLIC_INPUT_ROOT_RULESET_TAG: u64 = FACT_COMMITMENT_RULESET_TAG;
 pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "eligibility_active",
     "aid_code",
@@ -39,18 +46,45 @@ pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "recipient_not_deceased",
     "physician_certification_valid",
 ];
+pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 14] = [
+    "claim_hash_be_u32_limb_0",
+    "claim_hash_be_u32_limb_1",
+    "claim_hash_be_u32_limb_2",
+    "claim_hash_be_u32_limb_3",
+    "claim_hash_be_u32_limb_4",
+    "claim_hash_be_u32_limb_5",
+    "claim_hash_be_u32_limb_6",
+    "claim_hash_be_u32_limb_7",
+    "fact_commitment_element_0",
+    "fact_commitment_element_1",
+    "fact_commitment_element_2",
+    "fact_commitment_element_3",
+    "decision",
+    "failure_code",
+];
 
 const CLAIM_HASH_LIMB_COUNT: usize = 8;
 const FACT_COMMITMENT_WIDTH: usize = 4;
 const FACT_COMMITMENT_PREIMAGE_LENGTH: usize = 28;
+const PUBLIC_INPUT_ROOT_WIDTH: usize = 4;
+const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 18;
 const FACT_COUNT: u64 = 16;
+const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 14;
+const FACT_HASH_TRACE_LENGTH: usize = 32;
 const RESCUE_STATE_WIDTH: usize = 12;
 const RESCUE_RATE_START: usize = 4;
 const RESCUE_RATE_WIDTH: usize = 8;
 const RESCUE_ROUND_COUNT: usize = 7;
 const HASH_ROUND_SELECTOR_COUNT: usize = RESCUE_ROUND_COUNT;
-const HASH_ABSORB_SELECTOR_COUNT: usize = 3;
-const HASH_PERIODIC_COLUMN_COUNT: usize = HASH_ROUND_SELECTOR_COUNT + HASH_ABSORB_SELECTOR_COUNT;
+const FACT_HASH_ABSORB_SELECTOR_COUNT: usize = 3;
+const PUBLIC_ROOT_ABSORB_SELECTOR_COUNT: usize = 2;
+const FACT_HASH_ABSORB_SELECTOR_START: usize = HASH_ROUND_SELECTOR_COUNT;
+const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+    FACT_HASH_ABSORB_SELECTOR_START + FACT_HASH_ABSORB_SELECTOR_COUNT;
+const PUBLIC_ROOT_RESET_SELECTOR: usize =
+    PUBLIC_ROOT_ABSORB_SELECTOR_START + PUBLIC_ROOT_ABSORB_SELECTOR_COUNT;
+const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
+const HASH_PERIODIC_COLUMN_COUNT: usize = PUBLIC_ROOT_HOLD_SELECTOR + 1;
 
 const COL_ELIGIBILITY_ACTIVE: usize = 0;
 const COL_AID_CODE: usize = 1;
@@ -85,17 +119,22 @@ const DATE_GE_DIFF_BITS_START: usize = 59;
 const DATE_LE_DIFF_BITS_START: usize = 91;
 const COL_CLOCK: usize = 123;
 const HASH_STATE_START: usize = 124;
+const FACT_COMMITMENT_RESULT_START: usize = 136;
 
-pub const TRACE_WIDTH: usize = 136;
+pub const TRACE_WIDTH: usize = 140;
 const GATE_COUNT: usize = 13;
 const RANGE_BITS: usize = 32;
 const SEMANTIC_CONSTRAINT_COUNT: usize = 129;
-const COMMITMENT_BOUND_COLUMN_COUNT: usize = 16 + CLAIM_HASH_LIMB_COUNT;
+const COMMITMENT_BOUND_COLUMN_COUNT: usize = 16 + CLAIM_HASH_LIMB_COUNT + FACT_COMMITMENT_WIDTH;
 const HASH_CONSTRAINT_COUNT: usize = RESCUE_STATE_WIDTH;
-const TRANSITION_CONSTRAINT_COUNT: usize =
-    SEMANTIC_CONSTRAINT_COUNT + COMMITMENT_BOUND_COLUMN_COUNT + HASH_CONSTRAINT_COUNT + 1;
+const FACT_COMMITMENT_BIND_CONSTRAINT_COUNT: usize = FACT_COMMITMENT_WIDTH;
+const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
+    + COMMITMENT_BOUND_COLUMN_COUNT
+    + HASH_CONSTRAINT_COUNT
+    + FACT_COMMITMENT_BIND_CONSTRAINT_COUNT
+    + 1;
 const PUBLIC_ASSERTION_COUNT: usize =
-    CLAIM_HASH_LIMB_COUNT + 2 + 1 + RESCUE_STATE_WIDTH + FACT_COMMITMENT_WIDTH;
+    CLAIM_HASH_LIMB_COUNT + 2 + 1 + RESCUE_STATE_WIDTH + PUBLIC_INPUT_ROOT_WIDTH;
 
 const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
     COL_ELIGIBILITY_ACTIVE,
@@ -116,7 +155,7 @@ const FAILURE_CODES: [u32; GATE_COUNT] = [1, 201, 202, 3, 4, 501, 502, 601, 602,
 #[derive(Clone, Copy, Debug)]
 pub struct ProductionAirPublicInputsV1 {
     pub claim_hash_limbs: [ProductionFelt; CLAIM_HASH_LIMB_COUNT],
-    pub fact_commitment: [ProductionFelt; FACT_COMMITMENT_WIDTH],
+    pub public_input_root: [ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
     pub decision: ProductionFelt,
     pub failure_code: ProductionFelt,
 }
@@ -124,7 +163,7 @@ pub struct ProductionAirPublicInputsV1 {
 impl ToElements<ProductionFelt> for ProductionAirPublicInputsV1 {
     fn to_elements(&self) -> Vec<ProductionFelt> {
         let mut elements = self.claim_hash_limbs.to_vec();
-        elements.extend(self.fact_commitment);
+        elements.extend(self.public_input_root);
         elements.push(self.decision);
         elements.push(self.failure_code);
         elements
@@ -290,24 +329,29 @@ impl Air for ProductionG1G10Air {
             core::array::from_fn(|round| {
                 rescue_round_constraints(&current_hash, &next_hash, round)
             });
-        let absorption_blocks = [
+        let fact_absorption_blocks = [
             commitment_absorption_block(current, 1),
             commitment_absorption_block(current, 2),
             commitment_absorption_block(current, 3),
         ];
+        let public_root_absorption_blocks = [
+            public_input_root_absorption_block(current, 1),
+            public_input_root_absorption_block(current, 2),
+        ];
+        let public_root_initial_state = initial_public_input_root_hash_state(current);
 
         let mut hash_degree_adjustment = clock_transition;
         for _ in 0..6 {
             hash_degree_adjustment *= current[COL_CLOCK];
         }
-        hash_degree_adjustment *= periodic_values[HASH_ROUND_SELECTOR_COUNT];
+        hash_degree_adjustment *= periodic_values[FACT_HASH_ABSORB_SELECTOR_START];
 
         for state_index in 0..RESCUE_STATE_WIDTH {
             let mut constraint = E::ZERO;
             for round in 0..RESCUE_ROUND_COUNT {
                 constraint += periodic_values[round] * round_constraints[round][state_index];
             }
-            for (block_index, block) in absorption_blocks.iter().enumerate() {
+            for (block_index, block) in fact_absorption_blocks.iter().enumerate() {
                 let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
                     .contains(&state_index)
                 {
@@ -315,11 +359,33 @@ impl Air for ProductionG1G10Air {
                 } else {
                     E::ZERO
                 };
-                constraint += periodic_values[HASH_ROUND_SELECTOR_COUNT + block_index]
+                constraint += periodic_values[FACT_HASH_ABSORB_SELECTOR_START + block_index]
                     * (next_hash[state_index] - current_hash[state_index] - absorbed);
             }
+            for (block_index, block) in public_root_absorption_blocks.iter().enumerate() {
+                let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
+                    .contains(&state_index)
+                {
+                    block[state_index - RESCUE_RATE_START]
+                } else {
+                    E::ZERO
+                };
+                constraint += periodic_values[PUBLIC_ROOT_ABSORB_SELECTOR_START + block_index]
+                    * (next_hash[state_index] - current_hash[state_index] - absorbed);
+            }
+            constraint += periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+                * (next_hash[state_index] - public_root_initial_state[state_index]);
+            constraint += periodic_values[PUBLIC_ROOT_HOLD_SELECTOR]
+                * (next_hash[state_index] - current_hash[state_index]);
             constraint += hash_degree_adjustment * E::from((state_index + 1) as u32);
             result[index] = constraint;
+            index += 1;
+        }
+
+        for digest_index in 0..FACT_COMMITMENT_WIDTH {
+            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+                * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
+                    - current[FACT_COMMITMENT_RESULT_START + digest_index]);
             index += 1;
         }
 
@@ -354,7 +420,7 @@ impl Air for ProductionG1G10Air {
         for (state_index, value) in initial_hash_state.into_iter().enumerate() {
             assertions.push(Assertion::single(HASH_STATE_START + state_index, 0, value));
         }
-        for (digest_index, value) in self.public_inputs.fact_commitment.iter().enumerate() {
+        for (digest_index, value) in self.public_inputs.public_input_root.iter().enumerate() {
             assertions.push(Assertion::single(
                 HASH_STATE_START + RESCUE_RATE_START + digest_index,
                 TRACE_LENGTH - 1,
@@ -403,7 +469,7 @@ impl Prover for ProductionG1G10Prover {
             claim_hash_limbs: core::array::from_fn(|limb| {
                 trace.get(CLAIM_HASH_LIMBS_START + limb, 0)
             }),
-            fact_commitment: core::array::from_fn(|limb| {
+            public_input_root: core::array::from_fn(|limb| {
                 trace.get(
                     HASH_STATE_START + RESCUE_RATE_START + limb,
                     TRACE_LENGTH - 1,
@@ -460,11 +526,24 @@ pub fn build_production_air_trace(
     validate_commitment_field_range(input)?;
     let semantics = input.evaluate()?;
     let commitment_preimage = canonical_claim_fact_commitment_preimage(input)?;
-    let hash_states = build_commitment_hash_states(&commitment_preimage);
+    let fact_hash_states = build_commitment_hash_states(&commitment_preimage);
+    let fact_commitment: [ProductionFelt; FACT_COMMITMENT_WIDTH] = core::array::from_fn(|index| {
+        fact_hash_states[FACT_HASH_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+    });
+    let public_root_preimage =
+        canonical_public_input_root_preimage_with_fact_commitment(input, &fact_commitment)?;
+    let public_root_hash_states = build_public_input_root_hash_states(&public_root_preimage);
     let mut rows = Vec::with_capacity(TRACE_LENGTH);
-    for (step, hash_state) in hash_states.into_iter().enumerate() {
+    for step in 0..TRACE_LENGTH {
         let mut row = build_trace_row(input, &semantics)?;
         row[COL_CLOCK] = ProductionFelt::from(step as u32);
+        row[FACT_COMMITMENT_RESULT_START..FACT_COMMITMENT_RESULT_START + FACT_COMMITMENT_WIDTH]
+            .copy_from_slice(&fact_commitment);
+        let hash_state = if step < FACT_HASH_TRACE_LENGTH {
+            fact_hash_states[step]
+        } else {
+            public_root_hash_states[step - FACT_HASH_TRACE_LENGTH]
+        };
         row[HASH_STATE_START..HASH_STATE_START + RESCUE_STATE_WIDTH].copy_from_slice(&hash_state);
         rows.push(row);
     }
@@ -545,6 +624,59 @@ pub fn compute_claim_fact_commitment(
         .expect("Rp64_256 digest must contain four field elements"))
 }
 
+pub fn canonical_public_input_root_preimage(
+    input: &ProductionAirInputV1,
+) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH], Vec<String>> {
+    let fact_commitment = compute_claim_fact_commitment(input)?;
+    canonical_public_input_root_preimage_with_fact_commitment(input, &fact_commitment)
+}
+
+pub fn compute_public_input_root(
+    input: &ProductionAirInputV1,
+) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH], Vec<String>> {
+    let elements = canonical_public_input_root_preimage(input)?;
+    let digest = Rp64_256::hash_elements(&elements);
+    Ok(digest
+        .as_elements()
+        .try_into()
+        .expect("Rp64_256 digest must contain four field elements"))
+}
+
+pub fn pack_public_input_root_bytes32(
+    public_input_root: &[ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
+) -> String {
+    let mut encoded = String::with_capacity(66);
+    encoded.push_str("0x");
+    for element in public_input_root {
+        write!(&mut encoded, "{:016x}", element.as_int()).expect("writing to a String cannot fail");
+    }
+    encoded
+}
+
+pub fn unpack_public_input_root_bytes32(
+    encoded: &str,
+) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH], String> {
+    let hex = encoded.strip_prefix("0x").unwrap_or(encoded);
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("public_input_root must be a 0x-prefixed bytes32 hex string".to_string());
+    }
+
+    let mut elements = [ProductionFelt::ZERO; PUBLIC_INPUT_ROOT_WIDTH];
+    for (index, element) in elements.iter_mut().enumerate() {
+        let start = index * 16;
+        let value = u64::from_str_radix(&hex[start..start + 16], 16)
+            .map_err(|error| format!("invalid public_input_root element {index}: {error}"))?;
+        let candidate = ProductionFelt::new(value);
+        if candidate.as_int() != value {
+            return Err(format!(
+                "public_input_root element {index} is not a canonical f64 field element"
+            ));
+        }
+        *element = candidate;
+    }
+    Ok(elements)
+}
+
 fn build_trace_row(
     input: &ProductionAirInputV1,
     semantics: &ProductionAirSemanticsTraceV1,
@@ -623,6 +755,10 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..HASH_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(7, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..FACT_COMMITMENT_BIND_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -630,13 +766,20 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
 
 fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
     let mut columns = vec![vec![ProductionFelt::ZERO; TRACE_LENGTH]; HASH_PERIODIC_COLUMN_COUNT];
-    for block in 0..4 {
+    for block in 0..7 {
         for round in 0..RESCUE_ROUND_COUNT {
             columns[round][block * 8 + round] = ProductionFelt::ONE;
         }
     }
     for (selector, step) in [7usize, 15, 23].into_iter().enumerate() {
-        columns[HASH_ROUND_SELECTOR_COUNT + selector][step] = ProductionFelt::ONE;
+        columns[FACT_HASH_ABSORB_SELECTOR_START + selector][step] = ProductionFelt::ONE;
+    }
+    for (selector, step) in [39usize, 47].into_iter().enumerate() {
+        columns[PUBLIC_ROOT_ABSORB_SELECTOR_START + selector][step] = ProductionFelt::ONE;
+    }
+    columns[PUBLIC_ROOT_RESET_SELECTOR][31] = ProductionFelt::ONE;
+    for step in 55..TRACE_LENGTH - 1 {
+        columns[PUBLIC_ROOT_HOLD_SELECTOR][step] = ProductionFelt::ONE;
     }
     columns
 }
@@ -644,6 +787,7 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
 fn commitment_bound_columns() -> Vec<usize> {
     (COL_ELIGIBILITY_ACTIVE..=COL_PHYSICIAN_CERTIFICATION_VALID)
         .chain(CLAIM_HASH_LIMBS_START..CLAIM_HASH_LIMBS_START + CLAIM_HASH_LIMB_COUNT)
+        .chain(FACT_COMMITMENT_RESULT_START..FACT_COMMITMENT_RESULT_START + FACT_COMMITMENT_WIDTH)
         .collect()
 }
 
@@ -654,6 +798,32 @@ fn commitment_header() -> [ProductionFelt; 4] {
         felt(FACT_COMMITMENT_RULESET_TAG),
         felt(FACT_COUNT),
     ]
+}
+
+fn public_input_root_header() -> [ProductionFelt; 4] {
+    [
+        felt(PUBLIC_INPUT_ROOT_DOMAIN_TAG),
+        felt(1),
+        felt(PUBLIC_INPUT_ROOT_RULESET_TAG),
+        felt(PUBLIC_INPUT_ROOT_ELEMENT_COUNT),
+    ]
+}
+
+fn canonical_public_input_root_preimage_with_fact_commitment(
+    input: &ProductionAirInputV1,
+    fact_commitment: &[ProductionFelt; FACT_COMMITMENT_WIDTH],
+) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH], Vec<String>> {
+    input.validate()?;
+    validate_commitment_field_range(input)?;
+
+    let claim_hash_limbs = parse_claim_hash_limbs(&input.claim_hash)?;
+    let mut elements = [ProductionFelt::ZERO; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH];
+    elements[..4].copy_from_slice(&public_input_root_header());
+    elements[4..12].copy_from_slice(&claim_hash_limbs);
+    elements[12..16].copy_from_slice(fact_commitment);
+    elements[16] = felt(input.expected_outcome.decision as u64);
+    elements[17] = felt(input.expected_outcome.failure_code as u64);
+    Ok(elements)
 }
 
 fn canonical_fact_elements(input: &ProductionAirInputV1) -> [ProductionFelt; 16] {
@@ -689,14 +859,28 @@ fn initial_commitment_hash_state(
     state
 }
 
+fn initial_public_input_root_hash_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH as u64));
+    for (offset, value) in public_input_root_header().into_iter().enumerate() {
+        state[RESCUE_RATE_START + offset] = E::from(value);
+    }
+    for offset in 0..4 {
+        state[RESCUE_RATE_START + 4 + offset] = row[CLAIM_HASH_LIMBS_START + offset];
+    }
+    state
+}
+
 fn build_commitment_hash_states(
     elements: &[ProductionFelt; FACT_COMMITMENT_PREIMAGE_LENGTH],
-) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; TRACE_LENGTH] {
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; FACT_HASH_TRACE_LENGTH] {
     let first_claim_hash_limbs: [ProductionFelt; 4] = elements[4..8]
         .try_into()
         .expect("canonical commitment contains four initial claim hash limbs");
     let mut state = initial_commitment_hash_state(&first_claim_hash_limbs);
-    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; TRACE_LENGTH];
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; FACT_HASH_TRACE_LENGTH];
     states[0] = state;
     let mut step = 0;
 
@@ -719,7 +903,50 @@ fn build_commitment_hash_states(
         }
     }
 
-    debug_assert_eq!(step, TRACE_LENGTH - 1);
+    debug_assert_eq!(step, FACT_HASH_TRACE_LENGTH - 1);
+    states
+}
+
+fn build_public_input_root_hash_states(
+    elements: &[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; TRACE_LENGTH - FACT_HASH_TRACE_LENGTH] {
+    let first_claim_hash_limbs: [ProductionFelt; 4] = elements[4..8]
+        .try_into()
+        .expect("canonical public input root contains four initial claim hash limbs");
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH as u64);
+    state[RESCUE_RATE_START..RESCUE_RATE_START + 4].copy_from_slice(&public_input_root_header());
+    state[RESCUE_RATE_START + 4..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&first_claim_hash_limbs);
+
+    let mut states =
+        [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; TRACE_LENGTH - FACT_HASH_TRACE_LENGTH];
+    states[0] = state;
+    let mut step = 0;
+
+    for block in 0..3 {
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            step += 1;
+            states[step] = state;
+        }
+        if block < 2 {
+            let next_block_start = (block + 1) * RESCUE_RATE_WIDTH;
+            for rate_index in 0..RESCUE_RATE_WIDTH {
+                let element_index = next_block_start + rate_index;
+                if element_index < PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH {
+                    state[RESCUE_RATE_START + rate_index] += elements[element_index];
+                }
+            }
+            step += 1;
+            states[step] = state;
+        }
+    }
+
+    debug_assert_eq!(step, 23);
+    for hold_step in step + 1..states.len() {
+        states[hold_step] = state;
+    }
     states
 }
 
@@ -759,6 +986,35 @@ fn commitment_absorption_block<E: FieldElement + From<ProductionFelt>>(
             E::ZERO,
         ],
         _ => unreachable!("commitment absorption block must be 1, 2, or 3"),
+    }
+}
+
+fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    block: usize,
+) -> [E; RESCUE_RATE_WIDTH] {
+    match block {
+        1 => [
+            row[CLAIM_HASH_LIMBS_START + 4],
+            row[CLAIM_HASH_LIMBS_START + 5],
+            row[CLAIM_HASH_LIMBS_START + 6],
+            row[CLAIM_HASH_LIMBS_START + 7],
+            row[FACT_COMMITMENT_RESULT_START],
+            row[FACT_COMMITMENT_RESULT_START + 1],
+            row[FACT_COMMITMENT_RESULT_START + 2],
+            row[FACT_COMMITMENT_RESULT_START + 3],
+        ],
+        2 => [
+            row[COL_DECISION],
+            row[COL_FAILURE_CODE],
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+        ],
+        _ => unreachable!("public input root absorption block must be 1 or 2"),
     }
 }
 

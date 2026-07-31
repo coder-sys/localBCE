@@ -2,7 +2,9 @@
 
 ## Status
 
-Phase 8 has started as a planning-only real-prover boundary.
+Phase 8 now includes a feature-gated production Winterfell AIR, locally
+verified proof bytes, artifact schema v2, and verifier-handoff schema v2. The
+older planning sections in this document remain as implementation history.
 
 The active runtime is still Groth16. No STARK proof is submitted on-chain and no
 active `ClaimsRegistry.sol` behavior changes.
@@ -1764,7 +1766,8 @@ The trace now contains:
 
 - all active G1-G10 Rust facts
 - eight lossless 32-bit limbs of the existing SHA-256 claim identity hash
-- a four-element public Rescue-Prime claim-to-fact commitment
+- a four-element internal Rescue-Prime claim-to-fact commitment
+- a four-element public Rescue-Prime `publicInputRoot`
 - 13 ordered gate results
 - 13 first-failure prefix values
 - date comparison witnesses with sound 32-bit decompositions
@@ -1788,10 +1791,15 @@ preimage:
   all 16 G1-G10 facts in the documented canonical order
 ```
 
-The 32-row AIR executes four seven-round Rescue permutations with three
-absorption transitions. It constrains the claim-hash limbs and all 16 facts to
-remain constant across the trace, binds the first hash state to the public
-claim identity, and binds the final four digest elements to public inputs.
+The 64-row AIR first executes four seven-round Rescue permutations for the
+private fact commitment, then executes three seven-round Rescue permutations
+for `publicInputRoot`. It constrains the claim-hash limbs and all 16 facts to
+remain constant, binds the internal fact digest into the second hash phase,
+and binds the final four root elements to public inputs.
+
+The root preimage is domain-separated and contains the claim hash, internal
+fact commitment, decision, and failure code. The four canonical field elements
+are packed as four big-endian `u64` values into one Solidity `bytes32`.
 The v1 contract requires numeric adjudication facts to fit in 32 bits. This
 keeps field encoding lossless and prevents modular wraparound from weakening
 the service-date comparisons. Out-of-range values are rejected before trace
@@ -1805,7 +1813,8 @@ Feature-gated tests cover:
 - canonical domain, field ordering, and lossless claim-hash limb encoding
 - mutation rejection for every one of the 16 private facts
 - claim identity hash binding
-- tampered public claim-hash and fact-commitment rejection
+- tampered public claim-hash and `publicInputRoot` rejection
+- fixed `publicInputRoot` regression vector and `bytes32` round trip
 - field-range rejection
 
 This closes the production AIR's claim-to-fact binding gap, but does not make
@@ -1823,12 +1832,14 @@ groth16_flow_unchanged = true
 
 ## Production Proof Artifact
 
-The feature-gated `stark-production-proof-artifact-v1` contract packages:
+The feature-gated `stark-production-proof-artifact-v2` contract packages:
 
 - real Winterfell 0.13.1 proof bytes as lower-case hex
 - SHA-256 and exact byte length for the serialized proof
 - all 14 Winterfell public inputs in locked order as canonical decimal field
   values
+- the four AIR-constrained root elements and their canonical Solidity
+  `bytes32` representation
 - SHA-256 of the canonical 14 x 8-byte big-endian public-input encoding
 - the claim hash binding, fact commitment schema, AIR parameters, decision,
   and failure code
@@ -1856,7 +1867,7 @@ identity value carried by the proof.
 
 ## Production Verifier Handoff
 
-`stark-production-verifier-handoff-v1` embeds and re-validates the complete
+`stark-production-verifier-handoff-v2` embeds and re-validates the complete
 production proof artifact, then locks it to the exact field order and Solidity
 types in `IStarkClaimsVerifierV1Candidate`.
 
@@ -1876,10 +1887,10 @@ The current mapping is:
 claimHash       -> direct AIR claim-hash public input
 decision        -> direct AIR public input
 failureCode     -> direct AIR public input
-publicInputRoot -> SHA-256 handoff candidate over the 14 AIR inputs
+publicInputRoot -> direct AIR-constrained Rp64_256 root packed as bytes32
 proof           -> locally verified Winterfell proof bytes
 
-claimSourceRoot    -> unresolved
+claimSourceRoot    -> local Rp64_256 Merkle candidate; unresolved for handoff
 oracleFactsRoot    -> unresolved
 feeScheduleRoot    -> unresolved
 nullifierRootBefore -> unresolved
@@ -1887,8 +1898,8 @@ nullifierRootAfter  -> unresolved
 batchRoot           -> unresolved
 ```
 
-`publicInputRoot` is not yet an AIR-constrained or Solidity-adopted root. The
-six remaining roots are absent. Therefore:
+`publicInputRoot` is now a direct AIR-constrained public input packed into
+Solidity `bytes32`. The six remaining roots are absent. Therefore:
 
 ```text
 verifier_handoff_complete = true
@@ -1911,10 +1922,42 @@ cargo run --features production-air-winterfell \
   production_stark_verifier_handoff.json
 ```
 
+## Claim-Source Root Candidate
+
+The feature-gated `stark-claim-source-root-v1` artifact is the first concrete
+source-root implementation. It consumes only active `StarkBridgeInput` data and
+binds:
+
+- claim hash
+- member ID and provider NPI digests
+- service-line and diagnosis presence and counts
+- all procedure codes, line charges, units, and diagnosis codes
+- normalized total charge cents
+- service date
+
+The leaf is opened at index 5 in a canonical depth-10 `Rp64_256` Merkle tree
+with domain-separated indexed empty leaves. The root uses the same
+four-canonical-f64-elements-to-`bytes32` encoding as `publicInputRoot`.
+
+Generate and validate it with:
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_claim_source_root -- \
+  ../rust-engine/stark_bridge_input.json production_claim_source_root.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_claim_source_root -- \
+  production_claim_source_root.json
+```
+
+This root is not yet constrained by the production AIR, approved by governance,
+or placed in the verifier handoff. It remains unresolved at the ABI boundary.
+
 ## Next Safe Step
 
-Resolve the public-input semantic mismatch before implementing calldata or a
-contract verifier. Either make a selected `publicInputRoot` an explicit,
-constrained AIR public input, or revise the candidate ABI to accept the 14
-native AIR field elements. Then add governed source/state roots and only mark
-the envelope call-ready after positive and negative verifier tests.
+Bind `claimSourceRoot` into the production AIR and define governed root
+approval without activating runtime behavior. Then implement the five remaining
+source/state roots and a verifier for the locked proof and public-input
+encoding. Mark the envelope call-ready only after positive and negative
+verifier tests.

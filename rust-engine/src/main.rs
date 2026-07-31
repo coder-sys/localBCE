@@ -50,6 +50,13 @@ impl AdjudicationResult {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ClaimServiceLine {
+    procedure_code: String,
+    charge_cents: u64,
+    units: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaimInput {
     claim_id: String,
@@ -58,6 +65,10 @@ struct ClaimInput {
     provider_npi: Option<String>,
     diagnosis_count: Option<u64>,
     max_charge_cents: Option<u64>,
+    #[serde(default)]
+    diagnosis_codes: Vec<String>,
+    #[serde(default)]
+    service_lines: Vec<ClaimServiceLine>,
 
     eligibility_active: u8,
     aid_code: u64,
@@ -194,6 +205,8 @@ struct StarkBridgeClaim {
     provider_npi: Option<String>,
     diagnosis_count: Option<u64>,
     max_charge_cents: Option<u64>,
+    diagnosis_codes: Vec<String>,
+    service_lines: Vec<ClaimServiceLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -326,6 +339,8 @@ impl StarkBridgeInput {
                 provider_npi: claim.provider_npi.clone(),
                 diagnosis_count: claim.diagnosis_count,
                 max_charge_cents: claim.max_charge_cents,
+                diagnosis_codes: claim.diagnosis_codes.clone(),
+                service_lines: claim.service_lines.clone(),
             },
             adjudication: StarkBridgeAdjudication {
                 decision,
@@ -863,6 +878,8 @@ mod tests {
             provider_npi: None,
             diagnosis_count: None,
             max_charge_cents: None,
+            diagnosis_codes: Vec::new(),
+            service_lines: Vec::new(),
             eligibility_active: 1,
             aid_code: 53,
             benefit_level_exists: 1,
@@ -1585,6 +1602,8 @@ status                  1";
         assert_eq!(value["claim"]["provider_npi"], Value::Null);
         assert_eq!(value["claim"]["diagnosis_count"], Value::Null);
         assert_eq!(value["claim"]["max_charge_cents"], Value::Null);
+        assert_eq!(value["claim"]["diagnosis_codes"], json!([]));
+        assert_eq!(value["claim"]["service_lines"], json!([]));
         assert_eq!(value["adjudication"]["decision"], 1);
         assert_eq!(value["adjudication"]["failure_code"], 0);
         assert_eq!(value["adjudication"]["failure_reason"], Value::Null);
@@ -1640,6 +1659,12 @@ status                  1";
         claim.provider_npi = Some("1234567893".to_string());
         claim.diagnosis_count = Some(1);
         claim.max_charge_cents = Some(150_000);
+        claim.diagnosis_codes = vec!["Z00.00".to_string()];
+        claim.service_lines = vec![ClaimServiceLine {
+            procedure_code: "99213".to_string(),
+            charge_cents: 100_000,
+            units: 1,
+        }];
         let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
         let value =
             serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
@@ -1648,6 +1673,15 @@ status                  1";
         assert_eq!(value["claim"]["provider_npi"], "1234567893");
         assert_eq!(value["claim"]["diagnosis_count"], 1);
         assert_eq!(value["claim"]["max_charge_cents"], 150_000);
+        assert_eq!(value["claim"]["diagnosis_codes"], json!(["Z00.00"]));
+        assert_eq!(
+            value["claim"]["service_lines"],
+            json!([{
+                "procedure_code": "99213",
+                "charge_cents": 100_000,
+                "units": 1
+            }])
+        );
         assert_eq!(
             value["winterfell_poc_mapping"]["unmapped"]["member_id"],
             stable_identity_string_to_u64("MEMBER-FIXTURE-001")

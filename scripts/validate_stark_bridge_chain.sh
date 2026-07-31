@@ -101,6 +101,9 @@ STARK_SOLIDITY_VERIFIER_INTERFACE_PLAN="${TMP_DIR}/stark_solidity_verifier_inter
 STARK_SETTLEMENT_INTEGRATION_GAP_REPORT="${TMP_DIR}/stark_settlement_integration_gap_report.json"
 STARK_SETTLEMENT_IMPLEMENTATION_PLAN="${TMP_DIR}/stark_settlement_implementation_plan.json"
 STARK_SETTLEMENT_RUNTIME_READINESS_REPORT="${TMP_DIR}/stark_settlement_runtime_readiness_report.json"
+PRODUCTION_STARK_PROOF_ARTIFACT="${TMP_DIR}/production_stark_proof_artifact.json"
+PRODUCTION_STARK_VERIFIER_HANDOFF="${TMP_DIR}/production_stark_verifier_handoff.json"
+PRODUCTION_CLAIM_SOURCE_ROOT="${TMP_DIR}/production_claim_source_root.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -109,6 +112,16 @@ mv "${ROOT_DIR}/rust-engine/stark_bridge_input.json" "${BRIDGE_INPUT}"
 
 run_in_dir "Validate STARK bridge input" "stark-engine" \
   cargo run --bin validate_bridge_input -- "${BRIDGE_INPUT}"
+
+run_in_dir "Generate production claim-source root candidate" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin generate_production_claim_source_root -- \
+    "${BRIDGE_INPUT}" "${PRODUCTION_CLAIM_SOURCE_ROOT}"
+
+run_in_dir "Validate production claim-source root candidate" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_production_claim_source_root -- \
+    "${PRODUCTION_CLAIM_SOURCE_ROOT}"
 
 run_in_dir "Generate STARK proof artifact V1 candidate" "stark-engine" \
   cargo run --bin generate_stark_proof_artifact_v1_candidate -- "${BRIDGE_INPUT}" "${STARK_PROOF_ARTIFACT_V1_CANDIDATE}"
@@ -503,6 +516,26 @@ run_in_dir "Generate Winterfell compatibility report" "stark-engine" \
 
 run_in_dir "Generate Winterfell adapter gap plan" "stark-engine" \
   cargo run --bin generate_winterfell_gap_plan -- "${WINTERFELL_REPORT}" "${WINTERFELL_GAP_PLAN}"
+
+run_in_dir "Generate production STARK proof artifact" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin generate_production_stark_proof_artifact -- \
+    "${BRIDGE_INPUT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}"
+
+run_in_dir "Validate production STARK proof artifact" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_production_stark_proof_artifact -- \
+    "${PRODUCTION_STARK_PROOF_ARTIFACT}"
+
+run_in_dir "Generate production STARK verifier handoff" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin generate_production_stark_verifier_handoff -- \
+    "${PRODUCTION_STARK_PROOF_ARTIFACT}" "${PRODUCTION_STARK_VERIFIER_HANDOFF}"
+
+run_in_dir "Validate production STARK verifier handoff" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_production_stark_verifier_handoff -- \
+    "${PRODUCTION_STARK_VERIFIER_HANDOFF}"
 
 echo
 echo "==> STARK bridge CLI chain smoke test passed"

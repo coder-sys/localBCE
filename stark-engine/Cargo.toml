@@ -41,3 +41,13 @@ required-features = ["production-air-winterfell"]
 name = "validate_production_stark_verifier_handoff"
 path = "src/bin/validate_production_stark_verifier_handoff.rs"
 required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "generate_production_claim_source_root"
+path = "src/bin/generate_production_claim_source_root.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "validate_production_claim_source_root"
+path = "src/bin/validate_production_claim_source_root.rs"
+required-features = ["production-air-winterfell"]

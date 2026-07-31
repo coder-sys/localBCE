@@ -6,8 +6,10 @@ use crate::{
     StarkBridgeInput,
     production_air::ProductionAirInputV1,
     production_air_winterfell::{
-        FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_SCHEMA_VERSION, ProductionAirPublicInputsV1,
-        ProductionFelt, TRACE_LENGTH, TRACE_WIDTH, prove_production_air,
+        FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_SCHEMA_VERSION, PUBLIC_INPUT_ROOT_ENCODING,
+        PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
+        ProductionAirPublicInputsV1, ProductionFelt, TRACE_LENGTH, TRACE_WIDTH,
+        pack_public_input_root_bytes32, prove_production_air, unpack_public_input_root_bytes32,
         verify_production_air_result,
     },
 };
@@ -21,16 +23,16 @@ pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 14] = [
     "claim_hash_be_u32_limb_5",
     "claim_hash_be_u32_limb_6",
     "claim_hash_be_u32_limb_7",
-    "fact_commitment_element_0",
-    "fact_commitment_element_1",
-    "fact_commitment_element_2",
-    "fact_commitment_element_3",
+    "public_input_root_element_0",
+    "public_input_root_element_1",
+    "public_input_root_element_2",
+    "public_input_root_element_3",
     "decision",
     "failure_code",
 ];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkProofArtifactV1 {
+pub struct ProductionStarkProofArtifactV2 {
     pub schema_version: String,
     pub source_schema_version: String,
     pub artifact_status: String,
@@ -39,6 +41,10 @@ pub struct ProductionStarkProofArtifactV1 {
     pub air_schema_version: String,
     pub fact_commitment_schema_version: String,
     pub fact_commitment_hash: String,
+    pub public_input_root_schema_version: String,
+    pub public_input_root_hash: String,
+    pub public_input_root_encoding: String,
+    pub public_input_root_bytes32: String,
     pub claim_id: String,
     pub claim_id_binding: String,
     pub claim_hash: String,
@@ -46,9 +52,9 @@ pub struct ProductionStarkProofArtifactV1 {
     pub ruleset_id: String,
     pub decision: u8,
     pub failure_code: u32,
-    pub public_inputs: ProductionStarkPublicInputsV1,
-    pub proof: ProductionStarkProofBytesV1,
-    pub parameters: ProductionStarkProofParametersV1,
+    pub public_inputs: ProductionStarkPublicInputsV2,
+    pub proof: ProductionStarkProofBytesV2,
+    pub parameters: ProductionStarkProofParametersV2,
     pub local_verification_status: String,
     pub locally_verified: bool,
     pub runtime_wired: bool,
@@ -58,7 +64,7 @@ pub struct ProductionStarkProofArtifactV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkPublicInputsV1 {
+pub struct ProductionStarkPublicInputsV2 {
     pub schema_version: String,
     pub encoding: String,
     pub order: Vec<String>,
@@ -68,7 +74,7 @@ pub struct ProductionStarkPublicInputsV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkProofBytesV1 {
+pub struct ProductionStarkProofBytesV2 {
     pub encoding: String,
     pub bytes_hex: String,
     pub size_bytes: usize,
@@ -76,7 +82,7 @@ pub struct ProductionStarkProofBytesV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkProofParametersV1 {
+pub struct ProductionStarkProofParametersV2 {
     pub base_field: String,
     pub field_extension: String,
     pub trace_commitment_hash: String,
@@ -86,8 +92,13 @@ pub struct ProductionStarkProofParametersV1 {
     pub minimum_conjectured_security_bits: u32,
 }
 
-impl ProductionStarkProofArtifactV1 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v1";
+pub type ProductionStarkProofArtifactV1 = ProductionStarkProofArtifactV2;
+pub type ProductionStarkPublicInputsV1 = ProductionStarkPublicInputsV2;
+pub type ProductionStarkProofBytesV1 = ProductionStarkProofBytesV2;
+pub type ProductionStarkProofParametersV1 = ProductionStarkProofParametersV2;
+
+impl ProductionStarkProofArtifactV2 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v2";
     pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionAirInputV1::SCHEMA_VERSION;
     pub const ARTIFACT_STATUS: &'static str = "locally_verified_feature_gated_not_runtime";
     pub const PROOF_SYSTEM: &'static str = "winterfell";
@@ -112,7 +123,9 @@ impl ProductionStarkProofArtifactV1 {
         })?;
 
         let proof_bytes = proof.to_bytes();
-        let public_inputs = ProductionStarkPublicInputsV1::from_air_public_inputs(&public_inputs);
+        let public_input_root_bytes32 =
+            pack_public_input_root_bytes32(&public_inputs.public_input_root);
+        let public_inputs = ProductionStarkPublicInputsV2::from_air_public_inputs(&public_inputs);
         let artifact = Self {
             schema_version: Self::SCHEMA_VERSION.to_string(),
             source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
@@ -122,6 +135,10 @@ impl ProductionStarkProofArtifactV1 {
             air_schema_version: input.schema_version.clone(),
             fact_commitment_schema_version: FACT_COMMITMENT_SCHEMA_VERSION.to_string(),
             fact_commitment_hash: FACT_COMMITMENT_HASH_FUNCTION.to_string(),
+            public_input_root_schema_version: PUBLIC_INPUT_ROOT_SCHEMA_VERSION.to_string(),
+            public_input_root_hash: PUBLIC_INPUT_ROOT_HASH_FUNCTION.to_string(),
+            public_input_root_encoding: PUBLIC_INPUT_ROOT_ENCODING.to_string(),
+            public_input_root_bytes32,
             claim_id: input.claim_id.clone(),
             claim_id_binding: Self::CLAIM_ID_BINDING.to_string(),
             claim_hash: input.claim_hash.clone(),
@@ -130,13 +147,13 @@ impl ProductionStarkProofArtifactV1 {
             decision: input.expected_outcome.decision,
             failure_code: input.expected_outcome.failure_code,
             public_inputs,
-            proof: ProductionStarkProofBytesV1 {
-                encoding: ProductionStarkProofBytesV1::ENCODING.to_string(),
+            proof: ProductionStarkProofBytesV2 {
+                encoding: ProductionStarkProofBytesV2::ENCODING.to_string(),
                 bytes_hex: encode_hex(&proof_bytes),
                 size_bytes: proof_bytes.len(),
                 sha256: sha256_hex(&proof_bytes),
             },
-            parameters: ProductionStarkProofParametersV1::expected(),
+            parameters: ProductionStarkProofParametersV2::expected(),
             local_verification_status: Self::LOCAL_VERIFICATION_STATUS.to_string(),
             locally_verified: true,
             runtime_wired: false,
@@ -198,6 +215,24 @@ impl ProductionStarkProofArtifactV1 {
             "fact_commitment_hash",
             &self.fact_commitment_hash,
             FACT_COMMITMENT_HASH_FUNCTION,
+            &mut errors,
+        );
+        validate_exact(
+            "public_input_root_schema_version",
+            &self.public_input_root_schema_version,
+            PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
+            &mut errors,
+        );
+        validate_exact(
+            "public_input_root_hash",
+            &self.public_input_root_hash,
+            PUBLIC_INPUT_ROOT_HASH_FUNCTION,
+            &mut errors,
+        );
+        validate_exact(
+            "public_input_root_encoding",
+            &self.public_input_root_encoding,
+            PUBLIC_INPUT_ROOT_ENCODING,
             &mut errors,
         );
         validate_exact(
@@ -266,6 +301,25 @@ impl ProductionStarkProofArtifactV1 {
         {
             errors.append(&mut public_input_errors);
         }
+        match (
+            unpack_public_input_root_bytes32(&self.public_input_root_bytes32),
+            self.public_inputs.parsed_values(),
+        ) {
+            (Ok(packed), Ok(values))
+                if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() =>
+            {
+                let public_values = packed.map(|value| value.as_int());
+                if values[8..12] != public_values {
+                    errors.push(
+                        "public_input_root_bytes32 does not match public input root elements"
+                            .to_string(),
+                    );
+                }
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(error), _) => errors.push(error),
+            (_, Err(_)) => {}
+        }
         if let Err(mut proof_errors) = self.proof.validate() {
             errors.append(&mut proof_errors);
         }
@@ -301,8 +355,8 @@ impl ProductionStarkProofArtifactV1 {
     }
 }
 
-impl ProductionStarkPublicInputsV1 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v1";
+impl ProductionStarkPublicInputsV2 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v2";
     pub const ENCODING: &'static str = "winterfell-f64-canonical-decimal";
 
     fn from_air_public_inputs(public_inputs: &ProductionAirPublicInputsV1) -> Self {
@@ -313,7 +367,7 @@ impl ProductionStarkPublicInputsV1 {
             .collect::<Vec<_>>();
         values.extend(
             public_inputs
-                .fact_commitment
+                .public_input_root
                 .iter()
                 .map(|value| value.as_int()),
         );
@@ -462,16 +516,16 @@ impl ProductionStarkPublicInputsV1 {
             claim_hash_limbs: field_values[..8]
                 .try_into()
                 .expect("validated claim hash limb count"),
-            fact_commitment: field_values[8..12]
+            public_input_root: field_values[8..12]
                 .try_into()
-                .expect("validated fact commitment width"),
+                .expect("validated public input root width"),
             decision: field_values[12],
             failure_code: field_values[13],
         })
     }
 }
 
-impl ProductionStarkProofBytesV1 {
+impl ProductionStarkProofBytesV2 {
     pub const ENCODING: &'static str = "hex-lower-0x";
 
     fn validate(&self) -> Result<(), Vec<String>> {
@@ -529,7 +583,7 @@ impl ProductionStarkProofBytesV1 {
     }
 }
 
-impl ProductionStarkProofParametersV1 {
+impl ProductionStarkProofParametersV2 {
     pub const BASE_FIELD: &'static str = "winterfell-f64";
     pub const FIELD_EXTENSION: &'static str = "quadratic";
     pub const TRACE_COMMITMENT_HASH: &'static str = "blake3-256";

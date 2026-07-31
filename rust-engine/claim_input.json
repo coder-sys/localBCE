@@ -5,6 +5,16 @@
   "provider_npi": "1234567893",
   "diagnosis_count": 1,
   "max_charge_cents": 150000,
+  "diagnosis_codes": [
+    "Z00.00"
+  ],
+  "service_lines": [
+    {
+      "procedure_code": "99213",
+      "charge_cents": 100000,
+      "units": 1
+    }
+  ],
 
   "eligibility_active": 1,
   "aid_code": 53,

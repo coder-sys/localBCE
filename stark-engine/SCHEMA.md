@@ -47,7 +47,7 @@ Top-level fields:
 | `producer` | string | Must be `rust-engine`. |
 | `purpose` | string | Intended bridge purpose. |
 | `runtime_mode` | string | Dry-run or optional sidecar mode. |
-| `claim` | object | Claim identity, amount, and hash. |
+| `claim` | object | Claim identity, amount, hash, and optional source facts. |
 | `adjudication` | object | Decision, failure code/reason, and ruleset id. |
 | `active_rust_facts` | object | Current active Rust G1-G10 facts. |
 | `winterfell_poc_mapping` | object | Direct, partial, and unmapped compatibility fields. |
@@ -68,6 +68,19 @@ Required validation:
   - unmapped: `4`
 - `proof_status.stark_proof_generated == false`.
 
+Optional claim-source fields:
+
+- `member_id`
+- `provider_npi`
+- `diagnosis_count`
+- `max_charge_cents`
+- `diagnosis_codes`
+- `service_lines`, with `procedure_code`, `charge_cents`, and `units`
+
+The arrays default to empty during deserialization so older bridge fixtures
+remain compatible. They do not affect active Rust adjudication or Groth16
+inputs.
+
 Direct fields today:
 
 - `eligibility_active`
@@ -87,6 +100,41 @@ Unmapped fields today:
 - `provider_npi`
 - `diagnosis_count`
 - `max_charge_cents`
+
+## ProductionClaimSourceRootArtifactV1
+
+Schema version: `stark-claim-source-root-v1`
+
+Purpose: build a deterministic local `Rp64_256` claim-source Merkle candidate
+from a validated, source-complete `StarkBridgeInput`.
+
+The artifact contains:
+
+- the canonical 36-field claim-source leaf preimage and field order
+- the four-element leaf digest
+- a depth-10 Merkle opening at leaf index `5`
+- four-element root values and canonical Solidity `bytes32` packing
+- explicit governance, AIR binding, runtime, chain, and Groth16 safety flags
+
+Generation requires present member/provider identity, at least one service
+line and diagnosis, matching diagnosis counts, and line charges that equal
+`claim_amount * 100` cents. Procedure and diagnosis codes are trimmed and
+ASCII-uppercased before hashing.
+
+Commands:
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_claim_source_root -- \
+  stark_bridge_input.json production_claim_source_root.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_claim_source_root -- \
+  production_claim_source_root.json
+```
+
+This candidate is not constrained by the production AIR, governed, included
+in the verifier handoff, runtime-wired, or submitted on-chain.
 
 ## StarkProofIntent
 

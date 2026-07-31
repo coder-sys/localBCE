@@ -1,6 +1,6 @@
 use std::{env, fs, process};
 
-use stark_engine::production_verifier_handoff::ProductionStarkVerifierHandoffV1;
+use stark_engine::production_verifier_handoff::ProductionStarkVerifierHandoffV2;
 
 fn main() {
     if let Err(errors) = run() {
@@ -21,7 +21,7 @@ fn run() -> Result<(), Vec<String>> {
 
     let input_json = fs::read_to_string(&path)
         .map_err(|error| vec![format!("could not read {path}: {error}")])?;
-    let handoff: ProductionStarkVerifierHandoffV1 = serde_json::from_str(&input_json)
+    let handoff: ProductionStarkVerifierHandoffV2 = serde_json::from_str(&input_json)
         .map_err(|error| vec![format!("invalid production verifier handoff JSON: {error}")])?;
     handoff.validate()?;
 
@@ -38,6 +38,7 @@ fn run() -> Result<(), Vec<String>> {
             "decision": handoff.source_artifact.decision,
             "failure_code": handoff.source_artifact.failure_code,
             "air_public_input_count": handoff.air_public_input_count,
+            "public_input_root": handoff.public_input_root,
             "proof_size_bytes": handoff.proof_size_bytes,
             "proof_bytes_sha256": handoff.proof_bytes_sha256,
             "binding_digest_sha256": handoff.binding_digest_sha256,

@@ -192,10 +192,11 @@ deployment/operations controls.
 
 The next safest implementation step remains non-runtime:
 
-1. Convert `stark-production-proof-artifact-v1` into a versioned verifier
-   handoff envelope. Completed.
-2. Resolve the mismatch between the 14 native AIR inputs and the candidate
-   ABI's single `publicInputRoot`.
-3. Implement governed source/state roots and a real verifier.
+1. Convert the production proof artifact into a versioned verifier handoff
+   envelope. Completed; the current artifact and handoff schemas are v2.
+2. Bind the candidate ABI's `publicInputRoot` inside the AIR and package it as
+   canonical Solidity `bytes32`. Completed in artifact/handoff schema v2.
+3. Bind and govern the local claim-source Merkle candidate, implement the five
+   remaining source/state roots, and add a real verifier.
 4. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
    Solidity STARK verifier exists and passes independent proof tests.

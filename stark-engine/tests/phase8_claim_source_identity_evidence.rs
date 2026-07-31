@@ -66,6 +66,19 @@ fn sample_complete_candidate() -> WinterfellCompleteWitnessCandidate {
     }
 }
 
+fn sample_bridge_backed_complete_candidate() -> WinterfellCompleteWitnessCandidate {
+    let mut candidate = sample_complete_candidate();
+    candidate.source_schema_version =
+        WinterfellCompleteWitnessCandidate::BRIDGE_SOURCE_SCHEMA_VERSION.to_string();
+    candidate.candidate_status =
+        WinterfellCompleteWitnessCandidate::BRIDGE_CANDIDATE_STATUS.to_string();
+    for field in &mut candidate.fields {
+        field.value_status = "populated_adapter_ready_bridge_source".to_string();
+        field.source_artifact = "StarkBridgeInput".to_string();
+    }
+    candidate
+}
+
 #[test]
 fn claim_source_identity_evidence_records_current_missing_active_exports() {
     let source = sample_claim_source();
@@ -113,6 +126,28 @@ fn claim_source_identity_evidence_can_match_future_enriched_identity_sources() {
             && field.binding_status == "source_value_matches_complete_candidate"
             && field.source_matches_candidate_value
             && !field.runtime_equivalent
+    }));
+}
+
+#[test]
+fn claim_source_identity_evidence_accepts_bridge_backed_candidate_status() {
+    let mut source = sample_claim_source();
+    source.member_id = Some("MEMBER-FIXTURE-001".to_string());
+    source.provider_npi = Some("1234567893".to_string());
+    let candidate = sample_bridge_backed_complete_candidate();
+
+    assert_eq!(candidate.validate_bridge_backed(), Ok(()));
+
+    let evidence =
+        ClaimSourceIdentityEvidence::from_claim_source_and_candidate(&source, &candidate).unwrap();
+
+    assert_eq!(evidence.validate(), Ok(()));
+    assert!(evidence.source_fields_present);
+    assert!(evidence.identity_sources_match_candidate_values);
+    assert!(evidence.fields.iter().all(|field| {
+        field.candidate_value_status == "populated_adapter_ready_bridge_source"
+            && field.complete_candidate_source_artifact == "StarkBridgeInput"
+            && field.binding_status == "source_value_matches_complete_candidate"
     }));
 }
 

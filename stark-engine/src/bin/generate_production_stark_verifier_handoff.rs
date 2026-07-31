@@ -1,8 +1,8 @@
 use std::{env, fs, process};
 
 use stark_engine::{
-    production_proof_artifact::ProductionStarkProofArtifactV1,
-    production_verifier_handoff::ProductionStarkVerifierHandoffV1,
+    production_proof_artifact::ProductionStarkProofArtifactV2,
+    production_verifier_handoff::ProductionStarkVerifierHandoffV2,
 };
 
 fn main() {
@@ -25,9 +25,9 @@ fn run() -> Result<(), Vec<String>> {
 
     let input_json = fs::read_to_string(&input_path)
         .map_err(|error| vec![format!("could not read {input_path}: {error}")])?;
-    let artifact: ProductionStarkProofArtifactV1 = serde_json::from_str(&input_json)
+    let artifact: ProductionStarkProofArtifactV2 = serde_json::from_str(&input_json)
         .map_err(|error| vec![format!("invalid production proof artifact JSON: {error}")])?;
-    let handoff = ProductionStarkVerifierHandoffV1::from_proof_artifact(&artifact)?;
+    let handoff = ProductionStarkVerifierHandoffV2::from_proof_artifact(&artifact)?;
     let output_json = serde_json::to_string_pretty(&handoff)
         .map_err(|error| vec![format!("could not serialize verifier handoff: {error}")])?;
     fs::write(&output_path, format!("{output_json}\n"))
@@ -47,6 +47,7 @@ fn run() -> Result<(), Vec<String>> {
             "decision": handoff.source_artifact.decision,
             "failure_code": handoff.source_artifact.failure_code,
             "air_public_input_count": handoff.air_public_input_count,
+            "public_input_root": handoff.public_input_root,
             "proof_size_bytes": handoff.proof_size_bytes,
             "proof_bytes_sha256": handoff.proof_bytes_sha256,
             "binding_digest_sha256": handoff.binding_digest_sha256,

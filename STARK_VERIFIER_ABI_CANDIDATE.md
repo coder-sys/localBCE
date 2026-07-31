@@ -56,14 +56,22 @@ Winterfell 0.13.1 serialized proof bytes. Runtime use remains blocked on root
 semantics and a real Solidity verifier implementation.
 
 The feature-gated production AIR now emits real Winterfell proof bytes in
-`stark-production-proof-artifact-v1`. A separate
-`stark-production-verifier-handoff-v1` envelope aligns those bytes and the 14
-ordered AIR public inputs with this candidate interface.
+`stark-production-proof-artifact-v2`. A separate
+`stark-production-verifier-handoff-v2` envelope aligns those bytes, the 14
+ordered AIR public inputs, and the packed `publicInputRoot` with this candidate
+interface.
 
-The handoff is intentionally not call-ready. Its `publicInputRoot` is a
-SHA-256 candidate over the canonical AIR public-input vector, not a root
-currently constrained by the AIR or adopted by a Solidity verifier. The six
-remaining source/state roots are also unavailable.
+`publicInputRoot` is now constrained by the production AIR. It is an
+`Rp64_256` digest of a domain-separated preimage containing the claim hash, the
+internal G1-G10 fact commitment, decision, and failure code. Its four canonical
+field elements are packed as four big-endian `u64` values into Solidity
+`bytes32`.
+
+The handoff remains intentionally non-call-ready because the six remaining
+source/state roots are unavailable and no Solidity STARK verifier exists.
+`claimSourceRoot` now has a feature-gated local `Rp64_256` Merkle candidate,
+but it remains unavailable to this ABI until it is AIR-bound, governed, and
+included in the production proof artifact and handoff.
 
 ## Current Tests
 
@@ -135,11 +143,8 @@ This ABI candidate does not mean:
 
 ## Next Step
 
-Choose one production public-input contract before implementing the verifier:
-
-1. constrain an adopted `publicInputRoot` inside the AIR and keep this compact
-   ABI, or
-2. revise the candidate ABI to expose all 14 native AIR public inputs.
-
-Do not wire ClaimsRegistry until that choice, the six source/state roots, and a
-real Solidity verifier pass positive and negative proof tests.
+Bind and govern the local `claimSourceRoot` candidate, implement the other five
+source/state roots,
+then build and independently test a Solidity-compatible verifier for the
+locked proof and public-input encoding. Do not wire ClaimsRegistry until those
+roots and the verifier pass positive and negative proof tests.

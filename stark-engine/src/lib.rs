@@ -256,6 +256,17 @@ pub struct BridgeClaim {
     pub provider_npi: Option<String>,
     pub diagnosis_count: Option<u64>,
     pub max_charge_cents: Option<u64>,
+    #[serde(default)]
+    pub diagnosis_codes: Vec<String>,
+    #[serde(default)]
+    pub service_lines: Vec<BridgeClaimServiceLine>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BridgeClaimServiceLine {
+    pub procedure_code: String,
+    pub charge_cents: u64,
+    pub units: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -7914,13 +7925,19 @@ impl ClaimSourceRootInput {
             member_id: input.claim.member_id.clone(),
             provider_npi: input.claim.provider_npi.clone(),
             service_date: Some(input.active_rust_facts.date_of_service_from),
-            procedure_codes: Vec::new(),
-            diagnosis_codes: Vec::new(),
-            service_line_count: None,
+            procedure_codes: input
+                .claim
+                .service_lines
+                .iter()
+                .map(|line| line.procedure_code.clone())
+                .collect(),
+            diagnosis_codes: input.claim.diagnosis_codes.clone(),
+            service_line_count: (!input.claim.service_lines.is_empty())
+                .then_some(input.claim.service_lines.len() as u64),
             root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
             notes: vec![
                 "This input is a normalized source schema for future claimSourceRoot work.".to_string(),
-                "member_id and provider_npi are carried when supplied by the current rust-engine bridge; procedure_codes, diagnosis_codes, and service_line_count are not exported yet.".to_string(),
+                "member_id, provider_npi, procedure_codes, diagnosis_codes, and service_line_count are carried when supplied by the current rust-engine bridge.".to_string(),
                 "No claim-source leaf, hash, Merkle root, or STARK proof is generated from this object.".to_string(),
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],
@@ -8177,9 +8194,12 @@ impl ClaimSourceIdentityEvidence {
                     field.field_name
                 ));
             }
-            if field.candidate_value_status != "populated_adapter_ready_fixture" {
+            if !matches!(
+                field.candidate_value_status.as_str(),
+                "populated_adapter_ready_fixture" | "populated_adapter_ready_bridge_source"
+            ) {
                 errors.push(format!(
-                    "{} candidate_value_status must be populated_adapter_ready_fixture",
+                    "{} candidate_value_status must identify a fixture-backed or bridge-backed complete candidate",
                     field.field_name
                 ));
             }

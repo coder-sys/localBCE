@@ -1,4 +1,4 @@
-use stark_engine::{ClaimSourceRootInput, StarkBridgeInput};
+use stark_engine::{BridgeClaimServiceLine, ClaimSourceRootInput, StarkBridgeInput};
 
 fn sample_bridge_input_json() -> &'static str {
     r#"{
@@ -125,6 +125,24 @@ fn claim_source_root_input_accepts_future_enriched_source_data() {
     assert!(json.contains("\"root_generation_status\": \"not_generated\""));
     assert!(!json.contains("claim_source_root"));
     assert!(!json.contains("root_hash"));
+}
+
+#[test]
+fn claim_source_root_input_carries_active_bridge_source_arrays() {
+    let mut input = sample_bridge_input();
+    input.claim.diagnosis_codes = vec!["Z00.00".to_string()];
+    input.claim.service_lines = vec![BridgeClaimServiceLine {
+        procedure_code: "99213".to_string(),
+        charge_cents: 100_000,
+        units: 1,
+    }];
+
+    let source = ClaimSourceRootInput::from_bridge_input(&input).unwrap();
+
+    assert_eq!(source.procedure_codes, vec!["99213"]);
+    assert_eq!(source.diagnosis_codes, vec!["Z00.00"]);
+    assert_eq!(source.service_line_count, Some(1));
+    assert_eq!(source.validate(), Ok(()));
 }
 
 #[test]
