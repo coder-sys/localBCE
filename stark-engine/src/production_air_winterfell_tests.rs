@@ -8,11 +8,12 @@ use super::{
     FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER, FACT_COMMITMENT_HASH_FUNCTION,
     FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
     PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
-    PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionFelt, TRACE_LENGTH,
-    TRACE_WIDTH, build_production_air_trace, canonical_claim_fact_commitment_preimage,
-    canonical_public_input_root_preimage, compute_claim_fact_commitment, compute_public_input_root,
-    pack_public_input_root_bytes32, prove_production_air, unpack_public_input_root_bytes32,
-    verify_production_air, verify_production_air_result,
+    PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionAirProofInputV2,
+    ProductionFelt, TRACE_LENGTH, TRACE_WIDTH, build_production_air_trace,
+    canonical_claim_fact_commitment_preimage, canonical_public_input_root_preimage,
+    compute_claim_fact_commitment, compute_public_input_root, pack_public_input_root_bytes32,
+    prove_production_air, unpack_public_input_root_bytes32, verify_production_air,
+    verify_production_air_result,
 };
 use crate::{
     StarkBridgeInput,
@@ -32,7 +33,13 @@ fn approved_bridge() -> StarkBridgeInput {
             "member_id": "MEMBER-001",
             "provider_npi": "1234567893",
             "diagnosis_count": 1,
-            "max_charge_cents": 100000
+            "max_charge_cents": 100000,
+            "diagnosis_codes": ["Z00.00"],
+            "service_lines": [{
+                "procedure_code": "99213",
+                "charge_cents": 100000,
+                "units": 1
+            }]
         },
         "adjudication": {
             "decision": 1,
@@ -105,9 +112,13 @@ fn approved_bridge() -> StarkBridgeInput {
     .unwrap()
 }
 
+fn approved_proof_input() -> ProductionAirProofInputV2 {
+    ProductionAirProofInputV2::from_bridge_input(&approved_bridge()).unwrap()
+}
+
 #[test]
 fn approved_input_builds_expected_trace_dimensions() {
-    let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let input = approved_proof_input();
     let trace = build_production_air_trace(&input).unwrap();
 
     assert_eq!(trace.width(), TRACE_WIDTH);
@@ -116,7 +127,7 @@ fn approved_input_builds_expected_trace_dimensions() {
 
 #[test]
 fn approved_g1_g10_production_air_proof_verifies_locally() {
-    let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let input = approved_proof_input();
     let (proof, public_inputs) = prove_production_air(&input).unwrap();
 
     assert_eq!(public_inputs.decision, ProductionFelt::ONE);
@@ -126,7 +137,7 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         compute_public_input_root(&input).unwrap()
     );
     let serialized_public_inputs = public_inputs.to_elements();
-    assert_eq!(serialized_public_inputs.len(), 14);
+    assert_eq!(serialized_public_inputs.len(), 18);
     assert_eq!(
         &serialized_public_inputs[..8],
         &public_inputs.claim_hash_limbs
@@ -135,8 +146,12 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         &serialized_public_inputs[8..12],
         &public_inputs.public_input_root
     );
-    assert_eq!(serialized_public_inputs[12], public_inputs.decision);
-    assert_eq!(serialized_public_inputs[13], public_inputs.failure_code);
+    assert_eq!(
+        &serialized_public_inputs[12..16],
+        &public_inputs.claim_source_root
+    );
+    assert_eq!(serialized_public_inputs[16], public_inputs.decision);
+    assert_eq!(serialized_public_inputs[17], public_inputs.failure_code);
     verify_production_air_result(proof, public_inputs).unwrap();
 }
 
@@ -200,7 +215,7 @@ fn all_denied_g1_g10_production_air_proofs_verify_with_first_failure_codes() {
         mutate(&mut bridge);
         set_denial(&mut bridge, reason, failure_code);
 
-        let input = ProductionAirInputV1::from_bridge_input(&bridge).unwrap();
+        let input = ProductionAirProofInputV2::from_bridge_input(&bridge).unwrap();
         let (proof, public_inputs) = prove_production_air(&input).unwrap();
 
         assert_eq!(public_inputs.decision, ProductionFelt::ZERO, "{reason}");
@@ -215,7 +230,7 @@ fn all_denied_g1_g10_production_air_proofs_verify_with_first_failure_codes() {
 
 #[test]
 fn tampered_public_claim_hash_limb_is_rejected() {
-    let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let input = approved_proof_input();
     let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
     public_inputs.claim_hash_limbs[0] += ProductionFelt::ONE;
 
@@ -224,11 +239,37 @@ fn tampered_public_claim_hash_limb_is_rejected() {
 
 #[test]
 fn tampered_public_input_root_is_rejected() {
-    let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let input = approved_proof_input();
     let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
     public_inputs.public_input_root[0] += ProductionFelt::ONE;
 
     assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[test]
+fn tampered_public_claim_source_root_is_rejected() {
+    let input = approved_proof_input();
+    let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
+    public_inputs.claim_source_root[0] += ProductionFelt::ONE;
+
+    assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[test]
+fn forged_claim_source_leaf_path_and_root_are_rejected_before_proving() {
+    let original = approved_proof_input();
+
+    let mut forged_leaf = original.clone();
+    forged_leaf.claim_source.leaf_preimage[12] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_leaf).is_err());
+
+    let mut forged_path = original.clone();
+    forged_path.claim_source.merkle_path[0][0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_path).is_err());
+
+    let mut forged_root = original;
+    forged_root.claim_source.root[0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_root).is_err());
 }
 
 #[test]
@@ -342,13 +383,21 @@ fn every_g1_g10_fact_is_bound_to_the_public_input_root() {
         }),
     ];
 
-    let approved = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let approved = approved_proof_input();
     let original_root = compute_public_input_root(&approved).unwrap();
 
     for (field, mutate) in mutations {
-        let mut mutated = approved.clone();
-        mutate(&mut mutated.facts);
-        refresh_outcome(&mut mutated);
+        let mut mutated = if field == "date_of_service_from" {
+            let mut bridge = approved_bridge();
+            bridge.active_rust_facts.date_of_service_from += 1;
+            ProductionAirProofInputV2::from_bridge_input(&bridge).unwrap()
+        } else {
+            approved.clone()
+        };
+        if field != "date_of_service_from" {
+            mutate(&mut mutated.adjudication.facts);
+            refresh_outcome(&mut mutated.adjudication);
+        }
 
         let (proof, mut public_inputs) = prove_production_air(&mutated).unwrap();
         assert_ne!(
@@ -366,24 +415,24 @@ fn every_g1_g10_fact_is_bound_to_the_public_input_root() {
 
 #[test]
 fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
-    let input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
+    let input = approved_proof_input();
     let elements = canonical_public_input_root_preimage(&input).unwrap();
-    let fact_commitment = compute_claim_fact_commitment(&input).unwrap();
+    let fact_commitment = compute_claim_fact_commitment(&input.adjudication).unwrap();
     let root = compute_public_input_root(&input).unwrap();
     let packed = pack_public_input_root_bytes32(&root);
 
     assert_eq!(
         root.map(|element| element.as_int()),
         [
-            8_192_512_438_339_882_827,
-            5_162_194_282_442_774_812,
-            9_797_518_926_967_888_724,
-            3_847_378_501_583_702_865,
+            10_600_555_351_782_376_835,
+            9_202_052_587_614_174_713,
+            1_755_300_859_210_198_135,
+            14_774_745_441_193_650_080,
         ]
     );
     assert_eq!(
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
-        "stark-public-input-root-v1"
+        "stark-public-input-root-v2"
     );
     assert_eq!(PUBLIC_INPUT_ROOT_HASH_FUNCTION, "winterfell-rp64-256");
     assert_eq!(
@@ -393,7 +442,7 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
     assert_eq!(elements[0].as_int(), PUBLIC_INPUT_ROOT_DOMAIN_TAG);
     assert_eq!(elements[1].as_int(), 1);
     assert_eq!(elements[2].as_int(), PUBLIC_INPUT_ROOT_RULESET_TAG);
-    assert_eq!(elements[3].as_int(), 14);
+    assert_eq!(elements[3].as_int(), 18);
     assert_eq!(
         PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
         [
@@ -409,6 +458,10 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
             "fact_commitment_element_1",
             "fact_commitment_element_2",
             "fact_commitment_element_3",
+            "claim_source_root_element_0",
+            "claim_source_root_element_1",
+            "claim_source_root_element_2",
+            "claim_source_root_element_3",
             "decision",
             "failure_code",
         ]
@@ -423,8 +476,9 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
             .map(|element| element.as_int())
             .collect::<Vec<_>>()
     );
-    assert_eq!(elements[16].as_int(), 1);
-    assert_eq!(elements[17].as_int(), 0);
+    assert_eq!(&elements[16..20], &input.claim_source.root);
+    assert_eq!(elements[20].as_int(), 1);
+    assert_eq!(elements[21].as_int(), 0);
     assert_eq!(packed.len(), 66);
     assert_eq!(unpack_public_input_root_bytes32(&packed).unwrap(), root);
 }
@@ -458,11 +512,11 @@ fn values_outside_the_v1_32_bit_range_are_rejected_before_commitment_encoding() 
 
 #[test]
 fn v1_32_bit_date_boundary_proves_without_field_wraparound() {
-    let mut input = ProductionAirInputV1::from_bridge_input(&approved_bridge()).unwrap();
-    input.facts.date_of_service_from = u32::MAX as u64;
-    input.facts.eligibility_period_from = 0;
-    input.facts.eligibility_period_thru = u32::MAX as u64;
-    refresh_outcome(&mut input);
+    let mut bridge = approved_bridge();
+    bridge.active_rust_facts.date_of_service_from = u32::MAX as u64;
+    bridge.active_rust_facts.eligibility_period_from = 0;
+    bridge.active_rust_facts.eligibility_period_thru = u32::MAX as u64;
+    let input = ProductionAirProofInputV2::from_bridge_input(&bridge).unwrap();
 
     let (proof, public_inputs) = prove_production_air(&input).unwrap();
     assert!(verify_production_air(proof, public_inputs));

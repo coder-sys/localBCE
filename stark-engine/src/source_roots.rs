@@ -1,13 +1,13 @@
 //! Feature-gated source-root candidates for the STARK settlement boundary.
 //!
 //! The claim-source artifact in this module is locally generated and validated,
-//! but it is not yet governed, constrained by the production AIR, wired into
-//! runtime execution, or accepted by an on-chain verifier.
+//! and its canonical leaf and opening are consumed by the production AIR. It is
+//! not yet governed, wired into runtime execution, or accepted by an on-chain
+//! verifier.
 
 pub const TRANSFORMATION_ID: &str = "bind_source_roots";
 pub const MODULE_PATH: &str = "stark-engine/src/source_roots.rs";
-pub const IMPLEMENTATION_STATUS: &str =
-    "claim_source_root_candidate_feature_gated_not_air_bound_or_governed";
+pub const IMPLEMENTATION_STATUS: &str = "claim_source_root_feature_gated_air_bound_not_governed";
 pub const RUNTIME_WIRING_ALLOWED: bool = false;
 pub const REAL_PROOF_GENERATION_ALLOWED: bool = false;
 pub const REQUIRED_EVIDENCE: [&str; 4] = [
@@ -57,13 +57,13 @@ pub const CLAIM_SOURCE_ROOT_AMOUNT_UNIT: &str =
 pub const CLAIM_SOURCE_ROOT_SERVICE_DATE_UNIT: &str = "rust_engine_service_date_scalar";
 
 #[cfg(feature = "production-air-winterfell")]
-const CLAIM_SOURCE_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCSR001");
+pub(crate) const CLAIM_SOURCE_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCSR001");
 #[cfg(feature = "production-air-winterfell")]
-const CLAIM_SOURCE_ROOT_SCHEMA_TAG: u64 = 1;
+pub(crate) const CLAIM_SOURCE_ROOT_SCHEMA_TAG: u64 = 1;
 #[cfg(feature = "production-air-winterfell")]
-const CLAIM_SOURCE_ROOT_HASH_TAG: u64 = u64::from_le_bytes(*b"RP64256\0");
+pub(crate) const CLAIM_SOURCE_ROOT_HASH_TAG: u64 = u64::from_le_bytes(*b"RP64256\0");
 #[cfg(feature = "production-air-winterfell")]
-const CLAIM_SOURCE_ROOT_UNIT_TAG: u64 = 100;
+pub(crate) const CLAIM_SOURCE_ROOT_UNIT_TAG: u64 = 100;
 #[cfg(feature = "production-air-winterfell")]
 const MEMBER_ID_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCMEM01");
 #[cfg(feature = "production-air-winterfell")]
@@ -162,7 +162,8 @@ impl ProductionClaimSourceRootArtifactV1 {
         "locally_generated_candidate_not_air_bound_or_governed";
     pub const EMPTY_LEAF_STRATEGY: &'static str = "rp64_256_domain_separated_indexed_empty_leaves";
     pub const GOVERNANCE_STATUS: &'static str = "not_registered_or_approved";
-    pub const AIR_BINDING_STATUS: &'static str = "not_constrained_by_production_air";
+    pub const AIR_BINDING_STATUS: &'static str =
+        "production_air_v2_constrains_canonical_leaf_path_and_root";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
         bridge.validate()?;
@@ -218,6 +219,47 @@ impl ProductionClaimSourceRootArtifactV1 {
         };
         artifact.validate()?;
         Ok(artifact)
+    }
+
+    pub(crate) fn air_witness_components(
+        &self,
+    ) -> Result<
+        (
+            [ProductionFelt; CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH],
+            [[ProductionFelt; 4]; CLAIM_SOURCE_ROOT_TREE_DEPTH],
+            [ProductionFelt; 4],
+        ),
+        Vec<String>,
+    > {
+        self.validate()?;
+
+        let leaf_preimage = strings_to_felts(
+            "leaf_preimage_decimal",
+            &self.leaf_preimage_decimal,
+            CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH,
+        )?
+        .try_into()
+        .expect("validated claim-source leaf preimage length");
+
+        let merkle_path =
+            strings_to_digest_path("merkle_path_elements", &self.merkle_path_elements)?
+                .into_iter()
+                .map(|digest| {
+                    digest
+                        .as_elements()
+                        .try_into()
+                        .expect("Rp64_256 digest must contain four field elements")
+                })
+                .collect::<Vec<[ProductionFelt; 4]>>()
+                .try_into()
+                .expect("validated claim-source Merkle path depth");
+
+        let root = strings_to_digest("root_elements", &self.root_elements)?
+            .as_elements()
+            .try_into()
+            .expect("Rp64_256 digest must contain four field elements");
+
+        Ok((leaf_preimage, merkle_path, root))
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {

@@ -1,6 +1,6 @@
 use std::{env, fs, process};
 
-use stark_engine::production_proof_artifact::ProductionStarkProofArtifactV2;
+use stark_engine::production_proof_artifact::ProductionStarkProofArtifactV3;
 
 fn main() {
     if let Err(errors) = run() {
@@ -21,7 +21,7 @@ fn run() -> Result<(), Vec<String>> {
 
     let input_json = fs::read_to_string(&path)
         .map_err(|error| vec![format!("could not read {path}: {error}")])?;
-    let artifact: ProductionStarkProofArtifactV2 = serde_json::from_str(&input_json)
+    let artifact: ProductionStarkProofArtifactV3 = serde_json::from_str(&input_json)
         .map_err(|error| vec![format!("invalid production proof artifact JSON: {error}")])?;
     artifact.validate()?;
 
@@ -38,6 +38,7 @@ fn run() -> Result<(), Vec<String>> {
             "failure_code": artifact.failure_code,
             "public_input_count": artifact.public_inputs.count,
             "public_input_root": artifact.public_input_root_bytes32,
+            "claim_source_root": artifact.claim_source_root_bytes32,
             "proof_size_bytes": artifact.proof.size_bytes,
             "proof_sha256": artifact.proof.sha256,
             "local_verification_status": artifact.local_verification_status,

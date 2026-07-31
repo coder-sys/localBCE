@@ -50,15 +50,17 @@ STARK-based adjudication proofs, batch roots, result roots, nullifier roots, and
 - A feature-gated claimSourceRoot candidate now builds a canonical depth-10
   Rp64_256 Merkle tree from active bridge identity, service-line, diagnosis,
   charge, and service-date facts and independently validates its opening.
-  It is still ungoverned and not constrained by the production AIR.
+  The production AIR now constrains the canonical leaf, Merkle path, and final
+  root. The root is still ungoverned and not runtime-wired.
 - The STARK bridge chain smoke test is available at scripts/validate_stark_bridge_chain.sh.
 - Feature-gated Winterfell PoC proof previews remain available in the smoke chain.
 - A separate feature-gated production G1-G10 Winterfell AIR now generates and
   locally verifies approved and denied proofs with a constrained Rescue-Prime
   claim-to-fact commitment and ABI-facing `publicInputRoot`.
-- The production proof artifact and verifier handoff use version 2 schemas.
-  `publicInputRoot` is AIR-constrained and packed canonically into `bytes32`.
-- Six governed source/state roots remain unavailable, so the STARK verifier
+- The production proof artifact and verifier handoff use version 3 schemas.
+  Their 18 public inputs include AIR-constrained `publicInputRoot` and
+  `claimSourceRoot` values packed canonically into `bytes32`.
+- Five governed source/state roots remain unavailable, so the STARK verifier
   handoff is not call-ready.
 - No STARK proof is submitted on-chain yet.
 
@@ -145,8 +147,9 @@ Current localBCE alignment is intentionally staged:
   compatibility/demo path.
 - `stark-engine/` is the STARK bridge and feature-gated production AIR crate.
   Versioned production proof artifact generation and local re-verification are
-  implemented. A versioned handoff now locks the proof and 14 AIR inputs to the
-  Solidity ABI candidate, but remains non-call-ready because root semantics,
+  implemented. A versioned handoff now locks the proof and 18 AIR inputs,
+  including the constrained claim-source root, to the Solidity ABI candidate,
+  but remains non-call-ready because five root implementations, governance,
   runtime selection, and on-chain verification are incomplete.
 - `blind-ledger-app-layer/` and `localBCE-codex-dev-hardened-20260616/` are
   reference/import lanes until explicitly ported.
@@ -209,9 +212,8 @@ The long-term target architecture in rules_v9.json is broader and includes:
 ## Current Next Steps
 
 1. Keep the current Groth16 demo path green.
-2. Bind the local claim-source root candidate into the production AIR and a
-   governed root registry, then implement oracle, fee, nullifier, and batch
-   roots.
+2. Define governed approval for the AIR-bound claim-source root, then
+   implement oracle, fee, nullifier, and batch roots.
 3. Implement and independently test real STARK verification before changing
    ClaimsRegistry or runtime proof selection.
 4. Keep STARK generation feature-gated and off-chain until artifact bytes,

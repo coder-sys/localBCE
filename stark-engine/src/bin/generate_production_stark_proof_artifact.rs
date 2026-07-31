@@ -1,6 +1,6 @@
 use std::{env, fs, process};
 
-use stark_engine::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV2};
+use stark_engine::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV3};
 
 fn main() {
     if let Err(errors) = run() {
@@ -24,7 +24,7 @@ fn run() -> Result<(), Vec<String>> {
         .map_err(|error| vec![format!("could not read {input_path}: {error}")])?;
     let bridge: StarkBridgeInput = serde_json::from_str(&input_json)
         .map_err(|error| vec![format!("invalid StarkBridgeInput JSON: {error}")])?;
-    let artifact = ProductionStarkProofArtifactV2::from_bridge_input(&bridge)?;
+    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&bridge)?;
     let output_json = serde_json::to_string_pretty(&artifact)
         .map_err(|error| vec![format!("could not serialize proof artifact: {error}")])?;
     fs::write(&output_path, format!("{output_json}\n"))
@@ -44,6 +44,7 @@ fn run() -> Result<(), Vec<String>> {
             "failure_code": artifact.failure_code,
             "public_input_count": artifact.public_inputs.count,
             "public_input_root": artifact.public_input_root_bytes32,
+            "claim_source_root": artifact.claim_source_root_bytes32,
             "proof_size_bytes": artifact.proof.size_bytes,
             "proof_sha256": artifact.proof.sha256,
             "locally_verified": artifact.locally_verified,

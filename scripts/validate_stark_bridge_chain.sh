@@ -527,6 +527,27 @@ run_in_dir "Validate production STARK proof artifact" "stark-engine" \
     --bin validate_production_stark_proof_artifact -- \
     "${PRODUCTION_STARK_PROOF_ARTIFACT}"
 
+python3 - "${PRODUCTION_CLAIM_SOURCE_ROOT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as root_file:
+    root_artifact = json.load(root_file)
+with open(sys.argv[2], encoding="utf-8") as proof_file:
+    proof_artifact = json.load(proof_file)
+
+expected = root_artifact["claim_source_root_bytes32"]
+actual = proof_artifact["claim_source_root_bytes32"]
+if actual != expected:
+    raise SystemExit(
+        f"production proof claimSourceRoot mismatch: expected {expected}, got {actual}"
+    )
+if proof_artifact["claim_source_root_binding"] != (
+    "air_constrained_canonical_leaf_and_depth_10_merkle_path"
+):
+    raise SystemExit("production proof claimSourceRoot is not marked AIR-constrained")
+PY
+
 run_in_dir "Generate production STARK verifier handoff" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin generate_production_stark_verifier_handoff -- \

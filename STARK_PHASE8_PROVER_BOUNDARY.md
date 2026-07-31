@@ -1791,15 +1791,19 @@ preimage:
   all 16 G1-G10 facts in the documented canonical order
 ```
 
-The 64-row AIR first executes four seven-round Rescue permutations for the
-private fact commitment, then executes three seven-round Rescue permutations
-for `publicInputRoot`. It constrains the claim-hash limbs and all 16 facts to
-remain constant, binds the internal fact digest into the second hash phase,
-and binds the final four root elements to public inputs.
+The 256-row AIR executes four seven-round Rescue permutations for the private
+fact commitment, five permutations for the canonical 36-field claim-source
+leaf, ten Merkle parent hashes for its fixed depth-10 opening, and three
+permutations for `publicInputRoot`. It constrains the claim-hash limbs and all
+16 G1-G10 facts to remain constant, links the claim-source leaf to the claim
+hash and service date, constrains every Merkle path level, binds the resulting
+`claimSourceRoot` to public inputs, and absorbs that root into
+`publicInputRoot`.
 
-The root preimage is domain-separated and contains the claim hash, internal
-fact commitment, decision, and failure code. The four canonical field elements
-are packed as four big-endian `u64` values into one Solidity `bytes32`.
+The public-input root preimage is domain-separated and contains the claim hash,
+internal fact commitment, `claimSourceRoot`, decision, and failure code. Each
+four-element root is packed as four big-endian `u64` values into one Solidity
+`bytes32`.
 The v1 contract requires numeric adjudication facts to fit in 32 bits. This
 keeps field encoding lossless and prevents modular wraparound from weakening
 the service-date comparisons. Out-of-range values are rejected before trace
@@ -1813,7 +1817,10 @@ Feature-gated tests cover:
 - canonical domain, field ordering, and lossless claim-hash limb encoding
 - mutation rejection for every one of the 16 private facts
 - claim identity hash binding
-- tampered public claim-hash and `publicInputRoot` rejection
+- canonical claim-source leaf and depth-10 Merkle path validation
+- forged claim-source leaf, path, or supplied root rejection
+- tampered public claim-hash, `claimSourceRoot`, and `publicInputRoot`
+  rejection
 - fixed `publicInputRoot` regression vector and `bytes32` round trip
 - field-range rejection
 
@@ -1832,15 +1839,16 @@ groth16_flow_unchanged = true
 
 ## Production Proof Artifact
 
-The feature-gated `stark-production-proof-artifact-v2` contract packages:
+The feature-gated `stark-production-proof-artifact-v3` contract packages:
 
 - real Winterfell 0.13.1 proof bytes as lower-case hex
 - SHA-256 and exact byte length for the serialized proof
-- all 14 Winterfell public inputs in locked order as canonical decimal field
+- all 18 Winterfell public inputs in locked order as canonical decimal field
   values
-- the four AIR-constrained root elements and their canonical Solidity
-  `bytes32` representation
-- SHA-256 of the canonical 14 x 8-byte big-endian public-input encoding
+- the AIR-constrained `publicInputRoot` and `claimSourceRoot` elements and
+  their canonical Solidity `bytes32` representations
+- claim-source tree depth, leaf index, and AIR-binding metadata
+- SHA-256 of the canonical 18 x 8-byte big-endian public-input encoding
 - the claim hash binding, fact commitment schema, AIR parameters, decision,
   and failure code
 - explicit non-runtime, non-chain, Groth16-unchanged status flags
@@ -1867,7 +1875,7 @@ identity value carried by the proof.
 
 ## Production Verifier Handoff
 
-`stark-production-verifier-handoff-v2` embeds and re-validates the complete
+`stark-production-verifier-handoff-v3` embeds and re-validates the complete
 production proof artifact, then locks it to the exact field order and Solidity
 types in `IStarkClaimsVerifierV1Candidate`.
 
@@ -1875,10 +1883,10 @@ The handoff records:
 
 - the exact candidate interface and canonical ABI signatures
 - all 11 candidate ABI fields in order
-- the 14-element AIR public-input order and digest
+- the 18-element AIR public-input order and digest
 - the proof byte length and SHA-256
 - a domain-separated digest binding the source artifact, proof, public inputs,
-  claim hash, decision, failure code, and ABI candidate
+  claim hash, claim-source root, decision, failure code, and ABI candidate
 - explicit call-readiness and runtime flags
 
 The current mapping is:
@@ -1888,9 +1896,9 @@ claimHash       -> direct AIR claim-hash public input
 decision        -> direct AIR public input
 failureCode     -> direct AIR public input
 publicInputRoot -> direct AIR-constrained Rp64_256 root packed as bytes32
+claimSourceRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
 proof           -> locally verified Winterfell proof bytes
 
-claimSourceRoot    -> local Rp64_256 Merkle candidate; unresolved for handoff
 oracleFactsRoot    -> unresolved
 feeScheduleRoot    -> unresolved
 nullifierRootBefore -> unresolved
@@ -1898,8 +1906,9 @@ nullifierRootAfter  -> unresolved
 batchRoot           -> unresolved
 ```
 
-`publicInputRoot` is now a direct AIR-constrained public input packed into
-Solidity `bytes32`. The six remaining roots are absent. Therefore:
+`publicInputRoot` and `claimSourceRoot` are direct AIR-constrained public
+inputs packed into Solidity `bytes32`. The five remaining roots are absent.
+Therefore:
 
 ```text
 verifier_handoff_complete = true
@@ -1925,8 +1934,9 @@ cargo run --features production-air-winterfell \
 ## Claim-Source Root Candidate
 
 The feature-gated `stark-claim-source-root-v1` artifact is the first concrete
-source-root implementation. It consumes only active `StarkBridgeInput` data and
-binds:
+source-root implementation. It consumes only active `StarkBridgeInput` data
+and supplies the canonical leaf and Merkle opening consumed by the production
+AIR. It binds:
 
 - claim hash
 - member ID and provider NPI digests
@@ -1951,13 +1961,16 @@ cargo run --features production-air-winterfell \
   production_claim_source_root.json
 ```
 
-This root is not yet constrained by the production AIR, approved by governance,
-or placed in the verifier handoff. It remains unresolved at the ABI boundary.
+The production proof input validates this artifact, constrains its canonical
+leaf and every depth-10 Merkle path level, exposes the resulting root as four
+public inputs, and places its canonical `bytes32` value in the v3 verifier
+handoff. The standalone artifact remains an independently reproducible witness
+description; governance approval, runtime wiring, and on-chain acceptance are
+still disabled.
 
 ## Next Safe Step
 
-Bind `claimSourceRoot` into the production AIR and define governed root
-approval without activating runtime behavior. Then implement the five remaining
-source/state roots and a verifier for the locked proof and public-input
-encoding. Mark the envelope call-ready only after positive and negative
-verifier tests.
+Define governed approval for the AIR-bound `claimSourceRoot` without activating
+runtime behavior. Then implement the five remaining source/state roots and a
+verifier for the locked proof and public-input encoding. Mark the envelope
+call-ready only after positive and negative verifier tests.

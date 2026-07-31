@@ -133,8 +133,44 @@ cargo run --features production-air-winterfell \
   production_claim_source_root.json
 ```
 
-This candidate is not constrained by the production AIR, governed, included
-in the verifier handoff, runtime-wired, or submitted on-chain.
+This standalone artifact is not itself a proof or governance approval. The
+feature-gated production AIR consumes its canonical leaf and opening,
+constrains every Merkle level, and publishes the resulting root through the v3
+proof artifact and verifier handoff. Runtime wiring and on-chain submission
+remain disabled.
+
+## ProductionStarkProofArtifactV3
+
+Schema version: `stark-production-proof-artifact-v3`
+
+Purpose: package a locally verified Winterfell proof together with the exact
+18-element public-input vector consumed by the production AIR.
+
+The ordered public inputs are:
+
+1. eight 32-bit claim-hash limbs
+2. four `publicInputRoot` elements
+3. four `claimSourceRoot` elements
+4. decision
+5. failure code
+
+The artifact includes canonical proof bytes, proof and public-input digests,
+both roots as canonical Solidity `bytes32` values, claim-source tree metadata,
+and explicit non-runtime safety flags. Validation deserializes and locally
+re-verifies the proof instead of trusting stored status fields.
+
+## ProductionStarkVerifierHandoffV3
+
+Schema version: `stark-production-verifier-handoff-v3`
+
+Purpose: bind the v3 proof artifact to
+`IStarkClaimsVerifierV1Candidate` field ordering and Solidity types.
+
+`claimHash`, `decision`, `failureCode`, `publicInputRoot`,
+`claimSourceRoot`, and `proof` are direct. The handoff is not call-ready
+because `oracleFactsRoot`, `feeScheduleRoot`, `nullifierRootBefore`,
+`nullifierRootAfter`, and `batchRoot` are unresolved and no production
+Solidity STARK verifier is active.
 
 ## StarkProofIntent
 

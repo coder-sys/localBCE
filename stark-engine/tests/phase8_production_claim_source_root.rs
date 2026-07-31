@@ -130,7 +130,7 @@ fn production_claim_source_root_round_trips_and_preserves_safety_boundaries() {
     assert_eq!(artifact.governance_status, "not_registered_or_approved");
     assert_eq!(
         artifact.air_binding_status,
-        "not_constrained_by_production_air"
+        "production_air_v2_constrains_canonical_leaf_path_and_root"
     );
     assert!(!artifact.runtime_wired);
     assert!(!artifact.on_chain_verifier_wired);

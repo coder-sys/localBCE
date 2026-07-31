@@ -56,10 +56,10 @@ Winterfell 0.13.1 serialized proof bytes. Runtime use remains blocked on root
 semantics and a real Solidity verifier implementation.
 
 The feature-gated production AIR now emits real Winterfell proof bytes in
-`stark-production-proof-artifact-v2`. A separate
-`stark-production-verifier-handoff-v2` envelope aligns those bytes, the 14
-ordered AIR public inputs, and the packed `publicInputRoot` with this candidate
-interface.
+`stark-production-proof-artifact-v3`. A separate
+`stark-production-verifier-handoff-v3` envelope aligns those bytes, the 18
+ordered AIR public inputs, and the packed `publicInputRoot` and
+`claimSourceRoot` values with this candidate interface.
 
 `publicInputRoot` is now constrained by the production AIR. It is an
 `Rp64_256` digest of a domain-separated preimage containing the claim hash, the
@@ -67,11 +67,15 @@ internal G1-G10 fact commitment, decision, and failure code. Its four canonical
 field elements are packed as four big-endian `u64` values into Solidity
 `bytes32`.
 
-The handoff remains intentionally non-call-ready because the six remaining
-source/state roots are unavailable and no Solidity STARK verifier exists.
-`claimSourceRoot` now has a feature-gated local `Rp64_256` Merkle candidate,
-but it remains unavailable to this ABI until it is AIR-bound, governed, and
-included in the production proof artifact and handoff.
+`claimSourceRoot` is now constrained by the production AIR. The AIR validates a
+canonical 36-field claim-source leaf, links it to the adjudication claim hash
+and service date, executes its fixed depth-10 `Rp64_256` Merkle path, and binds
+the final four root elements to public inputs. The handoff packs those elements
+as Solidity `bytes32`.
+
+The handoff remains intentionally non-call-ready because five source/state
+roots are unavailable, the claim-source root is not governed, and no Solidity
+STARK verifier exists.
 
 ## Current Tests
 
@@ -143,8 +147,8 @@ This ABI candidate does not mean:
 
 ## Next Step
 
-Bind and govern the local `claimSourceRoot` candidate, implement the other five
-source/state roots,
-then build and independently test a Solidity-compatible verifier for the
-locked proof and public-input encoding. Do not wire ClaimsRegistry until those
-roots and the verifier pass positive and negative proof tests.
+Define governance for the AIR-bound `claimSourceRoot`, implement the other five
+source/state roots, then build and independently test a Solidity-compatible
+verifier for the locked proof and public-input encoding. Do not wire
+ClaimsRegistry until those roots and the verifier pass positive and negative
+proof tests.

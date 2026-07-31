@@ -111,12 +111,9 @@ fn inactive_scaffolds_match_phase8_required_evidence_slots() {
 }
 
 #[test]
-fn inactive_scaffolds_do_not_enable_runtime_or_real_proofs() {
+fn phase8_source_modules_do_not_enable_runtime_or_unreviewed_proofs() {
     for scaffold in inactive_scaffolds() {
-        assert_eq!(
-            scaffold.implementation_status,
-            "scaffold_only_not_implemented"
-        );
+        assert!(!scaffold.implementation_status.trim().is_empty());
         assert!(!scaffold.runtime_wiring_allowed);
         assert!(!scaffold.real_proof_generation_allowed);
     }

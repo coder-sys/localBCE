@@ -1,10 +1,10 @@
 use serde_json::json;
 
 use super::{
-    ProductionStarkVerifierHandoffV2, STARK_VERIFIER_V1_ABI_FIELDS,
+    ProductionStarkVerifierHandoffV3, STARK_VERIFIER_V1_ABI_FIELDS,
     STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS,
 };
-use crate::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV2};
+use crate::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV3};
 
 fn approved_bridge() -> StarkBridgeInput {
     serde_json::from_value(json!({
@@ -19,7 +19,13 @@ fn approved_bridge() -> StarkBridgeInput {
             "member_id": "MEMBER-001",
             "provider_npi": "1234567893",
             "diagnosis_count": 1,
-            "max_charge_cents": 100000
+            "max_charge_cents": 100000,
+            "diagnosis_codes": ["Z00.00"],
+            "service_lines": [{
+                "procedure_code": "99213",
+                "charge_cents": 100000,
+                "units": 1
+            }]
         },
         "adjudication": {
             "decision": 1,
@@ -94,8 +100,8 @@ fn approved_bridge() -> StarkBridgeInput {
 
 #[test]
 fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
-    let artifact = ProductionStarkProofArtifactV2::from_bridge_input(&approved_bridge()).unwrap();
-    let handoff = ProductionStarkVerifierHandoffV2::from_proof_artifact(&artifact).unwrap();
+    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
+    let handoff = ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact).unwrap();
 
     handoff.validate().unwrap();
     assert_eq!(
@@ -114,7 +120,15 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
         handoff.public_input_root_status,
         "air_constrained_rp64_256_packed_bytes32"
     );
-    assert_eq!(handoff.air_public_input_count, 14);
+    assert_eq!(
+        handoff.claim_source_root,
+        artifact.claim_source_root_bytes32
+    );
+    assert_eq!(
+        handoff.claim_source_root_status,
+        "air_constrained_canonical_leaf_and_depth_10_merkle_path"
+    );
+    assert_eq!(handoff.air_public_input_count, 18);
     assert_eq!(handoff.proof_bytes_sha256, artifact.proof.sha256);
     assert!(!handoff.call_readiness.abi_call_ready);
     assert!(!handoff.call_readiness.runtime_activation_allowed);
@@ -131,12 +145,18 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     assert!(
         handoff
             .call_readiness
+            .directly_available_abi_fields
+            .contains(&"claimSourceRoot".to_string())
+    );
+    assert!(
+        handoff
+            .call_readiness
             .derived_candidate_abi_fields
             .is_empty()
     );
 
     let encoded = serde_json::to_string_pretty(&handoff).unwrap();
-    let decoded: ProductionStarkVerifierHandoffV2 = serde_json::from_str(&encoded).unwrap();
+    let decoded: ProductionStarkVerifierHandoffV3 = serde_json::from_str(&encoded).unwrap();
     decoded.validate().unwrap();
 
     let mut tampered_proof = decoded.clone();
@@ -161,6 +181,12 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     fake_root.abi_fields[3].value =
         Some("0x1111111111111111111111111111111111111111111111111111111111111111".to_string());
     assert!(fake_root.validate().is_err());
+
+    let mut fake_claim_source_root =
+        ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact).unwrap();
+    fake_claim_source_root.abi_fields[4].value =
+        Some("0x2222222222222222222222222222222222222222222222222222222222222222".to_string());
+    assert!(fake_claim_source_root.validate().is_err());
 }
 
 #[test]
@@ -173,8 +199,8 @@ fn denied_artifact_handoff_preserves_failure_semantics() {
     bridge.public_inputs.decision = 0;
     bridge.public_inputs.failure_code = 501;
 
-    let artifact = ProductionStarkProofArtifactV2::from_bridge_input(&bridge).unwrap();
-    let handoff = ProductionStarkVerifierHandoffV2::from_proof_artifact(&artifact).unwrap();
+    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&bridge).unwrap();
+    let handoff = ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact).unwrap();
 
     assert_eq!(handoff.abi_fields[1].value.as_deref(), Some("0"));
     assert_eq!(handoff.abi_fields[2].value.as_deref(), Some("501"));

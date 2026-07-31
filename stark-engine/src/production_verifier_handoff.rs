@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::production_proof_artifact::ProductionStarkProofArtifactV2;
+use crate::production_proof_artifact::ProductionStarkProofArtifactV3;
 
 pub const STARK_VERIFIER_V1_ABI_FIELDS: [(&str, &str); 11] = [
     ("claimHash", "bytes32"),
@@ -17,8 +17,7 @@ pub const STARK_VERIFIER_V1_ABI_FIELDS: [(&str, &str); 11] = [
     ("proof", "bytes"),
 ];
 
-pub const STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS: [&str; 6] = [
-    "claimSourceRoot",
+pub const STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS: [&str; 5] = [
     "oracleFactsRoot",
     "feeScheduleRoot",
     "nullifierRootBefore",
@@ -27,7 +26,7 @@ pub const STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS: [&str; 6] = [
 ];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkVerifierHandoffV2 {
+pub struct ProductionStarkVerifierHandoffV3 {
     pub schema_version: String,
     pub source_schema_version: String,
     pub handoff_status: String,
@@ -36,18 +35,20 @@ pub struct ProductionStarkVerifierHandoffV2 {
     pub canonical_abi_signature: String,
     pub source_artifact_digest_encoding: String,
     pub source_artifact_sha256: String,
-    pub source_artifact: ProductionStarkProofArtifactV2,
-    pub abi_fields: Vec<ProductionStarkVerifierAbiFieldV2>,
+    pub source_artifact: ProductionStarkProofArtifactV3,
+    pub abi_fields: Vec<ProductionStarkVerifierAbiFieldV3>,
     pub air_public_input_count: usize,
     pub air_public_input_order: Vec<String>,
     pub air_public_inputs_sha256: String,
     pub public_input_root: String,
     pub public_input_root_status: String,
+    pub claim_source_root: String,
+    pub claim_source_root_status: String,
     pub proof_bytes_reference: String,
     pub proof_bytes_sha256: String,
     pub proof_size_bytes: usize,
     pub binding_digest_sha256: String,
-    pub call_readiness: ProductionStarkVerifierCallReadinessV2,
+    pub call_readiness: ProductionStarkVerifierCallReadinessV3,
     pub runtime_wired: bool,
     pub on_chain_verifier_wired: bool,
     pub on_chain_submission: bool,
@@ -56,7 +57,7 @@ pub struct ProductionStarkVerifierHandoffV2 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkVerifierAbiFieldV2 {
+pub struct ProductionStarkVerifierAbiFieldV3 {
     pub position: usize,
     pub name: String,
     pub solidity_type: String,
@@ -67,7 +68,7 @@ pub struct ProductionStarkVerifierAbiFieldV2 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkVerifierCallReadinessV2 {
+pub struct ProductionStarkVerifierCallReadinessV3 {
     pub readiness_status: String,
     pub proof_bytes_available: bool,
     pub proof_locally_verified: bool,
@@ -80,32 +81,38 @@ pub struct ProductionStarkVerifierCallReadinessV2 {
     pub runtime_activation_allowed: bool,
 }
 
-pub type ProductionStarkVerifierHandoffV1 = ProductionStarkVerifierHandoffV2;
-pub type ProductionStarkVerifierAbiFieldV1 = ProductionStarkVerifierAbiFieldV2;
-pub type ProductionStarkVerifierCallReadinessV1 = ProductionStarkVerifierCallReadinessV2;
+pub type ProductionStarkVerifierHandoffV2 = ProductionStarkVerifierHandoffV3;
+pub type ProductionStarkVerifierHandoffV1 = ProductionStarkVerifierHandoffV3;
+pub type ProductionStarkVerifierAbiFieldV2 = ProductionStarkVerifierAbiFieldV3;
+pub type ProductionStarkVerifierAbiFieldV1 = ProductionStarkVerifierAbiFieldV3;
+pub type ProductionStarkVerifierCallReadinessV2 = ProductionStarkVerifierCallReadinessV3;
+pub type ProductionStarkVerifierCallReadinessV1 = ProductionStarkVerifierCallReadinessV3;
 
-impl ProductionStarkVerifierHandoffV2 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-verifier-handoff-v2";
-    pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionStarkProofArtifactV2::SCHEMA_VERSION;
+impl ProductionStarkVerifierHandoffV3 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-verifier-handoff-v3";
+    pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionStarkProofArtifactV3::SCHEMA_VERSION;
     pub const HANDOFF_STATUS: &'static str =
-        "abi_aligned_not_call_ready_six_source_state_roots_missing";
+        "abi_aligned_not_call_ready_five_source_state_roots_missing";
     pub const INTERFACE_NAME: &'static str = "IStarkClaimsVerifierV1Candidate";
     pub const FUNCTION_SIGNATURE: &'static str = "verifyStarkClaim((bytes32,uint8,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32) publicInputs,bytes proof) external view returns (bool)";
     pub const CANONICAL_ABI_SIGNATURE: &'static str = "verifyStarkClaim((bytes32,uint8,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32),bytes)";
-    pub const SOURCE_ARTIFACT_DIGEST_ENCODING: &'static str = "serde-json-compact-struct-order-v2";
+    pub const SOURCE_ARTIFACT_DIGEST_ENCODING: &'static str = "serde-json-compact-struct-order-v3";
     pub const PUBLIC_INPUT_ROOT_STATUS: &'static str = "air_constrained_rp64_256_packed_bytes32";
+    pub const CLAIM_SOURCE_ROOT_STATUS: &'static str =
+        "air_constrained_canonical_leaf_and_depth_10_merkle_path";
     pub const PROOF_BYTES_REFERENCE: &'static str = "source_artifact.proof.bytes_hex";
 
     pub fn from_proof_artifact(
-        artifact: &ProductionStarkProofArtifactV2,
+        artifact: &ProductionStarkProofArtifactV3,
     ) -> Result<Self, Vec<String>> {
         artifact.validate()?;
 
         let source_artifact_sha256 = source_artifact_sha256(artifact)?;
         let air_public_inputs_sha256 = artifact.public_inputs.canonical_bytes_sha256.clone();
         let public_input_root = artifact.public_input_root_bytes32.clone();
+        let claim_source_root = artifact.claim_source_root_bytes32.clone();
         let abi_fields = expected_abi_fields(artifact);
-        let call_readiness = ProductionStarkVerifierCallReadinessV2::expected();
+        let call_readiness = ProductionStarkVerifierCallReadinessV3::expected();
         let binding_digest_sha256 = binding_digest_sha256(
             &source_artifact_sha256,
             &artifact.proof.sha256,
@@ -114,6 +121,7 @@ impl ProductionStarkVerifierHandoffV2 {
             artifact.decision,
             artifact.failure_code,
             &public_input_root,
+            &claim_source_root,
         );
 
         let handoff = Self {
@@ -132,6 +140,8 @@ impl ProductionStarkVerifierHandoffV2 {
             air_public_inputs_sha256,
             public_input_root,
             public_input_root_status: Self::PUBLIC_INPUT_ROOT_STATUS.to_string(),
+            claim_source_root,
+            claim_source_root_status: Self::CLAIM_SOURCE_ROOT_STATUS.to_string(),
             proof_bytes_reference: Self::PROOF_BYTES_REFERENCE.to_string(),
             proof_bytes_sha256: artifact.proof.sha256.clone(),
             proof_size_bytes: artifact.proof.size_bytes,
@@ -146,7 +156,7 @@ impl ProductionStarkVerifierHandoffV2 {
                     .to_string(),
                 "publicInputRoot is constrained by the production AIR and canonically packed into bytes32."
                     .to_string(),
-                "Six source/state roots remain unavailable, so this envelope is not valid call-ready calldata."
+                "Five source/state roots remain unavailable, so this envelope is not valid call-ready calldata."
                     .to_string(),
                 "The active Groth16 settlement path remains unchanged.".to_string(),
             ],
@@ -207,6 +217,12 @@ impl ProductionStarkVerifierHandoffV2 {
             &mut errors,
         );
         validate_exact(
+            "claim_source_root_status",
+            &self.claim_source_root_status,
+            Self::CLAIM_SOURCE_ROOT_STATUS,
+            &mut errors,
+        );
+        validate_exact(
             "proof_bytes_reference",
             &self.proof_bytes_reference,
             Self::PROOF_BYTES_REFERENCE,
@@ -254,6 +270,12 @@ impl ProductionStarkVerifierHandoffV2 {
                     .to_string(),
             );
         }
+        if self.claim_source_root != self.source_artifact.claim_source_root_bytes32 {
+            errors.push(
+                "claim_source_root must equal the AIR-constrained claim-source root packed by the source artifact"
+                    .to_string(),
+            );
+        }
         if self.proof_bytes_sha256 != self.source_artifact.proof.sha256 {
             errors.push("proof_bytes_sha256 does not match source artifact proof".to_string());
         }
@@ -280,6 +302,7 @@ impl ProductionStarkVerifierHandoffV2 {
             self.source_artifact.decision,
             self.source_artifact.failure_code,
             &self.public_input_root,
+            &self.claim_source_root,
         );
         if self.binding_digest_sha256 != expected_binding_digest {
             errors.push(
@@ -312,8 +335,8 @@ impl ProductionStarkVerifierHandoffV2 {
     }
 }
 
-impl ProductionStarkVerifierCallReadinessV2 {
-    pub const READINESS_STATUS: &'static str = "not_call_ready_six_source_state_roots_missing";
+impl ProductionStarkVerifierCallReadinessV3 {
+    pub const READINESS_STATUS: &'static str = "not_call_ready_five_source_state_roots_missing";
 
     fn expected() -> Self {
         Self {
@@ -321,12 +344,13 @@ impl ProductionStarkVerifierCallReadinessV2 {
             proof_bytes_available: true,
             proof_locally_verified: true,
             air_public_inputs_available: true,
-            air_public_input_count: 14,
+            air_public_input_count: 18,
             directly_available_abi_fields: vec![
                 "claimHash".to_string(),
                 "decision".to_string(),
                 "failureCode".to_string(),
                 "publicInputRoot".to_string(),
+                "claimSourceRoot".to_string(),
                 "proof".to_string(),
             ],
             derived_candidate_abi_fields: Vec::new(),
@@ -353,14 +377,14 @@ impl ProductionStarkVerifierCallReadinessV2 {
 }
 
 fn expected_abi_fields(
-    artifact: &ProductionStarkProofArtifactV2,
-) -> Vec<ProductionStarkVerifierAbiFieldV2> {
+    artifact: &ProductionStarkProofArtifactV3,
+) -> Vec<ProductionStarkVerifierAbiFieldV3> {
     let values = [
         Some(artifact.claim_hash.clone()),
         Some(artifact.decision.to_string()),
         Some(artifact.failure_code.to_string()),
         Some(artifact.public_input_root_bytes32.clone()),
-        None,
+        Some(artifact.claim_source_root_bytes32.clone()),
         None,
         None,
         None,
@@ -373,7 +397,7 @@ fn expected_abi_fields(
         "source_artifact.decision",
         "source_artifact.failure_code",
         "source_artifact.public_input_root_bytes32",
-        "unresolved.claim_source_root",
+        "source_artifact.claim_source_root_bytes32",
         "unresolved.oracle_facts_root",
         "unresolved.fee_schedule_root",
         "unresolved.nullifier_root_before",
@@ -386,7 +410,7 @@ fn expected_abi_fields(
         "direct_air_public_input",
         "direct_air_public_input",
         "direct_air_constrained_public_input",
-        "unresolved_root_not_in_production_artifact",
+        "direct_air_constrained_merkle_root",
         "unresolved_root_not_in_production_artifact",
         "unresolved_root_not_in_production_artifact",
         "unresolved_root_not_in_production_artifact",
@@ -400,7 +424,7 @@ fn expected_abi_fields(
         .zip(values.iter())
         .enumerate()
         .map(
-            |(position, ((name, solidity_type), value))| ProductionStarkVerifierAbiFieldV2 {
+            |(position, ((name, solidity_type), value))| ProductionStarkVerifierAbiFieldV3 {
                 position,
                 name: (*name).to_string(),
                 solidity_type: (*solidity_type).to_string(),
@@ -418,7 +442,7 @@ fn expected_abi_fields(
 }
 
 fn source_artifact_sha256(
-    artifact: &ProductionStarkProofArtifactV2,
+    artifact: &ProductionStarkProofArtifactV3,
 ) -> Result<String, Vec<String>> {
     let bytes = serde_json::to_vec(artifact)
         .map_err(|error| vec![format!("could not serialize source artifact: {error}")])?;
@@ -433,16 +457,17 @@ fn binding_digest_sha256(
     decision: u8,
     failure_code: u32,
     public_input_root: &str,
+    claim_source_root: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"localbce-stark-verifier-handoff-v2\0");
+    hasher.update(b"localbce-stark-verifier-handoff-v3\0");
     update_len_prefixed(
         &mut hasher,
-        ProductionStarkVerifierHandoffV2::INTERFACE_NAME,
+        ProductionStarkVerifierHandoffV3::INTERFACE_NAME,
     );
     update_len_prefixed(
         &mut hasher,
-        ProductionStarkVerifierHandoffV2::CANONICAL_ABI_SIGNATURE,
+        ProductionStarkVerifierHandoffV3::CANONICAL_ABI_SIGNATURE,
     );
     update_len_prefixed(&mut hasher, source_artifact_sha256);
     update_len_prefixed(&mut hasher, proof_bytes_sha256);
@@ -451,6 +476,7 @@ fn binding_digest_sha256(
     hasher.update([decision]);
     hasher.update(failure_code.to_be_bytes());
     update_len_prefixed(&mut hasher, public_input_root);
+    update_len_prefixed(&mut hasher, claim_source_root);
     for field in STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS {
         update_len_prefixed(&mut hasher, field);
     }

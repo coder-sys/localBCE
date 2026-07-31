@@ -7,6 +7,10 @@ The repository is no longer at the beginning of the STARK pivot. It now has:
 - an active Groth16 demo path that remains the runtime source of truth
 - `stark-engine/` bridge schemas, validators, and smoke-chain CLIs
 - feature-gated Winterfell proof preview generation and validation
+- a feature-gated production G1-G10 Winterfell AIR with real local proof
+  generation and verification
+- versioned production proof artifacts and verifier handoffs
+- an AIR-constrained depth-10 claim-source Merkle root
 - batch/public-input planning artifacts
 - preview-only Solidity interfaces for future STARK verification and settlement
 - focused Foundry tests for the STARK Solidity preview lane
@@ -63,8 +67,9 @@ Exit criteria:
 
 ### Phase 8: Real Prover Boundary
 
-Status: feature-gated production AIR and local prover implemented; artifact
-packaging and runtime integration remain.
+Status: feature-gated production AIR, local prover, artifact packaging, and
+claim-source root binding implemented; governed roots, verifier, and runtime
+integration remain.
 
 Goal:
 
@@ -79,14 +84,23 @@ Completed:
 - locked a canonical 28-element claim-and-fact preimage
 - constrained a public `Rp64_256` Rescue-Prime commitment inside the AIR
 - rejected claim-hash, fact, and public-commitment tampering
-
-Remaining:
-
 - serialize the production proof bytes and exact public-input order
 - add versioned approved and denied proof artifacts
 - validate artifact determinism and local re-verification
 - pin prover/verifier parameters and artifact digests
 - expose the artifact behind an explicit non-default CLI
+- constrain a canonical claim-source leaf and depth-10 Merkle path
+- expose `claimSourceRoot` as four public inputs and include it in
+  `publicInputRoot`
+- package 18 public inputs and both constrained roots in v3 artifact and
+  verifier-handoff schemas
+
+Remaining:
+
+- define governance and approval semantics for `claimSourceRoot`
+- implement and bind oracle, fee, nullifier-before, nullifier-after, and batch
+  roots
+- independently validate the locked prover and verifier parameters
 
 Exit criteria:
 
@@ -102,13 +116,14 @@ Current Phase 8 implementation includes the earlier artifact candidates plus:
 - `stark-engine/src/production_air_winterfell_tests.rs`
 - `STARK_PHASE8_PROVER_BOUNDARY.md`
 
-The feature-gated tests now generate real local Winterfell proofs. Those proof
-bytes are not yet exported as a stable production artifact or accepted by
-runtime or Solidity.
+The feature-gated tests generate real local Winterfell proofs, serialize them
+into a versioned artifact, deserialize and re-verify them, and build an
+ABI-aligned handoff. Those artifacts are not accepted by runtime or Solidity.
 
 ### Phase 9: Solidity Verifier Integration
 
-Status: blocked on Phase 8.
+Status: blocked on the five remaining root implementations and independent
+verification of the Phase 8 artifact boundary.
 
 Goal:
 
@@ -180,9 +195,9 @@ Exit criteria:
 
 For the current prototype, the transition is roughly:
 
-- 80-85% complete for scaffolding and compatibility modeling
-- 60-70% complete for an end-to-end STARK technical migration
-- 25-35% complete for production-grade STARK settlement
+- 90-95% complete for scaffolding and compatibility modeling
+- 75-80% complete for an end-to-end STARK technical migration
+- 35-45% complete for production-grade STARK settlement
 
 The remaining work is harder than the earlier phases because it requires a real
 on-chain verifier, settlement integration, runtime selection, and
@@ -193,10 +208,11 @@ deployment/operations controls.
 The next safest implementation step remains non-runtime:
 
 1. Convert the production proof artifact into a versioned verifier handoff
-   envelope. Completed; the current artifact and handoff schemas are v2.
+   envelope. Completed; the current artifact and handoff schemas are v3.
 2. Bind the candidate ABI's `publicInputRoot` inside the AIR and package it as
-   canonical Solidity `bytes32`. Completed in artifact/handoff schema v2.
-3. Bind and govern the local claim-source Merkle candidate, implement the five
-   remaining source/state roots, and add a real verifier.
-4. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
+   canonical Solidity `bytes32`. Completed in artifact/handoff schema v3.
+3. Bind the local claim-source Merkle candidate into the AIR and handoff.
+   Completed; governance approval is still pending.
+4. Implement the five remaining source/state roots and add a real verifier.
+5. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
    Solidity STARK verifier exists and passes independent proof tests.

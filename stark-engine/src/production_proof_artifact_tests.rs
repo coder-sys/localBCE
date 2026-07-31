@@ -1,14 +1,18 @@
 use serde_json::json;
 
 use super::{
-    PRODUCTION_STARK_PUBLIC_INPUT_ORDER, ProductionStarkProofArtifactV2,
-    ProductionStarkProofBytesV2,
+    PRODUCTION_STARK_PUBLIC_INPUT_ORDER, ProductionStarkProofArtifactV3,
+    ProductionStarkProofBytesV3,
 };
 use crate::{
     StarkBridgeInput,
     production_air_winterfell::{
         PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION,
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION, unpack_public_input_root_bytes32,
+    },
+    source_roots::{
+        CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION,
+        CLAIM_SOURCE_ROOT_SCHEMA_VERSION,
     },
 };
 
@@ -25,7 +29,13 @@ fn approved_bridge() -> StarkBridgeInput {
             "member_id": "MEMBER-001",
             "provider_npi": "1234567893",
             "diagnosis_count": 1,
-            "max_charge_cents": 100000
+            "max_charge_cents": 100000,
+            "diagnosis_codes": ["Z00.00"],
+            "service_lines": [{
+                "procedure_code": "99213",
+                "charge_cents": 100000,
+                "units": 1
+            }]
         },
         "adjudication": {
             "decision": 1,
@@ -100,9 +110,9 @@ fn approved_bridge() -> StarkBridgeInput {
 
 #[test]
 fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
-    let artifact = ProductionStarkProofArtifactV2::from_bridge_input(&approved_bridge()).unwrap();
+    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
 
-    assert_eq!(artifact.public_inputs.count, 14);
+    assert_eq!(artifact.public_inputs.count, 18);
     assert_eq!(
         artifact.public_inputs.order,
         PRODUCTION_STARK_PUBLIC_INPUT_ORDER
@@ -111,11 +121,11 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert_eq!(artifact.failure_code, 0);
     assert_eq!(
         artifact.schema_version,
-        "stark-production-proof-artifact-v2"
+        "stark-production-proof-artifact-v3"
     );
     assert_eq!(
         artifact.public_inputs.schema_version,
-        "stark-production-public-inputs-v2"
+        "stark-production-public-inputs-v3"
     );
     assert_eq!(
         artifact.public_input_root_schema_version,
@@ -134,6 +144,26 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
         .unwrap()
         .map(|value| value.as_int().to_string());
     assert_eq!(&artifact.public_inputs.values_decimal[8..12], &packed_root);
+    assert_eq!(
+        artifact.claim_source_root_schema_version,
+        CLAIM_SOURCE_ROOT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        artifact.claim_source_root_hash,
+        CLAIM_SOURCE_ROOT_HASH_FUNCTION
+    );
+    assert_eq!(
+        artifact.claim_source_root_encoding,
+        CLAIM_SOURCE_ROOT_ENCODING
+    );
+    let packed_claim_source_root =
+        unpack_public_input_root_bytes32(&artifact.claim_source_root_bytes32)
+            .unwrap()
+            .map(|value| value.as_int().to_string());
+    assert_eq!(
+        &artifact.public_inputs.values_decimal[12..16],
+        &packed_claim_source_root
+    );
     assert!(artifact.locally_verified);
     assert!(!artifact.runtime_wired);
     assert!(!artifact.on_chain_verifier_wired);
@@ -141,7 +171,7 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert!(artifact.proof.size_bytes > 0);
 
     let json = serde_json::to_string_pretty(&artifact).unwrap();
-    let decoded: ProductionStarkProofArtifactV2 = serde_json::from_str(&json).unwrap();
+    let decoded: ProductionStarkProofArtifactV3 = serde_json::from_str(&json).unwrap();
     decoded.validate().unwrap();
     decoded.verify_serialized_proof().unwrap();
 
@@ -163,13 +193,19 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert!(trailing_proof.validate().is_err());
 
     let mut tampered_public_input = decoded;
-    tampered_public_input.public_inputs.values_decimal[12] = "0".to_string();
+    tampered_public_input.public_inputs.values_decimal[16] = "0".to_string();
     assert!(tampered_public_input.validate().is_err());
 
     let mut tampered_root = artifact;
     tampered_root.public_input_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_root.validate().is_err());
+
+    let mut tampered_claim_source_root =
+        ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
+    tampered_claim_source_root.claim_source_root_bytes32 =
+        "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(tampered_claim_source_root.validate().is_err());
 }
 
 #[test]
@@ -182,19 +218,19 @@ fn denied_artifact_preserves_and_proves_the_failure_code() {
     bridge.public_inputs.decision = 0;
     bridge.public_inputs.failure_code = 7;
 
-    let artifact = ProductionStarkProofArtifactV2::from_bridge_input(&bridge).unwrap();
+    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&bridge).unwrap();
 
     assert_eq!(artifact.decision, 0);
     assert_eq!(artifact.failure_code, 7);
-    assert_eq!(artifact.public_inputs.values_decimal[12], "0");
-    assert_eq!(artifact.public_inputs.values_decimal[13], "7");
+    assert_eq!(artifact.public_inputs.values_decimal[16], "0");
+    assert_eq!(artifact.public_inputs.values_decimal[17], "7");
     artifact.validate().unwrap();
 }
 
 #[test]
 fn malformed_artifact_metadata_is_rejected_before_runtime_use() {
     let mut artifact =
-        ProductionStarkProofArtifactV2::from_bridge_input(&approved_bridge()).unwrap();
+        ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
     artifact.proof.encoding = "base64".to_string();
     artifact.runtime_wired = true;
     artifact.on_chain_verifier_wired = true;
@@ -209,6 +245,6 @@ fn malformed_artifact_metadata_is_rejected_before_runtime_use() {
     );
     assert_ne!(
         artifact.proof.encoding,
-        ProductionStarkProofBytesV2::ENCODING
+        ProductionStarkProofBytesV3::ENCODING
     );
 }
