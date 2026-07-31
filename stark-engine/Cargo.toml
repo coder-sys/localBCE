@@ -51,3 +51,13 @@ required-features = ["production-air-winterfell"]
 name = "validate_production_claim_source_root"
 path = "src/bin/validate_production_claim_source_root.rs"
 required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "generate_production_oracle_facts_root"
+path = "src/bin/generate_production_oracle_facts_root.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "validate_production_oracle_facts_root"
+path = "src/bin/validate_production_oracle_facts_root.rs"
+required-features = ["production-air-winterfell"]

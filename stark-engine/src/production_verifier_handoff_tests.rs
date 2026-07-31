@@ -1,10 +1,10 @@
 use serde_json::json;
 
 use super::{
-    ProductionStarkVerifierHandoffV3, STARK_VERIFIER_V1_ABI_FIELDS,
+    ProductionStarkVerifierHandoffV4, STARK_VERIFIER_V1_ABI_FIELDS,
     STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS,
 };
-use crate::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV3};
+use crate::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV4};
 
 fn approved_bridge() -> StarkBridgeInput {
     serde_json::from_value(json!({
@@ -25,7 +25,19 @@ fn approved_bridge() -> StarkBridgeInput {
                 "procedure_code": "99213",
                 "charge_cents": 100000,
                 "units": 1
-            }]
+            }],
+            "oracle_source_manifest_id": "DEMO-OFFICIAL-SOURCES-V1",
+            "oracle_facts": [{
+                "fact_type": "eligibility",
+                "fact_key": "eligibility_active",
+                "fact_value": "1",
+                "source_url": "https://example.gov/demo/oracle-facts",
+                "source_label": "Demo source - not production",
+                "verification_status": "verified"
+            }],
+            "oracle_attestation_refs": [
+                "demo-attestation:eligibility_active:CLAIM-PRODUCTION-HANDOFF-001"
+            ]
         },
         "adjudication": {
             "decision": 1,
@@ -100,8 +112,8 @@ fn approved_bridge() -> StarkBridgeInput {
 
 #[test]
 fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
-    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
-    let handoff = ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact).unwrap();
+    let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    let handoff = ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
 
     handoff.validate().unwrap();
     assert_eq!(
@@ -128,7 +140,15 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
         handoff.claim_source_root_status,
         "air_constrained_canonical_leaf_and_depth_10_merkle_path"
     );
-    assert_eq!(handoff.air_public_input_count, 18);
+    assert_eq!(
+        handoff.oracle_facts_root,
+        artifact.oracle_facts_root_bytes32
+    );
+    assert_eq!(
+        handoff.oracle_facts_root_status,
+        "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path"
+    );
+    assert_eq!(handoff.air_public_input_count, 22);
     assert_eq!(handoff.proof_bytes_sha256, artifact.proof.sha256);
     assert!(!handoff.call_readiness.abi_call_ready);
     assert!(!handoff.call_readiness.runtime_activation_allowed);
@@ -151,12 +171,18 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     assert!(
         handoff
             .call_readiness
+            .directly_available_abi_fields
+            .contains(&"oracleFactsRoot".to_string())
+    );
+    assert!(
+        handoff
+            .call_readiness
             .derived_candidate_abi_fields
             .is_empty()
     );
 
     let encoded = serde_json::to_string_pretty(&handoff).unwrap();
-    let decoded: ProductionStarkVerifierHandoffV3 = serde_json::from_str(&encoded).unwrap();
+    let decoded: ProductionStarkVerifierHandoffV4 = serde_json::from_str(&encoded).unwrap();
     decoded.validate().unwrap();
 
     let mut tampered_proof = decoded.clone();
@@ -183,10 +209,16 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     assert!(fake_root.validate().is_err());
 
     let mut fake_claim_source_root =
-        ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact).unwrap();
+        ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
     fake_claim_source_root.abi_fields[4].value =
         Some("0x2222222222222222222222222222222222222222222222222222222222222222".to_string());
     assert!(fake_claim_source_root.validate().is_err());
+
+    let mut fake_oracle_facts_root =
+        ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
+    fake_oracle_facts_root.abi_fields[5].value =
+        Some("0x3333333333333333333333333333333333333333333333333333333333333333".to_string());
+    assert!(fake_oracle_facts_root.validate().is_err());
 }
 
 #[test]
@@ -199,8 +231,8 @@ fn denied_artifact_handoff_preserves_failure_semantics() {
     bridge.public_inputs.decision = 0;
     bridge.public_inputs.failure_code = 501;
 
-    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&bridge).unwrap();
-    let handoff = ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact).unwrap();
+    let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&bridge).unwrap();
+    let handoff = ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
 
     assert_eq!(handoff.abi_fields[1].value.as_deref(), Some("0"));
     assert_eq!(handoff.abi_fields[2].value.as_deref(), Some("501"));

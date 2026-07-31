@@ -1791,19 +1791,21 @@ preimage:
   all 16 G1-G10 facts in the documented canonical order
 ```
 
-The 256-row AIR executes four seven-round Rescue permutations for the private
+The 512-row AIR executes four seven-round Rescue permutations for the private
 fact commitment, five permutations for the canonical 36-field claim-source
-leaf, ten Merkle parent hashes for its fixed depth-10 opening, and three
-permutations for `publicInputRoot`. It constrains the claim-hash limbs and all
-16 G1-G10 facts to remain constant, links the claim-source leaf to the claim
-hash and service date, constrains every Merkle path level, binds the resulting
-`claimSourceRoot` to public inputs, and absorbs that root into
+leaf, ten Merkle parent hashes for its fixed depth-10 opening, four
+permutations for the canonical oracle-facts leaf, ten Merkle parent hashes for
+its fixed depth-10 opening, and four permutations for `publicInputRoot`. It
+constrains the claim-hash limbs and all 16 G1-G10 facts to remain constant,
+links both source leaves to the claim hash, links the claim-source leaf to the
+service date, constrains every Merkle path level, binds `claimSourceRoot` and
+`oracleFactsRoot` to public inputs, and absorbs both roots into
 `publicInputRoot`.
 
 The public-input root preimage is domain-separated and contains the claim hash,
-internal fact commitment, `claimSourceRoot`, decision, and failure code. Each
-four-element root is packed as four big-endian `u64` values into one Solidity
-`bytes32`.
+internal fact commitment, `claimSourceRoot`, `oracleFactsRoot`, decision, and
+failure code. Each four-element root is packed as four big-endian `u64` values
+into one Solidity `bytes32`.
 The v1 contract requires numeric adjudication facts to fit in 32 bits. This
 keeps field encoding lossless and prevents modular wraparound from weakening
 the service-date comparisons. Out-of-range values are rejected before trace
@@ -1818,9 +1820,11 @@ Feature-gated tests cover:
 - mutation rejection for every one of the 16 private facts
 - claim identity hash binding
 - canonical claim-source leaf and depth-10 Merkle path validation
+- canonical verified-oracle-facts leaf and depth-10 Merkle path validation
 - forged claim-source leaf, path, or supplied root rejection
-- tampered public claim-hash, `claimSourceRoot`, and `publicInputRoot`
-  rejection
+- forged oracle-facts leaf, path, or supplied root rejection
+- tampered public claim-hash, `claimSourceRoot`, `oracleFactsRoot`, and
+  `publicInputRoot` rejection
 - fixed `publicInputRoot` regression vector and `bytes32` round trip
 - field-range rejection
 
@@ -1839,16 +1843,18 @@ groth16_flow_unchanged = true
 
 ## Production Proof Artifact
 
-The feature-gated `stark-production-proof-artifact-v3` contract packages:
+The feature-gated `stark-production-proof-artifact-v4` contract packages:
 
 - real Winterfell 0.13.1 proof bytes as lower-case hex
 - SHA-256 and exact byte length for the serialized proof
-- all 18 Winterfell public inputs in locked order as canonical decimal field
+- all 22 Winterfell public inputs in locked order as canonical decimal field
   values
-- the AIR-constrained `publicInputRoot` and `claimSourceRoot` elements and
-  their canonical Solidity `bytes32` representations
-- claim-source tree depth, leaf index, and AIR-binding metadata
-- SHA-256 of the canonical 18 x 8-byte big-endian public-input encoding
+- the AIR-constrained `publicInputRoot`, `claimSourceRoot`, and
+  `oracleFactsRoot` elements and their canonical Solidity `bytes32`
+  representations
+- claim-source and oracle-facts tree depth, leaf index, and AIR-binding metadata
+- oracle attestation-reference and governance status
+- SHA-256 of the canonical 22 x 8-byte big-endian public-input encoding
 - the claim hash binding, fact commitment schema, AIR parameters, decision,
   and failure code
 - explicit non-runtime, non-chain, Groth16-unchanged status flags
@@ -1875,7 +1881,7 @@ identity value carried by the proof.
 
 ## Production Verifier Handoff
 
-`stark-production-verifier-handoff-v3` embeds and re-validates the complete
+`stark-production-verifier-handoff-v4` embeds and re-validates the complete
 production proof artifact, then locks it to the exact field order and Solidity
 types in `IStarkClaimsVerifierV1Candidate`.
 
@@ -1883,10 +1889,11 @@ The handoff records:
 
 - the exact candidate interface and canonical ABI signatures
 - all 11 candidate ABI fields in order
-- the 18-element AIR public-input order and digest
+- the 22-element AIR public-input order and digest
 - the proof byte length and SHA-256
 - a domain-separated digest binding the source artifact, proof, public inputs,
-  claim hash, claim-source root, decision, failure code, and ABI candidate
+  claim hash, claim-source root, oracle-facts root, decision, failure code, and
+  ABI candidate
 - explicit call-readiness and runtime flags
 
 The current mapping is:
@@ -1897,18 +1904,18 @@ decision        -> direct AIR public input
 failureCode     -> direct AIR public input
 publicInputRoot -> direct AIR-constrained Rp64_256 root packed as bytes32
 claimSourceRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
+oracleFactsRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
 proof           -> locally verified Winterfell proof bytes
 
-oracleFactsRoot    -> unresolved
 feeScheduleRoot    -> unresolved
 nullifierRootBefore -> unresolved
 nullifierRootAfter  -> unresolved
 batchRoot           -> unresolved
 ```
 
-`publicInputRoot` and `claimSourceRoot` are direct AIR-constrained public
-inputs packed into Solidity `bytes32`. The five remaining roots are absent.
-Therefore:
+`publicInputRoot`, `claimSourceRoot`, and `oracleFactsRoot` are direct
+AIR-constrained public inputs packed into Solidity `bytes32`. The four
+remaining roots are absent. Therefore:
 
 ```text
 verifier_handoff_complete = true
@@ -1963,14 +1970,48 @@ cargo run --features production-air-winterfell \
 
 The production proof input validates this artifact, constrains its canonical
 leaf and every depth-10 Merkle path level, exposes the resulting root as four
-public inputs, and places its canonical `bytes32` value in the v3 verifier
+public inputs, and places its canonical `bytes32` value in the v4 verifier
 handoff. The standalone artifact remains an independently reproducible witness
 description; governance approval, runtime wiring, and on-chain acceptance are
 still disabled.
 
+## Oracle-Facts Root Candidate
+
+The feature-gated `stark-oracle-facts-root-v1` artifact commits bridge-supplied
+oracle evidence into a canonical Merkle opening consumed by the production
+AIR. It binds:
+
+- claim hash
+- source manifest ID
+- normalized and sorted fact type, key, value, HTTPS URL, label, and
+  verification status
+- normalized and sorted attestation references
+- fact and attestation counts
+
+Generation requires one or more facts, every fact marked `verified`, a source
+label and HTTPS URL for every fact, and unique non-empty attestation references.
+The leaf is opened at index 11 in a canonical depth-10 `Rp64_256` Merkle tree.
+
+Generate and validate it with:
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_oracle_facts_root -- \
+  ../rust-engine/stark_bridge_input.json production_oracle_facts_root.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_oracle_facts_root -- \
+  production_oracle_facts_root.json
+```
+
+The AIR proves consistency with the committed evidence. It does not fetch the
+URLs, establish the external truth of fact values, verify attestation
+signatures, or grant governance approval.
+
 ## Next Safe Step
 
-Define governed approval for the AIR-bound `claimSourceRoot` without activating
-runtime behavior. Then implement the five remaining source/state roots and a
-verifier for the locked proof and public-input encoding. Mark the envelope
-call-ready only after positive and negative verifier tests.
+Define governed approval for the AIR-bound `claimSourceRoot` and
+`oracleFactsRoot`, including external oracle attestation verification, without
+activating runtime behavior. Then implement the four remaining source/state
+roots and a verifier for the locked proof and public-input encoding. Mark the
+envelope call-ready only after positive and negative verifier tests.

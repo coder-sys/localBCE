@@ -104,6 +104,7 @@ STARK_SETTLEMENT_RUNTIME_READINESS_REPORT="${TMP_DIR}/stark_settlement_runtime_r
 PRODUCTION_STARK_PROOF_ARTIFACT="${TMP_DIR}/production_stark_proof_artifact.json"
 PRODUCTION_STARK_VERIFIER_HANDOFF="${TMP_DIR}/production_stark_verifier_handoff.json"
 PRODUCTION_CLAIM_SOURCE_ROOT="${TMP_DIR}/production_claim_source_root.json"
+PRODUCTION_ORACLE_FACTS_ROOT="${TMP_DIR}/production_oracle_facts_root.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -122,6 +123,16 @@ run_in_dir "Validate production claim-source root candidate" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin validate_production_claim_source_root -- \
     "${PRODUCTION_CLAIM_SOURCE_ROOT}"
+
+run_in_dir "Generate production oracle-facts root candidate" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin generate_production_oracle_facts_root -- \
+    "${BRIDGE_INPUT}" "${PRODUCTION_ORACLE_FACTS_ROOT}"
+
+run_in_dir "Validate production oracle-facts root candidate" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_production_oracle_facts_root -- \
+    "${PRODUCTION_ORACLE_FACTS_ROOT}"
 
 run_in_dir "Generate STARK proof artifact V1 candidate" "stark-engine" \
   cargo run --bin generate_stark_proof_artifact_v1_candidate -- "${BRIDGE_INPUT}" "${STARK_PROOF_ARTIFACT_V1_CANDIDATE}"
@@ -527,16 +538,18 @@ run_in_dir "Validate production STARK proof artifact" "stark-engine" \
     --bin validate_production_stark_proof_artifact -- \
     "${PRODUCTION_STARK_PROOF_ARTIFACT}"
 
-python3 - "${PRODUCTION_CLAIM_SOURCE_ROOT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" <<'PY'
+python3 - "${PRODUCTION_CLAIM_SOURCE_ROOT}" "${PRODUCTION_ORACLE_FACTS_ROOT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" <<'PY'
 import json
 import sys
 
-with open(sys.argv[1], encoding="utf-8") as root_file:
-    root_artifact = json.load(root_file)
-with open(sys.argv[2], encoding="utf-8") as proof_file:
+with open(sys.argv[1], encoding="utf-8") as claim_root_file:
+    claim_root_artifact = json.load(claim_root_file)
+with open(sys.argv[2], encoding="utf-8") as oracle_root_file:
+    oracle_root_artifact = json.load(oracle_root_file)
+with open(sys.argv[3], encoding="utf-8") as proof_file:
     proof_artifact = json.load(proof_file)
 
-expected = root_artifact["claim_source_root_bytes32"]
+expected = claim_root_artifact["claim_source_root_bytes32"]
 actual = proof_artifact["claim_source_root_bytes32"]
 if actual != expected:
     raise SystemExit(
@@ -546,6 +559,17 @@ if proof_artifact["claim_source_root_binding"] != (
     "air_constrained_canonical_leaf_and_depth_10_merkle_path"
 ):
     raise SystemExit("production proof claimSourceRoot is not marked AIR-constrained")
+
+expected = oracle_root_artifact["oracle_facts_root_bytes32"]
+actual = proof_artifact["oracle_facts_root_bytes32"]
+if actual != expected:
+    raise SystemExit(
+        f"production proof oracleFactsRoot mismatch: expected {expected}, got {actual}"
+    )
+if proof_artifact["oracle_facts_root_binding"] != (
+    "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path"
+):
+    raise SystemExit("production proof oracleFactsRoot is not marked AIR-constrained")
 PY
 
 run_in_dir "Generate production STARK verifier handoff" "stark-engine" \

@@ -39,7 +39,19 @@ fn approved_bridge() -> StarkBridgeInput {
                 "procedure_code": "99213",
                 "charge_cents": 100000,
                 "units": 1
-            }]
+            }],
+            "oracle_source_manifest_id": "DEMO-OFFICIAL-SOURCES-V1",
+            "oracle_facts": [{
+                "fact_type": "eligibility",
+                "fact_key": "eligibility_active",
+                "fact_value": "1",
+                "source_url": "https://example.gov/demo/oracle-facts",
+                "source_label": "Demo source - not production",
+                "verification_status": "verified"
+            }],
+            "oracle_attestation_refs": [
+                "demo-attestation:eligibility_active:CLAIM-PRODUCTION-AIR-PROOF-001"
+            ]
         },
         "adjudication": {
             "decision": 1,
@@ -137,7 +149,7 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         compute_public_input_root(&input).unwrap()
     );
     let serialized_public_inputs = public_inputs.to_elements();
-    assert_eq!(serialized_public_inputs.len(), 18);
+    assert_eq!(serialized_public_inputs.len(), 22);
     assert_eq!(
         &serialized_public_inputs[..8],
         &public_inputs.claim_hash_limbs
@@ -150,8 +162,12 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         &serialized_public_inputs[12..16],
         &public_inputs.claim_source_root
     );
-    assert_eq!(serialized_public_inputs[16], public_inputs.decision);
-    assert_eq!(serialized_public_inputs[17], public_inputs.failure_code);
+    assert_eq!(
+        &serialized_public_inputs[16..20],
+        &public_inputs.oracle_facts_root
+    );
+    assert_eq!(serialized_public_inputs[20], public_inputs.decision);
+    assert_eq!(serialized_public_inputs[21], public_inputs.failure_code);
     verify_production_air_result(proof, public_inputs).unwrap();
 }
 
@@ -256,6 +272,15 @@ fn tampered_public_claim_source_root_is_rejected() {
 }
 
 #[test]
+fn tampered_public_oracle_facts_root_is_rejected() {
+    let input = approved_proof_input();
+    let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
+    public_inputs.oracle_facts_root[0] += ProductionFelt::ONE;
+
+    assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[test]
 fn forged_claim_source_leaf_path_and_root_are_rejected_before_proving() {
     let original = approved_proof_input();
 
@@ -269,6 +294,23 @@ fn forged_claim_source_leaf_path_and_root_are_rejected_before_proving() {
 
     let mut forged_root = original;
     forged_root.claim_source.root[0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_root).is_err());
+}
+
+#[test]
+fn forged_oracle_facts_leaf_path_and_root_are_rejected_before_proving() {
+    let original = approved_proof_input();
+
+    let mut forged_leaf = original.clone();
+    forged_leaf.oracle_facts.leaf_preimage[12] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_leaf).is_err());
+
+    let mut forged_path = original.clone();
+    forged_path.oracle_facts.merkle_path[0][0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_path).is_err());
+
+    let mut forged_root = original;
+    forged_root.oracle_facts.root[0] += ProductionFelt::ONE;
     assert!(prove_production_air(&forged_root).is_err());
 }
 
@@ -424,15 +466,15 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
     assert_eq!(
         root.map(|element| element.as_int()),
         [
-            10_600_555_351_782_376_835,
-            9_202_052_587_614_174_713,
-            1_755_300_859_210_198_135,
-            14_774_745_441_193_650_080,
+            9_538_893_036_631_690_078,
+            6_674_994_727_422_009_091,
+            5_313_352_181_200_654_963,
+            2_538_945_094_103_489_475,
         ]
     );
     assert_eq!(
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
-        "stark-public-input-root-v2"
+        "stark-public-input-root-v3"
     );
     assert_eq!(PUBLIC_INPUT_ROOT_HASH_FUNCTION, "winterfell-rp64-256");
     assert_eq!(
@@ -440,9 +482,9 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
         "bytes32-four-canonical-f64-big-endian"
     );
     assert_eq!(elements[0].as_int(), PUBLIC_INPUT_ROOT_DOMAIN_TAG);
-    assert_eq!(elements[1].as_int(), 1);
+    assert_eq!(elements[1].as_int(), 3);
     assert_eq!(elements[2].as_int(), PUBLIC_INPUT_ROOT_RULESET_TAG);
-    assert_eq!(elements[3].as_int(), 18);
+    assert_eq!(elements[3].as_int(), 22);
     assert_eq!(
         PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
         [
@@ -462,6 +504,10 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
             "claim_source_root_element_1",
             "claim_source_root_element_2",
             "claim_source_root_element_3",
+            "oracle_facts_root_element_0",
+            "oracle_facts_root_element_1",
+            "oracle_facts_root_element_2",
+            "oracle_facts_root_element_3",
             "decision",
             "failure_code",
         ]
@@ -477,8 +523,9 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
             .collect::<Vec<_>>()
     );
     assert_eq!(&elements[16..20], &input.claim_source.root);
-    assert_eq!(elements[20].as_int(), 1);
-    assert_eq!(elements[21].as_int(), 0);
+    assert_eq!(&elements[20..24], &input.oracle_facts.root);
+    assert_eq!(elements[24].as_int(), 1);
+    assert_eq!(elements[25].as_int(), 0);
     assert_eq!(packed.len(), 66);
     assert_eq!(unpack_public_input_root_bytes32(&packed).unwrap(), root);
 }

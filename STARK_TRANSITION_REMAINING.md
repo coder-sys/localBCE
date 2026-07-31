@@ -92,14 +92,17 @@ Completed:
 - constrain a canonical claim-source leaf and depth-10 Merkle path
 - expose `claimSourceRoot` as four public inputs and include it in
   `publicInputRoot`
-- package 18 public inputs and both constrained roots in v3 artifact and
+- constrain a canonical verified-oracle-facts leaf and depth-10 Merkle path
+- expose `oracleFactsRoot` as four public inputs and include it in
+  `publicInputRoot`
+- package 22 public inputs and all three constrained roots in v4 artifact and
   verifier-handoff schemas
 
 Remaining:
 
 - define governance and approval semantics for `claimSourceRoot`
-- implement and bind oracle, fee, nullifier-before, nullifier-after, and batch
-  roots
+- define governance and external attestation semantics for `oracleFactsRoot`
+- implement and bind fee, nullifier-before, nullifier-after, and batch roots
 - independently validate the locked prover and verifier parameters
 
 Exit criteria:
@@ -122,7 +125,7 @@ ABI-aligned handoff. Those artifacts are not accepted by runtime or Solidity.
 
 ### Phase 9: Solidity Verifier Integration
 
-Status: blocked on the five remaining root implementations and independent
+Status: blocked on the four remaining root implementations and independent
 verification of the Phase 8 artifact boundary.
 
 Goal:
@@ -208,11 +211,13 @@ deployment/operations controls.
 The next safest implementation step remains non-runtime:
 
 1. Convert the production proof artifact into a versioned verifier handoff
-   envelope. Completed; the current artifact and handoff schemas are v3.
+   envelope. Completed; the current artifact and handoff schemas are v4.
 2. Bind the candidate ABI's `publicInputRoot` inside the AIR and package it as
-   canonical Solidity `bytes32`. Completed in artifact/handoff schema v3.
+   canonical Solidity `bytes32`. Completed in artifact/handoff schema v4.
 3. Bind the local claim-source Merkle candidate into the AIR and handoff.
    Completed; governance approval is still pending.
-4. Implement the five remaining source/state roots and add a real verifier.
-5. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
+4. Bind the local oracle-facts Merkle candidate into the AIR and handoff.
+   Completed; external attestation and governance approval are still pending.
+5. Implement the four remaining source/state roots and add a real verifier.
+6. Keep ClaimsRegistry and active Groth16 behavior unchanged until a real
    Solidity STARK verifier exists and passes independent proof tests.

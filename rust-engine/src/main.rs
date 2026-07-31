@@ -57,6 +57,16 @@ struct ClaimServiceLine {
     units: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ClaimOracleFact {
+    fact_type: String,
+    fact_key: String,
+    fact_value: String,
+    source_url: Option<String>,
+    source_label: Option<String>,
+    verification_status: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaimInput {
     claim_id: String,
@@ -69,6 +79,12 @@ struct ClaimInput {
     diagnosis_codes: Vec<String>,
     #[serde(default)]
     service_lines: Vec<ClaimServiceLine>,
+    #[serde(default)]
+    oracle_source_manifest_id: Option<String>,
+    #[serde(default)]
+    oracle_facts: Vec<ClaimOracleFact>,
+    #[serde(default)]
+    oracle_attestation_refs: Vec<String>,
 
     eligibility_active: u8,
     aid_code: u64,
@@ -207,6 +223,9 @@ struct StarkBridgeClaim {
     max_charge_cents: Option<u64>,
     diagnosis_codes: Vec<String>,
     service_lines: Vec<ClaimServiceLine>,
+    oracle_source_manifest_id: Option<String>,
+    oracle_facts: Vec<ClaimOracleFact>,
+    oracle_attestation_refs: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -341,6 +360,9 @@ impl StarkBridgeInput {
                 max_charge_cents: claim.max_charge_cents,
                 diagnosis_codes: claim.diagnosis_codes.clone(),
                 service_lines: claim.service_lines.clone(),
+                oracle_source_manifest_id: claim.oracle_source_manifest_id.clone(),
+                oracle_facts: claim.oracle_facts.clone(),
+                oracle_attestation_refs: claim.oracle_attestation_refs.clone(),
             },
             adjudication: StarkBridgeAdjudication {
                 decision,
@@ -880,6 +902,9 @@ mod tests {
             max_charge_cents: None,
             diagnosis_codes: Vec::new(),
             service_lines: Vec::new(),
+            oracle_source_manifest_id: None,
+            oracle_facts: Vec::new(),
+            oracle_attestation_refs: Vec::new(),
             eligibility_active: 1,
             aid_code: 53,
             benefit_level_exists: 1,
@@ -1665,6 +1690,16 @@ status                  1";
             charge_cents: 100_000,
             units: 1,
         }];
+        claim.oracle_source_manifest_id = Some("DEMO-OFFICIAL-SOURCES-V1".to_string());
+        claim.oracle_facts = vec![ClaimOracleFact {
+            fact_type: "eligibility".to_string(),
+            fact_key: "eligibility_active".to_string(),
+            fact_value: "1".to_string(),
+            source_url: Some("https://example.gov/demo/oracle-facts".to_string()),
+            source_label: Some("Demo source - not production".to_string()),
+            verification_status: "verified".to_string(),
+        }];
+        claim.oracle_attestation_refs = vec!["demo-attestation:eligibility_active".to_string()];
         let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
         let value =
             serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
@@ -1681,6 +1716,25 @@ status                  1";
                 "charge_cents": 100_000,
                 "units": 1
             }])
+        );
+        assert_eq!(
+            value["claim"]["oracle_source_manifest_id"],
+            "DEMO-OFFICIAL-SOURCES-V1"
+        );
+        assert_eq!(
+            value["claim"]["oracle_facts"],
+            json!([{
+                "fact_type": "eligibility",
+                "fact_key": "eligibility_active",
+                "fact_value": "1",
+                "source_url": "https://example.gov/demo/oracle-facts",
+                "source_label": "Demo source - not production",
+                "verification_status": "verified"
+            }])
+        );
+        assert_eq!(
+            value["claim"]["oracle_attestation_refs"],
+            json!(["demo-attestation:eligibility_active"])
         );
         assert_eq!(
             value["winterfell_poc_mapping"]["unmapped"]["member_id"],

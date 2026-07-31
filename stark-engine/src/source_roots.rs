@@ -29,7 +29,7 @@ use winterfell::{
 
 #[cfg(feature = "production-air-winterfell")]
 use crate::{
-    StarkBridgeInput,
+    OracleFactInput, StarkBridgeInput,
     production_air_winterfell::{
         ProductionFelt, pack_public_input_root_bytes32, unpack_public_input_root_bytes32,
     },
@@ -80,6 +80,40 @@ const DIAGNOSIS_CODE_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCDX001");
 const EMPTY_LEAF_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCEMPTY");
 
 #[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_SCHEMA_VERSION: &str = "stark-oracle-facts-root-v1";
+#[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_HASH_FUNCTION: &str = "winterfell-rp64-256";
+#[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_ENCODING: &str = "bytes32-four-canonical-f64-big-endian";
+#[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_TREE_DEPTH: usize = 10;
+#[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_LEAF_INDEX: usize = 11;
+#[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH: usize = 32;
+
+#[cfg(feature = "production-air-winterfell")]
+pub(crate) const ORACLE_FACTS_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOR001");
+#[cfg(feature = "production-air-winterfell")]
+pub(crate) const ORACLE_FACTS_ROOT_SCHEMA_TAG: u64 = 1;
+#[cfg(feature = "production-air-winterfell")]
+pub(crate) const ORACLE_FACTS_ROOT_HASH_TAG: u64 = u64::from_le_bytes(*b"RP64256\0");
+#[cfg(feature = "production-air-winterfell")]
+pub(crate) const ORACLE_FACTS_ROOT_NORMALIZATION_TAG: u64 = u64::from_le_bytes(*b"ORCANON1");
+#[cfg(feature = "production-air-winterfell")]
+const ORACLE_MANIFEST_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOMAN1");
+#[cfg(feature = "production-air-winterfell")]
+const ORACLE_FACTS_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOFACT");
+#[cfg(feature = "production-air-winterfell")]
+const ORACLE_FACT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOF001");
+#[cfg(feature = "production-air-winterfell")]
+const ORACLE_ATTESTATIONS_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOATT1");
+#[cfg(feature = "production-air-winterfell")]
+const ORACLE_ATTESTATION_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOA001");
+#[cfg(feature = "production-air-winterfell")]
+const ORACLE_EMPTY_LEAF_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCOEMPT");
+
+#[cfg(feature = "production-air-winterfell")]
 pub const CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_ORDER: [&str; CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH] = [
     "domain_tag",
     "schema_tag",
@@ -120,6 +154,42 @@ pub const CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_ORDER: [&str; CLAIM_SOURCE_ROOT_LEAF_P
 ];
 
 #[cfg(feature = "production-air-winterfell")]
+pub const ORACLE_FACTS_ROOT_LEAF_PREIMAGE_ORDER: [&str; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH] = [
+    "domain_tag",
+    "schema_tag",
+    "hash_family_tag",
+    "normalization_tag",
+    "claim_hash_be_u32_limb_0",
+    "claim_hash_be_u32_limb_1",
+    "claim_hash_be_u32_limb_2",
+    "claim_hash_be_u32_limb_3",
+    "claim_hash_be_u32_limb_4",
+    "claim_hash_be_u32_limb_5",
+    "claim_hash_be_u32_limb_6",
+    "claim_hash_be_u32_limb_7",
+    "source_manifest_digest_element_0",
+    "source_manifest_digest_element_1",
+    "source_manifest_digest_element_2",
+    "source_manifest_digest_element_3",
+    "facts_digest_element_0",
+    "facts_digest_element_1",
+    "facts_digest_element_2",
+    "facts_digest_element_3",
+    "attestations_digest_element_0",
+    "attestations_digest_element_1",
+    "attestations_digest_element_2",
+    "attestations_digest_element_3",
+    "source_manifest_present",
+    "facts_present",
+    "attestations_present",
+    "fact_count",
+    "attestation_count",
+    "verified_fact_count",
+    "reserved_zero_0",
+    "reserved_zero_1",
+];
+
+#[cfg(feature = "production-air-winterfell")]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProductionClaimSourceRootArtifactV1 {
     pub schema_version: String,
@@ -147,6 +217,42 @@ pub struct ProductionClaimSourceRootArtifactV1 {
     pub root_elements: [String; 4],
     pub claim_source_root_bytes32: String,
     pub governance_status: String,
+    pub air_binding_status: String,
+    pub runtime_wired: bool,
+    pub on_chain_verifier_wired: bool,
+    pub on_chain_submission: bool,
+    pub groth16_flow_unchanged: bool,
+}
+
+#[cfg(feature = "production-air-winterfell")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProductionOracleFactsRootArtifactV1 {
+    pub schema_version: String,
+    pub source_schema_version: String,
+    pub artifact_status: String,
+    pub hash_function: String,
+    pub root_encoding: String,
+    pub empty_leaf_strategy: String,
+    pub bridge_input_sha256: String,
+    pub claim_id: String,
+    pub claim_hash: String,
+    pub source_manifest_id: String,
+    pub facts: Vec<OracleFactInput>,
+    pub attestation_refs: Vec<String>,
+    pub tree_depth: usize,
+    pub leaf_index: usize,
+    pub fact_count: usize,
+    pub attestation_count: usize,
+    pub verified_fact_count: usize,
+    pub leaf_preimage_order: Vec<String>,
+    pub leaf_preimage_decimal: Vec<String>,
+    pub leaf_digest_elements: [String; 4],
+    pub merkle_path_elements: Vec<[String; 4]>,
+    pub merkle_path_indices: Vec<u8>,
+    pub root_elements: [String; 4],
+    pub oracle_facts_root_bytes32: String,
+    pub governance_status: String,
+    pub attestation_status: String,
     pub air_binding_status: String,
     pub runtime_wired: bool,
     pub on_chain_verifier_wired: bool,
@@ -483,6 +589,400 @@ impl ProductionClaimSourceRootArtifactV1 {
 }
 
 #[cfg(feature = "production-air-winterfell")]
+impl ProductionOracleFactsRootArtifactV1 {
+    pub const SCHEMA_VERSION: &'static str = ORACLE_FACTS_ROOT_SCHEMA_VERSION;
+    pub const SOURCE_SCHEMA_VERSION: &'static str = "stark-bridge-input-v0";
+    pub const ARTIFACT_STATUS: &'static str =
+        "locally_generated_oracle_root_air_bound_not_governed";
+    pub const EMPTY_LEAF_STRATEGY: &'static str =
+        "rp64_256_domain_separated_indexed_oracle_empty_leaves";
+    pub const GOVERNANCE_STATUS: &'static str = "not_registered_or_approved";
+    pub const ATTESTATION_STATUS: &'static str =
+        "references_committed_not_cryptographically_verified";
+    pub const AIR_BINDING_STATUS: &'static str =
+        "production_air_v3_constrains_canonical_leaf_path_and_root";
+
+    pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        bridge.validate()?;
+        validate_bridge_oracle_sources(bridge)?;
+
+        let leaf_preimage = canonical_oracle_facts_leaf_preimage(bridge)?;
+        let leaf_digest = Rp64_256::hash_elements(&leaf_preimage);
+        let tree = build_oracle_facts_tree(leaf_digest)?;
+        let (opened_leaf, path) = tree
+            .prove(ORACLE_FACTS_ROOT_LEAF_INDEX)
+            .map_err(|error| vec![format!("could not open oracle-facts Merkle leaf: {error}")])?;
+        debug_assert_eq!(opened_leaf, leaf_digest);
+        let root: [ProductionFelt; 4] = tree
+            .root()
+            .as_elements()
+            .try_into()
+            .expect("Rp64_256 digest must contain four field elements");
+
+        let source_manifest_id = bridge
+            .claim
+            .oracle_source_manifest_id
+            .as_deref()
+            .expect("validated oracle source manifest must be present")
+            .trim()
+            .to_string();
+        let verified_fact_count = bridge
+            .claim
+            .oracle_facts
+            .iter()
+            .filter(|fact| {
+                fact.verification_status
+                    .trim()
+                    .eq_ignore_ascii_case("verified")
+            })
+            .count();
+
+        let artifact = Self {
+            schema_version: Self::SCHEMA_VERSION.to_string(),
+            source_schema_version: Self::SOURCE_SCHEMA_VERSION.to_string(),
+            artifact_status: Self::ARTIFACT_STATUS.to_string(),
+            hash_function: ORACLE_FACTS_ROOT_HASH_FUNCTION.to_string(),
+            root_encoding: ORACLE_FACTS_ROOT_ENCODING.to_string(),
+            empty_leaf_strategy: Self::EMPTY_LEAF_STRATEGY.to_string(),
+            bridge_input_sha256: bridge_input_sha256(bridge)?,
+            claim_id: bridge.claim.claim_id.clone(),
+            claim_hash: bridge.claim.claim_hash.clone(),
+            source_manifest_id,
+            facts: bridge.claim.oracle_facts.clone(),
+            attestation_refs: bridge.claim.oracle_attestation_refs.clone(),
+            tree_depth: ORACLE_FACTS_ROOT_TREE_DEPTH,
+            leaf_index: ORACLE_FACTS_ROOT_LEAF_INDEX,
+            fact_count: bridge.claim.oracle_facts.len(),
+            attestation_count: bridge.claim.oracle_attestation_refs.len(),
+            verified_fact_count,
+            leaf_preimage_order: ORACLE_FACTS_ROOT_LEAF_PREIMAGE_ORDER
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            leaf_preimage_decimal: felts_to_strings(&leaf_preimage),
+            leaf_digest_elements: digest_to_strings(&leaf_digest),
+            merkle_path_elements: path.iter().map(digest_to_strings).collect(),
+            merkle_path_indices: merkle_path_indices(ORACLE_FACTS_ROOT_LEAF_INDEX),
+            root_elements: root.map(|element| element.as_int().to_string()),
+            oracle_facts_root_bytes32: pack_public_input_root_bytes32(&root),
+            governance_status: Self::GOVERNANCE_STATUS.to_string(),
+            attestation_status: Self::ATTESTATION_STATUS.to_string(),
+            air_binding_status: Self::AIR_BINDING_STATUS.to_string(),
+            runtime_wired: false,
+            on_chain_verifier_wired: false,
+            on_chain_submission: false,
+            groth16_flow_unchanged: true,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    pub(crate) fn air_witness_components(
+        &self,
+    ) -> Result<
+        (
+            [ProductionFelt; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH],
+            [[ProductionFelt; 4]; ORACLE_FACTS_ROOT_TREE_DEPTH],
+            [ProductionFelt; 4],
+        ),
+        Vec<String>,
+    > {
+        self.validate()?;
+
+        let leaf_preimage = strings_to_felts(
+            "leaf_preimage_decimal",
+            &self.leaf_preimage_decimal,
+            ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH,
+        )?
+        .try_into()
+        .expect("validated oracle-facts leaf preimage length");
+        let merkle_path =
+            strings_to_digest_path("merkle_path_elements", &self.merkle_path_elements)?
+                .into_iter()
+                .map(|digest| {
+                    digest
+                        .as_elements()
+                        .try_into()
+                        .expect("Rp64_256 digest must contain four field elements")
+                })
+                .collect::<Vec<[ProductionFelt; 4]>>()
+                .try_into()
+                .expect("validated oracle-facts Merkle path depth");
+        let root = strings_to_digest("root_elements", &self.root_elements)?
+            .as_elements()
+            .try_into()
+            .expect("Rp64_256 digest must contain four field elements");
+        Ok((leaf_preimage, merkle_path, root))
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        for (field, actual, expected) in [
+            (
+                "schema_version",
+                self.schema_version.as_str(),
+                Self::SCHEMA_VERSION,
+            ),
+            (
+                "source_schema_version",
+                self.source_schema_version.as_str(),
+                Self::SOURCE_SCHEMA_VERSION,
+            ),
+            (
+                "artifact_status",
+                self.artifact_status.as_str(),
+                Self::ARTIFACT_STATUS,
+            ),
+            (
+                "hash_function",
+                self.hash_function.as_str(),
+                ORACLE_FACTS_ROOT_HASH_FUNCTION,
+            ),
+            (
+                "root_encoding",
+                self.root_encoding.as_str(),
+                ORACLE_FACTS_ROOT_ENCODING,
+            ),
+            (
+                "empty_leaf_strategy",
+                self.empty_leaf_strategy.as_str(),
+                Self::EMPTY_LEAF_STRATEGY,
+            ),
+            (
+                "governance_status",
+                self.governance_status.as_str(),
+                Self::GOVERNANCE_STATUS,
+            ),
+            (
+                "attestation_status",
+                self.attestation_status.as_str(),
+                Self::ATTESTATION_STATUS,
+            ),
+            (
+                "air_binding_status",
+                self.air_binding_status.as_str(),
+                Self::AIR_BINDING_STATUS,
+            ),
+        ] {
+            validate_exact(field, actual, expected, &mut errors);
+        }
+
+        if self.claim_id.trim().is_empty() {
+            errors.push("claim_id must be present".to_string());
+        }
+        if parse_claim_hash_limbs(&self.claim_hash).is_err() {
+            errors.push("claim_hash must be a 0x-prefixed bytes32 hex string".to_string());
+        }
+        if !is_prefixed_sha256(&self.bridge_input_sha256) {
+            errors.push("bridge_input_sha256 must be a 0x-prefixed bytes32 hex string".to_string());
+        }
+        if self.tree_depth != ORACLE_FACTS_ROOT_TREE_DEPTH {
+            errors.push(format!(
+                "tree_depth must be {ORACLE_FACTS_ROOT_TREE_DEPTH}, got {}",
+                self.tree_depth
+            ));
+        }
+        if self.leaf_index != ORACLE_FACTS_ROOT_LEAF_INDEX {
+            errors.push(format!(
+                "leaf_index must be {ORACLE_FACTS_ROOT_LEAF_INDEX}, got {}",
+                self.leaf_index
+            ));
+        }
+        if let Err(mut source_errors) = validate_oracle_source_parts(
+            &self.source_manifest_id,
+            &self.facts,
+            &self.attestation_refs,
+        ) {
+            errors.append(&mut source_errors);
+        }
+        if self.fact_count != self.facts.len() {
+            errors.push("fact_count does not match facts length".to_string());
+        }
+        if self.attestation_count != self.attestation_refs.len() {
+            errors.push("attestation_count does not match attestation_refs length".to_string());
+        }
+        if self.verified_fact_count != self.fact_count {
+            errors.push("verified_fact_count must equal fact_count".to_string());
+        }
+
+        let expected_order: Vec<String> = ORACLE_FACTS_ROOT_LEAF_PREIMAGE_ORDER
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect();
+        if self.leaf_preimage_order != expected_order {
+            errors.push("leaf_preimage_order does not match the canonical V1 order".to_string());
+        }
+
+        let expected_preimage = canonical_oracle_facts_leaf_preimage_from_parts(
+            &self.claim_hash,
+            &self.source_manifest_id,
+            &self.facts,
+            &self.attestation_refs,
+        );
+        let preimage = strings_to_felts(
+            "leaf_preimage_decimal",
+            &self.leaf_preimage_decimal,
+            ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH,
+        );
+        match (expected_preimage, preimage) {
+            (Ok(expected), Ok(actual)) => {
+                if actual != expected {
+                    errors.push(
+                        "leaf_preimage_decimal does not match canonical oracle source data"
+                            .to_string(),
+                    );
+                }
+                let expected_leaf = Rp64_256::hash_elements(&expected);
+                match strings_to_digest("leaf_digest_elements", &self.leaf_digest_elements) {
+                    Ok(actual_leaf) if actual_leaf != expected_leaf => errors.push(
+                        "leaf_digest_elements do not match leaf_preimage_decimal".to_string(),
+                    ),
+                    Err(mut parse_errors) => errors.append(&mut parse_errors),
+                    _ => {}
+                }
+            }
+            (Err(mut source_errors), _) => errors.append(&mut source_errors),
+            (_, Err(mut parse_errors)) => errors.append(&mut parse_errors),
+        }
+
+        let leaf = strings_to_digest("leaf_digest_elements", &self.leaf_digest_elements);
+        let path = strings_to_digest_path("merkle_path_elements", &self.merkle_path_elements);
+        let root = strings_to_digest("root_elements", &self.root_elements);
+        match (leaf, path, root) {
+            (Ok(leaf), Ok(path), Ok(root)) => {
+                if path.len() != ORACLE_FACTS_ROOT_TREE_DEPTH {
+                    errors.push(format!(
+                        "merkle_path_elements must contain {ORACLE_FACTS_ROOT_TREE_DEPTH} digests"
+                    ));
+                } else {
+                    match build_oracle_facts_tree(leaf) {
+                        Ok(tree) => {
+                            let (_, expected_path) = tree
+                                .prove(ORACLE_FACTS_ROOT_LEAF_INDEX)
+                                .expect("canonical oracle leaf index must be in range");
+                            if path != expected_path {
+                                errors.push(
+                                    "merkle_path_elements do not match canonical oracle empty leaves"
+                                        .to_string(),
+                                );
+                            }
+                            if &root != tree.root() {
+                                errors.push(
+                                    "root_elements do not match the canonical oracle-facts tree"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        Err(mut tree_errors) => errors.append(&mut tree_errors),
+                    }
+                    if MerkleTree::<Rp64_256>::verify(
+                        root,
+                        ORACLE_FACTS_ROOT_LEAF_INDEX,
+                        leaf,
+                        &path,
+                    )
+                    .is_err()
+                    {
+                        errors.push(
+                            "oracle-facts leaf does not verify under the supplied Merkle root"
+                                .to_string(),
+                        );
+                    }
+                }
+
+                let root_elements: [ProductionFelt; 4] = root
+                    .as_elements()
+                    .try_into()
+                    .expect("Rp64_256 digest must contain four field elements");
+                if self.oracle_facts_root_bytes32 != pack_public_input_root_bytes32(&root_elements)
+                {
+                    errors
+                        .push("oracle_facts_root_bytes32 does not match root_elements".to_string());
+                }
+            }
+            (Err(mut parse_errors), _, _) => errors.append(&mut parse_errors),
+            (_, Err(mut parse_errors), _) => errors.append(&mut parse_errors),
+            (_, _, Err(mut parse_errors)) => errors.append(&mut parse_errors),
+        }
+
+        if self.merkle_path_indices != merkle_path_indices(ORACLE_FACTS_ROOT_LEAF_INDEX) {
+            errors.push("merkle_path_indices do not match leaf_index".to_string());
+        }
+        if unpack_public_input_root_bytes32(&self.oracle_facts_root_bytes32).is_err() {
+            errors.push(
+                "oracle_facts_root_bytes32 must use canonical f64 bytes32 encoding".to_string(),
+            );
+        }
+        if self.runtime_wired {
+            errors.push("runtime_wired must remain false".to_string());
+        }
+        if self.on_chain_verifier_wired {
+            errors.push("on_chain_verifier_wired must remain false".to_string());
+        }
+        if self.on_chain_submission {
+            errors.push("on_chain_submission must remain false".to_string());
+        }
+        if !self.groth16_flow_unchanged {
+            errors.push("groth16_flow_unchanged must remain true".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(feature = "production-air-winterfell")]
+pub fn canonical_oracle_facts_leaf_preimage(
+    bridge: &StarkBridgeInput,
+) -> Result<[ProductionFelt; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH], Vec<String>> {
+    validate_bridge_oracle_sources(bridge)?;
+    canonical_oracle_facts_leaf_preimage_from_parts(
+        &bridge.claim.claim_hash,
+        bridge
+            .claim
+            .oracle_source_manifest_id
+            .as_deref()
+            .expect("validated oracle source manifest must be present"),
+        &bridge.claim.oracle_facts,
+        &bridge.claim.oracle_attestation_refs,
+    )
+}
+
+#[cfg(feature = "production-air-winterfell")]
+fn canonical_oracle_facts_leaf_preimage_from_parts(
+    claim_hash: &str,
+    source_manifest_id: &str,
+    facts: &[OracleFactInput],
+    attestation_refs: &[String],
+) -> Result<[ProductionFelt; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH], Vec<String>> {
+    validate_oracle_source_parts(source_manifest_id, facts, attestation_refs)?;
+    let claim_hash_limbs = parse_claim_hash_limbs(claim_hash)?;
+    let manifest_digest = hash_text(ORACLE_MANIFEST_DOMAIN_TAG, source_manifest_id.trim());
+    let facts_digest = hash_oracle_facts(facts);
+    let attestations_digest = hash_oracle_attestations(attestation_refs);
+
+    let mut preimage = [ProductionFelt::ZERO; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH];
+    preimage[0] = felt(ORACLE_FACTS_ROOT_DOMAIN_TAG);
+    preimage[1] = felt(ORACLE_FACTS_ROOT_SCHEMA_TAG);
+    preimage[2] = felt(ORACLE_FACTS_ROOT_HASH_TAG);
+    preimage[3] = felt(ORACLE_FACTS_ROOT_NORMALIZATION_TAG);
+    preimage[4..12].copy_from_slice(&claim_hash_limbs);
+    preimage[12..16].copy_from_slice(manifest_digest.as_elements());
+    preimage[16..20].copy_from_slice(facts_digest.as_elements());
+    preimage[20..24].copy_from_slice(attestations_digest.as_elements());
+    preimage[24] = ProductionFelt::ONE;
+    preimage[25] = ProductionFelt::ONE;
+    preimage[26] = ProductionFelt::ONE;
+    preimage[27] = felt(facts.len() as u64);
+    preimage[28] = felt(attestation_refs.len() as u64);
+    preimage[29] = felt(facts.len() as u64);
+    Ok(preimage)
+}
+
+#[cfg(feature = "production-air-winterfell")]
 pub fn canonical_claim_source_leaf_preimage(
     bridge: &StarkBridgeInput,
 ) -> Result<[ProductionFelt; CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH], Vec<String>> {
@@ -618,6 +1118,82 @@ fn validate_bridge_claim_source(bridge: &StarkBridgeInput) -> Result<(), Vec<Str
 }
 
 #[cfg(feature = "production-air-winterfell")]
+fn validate_bridge_oracle_sources(bridge: &StarkBridgeInput) -> Result<(), Vec<String>> {
+    let Some(source_manifest_id) = bridge.claim.oracle_source_manifest_id.as_deref() else {
+        return Err(vec![
+            "claim.oracle_source_manifest_id must be present for oracleFactsRoot".to_string(),
+        ]);
+    };
+    validate_oracle_source_parts(
+        source_manifest_id,
+        &bridge.claim.oracle_facts,
+        &bridge.claim.oracle_attestation_refs,
+    )
+}
+
+#[cfg(feature = "production-air-winterfell")]
+fn validate_oracle_source_parts(
+    source_manifest_id: &str,
+    facts: &[OracleFactInput],
+    attestation_refs: &[String],
+) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    if source_manifest_id.trim().is_empty() {
+        errors.push("oracle source_manifest_id must be present".to_string());
+    }
+    if facts.is_empty() {
+        errors.push("oracle facts must contain at least one verified fact".to_string());
+    }
+
+    let mut canonical_fact_keys = Vec::with_capacity(facts.len());
+    for (index, fact) in facts.iter().enumerate() {
+        let normalized = normalized_oracle_fact(fact);
+        if normalized.iter().any(|value| value.is_empty()) {
+            errors.push(format!(
+                "oracle facts[{index}] requires fact_type, fact_key, fact_value, source_url, source_label, and verification_status"
+            ));
+        }
+        if !normalized[3].starts_with("https://") {
+            errors.push(format!("oracle facts[{index}].source_url must use https"));
+        }
+        if normalized[5] != "verified" {
+            errors.push(format!(
+                "oracle facts[{index}].verification_status must be verified"
+            ));
+        }
+        canonical_fact_keys.push(normalized.join("\u{1f}"));
+    }
+    canonical_fact_keys.sort();
+    if canonical_fact_keys
+        .windows(2)
+        .any(|pair| pair[0] == pair[1])
+    {
+        errors.push("oracle facts must not contain duplicate canonical entries".to_string());
+    }
+
+    if attestation_refs.is_empty() {
+        errors.push("oracle attestation_refs must contain at least one reference".to_string());
+    }
+    let mut normalized_refs = attestation_refs
+        .iter()
+        .map(|value| value.trim().to_string())
+        .collect::<Vec<_>>();
+    if normalized_refs.iter().any(|value| value.is_empty()) {
+        errors.push("oracle attestation_refs must be non-empty".to_string());
+    }
+    normalized_refs.sort();
+    if normalized_refs.windows(2).any(|pair| pair[0] == pair[1]) {
+        errors.push("oracle attestation_refs must not contain duplicates".to_string());
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+#[cfg(feature = "production-air-winterfell")]
 fn normalized_total_charge_cents(bridge: &StarkBridgeInput) -> Result<u64, Vec<String>> {
     match bridge.claim.claim_amount.checked_mul(100) {
         Some(value) if value > 0 && value <= u32::MAX as u64 => Ok(value),
@@ -666,6 +1242,73 @@ fn hash_diagnoses(bridge: &StarkBridgeInput) -> ClaimSourceDigest {
 }
 
 #[cfg(feature = "production-air-winterfell")]
+fn hash_oracle_facts(facts: &[OracleFactInput]) -> ClaimSourceDigest {
+    let mut canonical_facts = facts
+        .iter()
+        .map(normalized_oracle_fact)
+        .collect::<Vec<[String; 6]>>();
+    canonical_facts.sort();
+
+    let mut aggregate = vec![
+        felt(ORACLE_FACTS_DOMAIN_TAG),
+        felt(ORACLE_FACTS_ROOT_SCHEMA_TAG),
+        felt(canonical_facts.len() as u64),
+    ];
+    for fact in canonical_facts {
+        let mut fact_elements = vec![
+            felt(ORACLE_FACT_DOMAIN_TAG),
+            felt(ORACLE_FACTS_ROOT_SCHEMA_TAG),
+        ];
+        for value in fact {
+            fact_elements
+                .extend_from_slice(hash_text(ORACLE_FACT_DOMAIN_TAG, &value).as_elements());
+        }
+        let digest = Rp64_256::hash_elements(&fact_elements);
+        aggregate.extend_from_slice(digest.as_elements());
+    }
+    Rp64_256::hash_elements(&aggregate)
+}
+
+#[cfg(feature = "production-air-winterfell")]
+fn hash_oracle_attestations(attestation_refs: &[String]) -> ClaimSourceDigest {
+    let mut refs = attestation_refs
+        .iter()
+        .map(|value| value.trim().to_string())
+        .collect::<Vec<_>>();
+    refs.sort();
+
+    let mut elements = vec![
+        felt(ORACLE_ATTESTATIONS_DOMAIN_TAG),
+        felt(ORACLE_FACTS_ROOT_SCHEMA_TAG),
+        felt(refs.len() as u64),
+    ];
+    for value in refs {
+        elements.extend_from_slice(hash_text(ORACLE_ATTESTATION_DOMAIN_TAG, &value).as_elements());
+    }
+    Rp64_256::hash_elements(&elements)
+}
+
+#[cfg(feature = "production-air-winterfell")]
+fn normalized_oracle_fact(fact: &OracleFactInput) -> [String; 6] {
+    [
+        fact.fact_type.trim().to_ascii_lowercase(),
+        fact.fact_key.trim().to_ascii_lowercase(),
+        fact.fact_value.trim().to_string(),
+        fact.source_url
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        fact.source_label
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        fact.verification_status.trim().to_ascii_lowercase(),
+    ]
+}
+
+#[cfg(feature = "production-air-winterfell")]
 fn hash_text(domain_tag: u64, value: &str) -> ClaimSourceDigest {
     let bytes = value.as_bytes();
     let mut elements = vec![felt(domain_tag), felt(bytes.len() as u64)];
@@ -689,10 +1332,32 @@ fn build_claim_source_tree(
 }
 
 #[cfg(feature = "production-air-winterfell")]
+fn build_oracle_facts_tree(
+    oracle_leaf: ClaimSourceDigest,
+) -> Result<MerkleTree<Rp64_256>, Vec<String>> {
+    let leaf_count = 1_usize << ORACLE_FACTS_ROOT_TREE_DEPTH;
+    let mut leaves = (0..leaf_count)
+        .map(indexed_oracle_empty_leaf)
+        .collect::<Vec<_>>();
+    leaves[ORACLE_FACTS_ROOT_LEAF_INDEX] = oracle_leaf;
+    MerkleTree::<Rp64_256>::new(leaves)
+        .map_err(|error| vec![format!("could not build oracle-facts Merkle tree: {error}")])
+}
+
+#[cfg(feature = "production-air-winterfell")]
 fn indexed_empty_leaf(index: usize) -> ClaimSourceDigest {
     Rp64_256::hash_elements(&[
         felt(EMPTY_LEAF_DOMAIN_TAG),
         felt(CLAIM_SOURCE_ROOT_SCHEMA_TAG),
+        felt(index as u64),
+    ])
+}
+
+#[cfg(feature = "production-air-winterfell")]
+fn indexed_oracle_empty_leaf(index: usize) -> ClaimSourceDigest {
+    Rp64_256::hash_elements(&[
+        felt(ORACLE_EMPTY_LEAF_DOMAIN_TAG),
+        felt(ORACLE_FACTS_ROOT_SCHEMA_TAG),
         felt(index as u64),
     ])
 }

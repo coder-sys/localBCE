@@ -19,23 +19,26 @@ use crate::{
     source_roots::{
         CLAIM_SOURCE_ROOT_DOMAIN_TAG, CLAIM_SOURCE_ROOT_HASH_TAG, CLAIM_SOURCE_ROOT_LEAF_INDEX,
         CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH, CLAIM_SOURCE_ROOT_SCHEMA_TAG,
-        CLAIM_SOURCE_ROOT_TREE_DEPTH, CLAIM_SOURCE_ROOT_UNIT_TAG,
-        ProductionClaimSourceRootArtifactV1,
+        CLAIM_SOURCE_ROOT_TREE_DEPTH, CLAIM_SOURCE_ROOT_UNIT_TAG, ORACLE_FACTS_ROOT_DOMAIN_TAG,
+        ORACLE_FACTS_ROOT_HASH_TAG, ORACLE_FACTS_ROOT_LEAF_INDEX,
+        ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH, ORACLE_FACTS_ROOT_NORMALIZATION_TAG,
+        ORACLE_FACTS_ROOT_SCHEMA_TAG, ORACLE_FACTS_ROOT_TREE_DEPTH,
+        ProductionClaimSourceRootArtifactV1, ProductionOracleFactsRootArtifactV1,
     },
 };
 
 pub type ProductionFelt = BaseElement;
 
-pub const TRACE_LENGTH: usize = 256;
+pub const TRACE_LENGTH: usize = 512;
 
 pub const FACT_COMMITMENT_SCHEMA_VERSION: &str = "stark-claim-fact-commitment-v1";
 pub const FACT_COMMITMENT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const FACT_COMMITMENT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCFACT\0");
 pub const FACT_COMMITMENT_RULESET_TAG: u64 = u64::from_le_bytes(*b"G1G10V1\0");
-pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v2";
+pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v3";
 pub const PUBLIC_INPUT_ROOT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const PUBLIC_INPUT_ROOT_ENCODING: &str = "bytes32-four-canonical-f64-big-endian";
-pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR02");
+pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR03");
 pub const PUBLIC_INPUT_ROOT_RULESET_TAG: u64 = FACT_COMMITMENT_RULESET_TAG;
 pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "eligibility_active",
@@ -55,7 +58,7 @@ pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "recipient_not_deceased",
     "physician_certification_valid",
 ];
-pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 18] = [
+pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 22] = [
     "claim_hash_be_u32_limb_0",
     "claim_hash_be_u32_limb_1",
     "claim_hash_be_u32_limb_2",
@@ -72,6 +75,10 @@ pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 18] = [
     "claim_source_root_element_1",
     "claim_source_root_element_2",
     "claim_source_root_element_3",
+    "oracle_facts_root_element_0",
+    "oracle_facts_root_element_1",
+    "oracle_facts_root_element_2",
+    "oracle_facts_root_element_3",
     "decision",
     "failure_code",
 ];
@@ -80,10 +87,11 @@ const CLAIM_HASH_LIMB_COUNT: usize = 8;
 const FACT_COMMITMENT_WIDTH: usize = 4;
 const FACT_COMMITMENT_PREIMAGE_LENGTH: usize = 28;
 pub const CLAIM_SOURCE_ROOT_WIDTH: usize = 4;
+pub const ORACLE_FACTS_ROOT_WIDTH: usize = 4;
 const PUBLIC_INPUT_ROOT_WIDTH: usize = 4;
-const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 22;
+const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 26;
 const FACT_COUNT: u64 = 16;
-const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 18;
+const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 22;
 const FACT_HASH_TRACE_LENGTH: usize = 32;
 const CLAIM_SOURCE_LEAF_TRACE_START: usize = FACT_HASH_TRACE_LENGTH;
 const CLAIM_SOURCE_LEAF_TRACE_LENGTH: usize = 40;
@@ -92,8 +100,16 @@ const CLAIM_SOURCE_MERKLE_TRACE_START: usize =
 const CLAIM_SOURCE_MERKLE_LEVEL_LENGTH: usize = 8;
 const CLAIM_SOURCE_MERKLE_TRACE_LENGTH: usize =
     CLAIM_SOURCE_ROOT_TREE_DEPTH * CLAIM_SOURCE_MERKLE_LEVEL_LENGTH;
-const PUBLIC_ROOT_TRACE_START: usize =
+const ORACLE_FACTS_LEAF_TRACE_START: usize =
     CLAIM_SOURCE_MERKLE_TRACE_START + CLAIM_SOURCE_MERKLE_TRACE_LENGTH;
+const ORACLE_FACTS_LEAF_TRACE_LENGTH: usize = 32;
+const ORACLE_FACTS_MERKLE_TRACE_START: usize =
+    ORACLE_FACTS_LEAF_TRACE_START + ORACLE_FACTS_LEAF_TRACE_LENGTH;
+const ORACLE_FACTS_MERKLE_LEVEL_LENGTH: usize = 8;
+const ORACLE_FACTS_MERKLE_TRACE_LENGTH: usize =
+    ORACLE_FACTS_ROOT_TREE_DEPTH * ORACLE_FACTS_MERKLE_LEVEL_LENGTH;
+const PUBLIC_ROOT_TRACE_START: usize =
+    ORACLE_FACTS_MERKLE_TRACE_START + ORACLE_FACTS_MERKLE_TRACE_LENGTH;
 const RESCUE_STATE_WIDTH: usize = 12;
 const RESCUE_RATE_START: usize = 4;
 const RESCUE_RATE_WIDTH: usize = 8;
@@ -101,15 +117,21 @@ const RESCUE_ROUND_COUNT: usize = 7;
 const HASH_ROUND_SELECTOR_COUNT: usize = RESCUE_ROUND_COUNT;
 const FACT_HASH_ABSORB_SELECTOR_COUNT: usize = 3;
 const CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_COUNT: usize = 4;
-const PUBLIC_ROOT_ABSORB_SELECTOR_COUNT: usize = 2;
+const ORACLE_FACTS_LEAF_ABSORB_SELECTOR_COUNT: usize = 3;
+const PUBLIC_ROOT_ABSORB_SELECTOR_COUNT: usize = 3;
 const FACT_HASH_ABSORB_SELECTOR_START: usize = HASH_ROUND_SELECTOR_COUNT;
 const CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_START: usize =
     FACT_HASH_ABSORB_SELECTOR_START + FACT_HASH_ABSORB_SELECTOR_COUNT;
 const CLAIM_SOURCE_LEAF_RESET_SELECTOR: usize =
     CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_START + CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_COUNT;
 const CLAIM_SOURCE_MERKLE_RESET_SELECTOR_START: usize = CLAIM_SOURCE_LEAF_RESET_SELECTOR + 1;
-const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+const ORACLE_FACTS_LEAF_ABSORB_SELECTOR_START: usize =
     CLAIM_SOURCE_MERKLE_RESET_SELECTOR_START + CLAIM_SOURCE_ROOT_TREE_DEPTH;
+const ORACLE_FACTS_LEAF_RESET_SELECTOR: usize =
+    ORACLE_FACTS_LEAF_ABSORB_SELECTOR_START + ORACLE_FACTS_LEAF_ABSORB_SELECTOR_COUNT;
+const ORACLE_FACTS_MERKLE_RESET_SELECTOR_START: usize = ORACLE_FACTS_LEAF_RESET_SELECTOR + 1;
+const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+    ORACLE_FACTS_MERKLE_RESET_SELECTOR_START + ORACLE_FACTS_ROOT_TREE_DEPTH;
 const PUBLIC_ROOT_RESET_SELECTOR: usize =
     PUBLIC_ROOT_ABSORB_SELECTOR_START + PUBLIC_ROOT_ABSORB_SELECTOR_COUNT;
 const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
@@ -154,37 +176,51 @@ const CLAIM_SOURCE_PATH_START: usize =
     CLAIM_SOURCE_PREIMAGE_START + CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH;
 const CLAIM_SOURCE_ROOT_RESULT_START: usize =
     CLAIM_SOURCE_PATH_START + CLAIM_SOURCE_ROOT_TREE_DEPTH * CLAIM_SOURCE_ROOT_WIDTH;
+const ORACLE_FACTS_PREIMAGE_START: usize = CLAIM_SOURCE_PREIMAGE_START;
+const ORACLE_FACTS_PATH_START: usize = CLAIM_SOURCE_PATH_START;
+const ORACLE_FACTS_ROOT_RESULT_START: usize =
+    CLAIM_SOURCE_ROOT_RESULT_START + CLAIM_SOURCE_ROOT_WIDTH;
+const COL_CLAIM_SOURCE_DATE_BINDING: usize =
+    ORACLE_FACTS_ROOT_RESULT_START + ORACLE_FACTS_ROOT_WIDTH;
 
-pub const TRACE_WIDTH: usize = CLAIM_SOURCE_ROOT_RESULT_START + CLAIM_SOURCE_ROOT_WIDTH;
+pub const TRACE_WIDTH: usize = COL_CLAIM_SOURCE_DATE_BINDING + 1;
 const GATE_COUNT: usize = 13;
 const RANGE_BITS: usize = 32;
 const BASE_SEMANTIC_CONSTRAINT_COUNT: usize = 129;
-const CLAIM_SOURCE_LINK_CONSTRAINT_COUNT: usize = CLAIM_HASH_LIMB_COUNT + 1;
-const SEMANTIC_CONSTRAINT_COUNT: usize =
-    BASE_SEMANTIC_CONSTRAINT_COUNT + CLAIM_SOURCE_LINK_CONSTRAINT_COUNT;
+const CLAIM_SOURCE_LINK_CONSTRAINT_COUNT: usize = 1;
+const ORACLE_FACTS_LINK_CONSTRAINT_COUNT: usize = 0;
+const SEMANTIC_CONSTRAINT_COUNT: usize = BASE_SEMANTIC_CONSTRAINT_COUNT
+    + CLAIM_SOURCE_LINK_CONSTRAINT_COUNT
+    + ORACLE_FACTS_LINK_CONSTRAINT_COUNT;
 const COMMITMENT_BOUND_COLUMN_COUNT: usize = 16
     + CLAIM_HASH_LIMB_COUNT
     + FACT_COMMITMENT_WIDTH
-    + CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH
-    + CLAIM_SOURCE_ROOT_TREE_DEPTH * CLAIM_SOURCE_ROOT_WIDTH
-    + CLAIM_SOURCE_ROOT_WIDTH;
+    + CLAIM_SOURCE_ROOT_WIDTH
+    + ORACLE_FACTS_ROOT_WIDTH
+    + 1;
 const HASH_CONSTRAINT_COUNT: usize = RESCUE_STATE_WIDTH;
 const FACT_COMMITMENT_BIND_CONSTRAINT_COUNT: usize = FACT_COMMITMENT_WIDTH;
 const CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT: usize = CLAIM_SOURCE_ROOT_WIDTH;
+const ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT: usize = ORACLE_FACTS_ROOT_WIDTH;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
     + FACT_COMMITMENT_BIND_CONSTRAINT_COUNT
     + CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT
+    + ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT
     + 1;
 const CLAIM_SOURCE_FIXED_ASSERTION_COUNT: usize = 8;
+const ORACLE_FACTS_FIXED_ASSERTION_COUNT: usize = 9;
 const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + 2
     + 1
     + RESCUE_STATE_WIDTH
     + PUBLIC_INPUT_ROOT_WIDTH
     + CLAIM_SOURCE_ROOT_WIDTH
-    + CLAIM_SOURCE_FIXED_ASSERTION_COUNT;
+    + ORACLE_FACTS_ROOT_WIDTH
+    + CLAIM_SOURCE_FIXED_ASSERTION_COUNT
+    + ORACLE_FACTS_FIXED_ASSERTION_COUNT
+    + CLAIM_HASH_LIMB_COUNT * 2;
 
 const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
     COL_ELIGIBILITY_ACTIVE,
@@ -203,9 +239,10 @@ const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
 const FAILURE_CODES: [u32; GATE_COUNT] = [1, 201, 202, 3, 4, 501, 502, 601, 602, 7, 8, 9, 10];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductionAirProofInputV2 {
+pub struct ProductionAirProofInputV3 {
     pub adjudication: ProductionAirInputV1,
     pub claim_source: ProductionClaimSourceWitnessV2,
+    pub oracle_facts: ProductionOracleFactsWitnessV3,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,41 +252,60 @@ pub struct ProductionClaimSourceWitnessV2 {
     pub root: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionOracleFactsWitnessV3 {
+    pub leaf_preimage: [ProductionFelt; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH],
+    pub merkle_path: [[ProductionFelt; ORACLE_FACTS_ROOT_WIDTH]; ORACLE_FACTS_ROOT_TREE_DEPTH],
+    pub root: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+}
+
 #[derive(Clone, Copy, Debug)]
-pub struct ProductionAirPublicInputsV2 {
+pub struct ProductionAirPublicInputsV3 {
     pub claim_hash_limbs: [ProductionFelt; CLAIM_HASH_LIMB_COUNT],
     pub public_input_root: [ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
     pub claim_source_root: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
+    pub oracle_facts_root: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
     pub decision: ProductionFelt,
     pub failure_code: ProductionFelt,
 }
 
-pub type ProductionAirPublicInputsV1 = ProductionAirPublicInputsV2;
+pub type ProductionAirProofInputV2 = ProductionAirProofInputV3;
+pub type ProductionAirPublicInputsV2 = ProductionAirPublicInputsV3;
+pub type ProductionAirPublicInputsV1 = ProductionAirPublicInputsV3;
 
-impl ToElements<ProductionFelt> for ProductionAirPublicInputsV2 {
+impl ToElements<ProductionFelt> for ProductionAirPublicInputsV3 {
     fn to_elements(&self) -> Vec<ProductionFelt> {
         let mut elements = self.claim_hash_limbs.to_vec();
         elements.extend(self.public_input_root);
         elements.extend(self.claim_source_root);
+        elements.extend(self.oracle_facts_root);
         elements.push(self.decision);
         elements.push(self.failure_code);
         elements
     }
 }
 
-impl ProductionAirProofInputV2 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-air-proof-input-v2";
+impl ProductionAirProofInputV3 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-air-proof-input-v3";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
         let adjudication = ProductionAirInputV1::from_bridge_input(bridge)?;
         let claim_source_artifact = ProductionClaimSourceRootArtifactV1::from_bridge_input(bridge)?;
         let (leaf_preimage, merkle_path, root) = claim_source_artifact.air_witness_components()?;
+        let oracle_facts_artifact = ProductionOracleFactsRootArtifactV1::from_bridge_input(bridge)?;
+        let (oracle_leaf_preimage, oracle_merkle_path, oracle_root) =
+            oracle_facts_artifact.air_witness_components()?;
         let input = Self {
             adjudication,
             claim_source: ProductionClaimSourceWitnessV2 {
                 leaf_preimage,
                 merkle_path,
                 root,
+            },
+            oracle_facts: ProductionOracleFactsWitnessV3 {
+                leaf_preimage: oracle_leaf_preimage,
+                merkle_path: oracle_merkle_path,
+                root: oracle_root,
             },
         };
         input.validate()?;
@@ -264,6 +320,67 @@ impl ProductionAirProofInputV2 {
         if let Err(mut witness_errors) = self.claim_source.validate(&self.adjudication) {
             errors.append(&mut witness_errors);
         }
+        if let Err(mut witness_errors) = self.oracle_facts.validate(&self.adjudication) {
+            errors.append(&mut witness_errors);
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl ProductionOracleFactsWitnessV3 {
+    pub fn validate(&self, adjudication: &ProductionAirInputV1) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        let expected_header = [
+            felt(ORACLE_FACTS_ROOT_DOMAIN_TAG),
+            felt(ORACLE_FACTS_ROOT_SCHEMA_TAG),
+            felt(ORACLE_FACTS_ROOT_HASH_TAG),
+            felt(ORACLE_FACTS_ROOT_NORMALIZATION_TAG),
+        ];
+        if self.leaf_preimage[..4] != expected_header {
+            errors.push("oracle-facts leaf header is not canonical".to_string());
+        }
+        if self.leaf_preimage[24..27] != [ProductionFelt::ONE; 3] {
+            errors.push("oracle-facts presence flags must all be one".to_string());
+        }
+        if self.leaf_preimage[30..32] != [ProductionFelt::ZERO; 2] {
+            errors.push("oracle-facts reserved fields must be zero".to_string());
+        }
+        if self.leaf_preimage[27] == ProductionFelt::ZERO
+            || self.leaf_preimage[28] == ProductionFelt::ZERO
+            || self.leaf_preimage[29] != self.leaf_preimage[27]
+        {
+            errors.push(
+                "oracle-facts counts must be nonzero and all facts must be verified".to_string(),
+            );
+        }
+
+        match parse_claim_hash_limbs(&adjudication.claim_hash) {
+            Ok(claim_hash_limbs) if self.leaf_preimage[4..12] != claim_hash_limbs => {
+                errors.push(
+                    "oracle-facts leaf claim hash limbs do not match adjudication claim hash"
+                        .to_string(),
+                );
+            }
+            Ok(_) => {}
+            Err(mut claim_hash_errors) => errors.append(&mut claim_hash_errors),
+        }
+
+        let leaf = Rp64_256::hash_elements(&self.leaf_preimage);
+        let mut current: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH] = leaf
+            .as_elements()
+            .try_into()
+            .expect("Rp64_256 digest must contain four field elements");
+        for (level, sibling) in self.merkle_path.iter().enumerate() {
+            current = merge_oracle_facts_level(current, *sibling, level);
+        }
+        if current != self.root {
+            errors.push("oracle-facts Merkle path does not produce the supplied root".to_string());
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -327,12 +444,12 @@ impl ProductionClaimSourceWitnessV2 {
 
 pub struct ProductionG1G10Air {
     context: AirContext<ProductionFelt>,
-    public_inputs: ProductionAirPublicInputsV2,
+    public_inputs: ProductionAirPublicInputsV3,
 }
 
 impl Air for ProductionG1G10Air {
     type BaseField = ProductionFelt;
-    type PublicInputs = ProductionAirPublicInputsV2;
+    type PublicInputs = ProductionAirPublicInputsV3;
 
     fn new(
         trace_info: TraceInfo,
@@ -458,13 +575,7 @@ impl Air for ProductionG1G10Air {
 
         debug_assert_eq!(index, BASE_SEMANTIC_CONSTRAINT_COUNT);
 
-        for limb in 0..CLAIM_HASH_LIMB_COUNT {
-            result[index] = current[CLAIM_SOURCE_PREIMAGE_START + 4 + limb]
-                - current[CLAIM_HASH_LIMBS_START + limb];
-            index += 1;
-        }
-        result[index] =
-            current[CLAIM_SOURCE_PREIMAGE_START + 27] - current[COL_DATE_OF_SERVICE_FROM];
+        result[index] = current[COL_CLAIM_SOURCE_DATE_BINDING] - current[COL_DATE_OF_SERVICE_FROM];
         index += 1;
 
         debug_assert_eq!(index, SEMANTIC_CONSTRAINT_COUNT);
@@ -486,7 +597,6 @@ impl Air for ProductionG1G10Air {
                 + clock_transition * E::from((bound_index + 1) as u32);
             index += 1;
         }
-
         let current_hash: [E; RESCUE_STATE_WIDTH] =
             core::array::from_fn(|offset| current[HASH_STATE_START + offset]);
         let next_hash: [E; RESCUE_STATE_WIDTH] =
@@ -506,11 +616,18 @@ impl Air for ProductionG1G10Air {
             claim_source_leaf_absorption_block(current, 3),
             claim_source_leaf_absorption_block(current, 4),
         ];
+        let oracle_facts_leaf_absorption_blocks = [
+            oracle_facts_leaf_absorption_block(current, 1),
+            oracle_facts_leaf_absorption_block(current, 2),
+            oracle_facts_leaf_absorption_block(current, 3),
+        ];
         let public_root_absorption_blocks = [
             public_input_root_absorption_block(current, 1),
             public_input_root_absorption_block(current, 2),
+            public_input_root_absorption_block(current, 3),
         ];
         let claim_source_leaf_initial_state = initial_claim_source_leaf_hash_state(current);
+        let oracle_facts_leaf_initial_state = initial_oracle_facts_leaf_hash_state(current);
         let public_root_initial_state = initial_public_input_root_hash_state(current);
 
         let mut hash_degree_adjustment = clock_transition;
@@ -554,6 +671,25 @@ impl Air for ProductionG1G10Air {
                 constraint += periodic_values[CLAIM_SOURCE_MERKLE_RESET_SELECTOR_START + level]
                     * (next_hash[state_index] - merge_initial_state[state_index]);
             }
+            for (block_index, block) in oracle_facts_leaf_absorption_blocks.iter().enumerate() {
+                let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
+                    .contains(&state_index)
+                {
+                    block[state_index - RESCUE_RATE_START]
+                } else {
+                    E::ZERO
+                };
+                constraint += periodic_values
+                    [ORACLE_FACTS_LEAF_ABSORB_SELECTOR_START + block_index]
+                    * (next_hash[state_index] - current_hash[state_index] - absorbed);
+            }
+            constraint += periodic_values[ORACLE_FACTS_LEAF_RESET_SELECTOR]
+                * (next_hash[state_index] - oracle_facts_leaf_initial_state[state_index]);
+            for level in 0..ORACLE_FACTS_ROOT_TREE_DEPTH {
+                let merge_initial_state = initial_oracle_facts_merkle_state(current, level);
+                constraint += periodic_values[ORACLE_FACTS_MERKLE_RESET_SELECTOR_START + level]
+                    * (next_hash[state_index] - merge_initial_state[state_index]);
+            }
             for (block_index, block) in public_root_absorption_blocks.iter().enumerate() {
                 let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
                     .contains(&state_index)
@@ -582,9 +718,15 @@ impl Air for ProductionG1G10Air {
         }
 
         for digest_index in 0..CLAIM_SOURCE_ROOT_WIDTH {
-            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+            result[index] = periodic_values[ORACLE_FACTS_LEAF_RESET_SELECTOR]
                 * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
                     - current[CLAIM_SOURCE_ROOT_RESULT_START + digest_index]);
+            index += 1;
+        }
+        for digest_index in 0..ORACLE_FACTS_ROOT_WIDTH {
+            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+                * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
+                    - current[ORACLE_FACTS_ROOT_RESULT_START + digest_index]);
             index += 1;
         }
 
@@ -599,6 +741,16 @@ impl Air for ProductionG1G10Air {
         let mut assertions = Vec::with_capacity(PUBLIC_ASSERTION_COUNT);
         for (limb, value) in self.public_inputs.claim_hash_limbs.iter().enumerate() {
             assertions.push(Assertion::single(CLAIM_HASH_LIMBS_START + limb, 0, *value));
+            assertions.push(Assertion::single(
+                CLAIM_SOURCE_PREIMAGE_START + 4 + limb,
+                0,
+                *value,
+            ));
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_PREIMAGE_START + 4 + limb,
+                ORACLE_FACTS_LEAF_TRACE_START - 1,
+                *value,
+            ));
         }
         assertions.push(Assertion::single(
             COL_DECISION,
@@ -633,6 +785,13 @@ impl Air for ProductionG1G10Air {
                 *value,
             ));
         }
+        for (digest_index, value) in self.public_inputs.oracle_facts_root.iter().enumerate() {
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_ROOT_RESULT_START + digest_index,
+                0,
+                *value,
+            ));
+        }
         for (offset, value) in [
             (0, felt(CLAIM_SOURCE_ROOT_DOMAIN_TAG)),
             (1, felt(CLAIM_SOURCE_ROOT_SCHEMA_TAG)),
@@ -646,6 +805,23 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 CLAIM_SOURCE_PREIMAGE_START + offset,
                 0,
+                value,
+            ));
+        }
+        for (offset, value) in [
+            (0, felt(ORACLE_FACTS_ROOT_DOMAIN_TAG)),
+            (1, felt(ORACLE_FACTS_ROOT_SCHEMA_TAG)),
+            (2, felt(ORACLE_FACTS_ROOT_HASH_TAG)),
+            (3, felt(ORACLE_FACTS_ROOT_NORMALIZATION_TAG)),
+            (24, ProductionFelt::ONE),
+            (25, ProductionFelt::ONE),
+            (26, ProductionFelt::ONE),
+            (30, ProductionFelt::ZERO),
+            (31, ProductionFelt::ZERO),
+        ] {
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_PREIMAGE_START + offset,
+                ORACLE_FACTS_LEAF_TRACE_START - 1,
                 value,
             ));
         }
@@ -699,6 +875,9 @@ impl Prover for ProductionG1G10Prover {
             }),
             claim_source_root: core::array::from_fn(|limb| {
                 trace.get(CLAIM_SOURCE_ROOT_RESULT_START + limb, 0)
+            }),
+            oracle_facts_root: core::array::from_fn(|limb| {
+                trace.get(ORACLE_FACTS_ROOT_RESULT_START + limb, 0)
             }),
             decision: trace.get(COL_DECISION, 0),
             failure_code: trace.get(COL_FAILURE_CODE, 0),
@@ -775,10 +954,30 @@ pub fn build_production_air_trace(
             "claim-source trace root does not match validated witness root".to_string(),
         ]);
     }
+    let oracle_facts_leaf_hash_states =
+        build_oracle_facts_leaf_hash_states(&input.oracle_facts.leaf_preimage);
+    let oracle_facts_leaf: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            oracle_facts_leaf_hash_states[ORACLE_FACTS_LEAF_TRACE_LENGTH - 1]
+                [RESCUE_RATE_START + index]
+        });
+    let oracle_facts_merkle_hash_states =
+        build_oracle_facts_merkle_hash_states(oracle_facts_leaf, &input.oracle_facts.merkle_path);
+    let computed_oracle_facts_root: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            oracle_facts_merkle_hash_states[ORACLE_FACTS_MERKLE_TRACE_LENGTH - 1]
+                [RESCUE_RATE_START + index]
+        });
+    if computed_oracle_facts_root != input.oracle_facts.root {
+        return Err(vec![
+            "oracle-facts trace root does not match validated witness root".to_string(),
+        ]);
+    }
     let public_root_preimage = canonical_public_input_root_preimage_with_commitments(
         adjudication,
         &fact_commitment,
         &computed_claim_source_root,
+        &computed_oracle_facts_root,
     )?;
     let public_root_hash_states = build_public_input_root_hash_states(&public_root_preimage);
     let mut rows = Vec::with_capacity(TRACE_LENGTH);
@@ -787,23 +986,41 @@ pub fn build_production_air_trace(
         row[COL_CLOCK] = ProductionFelt::from(step as u32);
         row[FACT_COMMITMENT_RESULT_START..FACT_COMMITMENT_RESULT_START + FACT_COMMITMENT_WIDTH]
             .copy_from_slice(&fact_commitment);
-        row[CLAIM_SOURCE_PREIMAGE_START
-            ..CLAIM_SOURCE_PREIMAGE_START + CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH]
-            .copy_from_slice(&input.claim_source.leaf_preimage);
-        for (level, sibling) in input.claim_source.merkle_path.iter().enumerate() {
-            let start = CLAIM_SOURCE_PATH_START + level * CLAIM_SOURCE_ROOT_WIDTH;
-            row[start..start + CLAIM_SOURCE_ROOT_WIDTH].copy_from_slice(sibling);
+        if step < ORACLE_FACTS_LEAF_TRACE_START - 1 {
+            row[CLAIM_SOURCE_PREIMAGE_START
+                ..CLAIM_SOURCE_PREIMAGE_START + CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH]
+                .copy_from_slice(&input.claim_source.leaf_preimage);
+            for (level, sibling) in input.claim_source.merkle_path.iter().enumerate() {
+                let start = CLAIM_SOURCE_PATH_START + level * CLAIM_SOURCE_ROOT_WIDTH;
+                row[start..start + CLAIM_SOURCE_ROOT_WIDTH].copy_from_slice(sibling);
+            }
+        } else {
+            row[ORACLE_FACTS_PREIMAGE_START
+                ..ORACLE_FACTS_PREIMAGE_START + ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH]
+                .copy_from_slice(&input.oracle_facts.leaf_preimage);
+            for (level, sibling) in input.oracle_facts.merkle_path.iter().enumerate() {
+                let start = ORACLE_FACTS_PATH_START + level * ORACLE_FACTS_ROOT_WIDTH;
+                row[start..start + ORACLE_FACTS_ROOT_WIDTH].copy_from_slice(sibling);
+            }
         }
         row[CLAIM_SOURCE_ROOT_RESULT_START
             ..CLAIM_SOURCE_ROOT_RESULT_START + CLAIM_SOURCE_ROOT_WIDTH]
             .copy_from_slice(&computed_claim_source_root);
+        row[ORACLE_FACTS_ROOT_RESULT_START
+            ..ORACLE_FACTS_ROOT_RESULT_START + ORACLE_FACTS_ROOT_WIDTH]
+            .copy_from_slice(&computed_oracle_facts_root);
+        row[COL_CLAIM_SOURCE_DATE_BINDING] = felt(adjudication.facts.date_of_service_from);
 
         let hash_state = if step < CLAIM_SOURCE_LEAF_TRACE_START {
             fact_hash_states[step]
         } else if step < CLAIM_SOURCE_MERKLE_TRACE_START {
             claim_source_leaf_hash_states[step - CLAIM_SOURCE_LEAF_TRACE_START]
-        } else if step < PUBLIC_ROOT_TRACE_START {
+        } else if step < ORACLE_FACTS_LEAF_TRACE_START {
             claim_source_merkle_hash_states[step - CLAIM_SOURCE_MERKLE_TRACE_START]
+        } else if step < ORACLE_FACTS_MERKLE_TRACE_START {
+            oracle_facts_leaf_hash_states[step - ORACLE_FACTS_LEAF_TRACE_START]
+        } else if step < PUBLIC_ROOT_TRACE_START {
+            oracle_facts_merkle_hash_states[step - ORACLE_FACTS_MERKLE_TRACE_START]
         } else {
             public_root_hash_states[step - PUBLIC_ROOT_TRACE_START]
         };
@@ -896,6 +1113,7 @@ pub fn canonical_public_input_root_preimage(
         &input.adjudication,
         &fact_commitment,
         &input.claim_source.root,
+        &input.oracle_facts.root,
     )
 }
 
@@ -1031,6 +1249,10 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -1045,9 +1267,21 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
         }),
     );
     round_block_starts.extend([
+        ORACLE_FACTS_LEAF_TRACE_START,
+        ORACLE_FACTS_LEAF_TRACE_START + 8,
+        ORACLE_FACTS_LEAF_TRACE_START + 16,
+        ORACLE_FACTS_LEAF_TRACE_START + 24,
+    ]);
+    round_block_starts.extend(
+        (0..ORACLE_FACTS_ROOT_TREE_DEPTH).map(|level| {
+            ORACLE_FACTS_MERKLE_TRACE_START + level * ORACLE_FACTS_MERKLE_LEVEL_LENGTH
+        }),
+    );
+    round_block_starts.extend([
         PUBLIC_ROOT_TRACE_START,
         PUBLIC_ROOT_TRACE_START + 8,
         PUBLIC_ROOT_TRACE_START + 16,
+        PUBLIC_ROOT_TRACE_START + 24,
     ]);
     for block_start in round_block_starts {
         for round in 0..RESCUE_ROUND_COUNT {
@@ -1065,14 +1299,34 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
         let step = CLAIM_SOURCE_MERKLE_TRACE_START - 1 + level * CLAIM_SOURCE_MERKLE_LEVEL_LENGTH;
         columns[CLAIM_SOURCE_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
     }
-    for (selector, step) in [PUBLIC_ROOT_TRACE_START + 7, PUBLIC_ROOT_TRACE_START + 15]
-        .into_iter()
-        .enumerate()
+    for (selector, step) in [
+        ORACLE_FACTS_LEAF_TRACE_START + 7,
+        ORACLE_FACTS_LEAF_TRACE_START + 15,
+        ORACLE_FACTS_LEAF_TRACE_START + 23,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        columns[ORACLE_FACTS_LEAF_ABSORB_SELECTOR_START + selector][step] = ProductionFelt::ONE;
+    }
+    columns[ORACLE_FACTS_LEAF_RESET_SELECTOR][ORACLE_FACTS_LEAF_TRACE_START - 1] =
+        ProductionFelt::ONE;
+    for level in 0..ORACLE_FACTS_ROOT_TREE_DEPTH {
+        let step = ORACLE_FACTS_MERKLE_TRACE_START - 1 + level * ORACLE_FACTS_MERKLE_LEVEL_LENGTH;
+        columns[ORACLE_FACTS_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
+    }
+    for (selector, step) in [
+        PUBLIC_ROOT_TRACE_START + 7,
+        PUBLIC_ROOT_TRACE_START + 15,
+        PUBLIC_ROOT_TRACE_START + 23,
+    ]
+    .into_iter()
+    .enumerate()
     {
         columns[PUBLIC_ROOT_ABSORB_SELECTOR_START + selector][step] = ProductionFelt::ONE;
     }
     columns[PUBLIC_ROOT_RESET_SELECTOR][PUBLIC_ROOT_TRACE_START - 1] = ProductionFelt::ONE;
-    for step in PUBLIC_ROOT_TRACE_START + 23..TRACE_LENGTH - 1 {
+    for step in PUBLIC_ROOT_TRACE_START + 31..TRACE_LENGTH - 1 {
         columns[PUBLIC_ROOT_HOLD_SELECTOR][step] = ProductionFelt::ONE;
     }
     columns
@@ -1083,17 +1337,14 @@ fn commitment_bound_columns() -> Vec<usize> {
         .chain(CLAIM_HASH_LIMBS_START..CLAIM_HASH_LIMBS_START + CLAIM_HASH_LIMB_COUNT)
         .chain(FACT_COMMITMENT_RESULT_START..FACT_COMMITMENT_RESULT_START + FACT_COMMITMENT_WIDTH)
         .chain(
-            CLAIM_SOURCE_PREIMAGE_START
-                ..CLAIM_SOURCE_PREIMAGE_START + CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH,
-        )
-        .chain(
-            CLAIM_SOURCE_PATH_START
-                ..CLAIM_SOURCE_PATH_START + CLAIM_SOURCE_ROOT_TREE_DEPTH * CLAIM_SOURCE_ROOT_WIDTH,
-        )
-        .chain(
             CLAIM_SOURCE_ROOT_RESULT_START
                 ..CLAIM_SOURCE_ROOT_RESULT_START + CLAIM_SOURCE_ROOT_WIDTH,
         )
+        .chain(
+            ORACLE_FACTS_ROOT_RESULT_START
+                ..ORACLE_FACTS_ROOT_RESULT_START + ORACLE_FACTS_ROOT_WIDTH,
+        )
+        .chain(core::iter::once(COL_CLAIM_SOURCE_DATE_BINDING))
         .collect()
 }
 
@@ -1109,7 +1360,7 @@ fn commitment_header() -> [ProductionFelt; 4] {
 fn public_input_root_header() -> [ProductionFelt; 4] {
     [
         felt(PUBLIC_INPUT_ROOT_DOMAIN_TAG),
-        felt(1),
+        felt(3),
         felt(PUBLIC_INPUT_ROOT_RULESET_TAG),
         felt(PUBLIC_INPUT_ROOT_ELEMENT_COUNT),
     ]
@@ -1119,6 +1370,7 @@ fn canonical_public_input_root_preimage_with_commitments(
     input: &ProductionAirInputV1,
     fact_commitment: &[ProductionFelt; FACT_COMMITMENT_WIDTH],
     claim_source_root: &[ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
+    oracle_facts_root: &[ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
 ) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH], Vec<String>> {
     input.validate()?;
     validate_commitment_field_range(input)?;
@@ -1129,8 +1381,9 @@ fn canonical_public_input_root_preimage_with_commitments(
     elements[4..12].copy_from_slice(&claim_hash_limbs);
     elements[12..16].copy_from_slice(fact_commitment);
     elements[16..20].copy_from_slice(claim_source_root);
-    elements[20] = felt(input.expected_outcome.decision as u64);
-    elements[21] = felt(input.expected_outcome.failure_code as u64);
+    elements[20..24].copy_from_slice(oracle_facts_root);
+    elements[24] = felt(input.expected_outcome.decision as u64);
+    elements[25] = felt(input.expected_outcome.failure_code as u64);
     Ok(elements)
 }
 
@@ -1192,6 +1445,17 @@ fn initial_claim_source_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
     state
 }
 
+fn initial_oracle_facts_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH as u64));
+    for rate_index in 0..RESCUE_RATE_WIDTH {
+        state[RESCUE_RATE_START + rate_index] = row[ORACLE_FACTS_PREIMAGE_START + rate_index];
+    }
+    state
+}
+
 fn initial_claim_source_merkle_state<E: FieldElement + From<ProductionFelt>>(
     row: &[E],
     level: usize,
@@ -1210,6 +1474,28 @@ fn initial_claim_source_merkle_state<E: FieldElement + From<ProductionFelt>>(
     };
     state[RESCUE_RATE_START..RESCUE_RATE_START + CLAIM_SOURCE_ROOT_WIDTH].copy_from_slice(&left);
     state[RESCUE_RATE_START + CLAIM_SOURCE_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&right);
+    state
+}
+
+fn initial_oracle_facts_merkle_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    level: usize,
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(RESCUE_RATE_WIDTH as u64));
+    let current: [E; ORACLE_FACTS_ROOT_WIDTH] =
+        core::array::from_fn(|index| row[HASH_STATE_START + RESCUE_RATE_START + index]);
+    let sibling_start = ORACLE_FACTS_PATH_START + level * ORACLE_FACTS_ROOT_WIDTH;
+    let sibling: [E; ORACLE_FACTS_ROOT_WIDTH] =
+        core::array::from_fn(|index| row[sibling_start + index]);
+    let (left, right) = if oracle_facts_index_bit(level) == 0 {
+        (current, sibling)
+    } else {
+        (sibling, current)
+    };
+    state[RESCUE_RATE_START..RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH].copy_from_slice(&left);
+    state[RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
         .copy_from_slice(&right);
     state
 }
@@ -1283,6 +1569,38 @@ fn build_claim_source_leaf_hash_states(
     states
 }
 
+fn build_oracle_facts_leaf_hash_states(
+    elements: &[ProductionFelt; ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; ORACLE_FACTS_LEAF_TRACE_LENGTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH as u64);
+    state[RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&elements[..RESCUE_RATE_WIDTH]);
+
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; ORACLE_FACTS_LEAF_TRACE_LENGTH];
+    states[0] = state;
+    let mut step = 0;
+
+    for block in 0..4 {
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            step += 1;
+            states[step] = state;
+        }
+        if block < 3 {
+            let next_block_start = (block + 1) * RESCUE_RATE_WIDTH;
+            for rate_index in 0..RESCUE_RATE_WIDTH {
+                state[RESCUE_RATE_START + rate_index] += elements[next_block_start + rate_index];
+            }
+            step += 1;
+            states[step] = state;
+        }
+    }
+
+    debug_assert_eq!(step, ORACLE_FACTS_LEAF_TRACE_LENGTH - 1);
+    states
+}
+
 fn build_claim_source_merkle_hash_states(
     leaf: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     path: &[[ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH]; CLAIM_SOURCE_ROOT_TREE_DEPTH],
@@ -1301,6 +1619,29 @@ fn build_claim_source_merkle_hash_states(
         current = state[RESCUE_RATE_START..RESCUE_RATE_START + CLAIM_SOURCE_ROOT_WIDTH]
             .try_into()
             .expect("claim-source Merkle digest width");
+    }
+
+    states
+}
+
+fn build_oracle_facts_merkle_hash_states(
+    leaf: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    path: &[[ProductionFelt; ORACLE_FACTS_ROOT_WIDTH]; ORACLE_FACTS_ROOT_TREE_DEPTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; ORACLE_FACTS_MERKLE_TRACE_LENGTH] {
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; ORACLE_FACTS_MERKLE_TRACE_LENGTH];
+    let mut current = leaf;
+
+    for (level, sibling) in path.iter().copied().enumerate() {
+        let start = level * ORACLE_FACTS_MERKLE_LEVEL_LENGTH;
+        let mut state = initial_oracle_facts_merge_state(current, sibling, level);
+        states[start] = state;
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            states[start + round + 1] = state;
+        }
+        current = state[RESCUE_RATE_START..RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH]
+            .try_into()
+            .expect("oracle-facts Merkle digest width");
     }
 
     states
@@ -1338,8 +1679,44 @@ fn merge_claim_source_level(
         .expect("claim-source Merkle digest width")
 }
 
+fn initial_oracle_facts_merge_state(
+    current: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    sibling: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    level: usize,
+) -> [ProductionFelt; RESCUE_STATE_WIDTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(RESCUE_RATE_WIDTH as u64);
+    let (left, right) = if oracle_facts_index_bit(level) == 0 {
+        (current, sibling)
+    } else {
+        (sibling, current)
+    };
+    state[RESCUE_RATE_START..RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH].copy_from_slice(&left);
+    state[RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&right);
+    state
+}
+
+fn merge_oracle_facts_level(
+    current: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    sibling: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    level: usize,
+) -> [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH] {
+    let mut state = initial_oracle_facts_merge_state(current, sibling, level);
+    for round in 0..RESCUE_ROUND_COUNT {
+        Rp64_256::apply_round(&mut state, round);
+    }
+    state[RESCUE_RATE_START..RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH]
+        .try_into()
+        .expect("oracle-facts Merkle digest width")
+}
+
 fn claim_source_index_bit(level: usize) -> u8 {
     ((CLAIM_SOURCE_ROOT_LEAF_INDEX >> level) & 1) as u8
+}
+
+fn oracle_facts_index_bit(level: usize) -> u8 {
+    ((ORACLE_FACTS_ROOT_LEAF_INDEX >> level) & 1) as u8
 }
 
 fn build_public_input_root_hash_states(
@@ -1359,13 +1736,13 @@ fn build_public_input_root_hash_states(
     states[0] = state;
     let mut step = 0;
 
-    for block in 0..3 {
+    for block in 0..4 {
         for round in 0..RESCUE_ROUND_COUNT {
             Rp64_256::apply_round(&mut state, round);
             step += 1;
             states[step] = state;
         }
-        if block < 2 {
+        if block < 3 {
             let next_block_start = (block + 1) * RESCUE_RATE_WIDTH;
             for rate_index in 0..RESCUE_RATE_WIDTH {
                 let element_index = next_block_start + rate_index;
@@ -1378,7 +1755,7 @@ fn build_public_input_root_hash_states(
         }
     }
 
-    debug_assert_eq!(step, 23);
+    debug_assert_eq!(step, 31);
     for hold_step in step + 1..states.len() {
         states[hold_step] = state;
     }
@@ -1432,12 +1809,23 @@ fn claim_source_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
     let start = CLAIM_SOURCE_PREIMAGE_START + block * RESCUE_RATE_WIDTH;
     core::array::from_fn(|offset| {
         let element_index = block * RESCUE_RATE_WIDTH + offset;
-        if element_index < CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH {
+        if element_index == 27 {
+            row[COL_CLAIM_SOURCE_DATE_BINDING]
+        } else if element_index < CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH {
             row[start + offset]
         } else {
             E::ZERO
         }
     })
+}
+
+fn oracle_facts_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    block: usize,
+) -> [E; RESCUE_RATE_WIDTH] {
+    debug_assert!((1..=3).contains(&block));
+    let start = ORACLE_FACTS_PREIMAGE_START + block * RESCUE_RATE_WIDTH;
+    core::array::from_fn(|offset| row[start + offset])
 }
 
 fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
@@ -1460,12 +1848,22 @@ fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
             row[CLAIM_SOURCE_ROOT_RESULT_START + 1],
             row[CLAIM_SOURCE_ROOT_RESULT_START + 2],
             row[CLAIM_SOURCE_ROOT_RESULT_START + 3],
+            row[ORACLE_FACTS_ROOT_RESULT_START],
+            row[ORACLE_FACTS_ROOT_RESULT_START + 1],
+            row[ORACLE_FACTS_ROOT_RESULT_START + 2],
+            row[ORACLE_FACTS_ROOT_RESULT_START + 3],
+        ],
+        3 => [
             row[COL_DECISION],
             row[COL_FAILURE_CODE],
             E::ZERO,
             E::ZERO,
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
+            E::ZERO,
         ],
-        _ => unreachable!("public input root absorption block must be 1 or 2"),
+        _ => unreachable!("public input root absorption block must be 1, 2, or 3"),
     }
 }
 

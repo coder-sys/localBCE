@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::{
-    PRODUCTION_STARK_PUBLIC_INPUT_ORDER, ProductionStarkProofArtifactV3,
-    ProductionStarkProofBytesV3,
+    PRODUCTION_STARK_PUBLIC_INPUT_ORDER, ProductionStarkProofArtifactV4,
+    ProductionStarkProofBytesV4,
 };
 use crate::{
     StarkBridgeInput,
@@ -12,7 +12,8 @@ use crate::{
     },
     source_roots::{
         CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION,
-        CLAIM_SOURCE_ROOT_SCHEMA_VERSION,
+        CLAIM_SOURCE_ROOT_SCHEMA_VERSION, ORACLE_FACTS_ROOT_ENCODING,
+        ORACLE_FACTS_ROOT_HASH_FUNCTION, ORACLE_FACTS_ROOT_SCHEMA_VERSION,
     },
 };
 
@@ -35,7 +36,19 @@ fn approved_bridge() -> StarkBridgeInput {
                 "procedure_code": "99213",
                 "charge_cents": 100000,
                 "units": 1
-            }]
+            }],
+            "oracle_source_manifest_id": "DEMO-OFFICIAL-SOURCES-V1",
+            "oracle_facts": [{
+                "fact_type": "eligibility",
+                "fact_key": "eligibility_active",
+                "fact_value": "1",
+                "source_url": "https://example.gov/demo/oracle-facts",
+                "source_label": "Demo source - not production",
+                "verification_status": "verified"
+            }],
+            "oracle_attestation_refs": [
+                "demo-attestation:eligibility_active:CLAIM-PRODUCTION-ARTIFACT-001"
+            ]
         },
         "adjudication": {
             "decision": 1,
@@ -110,9 +123,9 @@ fn approved_bridge() -> StarkBridgeInput {
 
 #[test]
 fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
-    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
+    let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
 
-    assert_eq!(artifact.public_inputs.count, 18);
+    assert_eq!(artifact.public_inputs.count, 22);
     assert_eq!(
         artifact.public_inputs.order,
         PRODUCTION_STARK_PUBLIC_INPUT_ORDER
@@ -121,11 +134,11 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert_eq!(artifact.failure_code, 0);
     assert_eq!(
         artifact.schema_version,
-        "stark-production-proof-artifact-v3"
+        "stark-production-proof-artifact-v4"
     );
     assert_eq!(
         artifact.public_inputs.schema_version,
-        "stark-production-public-inputs-v3"
+        "stark-production-public-inputs-v4"
     );
     assert_eq!(
         artifact.public_input_root_schema_version,
@@ -164,6 +177,26 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
         &artifact.public_inputs.values_decimal[12..16],
         &packed_claim_source_root
     );
+    assert_eq!(
+        artifact.oracle_facts_root_schema_version,
+        ORACLE_FACTS_ROOT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        artifact.oracle_facts_root_hash,
+        ORACLE_FACTS_ROOT_HASH_FUNCTION
+    );
+    assert_eq!(
+        artifact.oracle_facts_root_encoding,
+        ORACLE_FACTS_ROOT_ENCODING
+    );
+    let packed_oracle_facts_root =
+        unpack_public_input_root_bytes32(&artifact.oracle_facts_root_bytes32)
+            .unwrap()
+            .map(|value| value.as_int().to_string());
+    assert_eq!(
+        &artifact.public_inputs.values_decimal[16..20],
+        &packed_oracle_facts_root
+    );
     assert!(artifact.locally_verified);
     assert!(!artifact.runtime_wired);
     assert!(!artifact.on_chain_verifier_wired);
@@ -171,7 +204,7 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert!(artifact.proof.size_bytes > 0);
 
     let json = serde_json::to_string_pretty(&artifact).unwrap();
-    let decoded: ProductionStarkProofArtifactV3 = serde_json::from_str(&json).unwrap();
+    let decoded: ProductionStarkProofArtifactV4 = serde_json::from_str(&json).unwrap();
     decoded.validate().unwrap();
     decoded.verify_serialized_proof().unwrap();
 
@@ -193,7 +226,7 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert!(trailing_proof.validate().is_err());
 
     let mut tampered_public_input = decoded;
-    tampered_public_input.public_inputs.values_decimal[16] = "0".to_string();
+    tampered_public_input.public_inputs.values_decimal[20] = "0".to_string();
     assert!(tampered_public_input.validate().is_err());
 
     let mut tampered_root = artifact;
@@ -202,10 +235,16 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert!(tampered_root.validate().is_err());
 
     let mut tampered_claim_source_root =
-        ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
+        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
     tampered_claim_source_root.claim_source_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_claim_source_root.validate().is_err());
+
+    let mut tampered_oracle_facts_root =
+        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    tampered_oracle_facts_root.oracle_facts_root_bytes32 =
+        "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(tampered_oracle_facts_root.validate().is_err());
 }
 
 #[test]
@@ -218,19 +257,19 @@ fn denied_artifact_preserves_and_proves_the_failure_code() {
     bridge.public_inputs.decision = 0;
     bridge.public_inputs.failure_code = 7;
 
-    let artifact = ProductionStarkProofArtifactV3::from_bridge_input(&bridge).unwrap();
+    let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&bridge).unwrap();
 
     assert_eq!(artifact.decision, 0);
     assert_eq!(artifact.failure_code, 7);
-    assert_eq!(artifact.public_inputs.values_decimal[16], "0");
-    assert_eq!(artifact.public_inputs.values_decimal[17], "7");
+    assert_eq!(artifact.public_inputs.values_decimal[20], "0");
+    assert_eq!(artifact.public_inputs.values_decimal[21], "7");
     artifact.validate().unwrap();
 }
 
 #[test]
 fn malformed_artifact_metadata_is_rejected_before_runtime_use() {
     let mut artifact =
-        ProductionStarkProofArtifactV3::from_bridge_input(&approved_bridge()).unwrap();
+        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
     artifact.proof.encoding = "base64".to_string();
     artifact.runtime_wired = true;
     artifact.on_chain_verifier_wired = true;
@@ -245,6 +284,6 @@ fn malformed_artifact_metadata_is_rejected_before_runtime_use() {
     );
     assert_ne!(
         artifact.proof.encoding,
-        ProductionStarkProofBytesV3::ENCODING
+        ProductionStarkProofBytesV4::ENCODING
     );
 }

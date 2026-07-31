@@ -260,6 +260,12 @@ pub struct BridgeClaim {
     pub diagnosis_codes: Vec<String>,
     #[serde(default)]
     pub service_lines: Vec<BridgeClaimServiceLine>,
+    #[serde(default)]
+    pub oracle_source_manifest_id: Option<String>,
+    #[serde(default)]
+    pub oracle_facts: Vec<OracleFactInput>,
+    #[serde(default)]
+    pub oracle_attestation_refs: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -8394,14 +8400,14 @@ impl OracleFactsRootInput {
             input_status: Self::INPUT_STATUS.to_string(),
             claim_id: input.claim.claim_id.clone(),
             claim_hash: input.claim.claim_hash.clone(),
-            source_manifest_id: None,
-            facts: Vec::new(),
-            attestation_refs: Vec::new(),
+            source_manifest_id: input.claim.oracle_source_manifest_id.clone(),
+            facts: input.claim.oracle_facts.clone(),
+            attestation_refs: input.claim.oracle_attestation_refs.clone(),
             root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
             notes: vec![
-                "This input is a normalized source schema for future oracleFactsRoot work.".to_string(),
-                "The current rust-engine bridge exports adjudication flags, not source-backed oracle facts or attestations.".to_string(),
-                "No oracle fact leaf, hash, Merkle root, source fetch, attestation, or STARK proof is generated from this object.".to_string(),
+                "This input carries optional source-backed oracle facts and attestation references supplied to rust-engine.".to_string(),
+                "The local application does not fetch URLs, scrape sources, or create attestations.".to_string(),
+                "Root generation and proof binding occur only in the feature-gated production STARK path.".to_string(),
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],
         })

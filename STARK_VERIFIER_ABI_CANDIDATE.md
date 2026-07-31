@@ -56,10 +56,10 @@ Winterfell 0.13.1 serialized proof bytes. Runtime use remains blocked on root
 semantics and a real Solidity verifier implementation.
 
 The feature-gated production AIR now emits real Winterfell proof bytes in
-`stark-production-proof-artifact-v3`. A separate
-`stark-production-verifier-handoff-v3` envelope aligns those bytes, the 18
-ordered AIR public inputs, and the packed `publicInputRoot` and
-`claimSourceRoot` values with this candidate interface.
+`stark-production-proof-artifact-v4`. A separate
+`stark-production-verifier-handoff-v4` envelope aligns those bytes, the 22
+ordered AIR public inputs, and the packed `publicInputRoot`,
+`claimSourceRoot`, and `oracleFactsRoot` values with this candidate interface.
 
 `publicInputRoot` is now constrained by the production AIR. It is an
 `Rp64_256` digest of a domain-separated preimage containing the claim hash, the
@@ -73,9 +73,15 @@ and service date, executes its fixed depth-10 `Rp64_256` Merkle path, and binds
 the final four root elements to public inputs. The handoff packs those elements
 as Solidity `bytes32`.
 
-The handoff remains intentionally non-call-ready because five source/state
-roots are unavailable, the claim-source root is not governed, and no Solidity
-STARK verifier exists.
+`oracleFactsRoot` is now constrained by the production AIR. Its canonical leaf
+commits the source manifest, normalized verified facts, HTTPS source references,
+and attestation references, then executes a fixed depth-10 `Rp64_256` Merkle
+path. The references are committed but not externally attested by the proof.
+
+The handoff remains intentionally non-call-ready because four source/state
+roots are unavailable, the claim-source and oracle-facts roots are not
+governed, external oracle attestations are not verified, and no Solidity STARK
+verifier exists.
 
 ## Current Tests
 
@@ -147,7 +153,8 @@ This ABI candidate does not mean:
 
 ## Next Step
 
-Define governance for the AIR-bound `claimSourceRoot`, implement the other five
+Define governance for the AIR-bound `claimSourceRoot` and `oracleFactsRoot`,
+define external oracle attestation verification, implement the four remaining
 source/state roots, then build and independently test a Solidity-compatible
 verifier for the locked proof and public-input encoding. Do not wire
 ClaimsRegistry until those roots and the verifier pass positive and negative

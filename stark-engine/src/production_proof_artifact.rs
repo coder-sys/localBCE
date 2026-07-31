@@ -14,11 +14,14 @@ use crate::{
     },
     source_roots::{
         CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION, CLAIM_SOURCE_ROOT_LEAF_INDEX,
-        CLAIM_SOURCE_ROOT_SCHEMA_VERSION, CLAIM_SOURCE_ROOT_TREE_DEPTH,
+        CLAIM_SOURCE_ROOT_SCHEMA_VERSION, CLAIM_SOURCE_ROOT_TREE_DEPTH, ORACLE_FACTS_ROOT_ENCODING,
+        ORACLE_FACTS_ROOT_HASH_FUNCTION, ORACLE_FACTS_ROOT_LEAF_INDEX,
+        ORACLE_FACTS_ROOT_SCHEMA_VERSION, ORACLE_FACTS_ROOT_TREE_DEPTH,
+        ProductionOracleFactsRootArtifactV1,
     },
 };
 
-pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 18] = [
+pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 22] = [
     "claim_hash_be_u32_limb_0",
     "claim_hash_be_u32_limb_1",
     "claim_hash_be_u32_limb_2",
@@ -35,12 +38,16 @@ pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 18] = [
     "claim_source_root_element_1",
     "claim_source_root_element_2",
     "claim_source_root_element_3",
+    "oracle_facts_root_element_0",
+    "oracle_facts_root_element_1",
+    "oracle_facts_root_element_2",
+    "oracle_facts_root_element_3",
     "decision",
     "failure_code",
 ];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkProofArtifactV3 {
+pub struct ProductionStarkProofArtifactV4 {
     pub schema_version: String,
     pub source_schema_version: String,
     pub artifact_status: String,
@@ -60,6 +67,15 @@ pub struct ProductionStarkProofArtifactV3 {
     pub claim_source_root_tree_depth: usize,
     pub claim_source_root_leaf_index: usize,
     pub claim_source_root_binding: String,
+    pub oracle_facts_root_schema_version: String,
+    pub oracle_facts_root_hash: String,
+    pub oracle_facts_root_encoding: String,
+    pub oracle_facts_root_bytes32: String,
+    pub oracle_facts_root_tree_depth: usize,
+    pub oracle_facts_root_leaf_index: usize,
+    pub oracle_facts_root_binding: String,
+    pub oracle_facts_attestation_status: String,
+    pub oracle_facts_governance_status: String,
     pub claim_id: String,
     pub claim_id_binding: String,
     pub claim_hash: String,
@@ -67,9 +83,9 @@ pub struct ProductionStarkProofArtifactV3 {
     pub ruleset_id: String,
     pub decision: u8,
     pub failure_code: u32,
-    pub public_inputs: ProductionStarkPublicInputsV3,
-    pub proof: ProductionStarkProofBytesV3,
-    pub parameters: ProductionStarkProofParametersV3,
+    pub public_inputs: ProductionStarkPublicInputsV4,
+    pub proof: ProductionStarkProofBytesV4,
+    pub parameters: ProductionStarkProofParametersV4,
     pub local_verification_status: String,
     pub locally_verified: bool,
     pub runtime_wired: bool,
@@ -79,7 +95,7 @@ pub struct ProductionStarkProofArtifactV3 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkPublicInputsV3 {
+pub struct ProductionStarkPublicInputsV4 {
     pub schema_version: String,
     pub encoding: String,
     pub order: Vec<String>,
@@ -89,7 +105,7 @@ pub struct ProductionStarkPublicInputsV3 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkProofBytesV3 {
+pub struct ProductionStarkProofBytesV4 {
     pub encoding: String,
     pub bytes_hex: String,
     pub size_bytes: usize,
@@ -97,7 +113,7 @@ pub struct ProductionStarkProofBytesV3 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProductionStarkProofParametersV3 {
+pub struct ProductionStarkProofParametersV4 {
     pub base_field: String,
     pub field_extension: String,
     pub trace_commitment_hash: String,
@@ -107,17 +123,21 @@ pub struct ProductionStarkProofParametersV3 {
     pub minimum_conjectured_security_bits: u32,
 }
 
-pub type ProductionStarkProofArtifactV2 = ProductionStarkProofArtifactV3;
-pub type ProductionStarkProofArtifactV1 = ProductionStarkProofArtifactV3;
-pub type ProductionStarkPublicInputsV2 = ProductionStarkPublicInputsV3;
-pub type ProductionStarkPublicInputsV1 = ProductionStarkPublicInputsV3;
-pub type ProductionStarkProofBytesV2 = ProductionStarkProofBytesV3;
-pub type ProductionStarkProofBytesV1 = ProductionStarkProofBytesV3;
-pub type ProductionStarkProofParametersV2 = ProductionStarkProofParametersV3;
-pub type ProductionStarkProofParametersV1 = ProductionStarkProofParametersV3;
+pub type ProductionStarkProofArtifactV3 = ProductionStarkProofArtifactV4;
+pub type ProductionStarkProofArtifactV2 = ProductionStarkProofArtifactV4;
+pub type ProductionStarkProofArtifactV1 = ProductionStarkProofArtifactV4;
+pub type ProductionStarkPublicInputsV3 = ProductionStarkPublicInputsV4;
+pub type ProductionStarkPublicInputsV2 = ProductionStarkPublicInputsV4;
+pub type ProductionStarkPublicInputsV1 = ProductionStarkPublicInputsV4;
+pub type ProductionStarkProofBytesV3 = ProductionStarkProofBytesV4;
+pub type ProductionStarkProofBytesV2 = ProductionStarkProofBytesV4;
+pub type ProductionStarkProofBytesV1 = ProductionStarkProofBytesV4;
+pub type ProductionStarkProofParametersV3 = ProductionStarkProofParametersV4;
+pub type ProductionStarkProofParametersV2 = ProductionStarkProofParametersV4;
+pub type ProductionStarkProofParametersV1 = ProductionStarkProofParametersV4;
 
-impl ProductionStarkProofArtifactV3 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v3";
+impl ProductionStarkProofArtifactV4 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v4";
     pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionAirProofInputV2::SCHEMA_VERSION;
     pub const ARTIFACT_STATUS: &'static str = "locally_verified_feature_gated_not_runtime";
     pub const PROOF_SYSTEM: &'static str = "winterfell";
@@ -126,6 +146,8 @@ impl ProductionStarkProofArtifactV3 {
     pub const CLAIM_HASH_BINDING: &'static str = "public_input_8x_big_endian_u32";
     pub const CLAIM_SOURCE_ROOT_BINDING: &'static str =
         "air_constrained_canonical_leaf_and_depth_10_merkle_path";
+    pub const ORACLE_FACTS_ROOT_BINDING: &'static str =
+        "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path";
     pub const LOCAL_VERIFICATION_STATUS: &'static str = "verified_from_serialized_proof_bytes";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
@@ -148,7 +170,9 @@ impl ProductionStarkProofArtifactV3 {
             pack_public_input_root_bytes32(&public_inputs.public_input_root);
         let claim_source_root_bytes32 =
             pack_public_input_root_bytes32(&public_inputs.claim_source_root);
-        let public_inputs = ProductionStarkPublicInputsV3::from_air_public_inputs(&public_inputs);
+        let oracle_facts_root_bytes32 =
+            pack_public_input_root_bytes32(&public_inputs.oracle_facts_root);
+        let public_inputs = ProductionStarkPublicInputsV4::from_air_public_inputs(&public_inputs);
         let adjudication = &input.adjudication;
         let artifact = Self {
             schema_version: Self::SCHEMA_VERSION.to_string(),
@@ -170,6 +194,17 @@ impl ProductionStarkProofArtifactV3 {
             claim_source_root_tree_depth: CLAIM_SOURCE_ROOT_TREE_DEPTH,
             claim_source_root_leaf_index: CLAIM_SOURCE_ROOT_LEAF_INDEX,
             claim_source_root_binding: Self::CLAIM_SOURCE_ROOT_BINDING.to_string(),
+            oracle_facts_root_schema_version: ORACLE_FACTS_ROOT_SCHEMA_VERSION.to_string(),
+            oracle_facts_root_hash: ORACLE_FACTS_ROOT_HASH_FUNCTION.to_string(),
+            oracle_facts_root_encoding: ORACLE_FACTS_ROOT_ENCODING.to_string(),
+            oracle_facts_root_bytes32,
+            oracle_facts_root_tree_depth: ORACLE_FACTS_ROOT_TREE_DEPTH,
+            oracle_facts_root_leaf_index: ORACLE_FACTS_ROOT_LEAF_INDEX,
+            oracle_facts_root_binding: Self::ORACLE_FACTS_ROOT_BINDING.to_string(),
+            oracle_facts_attestation_status:
+                ProductionOracleFactsRootArtifactV1::ATTESTATION_STATUS.to_string(),
+            oracle_facts_governance_status: ProductionOracleFactsRootArtifactV1::GOVERNANCE_STATUS
+                .to_string(),
             claim_id: adjudication.claim_id.clone(),
             claim_id_binding: Self::CLAIM_ID_BINDING.to_string(),
             claim_hash: adjudication.claim_hash.clone(),
@@ -178,13 +213,13 @@ impl ProductionStarkProofArtifactV3 {
             decision: adjudication.expected_outcome.decision,
             failure_code: adjudication.expected_outcome.failure_code,
             public_inputs,
-            proof: ProductionStarkProofBytesV3 {
-                encoding: ProductionStarkProofBytesV3::ENCODING.to_string(),
+            proof: ProductionStarkProofBytesV4 {
+                encoding: ProductionStarkProofBytesV4::ENCODING.to_string(),
                 bytes_hex: encode_hex(&proof_bytes),
                 size_bytes: proof_bytes.len(),
                 sha256: sha256_hex(&proof_bytes),
             },
-            parameters: ProductionStarkProofParametersV3::expected(),
+            parameters: ProductionStarkProofParametersV4::expected(),
             local_verification_status: Self::LOCAL_VERIFICATION_STATUS.to_string(),
             locally_verified: true,
             runtime_wired: false,
@@ -290,6 +325,42 @@ impl ProductionStarkProofArtifactV3 {
             Self::CLAIM_SOURCE_ROOT_BINDING,
             &mut errors,
         );
+        validate_exact(
+            "oracle_facts_root_schema_version",
+            &self.oracle_facts_root_schema_version,
+            ORACLE_FACTS_ROOT_SCHEMA_VERSION,
+            &mut errors,
+        );
+        validate_exact(
+            "oracle_facts_root_hash",
+            &self.oracle_facts_root_hash,
+            ORACLE_FACTS_ROOT_HASH_FUNCTION,
+            &mut errors,
+        );
+        validate_exact(
+            "oracle_facts_root_encoding",
+            &self.oracle_facts_root_encoding,
+            ORACLE_FACTS_ROOT_ENCODING,
+            &mut errors,
+        );
+        validate_exact(
+            "oracle_facts_root_binding",
+            &self.oracle_facts_root_binding,
+            Self::ORACLE_FACTS_ROOT_BINDING,
+            &mut errors,
+        );
+        validate_exact(
+            "oracle_facts_attestation_status",
+            &self.oracle_facts_attestation_status,
+            ProductionOracleFactsRootArtifactV1::ATTESTATION_STATUS,
+            &mut errors,
+        );
+        validate_exact(
+            "oracle_facts_governance_status",
+            &self.oracle_facts_governance_status,
+            ProductionOracleFactsRootArtifactV1::GOVERNANCE_STATUS,
+            &mut errors,
+        );
         if self.claim_source_root_tree_depth != CLAIM_SOURCE_ROOT_TREE_DEPTH {
             errors.push(format!(
                 "claim_source_root_tree_depth must be {CLAIM_SOURCE_ROOT_TREE_DEPTH}, got {}",
@@ -300,6 +371,18 @@ impl ProductionStarkProofArtifactV3 {
             errors.push(format!(
                 "claim_source_root_leaf_index must be {CLAIM_SOURCE_ROOT_LEAF_INDEX}, got {}",
                 self.claim_source_root_leaf_index
+            ));
+        }
+        if self.oracle_facts_root_tree_depth != ORACLE_FACTS_ROOT_TREE_DEPTH {
+            errors.push(format!(
+                "oracle_facts_root_tree_depth must be {ORACLE_FACTS_ROOT_TREE_DEPTH}, got {}",
+                self.oracle_facts_root_tree_depth
+            ));
+        }
+        if self.oracle_facts_root_leaf_index != ORACLE_FACTS_ROOT_LEAF_INDEX {
+            errors.push(format!(
+                "oracle_facts_root_leaf_index must be {ORACLE_FACTS_ROOT_LEAF_INDEX}, got {}",
+                self.oracle_facts_root_leaf_index
             ));
         }
         validate_exact(
@@ -406,6 +489,25 @@ impl ProductionStarkProofArtifactV3 {
             (Err(error), _) => errors.push(error),
             (_, Err(_)) => {}
         }
+        match (
+            unpack_public_input_root_bytes32(&self.oracle_facts_root_bytes32),
+            self.public_inputs.parsed_values(),
+        ) {
+            (Ok(packed), Ok(values))
+                if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() =>
+            {
+                let public_values = packed.map(|value| value.as_int());
+                if values[16..20] != public_values {
+                    errors.push(
+                        "oracle_facts_root_bytes32 does not match AIR public input root elements"
+                            .to_string(),
+                    );
+                }
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(error), _) => errors.push(error),
+            (_, Err(_)) => {}
+        }
         if let Err(mut proof_errors) = self.proof.validate() {
             errors.append(&mut proof_errors);
         }
@@ -441,8 +543,8 @@ impl ProductionStarkProofArtifactV3 {
     }
 }
 
-impl ProductionStarkPublicInputsV3 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v3";
+impl ProductionStarkPublicInputsV4 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v4";
     pub const ENCODING: &'static str = "winterfell-f64-canonical-decimal";
 
     fn from_air_public_inputs(public_inputs: &ProductionAirPublicInputsV2) -> Self {
@@ -460,6 +562,12 @@ impl ProductionStarkPublicInputsV3 {
         values.extend(
             public_inputs
                 .claim_source_root
+                .iter()
+                .map(|value| value.as_int()),
+        );
+        values.extend(
+            public_inputs
+                .oracle_facts_root
                 .iter()
                 .map(|value| value.as_int()),
         );
@@ -498,7 +606,7 @@ impl ProductionStarkPublicInputsV3 {
 
         if self.order != expected_public_input_order() {
             errors.push(
-                "public_inputs.order does not match the required 18-element order".to_string(),
+                "public_inputs.order does not match the required 22-element order".to_string(),
             );
         }
         if self.count != PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() {
@@ -538,10 +646,10 @@ impl ProductionStarkPublicInputsV3 {
                 }
 
                 if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() {
-                    if values[16] != u64::from(decision) {
+                    if values[20] != u64::from(decision) {
                         errors.push("public decision does not match artifact decision".to_string());
                     }
-                    if values[17] != u64::from(failure_code) {
+                    if values[21] != u64::from(failure_code) {
                         errors.push(
                             "public failure_code does not match artifact failure_code".to_string(),
                         );
@@ -614,13 +722,16 @@ impl ProductionStarkPublicInputsV3 {
             claim_source_root: field_values[12..12 + CLAIM_SOURCE_ROOT_WIDTH]
                 .try_into()
                 .expect("validated claim-source root width"),
-            decision: field_values[16],
-            failure_code: field_values[17],
+            oracle_facts_root: field_values[16..20]
+                .try_into()
+                .expect("validated oracle-facts root width"),
+            decision: field_values[20],
+            failure_code: field_values[21],
         })
     }
 }
 
-impl ProductionStarkProofBytesV3 {
+impl ProductionStarkProofBytesV4 {
     pub const ENCODING: &'static str = "hex-lower-0x";
 
     fn validate(&self) -> Result<(), Vec<String>> {
@@ -678,7 +789,7 @@ impl ProductionStarkProofBytesV3 {
     }
 }
 
-impl ProductionStarkProofParametersV3 {
+impl ProductionStarkProofParametersV4 {
     pub const BASE_FIELD: &'static str = "winterfell-f64";
     pub const FIELD_EXTENSION: &'static str = "quadratic";
     pub const TRACE_COMMITMENT_HASH: &'static str = "blake3-256";

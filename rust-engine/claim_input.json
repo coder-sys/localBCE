@@ -15,6 +15,20 @@
       "units": 1
     }
   ],
+  "oracle_source_manifest_id": "DEMO-OFFICIAL-SOURCES-V1",
+  "oracle_facts": [
+    {
+      "fact_type": "program_eligibility_status",
+      "fact_key": "eligibility_active",
+      "fact_value": "1",
+      "source_url": "https://example.gov/demo/oracle-facts",
+      "source_label": "Demo source - not production",
+      "verification_status": "verified"
+    }
+  ],
+  "oracle_attestation_refs": [
+    "demo-attestation:eligibility:CLAIM-DEMO-011:v1"
+  ],
 
   "eligibility_active": 1,
   "aid_code": 53,

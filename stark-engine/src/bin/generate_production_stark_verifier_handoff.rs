@@ -1,8 +1,8 @@
 use std::{env, fs, process};
 
 use stark_engine::{
-    production_proof_artifact::ProductionStarkProofArtifactV3,
-    production_verifier_handoff::ProductionStarkVerifierHandoffV3,
+    production_proof_artifact::ProductionStarkProofArtifactV4,
+    production_verifier_handoff::ProductionStarkVerifierHandoffV4,
 };
 
 fn main() {
@@ -25,9 +25,9 @@ fn run() -> Result<(), Vec<String>> {
 
     let input_json = fs::read_to_string(&input_path)
         .map_err(|error| vec![format!("could not read {input_path}: {error}")])?;
-    let artifact: ProductionStarkProofArtifactV3 = serde_json::from_str(&input_json)
+    let artifact: ProductionStarkProofArtifactV4 = serde_json::from_str(&input_json)
         .map_err(|error| vec![format!("invalid production proof artifact JSON: {error}")])?;
-    let handoff = ProductionStarkVerifierHandoffV3::from_proof_artifact(&artifact)?;
+    let handoff = ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact)?;
     let output_json = serde_json::to_string_pretty(&handoff)
         .map_err(|error| vec![format!("could not serialize verifier handoff: {error}")])?;
     fs::write(&output_path, format!("{output_json}\n"))
@@ -49,6 +49,7 @@ fn run() -> Result<(), Vec<String>> {
             "air_public_input_count": handoff.air_public_input_count,
             "public_input_root": handoff.public_input_root,
             "claim_source_root": handoff.claim_source_root,
+            "oracle_facts_root": handoff.oracle_facts_root,
             "proof_size_bytes": handoff.proof_size_bytes,
             "proof_bytes_sha256": handoff.proof_bytes_sha256,
             "binding_digest_sha256": handoff.binding_digest_sha256,
