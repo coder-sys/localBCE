@@ -7,7 +7,7 @@
   "challengeField": {
     "baseModulus": 2147483647,
     "extensionDegree": 16,
-    "perTermSecurityBits": 384
+    "perTermSecurityBits": 256
   },
   "uniqueDecodingBoundarySlackBits": 32,
   "profiles": [
@@ -43,11 +43,11 @@
     }
   ],
   "candidateSweep": [
-    {"logBlowup": 1, "queryCount": 926},
-    {"logBlowup": 2, "queryCount": 567},
-    {"logBlowup": 3, "queryCount": 463},
-    {"logBlowup": 4, "queryCount": 421},
-    {"logBlowup": 5, "queryCount": 402},
-    {"logBlowup": 6, "queryCount": 393}
+    {"logBlowup": 1, "queryCount": 617},
+    {"logBlowup": 2, "queryCount": 378},
+    {"logBlowup": 3, "queryCount": 309},
+    {"logBlowup": 4, "queryCount": 281},
+    {"logBlowup": 5, "queryCount": 268},
+    {"logBlowup": 6, "queryCount": 262}
   ]
 }

@@ -4439,3 +4439,39 @@ py -3.14 -m pytest -q tests/test_bl_pq512_state_interface.py tests/attacks/test_
 This is evidence-boundary scaffolding only. It does not close any H6 obligation, admit a state or
 commitment backend, bind H4, run H5, assign `proofSuiteId`, enable activation, or establish
 production throughput.
+
+## 2026-08-02 current-source UDR/native-hiding reconciliation - VERIFIED, NO ADMISSION
+
+The current implementation and its machine-readable nonactivating interface vector had drifted
+from stale expectations retained from the superseded worksheet. The source-derived values are now
+aligned in the focused tests and vector: the six unselected query candidates are
+`617/378/309/281/268/262`, the corresponding mask degrees are `3149/1954/1609/1469/1404/1374`,
+the K512 rate-half randomizer count is `6,899,459`, the entropy lower bound is `206,983,770` bits,
+the extension-row count is `3`, and the interface per-term floor is `256` bits. The registry's
+explicitly marked superseded historical values were not rewritten.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_native_hiding_parameters.py tests/attacks/test_bl_pq512_native_hiding_parameters_attacks.py tests/test_bl_pq512_unique_decoding_parameters.py
+15 passed in 0.91s
+```
+
+Containing current algebra/hiding command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_unique_decoding_parameters.py tests/attacks/test_bl_pq512_unique_decoding_parameters_attacks.py tests/test_bl_pq512_native_hiding_parameters.py tests/attacks/test_bl_pq512_native_hiding_parameters_attacks.py tests/test_bl_pq512_theorem_schedule.py tests/attacks/test_bl_pq512_theorem_schedule_attacks.py tests/test_bl_pq512_circle_fri.py tests/attacks/test_bl_pq512_circle_fri_attacks.py tests/test_bl_pq512_circle_hiding_simulator.py tests/attacks/test_bl_pq512_circle_hiding_simulator_attacks.py tests/test_bl_pq512_circle_quotient_masking.py tests/attacks/test_bl_pq512_circle_quotient_masking_attacks.py
+62 passed in 59.43s
+```
+
+This is a source/vector consistency correction only. It does not select a commitment backend,
+claim a native-hiding theorem, bind state into H4, run H5, assign `proofSuiteId`, enable
+activation, or convert any historical worksheet into qualification evidence.
+
+The admission audit remains blocked by the actual current evidence: all four Gate 2E commitment
+descriptors reject for missing reviewed exact source/parameters/theorem or complete composition;
+the Rust H4 core binds a semantic hash-bus statement but does not prove the persistent
+replay/payment state transition; and the available state implementations are explicitly synthetic
+references. The canonical sibling `../ops` is absent and recorded free disk is
+`59,091,513,344` bytes versus the required `73,100,269,364`, so the exact H5 22-launch campaign
+was not started.

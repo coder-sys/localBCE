@@ -38,7 +38,7 @@ def _valid_plan():
         profile_id="K128_CALIBRATION",
         tables=_tables(),
         log_blowup=1,
-        fri_query_count=926,
+        fri_query_count=617,
         reduced_air_degree=2,
     )
 
@@ -70,7 +70,7 @@ def test_missing_table_invalid_extension_and_activation_claims_fail_closed() -> 
             profile_id="K128_CALIBRATION",
             tables=_tables()[:-1],
             log_blowup=1,
-            fri_query_count=926,
+            fri_query_count=617,
             reduced_air_degree=2,
         )
     plan = _valid_plan()

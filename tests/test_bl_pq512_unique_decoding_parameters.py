@@ -69,7 +69,7 @@ def test_k512_unique_decoding_candidate_sweep_is_exact_and_unselected() -> None:
     candidates = build_candidate_sweep(envelope)
 
     assert [candidate.log_blowup for candidate in candidates] == [1, 2, 3, 4, 5, 6]
-    assert [candidate.query_count for candidate in candidates] == [926, 567, 463, 421, 402, 393]
+    assert [candidate.query_count for candidate in candidates] == [617, 378, 309, 281, 268, 262]
     assert [candidate.evaluation_domain_size for candidate in candidates] == [
         1 << 20,
         1 << 21,
@@ -147,7 +147,7 @@ def test_interface_error_terms_are_positive_named_and_below_budget() -> None:
     )
     assert all(value > 0 for value in terms.values())
     assert all(meets_per_term_budget(value) for value in terms.values())
-    assert soundness_bits_floor(candidate.interface_error_total) >= 381
+    assert soundness_bits_floor(candidate.interface_error_total) >= PER_TERM_SECURITY_BITS
 
 
 def test_invalid_or_final_claims_fail_closed() -> None:

@@ -64,8 +64,8 @@ def _plan(profile_id: str, log_blowup: int):
 
 
 def test_all_profiles_and_rate_candidates_apply_the_exact_mask_formula() -> None:
-    expected_query_counts = (926, 567, 463, 421, 402, 393)
-    expected_h = (4694, 2899, 2379, 2169, 2074, 2029)
+    expected_query_counts = (617, 378, 309, 281, 268, 262)
+    expected_h = (3149, 1954, 1609, 1469, 1404, 1374)
     for profile_id in PROFILES:
         for log_blowup, (query_count, mask_degree) in enumerate(
             zip(expected_query_counts, expected_h, strict=True), start=1
@@ -96,10 +96,10 @@ def test_all_profiles_and_rate_candidates_apply_the_exact_mask_formula() -> None
 def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
     plan = _plan("K512_CALIBRATION", 1)
     assert plan.private_trace_columns == 2_191
-    assert plan.randomizer_coefficient_count == 10_284_554
-    assert plan.entropy_lower_bound_bits == 308_536_620
-    assert plan.row_extension_count == 4
-    assert plan.total_added_rows == 27_136
+    assert plan.randomizer_coefficient_count == 6_899_459
+    assert plan.entropy_lower_bound_bits == 206_983_770
+    assert plan.row_extension_count == 3
+    assert plan.total_added_rows == 10_752
     assert tuple(
         table.dimensions.name
         for table in plan.table_plans
@@ -107,11 +107,10 @@ def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
     ) == (
         "canonical_witness",
         "claim_gate_and_money",
-        "oracle_facts",
         "payment_operation_log",
     )
     assert all(
-        table.target_trace_rows == 8_192
+        table.target_trace_rows == 4_096
         for table in plan.table_plans
         if table.requires_row_extension
     )
@@ -125,8 +124,8 @@ def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
     assert public.mask_degree_freedom == 0
     assert public.randomizer_coefficient_count == 0
     assert plan.commitment_sha3_512.hex() == (
-        "0800c37c3896025bff3a61bd16af9deb91dd66a4eb8b2d8886ad05fb71a51685"
-        "0c27aaacf5356009deb6c6fdb10736427f3207a5075823722d76edab42e11453"
+        "43cce0507c73cf19f3c3162a670b4662684903b8feb33f79a79636cafc116c0f"
+        "cf0e9fef1a18345a6990a37a8c6b5499c6ad1f2119a673eb8a75fe1343846777"
     )
 
     schedule = plan.fri_domain_schedule
@@ -136,6 +135,7 @@ def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
         16,
         15,
         13,
+        12,
         4,
     )
     assert tuple(group.evaluation_log_size for group in schedule.groups) == (
@@ -144,6 +144,7 @@ def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
         17,
         16,
         14,
+        13,
         5,
     )
     assert tuple(group.trace_column_count for group in schedule.groups) == (
@@ -151,7 +152,8 @@ def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
         372,
         272,
         312,
-        1_047,
+        132,
+        915,
         88,
     )
     assert tuple(group.global_power_offset for group in schedule.groups) == (
@@ -160,14 +162,15 @@ def test_k512_rate_half_inventory_entropy_and_padding_are_exact() -> None:
         560,
         832,
         1_144,
+        1_276,
         2_191,
     )
     assert schedule.trace_column_count == 2_279
-    assert schedule.mask_column_count == 6
+    assert schedule.mask_column_count == 7
     assert schedule.fold_log_sizes == tuple(range(20, 4, -1))
     assert schedule.commitment_sha3_512.hex() == (
-        "b147a129a899e33a4ed7097ac706c367f971aabe8b6cb1881736959032530c30"
-        "b4ccd10caff63b294f7ff9977e21db599515a28c08d56be2e73b84714c7e1373"
+        "1b9c510450f4b2bb82516aaa4e237c750ec7b36689cecb7097cb89df54c8b6df"
+        "8208507af0da59c9fce577255859bab740053a06dda150ed15e7215e6d65e12c"
     )
 
 

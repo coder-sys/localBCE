@@ -373,6 +373,13 @@ is closed, `proofSuiteId` remains null, and activation remains false. Its focuse
 6/6 and the containing S1-S7, terminal-ledger, H5, and H6 set is 85/85; these are ledger-test
 observations, not complete-proof qualification.
 
+The current-source UDR/native-hiding KAT boundary was reconciled on 2026-08-02. The implementation
+now derives the six unselected query candidates as `617/378/309/281/268/262` and the interface
+per-term floor as `256` bits; stale test/vector expectations for the superseded `926/567/463/421/402/393`
+and `384`-bit worksheet were corrected. This changes no proof-suite selection, state admission,
+H4 binding, `proofSuiteId`, activation, or qualification claim. The registry's explicitly marked
+superseded historical values remain historical evidence.
+
 ## Open boundaries and nonclaims
 
 - Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,
