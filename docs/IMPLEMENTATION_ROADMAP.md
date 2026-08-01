@@ -272,6 +272,26 @@ reference equivalence record as complete-proof, backend-selection, H5, or activa
 If no candidate beats C0 at the complete boundary, select C0 and retain exact rejection evidence.
 Gate 2E selection is not H5 qualification.
 
+Current S6/S7 record: `experiments/bl_pq512_crypto_foundation/gate_2e_selection.py` measures the
+same synthetic S2/S3/S4 reference component twice for each of the four screened backends and both
+K128/K512 profiles: 16 observations total. Each observation is independently verified at the
+reference boundary, carries derived work separately from observed timing, records zero proof bytes,
+and explicitly records that external complete-boundary monitoring was not run. S3 recomputation
+rejects every backend, so no finalist receives a warm-up or complete-proof attempt. The decision
+retains C0 as an unselected control with `selected_backend_id=null`, `proofSuiteId=null`, and
+`C0_CONTROL_RETAINED_NO_ELIGIBLE_PQ_FINALIST`.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py
+6 passed in 34.04s
+```
+
+S7 emits an explicitly unsealed handoff with the no-admission, no-complete-boundary, deferred-H4,
+and missing-canonical-ops blockers. Timing is retained as measured reference-component evidence,
+not selection credit. No candidate is selected or activated.
+
 ### 2E-7 - seal the selection handoff
 
 Record selected relation/commitment identities and parameters; source, lock, license, schema and

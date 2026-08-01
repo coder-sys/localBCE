@@ -4272,3 +4272,32 @@ records, and mixed K128/K512 profiles. This is reference failure/equivalence evi
 durable custody, production migration proof, backend selection, H5 measurement, `proofSuiteId`, or
 activation is closed. The next bounded boundary is Gate 2E-6/S6 component evidence and Gate
 2E-7/S7 selection/handoff.
+
+## 2026-08-02 Gate 2E-6/S6 and Gate 2E-7/S7 reference bake-off and handoff - NO ADMISSION
+
+`experiments/bl_pq512_crypto_foundation/gate_2e_selection.py` now measures the identical synthetic
+S2/S3/S4 reference component twice for each of the four screened commitment backends and both frozen
+K128/K512 profiles: 16 observations total. Each record independently verifies the scalar relation,
+authenticated reference opening, and S4 receipt; observed timing, verifier timing, and derived work
+are labeled separately, proof bytes are zero, and external complete-boundary monitoring is explicitly
+`NOT_RUN_NO_ELIGIBLE_FINALIST`.
+
+S3 recomputation rejects every backend, so no candidate receives a complete warm-up or complete-proof
+attempt. S7 retains `C0_CONTROL` as an unselected control with
+`selection_status=C0_CONTROL_RETAINED_NO_ELIGIBLE_PQ_FINALIST`, `selected_backend_id=null`,
+`proofSuiteId=null`, and activation false. The handoff is explicitly unsealed and records
+`no_backend_admitted`, `complete_boundary_not_authorized`, `h4_atomic_binding_deferred`, and the
+missing canonical `../ops` blocker. Timing is reference-component evidence only and receives no
+selection credit.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py
+6 passed in 34.04s
+```
+
+This closes only the S6/S7 synthetic measurement/rejection/handoff boundary. It does not select a
+PQ backend, close complete composition/simulator/leakage/state-proof receipt obligations, qualify
+H5, assign `proofSuiteId`, authorize activation, or establish production throughput. The next
+bounded boundary is the complete composition/simulator/leakage/state-proof receipt ledger.

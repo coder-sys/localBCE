@@ -164,17 +164,16 @@ fail closed.
    newer-epoch rollback/recovery. Corrupted, stale, downgraded, partial, replayed, and mixed-profile
    cases fail closed; the 10-test focused/attack suite passes. This is not a production migration
    theorem or durable custody result.
-7. **S6 - exact bake-off.** Screen every admitted candidate with repeated identical state-component
-   measurements, then run one uncounted complete warm-up and at least one unique, externally
-   monitored, independently verified complete batch per profile for each finalist. Record complete
-   input-to-independent-verification wall/CPU time, proof bytes, verifier time, peak RSS, scratch
-   high-water mark, I/O, cleanup, and failure behavior. Report p50/p95 only when the sample count
-   honestly supports them. This selects the Gate 2E candidate; it is not H5 qualification.
-8. **S7 - selection.** Select the highest-throughput candidate satisfying every hard constraint, or
-   retain C0 with exact rejection reasons. Pin its source, parameters, schema, module identities,
-   KATs, theorem ledger, benchmark records, and migration plan. Bind the selected state plane into
-   the actual H4 parent, transcript, proof grammar, independent verifier, and atomic receipt before
-   starting H5's separate warm-up-plus-ten campaign.
+7. **S6 - exact bake-off (reference boundary complete).** `gate_2e_selection.py` repeats the
+   identical synthetic S2/S3/S4 component twice for each of the four screened backends and K128/K512
+   profiles, with independent verification, observed timing labels, derived work labels, and no
+   proof/complete-boundary credit. All four S3 screens reject, so no finalist receives a complete
+   warm-up or externally monitored complete proof.
+8. **S7 - selection/handoff (reference boundary complete).** The selector recomputes every rejection,
+   retains C0 as an unselected control with no timing credit, and emits an explicitly unsealed
+   handoff. `selected_backend_id=null`, `proofSuiteId=null`, activation is false, and the canonical
+   `../ops` blocker remains recorded. A production state plane is not selected until a reviewed
+   backend and complete H4 binding exist.
 
 ## 6. Acceptance gates
 

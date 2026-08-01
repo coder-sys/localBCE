@@ -140,9 +140,9 @@ throughput evidence.
 
 ## Current next dependency
 
-Gate 2E must complete its selection/handoff evidence and atomically bind the state relation and PQ
-commitment into the H4 parent, transcript, proof grammar, independent verifier, and receipt. H5 then
-runs one warm-up plus ten
+Gate 2E must close its complete composition/simulator/leakage/state-proof receipt ledger and
+atomically bind a reviewed state relation and PQ commitment into the H4 parent, transcript, proof
+grammar, independent verifier, and receipt. H5 then runs one warm-up plus ten
 unique K128 and ten unique K512 proofs; H6 closes the theorem, simulator, parser, attack,
 reproducibility, resource, and identity obligations.
 

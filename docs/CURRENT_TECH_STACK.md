@@ -55,6 +55,13 @@ checkpoints at strictly newer epochs. Focused positive/attack tests pass 10/10. 
 failure/equivalence evidence only: no production migration theorem, durable custody, backend
 selection, `proofSuiteId`, or activation is closed.
 
+Gate 2E-6/S6 and 2E-7/S7 now have a reference measurement/selection ledger in
+`gate_2e_selection.py`. It measures the identical synthetic S2/S3/S4 component twice for each
+screened backend and both K128/K512 profiles, recomputes the S3 rejection reasons, and refuses to
+grant timing credit when no backend is admitted. All four backends remain rejected; C0 is retained
+as an unselected control, complete warm-up/complete-boundary runs are not authorized, and the
+selection handoff is explicitly unsealed. Focused positive/attack tests pass 6/6.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from
@@ -322,25 +329,26 @@ lanes.
 
 ## Current execution order
 
-1. Run S6/S7 exact component evidence, candidate rejection/retention, and sealed-handoff evidence.
-2. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
+1. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
 3. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
   driver monitoring; qualify p95 below 30/180 seconds.
 4. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
 5. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.
 
-The next code-writing action is Gate 2E stage S6/S7 exact component evidence and sealed handoff, not
-H5 and not another complete-proof backend bake-off. S5 is a synthetic reference only; do not start
-the repeated H5 campaign until one state plane is selected and atomically bound into the H4 parent,
-transcript, proof grammar, verifier, and receipt.
+The next code-writing action is the complete composition/simulator/leakage/state-proof receipt
+ledger, not H5 and not another complete-proof backend bake-off. S6/S7 retained C0 without selecting
+a PQ backend because S3 admission is closed; do not start the repeated H5 campaign until one state
+plane is selected and atomically bound into the H4 parent, transcript, proof grammar, verifier, and
+receipt.
 
 ## Open boundaries and nonclaims
 
 - Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,
   S3 commitment envelopes, S4 atomic composition, and S5 migration/recovery are correctness and
-  differential reference evidence only; no candidate has reviewed native-hiding composition,
-  complete proof composition, migration theorem, or complete-boundary measurement.
+  differential reference evidence only; S6/S7 timing is component-only and no candidate has reviewed
+  native-hiding composition, complete proof composition, migration theorem, or complete-boundary
+  measurement.
 - The complete semantic-STARK/state/GKR/PCS zero-knowledge simulator and composed 256-bit ledger are
   not closed.
 - H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.
