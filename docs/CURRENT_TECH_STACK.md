@@ -24,10 +24,10 @@ synthetic semantic relation. Wave 2 is the strict post-quantum proof and through
 Six of 93 engineering packages are complete. `proofSuiteId=null`, activation is false, and real
 PHI or payments are forbidden.
 
-Gate 2E-0/S0 is now implemented as a synthetic C0 control fixture plus a separate fresh-process
-measurement module. It freezes K128/K512 state/payment/access identities, ordered 12-field output,
-H4 resource metadata, and negative state mutations. Gate 2E-1/S1 is the next boundary; no state
-relation, commitment backend, proof suite, or activation profile has been selected.
+Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
+measurement module. Gate 2E-1/S1 is now also implemented as 13 bounded descriptors plus strict
+envelope/transition codecs with no claim or settlement imports. It freezes interfaces only; C1-C4,
+the state relation, commitment backend, proof suite, and activation profile remain unselected.
 
 ## How a successor must interpret this repository
 

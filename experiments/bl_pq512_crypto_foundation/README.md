@@ -62,6 +62,9 @@ testable without pretending that a proof suite exists.
   exact K128/K512 manifest identities. `c0_control_measurement.py` measures the state-only and
   complete boundaries in a fresh Windows process with explicit RSS, scratch, pagefile, and I/O
   fields; it is reference evidence, not a production proof path.
+- `state_interface.py` freezes the 13 Gate 2E-1/S1 replaceable state-plane descriptors, the bounded
+  `BLSI` envelope, the `BLTR` old/new transition grammar, and a SHA3-512 public identifier port.
+  It intentionally has no claim, payment, settlement, or proof implementation dependency.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

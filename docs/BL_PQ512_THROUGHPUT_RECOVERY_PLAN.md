@@ -220,8 +220,8 @@ or state-free proof.
 
 ## 11. Current Gate 2E evidence and next action
 
-Gate 2E-0/S0 is complete for the synthetic C0 reference. Its four fresh-process measurements are
-recorded in `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile usage deltas remain observed
-telemetry, not a swap conclusion. Execute Gate 2E-1/S1 next: define the narrow state-layout,
-relation, commitment, opening, transition, migration, transcript, independent-verifier, and
-receipt interfaces. Do not start H5 or another PCS/backend bake-off.
+Gate 2E-0/S0 and Gate 2E-1/S1 are complete for the synthetic control/interface boundary. The four
+fresh-process measurements are recorded in `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile
+usage deltas remain observed telemetry, not a swap conclusion. Execute Gate 2E-2/S2 next: build
+scalar C1-C4 controls and require full C0 positive/negative parity before optimization or a
+commitment bake-off. Do not start H5 or another PCS/backend bake-off.

@@ -53,7 +53,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
 | H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds | State binding, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 complete; 2E-1/S1 next | C0 control is frozen with independent negative fixtures and fresh-process boundary measurements | Freeze narrow replaceable interfaces, then select and atomically bind state relation plus PQ commitment |
+| Gate 2E | 2E-0/S0 and 2E-1/S1 complete; 2E-2 next | C0 control and all 13 narrow interface descriptors/codecs are tested and documented | Implement scalar C1-C4 controls, then screen and bind a state relation plus PQ commitment |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -124,7 +124,7 @@ The complete artifact lengths and SHA3-512 identities remain the frozen 11,217-b
 11,231-byte K512 manifests. This is C0 reference evidence only; it does not qualify H4, select a
 state relation, set `proofSuiteId`, enable activation, or authorize real data.
 
-### 2E-1 - freeze narrow replaceable interfaces
+### 2E-1 - freeze narrow replaceable interfaces (S1 complete)
 
 Define separate bounded interfaces for state layout/version, key/value encoding, membership,
 absence, ordered read/write manifest, memory consistency, commitment/opening, old/new transition,
@@ -135,6 +135,13 @@ Every interface must state producer, consumers, public/private fields, exact gra
 length, domain/version/parameter identity, canonical decode rule, error family, retry/crash
 behavior, and mutation cases. State relation and commitment remain replaceable and cannot reach
 into claim semantics or settlement.
+
+Current S1 record: `experiments/bl_pq512_crypto_foundation/state_interface.py` defines 13 wire-coded
+descriptors, one strict bounded `BLSI` envelope, and the strict `BLTR` old/new transition codec.
+The interface module has no imports into claim, payment, application, settlement, or proof
+implementations. Its focused and attack suites pass 22/22. This freezes ports only; it does not
+implement C1-C4, select a commitment, bind H4, set `proofSuiteId`, enable activation, or authorize
+real data.
 
 ### 2E-2 - implement scalar state-relation controls
 

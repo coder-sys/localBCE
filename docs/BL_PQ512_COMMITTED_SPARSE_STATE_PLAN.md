@@ -19,8 +19,9 @@ Execution authority: the deterministic continuation contract near the top of
 `IMPLEMENTATION_ROADMAP.md` defines the exact 2E-0 through 2E-7 sequence, finalist measurement
 boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen with exact
 K128/K512 fixture identities, independent negative controls, and fresh-process state-only and
-complete-boundary measurements. The immediate work is S1/2E-1 bounded interfaces; do not begin
-with a lattice optimization or paper benchmark.
+complete-boundary measurements. S1/2E-1 bounded interfaces is also frozen and tested. The
+immediate work is S2/2E-2 scalar C1-C4 controls; do not begin with a lattice optimization or paper
+benchmark.
 
 ## 1. Decision
 
@@ -140,7 +141,7 @@ fail closed.
 
 1. **S0 - exact control record (complete).** Freeze the same K128/K512 state fixtures, access manifests,
    conflict order, old/new roots, call counts, machine identity, and complete timing boundary.
-2. **S1 - common state interface.** Define canonical state-layout, commitment, opening, update,
+2. **S1 - common state interface (complete).** Define canonical state-layout, commitment, opening, update,
    migration, and independent-verifier interfaces with bounded byte grammars and domain tags.
 3. **S2 - relation prototypes.** Implement C1-C4 as independently testable scalar references and
    prove parity with C0 on membership, absence, duplicate, collision, conflicting update, denial,

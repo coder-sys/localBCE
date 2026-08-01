@@ -4105,3 +4105,40 @@ This closes only the synthetic C0 control record. `proofSuiteId=null`, activatio
 real PHI/payments remain forbidden, the trusted canonical `../ops` launch-blocker state is still
 absent, H4 remains one-run prototype evidence, and no production CUDA path was run. S1/2E-1 narrow
 replaceable interfaces is the next implementation boundary.
+
+## 2026-08-01 Gate 2E-1/S1 narrow interface freeze
+
+S1 is now implemented and tested in
+`experiments/bl_pq512_crypto_foundation/state_interface.py`. The module defines exactly 13 bounded,
+wire-coded descriptors: state layout, key/value encoding, membership, absence, ordered access
+manifest, memory consistency, commitment/opening, old/new transition, SHA3-512 public identifier,
+migration/rollback, transcript contribution, independent verification, and atomic receipt. Each
+descriptor carries its producer, consumers, public/private fields, grammar, maximum length,
+domain/version/parameter identity, canonical decode rule, error family, retry behavior, crash
+behavior, and mutation cases.
+
+The S1 source SHA-256 is
+`811363691DACCA11913705D3CEBB14CA93158824493EF46EC75DEC2A9BE01297`. The descriptor readback
+is 13 interfaces with wire codes 1 through 13; the `BLSI` header is 8 bytes with a 4,096-byte
+maximum payload. A representative K128 `BLTR` transition encodes to 329 bytes and begins with
+`424c545201`.
+
+The generic `BLSI` envelope has an 8-byte header and a 4,096-byte maximum payload. The concrete
+`BLTR` transition codec requires fixed-width nonzero SHA3-512 roots/digests, explicit profile and
+parameter identities, and `sequence_after = sequence_before + 1`; it rejects truncation, trailing
+bytes, retyping, parameter substitution, root substitution, and sequence replay. The
+`sha3_512_public_identifier` port hashes its domain/version/parameter identity and bounded source
+tuple with SHA3-512. The module imports no claim, payment, application, settlement, or proof
+implementation.
+
+Focused verification:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_interface.py tests/attacks/test_bl_pq512_state_interface_attacks.py
+22 passed in 0.15s
+```
+
+This completes only the S1 interface boundary. C1-C4 scalar state-relation controls, commitment
+selection, H4 binding, migration closure, H5/H6 qualification, `proofSuiteId`, activation, and
+production deployment remain open. The trusted canonical `../ops` launch-blocker state remains
+absent, and no production CUDA path was run. The next roadmap boundary is Gate 2E-2/S2.
