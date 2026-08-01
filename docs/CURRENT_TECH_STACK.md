@@ -25,9 +25,12 @@ Six of 93 engineering packages are complete. `proofSuiteId=null`, activation is 
 PHI or payments are forbidden.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
-measurement module. Gate 2E-1/S1 is now also implemented as 13 bounded descriptors plus strict
-envelope/transition codecs with no claim or settlement imports. It freezes interfaces only; C1-C4,
-the state relation, commitment backend, proof suite, and activation profile remain unselected.
+measurement module. Gate 2E-1/S1 is implemented as 13 bounded descriptors plus strict
+envelope/transition codecs with no claim or settlement imports. Gate 2E-2/S2 now has scalar C1
+dense/sparse, C2 dictionary, C3 touched-projection, and C4 shuffle-consistency controls plus an
+independent replay verifier and C0 differential parity harness. S2 freezes no state relation or
+commitment: candidate roots remain differential identities, the commitment backend and proof suite
+remain unselected, and activation is forbidden.
 
 ## How a successor must interpret this repository
 
@@ -286,6 +289,8 @@ helpers; name cleanup must never change proof bytes or silently drop an authenti
 - externally monitored complete proof with independent verification, no pagefile growth, zero
   scratch, and no driver event after the audited reset boundary; and
 - protected-path and canonical-ops integrity gates.
+- Gate 2E-2/S2 scalar positive/negative parity for both frozen profiles, including the independent
+  verifier and all seven C0 negative classes.
 
 The current Python-wide suite cannot receive a clean pass while the canonical sibling `../ops/` is
 absent. Do not copy `ops/` outward or skip mirror checks. Recover the authoritative sibling from
@@ -294,22 +299,26 @@ lanes.
 
 ## Current execution order
 
-1. Select and atomically bind the Gate 2E authoritative state plane and migration.
-2. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
-3. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
-   driver monitoring; qualify p95 below 30/180 seconds.
-4. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
-5. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
-   packages.
+1. Screen the Gate 2E commitment backends behind the completed C1-C4 scalar relations.
+2. Select and atomically bind the Gate 2E authoritative state plane and migration.
+3. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
+4. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
+  driver monitoring; qualify p95 below 30/180 seconds.
+5. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
+6. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
+  packages.
 
-The next code-writing action is Gate 2E stage S0/S1, not H5 and not another proof-backend bake-off:
-freeze the exact C0 state fixture and define the narrow canonical state-relation/commitment/
-migration/verifier interfaces. Do not start the repeated H5 campaign until one state plane is
-selected and atomically bound into the H4 parent, transcript, proof grammar, verifier, and receipt.
+The next code-writing action is Gate 2E stage S3/2E-3 commitment screening, not H5 and not another
+complete-proof backend bake-off: implement and review the admitted native-hiding PQ commitment
+interfaces behind the completed scalar relations. Do not start the repeated H5 campaign until one
+state plane is selected and atomically bound into the H4 parent, transcript, proof grammar, verifier,
+and receipt.
 
 ## Open boundaries and nonclaims
 
-- Gate 2E has not selected authoritative persistent state or its PQ commitment.
+- Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls
+  are correctness/differential evidence only; no candidate has a native-hiding commitment, complete
+  proof composition, migration proof, or complete-boundary measurement.
 - The complete semantic-STARK/state/GKR/PCS zero-knowledge simulator and composed 256-bit ledger are
   not closed.
 - H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.

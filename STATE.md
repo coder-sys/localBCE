@@ -4142,3 +4142,53 @@ This completes only the S1 interface boundary. C1-C4 scalar state-relation contr
 selection, H4 binding, migration closure, H5/H6 qualification, `proofSuiteId`, activation, and
 production deployment remain open. The trusted canonical `../ops` launch-blocker state remains
 absent, and no production CUDA path was run. The next roadmap boundary is Gate 2E-2/S2.
+
+## 2026-08-01 Gate 2E-2/S2 scalar C1-C4 controls — COMPLETE
+
+Gate 2E-2/S2 is now implemented at the scalar synthetic-reference boundary. The new
+`experiments/bl_pq512_crypto_foundation/scalar_state_relation_controls.py` module contains C1 dense
+and touched-sparse persistent-memory controls, C2 transparent index/value dictionary, C3
+touched-projection RAM, and C4 compact shuffle-based memory consistency. Each control replays the
+same bounded four-lane transition, membership/absence queries, update, money summary, and fixed
+shape; each exposes candidate-specific derived work counters and an independent verifier that
+rebuilds the transition rather than trusting candidate roots or result fields. C1 dense, C1 sparse,
+C2, C3, and C4 are all controls; no candidate is selected, committed to H4, or activated.
+
+`experiments/bl_pq512_crypto_foundation/scalar_state_relation_parity.py` is the only C0 bridge. It
+compares candidate-independent semantic parity for both frozen profiles: replay/benefit/obligation/
+ledger operation, access, position, and proof-node geometry; membership and absence; cursor and
+state/update-change behavior; representative approved/duplicate/conflict/denial/cover/correction
+outcomes; and `(80, 80, 80)` plan/debit/credit totals. Candidate-specific roots are not host-compared
+to C0 roots. The bounded parity record SHA3-512 is
+`fc99b31b333a6ec3a19cc55099bd612dcd1d7964115301bbcb9d512d8efe184bc320f04af65f3aa8417bf03fe368e05dddc1d2bd7fd2b2005280e777f0d496c4`.
+
+The focused S2 command and raw result were:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py
+14 passed in 21.50s
+```
+
+The containing S1/S2 command and raw result were:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py tests/test_bl_pq512_state_interface.py tests/attacks/test_bl_pq512_state_interface_attacks.py
+36 passed in 24.67s
+```
+
+The C1 dense full-capacity scan, C3 touched-projection quadratic online counter, and C4
+initialization/persistent-scan counter are derived scalar work labels, not measured timings,
+throughput, memory, security, or selection evidence. The full ordinary Python lane was attempted
+and failed closed during collection with:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\neers\\Documents\\Codex\\2026-07-27\\he\\work\\Blind-Ledger-Wave2-Workspace-2026-07-26\\..\\ops\\policy_spec_v1.yaml'
+```
+
+No mirror was copied and no check was weakened. The ordinary Python lane failed closed during
+collection on the missing canonical `../ops/policy_spec_v1.yaml`. A full `tests/attacks` rerun
+reached 100% progress but exited 1 after 182.2 seconds; its failures include the same exact missing
+canonical path. The bounded S2 attack suite above passed. `proofSuiteId=null`, activation remains
+false, real PHI/payments remain forbidden, the canonical `../ops` launch blocker remains absent, and
+no production CUDA path ran. Gate 2E-3/S3 native-hiding PQ commitment screening is the next
+boundary.

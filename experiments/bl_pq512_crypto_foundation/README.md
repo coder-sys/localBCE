@@ -65,6 +65,13 @@ testable without pretending that a proof suite exists.
 - `state_interface.py` freezes the 13 Gate 2E-1/S1 replaceable state-plane descriptors, the bounded
   `BLSI` envelope, the `BLTR` old/new transition grammar, and a SHA3-512 public identifier port.
   It intentionally has no claim, payment, settlement, or proof implementation dependency.
+- `scalar_state_relation_controls.py` implements the Gate 2E-2/S2 synthetic scalar controls:
+  C1 dense and touched-sparse persistent memory, C2 transparent index/value dictionary, C3
+  touched-projection RAM, and C4 compact shuffle-based memory consistency.  Each control has a
+  deterministic bounded witness, candidate-specific derived work counters, and an independent
+  replay verifier.  `scalar_state_relation_parity.py` compares the fixed semantic/shape/money
+  boundary to C0 and exercises all seven C0 negative classes for both K128 and K512.  Candidate
+  roots remain differential identities; no candidate is selected or bound to H4.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

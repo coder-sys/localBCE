@@ -19,9 +19,10 @@ Execution authority: the deterministic continuation contract near the top of
 `IMPLEMENTATION_ROADMAP.md` defines the exact 2E-0 through 2E-7 sequence, finalist measurement
 boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen with exact
 K128/K512 fixture identities, independent negative controls, and fresh-process state-only and
-complete-boundary measurements. S1/2E-1 bounded interfaces is also frozen and tested. The
-immediate work is S2/2E-2 scalar C1-C4 controls; do not begin with a lattice optimization or paper
-benchmark.
+ complete-boundary measurements. S1/2E-1 bounded interfaces is also frozen and tested. S2/2E-2
+scalar C1-C4 controls are now implemented and parity-tested; the immediate work is S3/2E-3
+commitment screening. Do not begin with a paper benchmark or treat scalar work counters as
+throughput evidence.
 
 ## 1. Decision
 
@@ -143,10 +144,11 @@ fail closed.
    conflict order, old/new roots, call counts, machine identity, and complete timing boundary.
 2. **S1 - common state interface (complete).** Define canonical state-layout, commitment, opening, update,
    migration, and independent-verifier interfaces with bounded byte grammars and domain tags.
-3. **S2 - relation prototypes.** Implement C1-C4 as independently testable scalar references and
-   prove parity with C0 on membership, absence, duplicate, collision, conflicting update, denial,
-   cover, rollback, and malformed-state corpora.
-4. **S3 - commitment prototypes.** Implement the common PCS/commitment interface, exact parameters,
+3. **S2 - relation prototypes (complete).** Implement C1 dense/sparse, C2, C3, and C4 as
+   independently testable scalar references and prove parity with C0 on membership, absence,
+   duplicate, collision, conflicting update, denial, cover, transactional nonmutation, and
+   malformed-state corpora.
+4. **S3 - commitment prototypes (next).** Implement the common PCS/commitment interface, exact parameters,
    native hiding, authenticated-public-coin transcript, and independent verifier for every admitted
    backend.
 5. **S4 - atomic composition.** Bind the semantic AIR, CBAM, state relation, commitment, SHA3-512
@@ -167,6 +169,23 @@ fail closed.
    starting H5's separate warm-up-plus-ten campaign.
 
 ## 6. Acceptance gates
+
+## 6.1 Current S2 evidence boundary
+
+The scalar controls pass both frozen synthetic profiles with the same candidate-independent
+semantic digest and C0 boundary: four lane geometries, fixed two-access rows per operation,
+membership and absence, sequential cursor behavior, changed state/update identities, the
+representative approved/duplicate/conflict/denial/cover/correction outcomes, and 80 cents of
+plan/debit/credit totals. The seven C0 negative classes reject for every C1/C2/C3/C4 control,
+including C1 dense and C1 sparse. The parity record identity is
+`fc99b31b333a6ec3a19cc55099bd612dcd1d7964115301bbcb9d512d8efe184bc320f04af65f3aa8417bf03fe368e05dddc1d2bd7fd2b2005280e777f0d496c4`.
+
+The C1 dense full-capacity scan, C3 touched-projection quadratic online counter, and C4
+initialization/persistent-scan counter are derived scalar risk labels. They are not measurements,
+commitment evidence, proof evidence, or candidate-selection credit. Candidate-specific roots are
+not host-compared to C0 roots; atomic root binding is deferred to S4. No commitment backend,
+native-hiding simulator, migration proof, H4 composition, `proofSuiteId`, or activation decision
+is closed by S2.
 
 The selected candidate must:
 

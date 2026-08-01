@@ -220,8 +220,11 @@ or state-free proof.
 
 ## 11. Current Gate 2E evidence and next action
 
-Gate 2E-0/S0 and Gate 2E-1/S1 are complete for the synthetic control/interface boundary. The four
-fresh-process measurements are recorded in `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile
-usage deltas remain observed telemetry, not a swap conclusion. Execute Gate 2E-2/S2 next: build
-scalar C1-C4 controls and require full C0 positive/negative parity before optimization or a
-commitment bake-off. Do not start H5 or another PCS/backend bake-off.
+Gate 2E-0/S0, Gate 2E-1/S1, and Gate 2E-2/S2 are complete for the synthetic control/interface/
+relation boundary. S2 runs C1 dense/sparse, C2, C3, and C4 scalar controls through an independent
+replay verifier and requires full C0 positive/negative parity for both profiles. Its C1 dense scan,
+C3 quadratic projection counter, and C4 persistent-scan counter are derived risk labels, not
+throughput measurements. The four S0 fresh-process measurements remain recorded in
+`IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile usage deltas remain observed telemetry, not a
+swap conclusion. Execute Gate 2E-3/S3 next: screen native-hiding PQ commitment backends behind the
+completed relations. Do not start H5 or another complete-proof backend bake-off.

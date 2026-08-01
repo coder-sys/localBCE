@@ -53,7 +53,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
 | H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds | State binding, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 and 2E-1/S1 complete; 2E-2 next | C0 control and all 13 narrow interface descriptors/codecs are tested and documented | Implement scalar C1-C4 controls, then screen and bind a state relation plus PQ commitment |
+| Gate 2E | 2E-0/S0, 2E-1/S1, and 2E-2/S2 complete; 2E-3 next | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, independent replay, and C0 parity are tested and documented | Screen and bind a state relation plus PQ commitment |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -140,14 +140,38 @@ Current S1 record: `experiments/bl_pq512_crypto_foundation/state_interface.py` d
 descriptors, one strict bounded `BLSI` envelope, and the strict `BLTR` old/new transition codec.
 The interface module has no imports into claim, payment, application, settlement, or proof
 implementations. Its focused and attack suites pass 22/22. This freezes ports only; it does not
-implement C1-C4, select a commitment, bind H4, set `proofSuiteId`, enable activation, or authorize
-real data.
+select a commitment, bind H4, set `proofSuiteId`, enable activation, or authorize real data. S2
+now supplies the separate scalar relation controls and parity evidence below.
 
-### 2E-2 - implement scalar state-relation controls
+### 2E-2 - implement scalar state-relation controls (S2 complete)
 
-Implement C1-C4 only far enough to decide correctness, privacy, asymptotics, and integration. Each
-must match C0 on the complete positive and negative corpus before SIMD, CUDA, lattice compression,
-or complete-proof integration. Require deterministic reference output and an independent verifier.
+`experiments/bl_pq512_crypto_foundation/scalar_state_relation_controls.py` implements bounded,
+synthetic-only scalar references for C1 dense persistent memory, C1 touched-sparse persistent
+memory, C2 transparent index/value dictionary, C3 touched-projection RAM, and C4 compact
+shuffle-based memory consistency. Each candidate recomputes the same fixed-shape four-lane
+transition, membership/absence queries, update, money summary, candidate-specific state identities,
+and a deterministic bounded witness. `independently_verify_candidate` replays the transition from
+the input rather than trusting candidate roots or result fields.
+
+`scalar_state_relation_parity.py` compares the candidate-independent boundary to the frozen C0
+control for both K128/100-live and K512/500-live: replay/benefit/obligation/ledger operation and
+access geometry, membership, absence, cursor behavior, approval/denial/cover/correction outcome
+labels, and `(80, 80, 80)` plan/debit/credit totals. It also exercises stale read, omitted write,
+reordered write, duplicate identity, key collision, conflicting update, and result-root
+substitution. The public parity record SHA3-512 is
+`fc99b31b333a6ec3a19cc55099bd612dcd1d7964115301bbcb9d512d8efe184bc320f04af65f3aa8417bf03fe368e05dddc1d2bd7fd2b2005280e777f0d496c4`.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py
+14 passed in 21.50s
+```
+
+The C1 dense capacity scan, C3 quadratic projection work, and C4 persistent initialization/scan
+are derived scalar work counters, not measurements or throughput claims. No scalar candidate has
+native hiding, a PQ commitment, H4 binding, migration proof, complete-proof timing, or selection
+credit. The canonical sibling `../ops` remains absent and readiness remains fail-closed.
 
 Reject semantic drift, witness-dependent shape, an implicit global scan, unbounded grammar, or
 host-trusted equality.
