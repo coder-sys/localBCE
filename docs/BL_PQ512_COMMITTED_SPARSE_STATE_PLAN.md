@@ -1,6 +1,6 @@
 # BL-PQ512 committed sparse-state and PQ commitment plan
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 
 Status: mandatory Wave 2 research, implementation, and selection gate. This document does not
 select or activate a proof suite or state layout. `proofSuiteId` remains null, production use is
@@ -14,6 +14,12 @@ state derivations. Every candidate's semantic-equivalence, fixed-shape leakage, 
 equivocation, rollback, reorganization, recovery, migration, and 256-bit security/encryption
 composition obligations below remain open. H5 must run only after this gate selects and binds the
 state plane used by the candidate being qualified.
+
+Execution authority: the deterministic continuation contract near the top of
+`IMPLEMENTATION_ROADMAP.md` defines the exact 2E-0 through 2E-7 sequence, finalist measurement
+boundary, H5 separation, terminal handoff, and STOP rules. The immediate work is 2E-0 C0 fixture
+freeze followed by 2E-1 bounded interfaces; do not begin with a lattice optimization or paper
+benchmark.
 
 ## 1. Decision
 
@@ -146,12 +152,17 @@ fail closed.
 6. **S5 - migration and operations.** Prove old-tree/new-commitment equivalence at the profile
    boundary and test reorganization, checkpoint, restoration, rollback, partial-write, crash, and
    key/parameter migration behavior.
-7. **S6 - exact bake-off.** Run one uncounted warm-up and ten unique measured fixed-shape batches per
-   profile. Record complete input-to-independent-verification wall/CPU time, p50/p95, proof bytes,
-   verifier time, peak RSS, scratch high-water mark, I/O, cleanup, and failure behavior.
+7. **S6 - exact bake-off.** Screen every admitted candidate with repeated identical state-component
+   measurements, then run one uncounted complete warm-up and at least one unique, externally
+   monitored, independently verified complete batch per profile for each finalist. Record complete
+   input-to-independent-verification wall/CPU time, proof bytes, verifier time, peak RSS, scratch
+   high-water mark, I/O, cleanup, and failure behavior. Report p50/p95 only when the sample count
+   honestly supports them. This selects the Gate 2E candidate; it is not H5 qualification.
 8. **S7 - selection.** Select the highest-throughput candidate satisfying every hard constraint, or
    retain C0 with exact rejection reasons. Pin its source, parameters, schema, module identities,
-   KATs, theorem ledger, benchmark records, and migration plan.
+   KATs, theorem ledger, benchmark records, and migration plan. Bind the selected state plane into
+   the actual H4 parent, transcript, proof grammar, independent verifier, and atomic receipt before
+   starting H5's separate warm-up-plus-ten campaign.
 
 ## 6. Acceptance gates
 
@@ -168,8 +179,9 @@ The selected candidate must:
   classical authority on a Blind Ledger-controlled boundary;
 - remain at or below 5,000,000,000 peak resident bytes and strictly below 5,000,000,000 scratch
   bytes without swap on the reference Dell G15; and
-- contribute to a complete K128/100-live p95 below 30 seconds and K512/500-live p95 below 180
-  seconds under the frozen full-boundary method.
+- complete at least one fresh K128/100-live and K512/500-live finalist proof below the 30/180-second
+  gates before selection, then pass H5's separate one-warm-up-plus-ten campaign under the frozen
+  full-boundary method before qualification.
 
 Failure of a paper number, asymptotic claim, microbenchmark, or isolated state proof to meet these
 conditions is a normal candidate rejection, not permission to relax a gate.

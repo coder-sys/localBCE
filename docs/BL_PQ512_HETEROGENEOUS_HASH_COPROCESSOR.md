@@ -1,6 +1,6 @@
 # BL-PQ512 shared-bus Boolean hash coprocessor
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 
 Status: authoritative Wave 2 architecture and qualification contract. This selects an implementation
 priority, not a production proof suite. `proofSuiteId` remains null, activation and real PHI/payment
@@ -671,6 +671,13 @@ digests, canonical decoding, public-coin authentication/replay, GKR/PCS target d
 multiproofs, answer-code verification, and final acceptance remain authoritative Rust work.
 
 ## 9. Mandatory implementation sequence
+
+Current interpretation: H0-H4's executable prototype boundary is complete and independently
+verified for one K128 and K512 attempt. The requirement bullets below remain design and
+qualification obligations, not current next-step commands. Gate 2E must now bind authoritative
+state; H5 then runs the repeated selected-candidate campaign; H6 closes the complete simulator,
+security ledger, identities, reproducibility, and proof-candidate qualification. No dated checkpoint
+below this section may override that order.
 
 ### H0 - freeze the bus and theorem worksheet
 

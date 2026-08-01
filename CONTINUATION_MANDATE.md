@@ -1,11 +1,13 @@
 # Blind Ledger continuation mandate and product ideology
 
-Updated: 2026-07-26
+Updated: 2026-08-01
 
-Status: mandatory agent-recovery and execution instruction. For the current clean transfer, read
-`AGENTS.md` and `WAVE2_HANDOFF_2026-07-26.md` completely first. Then read this file, `STATE.md`, and
-the handoff's exact recovery order before resuming trust-critical work. Do not restore an old
-browser/PDF session or treat the interrupted GPU-PCS run as evidence.
+Status: mandatory agent-recovery and execution instruction. Read `AGENTS.md`, this file, the newest
+section of `STATE.md`, `docs/CURRENT_TECH_STACK.md`, and the deterministic continuation contract
+near the top of `docs/IMPLEMENTATION_ROADMAP.md` before resuming trust-critical work.
+`WAVE2_HANDOFF_2026-07-26.md` is historical recovery evidence: its interrupted GPU-PCS boundary and
+next-step language are superseded by the accepted H4 K128/K512 prototype and current Gate 2E plan.
+Do not restore an old browser/PDF session or use a dated historical section as current authority.
 
 This file records the owner's standing direction to persist through the entire internally buildable
 roadmap. It does not override higher-priority system/developer instructions, `AGENTS.md`, an explicit
@@ -37,15 +39,18 @@ and inside the active roadmap.
 After every compaction, loss of context, or handoff:
 
 1. read `AGENTS.md` completely;
-2. when present, read the newest dated root handoff completely;
-3. read this file completely;
-4. read `STATE.md` completely and follow its full compaction recovery order;
-5. inspect `git status --short` and preserve every pre-existing user change;
-6. reconstruct the active task from the newest user instruction, current plan, roadmap gate, exact
+2. read this file completely;
+3. read the newest section of `STATE.md`, then `docs/CURRENT_TECH_STACK.md` completely;
+4. read the deterministic continuation contract in `docs/IMPLEMENTATION_ROADMAP.md` and every
+   specialized architecture document it names for the active gate;
+5. read dated handoffs and historical sections only when provenance or a rejected decision is
+   needed; never execute their old next-step language;
+6. inspect `git status --short` and preserve every pre-existing user change;
+7. reconstruct the active task from the newest user instruction, current plan, roadmap gate, exact
    source, tests, and sealed evidence--never from a vague conversational summary alone;
-7. resume the last genuinely incomplete step rather than restarting completed work or returning a
+8. resume the last genuinely incomplete step rather than restarting completed work or returning a
    status-only answer; and
-8. keep progressing through the next roadmap dependency after each verified milestone.
+9. keep progressing through the next roadmap dependency after each verified milestone.
 
 If the recorded plan and repository disagree, trust actual source, raw evidence, and fail-closed
 tests. Reconcile the documentation; never weaken a check or invent evidence to make the record agree.
@@ -147,11 +152,11 @@ candidates.
 11. **Frozen resource gate.** Complete K128 and K512 proving must use no more than
     5,000,000,000 peak resident bytes (5 GB decimal) on the reference laptop, with no swap
     dependency. Historical lower limits remain evidence of prior runs, not current acceptance gates.
-11. **Atomic state and proof integrity.** Attempt/nullifier identity must be retry-stable. Membership,
+12. **Atomic state and proof integrity.** Attempt/nullifier identity must be retry-stable. Membership,
     absence, uniqueness, ordering, money conservation, old/new state, commitment equality, proof,
     verifier identity, schema, parameters, migration, and settlement must be bound atomically with no
     host-trusted equality or reusable partial receipt.
-12. **First-principles simplicity.** Prefer the smallest construction that satisfies the complete
+13. **First-principles simplicity.** Prefer the smallest construction that satisfies the complete
     theorem and product boundary. Remove dead code, duplicate representations, speculative layers,
     obsolete artifacts, and dominated architectures only after resolving exact ownership and preserving
     required audit evidence.
@@ -213,9 +218,10 @@ it does not make the roadmap depend on outside help.
 
 ## 8. Current standing reminder
 
-At the time this mandate was written, progress is 6 of 93 packages complete, Wave 1 is sealed and
-nonactivating, Wave 2 is active with six gates, `proofSuiteId` is null, and real PHI/payments remain
-forbidden. Gate 2E is the committed sparse-state/PQ-commitment implementation and selection bake-off;
-gate 2F is the complete K128/K512 proof and latency qualification. Re-read `STATE.md` for the current
-truth because these numbers and boundaries may advance while this ideology and persistence mandate
-remain in force.
+Current recorded position: progress is 6 of 93 packages complete, Wave 1 is sealed and
+nonactivating, H4's manifest-bound one-run K128/K512 prototypes pass, Wave 2 remains active,
+`proofSuiteId` is null, and real PHI/payments remain forbidden. Gate 2E is the next dependency: it
+must select and atomically bind the committed state/PQ-commitment plane. H5 then runs the repeated
+complete-proof p95/resource campaign; H6 closes proof-candidate qualification. Re-read `STATE.md`
+and `docs/CURRENT_TECH_STACK.md` for current truth because these boundaries may advance while this
+ideology and persistence mandate remain in force.

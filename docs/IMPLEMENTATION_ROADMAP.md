@@ -1,6 +1,6 @@
 # Blind Ledger implementation roadmap
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 
 Status: authoritative implementation sequence for the isolated architecture workspace.
 
@@ -23,6 +23,288 @@ required canonical sibling `../ops/`. This pre-existing gap causes readiness and
 fail closed before substantive assertions and remains part of open operations/release work. It does
 not change H4 evidence or the 6/93 count. Recover the exact canonical sibling and prove recursive
 byte identity; do not construct it from an assumed mirror or weaken path checks.
+
+## Deterministic continuation contract
+
+This section is the only current execution algorithm in this document. Dated sections below it are
+evidence and design lineage. A successor must not execute a historical sentence such as “next,”
+“remaining,” or “rerun” unless this section still names the same action.
+
+### Current state machine
+
+| Boundary | Current state | What is actually proved | What remains |
+| --- | --- | --- | --- |
+| Wave 1 | Sealed, synthetic, nonactivating | Exact bounded claim relation, fixed-shape traces, money/replay/payment semantics, SHA3 schedule, and ordered 12-field projection | Durable authoritative state, production adapters, and activation |
+| H0-H3 | Prototype implementation complete | Exact bus, B16 Keccak/GKR, native GKR masks, Construction 8.2 mechanics, public coin, and independent component verification | Complete cross-module simulator/security ledger remains a containing H6 obligation |
+| H4 | Prototype-accepted | One manifest-bound K128 and one four-shard K512 proof pass complete independent verification at 29.974129/120.460733 seconds | Does not include selected persistent state, repeated p95, final suite identity, production verifier, or activation |
+| Gate 2E | Open and next | C0 correctness control and research plan exist | Implement candidates, select state relation/commitment, prove atomic binding and migration |
+| H5 | Blocked on Gate 2E | One-run H4 timing establishes feasibility | Run the selected state-bound candidate: one warm-up plus ten measured unique proofs per profile |
+| H6 | Blocked on Gate 2E and H5 | Current parser/KAT/mutation evidence exists | Close complete theorem/simulator, identity, reproducibility, attack, recovery, and qualification gates |
+| Wave 3 | Blocked on H6 | Reference state/verifier/custody components exist | Production verifier, authoritative publication, custody, migration, rollback, and suite assignment |
+
+The one legal next dependency chain is:
+
+```text
+recover/verify canonical ../ops when trusted material is available
+    -> Gate 2E control and interface freeze
+    -> Gate 2E state-relation candidates
+    -> Gate 2E PQ-commitment candidates
+    -> atomic state + H4 composition
+    -> migration/recovery/attack closure
+    -> Gate 2E selection
+    -> H5 repeated complete-proof campaign
+    -> H6 proof-candidate qualification
+    -> Wave 3 production verifier/state/custody
+```
+
+The missing `../ops` tree blocks broad readiness evidence but does not authorize inventing policy
+bytes and does not prevent isolated Gate 2E design/prototype work that does not claim a full
+repository pass. Before any result is promoted beyond an isolated prototype, canonical ops identity
+must be restored and all affected gates rerun.
+
+### Required reasoning record for every change
+
+Before editing a trust boundary, record in the change or `STATE.md`:
+
+1. the invariant being protected or bottleneck being removed;
+2. the authoritative producer and every downstream consumer;
+3. public versus private inputs and outputs;
+4. canonical encoding, domain, version, and size bounds;
+5. concurrency, retry, crash, rollback, recovery, and partial-failure behavior;
+6. adversarial substitutions or splices that must fail;
+7. exact focused tests and containing gates;
+8. resource effect in decimal bytes/MB and throughput effect at the complete boundary; and
+9. rollback or rejection path if the candidate fails.
+
+A step without a theorem, invariant, compatibility, audit, or measured-throughput purpose is bloat.
+Delete it only after proving that no current producer, consumer, manifest identity, migration path,
+negative test, or verifier invariant requires it.
+
+## Gate 2E: exact current implementation plan
+
+`BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` owns the candidate theory. The sequence below owns
+execution and prevents a successor from jumping from a paper benchmark to a selected state plane.
+
+### 2E-0 - freeze the C0 control
+
+Inputs:
+
+- exact sealed K128/K512 synthetic fixtures;
+- full-width replay/payment keys and values;
+- canonical access order, duplicates, conflicts, denial, cover, and correction cases;
+- old/new roots, operation log, append index, money totals, and ordered 12-field output; and
+- current complete H4 manifest, timing, proof, and resource boundary.
+
+Required output:
+
+- one canonical fixture manifest with byte lengths and SHA3-512 identities;
+- independently reproduced C0 membership, absence, sequential-update, and endpoint results;
+- exact state-only and complete-boundary call/time/RSS/scratch/I/O measurements; and
+- negative fixtures for stale reads, omitted/reordered writes, duplicate labels/nullifiers,
+  collision, root substitution, and conflicting updates.
+
+STOP if C0 does not reproduce the sealed relation. An alternative cannot repair a disagreement by
+changing semantics, normalizing inputs, or redefining the root.
+
+### 2E-1 - freeze narrow replaceable interfaces
+
+Define separate bounded interfaces for:
+
+- state layout and version;
+- canonical key/value encoding;
+- read membership and absence;
+- ordered read/write access manifest;
+- memory-consistency relation;
+- commitment creation and opening;
+- old/new state transition;
+- SHA3-512 public state identifier;
+- migration equivalence and rollback;
+- transcript contribution;
+- independent verification; and
+- atomic receipt contribution.
+
+Every interface requires an exact byte grammar, maximum size, domain separator, profile/parameter
+identity, canonical decode rule, error family, and ownership statement. The state relation and PQ
+commitment must remain replaceable modules; neither may reach into claim semantics or settlement.
+
+### 2E-2 - implement scalar state-relation controls
+
+Implement C1-C4 only far enough to answer correctness, privacy, asymptotic, and integration
+questions. Each candidate must match C0 on the complete positive and negative corpus before SIMD,
+CUDA, lattice compression, or complete-proof integration. Require deterministic scalar reference
+outputs and an independent verifier. Reject a candidate immediately on semantic drift,
+witness-dependent shape, global-state scan hidden behind setup, unbounded grammar, or host-trusted
+equality.
+
+### 2E-3 - screen PQ commitment backends
+
+For each admitted commitment candidate, pin the exact paper/version/source/license, assumptions,
+parameter generator, field mapping, rejection/abort distribution, knowledge/binding/hiding claims,
+update model, proof grammar, and verifier. Build KATs and mutation tests before optimization.
+
+Reject any backend that relies on pairings, KZG, IPA, RSA, ECC, trusted setup, Fiat--Shamir/QROM
+credit, a designated verifier, an external service, an unsupported knowledge assumption, or a
+security estimate below the frozen composed floor. A lattice label is not PQ evidence.
+
+### 2E-4 - atomically compose the finalist
+
+Bind in one transcript and receipt:
+
+- sealed semantic program and port identities;
+- fixed Claim Batch Access Manifest and conflict order;
+- attempt/nullifier identity;
+- state layout, epoch, capacity, and parameter identities;
+- old commitment/root and new commitment/root;
+- membership, absence, uniqueness, read/write order, and money conservation;
+- H4 bus, native-masked GKR, Construction 8.2 PCS, public coin, and execution manifest;
+- migration version where applicable;
+- exact ordered 12-field projection and wide sidecar; and
+- verifier/module identities.
+
+No partial receipt is reusable. No host comparison may substitute for an in-proof equality. Change
+any one bound field and require rejection before state acceptance.
+
+### 2E-5 - close migration and failure semantics
+
+Test genesis, old-layout-to-new-layout equivalence, checkpoint publication, conflicting-before-state
+CAS, reorganization, rollback, restoration, partial write, crash before/after publication, corrupted
+checkpoint, stale epoch, parameter rotation, verifier rotation, and mixed-profile rejection. Prove
+that retries preserve attempt identity but use fresh proof randomness. Recovery must never accept an
+unproved state or reinterpret old bytes under a new layout.
+
+### 2E-6 - measure and select
+
+Use staged measurement so rejected candidates do not consume a full H5 campaign:
+
+1. repeated state-component measurements on identical fixtures;
+2. one uncounted complete warm-up for each finalist/profile;
+3. at least one fresh, externally monitored, independently verified complete K128 and K512 proof
+   for each finalist that remains eligible; and
+4. selection of the fastest candidate that passes every correctness, privacy, PQ, auditability,
+   migration, host-memory, scratch, and no-swap gate.
+
+Record p50/p95 only for sample sets large enough to define them honestly. Gate 2E selection is not
+H5 qualification. If no alternative beats C0 at the complete boundary, select C0 and preserve exact
+rejection evidence; asymptotic fashion is not a reason to ship a slower or less auditable design.
+
+### 2E-7 - seal the selection handoff
+
+The Gate 2E terminal record must contain:
+
+- selected relation and commitment identities, parameters, source/lock/license hashes, and schema;
+- exact theorem and composed-security status, with every unclosed H6 obligation enumerated;
+- complete positive, mutation, attack, migration, rollback, and recovery results;
+- state-only and complete-boundary measurements;
+- rejected candidates with exact reasons and retained evidence;
+- updated source ownership and proof/verifier dataflow;
+- Git commit/tree, clean status, and protected-path readback; and
+- the exact H5 command, environment, input-manifest generator, monitor, and STOP conditions.
+
+Gate 2E closes only when the selected state plane is in the actual H4 parent, transcript, proof,
+independent verifier, and atomic receipt. A document-only selection does not close it.
+
+## H5: repeated complete-proof qualification campaign
+
+H5 begins only after Gate 2E-7. It qualifies the exact selected state-bound candidate, not a cached
+H4 proof and not an isolated GKR, PCS, or state benchmark.
+
+### H5 prerequisites
+
+- clean Git tree at the sealed Gate 2E commit;
+- canonical `../ops` restored from trusted material and recursively byte-identical to `ops/`;
+- locked/offline builds and manifest readback passing;
+- driver System-log audit and a verified clean reset boundary;
+- no later `nvlddmkm` Event 153 or Display Event 4101;
+- exclusive host, sufficient physical/device headroom, no competing build/proof/cache scan;
+- synthetic-only input allowlist and unique input manifest;
+- external process-tree, pagefile, device, scratch, stdout/stderr, and driver monitor; and
+- every focused, mutation, attack, parser, state, migration, and independent-verifier gate green.
+
+### H5 run matrix
+
+Run exactly 22 fresh launches unless a STOP condition ends the campaign:
+
+| Profile | Warm-up | Measured unique attempts | Latency gate |
+| --- | ---: | ---: | ---: |
+| K128/100-live | 1 uncounted | 10 | p95 < 30.000000 s |
+| K512/500-live | 1 uncounted | 10 | p95 < 180.000000 s |
+
+“Fresh” means a new proof, masks, authenticated public-coin session, input identity, parent binding,
+and receipt. Reviewed binaries, precompiled PTX, and immutable topology may be reused; witness,
+proof, challenge, mask, query, opening, or partial-receipt caches may not.
+
+Measure complete process time from admitted canonical input to successful independent verification
+and atomic receipt. Record external-wrapper wall time separately. With ten measured attempts, use
+the conservative nearest-rank definition: sort ascending and take element
+`ceil(0.95 * 10) = 10`; therefore H5 p95 is the maximum of the ten accepted times. Do not average
+away a slow or failed attempt.
+
+For every attempt record input/fixture identity, proof and receipt hashes, wall/CPU time, stage
+times, verifier time, proof bytes, peak internal/process-tree RSS, pagefile delta, tracked and total
+device residency, scratch high-water mark, reads/writes, public-coin latency/retries, cleanup,
+stdout/stderr hashes, driver-event interval, and every verifier flag. All memory units are decimal.
+
+Any failed verifier, mutation, manifest, driver, no-swap, host/scratch, stderr, missing-telemetry, or
+cleanup gate fails that attempt and stops the campaign for classification. It cannot be silently
+discarded and replaced by an eleventh measurement.
+
+### H5 throughput rule
+
+Optimize the measured dominant complete-proof stage only. For each proposed optimization ask:
+
+1. Is the work theorem-required or invariant-required?
+2. If required, can it be fused, streamed, derived, batched, vectorized, or moved without changing
+   transcript order or authority?
+3. Does the independent verifier still reconstruct the same statement?
+4. Does the containing benchmark improve rather than a microbenchmark alone?
+5. Does it preserve or reduce memory, scratch, device residency, failure surface, and audit burden?
+
+Reject an optimization that regresses the complete boundary, adds unverified device authority,
+duplicates full source/state, introduces nondeterminism, shares nonlinear challenges without a
+theorem, or increases live workers merely to hide startup latency.
+
+## H6: proof-candidate qualification and seal
+
+H6 consumes the exact H5 winner and must close all of the following before Wave 3 depends on it:
+
+1. exact 256-bit composed theorem/error/abort/retry/multi-target ledger;
+2. complete zero-knowledge simulator covering semantic AIR, state, GKR, PCS, public coin, malformed
+   input, abort, retry, crash, retained artifacts, and repeated proofs;
+3. fixed proof/sidecar/receipt grammar with bounded allocation and independent parser agreement;
+4. downgrade, splice, replay, stale-state, migration, mutation, malformed-proof, and resource-DoS
+   attack corpus;
+5. cross-language KATs and authoritative Rust verification;
+6. source, toolchain, dependency, license, SBOM, module, CUDA, schema, parameter, and manifest pins;
+7. locked/offline reproducible builds and independent artifact readback;
+8. H5 p95/resource/no-swap evidence and proof-size/verifier-cost thresholds;
+9. side-channel, telemetry, zeroization, cleanup, and repeated-proof unlinkability evidence;
+10. rollback/recovery and mixed-version behavior;
+11. complete raw evidence manifest with no unexplained skip, warning, count drift, or failed gate;
+12. explicit list of Wave 3 production-verifier/state/custody work that remains nonactivating.
+
+H6 may mark the proof candidate qualified for Wave 3 integration. It must keep `proofSuiteId=null`
+and activation false until the roadmap's authoritative verifier, state publication, custody,
+migration, and activation packages close. H6 is not the final independent audit.
+
+## Documentation and Git handoff discipline
+
+At every 2E/H5/H6 phase boundary:
+
+- update `STATE.md` first with raw evidence and honest labels;
+- update `CURRENT_TECH_STACK.md` only when the active implementation changes;
+- update this current-execution contract and the owning specialized architecture document;
+- move dominated alternatives to `REJECTED_ARCHITECTURES.md` without leaving executable fallback
+  code unless a current differential test imports it;
+- update tests, SBOM, supply-chain pins, provenance, project map, quickstart, and known issues when
+  affected;
+- run stale-path/current-claim scans and documentation invariant tests;
+- verify zero protected-path changes unless explicitly authorized;
+- commit the smallest coherent verified phase with a clean worktree; and
+- record commit, tree, exact commands, counts, failures, warnings, skips, resource evidence, risks,
+  and the single next dependency.
+
+Never create a model-specific memory file. The repository must be sufficient for a capable successor
+with no chat context.
 
 This roadmap records completed evidence and every currently identified package required to build a
 technically deployable Blind Ledger release candidate: the private-claim/PQ core, government/oracle
@@ -421,15 +703,21 @@ The five former O07-O11 rows are audit workstreams, not engineering packages. Th
 one final gate after all 93 internal packages close:
 
 1. AIR completeness and soundness;
-2. witness hiding, FRI masking, Fiat-Shamir, QROM, and strict-PQ analysis;
+2. witness hiding, selected PCS/GKR masking, authenticated interactive public coin, explicit
+   absence of launch Fiat--Shamir/QROM credit, and strict-PQ analysis;
 3. SHA3-512, dual-root/state, KEM/signature, and quantum-parameter review;
-4. Rust/S-two, parser, verifier, contracts, rollup, bridge, and supply-chain security review;
+4. Rust/current proof core, CUDA untrusted-accelerator boundary, parser, verifier, contracts,
+   rollup, bridge, and supply-chain security review;
 5. privacy, side-channel, custody, operational review, and synthetic adversarial pilot.
 
 Audit findings return to their owning package. No real PHI or payments are permitted until the gate
 accepts the exact release identities and authorized operator activation is complete.
 
-## Parallel lanes after the accepted pre-implementation freeze
+## Historical R24 parallel lanes - non-executable
+
+This section records the 2026-07-16 allocation that led to later work. Its Stwo lane is removed and
+rejected; it does not authorize restoring that backend or supersede the deterministic continuation
+contract above.
 
 After the R24 pre-implementation freeze is accepted, four local lanes may proceed concurrently as
 synthetic, nonactivating implementation and measurement work while remaining separately reviewable.
@@ -1385,7 +1673,11 @@ R24 closes no additional package. That is deliberate: a local draft cannot subst
 AIR, complete proof implementation, payment-state parity, reproducible artifacts, or independent
 cryptographic review. It generates no proof and does not make the 124-proof campaign runnable.
 
-## Final overnight qualification bundle - 16 gates in 12 stages
+## Historical R24 final qualification design - non-executable
+
+This pre-H4 design retains useful negative categories and campaign rationale. Do not run its
+RISC Zero or Stwo commands: both executable backends are removed. The current Gate 2E/H5/H6
+sequence, active source inventory, and 22-launch H5 matrix above supersede it.
 
 After A01-A16, Z01-Z12, P01-P10, and T01-T10 exist and have been reviewed, one orchestrator should
 run the following sequential stages. Builds and proofs are serialized; Cargo, Scarb, Forge, and

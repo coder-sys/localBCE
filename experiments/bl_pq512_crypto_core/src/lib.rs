@@ -1,10 +1,13 @@
-//! Isolated BL-PQ512 cryptographic substrate.
+//! BL-PQ512 cryptographic substrate and current Wave 2 proof core.
 //!
-//! This crate freezes the M31 degree-16 tower, strict field encoding,
-//! SHA3-512 rejection samplers, a typed Fp8-excluding OODS boundary, and a
-//! typed full-width PCS Merkle substrate.
-//! It is not a proof system and does not select Circle-FRI parameters. The
-//! Wave 1B schedule module is an explicitly unselected interface KAT.
+//! This crate owns the M31 degree-16 tower, strict field encoding, SHA3-512
+//! commitments and rejection samplers, the selected native-masked relay-free
+//! GKR, Construction 8.2 PCS bindings, authenticated public coin, canonical
+//! proof parsing, and the Rust-authoritative independent verifier used by the
+//! H4 K128/K512 prototype. Historical Circle-FRI and Wave 1B modules remain
+//! differential or theorem-reference controls unless a current caller imports
+//! them. H4 is nonactivating: Gate 2E state binding, the complete composed
+//! simulator/security ledger, H5, H6, and production verifier remain open.
 
 #![forbid(unsafe_code)]
 #![no_std]

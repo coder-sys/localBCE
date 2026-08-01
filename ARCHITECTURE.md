@@ -1,10 +1,16 @@
 # Blind Ledger architecture
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 
 Canonical navigation: `docs/CURRENT_TECH_STACK.md` defines the current implementation inventory;
 `docs/REJECTED_ARCHITECTURES.md` is the only rejection ledger. Historical measurements in other
 documents never override this architecture or re-enable removed code.
+
+For context-free continuation, use the deterministic continuation contract near the top of
+`docs/IMPLEMENTATION_ROADMAP.md`. It names the sole current dependency chain and supplies explicit
+Gate 2E, H5, and H6 inputs, outputs, tests, measurements, STOP conditions, and handoff fields. Dated
+sections in any architecture document preserve evidence; their old “next step” language is not an
+execution instruction.
 
 The current execution checkpoint is the newest dated section of `STATE.md`; the original transfer
 boundary remains `WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 is an untrusted field-arithmetic

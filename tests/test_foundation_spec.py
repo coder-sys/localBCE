@@ -13,6 +13,9 @@ BASELINE_PATH = ROOT / "docs" / "SUPPLY_CHAIN_BASELINE.md"
 SBOM_PATH = ROOT / "docs" / "SBOM.foundation.spdx.json"
 ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
 REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
+CURRENT_STACK_PATH = ROOT / "docs" / "CURRENT_TECH_STACK.md"
+ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
+STATE_PLAN_PATH = ROOT / "docs" / "BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md"
 
 EXPECTED_ABI = [
     (0, "protocolVersion", "bytes32"),
@@ -289,6 +292,61 @@ def test_retired_backend_sources_are_absent_and_rejection_evidence_is_pinned() -
         "6FC3AE0CC00EEAC4C08B33D060CE3725438DCDE152DC571E08F3D8E6F86B3B8F",
     ):
         assert identity in rejection
+
+
+def test_current_stack_and_roadmap_form_a_context_free_execution_contract() -> None:
+    stack = _read(CURRENT_STACK_PATH)
+    roadmap = _read(ROADMAP_PATH)
+    state_plan = _read(STATE_PLAN_PATH)
+
+    for heading in (
+        "## How a successor must interpret this repository",
+        "## Frozen system invariants",
+        "## Exact accepted H4 profiles",
+        "## Complete H4 proof flow",
+        "## Current memory and concurrency design",
+        "## Privacy and data-placement boundary",
+        "## Fail-closed verifier order",
+        "### Proof-core ownership map",
+        "## Evidence currently required to remain green",
+        "## Open boundaries and nonclaims",
+    ):
+        assert heading in stack
+    for invariant in (
+        "6,073 authenticated challenge rounds",
+        "one authenticated 6,086-round schedule",
+        "one output claim and four input claims",
+        "508 native GKR mask constraints per shard",
+        "52,429,015",
+        "209,715,415",
+        "29.974129 s",
+        "120.460733 s",
+        "5,000,000,000 decimal bytes",
+        "proofSuiteId=null",
+    ):
+        assert invariant in stack
+
+    required_order = (
+        "## Gate 2E: exact current implementation plan",
+        "### 2E-0 - freeze the C0 control",
+        "### 2E-1 - freeze narrow replaceable interfaces",
+        "### 2E-2 - implement scalar state-relation controls",
+        "### 2E-3 - screen PQ commitment backends",
+        "### 2E-4 - atomically compose the finalist",
+        "### 2E-5 - close migration and failure semantics",
+        "### 2E-6 - measure and select",
+        "### 2E-7 - seal the selection handoff",
+        "## H5: repeated complete-proof qualification campaign",
+        "## H6: proof-candidate qualification and seal",
+    )
+    positions = [roadmap.index(marker) for marker in required_order]
+    assert positions == sorted(positions)
+    assert "Run exactly 22 fresh launches" in roadmap
+    assert "ceil(0.95 * 10) = 10" in roadmap
+    assert "H6 may mark the proof candidate qualified" in roadmap
+    assert "keep `proofSuiteId=null`" in roadmap
+    assert "This selects the Gate 2E candidate; it is not H5 qualification" in state_plan
+    assert "Bind the selected state plane into\n   the actual H4 parent" in state_plan
 
 
 def test_foundation_sbom_is_valid_internal_spdx_inventory_with_honest_unknowns() -> None:
