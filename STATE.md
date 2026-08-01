@@ -3586,10 +3586,16 @@ false/false/null.
 
 The authoritative workspace remains
 `C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`;
-its missing `.git` metadata is expected. No replacement workspace was created or extracted. The
-verified Windows driver-reset boundary is `2026-07-31T05:06:01.7747420-06:00`. Every final proof
-audit found zero later `nvlddmkm` Event 153 and zero Display Event 4101. NVIDIA 610.88 reported the
-RTX 4060 healthy.
+its missing `.git` metadata was expected at handoff. After the owner's explicit 2026-07-31 request
+to use Git, the workspace was initialized in place without creating or extracting another
+workspace. The recovery root checkpoint is commit
+`20c409b6f546085120542e294e1868e878c56cf8`, tree
+`367a4672073f31e71520888cbf73f50b8918c796`: 998 source/documentation files and 11.942784 MB.
+Generated targets, caches, the NVIDIA installer, NVRTC wheel/runtime, and NVRTC cache total about
+2.27 GB; they remain preserved on disk under narrow ignore rules and were not committed as source.
+No remote was configured and nothing was pushed. The verified Windows driver-reset boundary is
+`2026-07-31T05:06:01.7747420-06:00`. Every final proof audit found zero later `nvlddmkm` Event 153
+and zero Display Event 4101. NVIDIA 610.88 reported the RTX 4060 healthy.
 
 The complete semantic prototype now attaches, for both K128 and K512:
 
