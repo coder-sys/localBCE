@@ -29,3 +29,6 @@ replacements pass versioned gates. Projected state-call reductions are not throu
 `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` owns the complete outer-chain change
 risk. R01-R12 must pin a deployed baseline, keep based sequencing and validity mandatory, and reject
 unknown or partial fork/EIP support; no live-map projection is release evidence.
+The exact risk classes are INHERIT, L1-COMPAT, L2-PARITY, OPTIONAL and RESEARCH. An unknown fork
+digest/interface or incomplete mandatory adapter pauses new batch acceptance/publication while the
+reviewed exit/recovery path remains available from the last supported finalized state.

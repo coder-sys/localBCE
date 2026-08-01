@@ -425,6 +425,22 @@ def test_strawmap_contract_is_complete_compulsory_and_fail_closed() -> None:
     assert observed_eips == expected_eips
     assert len(re.findall(r"^\| \d{4} \|", matrix, flags=re.MULTILINE)) == 23
 
+    impact_matrix = strawmap.split("### Exact 23-EIP impact and trigger matrix", 1)[1].split(
+        "### Non-EIP through-line action summary", 1
+    )[0]
+    impact_rows = {
+        match.group(1): match.group(0)
+        for match in re.finditer(r"^\| (\d{4}) \|.*$", impact_matrix, flags=re.MULTILINE)
+    }
+    assert set(impact_rows) == expected_eips
+    assert len(impact_rows) == 23
+    for row in impact_rows.values():
+        assert any(
+            impact_class in row
+            for impact_class in ("INHERIT", "L1-COMPAT", "L2-PARITY", "OPTIONAL", "RESEARCH")
+        )
+        assert re.search(r"R\d{2}", row)
+
     assert "is an Ethereum-settled, EVM-compatible based validity rollup" in strawmap
     assert "A permanent privileged" in strawmap
     assert "Every accepted L2 state transition requires" in strawmap
@@ -454,7 +470,21 @@ def test_strawmap_contract_is_complete_compulsory_and_fail_closed() -> None:
         assert through_line.lower() in strawmap.lower()
 
     assert "compulsory containing architecture" in based
+    assert "How an L1 upgrade propagates into this based L2" in based
     assert "Being an Ethereum-settled based validity\nrollup is compulsory" in roadmap
+    lockstep_markers = (
+        "**R01 inventory and classify:**",
+        "**R02 reproduce both sides:**",
+        "**R03-R05 bind correctness:**",
+        "**R06-R10 bind containing safety:**",
+        "**R11 activate atomically:**",
+        "**R12 qualify:**",
+        "**Post-fork reconcile:**",
+    )
+    positions = [roadmap.index(marker) for marker in lockstep_markers]
+    assert positions == sorted(positions)
+    assert "Unknown or partial\n   support pauses new batches" in roadmap
+    assert "safe exits from the last supported finalized state" in roadmap
     assert "EIP-7707, access-list provisioning" not in frontier
     assert "EIP-7928, block-level access lists" in frontier
 

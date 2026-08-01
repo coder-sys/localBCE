@@ -13,7 +13,9 @@ active read order. `docs/REJECTED_ARCHITECTURES.md` owns rejection decisions.
 The compulsory containing design is an Ethereum-settled based validity rollup. The complete live
 Strawmap/EIP compatibility surface and maturity rules are in
 `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. That prospective outer-chain contract
-does not change the current H4 proof implementation or mark any R01-R12 package complete.
+classifies every item as INHERIT, L1-COMPAT, L2-PARITY, OPTIONAL, or RESEARCH and supplies the
+lockstep fork lifecycle. It does not change the current H4 proof implementation or mark any
+R01-R12 package complete.
 
 ## Current product boundary
 

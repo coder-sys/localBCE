@@ -7,7 +7,9 @@ real PHI/payments are forbidden. Read `docs/CURRENT_TECH_STACK.md`, then
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` after the throughput and heterogeneous-proof
 contracts. Before any containing-rollup work, also read
 `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. Its compulsory based-validity invariants
-and the frontier projections must not be confused with implemented or measured evidence.
+and the frontier projections must not be confused with implemented or measured evidence. For each
+fork/EIP, read its impact class, activation trigger, package owners and required tests; never infer
+that “inherited from L1” means no compatibility work or that “available” means enabled.
 
 Run commands from `blind-ledger-app-layer/` unless a command says otherwise.
 

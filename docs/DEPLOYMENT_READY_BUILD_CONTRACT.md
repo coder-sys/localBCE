@@ -10,6 +10,9 @@ permit a draft Ethereum feature to block the pinned release path.
 compulsory and assigns the complete live-map compatibility surface to R01-R12. The pinned release
 baseline must remain deployable without any unshipped EIP; future fork adapters are internal
 engineering, versioned, rejected by default, and fail closed.
+Inherited L1 features still require fork-aware conformance before receiving benefit credit;
+L1-COMPAT and L2-PARITY changes require direct implementation; OPTIONAL/RESEARCH features remain
+disabled. The manifest-bound lifecycle and 23 activation triggers are part of R01-R12 completion.
 
 The committed sparse-state and PQ commitment bake-off in
 `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` is likewise internal work inside existing packages.

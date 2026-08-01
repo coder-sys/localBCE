@@ -16,6 +16,9 @@ Before R01-R12 deployment work, read
 `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`, refetch the canonical fork/EIP sources,
 and pin the exact deployed feature matrix. The deployment must remain a based validity rollup and
 must fail closed on unknown fork IDs, transaction/proof types, data modes, or partial adapters.
+Use the manifest lifecycle in that contract: freeze the final fork bill, rehearse old/boundary/new
+fixtures, activate all affected L1/L2 adapters atomically, and reconcile canonical receipts, DA,
+finality and bridge conservation before crediting an inherited improvement.
 
 ## Preflight
 

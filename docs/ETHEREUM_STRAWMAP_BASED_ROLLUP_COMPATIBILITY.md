@@ -207,6 +207,95 @@ work—not hidden assumptions.
 - The map's performance north stars—lower latency, greater throughput, and multiple hardness
   dimensions—are aligned goals, never permission to reduce security or report projections as runs.
 
+## Operational impact classes: what arrives automatically and what Blind Ledger must build
+
+“Ethereum ships it” does not imply either “Blind Ledger must reimplement it” or “Blind Ledger has
+nothing to do.” Use these exact classes:
+
+| Class | Meaning | Blind Ledger obligation |
+| --- | --- | --- |
+| **INHERIT** | The property is supplied by the canonical L1 clients/validator network: for example, a shorter slot or different proposer/builder pipeline. | Do not reimplement L1 consensus. Update fork-aware observation, timing, reorg/finality assumptions, monitoring, fixtures, and capacity measurements before relying on the benefit. |
+| **L1-COMPAT** | The change alters an interface or artifact Blind Ledger directly consumes or produces: Engine API, transaction envelope, gas/blob accounting, DA object, proof/witness, header, receipt, or L1 contract behavior. | Implement the exact versioned adapter, parser, producer, verifier binding, migration, attacks, and rollback before the fork activates. Unknown variants fail closed. |
+| **L2-PARITY** | The final fork changes EVM execution semantics that the selected EVM-compatible L2 promises to mirror. | Upgrade the L2 executor, state-transition prover, gas accounting, trace/witness schema, verifier vectors, and fork ID atomically. If the L2 deliberately does not mirror an L1 feature, record that exception and prove ordinary EVM application compatibility remains exact. |
+| **OPTIONAL** | The feature can improve the design but is not needed for the pinned based-validity baseline. | Keep it disabled and rejected by default. Enable only through R11 after a final spec, pinned implementation, threat review, differential tests, migration, rollback, and measured benefit. |
+| **RESEARCH** | The item is Stagnant, underspecified, a north star, or unsuitable for Blind Ledger’s theorem/privacy/PQ boundary. | No release code or capacity/security credit. Preserve the rejection or watch condition and revisit only on a material authoritative change. |
+
+Every **INHERIT** item therefore causes at least configuration and conformance work. Every
+**L1-COMPAT** or **L2-PARITY** item causes direct implementation work. **OPTIONAL** and **RESEARCH**
+items must not silently enter the dependency graph.
+
+### Exact 23-EIP impact and trigger matrix
+
+| EIP | Impact class | What L1 supplies | Direct Blind Ledger work | Trigger and owning packages |
+| --- | --- | --- | --- | --- |
+| 7503 | RESEARCH | Nothing deployed; proposed L1 private transfer mechanism only. | No protocol work. Keep its burn/remint/nullifier and non-PQ proof assumptions out of bridge, privacy, and claim semantics. | Re-open only if a successor reaches a scheduled fork and passes PQ/privacy review; R09/R11. |
+| 7732 | INHERIT + L1-COMPAT | ePBS ordering, bid/reveal, PTC, and delayed execution-validation behavior. | Fork-aware L1 observer; builder/payload/sidecar correlation; withholding, empty-block, reorg, and delayed-validation tests; never trust a relay/builder preconfirmation. | Final fork inclusion or supported-client devnet; R02/R06/R07/R12. |
+| 7773 | L1-COMPAT + conditional L2-PARITY | The final Glamsterdam fork bill and activated EL/CL rules. | Replace the draft bill with the final one; pin fork digest, clients, Engine API, EVM/gas/receipt/network rules; run every included-EIP adapter and differential vector. | Fork scope frozen by Ethereum governance; R01/R02/R05/R11/R12. |
+| 7805 | INHERIT + L1-COMPAT | L1 inclusion-list censorship resistance. | Make the based inbox/batcher consume only bounded opaque commitments; handle IL views, duplicates, invalid/conflicting transactions, unavailable ILs, builder invalidation, reorgs, and retry identity. | FOCIL scheduled in a supported fork; R02/R07/R10/R12. |
+| 7919 | RESEARCH | No deployed Pureth behavior. | No dependency. Track only concrete final replacements affecting block/transaction/receipt serialization or RPC proofs. | A component EIP becomes final/scheduled; R01/R02/R11. |
+| 7928 | L1-COMPAT + conditional L2-PARITY | Public block-level access lists, state diffs, Engine API objects, and reconstruction inputs. | Parse/validate deterministic BAL ordering and diffs; bind BAL-derived public artifacts to block/fork/data receipts; test phantom reads and gas attacks. Keep private CBAM separate. Mirror inside the L2 only if the selected L2 EVM fork adopts BAL semantics. | Final fork inclusion/client schema freeze; R01/R02/R04/R05/R07/R08/R11/R12. |
+| 7938 | INHERIT + RESEARCH | Only actual future gas-limit votes/forks create capacity. | Read measured live gas limits into multidimensional admission control; never use the stagnant 3x/year projection. | Deployed gas-limit change; R02/R06/R08/R12. |
+| 7999 | L1-COMPAT + conditional L2-PARITY | A final multidimensional L1 fee/resource market if adopted. | Version fee estimation, batch packing, admission, and receipts across execution/blob/calldata dimensions; bind resource vector and fork ID; test saturation and reserve-price failures. Mirror L2 fee semantics only if selected. | Final scheduled specification; R01/R02/R05/R06/R08/R11/R12. |
+| 8007 | L1-COMPAT + L2-PARITY for mirrored EVM rules | Final opcode, precompile, state, and transaction repricings. | Update L1 submission/settlement gas envelopes and, for mirrored rules, L2 executor/prover gas tables and differential out-of-gas/refund vectors atomically. | Each repricing included in a final fork; R01/R02/R05/R06/R11/R12. |
+| 8025 | OPTIONAL | Optional Ethereum execution-proof gossip/verification. | Default-reject all proof types. A later shadow verifier must bind proof type, guest, chain config, block, inputs, and size and cannot replace mandatory validity/re-execution. | Final spec plus at least two interoperable clients and measured value; R03/R06/R11/R12. |
+| 8070 | INHERIT + L1-COMPAT | Sparse EL blobpool sampling/provider behavior. | Use supported client APIs; update publisher/retriever health, custody-set handling, partial availability, reconstruction and retention tests; never treat its probabilities as proof of BL availability. | Supported clients enable eth/72/successor; R02/R08/R11/R12. |
+| 8077 | INHERIT + L1-COMPAT at broadcaster boundary | More efficient untrusted transaction announcements. | If BL operates a broadcaster, parse nonce/address hints as unauthenticated, verify fetched hash/payload, penalize mismatches, and never mutate L2 state from an announcement. | Supported networking version enabled; R02/R07/R11. |
+| 8079 | OPTIONAL | Possible native L1 execution/verification precompile for rollups. | Keep disabled. Later adapter must bind exact precompile version, chain/fork, execution config, state, proof and unsupported-feature policy while retaining based sequencing and BL validity. | Final EIP, production clients, reference tests, security review, and measured advantage; R01/R03/R05/R11/R12. |
+| 8081 | L1-COMPAT + conditional L2-PARITY | Final Hegotá fork bill. | Same fork-bill procedure as 7773; do not implement the draft proposal list as if scheduled. | Fork scope frozen by Ethereum governance; R01/R02/R05/R11/R12. |
+| 8136 | INHERIT + L1-COMPAT | More bandwidth-efficient cell-delta propagation among capable peers. | Negotiate partial messages, retain old-peer fallback, reconstruct and verify full required data, and test latency, group-ID spam, score neutrality, partitioning, rollback, and mixed networks. | Client/spec support enabled; R02/R08/R11/R12. |
+| 8141 | OPTIONAL + conditional L2-PARITY | Native frame transaction/account-abstraction format and future PQ-signature off-ramp. | Baseline remains ordinary supported transactions. If selected for L2 parity or L1 submission, implement canonical envelope/signature/frame/payer/blob/atomic-revert/receipt/gas/mempool semantics and reject unknown schemes. | Final fork inclusion plus wallet/client ecosystem readiness; R01/R02/R04/R05/R09/R11/R12. |
+| 8142 | L1-COMPAT | Execution payload carried and reconstructed through payload blobs, with BAL/witness/header coupling. | Version DA envelope and Engine API; bind payload-blob count/order, commitments/proofs, header, BAL/witness, rollup proof and reconstruction; test withholding, corruption, fee competition and rollback. | Final fork inclusion and stable client APIs; R02/R03/R05/R08/R11/R12. |
+| 8184 | OPTIONAL/RESEARCH, disabled for private claims | Public commit-before-reveal encrypted mempool behavior. | Do not use for PHI or witness transport. If later used for non-PHI L1 submission, isolate tickets/ciphertexts/key publishers and test non-reveal, bad keys, fee/nonce charging, rejected-payload recovery and FOCIL interaction. | Final spec plus satisfactory PQ encryption/custody review; R02/R07/R10/R11. |
+| 8198 | INHERIT + L1-COMPAT | Shorter configurable slots and proportionally changed gas/blob/timing parameters. | Remove hard-coded slot assumptions; update deadlines, finality/reorg windows, batch cadence, gas/blob per-block limits, weak-subjectivity/DA windows, monitoring and p95 capacity. Faster based-rollup latency is inherited only after these pass. | Scheduled slot-duration change; R02/R06/R07/R08/R09/R10/R12. |
+| 8200 | L1-COMPAT + L2-PARITY for mirrored precompiles | Final EVM bytecode replacements and gas behavior for long-tail precompiles. | Pin bytecode/codehash/gas at L1; if mirrored, update L2 executor/prover and differential vectors for RIPEMD-160, MODEXP and BLAKE2f. Do not touch BL SHA3-512 authority. | Each replacement finalized and scheduled; R01/R02/R05/R11/R12. |
+| 8250 | OPTIONAL + conditional L2-PARITY | Protocol-managed keyed nonces for frame transactions. | If frames are selected, bind sorted bounded nonce keys, common sequence, sender, signature hash, storage, first-use gas, consumption and replay. Preserve separate retry-stable attempt/nullifier identity. | 8141 and 8250 final/scheduled and shared-sender throughput benefit measured; R04/R05/R07/R11/R12. |
+| 8272 | OPTIONAL + conditional L2-PARITY | Protocol recent-root references for frame validation. | If selected, bind writer/salt/source ID/slot/root/window/system storage/signed envelope; reject current/future/expired/absent/overwritten/duplicate roots; keep BL private state authoritative. | 8141 and 8272 final/scheduled with a proven privacy-root use case; R04/R05/R07/R11/R12. |
+| 8297 | INHERIT + L1-COMPAT; optional L2-PARITY | A different L1 state tree, witness/proof shape, and possibly hash after finalization. | L1 clients own the tree. Update any light-client/storage-proof/witness adapter and vectors. Adopt it inside L2 only through Gate 2E/R11 equivalence, migration, privacy, PQ and resource gates; never copy a draft hash. | Final tree/hash/fork conversion and client proof APIs; R01/R02/R04/R05/R06/R11/R12. |
+
+### Non-EIP through-line action summary
+
+| Through-line | Inherited L1 effect | Direct Blind Ledger response |
+| --- | --- | --- |
+| Faster confirmation/finality, decoupled or one-round consensus, attester caps | Potentially lower based-rollup latency and different safety/liveness windows. | Fork-aware observer and bridge/exit policies must use the deployed safe/finalized semantics; measure again and never infer finality from a fast head signal. |
+| Secret proposers, distributed building, VDF, attester–includer separation, 51-percent recovery | Different censorship, role, randomness, and recovery behavior. | Expand R07/R10 fault injection and remove role-identity assumptions; bind recovery to canonical finalized evidence. |
+| Higher DA, streaming, leanDA/PQ sampling, removal of blob transaction type | More or differently transported public bandwidth. | R08 must version the publisher/retriever/reconstruction envelope; capacity rises only after complete measured publication and independent reconstruction. |
+| Gigagas/teragas and gas/blob futures | Potential capacity/economic changes. | Admission and fee models consume live measured resource vectors; no projected multiplier or future capacity is pre-sold. |
+| leanCL/leanVM/leanXMSS/PQ registry/PQ precompiles/PQ blobs | Gradual reduction of Ethereum’s external classical risk. | Track deployed primitives in the composed security ledger and adapters. Do not alter the specialized BL proof or claim end-to-end PQ early. |
+| Frames, ephemeral keys, private ETH/privacy pools/zkzk frames | Potential account and privacy interoperability. | Optional, non-PHI adapters only; BL fixed shape, custody, nullifier/state, and dual-PQ authority remain independent. |
+| VOPS, hyper-scaled/endgame state, RISC-V/evm-asm, SFI/CFI, tech-debt reset | Possible future execution/state architecture changes. | Research/watch until specifications stabilize; then enter R01/R11 through explicit equivalence and migration gates, never by inference from the map. |
+
+## Lockstep L1 upgrade lifecycle
+
+Blind Ledger moves in lockstep by preparing before L1 activation and failing safely at activation,
+not by copying every draft immediately:
+
+1. **Discover:** R01 records the EIP/source commit, status, fork proposal, affected EL/CL/Engine/
+   networking/EVM/DA surfaces, and impact class. A map label alone cannot enable code.
+2. **Scope freeze:** when Ethereum freezes a fork bill, R01 produces an
+   `ethereum_compat_manifest` containing chain/genesis identity, fork name/digest/epoch or
+   timestamp, EL/CL client commits, included EIPs, Engine API version, transaction/receipt types,
+   EVM revision, gas/precompile schedule, slot/finality constants, blob/cell parameters, state/
+   witness format, and explicitly disabled optional features.
+3. **Implement:** R02-R11 update only the affected adapters and theorem boundaries identified above.
+   Every parser and verifier dispatches on the manifest’s exact fork/version; no “latest” behavior.
+4. **Differential test:** run canonical upstream vectors plus cross-client/devnet fixtures, old/new
+   fork-boundary blocks, malformed/unknown variants, reorgs, rollback, DA withholding, and privacy
+   scans. L2-PARITY changes compare executor, prover, independent verifier, and receipt.
+5. **Rehearse:** before L1 activation, R12 runs the complete synthetic claim-to-finalized-Ethereum
+   path on the exact release candidates, including one rollback and mixed old/new peer/client cases.
+6. **Activate atomically:** the supported L1 fork manifest, L1 observer, DA publisher/retriever,
+   settlement contracts/configuration, L2 EVM/prover when applicable, verifier, monitoring, and
+   rollback plan activate as one governed version.
+7. **Fail closed but preserve exits:** if the observed fork digest, Engine payload, transaction/
+   receipt type, proof type, DA mode, or EVM revision is unknown or only partially supported, stop
+   accepting and publishing new L2 batches. Continue observing L1 and permit only the reviewed safe
+   exit/recovery path from the last supported finalized state.
+8. **Post-activation verify:** reconcile canonical blocks, receipts, DA reconstruction, finality,
+   bridge accounting, and p95 resource/capacity evidence before claiming the inherited benefit.
+
+The compatibility manifest is configuration/evidence, not a new roadmap package. R01 owns its
+schema and source pins; R11 owns activation/migration/rollback; R12 owns end-to-end qualification.
+
 ## Required R01-R12 implementation contract
 
 | Package | Strawmap-derived acceptance work |

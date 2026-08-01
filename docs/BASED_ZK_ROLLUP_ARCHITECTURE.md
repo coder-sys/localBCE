@@ -75,6 +75,25 @@ list, calldata, blob, or DA recovery object may contain raw or encrypted PHI. Pe
 transport and proof/data coupling require reconstruction and withholding tests. Ethereum's current
 classical cryptography remains an explicit external boundary and does not make the system end-to-end PQ.
 
+### How an L1 upgrade propagates into this based L2
+
+L1 and L2 are coupled, but they are not the same machine:
+
+| L1 change | Automatic effect | Required Blind Ledger response |
+| --- | --- | --- |
+| Consensus, proposer/builder, slot, or finality rule | The canonical L1 supplies the new ordering/timing/finality behavior. | Do not implement another consensus. Upgrade the observer, timing, reorg, settlement, bridge/exit and fault-test logic before relying on it. |
+| DA, blob/cell, payload, networking, or Engine API rule | Canonical clients transport data under the new rule. | Upgrade the exact batch publisher, retriever, reconstruction, proof/data binding, monitoring and rollback adapters. |
+| L1 EVM, gas, precompile, transaction, receipt, or state-proof rule | L1 contracts and submission transactions execute under the new fork. | Upgrade L1 contract assumptions and tooling. Also upgrade the L2 executor/prover/verifier when the selected L2 EVM compatibility profile mirrors that rule. |
+| Optional native proof, frame, nonce, root, privacy, or mempool feature | Nothing changes unless Blind Ledger chooses the feature. | Keep rejected by default; adopt only through a versioned R11 migration after finality, interoperability, security, privacy, PQ, rollback and measured-benefit gates. |
+| Research/north-star item | No deployable effect. | Monitor only; grant no implementation, capacity or security credit. |
+
+“Lockstep” means Blind Ledger freezes the exact final L1 fork bill, implements and rehearses all
+affected adapters before activation, switches the manifest-bound integration atomically, and pauses
+new batch publication on an unknown/partial fork while preserving safe exits from the last supported
+finalized state. It does not mean copying drafts or reimplementing L1 consensus. The authoritative
+23-EIP classification, triggers and package owners are in
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`.
+
 ## Trust boundaries
 
 ### Ethereum L1

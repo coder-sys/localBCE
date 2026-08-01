@@ -34,7 +34,9 @@ preserves strict-PQ/privacy bounds, and keeps draft EIPs optional.
 compatibility contract. It records all 23 live-map EIPs and every planned consensus/data/execution/
 PQ/privacy through-line, with maturity gates and R01-R12 ownership. Blind Ledger's
 Ethereum-settled based-validity architecture is compulsory; draft features remain optional
-adapters and public Ethereum data remains non-PHI.
+adapters and public Ethereum data remains non-PHI. Its INHERIT/L1-COMPAT/L2-PARITY/OPTIONAL/
+RESEARCH classes explain which benefits arrive through L1, which require direct L2 work, and when
+each change becomes actionable.
 
 This directory is the source root for day-to-day work. The archive root also contains sibling directories used by this source tree:
 

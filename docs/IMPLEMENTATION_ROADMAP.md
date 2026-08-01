@@ -383,6 +383,35 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 | R11 | Implement versioned EIP/fork adapters, timelocks, downgrade rejection, emergency rollback, and disaster recovery. | Open. |
 | R12 | Verify claim-to-proof-to-L2-to-finalized-Ethereum plus rollback on the pinned baseline and explicit future-fork profiles. | Open. |
 
+#### R01-R12 L1-lockstep execution order
+
+This is the deterministic upgrade algorithm for every supported Ethereum fork. Do not infer it
+from an EIP title:
+
+1. **R01 inventory and classify:** create the versioned `ethereum_compat_manifest` from final
+   canonical fork sources. For each included change record INHERIT, L1-COMPAT, L2-PARITY, OPTIONAL,
+   or RESEARCH; exact producer/consumer interfaces; source/client commits; and disabled features.
+2. **R02 reproduce both sides:** run old-fork, boundary-block, new-fork and mixed-client fixtures
+   with exact EL/CL/Engine/network/EVM/DA configuration.
+3. **R03-R05 bind correctness:** update the L1 verifier/settlement boundary and, only where the
+   compatibility profile requires it, L2 executor/state/prover/verifier semantics. Bind fork ID,
+   proof, state, data and receipt; never use host-trusted equivalence.
+4. **R06-R10 bind containing safety:** update finality/timing, based ordering, DA reconstruction,
+   bridge accounting, forced inclusion, exits and recovery for the new fork. Inherited L1 behavior
+   must still pass adversarial conformance before receiving latency/throughput credit.
+5. **R11 activate atomically:** version, migrate and roll back all affected adapters as one governed
+   manifest. Optional features remain rejected unless independently selected. Unknown or partial
+   support pauses new batches and preserves safe exits from the last supported finalized state.
+6. **R12 qualify:** before mainnet activation, run the full synthetic claim-to-finalized-Ethereum
+   path, canonical upstream/differential vectors, reorg, withholding, corruption, privacy scan,
+   resource/capacity measurement and one rollback on the exact release candidates.
+7. **Post-fork reconcile:** compare observed canonical blocks, receipts, DA, finality and bridge
+   conservation to the manifest before claiming any inherited benefit.
+
+The 23-EIP impact/trigger matrix in
+`ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` is the input contract for step 1. This sequence
+adds no package and cannot mark an R package complete without its existing acceptance evidence.
+
 ## Final independent Security Audit Gate - not counted
 
 The five former O07-O11 rows are audit workstreams, not engineering packages. After all 93

@@ -31,6 +31,13 @@ The frontier addendum `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` adds 
 conflict scheduling, versioned state-topology selection, proof-carrying external evidence, and
 maturity-gated Ethereum adapters inside the same 93-package plan.
 
+For implementation, every L1 change is classified as inherited consensus behavior, mandatory
+L1-interface compatibility, conditional L2 EVM/prover parity, optional adoption, or research-only.
+The exact per-EIP class, activation trigger, owner and tests are in
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. An inherited benefit is not zero work:
+the observer, timing, finality, DA, resource and recovery assumptions still require fork-specific
+conformance. An optional feature is never accepted merely because a client exposes it.
+
 `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` makes the state selection a mandatory Wave 2 gate:
 the existing SHA3-512 state proof is the control, and persistent sparse-memory, transparent-
 dictionary, touched-projection-RAM, shuffle-based memory, and native-hiding PQ commitment candidates
