@@ -322,6 +322,14 @@ manifest readback; clean driver-reset boundary; exclusive host; synthetic unique
 process-tree, pagefile, device, scratch, stdout/stderr, and driver monitoring; all focused,
 mutation, parser, state, migration, attack, and independent-verifier gates green.
 
+The fail-closed preflight is implemented in
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py`. It independently replays
+the unsealed Gate 2E terminal ledger, validates the reference hardware record, checks recursive
+byte identity of the real canonical `../ops` sibling against the app mirror, and freezes the
+one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
+preflight is `BLOCKED_H5_PREFLIGHT` with digest
+`8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435`; canonical ops is missing, reference hardware is not ready, the external monitor is not configured, and no complete-proof campaign has started. No CUDA/prover launch receives H5 credit from this record.
+
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |
 | K128/100-live | 1 | 10 | maximum of ten < 30.000000 s |

@@ -245,3 +245,29 @@ backend admission, missing complete simulator/leakage evidence, deferred H4 bind
 canonical `../ops`, and unset `proofSuiteId`. This is reference evidence only; do not start H5 or
 another complete-proof backend bake-off until a reviewed state plane is selected and atomically
 bound.
+
+## 12. H5 qualification preflight boundary
+
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now provides a read-only,
+fail-closed preflight for the next campaign. It independently replays the 11-record terminal
+ledger, validates the recorded reference hardware, checks the real canonical `../ops` sibling
+against the app-layer mirror, and freezes exactly one uncounted warm-up plus ten unique measured
+launches for each profile: 22 fresh launches total. It never starts CUDA, accepts cached proofs or
+witnesses, substitutes a failed run, assigns `proofSuiteId`, or authorizes activation.
+
+Current preflight evidence:
+
+```text
+status=BLOCKED_H5_PREFLIGHT
+preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+canonical_ops_status=MISSING_CANONICAL_SIBLING
+reference_hardware_status=NOT_READY
+fresh_launch_count=22
+proofSuiteId=None
+activation_allowed=False
+```
+
+The preflight focused/attack suite passed 6 tests in 44.60 seconds; the benchmark, S6/S7,
+terminal-ledger, and preflight containing set passed 61 tests in 117.72 seconds. The complete
+S1-S7 plus terminal-ledger and preflight set passed 79 tests in 175.33 seconds. These are test-run
+times, not complete-proof measurements.

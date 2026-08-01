@@ -237,6 +237,32 @@ must:
 Bind the selected state plane into
    the actual H4 parent, transcript, proof grammar, independent verifier, and atomic receipt.
 
+## 6.3 H5 qualification preflight
+
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` is the current bounded
+H5 boundary while admission is absent. It independently replays the terminal ledger, validates
+the reference hardware record, verifies the real canonical `../ops` sibling rather than copying
+the app mirror, and freezes one uncounted warm-up plus ten unique measured launches for each
+profile. The total is exactly 22 fresh launches. Cached proofs, cached witnesses, automatic retry,
+partial-campaign substitution, CUDA launch, `proofSuiteId`, and activation remain forbidden.
+
+The current record is:
+
+```text
+status=BLOCKED_H5_PREFLIGHT
+preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+canonical_ops_status=MISSING_CANONICAL_SIBLING
+reference_hardware_status=NOT_READY
+fresh_launch_count=22
+proofSuiteId=None
+activation_allowed=False
+```
+
+It remains blocked by the unsealed/unselected Gate 2E state, deferred H4 binding, incomplete
+simulator/leakage/strict-PQ evidence, missing canonical ops, unready reference hardware, absent
+external monitoring, absent source readback, and no complete-proof campaign. The preflight suite
+passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed.
+
 ## 7. Primary research record
 
 - Persistent/volatile memory AIPs: https://eprint.iacr.org/2024/979.pdf

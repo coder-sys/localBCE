@@ -4346,3 +4346,51 @@ identity, H5, H6, `proofSuiteId`, activation, or production throughput. The next
 boundary is a reviewed replacement state/commitment admission path or, while that remains absent,
 the fail-closed H5/H6 preflight and qualification ledger; no complete-proof run receives credit
 from this reference record.
+
+## 2026-08-02 H5 qualification preflight - BLOCKED
+
+The bounded H5 qualification preflight is now implemented in
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py`. It independently replays
+the terminal Gate 2E context, validates the reference hardware record, checks the actual canonical
+`../ops` tree against the app-layer mirror without creating or copying files, and freezes the exact
+campaign shape: one uncounted warm-up plus ten unique measured launches for each K128/K512 profile,
+22 fresh launches total. It never starts CUDA or accepts cached proofs, cached witnesses, retries,
+partial-campaign substitution, `proofSuiteId`, or activation.
+
+The current preflight record is:
+
+```text
+status=BLOCKED_H5_PREFLIGHT
+ledger_digest_sha3_512=2cbc9e48ea14e4e6dfeae9eebe46c34ad4ed551d63f946fcb696abc480c407d5893f7d29acd7349858e6ed9f496db121c1d00940504bc050f264502eae098964
+preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+protocol_id_sha3_512=a9aea0f7e884e867e10d93267038ee40500564cb68f7b5779fc40ec8a3fd43c05172ef955a0145d3da4db8da8f43799465917db2ebec57de7376ad3d7911d215
+canonical_ops_status=MISSING_CANONICAL_SIBLING
+reference_hardware_status=NOT_READY
+fresh_launch_count=22
+proofSuiteId=None
+activation_allowed=False
+blockers=gate_2e_ledger_unsealed,state_plane_unselected,h4_atomic_binding_deferred,complete_simulator_missing,complete_leakage_scan_missing,strict_pq_security_ledger_open,proof_suite_unselected,canonical_ops_missing,reference_hardware_not_ready,h5_campaign_not_started,h5_external_monitor_not_configured,h5_source_readback_not_captured,h5_no_qualified_evidence
+```
+
+Focused preflight and attack verification:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py
+6 passed in 44.60s
+```
+
+Containing evidence:
+
+```text
+benchmark + S6/S7 + terminal ledger + H5 preflight: 61 passed in 117.72s
+S1-S7 + terminal ledger + H5 preflight: 79 passed in 175.33s
+git diff --check: exit 0
+py_compile: exit 0
+```
+
+This does not run H5, close Gate 2E, select a state/commitment backend, close H6, assign
+`proofSuiteId`, activate, or establish production throughput. The exact canonical sibling
+`../ops` remains absent and the reference hardware is not ready because its recorded free disk
+(`59,091,513,344` bytes) is below the required headroom (`73,100,269,364` bytes). The next safe
+boundary is reviewed state/commitment admission and atomic H4 binding; no complete-proof launch
+receives credit before those gates close.

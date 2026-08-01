@@ -147,4 +147,11 @@ independent verifier, and receipt. H5 then runs one warm-up plus ten
 unique K128 and ten unique K512 proofs; H6 closes the theorem, simulator, parser, attack,
 reproducibility, resource, and identity obligations.
 
+The read-only H5 preflight now freezes that campaign boundary and returns
+`BLOCKED_H5_PREFLIGHT`: 22 fresh launches are required, but the current terminal ledger is
+unsealed, no state plane is selected, canonical `../ops` is missing, the reference hardware is
+not benchmark-ready, and no complete-proof campaign or external monitor has run. Its preflight
+digest is `8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435`. This does not assign
+`proofSuiteId`, authorize CUDA, or grant qualification credit.
+
 `proofSuiteId=null`, activation is false, and real PHI/payments remain forbidden.

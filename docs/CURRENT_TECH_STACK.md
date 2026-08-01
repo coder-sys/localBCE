@@ -353,6 +353,17 @@ without selecting a PQ backend because S3 admission is closed. Do not start the 
 campaign until one state plane is selected and atomically bound into the H4 parent, transcript,
 proof grammar, verifier, and receipt.
 
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now records that boundary
+without launching a prover. It independently replays the terminal ledger, freezes one uncounted
+warm-up plus ten unique measured launches for each K128/K512 profile (22 fresh launches total),
+checks the actual canonical `../ops` tree and reference-hardware readiness, and keeps cached
+proofs, cached witnesses, automatic retry, activation, and `proofSuiteId` disabled. The current
+record is `BLOCKED_H5_PREFLIGHT` with preflight digest
+`8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435`; it records
+`MISSING_CANONICAL_SIBLING`, `NOT_READY` reference hardware, no campaign, no external monitor,
+and the unresolved Gate 2E/H4/simulator/leakage/PQ blockers. This is a preflight ledger, not H5
+measurement or qualification evidence.
+
 ## Open boundaries and nonclaims
 
 - Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,
