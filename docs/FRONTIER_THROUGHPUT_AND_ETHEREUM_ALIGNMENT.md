@@ -1,10 +1,16 @@
 # Frontier throughput and Ethereum-alignment addendum
 
-Updated: 2026-07-22
+Updated: 2026-07-31
 
 Status: authoritative cross-wave research and implementation addendum. It adds acceptance work to
 existing packages; it does not add packages, reopen sealed Wave 1 semantics, select a proof suite,
 authorize real PHI, or make an unmeasured performance claim.
+
+Current proof checkpoint: the manifest-bound H4 heterogeneous prototype independently verifies
+K128 and four-shard K512 in 29.974129/120.460733 seconds. That evidence does not select the
+authenticated-state topology, close the mandatory gate 2E bake-off, satisfy H5's one-warm-up-plus-ten
+p95 campaign, qualify H6, or activate a suite. The state plane must be selected and bound before the
+repeat campaign so H5 measures the candidate that can actually advance to H6.
 
 ## Plain English
 
@@ -42,7 +48,7 @@ read/write streams, and are promoted only after folding has made them correspond
 - Keep `proofSuiteId=null` and activation false until existing qualification and downstream gates close.
 - Keep 93 internal packages. The work below belongs to existing Waves 2-6.
 - Treat end-to-end latency as a hard architecture gate on the reference Dell G15: a fixed-shape
-  K128 job carrying 100 live claims must produce and independently verify in under 60 seconds, and
+  K128 job carrying 100 live claims must produce and independently verify in under 30 seconds, and
   a fixed-shape K512 job carrying 500 live claims must do so in under 180 seconds. These targets do
   not relax any security, privacy, correctness, memory, scratch, or audit gate.
 
@@ -148,7 +154,7 @@ Admission control independently bounds CPU, GPU, RAM, scratch, I/O, public-coin 
 state-conflict pressure, and settlement/DA capacity. One scalar must not hide a saturated resource.
 
 Latency qualification uses unique synthetic batches, one uncounted warm-up, and ten measured
-steady-state runs. The input-to-independently-verified-output p95 must remain below 60 seconds for
+steady-state runs. The input-to-independently-verified-output p95 must remain below 30 seconds for
 K128/100-live and 180 seconds for K512/500-live. Reused witnesses, cached proofs, omitted privacy
 work, weaker parameters, swap dependence, or excluded verification time invalidate the run.
 
@@ -202,8 +208,10 @@ Hobbit are algorithmic controls for sequential streaming and space accounting on
 concrete group PCS is non-PQ, while Hobbit states only plausible PQ security and uses its own PCS,
 hash, Fiat--Shamir, and proof-size trade-offs; neither is a selectable Blind Ledger suite.
 
-WHIR, STIR, DEEP-commitment, and related transparent PCS work may be measured only after the primary
-path produces a complete K128 proof. A candidate gets no paper-benchmark credit and must use the
+The H4 primary path has now produced a complete one-run K128 prototype, so WHIR, STIR,
+DEEP-commitment, and related transparent PCS work may be measured only as isolated post-H4 research.
+No active-path replacement is permitted before the selected state plane, H5, and H6 close under the
+same gates. A candidate gets no paper-benchmark credit and must use the
 Blind Ledger field/hash/transcript/hiding profile, zero grinding credit, full error ledger,
 canonical bounded grammar, and Dell resource gates. Examples with roughly 80-100-bit security,
 shorter digests, Fiat--Shamir-only compilation, or no native hiding are ineligible.

@@ -1,10 +1,11 @@
 # Blind Ledger PQ-ZK claim-proof security architecture
 
-Updated: 2026-07-22
+Updated: 2026-07-31
 
-Status: selected target architecture with a real independently verified strict-parameter kernel
-proof and active Wave 2 throughput recovery; no complete K128 proof, stable proof-throughput
-benchmark, final suite identity, independent audit, or approval for real PHI.
+Status: selected target architecture with complete one-run H4 K128/K512 prototypes through
+independent verification and active Wave 2 qualification work. Gate 2E state selection, the H5
+repeated p95/resource benchmark, H6 suite identity, the final independent audit, and approval for
+real PHI remain open.
 
 Build boundary: the proof system, native hiding, strict-PQ suite, verifier, state, custody ports,
 tests, and qualification evidence are internal engineering packages. Independent reviewers do not
@@ -70,26 +71,26 @@ contingency prototype, not an audited shortcut.
 
 Current Wave 1 (historical Wave 1A) sealed the nonactivating executable relation. Current Wave 2
 (historical Wave 1B) owns the strict-PQ proof, native hiding, proof grammar, resource recovery, and
-complete K128 convergence. Current Wave 3 (historical Wave 1C) later owns authoritative durable
+complete K128/K512 convergence. Current Wave 3 (historical Wave 1C) later owns authoritative durable
 verifier/state/custody convergence. The final independent audit is outside the six internal waves.
 
 The real regression kernel proof is exactly 28,643,096 bytes at 945 queries and independently
-verifies. Two fresh worker runs took 50,070 ms and 47,178 ms. These are kernel results, not K128
-throughput. The v1 FRI encoding repeats adjacent paths and per-query openings; a canonical global
-multiproof for the exact same authenticated query list removes 15,171,200 bytes of existing path and
-value payload. This is theorem-neutral only if all query multiplicities remain bound, node order is
-canonical, roots are independently reconstructed, and the grammar version is suite-bound.
+verifies. Its two 50,070/47,178 ms worker runs and v1 multiproof de-duplication remain historical
+kernel/grammar evidence, not current complete-proof throughput. The active manifest-bound H4 path
+now combines the real semantic source, 168-layer native-masked GKR, Construction 8.2 PCS,
+dual-PQ-authenticated public coin, atomic one/four-shard coordinator, canonical parsing, and
+independent Rust verification. Fresh K128/K512 prototypes completed in 29.974129/120.460733 seconds
+with 288.412/296.255 MB internal host peaks, 681.607168/706.523136 MB external process-tree peaks,
+969.999360 MB per-proof tracked device state, 0.000000 MB scratch, and no accepted-attempt pagefile
+growth.
 
-Full K128 remains resource-blocked, but the release architecture has changed. The 9.03 TB
-monolithic, 950.76 GB streamed, and 554.26 GB de-duplicated direct-SHA3-STARK layouts are retired,
-not fallbacks. Wave 2 implements the shared-bus Boolean GKR hash coprocessor defined in
-`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. Exact 25-state bit-packed K128 storage is
-568,650,000 bytes; the `w=1,600` raw-state-layer baseline is 3,591,988,768 bytes and `w=2,048` is
-4,407,205,408 bytes. Both raw all-Fp16 baselines leave bounded but unproven room under the current
-release RAM limit before generated padded width or overhead. Hard qualification limits are no more
-than 5,000,000,000
-peak resident bytes and strictly below 5,000,000,000 scratch bytes, with no swap, on the reference
-laptop; these are models and gates, not a completed prover result.
+The 9.03 TB monolithic, 950.76 GB streamed, 554.26 GB de-duplicated direct-SHA3-STARK layouts, and
+3.59/4.41 GB raw all-Fp16 GKR baselines are historical rejection or differential evidence, not
+fallbacks. The current compact joined row state is 12.058624 MB. H4 therefore resolves the former
+raw proof-engine resource block, but it does not qualify the product: gate 2E must select and bind
+the authoritative state plane before H5's repeated campaign, and the complete simulator/security
+composition plus H6 remain open. Hard limits remain 5,000,000,000 peak resident bytes, strictly
+below 5,000,000,000 scratch bytes, and no swap on the reference laptop.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
@@ -130,15 +131,17 @@ remain unselected and require construction-specific assumption, parameter, hidin
 custody, quantum knowledge-soundness, and independent-verifier review; none may silently replace
 the transparent base proof or an authoritative state commitment.
 
-The 2026-07-26 frontier review adds implementation refinements inside this selected shape; it does
-not select a new suite. The GKR candidate combines Keccak-specific layer algebra, exact
+The 2026-07-26 preselection frontier review added implementation refinements inside this selected
+shape; it did not select a suite. Its GKR candidate combined Keccak-specific layer algebra, exact
 M31-to-Fp16 tower-field and small-value sumcheck, and persistent bounded device state. The PCS
-candidate combines unequal-height/jagged commitments with tile streaming and a proved-distance
+candidate combined unequal-height/jagged commitments with tile streaming and a proved-distance
 linear code selected by an exact Fp16 unique-decoding/256-bit security bake-off. VEIL and recent ZK
 sumcheck/code-composition results are simulator candidates around that exact transcript. Groth16,
 KZG, Fiat--Shamir-only, binary-field-only, conjectural list-decoding, distributed-server, and
-128-bit lattice headline results remain non-importable. `docs/PROVING_OPTIMIZATION_REVIEW.md`
-contains the source-by-source disposition and staged measurements.
+128-bit lattice headline results remain non-importable. The later selected H4 PCS is Construction
+8.2 with random-padded interleaved RS; jagged/DeepFold/BaseFold paths are retained only as rejected
+or differential controls. `docs/PROVING_OPTIMIZATION_REVIEW.md` contains the source-by-source
+disposition and staged measurements.
 
 ## What is observed, inferred, and selected
 
@@ -146,7 +149,7 @@ contains the source-by-source disposition and staged measurements.
 | --- | --- | --- |
 | Observed | The current application manifest defines exactly 12 ordered `bytes32` values, and the Solidity boundary requires each value to be a canonical Stark-field element. | `ops/native_stark_public_inputs_v2.json`; `contracts/src/stark/StarkBatchSettlementV2.sol` |
 | Observed | Current S-two does not provide zero knowledge and exposes unmasked commitments to witness values. | https://docs.starknet.io/learn/S-two-book/why-stwo |
-| Observed | The current denied path requires `nullifierRootAfter == nullifierRootBefore`. | `experiments/risc0_privacy_v2/model/src/lib.rs` |
+| Historical observed | The legacy RISC Zero denied path required `nullifierRootAfter == nullifierRootBefore`; the sealed Wave 1 relation instead uses witness-class-independent attempt/cover transitions. | `experiments/risc0_privacy_v2/model/src/lib.rs`; `STATE.md` |
 | Observed | The current settlement commitment hashes version, domain, nonce, and fields 9 and 10; it does not directly bind roots 3 through 8. | `experiments/risc0_privacy_v2/model/src/lib.rs` |
 | Observed | The verified RISC Zero qualification proved only the commitment envelope. The complete RISC-V claim computation was measured as operationally unsuitable, and its default security target does not establish strict 128-bit quantum security. | `STATE.md`; `docs/PRIVACY_V2_INTERNAL_AUDIT.md`; RISC Zero official security statement |
 | Inferred | Salting public outputs cannot repair an unmasked STARK transcript or a public before/after-root equality leak. | The proof transcript and public statement are separate privacy channels. |
@@ -303,13 +306,11 @@ construction, zero/denominator bad-event accounting, abort/retry freshness, and 
 composition. Until those items are proved and independently reviewed, complete-hiding and
 suite-selection claims remain forbidden.
 
-The same restriction applies explicitly to the Boolean-GKR layer. The implemented per-round
-correction chooses two fresh Fp16 values and therefore makes each quadratic uniform conditioned on
-the public incoming claim. That fact does **not** simulate the full GKR transcript: the current
-layer proof and authenticated mixing message publish both raw terminal polynomial evaluations.
-Once published, those values cannot be hidden by the later PCS. Replacing them by independently
-masked values plus a free correction would make every false terminal relation satisfiable and is
-therefore forbidden.
+The same restriction applies explicitly to the Boolean-GKR layer. A historical per-round-only
+correction made each quadratic uniform conditioned on the public incoming claim but still published
+raw terminal evaluations. That form was not zero knowledge and is retired; downstream PCS could not
+hide already-published values, while an unconstrained free correction would have destroyed
+soundness.
 
 The bounded repair candidate is the primary construction in Xie et al.,
 [*Libra*, Sections 4.1--4.2](https://www.iacr.org/archive/crypto2019/116940229/116940229.pdf).
@@ -317,19 +318,20 @@ Its sumcheck compiler commits a small polynomial
 `g(x)=a0+sum_j g_j(x_j)` before the verifier selects the nonzero mixing scalar, then opens `g` at
 the terminal point. Its GKR compiler replaces each layer MLE by a vanishing-domain randomized
 extension and uses one bivariate, individual-degree-two `R_i(z1,w)` per layer; the four revealed
-linear observations are proven independent through the committed openings. This is an
-architectural mapping only. Libra's original zkVPD/setup assumptions are not admitted. Blind
-Ledger must instantiate every `g_i` and `R_i` commitment/opening inside its transparent
-SHA3-512/Fp16 PCS, bind them before the relevant authenticated challenges, account for
-`u_1=v_1` and every other abort event at the 256-bit security/encryption floor, and prove
-composition with the selected Construction 8.2 random-padded interleaved-RS wrapper. DeepFold
-does not supply that composition theorem. Until the exact selected derivation passes, GKR hiding
-and the complete simulator remain open.
+linear observations are proven independent through the committed openings. That paper-to-design
+rationale was an architectural mapping only; Libra's original zkVPD/setup assumptions are not
+admitted. The H4 prototype now instantiates the selected native mask as 23,544 used coefficients in a
+32,768-coefficient commitment, proves 508 mask constraints per shard, commits 64 dimension-512 GKR-
+mask codewords, and includes them in the 73-word Construction 8.2 auxiliary plane before
+authenticated challenges. Production verifiers reject pre-mask and incomplete formats. This is
+implementation and one-run verification evidence, not final simulator/security qualification:
+exact distribution, abort/bad-event, retry-freshness, cross-module/state composition, H5, and H6
+still must close at the 256-bit floor. DeepFold supplies none of that credit.
 
 ### Uniform nullifier transition
 
-The current public equality of the before and after roots cannot be hidden by proof masking.
-`BL-PQ512-v1` therefore defines:
+Any public equality of the before and after roots cannot be hidden by proof masking. The legacy
+denied/padding equality therefore motivated these `BL-PQ512-v1` rules:
 
 - every real claim, approved or denied, inserts a canonical attempt nullifier;
 - corrected or resubmitted claims require a governed revision or attempt identifier;
@@ -591,7 +593,7 @@ not proof that the side channel is closed.
 | Backend | Selected role | Production privacy status |
 | --- | --- | --- |
 | S-two/Circle-STARK sibling | Algebra/PCS base for the M31 semantic module only; upstream QM31/hash/transcript defaults remain rejected. | Internal build blocked until semantic hiding and strict-PQ implementation qualify. |
-| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path, with SHA3-512 commitments and authenticated interactive public coin. | Blocked until the exact bridge, masks, simulator, theorem ledger, atomic verifier, resource gates, and full K128 proof pass. |
+| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path, with SHA3-512 commitments and authenticated interactive public coin. | H4 passes the real bridge, native masks, Construction 8.2 PCS, atomic verifier, one-run resource gates, and K128/K512 prototypes. State/composition qualification, H5, H6, and activation remain open. |
 | Shout-like/Twist-like memory checking | Read-only governed-table and read/write replay/payment bake-off against the current endpoint-multiproof/sorted-memory control. | Research only until the exact SHA3-512 root bridge, Fp16/public-coin composition, hiding, fixed-shape privacy, attacks, and K128 resource evidence pass. |
 | Persistent sparse-memory / transparent dictionary / projection RAM | Mandatory Wave 2 state-replacement bake-off under one versioned interface; current SHA3 tree remains the control. | Unselected until exact semantic equivalence, native hiding, strict-PQ theorem, SHA3-512 state identifier, migration attacks, independent verifier, and full laptop evidence pass. |
 | Jindo / Grand Danois / Hachi / RoKoko-style PQ commitments | Isolated commitment/compression candidates for the mandatory state bake-off. | No primitive-name credit: exact assumptions, 256-bit security/encryption parameters, adaptive binding, knowledge soundness, evaluation hiding, public-coin composition, grammar, license, and implementation must qualify. |
@@ -602,8 +604,8 @@ not proof that the side channel is closed.
 | Existing Cairo/S-two program | Semantic/KAT and performance reference. | Validity-only; never process real PHI or publish as a private receipt. |
 
 No currently available backend is a production-ready drop-in satisfying fixed-shape claim semantics,
-audited witness hiding, exact Starknet compatibility, and strict 128-bit quantum security. The
-selected architecture is feasible, not already delivered.
+audited witness hiding, exact settlement compatibility, and strict 128-bit quantum security. The
+selected architecture now has a delivered H4 prototype, not a qualified or production suite.
 
 The suite lifecycle is `UNSELECTED` -> `BUILT_AUDIT_PENDING` -> `AUDIT_ACCEPTED`. The repository is
 currently `UNSELECTED` with `proofSuiteId=null`; internal engineering may advance it only through
@@ -676,9 +678,10 @@ outputs. It is validity-only and does not implement witness hiding, the custom c
 shadow state, or the selected proof-system security parameters.
 
 The existing custom AIR and S-two measurements demonstrate that an application-specific AIR can be
-dramatically smaller than a general VM statement, but they do not implement the complete claim,
-witness hiding, or `BL-PQ512-v1`. No proof-time or proof-size target is claimed until the complete
-synthetic statement is measured.
+dramatically smaller than a general VM statement, but they do not implement the selected complete
+claim, witness hiding, or `BL-PQ512-v1`. The later H4 heterogeneous prototype is the current
+proof-time evidence: 29.974129 seconds for K128 and 120.460733 seconds for K512. Those one-run
+measurements do not substitute for gate 2E, the complete simulator/security ledger, H5 p95, or H6.
 
 ## Implementation handoff
 

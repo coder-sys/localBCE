@@ -1,6 +1,6 @@
 # Experimental proving and privacy architecture
 
-Current interpretation (2026-07-22): this document records historical experiments, not the active
+Current interpretation (2026-07-31): this document records historical experiments, not the active
 release architecture. The current Wave 2 path is the heterogeneous M31 semantic-STARK/shared-bus/
 Fp16 Boolean-GKR SHA3 construction in
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. Measurements below are controls only and must not
@@ -91,9 +91,9 @@ is small enough that scheduling and memory overhead dominate.
 ### Security boundary
 
 This custom AIR does not yet bind claim identities, claim/result/payment Merkle roots, policy or
-oracle evidence, permanent nullifiers, encrypted audit data, accumulators, or the production
-21-field public-input schema. Its sub-second result cannot be compared to the full Cairo proof as
-if it were a drop-in speedup. It is a verified prototype for one extracted statement.
+oracle evidence, permanent nullifiers, encrypted audit data, accumulators, or the then-current
+experimental 21-field settlement-input schema. Its sub-second result cannot be compared to the full
+Cairo proof as if it were a drop-in speedup. It is a verified prototype for one extracted statement.
 
 At the time of this historical experiment, production replacement would have required all of the
 following. The current H0-H6 contract supersedes this list for active implementation:

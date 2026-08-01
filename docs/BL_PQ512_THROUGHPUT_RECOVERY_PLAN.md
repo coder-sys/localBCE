@@ -27,10 +27,16 @@ superseded as acceptance criteria by the owner's later low-hundreds-of-MB host d
 remain dated evidence. The immutable 5,000 MB RSS, below-5,000 MB scratch, and no-swap gates are
 unchanged.
 
-The next execution boundary is H5: one uncounted warm-up plus ten unique K128 and K512 batches
-through independent verification, followed by H6 suite qualification. The 256-bit
-security/encryption, simulator, privacy, 5,000,000,000-byte peak-RAM, below-5,000,000,000-byte
-scratch, no-swap, and activation gates do not move.
+The next architecture dependency is gate 2E: select and atomically bind the authenticated-state/PQ-
+commitment plane used by the candidate that will be qualified. Only then run H5's one uncounted
+warm-up plus ten unique K128 and K512 batches through independent verification, followed by H6 suite
+qualification. The 256-bit security/encryption, simulator, privacy, 5,000,000,000-byte peak-RAM,
+below-5,000,000,000-byte scratch, no-swap, and activation gates do not move.
+
+The current integration checkpoint above and the newest dated section below control execution
+status. Intermediate sections preserve chronological requirements and evidence; any use of
+"current," "next," or "open" inside an older dated stage is scoped to that stage and is superseded
+for status purposes without changing its raw measurement or rejection evidence.
 
 ### 2026-07-28 sub-30 architecture checkpoint
 
@@ -59,7 +65,8 @@ and integration risk even though its isolated arithmetic is fast.
 
 ### 2026-07-29 Construction 8.2 correction and live integration state
 
-Status: **SELECTED NONACTIVATING ATTEMPT ARCHITECTURE; COMPLETE FRESH PROOF NOT YET RUN**.
+Historical status at this checkpoint: **SELECTED NONACTIVATING ATTEMPT ARCHITECTURE; COMPLETE FRESH
+PROOF NOT YET RUN**. The current H4 result is in the 2026-07-31 section.
 
 This checkpoint supersedes the 2026-07-28 BaseFold selection and its 26.859692-second accounting
 where they conflict. The seven-layer/B=16 relay-free GKR topology remains selected. The PCS is now
@@ -189,10 +196,10 @@ or pre-reset GPU run receives evidence credit.
 
 The sealed claim relation is not being discarded. Its semantics, exact 12-field ABI, fixed-shape
 privacy, SHA3-512 commitments, dual-PQ authority, replay protection, and economic conservation are
-the correct safety boundary. The current proof engine around that relation is not release-feasible:
-it repeats Merkle authentication data, duplicates disk layouts, and applies a generic wide-column
-PCS path to a SHA3-heavy relation. Those are engineering and proof-topology problems, not reasons to
-weaken the statement.
+the correct safety boundary. The pre-recovery direct proof engine around that relation was not
+release-feasible: it repeated Merkle authentication data, duplicated disk layouts, and applied a
+generic wide-column PCS path to a SHA3-heavy relation. Those were engineering and proof-topology
+problems, not reasons to weaken the statement.
 
 The active wave therefore has two independent jobs:
 
@@ -203,13 +210,15 @@ The active wave therefore has two independent jobs:
 A smaller proof does not by itself prove faster generation. A streamed prover that fits on disk does
 not by itself satisfy the throughput objective. Both gates must close independently.
 
-The architecture bake-off has now produced a primary implementation path:
+The architecture bake-off produced the primary implementation path:
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. Wave 2 keeps the sealed M31 semantic AIR but
 removes its six internal SHA3 tables from the generic wide-column release PCS. One canonical
 committed hash-call bus binds that AIR atomically to a data-parallel Boolean GKR/sumcheck
 coprocessor over Fp16. The 554-951 GB direct-SHA3-STARK layouts are retired release architectures,
-not fallbacks. This is an implementation priority, not suite activation; the bridge, masking,
-simulator, exact theorem ledger, and full K128 proof still have to pass fail-closed qualification.
+not fallbacks. H4 now passes the real bridge, native masking, Construction 8.2 PCS, atomic verifier,
+one-run resource gates, and K128/K512 prototypes. This remains an implementation priority, not suite
+activation: gate 2E, the complete simulator/security composition, H5, and H6 still have to pass
+fail-closed qualification.
 
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` adds the next measured layer: a privacy-padded
 access manifest, exact state/conflict census, deterministic conflict DAG, and authenticated-state
@@ -1349,5 +1358,6 @@ doc-test group, strict all-target Clippy with zero warnings, all seven host cryp
 rejections, and static CUDA compilation of 36 entry points. The PTX is 3.494439 MB with SHA-256
 `B1F826445F2630517E250CE4BBB5E694ADC61620BEED5684C6EE09197EBBEF73`.
 
-H4's functional and single-run latency prototype boundary is closed. H5 and H6 remain open;
-qualification and activation remain false and `proofSuiteId` remains null.
+H4's functional and single-run latency prototype boundary is closed. Gate 2E must next select and
+bind the authenticated state plane; H5 and H6 remain open after it. Qualification and activation
+remain false and `proofSuiteId` remains null.

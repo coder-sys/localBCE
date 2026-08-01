@@ -1,16 +1,19 @@
 # BL-PQ512 committed sparse-state and PQ commitment plan
 
-Updated: 2026-07-26
+Updated: 2026-07-31
 
 Status: mandatory Wave 2 research, implementation, and selection gate. This document does not
 select or activate a proof suite or state layout. `proofSuiteId` remains null, production use is
 forbidden, and real PHI or payment credentials remain forbidden.
 
-Current evidence boundary: read `../WAVE2_HANDOFF_2026-07-26.md`. The active GPU-PCS integration
-does not qualify, replace, or close this state-selection gate. The 782/706 integration controls are
-not canonical state derivations, and every semantic-equivalence, fixed-shape leakage, atomic CAS,
-equivocation, rollback, reorg, recovery, and 256-bit security/encryption composition obligation below
-remains open.
+Current evidence boundary: read the newest dated section of `../STATE.md`; the original transfer
+record is `../WAVE2_HANDOFF_2026-07-26.md`. The H4 GPU/GKR/Construction 8.2 prototype now passes one
+K128 and one four-shard K512 attempt through independent verification, but it does not qualify,
+replace, or close this state-selection gate. The historical 782/706 controls were not canonical
+state derivations. Every candidate's semantic-equivalence, fixed-shape leakage, atomic CAS,
+equivocation, rollback, reorganization, recovery, migration, and 256-bit security/encryption
+composition obligations below remain open. H5 must run only after this gate selects and binds the
+state plane used by the candidate being qualified.
 
 ## 1. Decision
 
@@ -165,7 +168,7 @@ The selected candidate must:
   classical authority on a Blind Ledger-controlled boundary;
 - remain at or below 5,000,000,000 peak resident bytes and strictly below 5,000,000,000 scratch
   bytes without swap on the reference Dell G15; and
-- contribute to a complete K128/100-live p95 below 60 seconds and K512/500-live p95 below 180
+- contribute to a complete K128/100-live p95 below 30 seconds and K512/500-live p95 below 180
   seconds under the frozen full-boundary method.
 
 Failure of a paper number, asymptotic claim, microbenchmark, or isolated state proof to meet these

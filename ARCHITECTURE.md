@@ -138,7 +138,8 @@ the current suite, latency evidence, or release status.
 
 The state plane remains unselected: `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` requires the
 current SHA3-512 endpoint-multiproof path and all admitted sparse-state/PQ-commitment candidates to
-be implemented and measured before the complete K128/K512 proof gate.
+be implemented and measured before the H5 repeated K128/K512 qualification campaign. The H4
+one-run prototype does not select a state layout or close gate 2E.
 
 The next measured boundary is authenticated state: 46,208 of 46,858 K128 SHA3 calls arise from
 replay/payment state. Current maps remain authoritative while a versioned topology bake-off,
@@ -147,12 +148,16 @@ projections are not proof-throughput results.
 
 ## Operational artifact layout
 
-Two `ops` locations are present intentionally:
+The required package layout has two `ops` locations:
 
-- `../ops/` is required by code that hashes policy artifacts using a sibling path from the app layer.
-- `ops/` inside this directory is a compatibility mirror for readiness tests and app-root tooling.
+- `../ops/` is the canonical sibling required by code that hashes policy artifacts.
+- `ops/` inside this directory is the compatibility mirror for app-root tooling.
 
-The contents must remain byte-identical. Do not edit policy YAML or verifier pin files to hide layout failures.
+The 2026-07-31 readback found 14 files in the compatibility mirror and no `../ops/` directory in
+this authoritative workspace. The trees therefore cannot currently be claimed byte-identical, and
+ops/readiness tests correctly fail closed with `FileNotFoundError` or mirror mismatch. Restore the
+exact canonical sibling from authoritative recovery material and verify recursive byte identity;
+do not synthesize it, edit policy YAML, or change verifier pins merely to hide the layout failure.
 
 ## Proof artifacts
 

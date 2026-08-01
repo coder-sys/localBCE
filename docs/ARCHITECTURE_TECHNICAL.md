@@ -1,12 +1,16 @@
 # Technical architecture
 
-Updated: 2026-07-26
+Updated: 2026-07-31
 
-Execution checkpoint: read `../WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 path is an untrusted
-arithmetic accelerator inside the existing heterogeneous topology, not a new trust boundary.
-Rust remains authoritative for SHA3-512, transcript, commitments, multiproofs, and verification.
-The combined proof has not completed, so the architecture and all activation gates remain
-unchanged.
+Execution checkpoint: read the newest dated section of `../STATE.md`; the original transfer record
+is `../WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 path is an untrusted arithmetic accelerator inside
+the existing heterogeneous topology, not a new trust boundary. Rust remains authoritative for
+SHA3-512, transcript, commitments, multiproofs, public-coin replay, canonical parsing, and final
+verification. The manifest-bound H4 prototype now completes the real 168-layer native-masked GKR,
+Construction 8.2 PCS, and one/four-shard coordinator through independent verification in
+29.974129 seconds for K128 and 120.460733 seconds for K512. This closes only H4's one-run prototype
+boundary. Gate 2E state selection, H5's repeated p95 campaign, H6 suite qualification, every
+activation gate, and `proofSuiteId=null` remain unchanged.
 
 The target protocol is defined in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`: an Ethereum-settled based validity rollup with private Blind Ledger claim proofs verified inside the L2 and a rollup validity proof verified on Ethereum L1.
 
@@ -27,11 +31,12 @@ maturity-gated Ethereum adapters inside the same 93-package plan.
 `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` makes the state selection a mandatory Wave 2 gate:
 the existing SHA3-512 state proof is the control, and persistent sparse-memory, transparent-
 dictionary, touched-projection-RAM, shuffle-based memory, and native-hiding PQ commitment candidates
-must be implemented and measured before the complete K128/K512 proof gate.
+must be implemented and measured before the H5 repeated K128/K512 qualification campaign. The H4
+prototype is proof-engine evidence, not state-layout selection.
 
 ## Runtime boundaries
 
-Blind Ledger separates operational concerns into four trust boundaries:
+Blind Ledger separates operational concerns into six trust boundaries:
 
 | Boundary | Main paths | Notes |
 | --- | --- | --- |
@@ -62,7 +67,11 @@ Public L1/L2 data contains only public state, roots, commitments, and proofs. PH
 
 The archive root is a wrapper. The source root is `blind-ledger-app-layer/`.
 
-`../ops/` and `ops/` are both present by design. The sibling `../ops/` supports code paths that hash policy artifacts outside the app root; the app-root `ops/` supports readiness checks and tools that resolve paths from the source root. These trees must stay byte-identical.
+The design requires both `../ops/` and `ops/`. The sibling `../ops/` is canonical for code paths
+that hash policy artifacts outside the app root; the app-root `ops/` is its compatibility mirror.
+The 2026-07-31 workspace readback found 14 mirror files but no canonical sibling directory, so
+readiness and attack suites fail closed before their substantive assertions. The exact canonical
+tree must be recovered and recursively matched; the mirror must not be promoted by assumption.
 
 Forge support is under `../third_party/forge-std/`. The app-layer root Foundry config points there, and the contracts subproject also resolves the same sibling dependency.
 

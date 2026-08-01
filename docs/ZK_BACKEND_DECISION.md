@@ -2,12 +2,13 @@
 
 Original qualification decision: 2026-07-12
 
-Updated: 2026-07-22
+Updated: 2026-07-31
 
 Status: the RISC Zero qualification remains valid historical evidence, but its selection as the
 leading production path is superseded by `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`. The custom strict-PQ
-kernel now produces a real independently verified proof; complete K128 proof/resource convergence
-and final suite selection remain open.
+path now produces manifest-bound K128 and four-shard K512 H4 prototypes through independent
+verification in 29.974129/120.460733 seconds. Gate 2E state selection, the H5 repeated p95/resource
+campaign, H6 suite qualification, and final suite selection remain open.
 
 `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` separates internal implementation from the final audit.
 No external party is required to choose or build the backend. The exact internally qualified suite
@@ -20,6 +21,8 @@ The selected target is heterogeneous: a fixed-shape application-specific M31 sem
 shared-bus Boolean GKR SHA3 coprocessor over Fp16, both under one native-hiding,
 dual-PQ-authenticated interactive public-coin session and the `BL-PQ512-v1` shadow-state profile.
 S-two/Circle-STARK remains the algebra/PCS basis for the semantic module, not the SHA3 coprocessor.
+The H4 bus PCS is Construction 8.2 of ePrint 2026/391 over random-padded interleaved
+Reed--Solomon codewords; zkDeepFold/BaseFold remains a retired differential control.
 
 Current Wave 1 (historical Wave 1A) seals the synthetic nonactivating executable relation. Current
 Wave 2 (historical Wave 1B) owns the theorem-matched proof and throughput recovery; current Wave 3
@@ -27,18 +30,21 @@ Wave 2 (historical Wave 1B) owns the theorem-matched proof and throughput recove
 `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md`.
 
 Frontier candidates in `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` are conditional bake-offs,
-not a replacement decision. The heterogeneous path remains primary until complete K128 evidence
-under identical security/resource gates proves otherwise.
+not a replacement decision. The H4 K128/K512 evidence strengthens the heterogeneous primary path.
+An alternative may replace it only after complete evidence under the identical statement,
+security, privacy, state, resource, repeat-campaign, and independent-verification gates proves a
+strictly better feasible point.
 
 The v1 regression kernel proof is exactly 28,643,096 bytes at 945 queries. The authoritative
 `BLPQPRF2` path independently verified a 6,755,933-byte compact proof in its latest real dual-PQ run;
-it is not a complete K128 proof. The 9.03 TB monolithic, 950.76 GB streamed, and 554.26 GB
-de-duplicated direct-SHA3-STARK layouts are retired release architectures. Wave 2 must implement
-`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`, compact theorem-neutral grammar, prove the masked
-shared-bus composition, and produce a complete verified K128 proof under the
-`<=5,000,000,000`-byte peak-RSS / `<5,000,000,000`-byte scratch / no-swap reference-laptop gates.
-No backend is selected merely because its toy proof is fast or
-small.
+that compact result is historical pre-H4 grammar evidence rather than a complete application proof.
+The active Construction 8.2 H4 path now completes K128/K512 through independent verification with
+288.412/296.255 MB internal host peaks, 969.999360 MB per-proof tracked device state, and
+0.000000 MB scratch. The 9.03 TB monolithic, 950.76 GB streamed, and 554.26 GB de-duplicated
+direct-SHA3-STARK layouts remain retired. These one-run results do not select the suite: 2E state
+selection, the complete simulator/composition ledger, H5/H6, and the final identities remain open.
+No backend is selected merely because a toy, kernel, component, or single successful proof is fast
+or small.
 
 R24's exact pre-implementation continuation is
 `docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md`. It permanently rejects the current
@@ -53,7 +59,8 @@ Successor Wave 1 work replaced that handoff with the sealed executable relation 
 SHA3 schedule. This chronology does not change the rejected-suite decision, `proofSuiteId=null`, or
 activation status.
 
-R35 is now building that sibling backend. Its current Python/`no_std` Rust scalar references cover
+R35 was the historical sibling-backend construction stage. Its Python/`no_std` Rust scalar
+references covered
 Fp8-excluding OODS, conjugate-pair degree correction, Circle-FRI folds, and typed SHA3-512 mixed-
 domain commitments. The Python control plane adds unselected theorem-parameter candidates, exact
 typed challenge ordering, mandatory pre-challenge FRI masks, and the pre-dense-schedule 16-table hiding worksheet.
@@ -74,7 +81,9 @@ oracle bundle per claim plus one ordered execution root; a separate audit tree r
 digests. Together with the compact dense claim tree this costs 14,322/28,644/57,288 permutations at
 K128/K256/K512. Non-dense
 application-port scheduling, final split log-degree/prover integration and lookup-interaction expansion, the Circle simulator, production scalar/SIMD prover/verifier,
-parameter selection, and proof-level qualification remain open.
+parameter selection, and proof-level qualification were open at that checkpoint. The later H4
+Construction 8.2 implementation supersedes that implementation status without rewriting the R35
+evidence.
 
 This is not approval to publish current S-two receipts for private witnesses. Current S-two is
 validity-only. Its production role remains blocked until all trace, quotient, DEEP, FRI, lookup,
@@ -88,7 +97,7 @@ Backend roles are now:
 | Backend | Role |
 | --- | --- |
 | S-two/Circle-STARK | Primary algebra/performance base for the custom sibling implementation. Upstream QM31, hash, Fiat-Shamir, grinding, and non-hiding defaults are not BL-PQ512 parameters. |
-| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path. The all-Fp16 prover is the control for a subfield-first streamed candidate; both retain full Fp16 challenges. Unselected until the exact bridge, masks, simulator, theorem ledger, atomic verifier, resource gates, and full K128 proof pass. |
+| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path. H4 passes the real bridge, native masks, Construction 8.2 PCS, atomic verifier, one-run resource gates, and complete K128/K512 prototypes. The state/composition ledger, repeated H5 campaign, H6 suite qualification, and activation remain open. |
 | Shout-like/Twist-like memory checking | Nonactivating read-only/read-write state bake-off against the optimized endpoint-multiproof/sorted-memory control; it must preserve the SHA3-512 root bridge and exact Blind Ledger transcript/security profile. |
 | Persistent memory / IRONDICT-derived dictionary / projection RAM / Two-Shuffles relation | Mandatory Wave 2 committed sparse-state bake-off behind one state interface. Published pairing, KZG, VOLE, structured-setup, random-oracle, or two-party backends are not adopted. |
 | Jindo / Grand Danois / Hachi / RoKoko-style commitments | Isolated native-hiding PQ commitment experiments for the state bake-off. Each remains unselected pending exact assumptions, parameters, field mapping, public-coin composition, grammar, independent verifier, and laptop evidence. |
@@ -99,10 +108,10 @@ Backend roles are now:
 | Existing Cairo/S-two statement | Semantic, known-answer, and performance reference only; it is not witness-hiding. |
 
 No currently available backend is a production-ready drop-in satisfying the complete claim,
-audited witness hiding, authenticated interactive public coin, exact Starknet compatibility, and
-the selected strict quantum target. The application relation and a real proof kernel exist; complete
-K128 private-proof implementation, resource qualification, authoritative state, and final suite
-identity remain open.
+audited witness hiding, authenticated interactive public coin, exact settlement compatibility, and
+the selected strict quantum target. The application relation and H4 K128/K512 prototypes exist;
+qualified repeated proof/resource evidence, authoritative state, production settlement verifier,
+and final suite identity remain open.
 
 ## Historical 2026-07-12 qualification decision
 

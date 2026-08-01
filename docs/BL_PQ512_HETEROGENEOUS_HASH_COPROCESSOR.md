@@ -4,15 +4,16 @@ Updated: 2026-07-31
 
 Status: authoritative Wave 2 architecture and qualification contract. This selects an implementation
 priority, not a production proof suite. `proofSuiteId` remains null, activation and real PHI/payment
-use remain forbidden, and every theorem and measurement gate below remains fail closed.
+use remain forbidden, and every unresolved theorem and measurement gate below remains fail closed.
 
 Current evidence boundary: the newest dated section of `../STATE.md` supersedes the transfer-time
 status in `../WAVE2_HANDOFF_2026-07-26.md`. The real semantic source, 168-layer GKR producer,
 native masks, Construction 8.2 PCS, authenticated public coin, atomic one/four-shard coordinator,
 and independent Rust verifier now complete together. Fresh manifest-bound K128 and K512 prototypes
 passed in 29.974129 and 120.460733 seconds with zero scratch, zero accepted-attempt pagefile growth,
-and zero post-reset driver events. The architecture remains nonactivating and unqualified until
-H5's warm-up-plus-ten p95 campaign and H6 close.
+and zero post-reset driver events. The architecture remains nonactivating and unqualified: gate 2E
+must select and bind the state plane before H5's warm-up-plus-ten p95 campaign, and H6 must then
+close.
 
 ## 1. Decision
 
@@ -869,9 +870,11 @@ gates close.
 
 ## 2026-07-30 H3 prototype closure
 
-After the clean `2026-07-29 23:17:48 -06:00` reboot boundary, the corrected real-GKR/PCS path
-completed a fresh segment-32 proof through independent verification in 28.943126 seconds
-externally. The proof process measured 28.177317 seconds. Its dominant authenticated GKR head was
+The corrected real-GKR/PCS path completed a fresh segment-32 proof through independent verification
+in 28.943126 seconds externally after the `2026-07-29 23:17:48 -06:00` reboot. A later System-log
+audit invalidated that reboot as a clean driver-integrity boundary, so this historical run receives
+no reset or qualification credit; the accepted 2026-07-31 H4 attempts supersede it. The proof
+process measured 28.177317 seconds. Its dominant authenticated GKR head was
 12.724326 seconds, compact PCS row sumcheck was 3.348778 seconds, and independent opening lane was
 2.740147 seconds. The complete PCS mechanics clock was 20.745883 seconds.
 
@@ -1028,7 +1031,8 @@ K128/K512 internal host peaks were 288.412/296.255 MB; external process-tree pea
 sampler observed 2,770.337792 MB total GPU residency across active/standby contexts. Both accepted
 attempts used 0.000000 MB scratch and had no pagefile growth. These figures are decimal MB.
 
-The H4 functional and one-run latency prototype is closed. H5 still requires one uncounted warm-up
-plus ten unique K128 and K512 batches, p95 measurement, and the complete recorded resource
-campaign. H6 and downstream activation remain open. `proofSuiteId=null`,
+The H4 functional and one-run latency prototype is closed. Gate 2E must now select and bind the
+authenticated state plane. H5 then requires one uncounted warm-up plus ten unique K128 and K512
+batches, p95 measurement, and the complete recorded resource campaign. H6 and downstream
+activation remain open. `proofSuiteId=null`,
 `complete_pcs_qualification=false`, and `complete_proof_qualification=false` remain mandatory.

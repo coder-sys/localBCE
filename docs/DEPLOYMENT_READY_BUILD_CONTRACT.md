@@ -1,6 +1,6 @@
 # Blind Ledger deployment-ready build contract
 
-Updated: 2026-07-22
+Updated: 2026-07-31
 
 The frontier additions in `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` are internal work
 inside the existing 93 packages. They do not create a new external dependency, change the count, or
@@ -14,6 +14,14 @@ inefficient; inefficiency is recorded as candidate evidence, not used to skip th
 
 Status: authoritative boundary between internal engineering completion, independent security
 assurance, and operator activation.
+
+Current proof checkpoint: H4's manifest-bound K128/K512 prototype passes one fresh attempt per
+profile through independent verification in 29.974129/120.460733 seconds, within the immutable
+5,000,000,000-byte host, below-5,000,000,000-byte scratch, and no-swap gates. This is not internal
+engineering completion or `BUILT_AUDIT_PENDING`. Gate 2E state selection and atomic composition must
+precede H5's one-warm-up-plus-ten p95 campaign; H6 suite qualification and the remaining 87 packages
+also remain open. `proofSuiteId=null`, `production_usable=false`, and the ban on real PHI/payments
+remain authoritative.
 
 ## Product objective
 

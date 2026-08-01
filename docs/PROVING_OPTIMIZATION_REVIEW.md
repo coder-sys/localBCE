@@ -1,6 +1,6 @@
 # Proving optimization review
 
-Updated: 2026-07-28
+Updated: 2026-07-31
 
 This review classifies proposed proving optimizations against the source in this archive. Its
 historical sections deliberately excluded hardware and GPU work. The current controlling recovery
@@ -13,8 +13,9 @@ rollup, deployment, and benchmark engineering are internal; the final independen
 completed exact release rather than choosing or implementing optimizations.
 
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` governs new state-topology, conflict-scheduling,
-outer-proof, and adapter/rollup research. Those items are prospective until complete K128 evidence
-exists; their structural projections must not be mixed with historical measured results below.
+outer-proof, and adapter/rollup research. H4 now supplies complete one-run K128/K512 prototype
+evidence, but gate 2E state selection, H5/H6 qualification, and downstream implementation remain
+open. Structural projections must not be mixed with measured H4 or historical results below.
 
 `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` now makes state replacement a mandatory measured
 Wave 2 gate. The current SHA3-512 endpoint-multiproof/sorted-memory construction remains C0; C1-C4
@@ -23,6 +24,17 @@ compact shuffle-based memory relation. Native-hiding PQ commitment candidates ar
 a separate interface. No paper speedup or primitive label is an optimization result.
 
 ## Current strict-PQ proof/resource decision (supersedes prospective status below)
+
+The current 2026-07-31 result supersedes the 2026-07-28 projection wherever they conflict. The
+manifest-bound real semantic source, 168-layer native-masked GKR, Construction 8.2 random-padded
+interleaved-RS PCS, 6,086-round authenticated public coin, atomic one/four-shard coordinator, and
+independent Rust verifier pass together. K128/K512 complete in 29.974129/120.460733 seconds;
+internal host peaks are 288.412/296.255 MB, external process-tree peaks are
+681.607168/706.523136 MB, per-proof tracked device state is 969.999360 MB, and scratch is
+0.000000 MB. These are H4 one-run prototype results. Gate 2E must select and bind the state plane
+before H5; H5's repeat campaign and H6 remain open.
+
+### Historical 2026-07-28 selection screen
 
 `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md` is the controlling prospective optimization plan and
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md` is the selected implementation priority. The
@@ -86,18 +98,17 @@ three-run field mixes improved 1.69x-1.80x. Neither the memory calculation nor f
 K128 proof result. Full Fp16 challenges, native masking, cross terms, promoted tails, commitments,
 streaming I/O, and the complete simulator remain closure work.
 
-The execution order is now:
+The current execution order is:
 
-1. exact byte/stage/resource attribution and reference-envelope freeze;
-2. theorem-neutral global multiproofs and one-layout/recompute storage;
-3. H0-H3 exact shared bus, byte-bit bridge, all-Fp16 control plus subfield-first streamed Boolean
-   GKR candidate with full Fp16 challenges, native masking, simulator, and atomic independent
-   verification;
-4. H4 integration of semantic STARK plus hash coprocessor, with scalar/SIMD/optional-GPU parity;
-5. implement and select the committed sparse-state/PQ-commitment candidate against C0 under
+1. retain H4's exact manifest, grammar, mutation, resource, and independent-verification evidence;
+2. implement and select the committed sparse-state/PQ-commitment candidate against C0 under
    identical fixtures, security, privacy, migration, independent-verifier, and laptop gates;
-6. generate complete K128 and K512 proofs, independently verify them, pass simulator/leakage gates,
-   and measure the frozen throughput frontier.
+3. bind the selected state, statement, retry identity, roots, parameters, verifier identity, and
+   proof atomically and close the complete simulator/security composition;
+4. run H5's one uncounted warm-up plus ten unique K128 and K512 batches and require p95 below
+   30/180 seconds with all resource gates inside the measured boundary; and
+5. close H6 suite qualification without changing `proofSuiteId=null` or activation until every
+   downstream identity gate permits the lifecycle transition.
 
 Query count, degree-16 security, SHA3-512, authenticated interactive public coin, fixed-shape work,
 and native hiding are not optimization knobs unless a complete stronger theorem and error ledger
@@ -348,7 +359,7 @@ exact release later enters the independent audit.
 | LogUp or data-parallel trace layout | Upstream Stwo has LogUp, SIMD, and parallel proving, but the current trust root is a Cairo program compiled to the Cairo VM. A Blind Ledger-specific lookup or lane-oriented AIR is a circuit/prover redesign, not a Python or Cairo compiler switch. |
 | M31 custom AIR | Replaces the Cairo VM statement with a hand-written constraint system and becomes a new trust root requiring a full equivalence specification and audit. |
 | Binius64 | Benchmark/control only; its current field, 96-bit/SHA-256 Fiat--Shamir profile, and non-ZK benchmark path fail the frozen suite requirements. |
-| Shared-bus Boolean GKR over Fp16 | Selected Wave 2 implementation priority, not an activated suite. It advances only through the exact bridge, native masking, complete simulator/theorem, atomic verifier, resource gates, and full K128 proof. |
+| Shared-bus Boolean GKR over Fp16 | Selected Wave 2 implementation priority, not an activated suite. H4 passes the exact bridge, native masking, Construction 8.2 PCS, atomic verifier, one-run resources, and K128/K512 prototypes; gate 2E, complete simulator/security composition, H5, and H6 remain. |
 
 The later owner-approved architecture decision permits design and qualification of the M31 custom
 AIR path. Source implementation still requires the protected-change authorization, equivalence

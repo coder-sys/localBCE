@@ -1,14 +1,24 @@
 # Blind Ledger implementation roadmap
 
-Updated: 2026-07-29
+Updated: 2026-07-31
 
 Status: authoritative implementation sequence for the isolated architecture workspace.
 
-Current transfer boundary: read `../WAVE2_HANDOFF_2026-07-26.md` before resuming Wave 2. The fast
-coherent GKR control, memory-bounded PCS changes, and GPU FRI arithmetic have passed their bounded
-checks, but the combined GPU-PCS path has not completed one atomic proof. Gates 2A-2E remain open;
-2D is the active integration gate and 2F has not started. This checkpoint changes no package count,
-security target, architecture, or activation status.
+Current execution boundary: read the newest dated section of `../STATE.md`; the original transfer
+record is `../WAVE2_HANDOFF_2026-07-26.md`. H4's manifest-bound semantic source, real 168-layer
+native-masked GKR, Construction 8.2 PCS, authenticated public coin, atomic one/four-shard
+coordinator, parser, and independent verifier now pass one fresh K128 and K512 attempt in
+29.974129/120.460733 seconds. This closes H4's functional and one-run prototype-latency boundary,
+not a numbered package or Wave 2. Gate 2E authenticated-state selection and atomic binding are the
+next architecture dependency; H5's repeated p95/resource campaign and H6 suite qualification must
+then close before 2F can qualify. `proofSuiteId=null`, activation=false, and the count of 6/93
+remain unchanged.
+
+Repository-layout readback also found 14 files in the app-root `ops/` compatibility mirror and no
+required canonical sibling `../ops/`. This pre-existing gap causes readiness and attack suites to
+fail closed before substantive assertions and remains part of open operations/release work. It does
+not change H4 evidence or the 6/93 count. Recover the exact canonical sibling and prove recursive
+byte identity; do not construct it from an assumed mirror or weaken path checks.
 
 This roadmap records completed evidence and every currently identified package required to build a
 technically deployable Blind Ledger release candidate: the private-claim/PQ core, government/oracle
@@ -75,7 +85,7 @@ listed package at once.
 | Wave | Outcome | Status and main packages |
 | --- | --- | --- |
 | 1. Claim relation and executable AIR | One bounded claim relation, canonical inputs, fixed approval/denial/cover work, exact money, replay/payment transitions, exact SHA3-512, and the 12-field output | **Complete and sealed, synthetic and nonactivating.** Historical label: Wave 1A. S/A/P/T semantic and AIR inputs. |
-| 2. Strict-PQ proof and throughput recovery | Heterogeneous degree-16 semantic STARK plus shared-bus Boolean SHA3 coprocessor, authenticated public coin, native hiding, compact grammar, privacy-padded access manifest, state/conflict census, bounded-memory prover, complete K128 proof, and proof-level evidence | **Active.** Historical label: Wave 1B. Z02-Z12 and proof portions of P07-P12/T02-T14. |
+| 2. Strict-PQ proof and throughput recovery | Heterogeneous degree-16 semantic STARK plus shared-bus Boolean SHA3 coprocessor, authenticated public coin, native hiding, compact grammar, privacy-padded access manifest, state/conflict census, bounded-memory prover, complete K128/K512 proofs, and proof-level evidence | **Active.** H4 one-run prototypes pass; 2E, H5, H6, and final qualification remain open. Historical label: Wave 1B. Z02-Z12 and proof portions of P07-P12/T02-T14. |
 | 3. Authoritative verifier, state, and custody | Final sidecar/verifier identities, measured authenticated-state topology, atomic tiered state, anti-rollback publication, custody, migrations, PQ checkpoints, and proof/verifier/state attacks | Open; depends on Wave 2. Historical label: Wave 1C. Remaining S/A/P/T state and custody packages. |
 | 4. Government/oracle integrations and operations | Provider-neutral adapters, proof-carrying evidence capsules, FHIR/PAS/PDex profiles, simulators, conformance, isolation, monitoring, recovery, and reproducible operations | Open; I01-I08 and O01-O06/S11. |
 | 5. Containing rollup | L2 verifier/state, rollup proof, Ethereum settlement, proof/data coupling, data availability, bridge, opaque FOCIL-compatible forced inclusion, exits, upgrades, recovery, and optional maturity-gated native-rollup adapter | Open; R01-R12. Draft EIPs are not dependencies. |
@@ -180,9 +190,9 @@ This distinction resolves the former ambiguity between "pre-implementation freez
 "S07-S12 complete."
 
 The final qualification bundle is **not runnable today**. The complete nonactivating Wave 1
-executable relation and a real Wave 2 regression-kernel proof exist, but the complete K128
-application proof, qualified native hiding, final sidecar/verifier, and authoritative shadow state
-do not.
+executable relation and complete one-run H4 K128/K512 prototypes exist, but gate 2E has not selected
+and bound the authoritative state plane, the complete simulator/composition ledger is not closed,
+H5/H6 have not qualified the suite, and the final sidecar/verifier/state identities do not exist.
 
 ## Status definitions
 
@@ -343,14 +353,14 @@ begin with `Complete` remains in the outstanding count.
 | ID | Work package | Status and dependency |
 | --- | --- | --- |
 | T01 | Create one machine-readable vector schema covering private semantics, 12 compatibility outputs, and the wide sidecar. | Open; the foundation vector covers those three surfaces and R33 adds a machine-readable physical-dimension/program-commitment vector, but one final suite-qualified proof/vector schema still depends on current Wave 2. |
-| T02 | Add approved-claim KATs across Python, Rust, Cairo, RISC Zero, custom AIR, proof, and verifier. | Open; current Wave 1 pins the Python K128 composed relation KAT, the prior Python/Rust/Cairo/RISC legacy differential still passes, and the regression kernel proof independently verifies. The complete K128 successor proof and final verifier do not yet exist. |
+| T02 | Add approved-claim KATs across Python, Rust, Cairo, RISC Zero, custom AIR, proof, and verifier. | Open; current Wave 1 pins the Python K128 composed relation KAT, the prior Python/Rust/Cairo/RISC legacy differential still passes, and H4 supplies complete one-run K128/K512 prototype proofs. The final suite-qualified proof vectors and production verifier do not yet exist. |
 | T03 | Add KATs for every denial code and exact reason priority. | Open; source count must be pinned. |
 | T04 | Add dummy, padding, mixed, and all-denied fixed-shape KATs. | Open; current Wave 1 binds approval, denial, and cover under witness-class-independent component schedules, but final proof-byte/query equality awaits current Wave 2. |
 | T05 | Add zero/minimum/maximum capacity and every boundary-value KAT. | Open. |
 | T06 | Add duplicate, replay, retry, correction, revision, and nullifier KATs. | Open overall; A12 and the sealed physical AIR cover exact wide attempt/cover derivation, retry stability, duplicate/reserved/path mutation, pepper rotation, and original-only revision rejection cross-language. Correction/replacement/void authority, proof/verifier, and durable-state vectors remain open. |
 | T07 | Add fabricated/stale/wrong policy, oracle, authorization, claim-source, signer, and epoch attacks. | Open; Wave 1A rejects governed source/oracle-economic/policy and exact membership-path forgeries in the Python reference; R33 adds payment-map and physical-slot/root forgeries. Stale signer/epoch and real-proof attacks remain open. |
 | T08 | Add overflow, underflow, money mismatch, noncanonical field, serialization, and length attacks. | Open; Wave 1A covers duplicate-key, float, extra-field, count, chain, field-modulus, aggregate payment underflow/root mutation, and coercible V2 inputs. R33 adds payer-map underflow, duplicate obligation, and physical-program mutation rejection. Complete transcript and cross-language parser attacks remain open. |
-| T09 | Add proof tampering, wrong profile/schema/artifact/domain/hash/root, and old-proof/new-input attacks. | Open; host/AIR and regression-kernel mutation coverage exists, but the complete K128 proof, final grammar, sidecar, artifact identity, and production verifier do not yet exist for full attack convergence. |
+| T09 | Add proof tampering, wrong profile/schema/artifact/domain/hash/root, and old-proof/new-input attacks. | Open; host/AIR, regression-kernel, and H4 proof/manifest/retired-format mutation coverage exists. Final suite grammar, sidecar, authoritative state, release artifact identity, and production verifier attacks remain open for full convergence. |
 | T10 | Property-test and fuzz AIR constraints, proof parsers, verifiers, and wide-root/projection equivalence. | Open overall; current Wave 1 covers executable AIR mutations, projection arithmetic, sparse-tree order invariance, dense/sparse path mutation, deterministic program recomputation, and Rust parity. Final proof-parser/verifier fuzz convergence remains current Waves 2/3 work. |
 | T11 | Scan proofs, logs, errors, crashes, and artifacts; test independent proofs of one witness for unlinkability. | Convergence gate. |
 | T12 | Test trace size, proof size, queries, timing, cadence, root behavior, and failure behavior for inference. | Convergence gate; threshold frozen before run. |
@@ -691,8 +701,24 @@ The current nonactivating implementation blueprint is section 8.3 of
 running concurrently with a bounded CPU semantic-AIR lane and the Construction 8.2 random-padded
 interleaved Reed--Solomon PCS. The exact GKR component sum plus segment-32 initial PCS mechanics is
 28.3824358 seconds and leaves 1.6175642 seconds for every remaining complete-proof stage. This
-passes the attempt gate only; it is not a complete-proof projection. The exact ordered work is
-recorded in the 2026-07-29 correction below.
+is a historical pre-integration component subtotal, not the current complete-proof result or a
+remaining-time budget. The exact ordered work is recorded in the dated corrections below, and the
+2026-07-31 H4 section is the current proof-engine checkpoint.
+
+Current Wave 2 gate status is:
+
+| Gate | Current status |
+| --- | --- |
+| 2A | Open. H4 supplies exact one-run timing/resource evidence, but the frozen access/state census and qualification telemetry are not complete. |
+| 2B | Open at the release boundary. The H4 grammar, parser, complete 20/36-tree formats, and retired-format rejection pass; final suite/state storage and parity evidence remain. |
+| 2C | H3/H4 prototype sub-boundary passed; gate remains open for the complete simulator/security composition and suite-qualified evidence. |
+| 2D | H4 functional and one-run 30/180-second prototype boundary passed; this does not close a package or the selected-state composition. |
+| 2E | Open and next. Implement, select, and atomically bind the authenticated state/PQ-commitment plane before H5. |
+| 2F | Open. After 2E, run H5's one warm-up plus ten unique batches per profile, close H6, and only then qualify K128/K512. |
+
+All dated material below remains audit history. Where a historical paragraph says "current" or
+"next," its statement is scoped to that dated checkpoint; this table and the newest dated section
+supersede its execution status without rewriting its raw evidence.
 
 Current evidence must be stated precisely:
 
@@ -757,7 +783,7 @@ Wave 2 has six closure gates:
 
 1. **2A - cost truth and envelope freeze.** Exact v1 proof-section byte attribution is now emitted
    by the canonical encoder and verified on both regression proof paths. Complete independently
-   scoped SHA3 inventory hardening and stage/resource telemetry; freeze K128/K512 workloads, the 60/180-second p95 latency gates,
+   scoped SHA3 inventory hardening and stage/resource telemetry; freeze K128/K512 workloads, the 30/180-second p95 latency gates,
    reference hardware classes, resource envelopes, repetition/variance rules, and the source-bound
    benchmark schema. Freeze the privacy-padded Claim
    Batch Access Manifest and publish the exact K128 state-call/conflict census. No estimated
@@ -1612,21 +1638,23 @@ completion status.
 ## Production truth
 
 Today Blind Ledger has verified experimental proof evidence, a real 12-field application ABI, a
-selected claim-proof security architecture, and R34's corrected, nonactivating fixed-shape claim-
-relation IR and scoped payment-state reference. It does not have the concrete theorem-matched
-SHA3/PCS/FRI proof instantiation, native
-hiding, strict-PQ proof parameters, authoritative SHA3-512 state, a production claim verifier,
-complete adapter platform, or an implemented based rollup. Current internal progress is **6 of 93
-packages complete and 87 open**. No real PHI is authorized. The next legitimate product milestone
-is `DEPLOYMENT_READY_AUDIT_PENDING`, followed by the single independent Security Audit Gate and
-authorized operator activation.
+selected claim-proof security architecture, the sealed Wave 1 relation, and manifest-bound H4
+K128/K512 prototypes combining the real semantic source, native-masked GKR, Construction 8.2 PCS,
+dual-PQ authenticated public coin, atomic coordinator, and independent verifier. It does not yet
+have a selected authoritative state plane, H5 repeated qualification evidence, H6 suite identity,
+a production claim verifier, a complete adapter platform, or an implemented based rollup. Current
+internal progress is **6 of 93 packages complete and 87 open**. No real PHI is authorized. The next
+legitimate product milestone is `DEPLOYMENT_READY_AUDIT_PENDING`, followed by the single independent
+Security Audit Gate and authorized operator activation.
 
 ## 2026-07-30 Wave 2 H3 prototype closure
 
-The ordered H3 items 1 and 2 in the 2026-07-29 correction are complete. After a clean System-log
-audit, one fresh segment-32 proof completed through independent verification in 28.943126 seconds
-externally. Every printed verifier gate was true; driver-event count was zero, pagefile usage did
-not grow, and scratch was 0.000000 MB.
+The ordered H3 items 1 and 2 in the 2026-07-29 correction are complete. One fresh segment-32 proof
+completed through independent verification in 28.943126 seconds externally. Its contemporaneous
+post-launch audit found zero new driver events, but a later System-log audit invalidated the reboot
+as a clean driver-integrity boundary; this run therefore receives no reset or qualification credit.
+Every printed cryptographic verifier gate was true, pagefile usage did not grow, and scratch was
+0.000000 MB. The accepted 2026-07-31 H4 attempts supersede it.
 
 Measured decimal resources were 311.537664 MB external process-tree RSS and 1,058.013184 MB sampled
 GPU use. The row-state accounting is 7.864320 MB for claim component/source/relation state plus
@@ -1724,9 +1752,9 @@ assume that nonlinear traces may share challenges without a batching theorem. K1
 below 30 seconds and K512 below 180 seconds before qualification.
 
 zkDeepFold remains excluded from the active path. Its historical `mu=21`, `s=473` inequality is
-the superseded zkDeepFold simulator's interpolation-capacity condition, so it is valid hiding
-evidence for that exact control. It is neither the selected construction's composition theorem nor
-support for conjecture-dependent lower-query list decoding. Construction 8.2 of ePrint 2026/391
+only the superseded zkDeepFold simulator's interpolation-capacity condition; by itself it is not
+hiding evidence, a composition theorem, or support for conjecture-dependent lower-query list
+decoding. Construction 8.2 of ePrint 2026/391
 remains selected until any alternative supplies the complete theorem mapping, error ledger,
 implementation, and independently verified end-to-end measurement.
 
@@ -1793,5 +1821,6 @@ compilation of all 36 CUDA entry points.
 
 This closes H4's functional and one-run 30/180-second prototype boundary. It does not close H5:
 the required one uncounted warm-up plus ten unique K128 and K512 batches and p95/resource campaign
-have not run. H6 suite qualification also remains open. `proofSuiteId=null`, activation=false,
+have not run. Gate 2E must first select and bind the authenticated state plane so H5 measures the
+candidate eligible for H6. H6 suite qualification also remains open. `proofSuiteId=null`, activation=false,
 `complete_pcs_qualification=false`, and `complete_proof_qualification=false` remain authoritative.

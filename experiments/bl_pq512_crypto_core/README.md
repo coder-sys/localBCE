@@ -12,8 +12,8 @@ codewords use 38.273024 MB. Under execution manifest
 `51c23310274ccf7c4d7f9abe4ae7eba43266b335bd377b21cbf92409729b91e2a40a39787a157baa080c9d0516c7815af404a4d58d9e76747f652f57cd017ed6`,
 fresh K128 and four-shard K512 prototypes independently verified in 29.974129 and 120.460733
 seconds. Both accepted attempts used 0.000000 MB scratch, had zero pagefile growth, empty stderr,
-and zero post-reset driver events. This is complete H4 prototype evidence, not the H5 ten-run
-qualification campaign.
+and zero post-reset driver events. This is complete H4 prototype evidence, not state-plane
+selection or the H5 ten-run qualification campaign.
 
 The host coordinator KAT independently replays the honest dual-PQ bundle and rejects a forged
 GKR-terminal digest before releasing the PCS base-mask challenge.
@@ -23,9 +23,9 @@ Current continuation checkpoint: read the newest dated section of `../../STATE.m
 boundary and broadcasts only the public message evaluation, removing 510 theorem-redundant
 evaluations without copying hiding coefficients. The real masked producer, same-chain coordinator,
 PCS, and independent verifier now complete together below 30 seconds for K128 and below 180 seconds
-for K512. Qualification and activation remain closed.
+for K512. Gate 2E state selection must precede H5; qualification and activation remain closed.
 
-The immediate implementation boundary is
+The current H4 implementation boundary is
 `src/fp16_zk_rs_gkr_binding.rs`, `src/bin/fp16_zk_rs_theorem8_1_transcript.rs`,
 `cuda/cuda_fp16_zk_rs_theorem8_1_k128_prototype.py`, and the exact B=16 GKR producer. Rust now
 binds one output and four relay-free input claims, each with 24 coordinates and sixteen committed
@@ -40,8 +40,8 @@ remains authoritative for SHA3-512 roots, canonical values, row parameters, mult
 answer-code arithmetic and target, transcript ordering, dual-PQ public-coin replay, and final
 verification. The real GKR mask is committed as 64 dimension-512 auxiliary codewords, and the
 answer plane contains 73 words: nine sumcheck masks plus those 64 GKR mask words. The complete
-H4 prototype gate has passed; the remaining boundaries are H5's repeated p95 campaign and H6 suite
-qualification.
+H4 prototype gate has passed. At the product level gate 2E must select and atomically bind the state
+plane before this crate's remaining H5 repeated p95 campaign and H6 suite qualification.
 
 Current Wave 2 role: this crate is the semantic-STARK/Fp16/SHA3-512 substrate for the heterogeneous
 proof in `../../docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. Its direct SHA3 AIR and disk-backed
@@ -249,5 +249,5 @@ points in a 3.494439 MB PTX image with SHA-256
 No additional test was removed in the final audit. The V1-layer compaction test remains a required
 migration-equivalence check, the two-claim GKR/PCS bridge remains a nonproduction component
 differential, and the retired-format KAT proves those older formats cannot enter the active
-verifier. H5 and H6 remain open; qualification and activation stay false and `proofSuiteId` stays
-null.
+verifier. Gate 2E precedes H5; H5 and H6 remain open, qualification and activation stay false, and
+`proofSuiteId` stays null.
