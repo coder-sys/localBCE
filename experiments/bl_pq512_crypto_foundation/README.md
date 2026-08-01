@@ -71,7 +71,12 @@ testable without pretending that a proof suite exists.
   deterministic bounded witness, candidate-specific derived work counters, and an independent
   replay verifier.  `scalar_state_relation_parity.py` compares the fixed semantic/shape/money
   boundary to C0 and exercises all seven C0 negative classes for both K128 and K512.  Candidate
-  roots remain differential identities; no candidate is selected or bound to H4.
+   roots remain differential identities; no candidate is selected or bound to H4.
+- `pq_commitment_screening.py` implements the Gate 2E-3/S3 common fixed-width masked commitment
+  envelope, exact descriptor/parameter identities, dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated
+  public-coin round, and independent opening verifier. The four screening descriptors all reject
+  closed because reviewed native-hiding, strict-PQ theorem, or complete-proof evidence is missing;
+  the reference envelope is not a PCS, proof suite, H4 binding, or activation path.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

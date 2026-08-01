@@ -53,7 +53,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
 | H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds | State binding, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0, 2E-1/S1, and 2E-2/S2 complete; 2E-3 next | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, independent replay, and C0 parity are tested and documented | Screen and bind a state relation plus PQ commitment |
+| Gate 2E | 2E-0/S0 through 2E-3/S3 reference screening complete; 2E-4 next | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, dual-PQ S3 reference transcript, and candidate rejection records are tested and documented | Admit a reviewed backend and atomically compose the state plane |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -185,6 +185,24 @@ grammar, verifier, and independent KATs.
 Reject pairings, KZG, IPA, RSA, ECC, trusted setup, Fiat--Shamir/QROM credit, designated verifier,
 external service, unsupported knowledge assumption, or any term below the frozen floor. A lattice
 label is not security evidence.
+
+Current S3 record: `experiments/bl_pq512_crypto_foundation/pq_commitment_screening.py` defines the
+common fixed-width masked commitment/opening envelope, exact parameter identities, the four admitted
+screening families, a dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated public-coin round, and an
+independent opening verifier. The reference envelope is synthetic and nonproduction. All four
+descriptors fail closed: the three lattice families lack pinned source/parameters/theorem evidence,
+and the transparent hash/code reference lacks reviewed native-hiding composition and complete-proof
+evidence. No candidate is admitted, selected, bound to H4, or assigned `proofSuiteId`.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py
+8 passed in 3.27s
+```
+
+The timing is a test-run observation only; it is not a complete-proof or H5 measurement. Proceed to
+2E-4/S4 atomic reference composition without treating the synthetic envelope as a qualified PCS.
 
 ### 2E-4 - atomically compose the finalist
 

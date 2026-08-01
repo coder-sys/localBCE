@@ -226,5 +226,7 @@ replay verifier and requires full C0 positive/negative parity for both profiles.
 C3 quadratic projection counter, and C4 persistent-scan counter are derived risk labels, not
 throughput measurements. The four S0 fresh-process measurements remain recorded in
 `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile usage deltas remain observed telemetry, not a
-swap conclusion. Execute Gate 2E-3/S3 next: screen native-hiding PQ commitment backends behind the
-completed relations. Do not start H5 or another complete-proof backend bake-off.
+swap conclusion. Gate 2E-3/S3 now has a tested dual-PQ authenticated commitment-screening reference;
+all four descriptors remain rejected because reviewed native-hiding and complete-proof evidence is
+missing. Execute Gate 2E-4/S4 atomic composition next. Do not start H5 or another complete-proof
+backend bake-off.

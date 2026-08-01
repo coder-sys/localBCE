@@ -20,9 +20,9 @@ Execution authority: the deterministic continuation contract near the top of
 boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen with exact
 K128/K512 fixture identities, independent negative controls, and fresh-process state-only and
  complete-boundary measurements. S1/2E-1 bounded interfaces is also frozen and tested. S2/2E-2
-scalar C1-C4 controls are now implemented and parity-tested; the immediate work is S3/2E-3
-commitment screening. Do not begin with a paper benchmark or treat scalar work counters as
-throughput evidence.
+scalar C1-C4 controls are now implemented and parity-tested; S3/2E-3 reference commitment screening
+is complete with no backend admitted; the immediate work is S4/2E-4 atomic composition. Do not begin
+with a paper benchmark or treat scalar work counters as throughput evidence.
 
 ## 1. Decision
 
@@ -148,9 +148,11 @@ fail closed.
    independently testable scalar references and prove parity with C0 on membership, absence,
    duplicate, collision, conflicting update, denial, cover, transactional nonmutation, and
    malformed-state corpora.
-4. **S3 - commitment prototypes (next).** Implement the common PCS/commitment interface, exact parameters,
-   native hiding, authenticated-public-coin transcript, and independent verifier for every admitted
-   backend.
+4. **S3 - commitment prototypes (reference screening complete).** The common fixed-width commitment
+   interface, exact descriptor identities, dual-PQ authenticated-public-coin round, and independent
+   verifier are implemented in `pq_commitment_screening.py`. All four descriptors remain rejected
+   because exact reviewed theorem/source/parameter and complete-proof evidence is missing; no backend
+   is admitted or selected.
 5. **S4 - atomic composition.** Bind the semantic AIR, CBAM, state relation, commitment, SHA3-512
    state identifier, proof grammar, and verifier decision into one non-spliceable transcript.
 6. **S5 - migration and operations.** Prove old-tree/new-commitment equivalence at the profile

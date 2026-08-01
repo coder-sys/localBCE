@@ -4192,3 +4192,30 @@ canonical path. The bounded S2 attack suite above passed. `proofSuiteId=null`, a
 false, real PHI/payments remain forbidden, the canonical `../ops` launch blocker remains absent, and
 no production CUDA path ran. Gate 2E-3/S3 native-hiding PQ commitment screening is the next
 boundary.
+
+## 2026-08-01 Gate 2E-3/S3 PQ commitment screening — REFERENCE COMPLETE, NO ADMISSION
+
+Gate 2E-3/S3 is implemented at the bounded synthetic screening boundary. The new
+`experiments/bl_pq512_crypto_foundation/pq_commitment_screening.py` module defines a common
+fixed-width masked commitment/opening envelope, exact descriptor and parameter identities for the
+Jindo-style lattice, Module-SIS, RoKoko-style lattice, and transparent hash/code families, a
+dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated public-coin round, and an independent opening
+verifier. The envelope uses SHA3-512 reference masking only; it is not a lattice PCS, complete
+zero-knowledge proof, H4 binding, or production/activation path.
+
+All four descriptors reject closed. The three lattice descriptors lack pinned primary source,
+parameters, license, and reviewed theorem evidence. The transparent hash/code descriptor has the
+internal 512-bit parameter reference and 256-bit labels but still lacks reviewed native-hiding
+composition and complete-proof evidence. No candidate is admitted, selected, assigned
+`proofSuiteId`, or activated.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py
+8 passed in 3.27s
+```
+
+This is reference test-run timing, not complete-proof or H5 evidence. The next bounded boundary is
+Gate 2E-4/S4 atomic composition: independently replay the S2 relation, bind the S3 transcript and
+transition, and reject every field mutation before any state acceptance.
