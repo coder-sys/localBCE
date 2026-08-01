@@ -3927,3 +3927,87 @@ The one full-roadmap failure is the same pre-existing fail-closed canonical-ops 
 tree, policy byte, protected path, proof source, proof byte, execution manifest, or activation state
 changed. No CUDA proof was launched. H4 evidence and the exact Gate 2E-0 then 2E-1 implementation
 boundary remain unchanged.
+
+## 2026-08-01 complete Ethereum Strawmap compatibility contract
+
+The containing architecture is now unambiguous: Blind Ledger is an Ethereum-settled,
+EVM-compatible **based validity rollup by compulsory design**. Ethereum ordering is canonical, no
+permanent privileged sequencer may own canonical history, every accepted L2 transition requires
+the Blind Ledger claim proof and containing rollup validity proof, and public Ethereum DA is
+fixed-shape non-PHI only. Draft Ethereum features are versioned compatibility adapters, never
+hidden release dependencies.
+
+Implementation commit `c4b2bd86ce26f5900314d7836f2d629754886c0b`, tree
+`90cb5dd9d90f2902f797e0585b98178f87a52d86`, adds 437 lines and removes 28 across 20 files.
+Protected-path changes are zero.
+
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` records the live
+`strawmap.org`/Google Drawing snapshot, not a PDF or screenshot. The Drawing identifier is
+`1GkcGfQv9kxgrYQMyu0BYGcZya0gIDG_wQ7GsFJEsdzY`, its label said updated Jul 29, 2026, and the
+fetched SVG SHA-256 is
+`6514BA52E8EABDDE9162F460E3BAAC52BA0DBA62BA5AA0EAE546FBCB6C7163C8`.
+All 23 linked EIPs were fetched from canonical `ethereum/EIPs`; the sorted
+`filename:SHA-256` manifest hashes to
+`D18D3AB07B30535E647B2E23665958A229934C99318371C61E0C567650561AB2`.
+
+The exact linked set is EIPs 7503, 7732, 7773, 7805, 7919, 7928, 7938, 7999, 8007, 8025,
+8070, 8077, 8079, 8081, 8136, 8141, 8142, 8184, 8198, 8200, 8250, 8272, and 8297.
+The contract distinguishes Review, Draft, Stagnant, shipped/final, and research maturity; maps
+every EIP to an exact Blind Ledger decision; includes the linked primary specification, GitHub,
+Ethereum Research, PQ, leanVM/leanXMSS/leanMultisig, ethp2p, evm-asm, and RISC-V sources; and
+assigns all consensus, data, execution, PQ, privacy, networking, latency, and throughput
+through-lines to existing R01-R12 packages.
+
+The stale active EIP-7707 access-list reference was removed. EIP-7928 BAL is the current Review
+compatibility surface. The reason EIP-7707 must not be used remains in the rejection ledger.
+BAL is explicitly not the private fixed-padded CBAM. EIP-7503 wormholes, EIP-8184 LUCID,
+EIP-8025 optional execution proofs, EIP-8079 native rollups, and Ethereum leanVM are explicitly
+forbidden from substituting for Blind Ledger privacy, strict-PQ authority, mandatory validity, or
+the selected inner proof.
+
+R01-R12 remain 12 open packages and the total stays 6/93 complete. Their rows now require a pinned
+deployed baseline, multi-fork fixtures, proof/verifier/fork/data identity, BAL/CBAM separation,
+keyed-nonce and recent-root semantics, final-fork differential proving, fork-aware finality,
+ePBS/FOCIL adversarial based ordering, payload/blob/cell reconstruction, finalized bridge
+accounting, opaque forced inclusion, fail-closed versioned adapters, and baseline plus future-fork
+end-to-end tests. No rollup, production verifier, native-rollup adapter, or Ethereum-security claim
+was implemented or activated by this documentation phase.
+
+Verification:
+
+```text
+py -3.14 -m pytest -q tests/test_foundation_spec.py
+12 passed in 0.20s
+
+py -3.14 -m pytest -q tests/test_foundation_spec.py \
+  tests/test_security_freeze_spec.py \
+  tests/test_deployment_ready_roadmap_contract.py \
+  -k "not app_layer_ops_is_an_exact_recursive_mirror_of_canonical_ops and not launch_blocker_manifest_has_only_one_external_assurance_dependency"
+19 passed, 2 deselected in 0.40s
+
+py -3.14 -m pytest -q tests/test_deployment_ready_roadmap_contract.py
+2 passed, 1 failed in 0.21s
+failure: FileNotFoundError for trusted canonical ../ops/launch_blockers.json
+
+cargo fmt --all -- --check
+exit=0
+
+cargo check --release --offline --locked --lib --no-default-features
+exit=0 (isolated C:\tmp target used because the pre-existing source-tree cargo lock denied access)
+
+cargo clippy --release --offline --locked --all-targets --features std,parallel -- -D warnings
+exit=0; warnings=0
+
+git diff --check
+exit=0
+
+Strawmap contract readback
+23 EIP rows; 23 unique; 12 R01-R12 rows; 48 HTTPS links; 0 PDF authority links
+
+active stale EIP-7707 reference scan
+hits=0
+```
+
+No CUDA proof was launched. H4 evidence, proof bytes, execution manifest, resource measurements,
+`proofSuiteId=null`, activation=false, the missing canonical `../ops` condition, and the next
+Gate 2E-0 then 2E-1 code boundary are unchanged.
