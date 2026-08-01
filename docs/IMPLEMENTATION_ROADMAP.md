@@ -372,6 +372,20 @@ H6 must close all twelve obligations:
 H6 may mark the proof candidate qualified for Wave 3 integration. It must keep `proofSuiteId=null`;
 it cannot activate production or claim audit completion.
 
+The bounded preflight is implemented in
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`. It independently replays
+the blocked H5/2E context, validates the candidate registry remains
+`CANDIDATE_UNQUALIFIED` with eight null module identities, and emits exactly twelve H6 obligation
+records with explicit measured/derived/inferred/unknown labels. The current record is
+`BLOCKED_H6_PREFLIGHT`: five records are blocked, five are open, and two are reference-only. The
+preflight never launches a prover, closes an obligation, assigns `proofSuiteId`, or enables
+activation; the H6 theorem, simulator, parser, attack, reproducibility, resource, side-channel,
+rollback, and evidence gates remain open.
+
+The focused H6 preflight/attack suite passes 6/6 in 30.02 seconds. The containing S1-S7,
+terminal-ledger, H5-preflight, and H6-preflight suite passes 85/85 in 151.88 seconds; these are
+qualification-ledger test observations, not complete-proof measurements.
+
 ## Whole-product package map
 
 The 93-package denominator is fixed. Detailed closure criteria live in the owning specification or

@@ -263,6 +263,40 @@ simulator/leakage/strict-PQ evidence, missing canonical ops, unready reference h
 external monitoring, absent source readback, and no complete-proof campaign. The preflight suite
 passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed.
 
+## 6.4 H6 qualification preflight
+
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` now replays the blocked H5
+and terminal Gate 2E context and independently reads
+`docs/bl_pq512_suite_candidate_v1.json`. It requires the candidate registry to remain
+`CANDIDATE_UNQUALIFIED`, with eight null module identities, null `proofSuiteId`, and activation
+disabled. It emits exactly twelve H6 obligation records: five `BLOCKED`, five `OPEN`, and two
+`REFERENCE_ONLY`, with 24 distinct blockers. No record may be closed by this preflight.
+
+Current raw record:
+
+```text
+status=BLOCKED_H6_PREFLIGHT
+h5_preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+suite_registry_digest_sha3_512=307439093721aeaa9a70ef00d546f06af5f50b73781f9f19b8b02cca8c3d36ee1ef36e9981d49a59d10d8d7768fec079d40e05b6c008d7913c9caf4cc52cf974
+suite_registry_canonical_digest_sha3_512=d082aaec00392f6ae7c7c37a52b6b18ab0fccd5fb08654ec9e326d8c20dd355e13f02b240577823f18b06f50aa165d25f5479d2ba1067beb80dd20ab9d6724e0
+preflight_digest_sha3_512=680d73501851b316d969f811e23aa04985cacfce04df5bea8bd1b6e8553ddd07f12e08d89c79915a80c86f175eb9973cd3825e8ce7e09e2b4122cee44bcd24d7
+proofSuiteId=None
+activation_allowed=False
+```
+
+Focused and containing verification:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+6 passed in 30.02s
+
+py -3.14 -m pytest -q tests/test_bl_pq512_state_interface.py tests/attacks/test_bl_pq512_state_interface_attacks.py tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+85 passed in 151.88s (0:02:31)
+```
+
+This is H6 evidence-boundary scaffolding, not theorem, simulator, attack, reproducibility,
+resource, qualification, state-admission, H5, or activation evidence.
+
 ## 7. Primary research record
 
 - Persistent/volatile memory AIPs: https://eprint.iacr.org/2024/979.pdf

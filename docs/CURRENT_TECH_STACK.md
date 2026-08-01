@@ -364,6 +364,15 @@ record is `BLOCKED_H5_PREFLIGHT` with preflight digest
 and the unresolved Gate 2E/H4/simulator/leakage/PQ blockers. This is a preflight ledger, not H5
 measurement or qualification evidence.
 
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` now records the next
+qualification boundary without launching a prover. It independently replays the H5/2E context,
+validates the candidate registry's `CANDIDATE_UNQUALIFIED` state and eight null module identities,
+and emits all twelve H6 obligations with explicit evidence classes. The current record is
+`BLOCKED_H6_PREFLIGHT` with five blocked, five open, and two reference-only records; no obligation
+is closed, `proofSuiteId` remains null, and activation remains false. Its focused/attack suite is
+6/6 and the containing S1-S7, terminal-ledger, H5, and H6 set is 85/85; these are ledger-test
+observations, not complete-proof qualification.
+
 ## Open boundaries and nonclaims
 
 - Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,

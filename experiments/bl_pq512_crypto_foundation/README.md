@@ -77,6 +77,17 @@ testable without pretending that a proof suite exists.
   public-coin round, and independent opening verifier. The four screening descriptors all reject
   closed because reviewed native-hiding, strict-PQ theorem, or complete-proof evidence is missing;
   the reference envelope is not a PCS, proof suite, H4 binding, or activation path.
+- `atomic_state_composition.py`, `state_migration_recovery.py`, and `gate_2e_selection.py` provide
+  the S4-S7 synthetic composition, migration/recovery, measurement, rejection, and unsealed
+  handoff references. `gate_2e_terminal_ledger.py` independently replays those boundaries and
+  preserves the unresolved simulator, leakage, strict-PQ, canonical-ops, and H4-binding blockers.
+- `h5_qualification_preflight.py` freezes one uncounted warm-up plus ten unique measured launches
+  for each K128/K512 profile (22 fresh launches total) without starting CUDA. It remains blocked
+  while Gate 2E is unsealed, the canonical sibling `../ops` is missing, and reference hardware is
+  not ready.
+- `h6_qualification_preflight.py` replays the blocked H5/2E context, validates the unselected
+  candidate registry, and records all twelve H6 obligations with explicit evidence classes and
+  blockers. It cannot close an obligation, assign `proofSuiteId`, or enable activation.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

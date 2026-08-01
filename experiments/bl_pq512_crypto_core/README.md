@@ -155,3 +155,10 @@ digest is `8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aeb
 `proofSuiteId`, authorize CUDA, or grant qualification credit.
 
 `proofSuiteId=null`, activation is false, and real PHI/payments remain forbidden.
+
+The fail-closed H6 preflight now records all twelve qualification obligations without claiming any
+are closed. Its current record is `BLOCKED_H6_PREFLIGHT`; it replays the H5/2E evidence, confirms
+the candidate suite registry remains `CANDIDATE_UNQUALIFIED` with eight null module identities,
+and reports five blocked, five open, and two reference-only obligation records. This is evidence
+boundary scaffolding only: no H5 launch, proof-suite selection, H4 state admission, or activation
+credit is granted.

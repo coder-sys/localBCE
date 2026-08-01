@@ -271,3 +271,16 @@ The preflight focused/attack suite passed 6 tests in 44.60 seconds; the benchmar
 terminal-ledger, and preflight containing set passed 61 tests in 117.72 seconds. The complete
 S1-S7 plus terminal-ledger and preflight set passed 79 tests in 175.33 seconds. These are test-run
 times, not complete-proof measurements.
+
+## 13. H6 qualification preflight boundary
+
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` is a non-launching
+qualification ledger. It independently replays H5 and Gate 2E, validates the unselected suite
+registry, and records all twelve H6 obligations without assigning timing or qualification credit.
+The current record is `BLOCKED_H6_PREFLIGHT`: five obligations are blocked, five are open, and two
+are reference-only, with 24 distinct blockers. No proof, witness, retry, state admission,
+`proofSuiteId`, or activation path is accepted by this boundary.
+
+Focused H6 preflight/attack verification passed `6 passed in 30.02s`; the containing S1-S7,
+terminal-ledger, H5-preflight, and H6-preflight set passed `85 passed in 151.88s`. These are
+qualification-ledger test times, not complete-proof measurements.

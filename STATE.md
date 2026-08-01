@@ -4394,3 +4394,48 @@ This does not run H5, close Gate 2E, select a state/commitment backend, close H6
 (`59,091,513,344` bytes) is below the required headroom (`73,100,269,364` bytes). The next safe
 boundary is reviewed state/commitment admission and atomic H4 binding; no complete-proof launch
 receives credit before those gates close.
+
+## 2026-08-02 H6 qualification preflight - BLOCKED
+
+The bounded H6 qualification preflight is now implemented in
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`. It independently replays
+the blocked H5/terminal Gate 2E context, reads the actual candidate registry without modifying it,
+and requires `CANDIDATE_UNQUALIFIED`, eight null module identities, `proofSuiteId=None`, and
+`activation_allowed=False`. It records all twelve H6 obligations with explicit evidence classes;
+five records are `BLOCKED`, five are `OPEN`, and two are `REFERENCE_ONLY`.
+
+Raw H6 preflight record:
+
+```text
+status=BLOCKED_H6_PREFLIGHT
+obligation_count=12
+blocked_record_count=5
+open_record_count=5
+reference_only_record_count=2
+blocker_count=24
+blockers=no_backend_admitted,proof_suite_unselected,strict_pq_security_ledger_open,complete_simulator_missing,proof_grammar_unselected,h4_atomic_binding_deferred,attack_corpus_incomplete,cross_language_verifier_kats_open,source_toolchain_dependency_sbom_open,offline_reproducible_builds_open,gate_2e_ledger_unsealed,state_plane_unselected,complete_leakage_scan_missing,canonical_ops_missing,reference_hardware_not_ready,h5_campaign_not_started,h5_external_monitor_not_configured,h5_source_readback_not_captured,h5_no_qualified_evidence,side_channel_unlinkability_open,production_migration_theorem_open,complete_evidence_manifest_missing,h6_no_qualified_evidence,wave3_verifier_state_custody_open
+h5_preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+suite_registry_digest_sha3_512=307439093721aeaa9a70ef00d546f06af5f50b73781f9f19b8b02cca8c3d36ee1ef36e9981d49a59d10d8d7768fec079d40e05b6c008d7913c9caf4cc52cf974
+suite_registry_canonical_digest_sha3_512=d082aaec00392f6ae7c7c37a52b6b18ab0fccd5fb08654ec9e326d8c20dd355e13f02b240577823f18b06f50aa165d25f5479d2ba1067beb80dd20ab9d6724e0
+preflight_digest_sha3_512=680d73501851b316d969f811e23aa04985cacfce04df5bea8bd1b6e8553ddd07f12e08d89c79915a80c86f175eb9973cd3825e8ce7e09e2b4122cee44bcd24d7
+proofSuiteId=None
+activation_allowed=False
+```
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+6 passed in 30.02s
+```
+
+Containing Gate 2E/H5/H6 command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_interface.py tests/attacks/test_bl_pq512_state_interface_attacks.py tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+85 passed in 151.88s (0:02:31)
+```
+
+This is evidence-boundary scaffolding only. It does not close any H6 obligation, admit a state or
+commitment backend, bind H4, run H5, assign `proofSuiteId`, enable activation, or establish
+production throughput.
