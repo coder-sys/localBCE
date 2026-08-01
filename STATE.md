@@ -3767,3 +3767,94 @@ pass-count credit; focused gates and Rust containing gates above have complete t
 
 H4 proof evidence and manifest identity do not change. Gate 2E state selection and atomic binding,
 composition/simulator closure, H5 repeated p95, and H6 qualification remain the active order.
+
+## 2026-08-01 model-independent technical handoff
+
+The current architecture and execution plan no longer depend on a model remembering chat context or
+inferring status from dated evidence. Documentation implementation commit
+`238ed83729bd1b8fa7d4e061c2982eab2b4a5c54`, tree
+`ed329dc9160b9b37def6bd031b384c7ccddf7ce7`, adds 695 lines and removes 50 across nine files.
+Protected-path changes are zero.
+
+`docs/CURRENT_TECH_STACK.md` is now the complete active-stack contract. It defines evidence terms,
+frozen invariants, exact K128/K512 geometry, the ordered ten-step H4 proof flow, Rust/CUDA authority
+split, decimal memory and concurrency model, privacy placement, fail-closed verifier order, exact
+source ownership, required green evidence, execution order, and explicit nonclaims. Its source
+readback checked 22 named authoritative files with zero missing. Rust/Python constant readback
+reconciled 46,858/165,762 semantic calls, 52,429,015/209,715,415 `BLHBB101` bytes, one/four shards,
+1,600 live wires, 131,072 padded permutations per shard, 6,073 GKR rounds, and 6,086 combined rounds.
+
+The deterministic continuation contract near the top of `docs/IMPLEMENTATION_ROADMAP.md` is the
+sole current execution algorithm. It contains:
+
+- an explicit current-state matrix and authority rule for historical sections;
+- a single dependency chain from Gate 2E through H5, H6, and Wave 3;
+- Gate 2E stages 2E-0 through 2E-7 with inputs, outputs, interfaces, mutations, migration/failure
+  semantics, finalist measurement, selection, and terminal-handoff requirements;
+- an exact H5 matrix of one uncounted warm-up plus ten measured unique attempts for each profile,
+  22 fresh launches total, with conservative ten-sample nearest-rank p95 equal to the maximum;
+- complete measurement fields, driver/resource/no-swap/independent-verifier STOP rules, and
+  first-principles throughput criteria; and
+- twelve H6 theorem, simulator, parser, attack, identity, reproducibility, resource, side-channel,
+  recovery, and evidence-seal obligations.
+
+Gate 2E and H5 are now unambiguous. Candidate screening uses repeated state-component measurements,
+then one uncounted complete warm-up and at least one fresh complete K128/K512 proof per eligible
+finalist. Gate 2E selects and atomically binds the state plane. The separate H5
+warm-up-plus-ten-per-profile campaign then qualifies the exact selected candidate. A candidate
+paper number, state microbenchmark, or Gate 2E finalist run cannot receive H5 p95 credit.
+
+Instruction-level contradictions were removed:
+
+- `AGENTS.md` now records that the architecture requires two ops trees but this workspace is missing
+  canonical `../ops`; it forbids constructing it from the app mirror;
+- `CONTINUATION_MANDATE.md` makes the July handoff historical, preserves the full ideology, and
+  names the current context-recovery order;
+- historical R24 parallel/overnight plans are labeled non-executable and cannot restore removed
+  RISC Zero or Stwo backends;
+- the H0-H6 architecture says H0-H4's executable prototype boundary is complete while containing
+  simulator/security obligations remain for H6; and
+- the Rust crate-level documentation now describes the actual H4 proof core instead of the obsolete
+  statement that it is not a proof system.
+
+Verification after the change:
+
+```text
+py -3.14 -m pytest -q tests/test_foundation_spec.py
+10 passed in 0.27s
+
+py -3.14 -m pytest -q tests/test_security_freeze_spec.py -k "not app_layer_ops_is_an_exact_recursive_mirror_of_canonical_ops"
+5 passed, 1 deselected in 0.09s
+
+py -3.14 -m pytest -q tests/test_deployment_ready_roadmap_contract.py
+2 passed, 1 failed in 0.21s
+failure: FileNotFoundError for canonical ../ops/launch_blockers.json
+
+cargo fmt --all -- --check
+exit=0
+
+cargo check --release --offline --locked --lib --no-default-features
+exit=0
+
+cargo clippy --release --offline --locked --all-targets --features std,parallel -- -D warnings
+exit=0; warnings=0
+
+git diff --check
+exit=0
+
+active stale-current claim scan
+hits=0
+
+authoritative source-path readback
+checked=22; missing=0
+```
+
+The one deselection and one roadmap failure have the same pre-existing reason: canonical `../ops`
+is absent. No test, mirror check, protected path, or policy byte was changed to bypass it. H4 proof
+evidence, execution manifest, measured resources, and activation status are unchanged. No CUDA proof
+was run during this documentation phase.
+
+The exact next implementation action is Gate 2E-0 followed by 2E-1: freeze the C0 state fixtures and
+complete-boundary control record, then define narrow canonical state-layout, relation, commitment,
+opening, transition, migration, transcript, independent-verifier, and receipt interfaces. Do not
+start with a lattice optimization, another proof backend, or H5.
