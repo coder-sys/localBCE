@@ -4011,3 +4011,62 @@ hits=0
 No CUDA proof was launched. H4 evidence, proof bytes, execution manifest, resource measurements,
 `proofSuiteId=null`, activation=false, the missing canonical `../ops` condition, and the next
 Gate 2E-0 then 2E-1 code boundary are unchanged.
+
+## 2026-08-01 L1-lockstep impact and activation clarification
+
+The Strawmap contract no longer requires a successor to infer whether an Ethereum change is
+automatic, mandatory, optional, or irrelevant to the L2. Implementation commit
+`e5932847c4d4f8fe92ca15484957472bd1a7db3d`, tree
+`9f5e394ca2e33523e51148e1a7c5dd8f7c20a8c5`, adds 194 lines and removes five across 13 files.
+Protected-path changes are zero.
+
+Every one of the 23 linked EIPs now has an exact impact class, inherited L1 effect, direct Blind
+Ledger work, activation trigger, and R01-R12 owner. The five classes are:
+
+- `INHERIT`: L1 supplies the consensus/timing/network property, but BL must update and test its
+  observer, finality, reorg, DA, monitoring and capacity assumptions before claiming the benefit;
+- `L1-COMPAT`: BL directly changes a parser, producer, Engine/network/DA adapter, L1 transaction,
+  settlement contract assumption, receipt, proof/data binding, or monitoring surface;
+- `L2-PARITY`: when the selected EVM-compatibility profile mirrors a final L1 execution change,
+  the L2 executor, state-transition prover, gas/trace/witness logic, independent verifier and
+  receipts change atomically;
+- `OPTIONAL`: the baseline does not need the feature and rejects it until R11 selection,
+  migration, rollback, security/privacy/PQ review, interoperability and measured benefit pass; and
+- `RESEARCH`: no code, capacity, security or release credit.
+
+The deterministic lockstep lifecycle is now explicit in both the compatibility contract and active
+roadmap: discover; freeze an exact `ethereum_compat_manifest`; reproduce old/boundary/new and
+mixed-client cases; implement affected R02-R11 boundaries; run canonical/differential/adversarial
+tests; rehearse complete R12 finality and rollback; activate the fork-bound manifest atomically;
+and reconcile post-fork canonical receipts, DA, finality and conservation. Unknown or partial fork
+support pauses new batch acceptance/publication while preserving the reviewed exit/recovery path
+from the last supported finalized state.
+
+The architecture now states the critical separation directly: Blind Ledger does not reimplement L1
+consensus, but inherited behavior is never zero work; DA/Engine/network changes require direct
+publisher/reconstruction integration; L1 execution changes require settlement compatibility and
+conditional L2 prover parity; optional transaction/privacy/native-proof features remain disabled.
+This preserves compulsory based sequencing while moving with finalized L1 behavior instead of
+against it.
+
+Verification:
+
+```text
+py -3.14 -m pytest -q tests/test_foundation_spec.py
+12 passed in 0.31s
+
+py -3.14 -m pytest -q tests/test_foundation_spec.py \
+  tests/test_security_freeze_spec.py \
+  tests/test_deployment_ready_roadmap_contract.py \
+  -k "not app_layer_ops_is_an_exact_recursive_mirror_of_canonical_ops and not launch_blocker_manifest_has_only_one_external_assurance_dependency"
+19 passed, 2 deselected in 0.42s
+
+git diff --check
+exit=0
+
+impact matrix readback
+23 EIPs; 23 unique; every row has an impact class and R01-R12 owner
+```
+
+No code implementation, package status, H4 evidence, activation state, proof-suite identity, or
+Gate 2E ordering changed. R01-R12 and the compatibility manifest remain future implementation work.
