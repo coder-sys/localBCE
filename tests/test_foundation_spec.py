@@ -16,6 +16,7 @@ REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
 CURRENT_STACK_PATH = ROOT / "docs" / "CURRENT_TECH_STACK.md"
 ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
 STATE_PLAN_PATH = ROOT / "docs" / "BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md"
+STRAWMAP_PATH = ROOT / "docs" / "ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md"
 ACTIVE_HANDOFF_PATHS = (
     ROADMAP_PATH,
     ROOT / "docs" / "BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md",
@@ -384,6 +385,78 @@ def test_active_handoff_is_physically_separated_from_dated_execution_history() -
         assert (HISTORY_INDEX_PATH.parent / archived_name).is_file()
 
     assert "Never execute" in history_index
+
+
+def test_strawmap_contract_is_complete_compulsory_and_fail_closed() -> None:
+    strawmap = _read(STRAWMAP_PATH)
+    roadmap = _read(ROADMAP_PATH)
+    based = _read(ROOT / "docs" / "BASED_ZK_ROLLUP_ARCHITECTURE.md")
+    frontier = _read(ROOT / "docs" / "FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md")
+
+    expected_eips = {
+        "7503",
+        "7732",
+        "7773",
+        "7805",
+        "7919",
+        "7928",
+        "7938",
+        "7999",
+        "8007",
+        "8025",
+        "8070",
+        "8077",
+        "8079",
+        "8081",
+        "8136",
+        "8141",
+        "8142",
+        "8184",
+        "8198",
+        "8200",
+        "8250",
+        "8272",
+        "8297",
+    }
+    matrix = strawmap.split("## Complete linked-EIP decision matrix", 1)[1].split(
+        "## Planned-upgrade through-lines", 1
+    )[0]
+    observed_eips = set(re.findall(r"^\| (\d{4}) \|", matrix, flags=re.MULTILINE))
+    assert observed_eips == expected_eips
+    assert len(re.findall(r"^\| \d{4} \|", matrix, flags=re.MULTILINE)) == 23
+
+    assert "is an Ethereum-settled, EVM-compatible based validity rollup" in strawmap
+    assert "A permanent privileged" in strawmap
+    assert "Every accepted L2 state transition requires" in strawmap
+    assert "must work against a pinned, deployed Ethereum fork" in strawmap
+    assert "may later provide a versioned execution/verification adapter" in strawmap
+    assert "public ethereum data availability carries only fixed-shape, non-phi" in strawmap.lower()
+
+    for package_id in (f"R{i:02d}" for i in range(1, 13)):
+        assert f"| {package_id} |" in strawmap
+        assert f"| {package_id} |" in roadmap
+
+    for through_line in (
+        "attester–includer separation",
+        "one-round finality",
+        "proofs of custody",
+        "sparse blobpool",
+        "cell deltas",
+        "frame",
+        "keyed nonces",
+        "recent roots",
+        "partitioned binary tree",
+        "leanVM",
+        "PQ key registry",
+        "PQ signature precompiles",
+        "PQ-safe blobs",
+    ):
+        assert through_line.lower() in strawmap.lower()
+
+    assert "compulsory containing architecture" in based
+    assert "Being an Ethereum-settled based validity\nrollup is compulsory" in roadmap
+    assert "EIP-7707, access-list provisioning" not in frontier
+    assert "EIP-7928, block-level access lists" in frontier
 
 
 def test_foundation_sbom_is_valid_internal_spdx_inventory_with_honest_unknowns() -> None:

@@ -25,3 +25,7 @@ internal adapters, simulators, conformance tests, or deployment automation.
 migration/rollback, evidence-capsule exactness, proof/data reconstruction, and dependence on draft
 Ethereum features. Current state maps and pinned validity-rollup settlement stay authoritative until
 replacements pass versioned gates. Projected state-call reductions are not throughput results.
+
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` owns the complete outer-chain change
+risk. R01-R12 must pin a deployed baseline, keep based sequencing and validity mandatory, and reject
+unknown or partial fork/EIP support; no live-map projection is release evidence.

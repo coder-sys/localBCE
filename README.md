@@ -30,6 +30,12 @@ dominant state-proof cost, safely schedule independent claims, bind government/o
 stay compatible with Ethereum's direction. It adds no package, makes no unmeasured speed claim,
 preserves strict-PQ/privacy bounds, and keeps draft EIPs optional.
 
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` is the complete current Ethereum
+compatibility contract. It records all 23 live-map EIPs and every planned consensus/data/execution/
+PQ/privacy through-line, with maturity gates and R01-R12 ownership. Blind Ledger's
+Ethereum-settled based-validity architecture is compulsory; draft features remain optional
+adapters and public Ethereum data remains non-PHI.
+
 This directory is the source root for day-to-day work. The archive root also contains sibling directories used by this source tree:
 
 | Sibling path | Purpose |
@@ -60,7 +66,11 @@ This directory is the source root for day-to-day work. The archive root also con
 
 ## Target L2 architecture
 
-Blind Ledger targets an Ethereum-settled, EVM-compatible based validity rollup. Ethereum provides canonical sequencing, public data availability, settlement, and finality; Blind Ledger claim proofs verify inside the L2; a rollup validity proof authenticates the resulting L2 state transition on Ethereum L1. Patient and claim records remain in government-controlled encrypted storage and are represented publicly only by commitments.
+Blind Ledger is an Ethereum-settled, EVM-compatible based validity rollup by compulsory design.
+Ethereum provides canonical sequencing, public data availability, settlement, and finality; Blind
+Ledger claim proofs verify inside the L2; a rollup validity proof authenticates the resulting L2
+state transition on Ethereum L1. Patient and claim records remain in government-controlled
+encrypted storage and are represented publicly only by commitments.
 
 This target is not yet implemented. The current repository has no production `INativeStarkVerifier` implementation, and the current Cairo output does not match the settlement contract's caller-supplied public-input schema. See `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md` and `KNOWN_ISSUES.md`.
 

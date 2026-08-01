@@ -5,7 +5,9 @@ Gate 2E state selection, H5 repeated p95, and H6 qualification remain open. Wave
 synthetic/nonactivating; Wave 2 is active; 6 of 93 packages are complete; `proofSuiteId` is null;
 real PHI/payments are forbidden. Read `docs/CURRENT_TECH_STACK.md`, then
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` after the throughput and heterogeneous-proof
-contracts. Its projections are prospective and must not be reported as benchmarks.
+contracts. Before any containing-rollup work, also read
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. Its compulsory based-validity invariants
+and the frontier projections must not be confused with implemented or measured evidence.
 
 Run commands from `blind-ledger-app-layer/` unless a command says otherwise.
 

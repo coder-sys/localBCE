@@ -11,6 +11,25 @@ preserved under `history/`. Their imperative language is non-executable. Use thi
 rejection decision, `history/` for verbatim provenance, and current architecture documents for
 implementation.
 
+## Rejected Ethereum-roadmap shortcuts
+
+The exact accepted outer-chain contract is
+`ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. The following shortcuts are rejected:
+
+| Rejected shortcut | Reason |
+| --- | --- |
+| A dedicated or committee sequencer as canonical release ordering | Violates the compulsory based-rollup decision. Ethereum ordering must determine the canonical L2 history. |
+| Optimistic-only, re-execution-only, or optional validity | Fails the mandatory Blind Ledger claim-proof plus containing rollup-validity boundary. |
+| EIP-7707 as the current access-list tracker | Stagnant and absent from the live map; EIP-7928 BAL is the current Review surface. Historical mentions may remain only in history. |
+| EIP-7503 wormholes as Blind Ledger privacy/PQ | Stagnant, different burn/remint semantics, and the proposed curve proof does not satisfy the strict-PQ/private claim theorem. |
+| EIP-8184 LUCID as PHI transport or PQ encryption | The draft explicitly lacks an enshrined satisfactory PQ encryption scheme and introduces public tickets/commitments plus off-protocol key release. |
+| EIP-8025 optional execution proofs as the production verifier | Optional/shadow evidence cannot replace authoritative execution, the Blind Ledger verifier, or mandatory rollup validity. |
+| EIP-8079 native rollups as a release prerequisite | Draft with security, tests, and reference implementation incomplete/TBD; admissible only as a later versioned adapter. |
+| Ethereum leanVM as the Blind Ledger inner proof | It targets Ethereum PQ-signature aggregation and does not prove the sealed claim relation, state transition, native hiding, or atomic receipt. |
+| Ethereum BAL as private CBAM | BAL is a public execution/witness artifact; CBAM is a fixed-padded private semantic access contract. |
+| Draft gas/slot/DA north stars as measured capacity | Roadmap labels and EIP projections are not deployed fork behavior or end-to-end Blind Ledger measurements. |
+| Encrypted claim/medical payloads in public DA | Encryption does not remove metadata, retention, custody, or future-decryption risk and violates the strict privacy boundary. |
+
 ## RISC Zero 3.0.5 backend
 
 Decision: removed from the active source tree.

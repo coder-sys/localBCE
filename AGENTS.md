@@ -8,6 +8,8 @@ This is a zero-knowledge payment-system source handoff. Treat cryptographic, set
    recorded in the newest `STATE.md`; do not create, extract, or silently switch to another copy.
 2. Read `docs/CURRENT_TECH_STACK.md` for the exact active implementation and evidence vocabulary.
 3. Read `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md` before any proof, settlement, privacy, sequencing, data-availability, bridge, or finality work.
+   For containing-rollup or Ethereum-upgrade work, immediately follow it with
+   `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`.
 4. Read `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`, the deterministic continuation contract near the top of `docs/IMPLEMENTATION_ROADMAP.md`, and `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` before any claim-proof, witness-hiding, nullifier, commitment, post-quantum, verifier, adapter, rollup, deployment, or proving-performance work.
 5. If working context is compacted or lost, re-read `CONTINUATION_MANDATE.md` immediately after this file, then read the newest section of `STATE.md`, `docs/CURRENT_TECH_STACK.md`, and the architecture/roadmap documents above before continuing. Read `WAVE2_HANDOFF_2026-07-26.md` only as historical recovery evidence; its old next-step language is not current authority. Do not reconstruct trust-critical decisions from chat summaries.
 6. Check existing tools before installing anything. Do not reinstall Python, Rust, Scarb, Foundry, or CUDA if they are already present and working.
@@ -55,6 +57,7 @@ Do not add Claude, Gemini, or generic memory files. In this archive, agent instr
 - `docs/CURRENT_TECH_STACK.md`
 - `docs/REJECTED_ARCHITECTURES.md`
 - `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`
+- `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`
 - `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`
 - `docs/IMPLEMENTATION_ROADMAP.md`
 - `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`

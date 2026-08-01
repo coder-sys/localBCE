@@ -6,6 +6,11 @@ The frontier additions in `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` a
 inside the existing 93 packages. They do not create a new external dependency, change the count, or
 permit a draft Ethereum feature to block the pinned release path.
 
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` makes the based-validity decision
+compulsory and assigns the complete live-map compatibility surface to R01-R12. The pinned release
+baseline must remain deployable without any unshipped EIP; future fork adapters are internal
+engineering, versioned, rejected by default, and fail closed.
+
 The committed sparse-state and PQ commitment bake-off in
 `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` is likewise internal work inside existing packages.
 It creates no upstream-author, external-prover, hardware-service, or outside-engineer dependency.

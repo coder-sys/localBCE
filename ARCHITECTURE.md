@@ -37,11 +37,18 @@ external sampler observed 2,770.337792 MB total GPU residency across live CUDA c
 was 0.000000 MB and pagefile CurrentUsage did not grow. These are complete-prototype measurements,
 not the warm-up-plus-ten qualification campaign.
 
-Cross-wave state, scheduling, adapter-evidence, formalization, and Ethereum compatibility are
-governed by `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md`. It assigns work to existing
-packages rather than creating a second roadmap.
+Cross-wave state, scheduling, adapter-evidence, and formalization are governed by
+`docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md`. The complete live Ethereum Strawmap
+snapshot, all 23 linked EIPs, non-EIP upgrade through-lines, maturity rules, and exact R01-R12
+consequences are governed by `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. Both assign
+work to existing packages rather than creating a second roadmap.
 
-The canonical target design is `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`. Blind Ledger targets an Ethereum-settled, EVM-compatible based validity rollup. This document describes the current source layout; it must not be read as evidence that the target rollup or production verifier is already implemented.
+The canonical target design is `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`. Blind Ledger **is designed
+as an Ethereum-settled, EVM-compatible based validity rollup**; this is compulsory, not an optional
+future mode. Ethereum canonical ordering, mandatory validity, non-PHI public DA, and no permanent
+privileged sequencer are frozen R01-R12 invariants. This document describes the current source
+layout; it must not be read as evidence that the target rollup or production verifier is already
+implemented.
 
 `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` defines the whole-product completion boundary. All 93
 roadmap packages—including the proof/state core, adapters, rollup, deployment, and release

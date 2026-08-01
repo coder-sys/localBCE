@@ -2,7 +2,7 @@
 
 Status: architectural source of truth for the target system.
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 
 Current inner-proof execution checkpoint: the newest dated section of `../STATE.md`; the original
 transfer record is `../WAVE2_HANDOFF_2026-07-26.md`. The GPU accelerates only untrusted field
@@ -27,12 +27,14 @@ direct-SHA3 STARK. The containing rollup must bind the exact semantic-AIR, share
 coprocessor, sidecar, and verifier identities selected by Wave 2/3.
 
 Ethereum-roadmap compatibility and its maturity gates are defined in
-`docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md`. Draft EIPs are optional adapter targets, not
-dependencies of the deployment-ready build.
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. It inventories every live-map EIP and
+planned through-line. Draft/Review/Stagnant items are versioned compatibility targets, not
+dependencies of the deployment-ready baseline.
 
 ## Decision
 
-Blind Ledger targets an Ethereum-settled, EVM-compatible, based validity rollup:
+Blind Ledger's compulsory containing architecture is an Ethereum-settled, EVM-compatible, based
+validity rollup:
 
 - Ethereum L1 provides canonical sequencing, data availability for public rollup state, settlement,
   and objective finality.
@@ -44,6 +46,8 @@ Blind Ledger targets an Ethereum-settled, EVM-compatible, based validity rollup:
   Ethereum that the verifier and settlement logic executed correctly.
 - Patient and claim records remain in government-controlled encrypted storage. Public L1/L2 data
   contains commitments, roots, proofs, and the minimum public financial state only.
+- EIP-8079 native execution, EIP-8025 optional execution proofs, and leanVM may be future outer-chain
+  adapters. None can replace based ordering, mandatory validity, or the Blind Ledger inner proof.
 
 This is not a decision to clone Robinhood Chain. Robinhood Chain is a finance-focused Ethereum L2
 built on Arbitrum Nitro with a dedicated sequencer and optimistic fraud-proof finality. It is a useful

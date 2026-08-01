@@ -12,7 +12,10 @@ Construction 8.2 PCS, and one/four-shard coordinator through independent verific
 boundary. Gate 2E state selection, H5's repeated p95 campaign, H6 suite qualification, every
 activation gate, and `proofSuiteId=null` remain unchanged.
 
-The target protocol is defined in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`: an Ethereum-settled based validity rollup with private Blind Ledger claim proofs verified inside the L2 and a rollup validity proof verified on Ethereum L1.
+The compulsory target protocol is defined in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`: an
+Ethereum-settled based validity rollup with private Blind Ledger claim proofs verified inside the
+L2 and a rollup validity proof verified on Ethereum L1. The complete fork/EIP compatibility
+surface is `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`.
 
 The completion boundary is `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`: 93 internally finishable
 packages cover the proof/state core, provider-neutral external-system adapters, rollup, operations,

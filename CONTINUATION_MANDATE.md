@@ -43,6 +43,7 @@ After every compaction, loss of context, or handoff:
 3. read the newest section of `STATE.md`, then `docs/CURRENT_TECH_STACK.md` completely;
 4. read the deterministic continuation contract in `docs/IMPLEMENTATION_ROADMAP.md` and every
    specialized architecture document it names for the active gate;
+   R01-R12 work always includes `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`;
 5. read dated handoffs and historical sections only when provenance or a rejected decision is
    needed; never execute their old next-step language;
 6. inspect `git status --short` and preserve every pre-existing user change;

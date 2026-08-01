@@ -10,6 +10,11 @@ Former active roadmap, throughput, coprocessor, optimization-review, and crate-R
 are physically isolated under `docs/history/`. They preserve provenance but are never part of the
 active read order. `docs/REJECTED_ARCHITECTURES.md` owns rejection decisions.
 
+The compulsory containing design is an Ethereum-settled based validity rollup. The complete live
+Strawmap/EIP compatibility surface and maturity rules are in
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. That prospective outer-chain contract
+does not change the current H4 proof implementation or mark any R01-R12 package complete.
+
 ## Current product boundary
 
 Blind Ledger is a nonactivating zero-knowledge payment-system prototype. Wave 1 is the sealed

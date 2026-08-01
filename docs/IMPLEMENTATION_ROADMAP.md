@@ -22,6 +22,11 @@ After compaction, read `../AGENTS.md`, `../CONTINUATION_MANDATE.md`, the newest 
 section, `CURRENT_TECH_STACK.md`, this file, and the current document for the active gate. Never
 derive a next action from a dated section in `STATE.md` or `history/`.
 
+For any R01-R12 work, the specialized contract is
+`ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. Being an Ethereum-settled based validity
+rollup is compulsory. Strawmap items are compatibility inputs selected by maturity and deployed
+fork state; no Draft, Review, Stagnant, or research item may become a hidden release dependency.
+
 ## Frozen product boundary
 
 Every package and optimization must preserve all of the following:
@@ -365,18 +370,18 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| R01 | Select and pin the exact EVM-compatible based-validity-rollup stack. | Open. |
-| R02 | Build deterministic reproducible local multi-node deployment. | Open. |
-| R03 | Integrate the real claim verifier and 12-field-plus-sidecar interface into L2. | Open. |
-| R04 | Implement atomic claim/nullifier/root/payment/wide-state transitions. | Open. |
-| R05 | Implement and qualify the L2 state-transition prover. | Open. |
-| R06 | Implement Ethereum verification, settlement, finality, and verifier governance. | Open. |
-| R07 | Implement based ordering, inclusion, reorg, duplicate, and replay handling. | Open. |
-| R08 | Implement non-PHI data publication, reconstruction, retention, and corruption tests. | Open. |
-| R09 | Implement bridge/escrow accounting, deposits, withdrawals, and conservation. | Open. |
-| R10 | Implement forced inclusion, censorship resistance, exits, and recovery. | Open. |
-| R11 | Implement upgrades, timelocks, emergency rollback, and disaster recovery. | Open. |
-| R12 | Verify claim-to-proof-to-L2-to-Ethereum finality and one-command rollback. | Open. |
+| R01 | Pin the deployed EL/CL fork specs, EVM, and exact EVM-compatible based-validity stack; record Strawmap feature maturity without depending on drafts. | Open. |
+| R02 | Build a reproducible multi-node, multi-fork local deployment with parameterized slots, gas/blob schedules, BAL/data modes, and transaction formats. | Open. |
+| R03 | Integrate the production claim verifier and exact 12-field-plus-sidecar boundary; bind rollup proof, chain/fork, verifier, suite, state, and DA identities. | Open. |
+| R04 | Implement atomic claim/nullifier/root/payment/wide-state transitions including BAL/CBAM separation, keyed nonce/recent-root adapters, migration, and receipt. | Open. |
+| R05 | Implement and qualify the L2 state-transition prover against every supported final fork rule with differential execution vectors. | Open. |
+| R06 | Implement Ethereum verification, settlement, finality, fork-aware timing, and verifier governance; never equate preconfirmation/head with finality. | Open. |
+| R07 | Implement compulsory based ordering without a privileged canonical sequencer; test ePBS/FOCIL withholding, inclusion, reorg, duplicate, nonce, and replay failures. | Open. |
+| R08 | Implement non-PHI proof/data coupling, payload/blob/cell publication, partial fetch, reconstruction, retention, withholding, migration, and corruption tests. | Open. |
+| R09 | Implement bridge/escrow accounting, deposits, finalized withdrawals, replay binding, and conservation. | Open. |
+| R10 | Implement opaque bounded forced inclusion, censorship resistance, exits, reorg-safe recovery, and privacy preservation. | Open. |
+| R11 | Implement versioned EIP/fork adapters, timelocks, downgrade rejection, emergency rollback, and disaster recovery. | Open. |
+| R12 | Verify claim-to-proof-to-L2-to-finalized-Ethereum plus rollback on the pinned baseline and explicit future-fork profiles. | Open. |
 
 ## Final independent Security Audit Gate - not counted
 

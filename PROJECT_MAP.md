@@ -37,6 +37,7 @@ recovery evidence and does not define the current proof architecture.
 | `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md` | Authoritative current Wave 2 shared-bus Boolean GKR architecture, exact K128/K512 geometry, hiding/PCS boundary, verifier order, resources, and H4 evidence. | H4 is prototype-accepted; Gate 2E, H5, H6, suite identity, and activation remain open. |
 | `docs/history/` | Verbatim former roadmap, throughput, coprocessor, and crate-README checkpoint narratives. | Non-executable provenance only; active work must not follow imperative language from this directory. |
 | `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` | Cross-wave contract for CBAM, state-topology bake-off, conflict-DAG scheduling, proof-carrying adapters, formal spine, and maturity-gated Ethereum alignment. | Prospective work allocation. It adds no package, changes no status, and makes no measured speed or activation claim. |
+| `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` | Complete live Strawmap snapshot: all 23 linked EIPs, every non-EIP planned through-line, maturity rules, compulsory based-validity invariants, and exact R01-R12 acceptance work. | Current outer-chain compatibility contract. It adds no package or completion credit and never turns a draft into a release dependency. |
 | `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` | Mandatory Wave 2 gate for persistent sparse memory, transparent dictionaries, touched-projection RAM, compact memory consistency, and native-hiding PQ commitment selection against the existing SHA3-512 control. | Trust-critical prospective architecture. It selects no primitive by documentation and requires exact theorem, migration, independent-verifier, and laptop evidence. |
 | `CONTINUATION_MANDATE.md` | Mandatory post-compaction persistence, product-ideology, recovery, download, evidence, and legitimate-hard-stop instructions. | Read immediately after `AGENTS.md`; it never authorizes weakening a gate or bypassing higher-priority instructions. |
 | `docs/REJECTED_ARCHITECTURES.md` | Non-executable ledger for removed or dominated proof backends, layouts, formats, and optimizations. | Preserve exact identities and rejection reasons; never treat it as a fallback catalog. |
@@ -45,7 +46,10 @@ recovery evidence and does not define the current proof architecture.
 | `../third_party/forge-std/` | Vendored Forge standard library. | Low unless changing Solidity test toolchain. |
 | `docs/` | Architecture and operating docs. | Low to medium. Keep aligned with code. |
 
-The architectural source of truth is `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`. Read it before editing proof, verifier, settlement, sequencing, data availability, bridge, privacy, or finality behavior.
+The architectural source of truth is `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`. Read it and
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` before editing proof, verifier,
+settlement, sequencing, data availability, bridge, privacy, Ethereum compatibility, or finality
+behavior.
 
 The claim proof's selected witness-hiding and strict post-quantum profile is maintained in
 `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`. It preserves the 12-field external application ABI while

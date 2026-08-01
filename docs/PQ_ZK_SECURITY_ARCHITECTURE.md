@@ -19,6 +19,10 @@ in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`.
 The cross-wave throughput/settlement compatibility contract is
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md`. It cannot weaken this document's profile,
 promote a paper benchmark, or count Ethereum's classical settlement boundary as PQ security.
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` further separates Ethereum's leanVM,
+leanXMSS, PQ milestones, optional execution proofs, native rollups, KZG/DA, and transaction
+migrations from the Blind Ledger inner proof. No external roadmap item receives theorem, hiding,
+soundness, or PQ credit before its exact deployed implementation independently earns it.
 
 ## Compaction and handoff rule
 

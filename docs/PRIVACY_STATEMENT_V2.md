@@ -15,6 +15,11 @@ The current physical proof topology is
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`.
 The cross-wave frontier contract is `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md`; its CBAM,
 evidence capsules, scheduler, DA, and Ethereum adapters inherit every privacy prohibition here.
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` makes the outer-chain privacy boundary
+explicit: wormholes, LUCID/encrypted mempools, ephemeral keys, private ETH, privacy pools, and
+zkzk frames are research or compatibility surfaces. None authorizes PHI, claim documents, exact
+private amounts, decision metadata, or witnesses in public calldata, blobs, logs, tickets, or
+ciphertext envelopes.
 
 ## Proof-backend blocker
 

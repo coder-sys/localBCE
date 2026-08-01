@@ -288,11 +288,13 @@ transition. External libraries may inspire or cross-check work; no outside team/
 ## Primary references
 
 - Ethereum roadmap tracker: https://strawmap.org/
+- Complete Blind Ledger Strawmap/EIP compatibility contract:
+  `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`
 - EIP-8079, Native rollups: https://eips.ethereum.org/EIPS/eip-8079
 - EIP-7805, FOCIL: https://eips.ethereum.org/EIPS/eip-7805
 - EIP-7594, PeerDAS: https://eips.ethereum.org/EIPS/eip-7594
 - EIP-7999, unified multidimensional fee market: https://eips.ethereum.org/EIPS/eip-7999
-- EIP-7707, access-list provisioning: https://eips.ethereum.org/EIPS/eip-7707
+- EIP-7928, block-level access lists: https://eips.ethereum.org/EIPS/eip-7928
 - Twist and Shout memory checking: https://eprint.iacr.org/2025/105
 - VEIL zero-knowledge compiler: https://eprint.iacr.org/2026/683
 - Neo and SuperNeo post-quantum folding: https://eprint.iacr.org/2026/242

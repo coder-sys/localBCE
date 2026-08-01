@@ -12,6 +12,11 @@ state/scheduler safety, proof-carrying adapters, proof/data reconstruction, and 
 capacity. Native-rollup and FOCIL paths remain disabled unless maturity gates pass; the pinned
 validity-rollup path cannot depend on them.
 
+Before R01-R12 deployment work, read
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`, refetch the canonical fork/EIP sources,
+and pin the exact deployed feature matrix. The deployment must remain a based validity rollup and
+must fail closed on unknown fork IDs, transaction/proof types, data modes, or partial adapters.
+
 ## Preflight
 
 1. Confirm the release zip packages `blind-ledger-app-layer/`, `ops/`, and
