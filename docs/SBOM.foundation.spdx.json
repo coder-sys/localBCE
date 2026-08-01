@@ -1,0 +1,303 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Blind Ledger synthetic foundation SBOM draft",
+  "documentNamespace": "https://blind-ledger.invalid/spdx/foundation/2026-07-13/bl-pq512-draft",
+  "creationInfo": {
+    "created": "2026-07-13T00:00:00Z",
+    "creators": [
+      "Tool: Codex source-inspection foundation inventory"
+    ],
+    "comment": "Provisional multi-ecosystem S11 foundation inventory. The complete qualified Python sub-inventory and platform artifact identities are maintained in docs/SBOM.python.spdx.json and requirements/locks/python-artifacts.lock.json."
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-Blind-Ledger-App-Layer"
+  ],
+  "packages": [
+    {
+      "name": "blind-ledger-app-layer",
+      "SPDXID": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "comment": "Synthetic development workspace. No top-level project license or production release identity is asserted."
+    },
+    {
+      "name": "fastapi",
+      "SPDXID": "SPDXRef-Package-Python-fastapi",
+      "versionInfo": "0.136.3",
+      "downloadLocation": "https://pypi.org/project/fastapi/0.136.3/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/fastapi@0.136.3"
+        }
+      ]
+    },
+    {
+      "name": "uvicorn",
+      "SPDXID": "SPDXRef-Package-Python-uvicorn",
+      "versionInfo": "0.49.0",
+      "downloadLocation": "https://pypi.org/project/uvicorn/0.49.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/uvicorn@0.49.0"
+        }
+      ]
+    },
+    {
+      "name": "cryptography",
+      "SPDXID": "SPDXRef-Package-Python-cryptography",
+      "versionInfo": "49.0.0",
+      "downloadLocation": "https://pypi.org/project/cryptography/49.0.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/cryptography@49.0.0"
+        }
+      ]
+    },
+    {
+      "name": "pqcrypto",
+      "SPDXID": "SPDXRef-Package-Python-pqcrypto",
+      "versionInfo": "0.4.0",
+      "downloadLocation": "https://pypi.org/project/pqcrypto/0.4.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pqcrypto@0.4.0"
+        }
+      ]
+    },
+    {
+      "name": "pytest",
+      "SPDXID": "SPDXRef-Package-Python-pytest",
+      "versionInfo": "9.0.3",
+      "downloadLocation": "https://pypi.org/project/pytest/9.0.3/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest@9.0.3"
+        }
+      ]
+    },
+    {
+      "name": "httpx",
+      "SPDXID": "SPDXRef-Package-Python-httpx",
+      "versionInfo": "0.28.1",
+      "downloadLocation": "https://pypi.org/project/httpx/0.28.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/httpx@0.28.1"
+        }
+      ]
+    },
+    {
+      "name": "blind-ledger-rules-engine",
+      "SPDXID": "SPDXRef-Package-Rust-Rules-Engine",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "comment": "Workspace component. Cargo.lock exists; repository toolchain and package license remain unresolved."
+    },
+    {
+      "name": "blind-ledger-poseidon-helper",
+      "SPDXID": "SPDXRef-Package-Rust-Poseidon-Helper",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "comment": "Workspace component. Cargo.lock exists; compiler/toolchain and package license remain unresolved."
+    },
+    {
+      "name": "stwo",
+      "SPDXID": "SPDXRef-Package-Rust-Stwo-Vendored",
+      "versionInfo": "git-aeceb74c58184d7886ebd7f34a7453fee714ca40-local-patch",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "comment": "Vendored experimental source at a repository-documented upstream commit plus a local allocator-safety patch. The patched bytes are not downloadable at one verified location, and R24 did not independently rederive the inherited upstream/archive identities. Not the future production witness-hiding fork."
+    },
+    {
+      "name": "risc0-zkvm",
+      "SPDXID": "SPDXRef-Package-Rust-Risc0-zkvm",
+      "versionInfo": "3.0.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/risc0-zkvm@3.0.5"
+        }
+      ],
+      "comment": "Direct experiment manifest pin. A Cargo.lock is present, but this foundation SBOM has not reconciled every locked transitive package and license."
+    },
+    {
+      "name": "risc0-build",
+      "SPDXID": "SPDXRef-Package-Rust-Risc0-build",
+      "versionInfo": "3.0.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/risc0-build@3.0.5"
+        }
+      ],
+      "comment": "Direct build dependency in the RISC Zero experiment manifest. The foundation inventory does not infer license or supplier metadata."
+    },
+    {
+      "name": "cairo_execute",
+      "SPDXID": "SPDXRef-Package-Cairo-cairo-execute",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "comment": "Scarb manifest permits >=2.18.0. Exact resolved source is not represented by the packaged lock and is intentionally not invented."
+    },
+    {
+      "name": "forge-std",
+      "SPDXID": "SPDXRef-Package-Solidity-forge-std",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "comment": "The app-layer documentation points to sibling vendored source and license files outside this run's authorized path. License, upstream commit, source-tree hash, and archive provenance remain NOASSERTION until captured by an authorized provenance check."
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-App-Layer"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Python-fastapi"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Python-uvicorn"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Python-cryptography"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Python-pqcrypto"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Python-pytest",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-App-Layer"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Python-httpx",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-App-Layer"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-Rust-Rules-Engine"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-Rust-Poseidon-Helper"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-Rust-Stwo-Vendored"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Rust-Risc0-zkvm"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Rust-Risc0-build",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-App-Layer"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Cairo-cairo-execute"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Solidity-forge-std",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-App-Layer"
+    }
+  ],
+  "annotations": [
+    {
+      "annotator": "Tool: Codex source-inspection foundation inventory",
+      "annotationDate": "2026-07-13T00:00:00Z",
+      "annotationType": "OTHER",
+      "comment": "INCOMPLETE FOUNDATION DRAFT: transitive Python artifacts, full Cargo-lock license reconciliation, exact Cairo resolution, Forge identity, forge-std provenance, most licenses, compiler environments, and future BL-PQ512 proof-suite dependencies remain unresolved. NOASSERTION is intentional."
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "schema": "blind-ledger-wave1a-physical-relation-vector-v1",
+  "status": "WAVE1A_PHYSICAL_RELATION_IR_COMPLETE_BACKEND_UNSELECTED_NONACTIVATING",
+  "activationAllowed": false,
+  "proofSuiteId": null,
+  "proofGenerated": false,
+  "ports": {
+    "hash": "SHA3_512_CONSTRAINT_PORT_V1_UNINSTANTIATED",
+    "legacyHash": "STARKNET_POSEIDON_CONSTRAINT_PORT_V1",
+    "challenge": "BL_PQ512_TYPED_CHALLENGE_PORT_V1_UNINSTANTIATED",
+    "commitment": "BL_PQ512_TYPED_COMMITMENT_PORT_V1_UNINSTANTIATED"
+  },
+  "profiles": [
+    {
+      "profileId": "K128_CALIBRATION",
+      "programCommitmentSha3_512": "d5df3ac6795e534bb6bb2ae090ff2dc9282a3dcf76c2602997e3b7cd304a95422d9c791dcd36ca5ae635afb3b6a11791d66b4ae3a194999de523247f353dd161",
+      "dimensions": {
+        "tables": 16,
+        "commitments": 4,
+        "logicalRows": 753164,
+        "paddedRows": 848272,
+        "traceColumnsAcrossTables": 2279,
+        "constraints": 4844,
+        "maximumConstraintDegree": 3,
+        "lookupMessageWidthAcrossTables": 276,
+        "paddedCells": 114853632,
+        "dEffUpperBound": 1427283902464
+      }
+    },
+    {
+      "profileId": "K256_DESIGN_POINT",
+      "programCommitmentSha3_512": "2f0029505286c35976c50dcb747605e72c31b34de0463c3093621d6936b8b63de62369302ca84a583bad6e6d365db9460870c6b0c4cb973bcb55f0af4de01860",
+      "dimensions": {
+        "tables": 16,
+        "commitments": 4,
+        "logicalRows": 1519500,
+        "paddedRows": 1696528,
+        "traceColumnsAcrossTables": 2279,
+        "constraints": 4844,
+        "maximumConstraintDegree": 3,
+        "lookupMessageWidthAcrossTables": 276,
+        "paddedCells": 229705856,
+        "dEffUpperBound": 2854567804928
+      }
+    },
+    {
+      "profileId": "K512_CALIBRATION",
+      "programCommitmentSha3_512": "60cb58cc01fdb445b83b919cae2f30d00fbe4842cd2b60fea8bff4943cbc83782f878c252f8d4ff1e7950c68fab141ffcb784ec141a7ffd612544929de406e70",
+      "dimensions": {
+        "tables": 16,
+        "commitments": 4,
+        "logicalRows": 3065484,
+        "paddedRows": 3397136,
+        "traceColumnsAcrossTables": 2279,
+        "constraints": 4844,
+        "maximumConstraintDegree": 3,
+        "lookupMessageWidthAcrossTables": 276,
+        "paddedCells": 459803520,
+        "dEffUpperBound": 5709135609856
+      }
+    }
+  ]
+}

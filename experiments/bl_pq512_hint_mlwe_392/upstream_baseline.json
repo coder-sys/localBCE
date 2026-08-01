@@ -1,0 +1,25 @@
+{
+  "candidate_id": "rejection-free-hint-mlwe-upstream-c86212e",
+  "status": "BLOCKED",
+  "upstream_commit": "c86212e45af9e957d1ae2be58c111e2d85b253be",
+  "lazer_gitlink_commit": "415967cfdf97234d1757d0b363e15cadcb6b1cec",
+  "lattice_estimator_gitlink_commit": "",
+  "parameter_generator_security_bits": 128,
+  "challenge_space_bits": [
+    129,
+    147
+  ],
+  "transcript": {
+    "mode": "fiat-shamir",
+    "hash": "shake128",
+    "hash_bytes": 32
+  },
+  "required_redesign": {
+    "per_term_bits": 392,
+    "total_bits": 384,
+    "mode": "authenticated-interactive-public-coin",
+    "authoritative_hash": "sha3-512",
+    "hash_bytes": 64
+  },
+  "qualification_credit": 0
+}

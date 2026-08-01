@@ -1,0 +1,53 @@
+{
+  "schema_version": "blind_ledger_policy_spec_v1",
+  "policy_id": "ca_medi_cal_outpatient_office_visit_v1",
+  "jurisdiction": "CA",
+  "program": "Medi-Cal",
+  "service_wedge": {
+    "service_type": "outpatient_professional_claim",
+    "transaction": "837P",
+    "procedure_codes": ["99213", "T1019", "S5102", "H2015"],
+    "effective_from": "20260101",
+    "effective_until": "20261231"
+  },
+  "evidence_requirements": [
+    "eligibility_active",
+    "not_deceased",
+    "provider_enrolled",
+    "provider_not_suspended",
+    "authorization_present",
+    "fee_allowed_cents",
+    "duplicate_claim",
+    "program_integrity_hold"
+  ],
+  "gates": [
+    {"id": "G1_MEMBER_ID_PRESENT", "failure_reason": "member_id_missing"},
+    {"id": "G2_ELIGIBILITY_ACTIVE", "failure_reason": "eligibility_inactive"},
+    {"id": "G2B_PATIENT_NOT_DECEASED", "failure_reason": "patient_deceased"},
+    {"id": "G3_PROVIDER_NPI_PRESENT", "failure_reason": "provider_npi_missing"},
+    {"id": "G4_PROVIDER_ENROLLED", "failure_reason": "provider_not_enrolled"},
+    {"id": "G4B_PROVIDER_NOT_SUSPENDED", "failure_reason": "provider_suspended"},
+    {"id": "G5_SERVICE_LINES_PRESENT", "failure_reason": "service_line_missing"},
+    {"id": "G6_DIAGNOSIS_PRESENT", "failure_reason": "diagnosis_missing"},
+    {"id": "G7_PRIOR_AUTH_WHEN_REQUIRED", "failure_reason": "prior_authorization_required"},
+    {"id": "G8A_CHARGE_VALID", "failure_reason": "invalid_charge"},
+    {"id": "G8B_FEE_SCHEDULE_PRESENT", "failure_reason": "fee_schedule_missing"},
+    {"id": "G9_NOT_DUPLICATE", "failure_reason": "duplicate_claim"},
+    {"id": "G10_NO_PROGRAM_INTEGRITY_HOLD", "failure_reason": "program_integrity_hold"}
+  ],
+  "fee_schedule_cents": {
+    "99213": 12500,
+    "T1019": 12500,
+    "S5102": 12500,
+    "H2015": 12500
+  },
+  "source_to_execution_flow": [
+    "official_source",
+    "cited_rule_section",
+    "atomic_rule",
+    "human_ratification",
+    "executable_policy_artifact",
+    "policy_hash_or_root",
+    "rules_engine"
+  ]
+}

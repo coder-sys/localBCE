@@ -1,0 +1,391 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blind-ledger.invalid/schemas/bl_pq512_vector_v1.schema.json",
+  "title": "Blind Ledger BL-PQ512 synthetic foundation vector v1",
+  "description": "Synthetic-only T01 structural scaffold plus P01/P02 tree KAT. Only canonical-record, manifest, and dual-tree values are recomputed; claim semantics, the 12 compatibility outputs, and logical sidecar are structural placeholders until T02-T06. REFERENCE/v0 is not an S07-S09 production primitive or P06 encoding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "vectorSchema",
+    "referenceStatus",
+    "profileId",
+    "referenceSchemaId",
+    "domainSuite",
+    "caseId",
+    "privateSemantics",
+    "compatibilityOutputs",
+    "wideSidecar"
+  ],
+  "properties": {
+    "vectorSchema": {
+      "const": "blind-ledger-bl-pq512-foundation-vector-v1"
+    },
+    "referenceStatus": {
+      "const": "SYNTHETIC_T01_STRUCTURE_AND_P01_P02_TREE_KAT_NOT_T02"
+    },
+    "profileId": {
+      "const": "BL-PQ512-v1"
+    },
+    "referenceSchemaId": {
+      "const": "BL-PQ512-TREE-REFERENCE-v0"
+    },
+    "domainSuite": {
+      "const": "BL-PQ512-REFERENCE/v0"
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^synthetic-[a-z0-9_.-]{1,54}$"
+    },
+    "privateSemantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "syntheticOnly",
+        "snapshotId",
+        "snapshotVersion",
+        "decision",
+        "failureCode",
+        "allowedCents",
+        "payableCents",
+        "canonicalRecordsHex",
+        "orderedOperations",
+        "recordManifestSha3_512",
+        "legacyTree",
+        "wideTree"
+      ],
+      "properties": {
+        "syntheticOnly": {
+          "const": true
+        },
+        "snapshotId": {
+          "type": "string",
+          "pattern": "^SYNTHETIC-[A-Z0-9-]{1,54}$"
+        },
+        "snapshotVersion": {
+          "const": 0
+        },
+        "decision": {
+          "enum": ["approved", "denied", "padding"]
+        },
+        "failureCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 13
+        },
+        "allowedCents": {
+          "$ref": "#/$defs/u64Hex"
+        },
+        "payableCents": {
+          "$ref": "#/$defs/u64Hex"
+        },
+        "canonicalRecordsHex": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/evenLowerHex"
+          }
+        },
+        "orderedOperations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+          }
+        },
+        "recordManifestSha3_512": {
+          "$ref": "#/$defs/wideHex"
+        },
+        "legacyTree": {
+          "$ref": "#/$defs/legacyTree"
+        },
+        "wideTree": {
+          "$ref": "#/$defs/wideTree"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"decision": {"const": "approved"}},
+            "required": ["decision"]
+          },
+          "then": {
+            "properties": {"failureCode": {"const": 0}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"decision": {"const": "denied"}},
+            "required": ["decision"]
+          },
+          "then": {
+            "properties": {
+              "failureCode": {"minimum": 1},
+              "payableCents": {"const": "0000000000000000"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"decision": {"const": "padding"}},
+            "required": ["decision"]
+          },
+          "then": {
+            "properties": {
+              "failureCode": {"const": 0},
+              "allowedCents": {"const": "0000000000000000"},
+              "payableCents": {"const": "0000000000000000"}
+            }
+          }
+        }
+      ]
+    },
+    "compatibilityOutputs": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 0}, "name": {"const": "protocolVersion"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 1}, "name": {"const": "settlementDomain"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 2}, "name": {"const": "batchNonce"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 3}, "name": {"const": "nullifierRootBefore"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 4}, "name": {"const": "nullifierRootAfter"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 5}, "name": {"const": "claimSourceRoot"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 6}, "name": {"const": "oracleFactsRoot"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 7}, "name": {"const": "policyRoot"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 8}, "name": {"const": "rulesetRoot"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 9}, "name": {"const": "opaqueBatchCommitment"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 10}, "name": {"const": "valueConservationCommitment"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/compatibilityField"},
+            {"properties": {"index": {"const": 11}, "name": {"const": "settlementCommitment"}}}
+          ]
+        }
+      ],
+      "items": false
+    },
+    "wideSidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profileId",
+        "proofSuiteId",
+        "schemaId",
+        "epoch",
+        "sequenceBefore",
+        "sequenceAfter",
+        "strongNullifierRootBefore",
+        "strongNullifierRootAfter",
+        "strongGovernanceCommitment",
+        "strongPaymentStateBinding",
+        "verifierArtifactIdentity",
+        "strongBatchCommitment",
+        "encodingStatus"
+      ],
+      "properties": {
+        "profileId": {
+          "const": "BL-PQ512-v1"
+        },
+        "proofSuiteId": {
+          "const": "TBD-S07-S08-S09-NOT-SELECTED"
+        },
+        "schemaId": {
+          "const": "TBD-S12-P06-NOT-FROZEN"
+        },
+        "epoch": {
+          "$ref": "#/$defs/u64Hex"
+        },
+        "sequenceBefore": {
+          "$ref": "#/$defs/u64Hex"
+        },
+        "sequenceAfter": {
+          "$ref": "#/$defs/u64Hex"
+        },
+        "strongNullifierRootBefore": {
+          "$ref": "#/$defs/wideHex"
+        },
+        "strongNullifierRootAfter": {
+          "$ref": "#/$defs/wideHex"
+        },
+        "strongGovernanceCommitment": {
+          "$ref": "#/$defs/wideHex"
+        },
+        "strongPaymentStateBinding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "bindingKind", "bindingValue"],
+          "properties": {
+            "status": {
+              "const": "UNRESOLVED-A11-P05"
+            },
+            "bindingKind": {
+              "const": "TBD"
+            },
+            "bindingValue": {
+              "type": "null"
+            }
+          }
+        },
+        "verifierArtifactIdentity": {
+          "$ref": "#/$defs/wideHex"
+        },
+        "strongBatchCommitment": {
+          "$ref": "#/$defs/wideHex"
+        },
+        "encodingStatus": {
+          "const": "LOGICAL_PLACEHOLDERS_S04_P06_OPEN_NOT_AUTHENTICATED"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evenLowerHex": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{2})+$"
+    },
+    "feltHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "$comment": "The mandatory semantic parser additionally rejects values greater than or equal to the Stark field modulus."
+    },
+    "wideHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "u64Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "compatibilityField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "name", "feltHex"],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 11
+        },
+        "name": {
+          "type": "string"
+        },
+        "feltHex": {
+          "$ref": "#/$defs/feltHex"
+        }
+      }
+    },
+    "legacyTree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["treeKind", "treeHeight", "leafFeltHex", "rootFeltHex"],
+      "properties": {
+        "treeKind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "treeHeight": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "leafFeltHex": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/feltHex"
+          }
+        },
+        "rootFeltHex": {
+          "$ref": "#/$defs/feltHex"
+        }
+      }
+    },
+    "wideTree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["treeKind", "treeHeight", "leafSha3_512", "rootSha3_512"],
+      "properties": {
+        "treeKind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "treeHeight": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "leafSha3_512": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/wideHex"
+          }
+        },
+        "rootSha3_512": {
+          "$ref": "#/$defs/wideHex"
+        }
+      }
+    }
+  }
+}

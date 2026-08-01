@@ -1,0 +1,53 @@
+{
+  "schema": "blind-ledger-pq512-wave1b-udr-interface-vector-v1",
+  "status": "R33_HISTORICAL_INTERFACE_SWEEP_NEVER_FINAL_THEOREM_INPUT_NONACTIVATING",
+  "proofSuiteId": null,
+  "activationAllowed": false,
+  "finalExpansionSubstituted": false,
+  "challengeField": {
+    "baseModulus": 2147483647,
+    "extensionDegree": 16,
+    "perTermSecurityBits": 384
+  },
+  "uniqueDecodingBoundarySlackBits": 32,
+  "profiles": [
+    {
+      "profileId": "K128_CALIBRATION",
+      "interfaceEnvelopeSha3_512": "b8c43d2b28a72690d75501d7986c50ad78f2c1d7a659ca6d580ed80866e074d526d147ec2eaa606d3b6d65cea80eaf03765dd3d40483e8d063cfe601a6b70bf8",
+      "maximumRows": 131072,
+      "minimumRows": 16,
+      "logupNumeratorUpperBound": 6890664,
+      "compositionNumeratorUpperBound": 357,
+      "deepNumeratorUpperBound": 393217,
+      "interfaceBatchWidthUpperBound": 7420
+    },
+    {
+      "profileId": "K256_DESIGN_POINT",
+      "interfaceEnvelopeSha3_512": "c9191055ece5f87dec1cb6cb3c565c6af814c415740791c4d32d340bba82e921861e46c1693ec90fa18fac94639f80dbfa31518e57503a4854e1651655cf9d3d",
+      "maximumRows": 262144,
+      "minimumRows": 16,
+      "logupNumeratorUpperBound": 13726376,
+      "compositionNumeratorUpperBound": 357,
+      "deepNumeratorUpperBound": 786433,
+      "interfaceBatchWidthUpperBound": 7420
+    },
+    {
+      "profileId": "K512_CALIBRATION",
+      "interfaceEnvelopeSha3_512": "9f0801aa769fb98b38dc011368e68c758c1654724649ab7c4860fa8fdc1a631d51b9133ce897f8c626c0d35cb51f3425f5636aa13b7931d5525130b8652713c0",
+      "maximumRows": 524288,
+      "minimumRows": 16,
+      "logupNumeratorUpperBound": 27463336,
+      "compositionNumeratorUpperBound": 357,
+      "deepNumeratorUpperBound": 1572865,
+      "interfaceBatchWidthUpperBound": 7420
+    }
+  ],
+  "candidateSweep": [
+    {"logBlowup": 1, "queryCount": 926},
+    {"logBlowup": 2, "queryCount": 567},
+    {"logBlowup": 3, "queryCount": 463},
+    {"logBlowup": 4, "queryCount": 421},
+    {"logBlowup": 5, "queryCount": 402},
+    {"logBlowup": 6, "queryCount": 393}
+  ]
+}

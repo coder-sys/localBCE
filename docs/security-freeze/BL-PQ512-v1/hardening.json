@@ -1,0 +1,70 @@
+{
+  "schema_version": "blind-ledger-hardening-v1",
+  "run_id": "20260715T202353Z-security-freeze-r23",
+  "target": "blind-ledger-app-layer/BL-PQ512-v1",
+  "source_snapshot_sha256": "382c02a9a9890251f167f3e28023ae4a2caf67c28ee24075a69b587bb6b9b20e",
+  "status": "REJECTED_KERNEL_INTERNAL_REPLACEMENT_SELECTED_S09_OPEN",
+  "historical_r23_status": "CURRENT_CONFIGURATION_REJECTED_REPLACEMENT_REVIEW_REQUIRED",
+  "constraints": {
+    "synthetic_only": true,
+    "external_abi_fields": 12,
+    "abi_change_allowed": false,
+    "dependency_upgrade_allowed": false,
+    "real_data_allowed": false
+  },
+  "observed_current_profile": {
+    "base_field": "M31",
+    "challenge_field": "QM31",
+    "challenge_field_log2_cardinality": 123.9999999973,
+    "transcript_and_merkle": "BLAKE2S-256",
+    "pow_bits": 10,
+    "log_blowup_factor": 1,
+    "fri_queries": 3,
+    "library_nominal_bits": 13,
+    "witness_hiding": false
+  },
+  "hard_failures": [
+    "QM31_FIELD_ERROR_CEILING_BELOW_TARGET",
+    "BLAKE2S_256_QUANTUM_COLLISION_CEILING_BELOW_TARGET",
+    "NO_NATIVE_WITNESS_HIDING",
+    "NO_CIRCLE_STARK_SPECIFIC_QROM_BUDGET",
+    "NO_OUT_OF_BAND_EXACT_SUITE_PIN",
+    "COMPLETE_AIR_DIMENSIONS_UNKNOWN"
+  ],
+  "conditional_lead": {
+    "base_trace_field": "M31",
+    "challenge_field_candidate": "M31_DEGREE_16_PINNED_REFERENCE_TOWER_NOT_PRODUCTION",
+    "challenge_field_log2_cardinality_approx": 495.9999999893,
+    "transcript_and_merkle_candidate": "SHA3-512_FULL_WIDTH_TYPED_DOMAINS",
+    "authoritative_transcript": "PQ_AUTHENTICATED_PUBLIC_COIN_INTERACTIVE",
+    "fiat_shamir_allowed": false,
+    "qrom_reduction_required_for_authoritative_mode": false,
+    "round_by_round_error_bits_candidate_min": 256,
+    "grinding_security_credit_bits": 0,
+    "fri_regime": "PROVEN_ONLY",
+    "status": "LOCAL_ALGEBRA_AND_PUBLIC_COIN_REFERENCE_KATS_PASSED_PRODUCTION_MODULES_OPEN"
+  },
+  "proposals": [
+    {
+      "id": "BLH-001",
+      "title": "Wide challenge and proof commitment profile",
+      "priority": "critical",
+      "file": "proposals/001-wide-challenge-and-proof-commitments.md"
+    },
+    {
+      "id": "BLH-002",
+      "title": "Complete native witness hiding",
+      "priority": "critical",
+      "file": "proposals/002-native-witness-hiding.md"
+    }
+  ],
+  "open_gates": [
+    "S07_INTERNAL_SECURITY_BUDGET_AND_ABORT_RETRY_LEDGER",
+    "S08_FULL_AIR_PARAMETER_INSTANTIATION",
+    "S09_EXACT_SUITE_AND_DOMAIN_REGISTRY",
+    "INTERACTIVE_CIRCLE_STARK_THEOREM_AND_COMPLETE_SCHEDULE",
+    "PRODUCTION_PQ_PUBLIC_COIN_ADAPTERS_AND_GOVERNANCE",
+    "NATIVE_HIDING_SIMULATOR_AND_INTERNAL_QUALIFICATION",
+    "FINAL_INDEPENDENT_AUDIT_AFTER_BUILT_AUDIT_PENDING"
+  ]
+}

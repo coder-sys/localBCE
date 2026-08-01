@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Provider Packet Desk</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/provider-static/styles.css?v=neer-provider-9" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <h1>Provider Packet Desk</h1>
+          <p id="sessionSummary">2 action &middot; 1 waiting &middot; 1 accepted &middot; 0 closed</p>
+        </div>
+
+        <div class="topbar-center">
+          <label class="search" aria-label="Search packet queue">
+            <span aria-hidden="true">/</span>
+            <input id="searchInput" autocomplete="off" placeholder="Search requests" />
+          </label>
+          <nav class="filters" aria-label="Packet views">
+            <button class="filter active" data-filter="action_needed">Action needed</button>
+            <button class="filter" data-filter="corrections">Corrections</button>
+            <button class="filter" data-filter="submitted">Submitted</button>
+            <button class="filter" data-filter="accepted">Accepted</button>
+            <button class="filter" data-filter="closed">Closed</button>
+          </nav>
+        </div>
+
+        <div class="topbar-utility">
+          <button id="themeToggle" class="theme-toggle" type="button">Dark</button>
+          <button id="commandButton" class="command-hint" type="button" aria-label="Open command palette">
+            <kbd>Ctrl K</kbd>
+          </button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="queue" aria-label="Provider request queue">
+          <div class="queue-head">
+            <div>
+              <h2 id="queueTitle">Packet queue</h2>
+              <p id="queueSort">Sorted by action needed, due date</p>
+            </div>
+            <div class="queue-tools">
+              <select id="sortSelect" aria-label="Sort packet queue">
+                <option value="status_due">Status / due</option>
+                <option value="due">Due date</option>
+                <option value="amount">Amount</option>
+              </select>
+              <span id="queueCount">4</span>
+            </div>
+          </div>
+          <div id="queueList" class="queue-list" role="listbox" aria-label="Requests awaiting provider action"></div>
+        </aside>
+
+        <section id="workspacePane" class="workspace" aria-live="polite"></section>
+
+        <aside id="railPane" class="rail" aria-label="Provider request record"></aside>
+      </main>
+    </div>
+
+    <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+    <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden>
+      <div class="drawer-head">
+        <div>
+          <p id="drawerKicker">Request</p>
+          <h2 id="drawerTitle">Action</h2>
+        </div>
+        <button id="drawerClose" type="button">Close</button>
+      </div>
+      <div id="drawerBody" class="drawer-body"></div>
+    </aside>
+
+    <div id="commandPalette" class="command-palette" hidden>
+      <div class="command-box" role="dialog" aria-modal="true" aria-labelledby="commandTitle">
+        <h2 id="commandTitle">Commands</h2>
+        <button type="button" data-command="focus-search">Search requests</button>
+        <button type="button" data-command="next-request">Next request</button>
+        <button type="button" data-command="previous-request">Previous request</button>
+        <button type="button" data-command="primary-action">Primary action</button>
+        <button type="button" data-command="request-log">Request log</button>
+        <button type="button" data-command="toggle-theme">Toggle theme</button>
+        <button type="button" data-command="reset">Reset demo</button>
+      </div>
+    </div>
+
+    <script src="/provider-static/app.js?v=neer-provider-9"></script>
+  </body>
+</html>

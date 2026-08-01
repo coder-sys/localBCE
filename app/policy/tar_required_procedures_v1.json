@@ -1,0 +1,8 @@
+{
+  "schema_version": "blind_ledger_tar_required_procedures_v1",
+  "tar_required_procedure_codes": [
+    "T1019",
+    "S5102",
+    "H2015"
+  ]
+}

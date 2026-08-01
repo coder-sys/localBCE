@@ -1,0 +1,36 @@
+[package]
+name = "blind_ledger_cairo_adjudication"
+version = "0.1.0"
+edition = "2024_07"
+
+[cairo]
+enable-gas = false
+
+[dependencies]
+cairo_execute = ">=2.18.0"
+
+[lib]
+
+[[target.executable]]
+name = "claim_main"
+function = "blind_ledger_cairo_adjudication::main"
+
+[[target.executable]]
+name = "batch_main"
+function = "blind_ledger_cairo_adjudication::batch_main"
+
+[[target.executable]]
+name = "batch_main_v2"
+function = "blind_ledger_cairo_adjudication::batch_main_v2"
+
+[[target.executable]]
+name = "claim_main_canonical_transport"
+function = "blind_ledger_cairo_adjudication::claim_main_canonical_transport"
+
+[[target.executable]]
+name = "batch_main_v2_canonical_transport"
+function = "blind_ledger_cairo_adjudication::batch_main_v2_canonical_transport"
+
+[dev-dependencies]
+cairo_test = "2.18.0"
+assert_macros = "2.18.0"

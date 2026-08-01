@@ -1,0 +1,3 @@
+# NOT AN INSTALL LOCK. Kept only as a fail-safe compatibility marker.
+# Direct declarations live in requirements/inputs/development.in.
+# Install only with: python -m tools.locked_python_dependencies install

@@ -1,0 +1,11 @@
+[package]
+name = "privacy-v2-model"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+blind-ledger-rules-engine = { path = "../../../rules-engine-rust" }
+postcard = { version = "1.1", features = ["alloc"] }
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+starknet-crypto = "=0.8.1"

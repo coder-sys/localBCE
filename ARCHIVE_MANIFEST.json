@@ -1,0 +1,50 @@
+{
+  "archive_name": "Blind Ledger Neer Version - WSL Prover Optimized.zip",
+  "manifest_version": 1,
+  "updated_on": "2026-07-13",
+  "archive_root": "Blind Ledger Neer Version/",
+  "source_root": "Blind Ledger Neer Version/blind-ledger-app-layer/",
+  "canonical_ops_root": "Blind Ledger Neer Version/ops/",
+  "app_layer_ops_mirror": "Blind Ledger Neer Version/blind-ledger-app-layer/ops/",
+  "third_party_root": "Blind Ledger Neer Version/third_party/",
+  "no_assistant_memory_files": [
+    "CLAUDE.md",
+    "GEMINI.md",
+    "MEMORY.md"
+  ],
+  "protected_paths": [
+    "zk-cairo-sharp/",
+    "contracts/",
+    "app/batch/nullifier.py",
+    "app/batch/leaf.py",
+    "app/batch/stark_binding.py",
+    "app/batch/merkle.py",
+    "app/batch/accumulators.py",
+    "app/batch/batch_orchestrator.py",
+    "app/oracle_attestation.py",
+    "app/public_inputs.py",
+    "app/canonical_encoding.py"
+  ],
+  "expected_test_commands": [
+    "python -m pytest -q --ignore=tests/attacks",
+    "python -m pytest -q tests/attacks"
+  ],
+  "generated_outputs_excluded": [
+    ".git/",
+    "__pycache__/",
+    ".pytest_cache/",
+    "target/",
+    "node_modules/",
+    "scratch/",
+    "nested archives",
+    "proof JSON/output directories"
+  ],
+  "proof_artifacts_packaged": false,
+  "latest_external_proof_note": {
+    "date": "2026-07-09",
+    "path_at_time_of_run": "<external-workspace>/proofs/safeopts_execution162_cuda_finalgroup_proof.json",
+    "sha256": "2e6a0d5edbf8884a6da4f5476298f06a3c5e95b4a8bb9934b24c0f6b06c3ea3f",
+    "wall_seconds": 352.08,
+    "packaged": false
+  }
+}

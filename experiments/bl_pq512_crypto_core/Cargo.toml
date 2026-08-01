@@ -1,0 +1,184 @@
+[package]
+name = "bl_pq512_crypto_core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[features]
+default = []
+std = []
+parallel = ["std"]
+bench_fixture_coin = ["parallel"]
+control_reference = []
+
+[dependencies]
+getrandom = { version = "=0.3.4" }
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
+sha3 = { version = "=0.10.9", default-features = false }
+slh-dsa = { version = "=0.2.0-rc.5" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[[bin]]
+name = "scalar-throughput"
+path = "src/bin/scalar_throughput.rs"
+
+[[bin]]
+name = "wave1a-dimensions"
+path = "src/bin/wave1a_dimensions.rs"
+
+[[bin]]
+name = "sha3-trace-throughput"
+path = "src/bin/sha3_trace_throughput.rs"
+
+[[bin]]
+name = "air_disk_main_compare"
+path = "src/bin/air_disk_main_compare.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "packed_boolean_sumcheck_benchmark"
+path = "src/bin/packed_boolean_sumcheck_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "packed_boolean_sumcheck_b64_spike"
+path = "src/bin/packed_boolean_sumcheck_b64_spike.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "gkr_cuda_worker_benchmark"
+path = "src/bin/gkr_cuda_worker_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "gkr_packed_boundary_benchmark"
+path = "src/bin/gkr_packed_boundary_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "gkr_packed_bridge_benchmark"
+path = "src/bin/gkr_packed_bridge_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "gkr_compact_chain_benchmark"
+path = "src/bin/gkr_compact_chain_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "gkr_coherent_chain_benchmark"
+path = "src/bin/gkr_coherent_chain_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "multilinear_terminal_benchmark"
+path = "src/bin/multilinear_terminal_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "mlpcs_merkle_benchmark"
+path = "src/bin/mlpcs_merkle_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "zk_basefold_stateless_merkle_benchmark"
+path = "src/bin/zk_basefold_stateless_merkle_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "zk_basefold_security_ledger"
+path = "src/bin/zk_basefold_security_ledger.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_basefold_security_ledger"
+path = "src/bin/fp16_basefold_security_ledger.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "zk_basefold_query_verifier_benchmark"
+path = "src/bin/zk_basefold_query_verifier_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_basefold_query_verifier_benchmark"
+path = "src/bin/fp16_basefold_query_verifier_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_interleaved_verify"
+path = "src/bin/fp16_zk_rs_interleaved_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_theorem8_1_transcript"
+path = "src/bin/fp16_zk_rs_theorem8_1_transcript.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_row_sumcheck_prover"
+path = "src/bin/fp16_zk_rs_row_sumcheck_prover.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_polynomial_eval"
+path = "src/bin/fp16_zk_rs_polynomial_eval.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_spotcheck_verify"
+path = "src/bin/fp16_zk_rs_spotcheck_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_answer_code_verify"
+path = "src/bin/fp16_zk_rs_answer_code_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_answer_target"
+path = "src/bin/fp16_zk_rs_answer_target.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "fp16_zk_rs_public_coin_bridge"
+path = "src/bin/fp16_zk_rs_public_coin_bridge.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "gkr_packed_bridge_fp16_benchmark"
+path = "src/bin/gkr_packed_bridge_fp16_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "mlpcs_prelude_benchmark"
+path = "src/bin/mlpcs_prelude_benchmark.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "file_backed_prelude_benchmark"
+path = "src/bin/file_backed_prelude_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "mlpcs_complete_control_benchmark"
+path = "src/bin/mlpcs_complete_control_benchmark.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "selected_streaming_prover_worker"
+path = "src/bin/selected_streaming_prover_worker.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "hash_bus_snapshot_to_b16"
+path = "src/bin/hash_bus_snapshot_to_b16.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "hash_bus_b16_trace_verify"
+path = "src/bin/hash_bus_b16_trace_verify.rs"
+required-features = ["std"]

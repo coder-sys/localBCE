@@ -1,0 +1,1108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blind-ledger:bl-pq512-suite-candidate:v1",
+  "title": "BL-PQ512 unqualified suite candidate registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "registryVersion",
+    "registryId",
+    "profileLabel",
+    "status",
+    "activationAllowed",
+    "proofSuiteId",
+    "syntheticOnly",
+    "externalAbi",
+    "legacyCompatibilityBindings",
+    "securityPolicy",
+    "currentSuiteDisposition",
+    "candidateAlgebra",
+    "candidateTranscript",
+    "candidateSha3Air",
+    "candidateFri",
+    "candidateNativeHiding",
+    "modules",
+    "sidecar",
+    "strongReplayRegistry",
+    "transport",
+    "domainRegistry",
+    "multiTargetLedgerRequiredFields",
+    "blockedBy"
+  ],
+  "properties": {
+    "registryVersion": {
+      "const": 1
+    },
+    "registryId": {
+      "const": "BL-PQ512-SUITE-CANDIDATE-v1"
+    },
+    "profileLabel": {
+      "const": "BL-PQ512-v1"
+    },
+    "status": {
+      "const": "CANDIDATE_UNQUALIFIED"
+    },
+    "activationAllowed": {
+      "const": false
+    },
+    "proofSuiteId": {
+      "type": "null"
+    },
+    "syntheticOnly": {
+      "const": true
+    },
+    "externalAbi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest",
+        "fieldCount",
+        "fieldWidthBytes",
+        "changeAllowed"
+      ],
+      "properties": {
+        "manifest": {
+          "const": "ops/native_stark_public_inputs_v2.json"
+        },
+        "fieldCount": {
+          "const": 12
+        },
+        "fieldWidthBytes": {
+          "const": 32
+        },
+        "changeAllowed": {
+          "const": false
+        }
+      }
+    },
+    "legacyCompatibilityBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersionFieldIndex",
+        "protocolVersionCanonicalValueHex",
+        "protocolVersionBinding",
+        "settlementDomainFieldIndex",
+        "settlementDomainBinding",
+        "settlementDomainStrongSidecarField",
+        "deriveStrongDomainFromLegacyAlias",
+        "governanceCommitmentBindsBoth"
+      ],
+      "properties": {
+        "protocolVersionFieldIndex": {
+          "const": 0
+        },
+        "protocolVersionCanonicalValueHex": {
+          "const": "0000000000000000000000000000000000000000000000000000000000000002"
+        },
+        "protocolVersionBinding": {
+          "const": "AUTHENTICATED_ACTIVE_PROFILE_DESCRIPTOR"
+        },
+        "settlementDomainFieldIndex": {
+          "const": 1
+        },
+        "settlementDomainBinding": {
+          "const": "AUTHENTICATED_ACTIVE_LEGACY_STRONG_DOMAIN_PAIR"
+        },
+        "settlementDomainStrongSidecarField": {
+          "const": "strongSettlementDomainId"
+        },
+        "deriveStrongDomainFromLegacyAlias": {
+          "const": false
+        },
+        "governanceCommitmentBindsBoth": {
+          "const": true
+        }
+      }
+    },
+    "securityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimumQuantumWorkFactorBits",
+        "securityMeaning",
+        "maximumQuantumOracleQueryExponent",
+        "maximumLifetimeTargetExponent",
+        "maximumPositiveErrorTerms",
+        "minimumRoundErrorExponent",
+        "hashOutputBits",
+        "residualTargetExponent",
+        "perDisplayedBranchAdvantageExponentBeforeConstants",
+        "combinedDisplayedBoundExponentBeforeConstants",
+        "accountingMarginBitsBeforeConstants",
+        "grindingCreditBits",
+        "maximumConservativeDEffExponent",
+        "status"
+      ],
+      "properties": {
+        "minimumQuantumWorkFactorBits": {
+          "const": 128
+        },
+        "securityMeaning": {
+          "const": "WORK_ADVANTAGE_PAIR_NOT_FAILURE_PROBABILITY"
+        },
+        "maximumQuantumOracleQueryExponent": {
+          "const": 128
+        },
+        "maximumLifetimeTargetExponent": {
+          "const": 64
+        },
+        "maximumPositiveErrorTerms": {
+          "const": 64
+        },
+        "minimumRoundErrorExponent": {
+          "const": 256
+        },
+        "hashOutputBits": {
+          "const": 512
+        },
+        "residualTargetExponent": {
+          "const": 32
+        },
+        "perDisplayedBranchAdvantageExponentBeforeConstants": {
+          "const": 58
+        },
+        "combinedDisplayedBoundExponentBeforeConstants": {
+          "const": 57
+        },
+        "accountingMarginBitsBeforeConstants": {
+          "const": 25
+        },
+        "grindingCreditBits": {
+          "const": 0
+        },
+        "maximumConservativeDEffExponent": {
+          "const": 111
+        },
+        "status": {
+          "const": "POLICY_DRAFT_EXTERNAL_REVIEW_REQUIRED"
+        }
+      }
+    },
+    "currentSuiteDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challengeField",
+        "hash",
+        "pcsConfiguration",
+        "disposition",
+        "reasons"
+      ],
+      "properties": {
+        "challengeField": {
+          "const": "QM31"
+        },
+        "hash": {
+          "const": "BLAKE2s-256"
+        },
+        "pcsConfiguration": {
+          "const": "S_TWO_DEFAULT"
+        },
+        "disposition": {
+          "const": "REJECTED"
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+$"
+          }
+        }
+      }
+    },
+    "candidateAlgebra": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseField",
+        "extensionDegree",
+        "status",
+        "irreduciblePolynomial",
+        "tower",
+        "basis",
+        "conjugation"
+      ],
+      "properties": {
+        "baseField": {
+          "const": "M31"
+        },
+        "extensionDegree": {
+          "const": 16
+        },
+        "status": {
+          "const": "LOCAL_TOWER_REFERENCE_KAT_PASSED_NOT_PRODUCTION"
+        },
+        "irreduciblePolynomial": {
+          "const": [
+            "X^2+1",
+            "X^2-(2+i)",
+            "X^2-u",
+            "X^2-v"
+          ]
+        },
+        "tower": {
+          "const": [
+            "Fp=M31",
+            "Fp2=Fp[i]/(i^2+1)",
+            "Fp4=Fp2[u]/(u^2-(2+i))",
+            "Fp8=Fp4[v]/(v^2-u)",
+            "Fp16=Fp8[w]/(w^2-v)"
+          ]
+        },
+        "basis": {
+          "const": [
+            "1",
+            "i",
+            "u",
+            "iu",
+            "v",
+            "iv",
+            "uv",
+            "iuv",
+            "w",
+            "iw",
+            "uw",
+            "iuw",
+            "vw",
+            "ivw",
+            "uvw",
+            "iuvw"
+          ]
+        },
+        "conjugation": {
+          "type": "null"
+        }
+      }
+    },
+    "candidateTranscript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "authoritativeMode",
+        "fiatShamirAllowed",
+        "qromReductionRequired",
+        "hashFunction",
+        "publicCoinCommitReveal",
+        "minimumContributors",
+        "requireEveryRegisteredReveal",
+        "withholdingAction",
+        "productionPqAuthenticationSuites",
+        "productionRequiresSuiteDiversity",
+        "challengeFieldSampler",
+        "samplerAttemptCap",
+        "samplerAbortProbabilityUpperBound",
+        "fullSchedule",
+        "grindingCreditBits",
+        "implementation"
+      ],
+      "properties": {
+        "status": {
+          "const": "LOCAL_PUBLIC_COIN_REFERENCE_KAT_PASSED_NOT_INTEGRATED"
+        },
+        "authoritativeMode": {
+          "const": "PQ_AUTHENTICATED_PUBLIC_COIN_INTERACTIVE"
+        },
+        "fiatShamirAllowed": {
+          "const": false
+        },
+        "qromReductionRequired": {
+          "const": false
+        },
+        "hashFunction": {
+          "const": "SHA3-512"
+        },
+        "publicCoinCommitReveal": {
+          "const": true
+        },
+        "minimumContributors": {
+          "const": 2
+        },
+        "requireEveryRegisteredReveal": {
+          "const": true
+        },
+        "withholdingAction": {
+          "const": "ABORT_SESSION_NO_CHALLENGE"
+        },
+        "productionPqAuthenticationSuites": {
+          "const": [
+            "FIPS204-ML-DSA-87",
+            "FIPS205-SLH-DSA-SHAKE-256F"
+          ]
+        },
+        "productionRequiresSuiteDiversity": {
+          "const": true
+        },
+        "challengeFieldSampler": {
+          "const": "512_BIT_REJECTION_TO_M31_DEGREE16"
+        },
+        "samplerAttemptCap": {
+          "const": 16
+        },
+        "samplerAbortProbabilityUpperBound": {
+          "const": "2^-432"
+        },
+        "fullSchedule": {
+          "type": "null"
+        },
+        "grindingCreditBits": {
+          "const": 0
+        },
+        "implementation": {
+          "const": "experiments/bl_pq512_crypto_foundation/public_coin_reference.py"
+        }
+      }
+    },
+    "candidateSha3Air": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "stateBytes",
+        "rateBytes",
+        "capacityBytes",
+        "permutationRounds",
+        "coreRoundBaseColumns",
+        "spongeBlockColumns",
+        "traceBaseColumns",
+        "coreRoundLookupMessages",
+        "absorbXorLookups",
+        "firstRoundLookupMessages",
+        "roundXorLookups",
+        "roundAndNotLookups",
+        "roundSplitLookups",
+        "directMaximumDegree",
+        "composedMaximumDegree",
+        "shapeSha3_512",
+        "applicationPortInventoryStatus",
+        "applicationPortInventoryCurrent",
+        "applicationPortComprehensiveSourceScopeCurrent",
+        "applicationPortGovernedSourceDirectories",
+        "applicationPortHistoricalMeasurementCurrent",
+        "applicationPortReconciledAdditionMeasurementCurrent",
+        "applicationPortReconciledAdditionCount",
+        "applicationPortInventoryProfileId",
+        "applicationPortStaticCallsites",
+        "applicationPortAirCallsites",
+        "applicationPortPublicPrecomputedCallsites",
+        "applicationPortHostEvidenceOnlyCallsites",
+        "applicationPortWave1cVerifierStateCallsites",
+        "applicationPortSupersededReferenceCallsites",
+        "applicationPortObservedInvocations",
+        "applicationPortConservativeInvocations",
+        "applicationPortConservativePermutations",
+        "applicationPortConservativeKeccakRoundRows",
+        "applicationPortInventorySha3_512",
+        "applicationPortFinalScheduleSelected",
+        "applicationPortInventoryImplementation",
+        "denseSharedScheduleStatus",
+        "denseSharedSchedulePackedOracleBundlesPerSlot",
+        "denseSharedScheduleK128HashInvocations",
+        "denseSharedScheduleK256HashInvocations",
+        "denseSharedScheduleK512HashInvocations",
+        "denseSharedScheduleK128Permutations",
+        "denseSharedScheduleK256Permutations",
+        "denseSharedScheduleK512Permutations",
+        "denseSharedScheduleK128KeccakRoundRows",
+        "denseSharedScheduleK256KeccakRoundRows",
+        "denseSharedScheduleK512KeccakRoundRows",
+        "denseSharedScheduleK128MembershipLinks",
+        "denseSharedScheduleK256MembershipLinks",
+        "denseSharedScheduleK512MembershipLinks",
+        "denseSharedSchedulePreimageWidthsSelected",
+        "denseSharedScheduleSha3_512",
+        "denseSharedScheduleImplementation",
+        "economicMapScheduleStatus",
+        "economicMapShardIndexBits",
+        "economicMapShardAllocatedCapacity",
+        "economicMapK128OperationRows",
+        "economicMapK128PositionRows",
+        "economicMapK128MemoryRows",
+        "economicMapK128ProofNodeRows",
+        "economicMapK128NodeHashRows",
+        "economicMapK128LeafHashRows",
+        "economicMapK128HeaderHashRows",
+        "economicMapK128Sha3Calls",
+        "economicMapK128Sha3Permutations",
+        "economicMapK128KeccakRoundRows",
+        "economicMapPaddingMaterialized",
+        "economicMapScheduleImplementation",
+        "interactionPackingSelected",
+        "proofSuiteId",
+        "activationAllowed",
+        "implementation"
+      ],
+      "properties": {
+        "status": {
+          "const": "BYTE_LOOKUP_AIR_KAT_PASSED_INTERACTION_PACKING_UNSELECTED"
+        },
+        "stateBytes": {
+          "const": 200
+        },
+        "rateBytes": {
+          "const": 72
+        },
+        "capacityBytes": {
+          "const": 128
+        },
+        "permutationRounds": {
+          "const": 24
+        },
+        "coreRoundBaseColumns": {
+          "const": 1632
+        },
+        "spongeBlockColumns": {
+          "const": 72
+        },
+        "traceBaseColumns": {
+          "const": 1704
+        },
+        "coreRoundLookupMessages": {
+          "const": 1024
+        },
+        "absorbXorLookups": {
+          "const": 72
+        },
+        "firstRoundLookupMessages": {
+          "const": 1096
+        },
+        "roundXorLookups": {
+          "const": 608
+        },
+        "roundAndNotLookups": {
+          "const": 200
+        },
+        "roundSplitLookups": {
+          "const": 216
+        },
+        "directMaximumDegree": {
+          "const": 2
+        },
+        "composedMaximumDegree": {
+          "const": 3
+        },
+        "shapeSha3_512": {
+          "const": "824d0d5adb44dc5a7f61960f7ad61ccb5a34aff177a51616afd0de6b49bbb4adea54e216cb0d0ea5bbe59f4818468e6bc3deafec21bdeddb4db797d899784e1c"
+        },
+        "applicationPortInventoryStatus": {
+          "const": "HISTORICAL_51XK_MEASUREMENT_SUPERSEDED_BY_PACKED_SCHEDULE"
+        },
+        "applicationPortInventoryCurrent": {
+          "const": true
+        },
+        "applicationPortComprehensiveSourceScopeCurrent": {
+          "const": true
+        },
+        "applicationPortGovernedSourceDirectories": {
+          "const": [
+            "app/batch",
+            "experiments/fixed_shape_claim_air"
+          ]
+        },
+        "applicationPortHistoricalMeasurementCurrent": {
+          "const": false
+        },
+        "applicationPortReconciledAdditionMeasurementCurrent": {
+          "const": true
+        },
+        "applicationPortReconciledAdditionCount": {
+          "const": 5
+        },
+        "applicationPortInventoryProfileId": {
+          "const": "K128_CALIBRATION"
+        },
+        "applicationPortStaticCallsites": {
+          "const": 79
+        },
+        "applicationPortAirCallsites": {
+          "const": 39
+        },
+        "applicationPortPublicPrecomputedCallsites": {
+          "const": 5
+        },
+        "applicationPortHostEvidenceOnlyCallsites": {
+          "const": 21
+        },
+        "applicationPortWave1cVerifierStateCallsites": {
+          "const": 11
+        },
+        "applicationPortSupersededReferenceCallsites": {
+          "const": 3
+        },
+        "applicationPortObservedInvocations": {
+          "const": 404482
+        },
+        "applicationPortConservativeInvocations": {
+          "const": 401275
+        },
+        "applicationPortConservativePermutations": {
+          "const": 1205016
+        },
+        "applicationPortConservativeKeccakRoundRows": {
+          "const": 28920384
+        },
+        "applicationPortInventorySha3_512": {
+          "const": "618c06447efc67bca80ca9bb4c59a89970e7c42a26ea6a45a298c8dc8e1e8b2643f3c51a923d1b89ebb6a2311dc22edfffeea70471a9f97c5378b8a43fb607c2"
+        },
+        "applicationPortFinalScheduleSelected": {
+          "const": false
+        },
+        "applicationPortInventoryImplementation": {
+          "const": "experiments/bl_pq512_crypto_foundation/application_sha3_port_inventory.py"
+        },
+        "denseSharedScheduleStatus": {
+          "const": "CLAIM_DENSE_TREE_AND_PACKED_ORACLE_BUNDLE_SCHEDULE_PROVED_INTERACTION_PACKING_OPEN"
+        },
+        "denseSharedSchedulePackedOracleBundlesPerSlot": {
+          "const": 1
+        },
+        "denseSharedScheduleK128HashInvocations": {
+          "const": 385
+        },
+        "denseSharedScheduleK256HashInvocations": {
+          "const": 769
+        },
+        "denseSharedScheduleK512HashInvocations": {
+          "const": 1537
+        },
+        "denseSharedScheduleK128Permutations": {
+          "const": 19825
+        },
+        "denseSharedScheduleK256Permutations": {
+          "const": 39651
+        },
+        "denseSharedScheduleK512Permutations": {
+          "const": 79303
+        },
+        "denseSharedScheduleK128KeccakRoundRows": {
+          "const": 475800
+        },
+        "denseSharedScheduleK256KeccakRoundRows": {
+          "const": 951624
+        },
+        "denseSharedScheduleK512KeccakRoundRows": {
+          "const": 1903272
+        },
+        "denseSharedScheduleK128MembershipLinks": {
+          "const": 896
+        },
+        "denseSharedScheduleK256MembershipLinks": {
+          "const": 2048
+        },
+        "denseSharedScheduleK512MembershipLinks": {
+          "const": 4608
+        },
+        "denseSharedSchedulePreimageWidthsSelected": {
+          "const": true
+        },
+        "denseSharedScheduleSha3_512": {
+          "const": "8116169f96371d01a5f62ca32ead5036ac1dc74d0f4ff83c82007710a03c196cb6854ce02ea09b032b9b0c50a9187bad8e0590e38439d328f1c566dfe661ee0c"
+        },
+        "denseSharedScheduleImplementation": {
+          "const": "experiments/bl_pq512_crypto_foundation/application_sha3_shared_schedule.py"
+        },
+        "economicMapScheduleStatus": {
+          "const": "SHARD24_FIXED_PRIVACY_BOUNDS_SELECTED_PADDED_AIR_OPEN"
+        },
+        "economicMapShardIndexBits": {
+          "const": 24
+        },
+        "economicMapShardAllocatedCapacity": {
+          "const": 16777214
+        },
+        "economicMapK128OperationRows": {
+          "const": 512
+        },
+        "economicMapK128PositionRows": {
+          "const": 1024
+        },
+        "economicMapK128MemoryRows": {
+          "const": 1024
+        },
+        "economicMapK128ProofNodeRows": {
+          "const": 18034
+        },
+        "economicMapK128NodeHashRows": {
+          "const": 34026
+        },
+        "economicMapK128LeafHashRows": {
+          "const": 2048
+        },
+        "economicMapK128HeaderHashRows": {
+          "const": 6
+        },
+        "economicMapK128Sha3Calls": {
+          "const": 36080
+        },
+        "economicMapK128Sha3Permutations": {
+          "const": 74208
+        },
+        "economicMapK128KeccakRoundRows": {
+          "const": 1780992
+        },
+        "economicMapPaddingMaterialized": {
+          "const": false
+        },
+        "economicMapScheduleImplementation": {
+          "const": "experiments/fixed_shape_claim_air/ordered_map_batch_reference.py"
+        },
+        "interactionPackingSelected": {
+          "const": false
+        },
+        "proofSuiteId": {
+          "type": "null"
+        },
+        "activationAllowed": {
+          "const": false
+        },
+        "implementation": {
+          "const": "experiments/bl_pq512_crypto_foundation/sha3_512_air_reference.py"
+        }
+      }
+    },
+    "candidateFri": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "codeRate",
+        "distanceParameter",
+        "foldSchedule",
+        "queryCount",
+        "queryReplacementPolicy",
+        "listBound"
+      ],
+      "properties": {
+        "status": {
+          "const": "UNSELECTED"
+        },
+        "codeRate": {
+          "type": "null"
+        },
+        "distanceParameter": {
+          "type": "null"
+        },
+        "foldSchedule": {
+          "type": "null"
+        },
+        "queryCount": {
+          "type": "null"
+        },
+        "queryReplacementPolicy": {
+          "type": "null"
+        },
+        "listBound": {
+          "type": "null"
+        }
+      }
+    },
+    "candidateNativeHiding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "profileId",
+        "interfaceScheduleCurrent",
+        "supersededByDenseSharedScheduleSha3_512",
+        "logBlowup",
+        "friQueryCount",
+        "traceMaskDegreeFreedom",
+        "nativeHidingPlanSha3_512",
+        "directEvaluationMapSha3_512",
+        "directEvaluationRank",
+        "directEvaluationFreeDimension",
+        "quotientMaskDegreeFreedom",
+        "quotientMaskPlanSha3_512",
+        "quotientSplitLogReduction",
+        "quotientSplitFactorRule",
+        "quotientSplitFactorLog21KatHex",
+        "quotientClosureProved",
+        "simulatorComplete",
+        "coverageGaps",
+        "vector"
+      ],
+      "properties": {
+        "status": {
+          "const": "INTERFACE_SCHEDULE_SUPERSEDED_PACKED_SHA3_RERUN_REQUIRED"
+        },
+        "profileId": {
+          "const": "K512_CALIBRATION"
+        },
+        "interfaceScheduleCurrent": {
+          "const": false
+        },
+        "supersededByDenseSharedScheduleSha3_512": {
+          "const": "8116169f96371d01a5f62ca32ead5036ac1dc74d0f4ff83c82007710a03c196cb6854ce02ea09b032b9b0c50a9187bad8e0590e38439d328f1c566dfe661ee0c"
+        },
+        "logBlowup": {
+          "const": 1
+        },
+        "friQueryCount": {
+          "const": 926
+        },
+        "traceMaskDegreeFreedom": {
+          "const": 4694
+        },
+        "nativeHidingPlanSha3_512": {
+          "const": "7e83a20f7125fe21985daca5cd063e4b63f0e7d839fce8075f3a16286f581b9b9ef3b193b01cf2ea34f40288e4151a1bfae12ea1f39eb44ea5fdeb6ea4b0515f"
+        },
+        "directEvaluationMapSha3_512": {
+          "const": "79148ba5b5ee6655478cd478cf3dd159bb8d458d1b6dad0245ee2db0ba223d4c766e0764f9909d05cba9efd0ea98329f53a70618553bf53ea1cd3ead86b6fb04"
+        },
+        "directEvaluationRank": {
+          "const": 958
+        },
+        "directEvaluationFreeDimension": {
+          "const": 3736
+        },
+        "quotientMaskDegreeFreedom": {
+          "const": 927
+        },
+        "quotientMaskPlanSha3_512": {
+          "const": "8b577a857db1f9ae09b0382039bf1af47bd7fbd0b4f42fb3643039233852b1acd56887c45710fb42e733d12024c48ee0c6a334aebdc064fd86d341f1896e6f3a"
+        },
+        "quotientSplitLogReduction": {
+          "const": 1
+        },
+        "quotientSplitFactorRule": {
+          "const": "REPEATED_DOUBLE_OODS_X_AT_MAX_LOG_DEGREE_BOUND_MINUS_ONE"
+        },
+        "quotientSplitFactorLog21KatHex": {
+          "const": "2c2ef3f200470e3f16a140270c1f9e9a451cfd791cc2587f63d18d395ece54732ccf39e70f9ab53e19e773cc623a1da32a4355f83810202c14a20e304f577f9e"
+        },
+        "quotientClosureProved": {
+          "const": false
+        },
+        "simulatorComplete": {
+          "const": false
+        },
+        "coverageGaps": {
+          "const": [
+            "RERUN_AFTER_PACKED_SHA3_SCHEDULE_SUBSTITUTION",
+            "FINAL_CIRCLE_SPLIT_LOG_DEGREE_AND_PROVER_INTEGRATION",
+            "FINAL_SHA3_AIR_INTERACTION_ORACLE_DIMENSIONS",
+            "FINAL_MULTI_DOMAIN_FRI_ORACLE_WIDTHS_AFTER_SHA3_AIR_EXPANSION",
+            "INTERACTIVE_CIRCLE_SIMULATOR_TRANSCRIPT"
+          ]
+        },
+        "vector": {
+          "const": "test_data/bl_pq512_wave1b_hiding_vectors_v1.json"
+        }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "status",
+          "moduleId"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "ENCODING_FRAMING",
+              "APPLICATION_SHA3_STATE",
+              "CHALLENGE_FIELD_ALGEBRA",
+              "PCS_CIRCLE_FRI",
+              "PUBLIC_COIN_INTERACTIVE_TRANSCRIPT",
+              "NATIVE_WITNESS_HIDING",
+              "SECURITY_BUDGET",
+              "PROOF_BODY_FORMAT"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_]+$"
+          },
+          "moduleId": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    "sidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "magicAscii",
+        "encodingVersion",
+        "flags",
+        "encodedLength",
+        "integerEncoding",
+        "fields"
+      ],
+      "properties": {
+        "status": {
+          "const": "LOCAL_FORMAT_CANDIDATE"
+        },
+        "magicAscii": {
+          "const": "BLPQSC01"
+        },
+        "encodingVersion": {
+          "const": 1
+        },
+        "flags": {
+          "const": 0
+        },
+        "encodedLength": {
+          "const": 744
+        },
+        "integerEncoding": {
+          "const": "BIG_ENDIAN"
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 18,
+          "maxItems": 18,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "offset",
+              "length",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9]*$"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 743
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "type": {
+                "enum": [
+                  "ASCII_FIXED",
+                  "U16BE",
+                  "U32BE",
+                  "U64BE",
+                  "NONZERO_U64BE",
+                  "U64BE_SUCCESSOR",
+                  "NONZERO_BYTES64"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "strongReplayRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "historicalRootFieldNames",
+        "treeDepth",
+        "retainedKeyBits",
+        "batchSlotCount",
+        "slotReplayEntriesPerBatch",
+        "saltUseEntriesPerBatch",
+        "saltUseInsertionPosition",
+        "entryKinds",
+        "saltUseTagFraming",
+        "preserveAcrossEpochDomainSchemaSuiteAndRecovery",
+        "separateSaltRegistryAuthoritative"
+      ],
+      "properties": {
+        "historicalRootFieldNames": {
+          "const": [
+            "strongNullifierRootBefore",
+            "strongNullifierRootAfter"
+          ]
+        },
+        "treeDepth": {
+          "const": 64
+        },
+        "retainedKeyBits": {
+          "const": 512
+        },
+        "batchSlotCount": {
+          "const": 256
+        },
+        "slotReplayEntriesPerBatch": {
+          "const": 256
+        },
+        "saltUseEntriesPerBatch": {
+          "const": 1
+        },
+        "saltUseInsertionPosition": {
+          "const": 256
+        },
+        "entryKinds": {
+          "const": [
+            "ATTEMPT_NULLIFIER",
+            "COVER_NULLIFIER",
+            "SALT_USE"
+          ]
+        },
+        "saltUseTagFraming": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "magicAscii",
+            "version",
+            "domainCode",
+            "saltLength",
+            "encodedLength",
+            "contextFields"
+          ],
+          "properties": {
+            "magicAscii": {
+              "const": "BLPQSALT"
+            },
+            "version": {
+              "const": 1
+            },
+            "domainCode": {
+              "const": 259
+            },
+            "saltLength": {
+              "const": 64
+            },
+            "encodedLength": {
+              "const": 78
+            },
+            "contextFields": {
+              "const": []
+            }
+          }
+        },
+        "preserveAcrossEpochDomainSchemaSuiteAndRecovery": {
+          "const": true
+        },
+        "separateSaltRegistryAuthoritative": {
+          "const": false
+        }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preferredApi",
+        "containerMagicAscii",
+        "containerVersion",
+        "containerHeaderLength",
+        "containerContainsPublicOutputs",
+        "publicOutputsLocation",
+        "publicOutputsEncodedLength",
+        "containerContentOrder",
+        "proofBodyMagicAscii",
+        "proofBodyHeaderLength",
+        "proofLength",
+        "proofSections",
+        "parseBeforeAllocate",
+        "trailingBytesAllowed"
+      ],
+      "properties": {
+        "preferredApi": {
+          "const": [
+            "publicOutputs[12]",
+            "sidecar[744]",
+            "proofBody[]"
+          ]
+        },
+        "containerMagicAscii": {
+          "const": "BLPQEN01"
+        },
+        "containerVersion": {
+          "const": 1
+        },
+        "containerHeaderLength": {
+          "const": 24
+        },
+        "containerContainsPublicOutputs": {
+          "const": false
+        },
+        "publicOutputsLocation": {
+          "const": "OUT_OF_BAND_REQUIRED_SETTLEMENT_ARGUMENT"
+        },
+        "publicOutputsEncodedLength": {
+          "const": 384
+        },
+        "containerContentOrder": {
+          "const": [
+            "sidecar",
+            "proofBody"
+          ]
+        },
+        "proofBodyMagicAscii": {
+          "const": "BLPQPF01"
+        },
+        "proofBodyHeaderLength": {
+          "const": 88
+        },
+        "proofLength": {
+          "type": "null"
+        },
+        "proofSections": {
+          "type": "null"
+        },
+        "parseBeforeAllocate": {
+          "const": true
+        },
+        "trailingBytesAllowed": {
+          "const": false
+        }
+      }
+    },
+    "domainRegistry": {
+      "type": "array",
+      "minItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "name"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^BL/PQ512/v1/[A-Z0-9/-]+$"
+          }
+        }
+      }
+    },
+    "multiTargetLedgerRequiredFields": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9]*$"
+      }
+    },
+    "blockedBy": {
+      "type": "array",
+      "minItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z0-9_]+$"
+      }
+    }
+  }
+}

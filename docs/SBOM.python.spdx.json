@@ -1,0 +1,635 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "creationInfo": {
+    "comment": "Complete Python logical-package inventory for the reviewed CPython 3.14.4 Windows x86-64 and Linux x86-64 production/development locks.",
+    "created": "2026-07-18T17:02:33Z",
+    "creators": [
+      "Tool: Codex R30 reviewed-wheel inventory"
+    ]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentDescribes": [
+    "SPDXRef-Package-Blind-Ledger-Python-Environment"
+  ],
+  "documentNamespace": "https://blind-ledger.invalid/spdx/python/2026-07-18/r30",
+  "name": "Blind Ledger reviewed Python dependency SBOM",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "comment": "Synthetic app-layer Python environment; no top-level project license is asserted.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "name": "blind-ledger-python-environment",
+      "versionInfo": "R30"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-annotated-doc",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact annotated_doc-0.0.4-py3-none-any.whl; Linux artifact annotated_doc-0.0.4-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/annotated-doc/0.0.4/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/annotated-doc@0.0.4",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "annotated-doc",
+      "versionInfo": "0.0.4"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-annotated-types",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact annotated_types-0.7.0-py3-none-any.whl; Linux artifact annotated_types-0.7.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/annotated-types/0.7.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/annotated-types@0.7.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "annotated-types",
+      "versionInfo": "0.7.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-anyio",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact anyio-4.13.0-py3-none-any.whl; Linux artifact anyio-4.13.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/anyio/4.13.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/anyio@4.13.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "anyio",
+      "versionInfo": "4.13.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-certifi",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact certifi-2026.4.22-py3-none-any.whl; Linux artifact certifi-2026.4.22-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/certifi/2026.4.22/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/certifi@2026.4.22",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0",
+      "name": "certifi",
+      "versionInfo": "2026.4.22"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-cffi",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact cffi-2.0.0-cp314-cp314-win_amd64.whl; Linux artifact cffi-2.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/cffi/2.0.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/cffi@2.0.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "cffi",
+      "versionInfo": "2.0.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-click",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact click-8.4.1-py3-none-any.whl; Linux artifact click-8.4.1-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/click/8.4.1/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/click@8.4.1",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "click",
+      "versionInfo": "8.4.1"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-colorama",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact colorama-0.4.6-py2.py3-none-any.whl; Linux artifact colorama-0.4.6-py2.py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/colorama/0.4.6/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/colorama@0.4.6",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "colorama",
+      "versionInfo": "0.4.6"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-cryptography",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact cryptography-49.0.0-cp311-abi3-win_amd64.whl; Linux artifact cryptography-49.0.0-cp311-abi3-manylinux_2_28_x86_64.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/cryptography/49.0.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/cryptography@49.0.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR BSD-3-Clause",
+      "name": "cryptography",
+      "versionInfo": "49.0.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-fastapi",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact fastapi-0.136.3-py3-none-any.whl; Linux artifact fastapi-0.136.3-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/fastapi/0.136.3/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/fastapi@0.136.3",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "fastapi",
+      "versionInfo": "0.136.3"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-h11",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact h11-0.16.0-py3-none-any.whl; Linux artifact h11-0.16.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/h11/0.16.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/h11@0.16.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "h11",
+      "versionInfo": "0.16.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-httpcore",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact httpcore-1.0.9-py3-none-any.whl; Linux artifact httpcore-1.0.9-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/httpcore/1.0.9/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/httpcore@1.0.9",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "httpcore",
+      "versionInfo": "1.0.9"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-httpx",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact httpx-0.28.1-py3-none-any.whl; Linux artifact httpx-0.28.1-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/httpx/0.28.1/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/httpx@0.28.1",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "httpx",
+      "versionInfo": "0.28.1"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-idna",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact idna-3.15-py3-none-any.whl; Linux artifact idna-3.15-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/idna/3.15/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/idna@3.15",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "idna",
+      "versionInfo": "3.15"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-iniconfig",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact iniconfig-2.3.0-py3-none-any.whl; Linux artifact iniconfig-2.3.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/iniconfig/2.3.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/iniconfig@2.3.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "iniconfig",
+      "versionInfo": "2.3.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-packaging",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact packaging-26.2-py3-none-any.whl; Linux artifact packaging-26.2-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/packaging/26.2/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/packaging@26.2",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR BSD-2-Clause",
+      "name": "packaging",
+      "versionInfo": "26.2"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pluggy",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pluggy-1.6.0-py3-none-any.whl; Linux artifact pluggy-1.6.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pluggy/1.6.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pluggy@1.6.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "pluggy",
+      "versionInfo": "1.6.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pqcrypto",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pqcrypto-0.4.0-cp314-cp314-win_amd64.whl; Linux artifact pqcrypto-0.4.0-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pqcrypto/0.4.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pqcrypto@0.4.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "name": "pqcrypto",
+      "versionInfo": "0.4.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pycparser",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pycparser-3.0-py3-none-any.whl; Linux artifact pycparser-3.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pycparser/3.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pycparser@3.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "pycparser",
+      "versionInfo": "3.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pydantic",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pydantic-2.13.4-py3-none-any.whl; Linux artifact pydantic-2.13.4-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pydantic/2.13.4/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pydantic@2.13.4",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "pydantic",
+      "versionInfo": "2.13.4"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pydantic-core",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pydantic_core-2.46.4-cp314-cp314-win_amd64.whl; Linux artifact pydantic_core-2.46.4-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pydantic-core/2.46.4/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pydantic-core@2.46.4",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "pydantic-core",
+      "versionInfo": "2.46.4"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pygments",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pygments-2.20.0-py3-none-any.whl; Linux artifact pygments-2.20.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pygments/2.20.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pygments@2.20.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "name": "pygments",
+      "versionInfo": "2.20.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pytest",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact pytest-9.0.3-py3-none-any.whl; Linux artifact pytest-9.0.3-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pytest/9.0.3/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pytest@9.0.3",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "pytest",
+      "versionInfo": "9.0.3"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-starlette",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact starlette-1.2.1-py3-none-any.whl; Linux artifact starlette-1.2.1-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/starlette/1.2.1/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/starlette@1.2.1",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "starlette",
+      "versionInfo": "1.2.1"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-typing-extensions",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact typing_extensions-4.15.0-py3-none-any.whl; Linux artifact typing_extensions-4.15.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/typing-extensions/4.15.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/typing-extensions@4.15.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "PSF-2.0",
+      "name": "typing-extensions",
+      "versionInfo": "4.15.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-typing-inspection",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact typing_inspection-0.4.2-py3-none-any.whl; Linux artifact typing_inspection-0.4.2-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/typing-inspection/0.4.2/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/typing-inspection@0.4.2",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "typing-inspection",
+      "versionInfo": "0.4.2"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-uvicorn",
+      "comment": "Wheel metadata license reconciled. Exact Windows and Linux filenames, sizes, official acquisition URLs, SHA-256, and SHA3-512 values are governed by requirements/locks/python-artifacts.lock.json. Windows artifact uvicorn-0.49.0-py3-none-any.whl; Linux artifact uvicorn-0.49.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/uvicorn/0.49.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/uvicorn@0.49.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "uvicorn",
+      "versionInfo": "0.49.0"
+    }
+  ],
+  "relationships": [
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-annotated-doc",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-annotated-types",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-anyio",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-certifi"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-cffi",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-click",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-colorama",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-cryptography",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-fastapi",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-h11",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-httpcore"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-httpx"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-idna",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-iniconfig"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-packaging"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-pluggy"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-pqcrypto",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-pycparser",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-pydantic",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-pydantic-core",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-pygments"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-pytest"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-starlette",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-typing-extensions",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-typing-inspection",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-uvicorn",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    }
+  ],
+  "spdxVersion": "SPDX-2.3"
+}

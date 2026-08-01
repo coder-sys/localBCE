@@ -1,0 +1,359 @@
+{
+  "$defs": {
+    "cleanup": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {"const": true},
+        "process_residual_count": {"const": 0},
+        "scratch_residual_bytes": {"const": 0},
+        "sensitive_artifact_residual_count": {"const": 0}
+      },
+      "required": ["complete", "process_residual_count", "scratch_residual_bytes", "sensitive_artifact_residual_count"],
+      "type": "object"
+    },
+    "digest": {
+      "pattern": "^[0-9a-f]{128}$",
+      "type": "string"
+    },
+    "failure": {
+      "additionalProperties": false,
+      "properties": {
+        "class": {"minLength": 1, "type": "string"},
+        "cleanup_complete": {"type": "boolean"},
+        "error_code": {"minLength": 1, "type": "string"},
+        "stage": {"minLength": 1, "type": "string"},
+        "state_unchanged": {"type": "boolean"},
+        "success_receipt_emitted": {"type": "boolean"}
+      },
+      "required": ["class", "cleanup_complete", "error_code", "stage", "state_unchanged", "success_receipt_emitted"],
+      "type": "object"
+    },
+    "gate_result": {
+      "additionalProperties": false,
+      "properties": {
+        "cleanup_pass": {"type": "boolean"},
+        "failure_reasons": {"items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true},
+        "latency_pass": {"type": "boolean"},
+        "passed": {"type": "boolean"},
+        "resource_pass": {"type": "boolean"},
+        "variance_pass": {"type": "boolean"},
+        "verification_pass": {"type": "boolean"}
+      },
+      "required": ["cleanup_pass", "failure_reasons", "latency_pass", "passed", "resource_pass", "variance_pass", "verification_pass"],
+      "type": "object"
+    },
+    "proof": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {"$ref": "#/$defs/u64"},
+        "sections": {
+          "items": {"$ref": "#/$defs/proof_section"},
+          "minItems": 1,
+          "type": "array"
+        },
+        "sha3_512": {"$ref": "#/$defs/digest"}
+      },
+      "required": ["bytes", "sections", "sha3_512"],
+      "type": "object"
+    },
+    "proof_section": {
+      "additionalProperties": false,
+      "properties": {
+        "length_bytes": {"$ref": "#/$defs/u64"},
+        "module_id": {"pattern": "^[A-Z0-9_]{1,64}$", "type": "string"},
+        "offset_bytes": {"$ref": "#/$defs/u64"}
+      },
+      "required": ["length_bytes", "module_id", "offset_bytes"],
+      "type": "object"
+    },
+    "raw_evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest_sha3_512": {"$ref": "#/$defs/digest"}
+      },
+      "required": ["manifest_sha3_512"],
+      "type": "object"
+    },
+    "resources": {
+      "additionalProperties": false,
+      "properties": {
+        "io_read_bytes": {"$ref": "#/$defs/u64"},
+        "io_read_operations": {"$ref": "#/$defs/u64"},
+        "io_write_bytes": {"$ref": "#/$defs/u64"},
+        "io_write_operations": {"$ref": "#/$defs/u64"},
+        "minimum_available_ram_bytes": {"$ref": "#/$defs/u64"},
+        "minimum_disk_free_bytes": {"$ref": "#/$defs/u64"},
+        "peak_rss_bytes": {"allOf": [{"$ref": "#/$defs/u64"}, {"maximum": 5000000000}]},
+        "peak_swap_bytes": {"$ref": "#/$defs/u64"},
+        "scratch_high_water_bytes": {"allOf": [{"$ref": "#/$defs/u64"}, {"exclusiveMaximum": 5000000000}]},
+        "swap_in_bytes": {"$ref": "#/$defs/u64"},
+        "swap_out_bytes": {"$ref": "#/$defs/u64"}
+      },
+      "required": ["io_read_bytes", "io_read_operations", "io_write_bytes", "io_write_operations", "minimum_available_ram_bytes", "minimum_disk_free_bytes", "peak_rss_bytes", "peak_swap_bytes", "scratch_high_water_bytes", "swap_in_bytes", "swap_out_bytes"],
+      "type": "object"
+    },
+    "run": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_sha3_512": {"$ref": "#/$defs/digest"},
+        "cbam_sha3_512": {"$ref": "#/$defs/digest"},
+        "cleanup": {"$ref": "#/$defs/cleanup"},
+        "counted": {"type": "boolean"},
+        "failure": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/failure"}]},
+        "ordinal": {"maximum": 10, "minimum": 0, "type": "integer"},
+        "outcome": {"enum": ["INDEPENDENTLY_VERIFIED", "FAILED"]},
+        "proof": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/proof"}]},
+        "public_inputs_sha3_512": {"$ref": "#/$defs/digest"},
+        "raw_evidence": {"$ref": "#/$defs/raw_evidence"},
+        "resources": {"$ref": "#/$defs/resources"},
+        "timings_ns": {"$ref": "#/$defs/timings"},
+        "verification": {"$ref": "#/$defs/verification"}
+      },
+      "required": ["batch_sha3_512", "cbam_sha3_512", "cleanup", "counted", "failure", "ordinal", "outcome", "proof", "public_inputs_sha3_512", "raw_evidence", "resources", "timings_ns", "verification"],
+      "type": "object"
+    },
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_system_sum_ns": {"$ref": "#/$defs/u64"},
+        "cpu_user_sum_ns": {"$ref": "#/$defs/u64"},
+        "io_read_bytes_sum": {"$ref": "#/$defs/u64"},
+        "io_write_bytes_sum": {"$ref": "#/$defs/u64"},
+        "mad_ns": {"$ref": "#/$defs/u64"},
+        "mad_over_p50_ppm": {"$ref": "#/$defs/u64"},
+        "measured_count": {"const": 10},
+        "p95_over_p50_ppm": {"$ref": "#/$defs/u64"},
+        "peak_rss_max_bytes": {"$ref": "#/$defs/u64"},
+        "proof_bytes_max": {"$ref": "#/$defs/u64"},
+        "proof_bytes_min": {"$ref": "#/$defs/u64"},
+        "scratch_max_bytes": {"$ref": "#/$defs/u64"},
+        "swap_in_bytes_sum": {"$ref": "#/$defs/u64"},
+        "swap_out_bytes_sum": {"$ref": "#/$defs/u64"},
+        "verifier_p50_ns": {"$ref": "#/$defs/u64"},
+        "verifier_p95_ns": {"$ref": "#/$defs/u64"},
+        "verifier_sum_ns": {"$ref": "#/$defs/u64"},
+        "wall_max_ns": {"$ref": "#/$defs/u64"},
+        "wall_min_ns": {"$ref": "#/$defs/u64"},
+        "wall_p50_ns": {"$ref": "#/$defs/u64"},
+        "wall_p95_ns": {"$ref": "#/$defs/u64"},
+        "wall_sum_ns": {"$ref": "#/$defs/u64"}
+      },
+      "required": ["cpu_system_sum_ns", "cpu_user_sum_ns", "io_read_bytes_sum", "io_write_bytes_sum", "mad_ns", "mad_over_p50_ppm", "measured_count", "p95_over_p50_ppm", "peak_rss_max_bytes", "proof_bytes_max", "proof_bytes_min", "scratch_max_bytes", "swap_in_bytes_sum", "swap_out_bytes_sum", "verifier_p50_ns", "verifier_p95_ns", "verifier_sum_ns", "wall_max_ns", "wall_min_ns", "wall_p50_ns", "wall_p95_ns", "wall_sum_ns"],
+      "type": "object"
+    },
+    "timings": {
+      "additionalProperties": false,
+      "properties": {
+        "cleanup_wall_ns": {"$ref": "#/$defs/u64"},
+        "cpu_system_ns": {"$ref": "#/$defs/u64"},
+        "cpu_user_ns": {"$ref": "#/$defs/u64"},
+        "input_to_verified_wall_ns": {"$ref": "#/$defs/u64"},
+        "verifier_cpu_system_ns": {"$ref": "#/$defs/u64"},
+        "verifier_cpu_user_ns": {"$ref": "#/$defs/u64"},
+        "verifier_wall_ns": {"$ref": "#/$defs/u64"}
+      },
+      "required": ["cleanup_wall_ns", "cpu_system_ns", "cpu_user_ns", "input_to_verified_wall_ns", "verifier_cpu_system_ns", "verifier_cpu_user_ns", "verifier_wall_ns"],
+      "type": "object"
+    },
+    "u64": {
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "verification": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {"type": "boolean"},
+        "independent": {"type": "boolean"},
+        "semantic_output_match": {"type": "boolean"},
+        "success_marker": {"type": "boolean"}
+      },
+      "required": ["accepted", "independent", "semantic_output_match", "success_marker"],
+      "type": "object"
+    },
+    "workload": {
+      "additionalProperties": false,
+      "properties": {
+        "capacity_claims": {"type": "integer"},
+        "cover_claims": {"type": "integer"},
+        "fixed_shape": {"const": true},
+        "live_claims": {"type": "integer"},
+        "profile_id": {"enum": ["K128_CALIBRATION", "K512_CALIBRATION"]},
+        "workload_manifest_sha3_512": {"$ref": "#/$defs/digest"}
+      },
+      "required": ["capacity_claims", "cover_claims", "fixed_shape", "live_claims", "profile_id", "workload_manifest_sha3_512"],
+      "type": "object"
+    },
+    "profile": {
+      "additionalProperties": false,
+      "properties": {
+        "gate_result": {"$ref": "#/$defs/gate_result"},
+        "repetitions": {"items": {"$ref": "#/$defs/run"}, "maxItems": 10, "minItems": 10, "type": "array"},
+        "summary": {"$ref": "#/$defs/summary"},
+        "warmup": {"$ref": "#/$defs/run"},
+        "workload": {"$ref": "#/$defs/workload"}
+      },
+      "required": ["gate_result", "repetitions", "summary", "warmup", "workload"],
+      "type": "object"
+    }
+  },
+  "$id": "urn:blind-ledger:schema:bl-pq512-benchmark-evidence:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {"pattern": "^[a-z0-9][a-z0-9._-]{7,127}$", "type": "string"},
+        "campaign_result": {
+          "additionalProperties": false,
+          "properties": {
+            "all_batches_unique": {"type": "boolean"},
+            "all_profiles_pass": {"type": "boolean"},
+            "failure_count": {"$ref": "#/$defs/u64"},
+            "qualifies": {"type": "boolean"},
+            "reference_hardware_ready": {"type": "boolean"},
+            "source_unchanged": {"type": "boolean"}
+          },
+          "required": ["all_batches_unique", "all_profiles_pass", "failure_count", "qualifies", "reference_hardware_ready", "source_unchanged"],
+          "type": "object"
+        },
+        "created_at_utc": {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", "type": "string"},
+        "failure_policy": {
+          "additionalProperties": false,
+          "properties": {
+            "failed_run_disqualifies": {"const": true},
+            "failed_run_preserved": {"const": true},
+            "partial_campaign_qualifies": {"const": false},
+            "substitution_allowed": {"const": false}
+          },
+          "required": ["failed_run_disqualifies", "failed_run_preserved", "partial_campaign_qualifies", "substitution_allowed"],
+          "type": "object"
+        },
+        "gates": {
+          "additionalProperties": false,
+          "properties": {
+            "disk_headroom_min_ppm": {"const": 150000},
+            "mad_over_p50_max_ppm": {"const": 100000},
+            "p95_over_p50_max_ppm": {"const": 1200000},
+            "peak_rss_max_bytes": {"const": 5000000000},
+            "ram_headroom_min_ppm": {"const": 100000},
+            "scratch_max_bytes": {"const": 5000000000},
+            "swap_max_bytes": {"const": 0}
+          },
+          "required": ["disk_headroom_min_ppm", "mad_over_p50_max_ppm", "p95_over_p50_max_ppm", "peak_rss_max_bytes", "ram_headroom_min_ppm", "scratch_max_bytes", "swap_max_bytes"],
+          "type": "object"
+        },
+        "profiles": {
+          "items": false,
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/profile"},
+                {"properties": {"workload": {"properties": {"capacity_claims": {"const": 128}, "cover_claims": {"const": 28}, "live_claims": {"const": 100}, "profile_id": {"const": "K128_CALIBRATION"}}}}}
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/profile"},
+                {"properties": {"workload": {"properties": {"capacity_claims": {"const": 512}, "cover_claims": {"const": 12}, "live_claims": {"const": 500}, "profile_id": {"const": "K512_CALIBRATION"}}}}}
+              ]
+            }
+          ],
+          "type": "array"
+        },
+        "protocol": {
+          "additionalProperties": false,
+          "properties": {
+            "automatic_retry_allowed": {"const": false},
+            "cached_proofs_allowed": {"const": false},
+            "cached_witnesses_allowed": {"const": false},
+            "clock": {"const": "MONOTONIC_NANOSECONDS"},
+            "fresh_process_per_run": {"const": true},
+            "independent_verification_in_timed_boundary": {"const": true},
+            "masking_in_timed_boundary": {"const": true},
+            "measured_repetitions": {"const": 10},
+            "outlier_exclusion_allowed": {"const": false},
+            "p50_method": {"const": "EVEN_MEDIAN_FLOOR"},
+            "p95_method": {"const": "NEAREST_RANK_CEIL"},
+            "parsing_in_timed_boundary": {"const": true},
+            "public_coin_in_timed_boundary": {"const": true},
+            "warmup_count": {"const": 1}
+          },
+          "required": ["automatic_retry_allowed", "cached_proofs_allowed", "cached_witnesses_allowed", "clock", "fresh_process_per_run", "independent_verification_in_timed_boundary", "masking_in_timed_boundary", "measured_repetitions", "outlier_exclusion_allowed", "p50_method", "p95_method", "parsing_in_timed_boundary", "public_coin_in_timed_boundary", "warmup_count"],
+          "type": "object"
+        },
+        "reference_hardware": {
+          "additionalProperties": false,
+          "properties": {
+            "ac_powered": {"const": true},
+            "capture_sha3_512": {"$ref": "#/$defs/digest"},
+            "cpu_model": {"const": "AMD Ryzen 7 7840HS"},
+            "discrete_gpu_model": {"const": "NVIDIA GeForce RTX 4060 Laptop GPU"},
+            "discrete_gpu_vram_mib": {"const": 8188},
+            "logical_processors": {"const": 16},
+            "machine_manufacturer": {"const": "Dell"},
+            "machine_model": {"const": "G15 5535"},
+            "physical_cores": {"const": 8},
+            "physical_memory_bytes": {"const": 16438382592},
+            "power_profile": {"minLength": 1, "type": "string"},
+            "reference_class_id": {"const": "BL_REF_DELL_G15_5535_V1"},
+            "reference_hardware_config_sha3_512": {"$ref": "#/$defs/digest"},
+            "system_disk_bytes": {"const": 487335129088},
+            "system_disk_free_bytes_at_capture": {"$ref": "#/$defs/u64"},
+            "wsl_kernel": {"minLength": 1, "type": "string"},
+            "wsl_release": {"minLength": 1, "type": "string"}
+          },
+          "required": ["ac_powered", "capture_sha3_512", "cpu_model", "discrete_gpu_model", "discrete_gpu_vram_mib", "logical_processors", "machine_manufacturer", "machine_model", "physical_cores", "physical_memory_bytes", "power_profile", "reference_class_id", "reference_hardware_config_sha3_512", "system_disk_bytes", "system_disk_free_bytes_at_capture", "wsl_kernel", "wsl_release"],
+          "type": "object"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "activation_allowed": {"const": false},
+            "no_phi": {"const": true},
+            "production_usable": {"const": false},
+            "synthetic_only": {"const": true}
+          },
+          "required": ["activation_allowed", "no_phi", "production_usable", "synthetic_only"],
+          "type": "object"
+        },
+        "source_identity": {
+          "additionalProperties": false,
+          "properties": {
+            "benchmark_driver_sha3_512": {"$ref": "#/$defs/digest"},
+            "build_manifest_sha3_512": {"$ref": "#/$defs/digest"},
+            "cbam_schema_sha3_512": {"$ref": "#/$defs/digest"},
+            "git_commit": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+            "git_dirty": {"const": false},
+            "git_status_sha3_512": {"$ref": "#/$defs/digest"},
+            "lock_manifest_sha3_512": {"$ref": "#/$defs/digest"},
+            "module_manifest_sha3_512": {"$ref": "#/$defs/digest"},
+            "parameter_set_id": {"$ref": "#/$defs/digest"},
+            "program_artifact_sha3_512": {"$ref": "#/$defs/digest"},
+            "proof_grammar_sha3_512": {"$ref": "#/$defs/digest"},
+            "proof_suite_id": {"$ref": "#/$defs/digest"},
+            "prover_artifact_sha3_512": {"$ref": "#/$defs/digest"},
+            "public_input_schema_id": {"$ref": "#/$defs/digest"},
+            "schema_sha3_512": {"$ref": "#/$defs/digest"},
+            "source_manifest_sha3_512_after": {"$ref": "#/$defs/digest"},
+            "source_manifest_sha3_512_before": {"$ref": "#/$defs/digest"},
+            "verifier_artifact_sha3_512": {"$ref": "#/$defs/digest"},
+            "workload_generator_sha3_512": {"$ref": "#/$defs/digest"}
+          },
+          "required": ["benchmark_driver_sha3_512", "build_manifest_sha3_512", "cbam_schema_sha3_512", "git_commit", "git_dirty", "git_status_sha3_512", "lock_manifest_sha3_512", "module_manifest_sha3_512", "parameter_set_id", "program_artifact_sha3_512", "proof_grammar_sha3_512", "proof_suite_id", "prover_artifact_sha3_512", "public_input_schema_id", "schema_sha3_512", "source_manifest_sha3_512_after", "source_manifest_sha3_512_before", "verifier_artifact_sha3_512", "workload_generator_sha3_512"],
+          "type": "object"
+        }
+      },
+      "required": ["campaign_id", "campaign_result", "created_at_utc", "failure_policy", "gates", "profiles", "protocol", "reference_hardware", "scope", "source_identity"],
+      "type": "object"
+    },
+    "payload_sha3_512": {"$ref": "#/$defs/digest"},
+    "schema_version": {"const": "blind_ledger_pq512_benchmark_evidence_v1"}
+  },
+  "required": ["payload", "payload_sha3_512", "schema_version"],
+  "title": "Blind Ledger BL-PQ512 benchmark qualification evidence v1",
+  "type": "object"
+}
