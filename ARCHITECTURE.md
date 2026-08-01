@@ -128,23 +128,17 @@ measured 29.974129 seconds for K128 and 120.460733 seconds for four-shard K512 i
 coordinator. `complete_proof_qualification=false` remains correct until the H5 campaign and H6
 qualification gates close.
 
-The reference Dell release envelope is no more than 5,000,000,000 peak resident bytes, strictly
-below 5,000,000,000 scratch bytes, and no swap. The 3.24 GB coherent-chain measurements remain
-correctness/parity controls rather than complete resource-qualified runs because they do not measure
-the complete proof pipeline. The 5.06-7.46 GB PCS realizations and both raw all-Fp16 GKR baselines
-are rejected before overhead. Subfield-first
-promotion, bounded streaming, recomputation, and single-owner buffer lifetimes are therefore
-mandatory architecture properties, not optional tuning.
+The reference Dell release envelope is no more than 5,000,000,000 peak resident bytes, scratch
+strictly below 5,000,000,000 bytes, and no swap. The selected bounded implementation uses
+288.412/296.255 MB internal host memory, 681.607168/706.523136 MB external process-tree RSS,
+969.999360 MB tracked device state per proof, 2,770.337792 MB sampled total K512 GPU residency,
+and zero scratch. Bounded streaming, recomputation, and single-owner buffer lifetimes are mandatory
+architecture properties.
 
-The admitted frontier refinement is a combined architecture, not a new proof-suite selection:
-Keccak-specific GKR algebra over the unchanged FIPS 202 relation; an exact M31-to-Fp16 tower and
-small-value sumcheck; persistent bounded GPU execution with authoritative Rust transcript and
-verification; and a streamed jagged code PCS whose tiles do not survive their commitment/frontier
-stage. Native-ZK compilation, exact 256-bit security/encryption and unique-decoding parameters, and
-atomic verification
-remain mandatory. The research sources, incompatible dependencies, second-order effects, and
-prototype order are recorded in `docs/PROVING_OPTIMIZATION_REVIEW.md`. No paper benchmark changes
-the current suite, latency evidence, or release status.
+No alternative PCS, code, sumcheck, or accelerator lane is currently admitted. The current
+optimization policy is `docs/PROVING_OPTIMIZATION_REVIEW.md`; former paper screens and prototype
+orders are quarantined under `docs/history/`. A new candidate must re-enter through exact theorem,
+privacy, PQ, independent-verifier, resource, migration, and complete-boundary measurement gates.
 
 The state plane remains unselected: `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` requires the
 current SHA3-512 endpoint-multiproof path and all admitted sparse-state/PQ-commitment candidates to
@@ -193,8 +187,7 @@ The exact semantic B16 source, real 168-layer producer, native masking, Construc
 6,086-round coordinator now pass independent verification together under execution manifest
 `51c23310274ccf7c4d7f9abe4ae7eba43266b335bd377b21cbf92409729b91e2a40a39787a157baa080c9d0516c7815af404a4d58d9e76747f652f57cd017ed6`.
 The accepted fresh K128 proof measured 29.974129 seconds. Four ordered K512 shards reused the same
-bounded one-GPU design and completed atomically in 120.460733 seconds. The older
-53.547306/220.583627-second measurements are retained only as superseded profiling evidence.
+bounded one-GPU design and completed atomically in 120.460733 seconds.
 
 Final decimal internal host peaks are 288.412 MB for K128 and 296.255 MB for K512. External
 process-tree peaks are 681.607168 and 706.523136 MB; per-proof tracked device allocation is
@@ -202,13 +195,10 @@ process-tree peaks are 681.607168 and 706.523136 MB; per-proof tracked device al
 attempts used 0.000000 MB scratch and had zero pagefile growth. K512 remains sequential; four-way
 image duplication and theorem-free challenge sharing are prohibited.
 
-The historical 200 MB host and 1,800 MB device component-selection targets are not current
-acceptance gates. The owner's later resource direction replaces them with the measured
-low-hundreds-of-MB internal host objective while preserving the immutable 5,000 MB host,
-below-5,000 MB scratch, and no-swap gates. This supersession is explicit; the older measurements
-remain dated audit evidence.
+The active regression objective is low-hundreds-of-MB internal host use while preserving the
+immutable 5,000 MB host, below-5,000 MB scratch, and no-swap gates.
 
-## 2026-07-30 atomic semantic execution boundary
+## Atomic semantic execution boundary
 
 The active H4 prototype has one acceptance boundary for both profiles. K128 is one canonical B16
 shard; K512 is four ordered canonical B16 shards proven sequentially on one GPU. Each shard has

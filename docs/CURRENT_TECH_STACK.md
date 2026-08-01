@@ -1,10 +1,14 @@
 # Blind Ledger current technical stack
 
-Updated: 2026-08-01
+Updated: 2026-08-02
 
 Status: canonical current-stack index. If an older checkpoint conflicts with this file, `STATE.md`,
 `ARCHITECTURE.md`, or `docs/IMPLEMENTATION_ROADMAP.md`, the newer current files win. Historical
 measurements and rejected designs are evidence, never executable fallbacks.
+
+Former active roadmap, throughput, coprocessor, optimization-review, and crate-README narratives
+are physically isolated under `docs/history/`. They preserve provenance but are never part of the
+active read order. `docs/REJECTED_ARCHITECTURES.md` owns rejection decisions.
 
 ## Current product boundary
 

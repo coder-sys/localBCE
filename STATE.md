@@ -1,6 +1,6 @@
 # Blind Ledger state
 
-Updated: 2026-07-31
+Updated: 2026-08-02
 
 ## Current execution boundary
 
@@ -3858,3 +3858,72 @@ The exact next implementation action is Gate 2E-0 followed by 2E-1: freeze the C
 complete-boundary control record, then define narrow canonical state-layout, relation, commitment,
 opening, transition, migration, transcript, independent-verifier, and receipt interfaces. Do not
 start with a lattice optimization, another proof backend, or H5.
+
+## 2026-08-02 active/history documentation separation
+
+The active handoff no longer interleaves dated execution language with current instructions. Five
+former active documents were preserved line-for-line under `docs/history/` except for an explicit
+`Archived` title marker:
+
+- the 2,072-line implementation roadmap;
+- the 1,365-line throughput-recovery plan;
+- the 1,022-line heterogeneous-coprocessor architecture;
+- the 427-line proving-optimization review; and
+- the 254-line proof-core README.
+
+Readback compared every archived line after the title against Git commit `e640e88`; all five bodies
+were equal. `docs/history/README.md` makes the archive non-executable and routes current work back
+to the active contracts. `docs/REJECTED_ARCHITECTURES.md` now indexes the detailed archived
+provenance without restoring a rejected path.
+
+The active replacements are current-only:
+
+| Document | Active lines | Purpose |
+| --- | ---: | --- |
+| `docs/IMPLEMENTATION_ROADMAP.md` | 424 before final evidence append | Exact authority, invariants, 2E-0 through 2E-7, H5/H6, all 93 package rows, waves, Git discipline |
+| `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md` | 225 | Complete-boundary optimization and H5 measurement/STOP contract |
+| `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md` | 220 | Selected construction, geometry, schedule, authority, memory, verifier, H4 evidence |
+| `docs/PROVING_OPTIMIZATION_REVIEW.md` | 108 | Current optimization policy and excluded paths |
+| `experiments/bl_pq512_crypto_core/README.md` | 148 | Current crate role, sources, worker rules, commands, and next dependency |
+
+Stale tests that required R24/R25/R26 narrative inside the active roadmap were corrected to test
+current security/package invariants and archived provenance separately. A new test rejects seven
+known dated-execution headings from every active handoff file and requires all five archives and
+the archive authority warning.
+
+Verification:
+
+```text
+py -3.14 -m pytest -q tests/test_foundation_spec.py \
+  tests/test_security_freeze_spec.py \
+  tests/test_deployment_ready_roadmap_contract.py \
+  -k "not app_layer_ops_is_an_exact_recursive_mirror_of_canonical_ops and not launch_blocker_manifest_has_only_one_external_assurance_dependency"
+18 passed, 2 deselected in 0.41s
+
+py -3.14 -m pytest -q tests/test_deployment_ready_roadmap_contract.py
+2 passed, 1 failed in 0.20s
+failure: FileNotFoundError for trusted canonical ../ops/launch_blockers.json
+
+cargo fmt --all -- --check
+exit=0
+
+cargo check --release --offline --locked --lib --no-default-features
+exit=0
+
+cargo clippy --release --offline --locked --all-targets --features std,parallel -- -D warnings
+exit=0; warnings=0
+
+git diff --check
+exit=0
+
+active dated-heading scan
+hits=0
+
+archived body readback against e640e88
+5/5 equal after title
+```
+
+The one full-roadmap failure is the same pre-existing fail-closed canonical-ops condition. No ops
+tree, policy byte, protected path, proof source, proof byte, execution manifest, or activation state
+changed. No CUDA proof was launched. H4 evidence and the exact Gate 2E-0 then 2E-1 implementation
+boundary remain unchanged.

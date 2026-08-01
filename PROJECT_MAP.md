@@ -34,7 +34,8 @@ recovery evidence and does not define the current proof architecture.
 | `experiments/bl_pq512_crypto_foundation/` | Nonactivating Python references for the frozen Fp16 algebra, interactive public coin, exact software PQ adapters, bounded retry/quarantine governance, and strict proof-body framing. | Trust-critical protocol reference; preserve domain framing, caps, and fail-closed boundaries. |
 | `experiments/bl_pq512_crypto_core/` | `no_std` Rust strict-PQ substrate and active nonactivating proof engine: Fp16, SHA3-512 Merkle commitments, authenticated public-coin integration, OODS/DEEP/Circle-FRI, native mask plumbing, streamed oracle storage, bounded proof grammar, and independent verification. | Soundness-critical current Wave 2 implementation. The kernel proof is real; complete K128 proving, simulator/leakage convergence, final parameters, suite identity, and activation remain open. |
 | `experiments/bl_pq512_crypto_core/src/proof_format.rs`, `fri_pipeline.rs`, `disk_fri.rs`, and `resource_preflight.rs` | Current v1 proof grammar, per-query pair openings, memory/disk FRI paths, and verifier-derived monolithic/scratch resource estimator. | Highest-risk Wave 2 throughput boundary. Grammar/storage changes require a new version, canonical multiproof reconstruction, exact byte attribution, independent verifier tests, and unchanged theorem/query semantics. |
-| `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md` | Authoritative Wave 2 shared-bus Boolean GKR hash-coprocessor architecture, exact K128 geometry, reference-laptop resource gates, security composition, research controls, and H0-H6 implementation sequence. | Trust-critical architecture contract. It retires 554-951 GB direct-SHA3-STARK release layouts but does not select a suite or claim an implemented K128 prover. |
+| `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md` | Authoritative current Wave 2 shared-bus Boolean GKR architecture, exact K128/K512 geometry, hiding/PCS boundary, verifier order, resources, and H4 evidence. | H4 is prototype-accepted; Gate 2E, H5, H6, suite identity, and activation remain open. |
+| `docs/history/` | Verbatim former roadmap, throughput, coprocessor, and crate-README checkpoint narratives. | Non-executable provenance only; active work must not follow imperative language from this directory. |
 | `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` | Cross-wave contract for CBAM, state-topology bake-off, conflict-DAG scheduling, proof-carrying adapters, formal spine, and maturity-gated Ethereum alignment. | Prospective work allocation. It adds no package, changes no status, and makes no measured speed or activation claim. |
 | `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` | Mandatory Wave 2 gate for persistent sparse memory, transparent dictionaries, touched-projection RAM, compact memory consistency, and native-hiding PQ commitment selection against the existing SHA3-512 control. | Trust-critical prospective architecture. It selects no primitive by documentation and requires exact theorem, migration, independent-verifier, and laptop evidence. |
 | `CONTINUATION_MANDATE.md` | Mandatory post-compaction persistence, product-ideology, recovery, download, evidence, and legitimate-hard-stop instructions. | Read immediately after `AGENTS.md`; it never authorizes weakening a gate or bypassing higher-priority instructions. |
@@ -66,8 +67,9 @@ The build/audit/activation boundary is maintained in
 packages, I01-I08 government/oracle adapters, and R01-R12 containing-rollup packages: 93 internal
 packages total. Independent audit work is one separate, uncounted gate.
 
-The historical and current proving measurements are reconciled in
-`docs/PROVING_OPTIMIZATION_REVIEW.md`; the throughput-recovery plan controls prospective work.
+Current proving optimization policy is in `docs/PROVING_OPTIMIZATION_REVIEW.md`; verbatim former
+measurements and paper screens are under `docs/history/`. The throughput-recovery plan controls
+current measured work.
 
 ## Source organization rule
 

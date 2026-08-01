@@ -1,10 +1,15 @@
 # Blind Ledger rejected architecture ledger
 
-Updated: 2026-07-31
+Updated: 2026-08-02
 
 Status: authoritative non-executable rejection record. Entries here preserve why a path failed and
 what evidence remains useful. Nothing in this file is an approved fallback, dependency, acceptance
 format, or activation path.
+
+Former active documents containing complete intermediate measurements and decision sequences are
+preserved under `history/`. Their imperative language is non-executable. Use this ledger for the
+rejection decision, `history/` for verbatim provenance, and current architecture documents for
+implementation.
 
 ## RISC Zero 3.0.5 backend
 
@@ -105,3 +110,17 @@ A rejected path can return only after a written first-principles review proves t
 the complete theorem, strict privacy and PQ boundaries, exact ABI and atomic state binding, current
 resource gates, independent verification, and a measured advantage. Fashion, familiarity, or a
 component benchmark is insufficient.
+
+## Historical provenance index
+
+| Rejected or superseded area | Detailed preserved evidence |
+| --- | --- |
+| RISC Zero and Stwo experiments | This ledger, dated `STATE.md` sections, and Git history before cleanup commit `960d5a1` |
+| Direct SHA3 AIR/STARK resource failures | Archived throughput-plan sections 3-5 and dated `STATE.md` measurements |
+| BaseFold, zkDeepFold, and legacy PCS grammars | Archived throughput/coprocessor documents and the retired-format KAT |
+| B=64, merged layers, scalar replay, excess worker lifetime | Archived coprocessor sections 8.1-8.2 and H3/H4 records |
+| Superseded H3/H4 timing/resource checkpoints | Archived roadmap, throughput plan, crate README, and dated `STATE.md` sections |
+| Current accepted replacement | `CURRENT_TECH_STACK.md`, the active coprocessor contract, and active source |
+
+The archive split changes documentation routing only. It does not restore code, alter proof bytes
+or the execution manifest, or grant qualification credit to a historical result.

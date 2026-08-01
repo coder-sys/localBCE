@@ -15,6 +15,9 @@ ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
 CANONICAL_OPS_PATH = ROOT.parent / "ops"
 MIRRORED_OPS_PATH = ROOT / "ops"
 ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
+HISTORICAL_ROADMAP_PATH = (
+    ROOT / "docs" / "history" / "IMPLEMENTATION_ROADMAP_THROUGH_2026-08-01.md"
+)
 REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
 SOLIDITY_PATH = ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlementV2.sol"
 
@@ -161,6 +164,11 @@ def test_roadmap_closure_does_not_change_the_twelve_field_boundary() -> None:
     assert "**6 of 93 internal engineering packages are complete and 87 remain open**" in roadmap
     assert "R25 closes only `Z01`" in roadmap
     assert "This is not a privacy, strict-PQ, full-claim, or production claim" in roadmap
-    assert "| S07 |" in roadmap and "R24 corrects the worksheet" in roadmap
-    assert "| S08 |" in roadmap and "conclusively rejected" in roadmap
+    assert "| S07 |" in roadmap and "complete 256-bit security" in roadmap
+    assert "| S08 |" in roadmap and "rejected defaults are recorded" in roadmap
     assert "| S09 |" in roadmap and "`proofSuiteId=null`" in roadmap
+
+    historical = _read(HISTORICAL_ROADMAP_PATH)
+    assert "R24 corrects the worksheet" in historical
+    assert "conclusively rejected" in historical
+    assert "Status: authoritative current execution plan" not in historical

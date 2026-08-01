@@ -16,6 +16,14 @@ REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
 CURRENT_STACK_PATH = ROOT / "docs" / "CURRENT_TECH_STACK.md"
 ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
 STATE_PLAN_PATH = ROOT / "docs" / "BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md"
+ACTIVE_HANDOFF_PATHS = (
+    ROADMAP_PATH,
+    ROOT / "docs" / "BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md",
+    ROOT / "docs" / "BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md",
+    ROOT / "docs" / "PROVING_OPTIMIZATION_REVIEW.md",
+    ROOT / "experiments" / "bl_pq512_crypto_core" / "README.md",
+)
+HISTORY_INDEX_PATH = ROOT / "docs" / "history" / "README.md"
 
 EXPECTED_ABI = [
     (0, "protocolVersion", "bytes32"),
@@ -347,6 +355,35 @@ def test_current_stack_and_roadmap_form_a_context_free_execution_contract() -> N
     assert "keep `proofSuiteId=null`" in roadmap
     assert "This selects the Gate 2E candidate; it is not H5 qualification" in state_plan
     assert "Bind the selected state plane into\n   the actual H4 parent" in state_plan
+
+
+def test_active_handoff_is_physically_separated_from_dated_execution_history() -> None:
+    forbidden_active_headings = (
+        "## Historical R24 parallel lanes",
+        "## R25 terminal result",
+        "## R26 interrupted",
+        "## 2026-07-29 Wave 2 PCS architecture correction",
+        "## 2026-07-30 Wave 2 H3 prototype closure",
+        "## 2026-07-30 Wave 2 H4 K128 functional composition",
+        "### Historical 2026-07-28 selection screen",
+    )
+    for path in ACTIVE_HANDOFF_PATHS:
+        text = _read(path)
+        assert not any(heading in text for heading in forbidden_active_headings), path
+        assert "29.974129" in text and "120.460733" in text
+
+    history_index = _read(HISTORY_INDEX_PATH)
+    for archived_name in (
+        "IMPLEMENTATION_ROADMAP_THROUGH_2026-08-01.md",
+        "BL_PQ512_THROUGHPUT_RECOVERY_PLAN_THROUGH_2026-08-01.md",
+        "BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR_THROUGH_2026-08-01.md",
+        "BL_PQ512_CRYPTO_CORE_README_THROUGH_2026-08-01.md",
+        "PROVING_OPTIMIZATION_REVIEW_THROUGH_2026-08-01.md",
+    ):
+        assert archived_name in history_index
+        assert (HISTORY_INDEX_PATH.parent / archived_name).is_file()
+
+    assert "Never execute" in history_index
 
 
 def test_foundation_sbom_is_valid_internal_spdx_inventory_with_honest_unknowns() -> None:
