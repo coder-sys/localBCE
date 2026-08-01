@@ -17,9 +17,10 @@ state plane used by the candidate being qualified.
 
 Execution authority: the deterministic continuation contract near the top of
 `IMPLEMENTATION_ROADMAP.md` defines the exact 2E-0 through 2E-7 sequence, finalist measurement
-boundary, H5 separation, terminal handoff, and STOP rules. The immediate work is 2E-0 C0 fixture
-freeze followed by 2E-1 bounded interfaces; do not begin with a lattice optimization or paper
-benchmark.
+boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen with exact
+K128/K512 fixture identities, independent negative controls, and fresh-process state-only and
+complete-boundary measurements. The immediate work is S1/2E-1 bounded interfaces; do not begin
+with a lattice optimization or paper benchmark.
 
 ## 1. Decision
 
@@ -137,7 +138,7 @@ fail closed.
 
 ## 5. Wave 2 execution stages
 
-1. **S0 - exact control record.** Freeze the same K128/K512 state fixtures, access manifests,
+1. **S0 - exact control record (complete).** Freeze the same K128/K512 state fixtures, access manifests,
    conflict order, old/new roots, call counts, machine identity, and complete timing boundary.
 2. **S1 - common state interface.** Define canonical state-layout, commitment, opening, update,
    migration, and independent-verifier interfaces with bounded byte grammars and domain tags.

@@ -53,7 +53,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
 | H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds | State binding, repeated p95, final suite identity |
-| Gate 2E | Open; active dependency | C0 control and candidate theory exist | Select and atomically bind state relation plus PQ commitment |
+| Gate 2E | 2E-0/S0 complete; 2E-1/S1 next | C0 control is frozen with independent negative fixtures and fresh-process boundary measurements | Freeze narrow replaceable interfaces, then select and atomically bind state relation plus PQ commitment |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -89,7 +89,7 @@ cannot be promoted until canonical bytes are recovered and recursive identity pa
 
 ## Gate 2E: exact current implementation plan
 
-### 2E-0 - freeze the C0 control
+### 2E-0 - freeze the C0 control (S0 complete)
 
 Inputs: sealed K128/K512 fixtures; full-width replay/payment keys and values; canonical ordered
 accesses, duplicates, conflicts, denial, cover, and correction cases; old/new roots; operation log;
@@ -105,6 +105,24 @@ Outputs:
 
 STOP if C0 disagrees with the sealed relation. Never repair a candidate by changing semantics or
 normalizing mismatched bytes.
+
+Current S0 record: `experiments/bl_pq512_crypto_foundation/c0_control_fixture.py` and
+`c0_control_measurement.py` freeze K128/K512 synthetic state, payment, ordered 12-field, H4, and
+negative-case evidence. The focused C0 suite is 9/9 green. Fresh Windows-process measurements
+were collected separately for each profile and boundary; decimal MB values are observed process
+RSS, scratch is the explicit no-fixture-scratch boundary, and pagefile deltas are recorded as
+observed usage deltas rather than a swap classification:
+
+| Profile | Boundary | Seconds | Peak RSS MB | Scratch MB | Pagefile delta MB | Read/Write I/O MB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| K128 | state-only | 3.074924 | 29.171712 | 0.000000 | 2.592768 | 0.000000 / 0.000000 |
+| K128 | complete | 3.010325 | 29.708288 | 0.000000 | 3.010560 | 0.000000 / 0.000000 |
+| K512 | state-only | 12.910909 | 37.777408 | 0.000000 | 6.602752 | 0.000000 / 0.000000 |
+| K512 | complete | 13.353259 | 39.399424 | 0.000000 | 8.630272 | 0.000000 / 0.000000 |
+
+The complete artifact lengths and SHA3-512 identities remain the frozen 11,217-byte K128 and
+11,231-byte K512 manifests. This is C0 reference evidence only; it does not qualify H4, select a
+state relation, set `proofSuiteId`, enable activation, or authorize real data.
 
 ### 2E-1 - freeze narrow replaceable interfaces
 

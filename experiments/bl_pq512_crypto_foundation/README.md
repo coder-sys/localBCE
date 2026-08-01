@@ -58,6 +58,10 @@ testable without pretending that a proof suite exists.
 - `proof_body_reference.py` provides an out-of-band-identity-bound `BLPQPF01` reference grammar,
   exact 88-byte header preflight, bounded header-first stream reading, fixed ordered sections, and
   strict malformed/trailing-byte rejection.
+- `c0_control_fixture.py` freezes the synthetic Gate 2E-0 C0 state/payment/access control and its
+  exact K128/K512 manifest identities. `c0_control_measurement.py` measures the state-only and
+  complete boundaries in a fresh Windows process with explicit RSS, scratch, pagefile, and I/O
+  fields; it is reference evidence, not a production proof path.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

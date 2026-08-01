@@ -120,7 +120,7 @@ candidates.
 4. **Laptop-first resource discipline with server-scale parallelism.** The reference Dell G15 must
    remain at or below 5,000,000,000 peak resident bytes, strictly below 5,000,000,000 scratch
    bytes, and use no swap. The hard
-   p95 objectives are below 60 seconds for fixed-shape K128/100-live and below 180 seconds for
+   p95 objectives are below 30 seconds for fixed-shape K128/100-live and below 180 seconds for
    K512/500-live under the complete fresh-proof benchmark. Designs must also expose deterministic,
    modular parallelism for future large CPU boxes rather than depending on extra RAM to rescue bloat.
 5. **Maximum auditability.** Use canonical bounded formats, explicit domain separation, exact

@@ -4070,3 +4070,38 @@ impact matrix readback
 
 No code implementation, package status, H4 evidence, activation state, proof-suite identity, or
 Gate 2E ordering changed. R01-R12 and the compatibility manifest remain future implementation work.
+
+## 2026-08-01 Gate 2E-0/S0 C0 control freeze
+
+The synthetic C0 control is now frozen at the current Gate 2E-0 boundary. The implementation is
+`experiments/bl_pq512_crypto_foundation/c0_control_fixture.py`; its fresh-process measurement
+boundary is `c0_control_measurement.py`. The exact K128/K512 manifest lengths remain 11,217 and
+11,231 bytes with SHA3-512 identities:
+
+```text
+K128 74c6812c830f9d53d556712b2c08700dae11fd95777a82b01f498743de6e738d2accc6319c7870425debc668b401a92a20e88bcc96c591c8bebb74dc3b496d83
+K512 5d45ffed375d27d64762d6c03ec832e894e6d34fc057f78d8b6885f9441c9835fe0e9999f46807ac083c69c12e2481f8e457d09d825b19506b02fc6a44793d20
+```
+
+The focused command
+`py -3.14 -m pytest -q tests/test_bl_pq512_c0_control_fixture.py tests/test_bl_pq512_c0_control_measurement.py`
+passed 9/9 in 32.37 seconds under the equivalent Python 3.14.4 launcher. Each measurement below
+was a separate fresh process with the explicit synthetic environment; all values are decimal MB:
+
+| Profile | Boundary | Seconds | Peak RSS MB | Scratch MB | Pagefile delta MB | Read/Write I/O MB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| K128 | state-only | 3.074924 | 29.171712 | 0.000000 | 2.592768 | 0.000000 / 0.000000 |
+| K128 | complete | 3.010325 | 29.708288 | 0.000000 | 3.010560 | 0.000000 / 0.000000 |
+| K512 | state-only | 12.910909 | 37.777408 | 0.000000 | 6.602752 | 0.000000 / 0.000000 |
+| K512 | complete | 13.353259 | 39.399424 | 0.000000 | 8.630272 | 0.000000 / 0.000000 |
+
+The complete boundary returned the exact frozen manifest identities above. Scratch is zero because
+the fixture invokes no scratch API and the measured process recorded zero read/write transfer I/O.
+Pagefile values are observed process usage deltas and are not evidence of swap absence; H5 still
+requires external pagefile/swap monitoring. The negative corpus covers stale reads, omitted and
+reordered writes, duplicate identity, collision, root substitution, and conflicting updates.
+
+This closes only the synthetic C0 control record. `proofSuiteId=null`, activation remains false,
+real PHI/payments remain forbidden, the trusted canonical `../ops` launch-blocker state is still
+absent, H4 remains one-run prototype evidence, and no production CUDA path was run. S1/2E-1 narrow
+replaceable interfaces is the next implementation boundary.

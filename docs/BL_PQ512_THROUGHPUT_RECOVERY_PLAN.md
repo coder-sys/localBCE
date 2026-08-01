@@ -218,8 +218,10 @@ Report decimal MB only. Preserve raw output, hashes, counts, failures, warnings,
 measurement boundaries. Do not claim qualification from an interrupted, cached, internally-only,
 or state-free proof.
 
-## 11. Current next action
+## 11. Current Gate 2E evidence and next action
 
-Execute Gate 2E-0 and 2E-1: freeze C0 fixtures and the complete-boundary control record, then define
-the narrow state-layout, relation, commitment, opening, transition, migration, transcript,
-independent-verifier, and receipt interfaces. Do not start H5 or another PCS/backend bake-off.
+Gate 2E-0/S0 is complete for the synthetic C0 reference. Its four fresh-process measurements are
+recorded in `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile usage deltas remain observed
+telemetry, not a swap conclusion. Execute Gate 2E-1/S1 next: define the narrow state-layout,
+relation, commitment, opening, transition, migration, transcript, independent-verifier, and
+receipt interfaces. Do not start H5 or another PCS/backend bake-off.
