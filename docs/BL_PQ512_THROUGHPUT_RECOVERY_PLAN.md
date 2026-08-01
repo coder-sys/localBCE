@@ -232,4 +232,8 @@ missing. Gate 2E-4/S4 now has a tested synthetic composition reference that inde
 the scalar relation, verifies the screened opening, and binds the transition, deferred H4 identity,
 verifier identity, and receipt; its focused/attack result is 6 passed in 10.11 seconds. This is not
 complete-proof throughput evidence and does not admit a backend. Execute Gate 2E-5/S5 migration and
-failure semantics next. Do not start H5 or another complete-proof backend bake-off.
+failure semantics next. Gate 2E-5/S5 now has a tested synthetic migration/recovery controller with
+10 focused positive/attack tests passing in 10.10 seconds. It is reference state-equivalence and
+failure evidence only; it does not select a backend or qualify complete-proof throughput. Execute
+Gate 2E-6/S6 and 2E-7/S7 evidence/handoff next. Do not start H5 or another complete-proof backend
+bake-off.

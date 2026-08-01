@@ -47,6 +47,14 @@ hashes private membership material instead of serializing raw keys. S4 focused a
 pass 6/6. This is reference binding evidence only: no backend is admitted, no `proofSuiteId` is
 set, and activation remains false.
 
+Gate 2E-5/S5 now has a synthetic migration/recovery controller in
+`state_migration_recovery.py`. It independently verifies S4 before preparing a state publication,
+publishes only store-owned pending CAS records, preserves the logical state root/manifest/sequence
+across a versioned layout/parameter/verifier migration, and restores only known complete
+checkpoints at strictly newer epochs. Focused positive/attack tests pass 10/10. This is reference
+failure/equivalence evidence only: no production migration theorem, durable custody, backend
+selection, `proofSuiteId`, or activation is closed.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from
@@ -314,26 +322,25 @@ lanes.
 
 ## Current execution order
 
-1. Close S5 migration, rollback, recovery, and failure semantics, then run S6/S7 selection and
-   sealed-handoff evidence.
-3. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
-4. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
+1. Run S6/S7 exact component evidence, candidate rejection/retention, and sealed-handoff evidence.
+2. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
+3. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
   driver monitoring; qualify p95 below 30/180 seconds.
-5. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
-6. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
+4. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
+5. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.
 
-The next code-writing action is Gate 2E stage S5/2E-5 migration and failure semantics, not H5 and
-not another complete-proof backend bake-off. The S4 composition is a synthetic reference only;
-do not start the repeated H5 campaign until one state plane is selected and atomically bound into
-the H4 parent, transcript, proof grammar, verifier, and receipt.
+The next code-writing action is Gate 2E stage S6/S7 exact component evidence and sealed handoff, not
+H5 and not another complete-proof backend bake-off. S5 is a synthetic reference only; do not start
+the repeated H5 campaign until one state plane is selected and atomically bound into the H4 parent,
+transcript, proof grammar, verifier, and receipt.
 
 ## Open boundaries and nonclaims
 
 - Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,
-  S3 commitment envelopes, and S4 atomic composition are correctness/differential reference evidence
-  only; no candidate has reviewed native-hiding composition, complete proof composition, migration
-  proof, or complete-boundary measurement.
+  S3 commitment envelopes, S4 atomic composition, and S5 migration/recovery are correctness and
+  differential reference evidence only; no candidate has reviewed native-hiding composition,
+  complete proof composition, migration theorem, or complete-boundary measurement.
 - The complete semantic-STARK/state/GKR/PCS zero-knowledge simulator and composed 256-bit ledger are
   not closed.
 - H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.

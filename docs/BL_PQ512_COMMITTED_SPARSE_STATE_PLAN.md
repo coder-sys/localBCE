@@ -158,9 +158,12 @@ fail closed.
    transition, hashes private relation material in the canonical payload, and constructs an
    independent-verifier receipt. The H4 identity is deferred; no relation or commitment backend is
    admitted, selected, or activated. Its focused and attack tests pass 6/6.
-6. **S5 - migration and operations.** Prove old-tree/new-commitment equivalence at the profile
-   boundary and test reorganization, checkpoint, restoration, rollback, partial-write, crash, and
-   key/parameter migration behavior.
+6. **S5 - migration and operations (reference complete).** `state_migration_recovery.py` provides
+   immutable checkpoints, independently verified S4 publication, store-owned pending CAS records,
+   reference root/manifest equivalence, versioned layout/parameter/verifier rotation, and strictly
+   newer-epoch rollback/recovery. Corrupted, stale, downgraded, partial, replayed, and mixed-profile
+   cases fail closed; the 10-test focused/attack suite passes. This is not a production migration
+   theorem or durable custody result.
 7. **S6 - exact bake-off.** Screen every admitted candidate with repeated identical state-component
    measurements, then run one uncounted complete warm-up and at least one unique, externally
    monitored, independently verified complete batch per profile for each finalist. Record complete

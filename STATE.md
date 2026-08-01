@@ -4244,3 +4244,31 @@ proof-identity, and relation-result mutations. This closes only a synthetic non-
 composition/reference-receipt boundary. It is not a production proof, PCS, H4 acceptance,
 migration proof, H5 measurement, selection, or activation result. The next bounded boundary is
 Gate 2E-5/S5 migration, rollback, recovery, and failure semantics.
+
+## 2026-08-02 Gate 2E-5/S5 migration and failure semantics - REFERENCE COMPLETE, NO ADMISSION
+
+Gate 2E-5/S5 is implemented at the synthetic state-plane boundary in
+`experiments/bl_pq512_crypto_foundation/state_migration_recovery.py`. It defines immutable
+SHA3-512 checkpoints, independently verifies the S4 composition before preparing publication,
+publishes only store-owned pending compare-and-swap records, and keeps the current checkpoint
+unchanged on every rejected operation. Migration preserves the logical state root, state manifest,
+and sequence while rotating the layout, parameter, and verifier identities at exactly the next
+epoch. Rollback and recovery restore only complete checkpoints already known to the store and
+advance to a strictly newer epoch, so old transition attempts cannot replay. The reference
+equivalence record is not a production migration theorem and old private bytes are never
+reinterpreted under a new layout.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py
+10 passed in 10.10s
+```
+
+The positive and attack corpus covers composition publication, crash before publication, conflicting
+CAS, root/manifest substitution, identity downgrade, layout/parameter/verifier rotation, rollback,
+recovery, stale epoch/sequence, corrupted and unknown checkpoints, partial/self-consistent forged
+records, and mixed K128/K512 profiles. This is reference failure/equivalence evidence only; no
+durable custody, production migration proof, backend selection, H5 measurement, `proofSuiteId`, or
+activation is closed. The next bounded boundary is Gate 2E-6/S6 component evidence and Gate
+2E-7/S7 selection/handoff.

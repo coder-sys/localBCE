@@ -241,6 +241,25 @@ restore, partial write, crash before/after publication, corrupted checkpoint, st
 parameter/verifier rotation, and mixed-profile rejection. Retries preserve attempt identity but use
 fresh proof randomness. Old bytes are never reinterpreted under a new layout.
 
+Current S5 record: `experiments/bl_pq512_crypto_foundation/state_migration_recovery.py` provides
+immutable SHA3-512 checkpoints, independently verified S4 composition publication, store-owned
+pending CAS records, reference migration equivalence, and monotonic rollback/recovery epochs.
+Migration preserves the logical state root, state manifest, and sequence while rotating layout,
+parameter, or verifier identities. Recovery accepts only a complete checkpoint already known to the
+store; stale, corrupted, mixed-profile, downgraded, partial, and replayed records fail closed
+without changing the current checkpoint. This is synthetic reference evidence, not a production
+migration theorem or durable custody implementation.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py
+10 passed in 10.10s
+```
+
+Proceed to 2E-6/S6 repeated state-component evidence and 2E-7/S7 handoff. Do not treat the
+reference equivalence record as complete-proof, backend-selection, H5, or activation evidence.
+
 ### 2E-6 - measure and select
 
 1. Repeated state-component measurements on identical fixtures.
