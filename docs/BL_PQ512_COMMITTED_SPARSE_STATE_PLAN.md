@@ -153,8 +153,11 @@ fail closed.
    verifier are implemented in `pq_commitment_screening.py`. All four descriptors remain rejected
    because exact reviewed theorem/source/parameter and complete-proof evidence is missing; no backend
    is admitted or selected.
-5. **S4 - atomic composition.** Bind the semantic AIR, CBAM, state relation, commitment, SHA3-512
-   state identifier, proof grammar, and verifier decision into one non-spliceable transcript.
+5. **S4 - atomic composition (reference complete).** `atomic_state_composition.py` independently
+   replays the scalar relation, binds the S3 authenticated opening to the fixed projection and BLTR
+   transition, hashes private relation material in the canonical payload, and constructs an
+   independent-verifier receipt. The H4 identity is deferred; no relation or commitment backend is
+   admitted, selected, or activated. Its focused and attack tests pass 6/6.
 6. **S5 - migration and operations.** Prove old-tree/new-commitment equivalence at the profile
    boundary and test reorganization, checkpoint, restoration, rollback, partial-write, crash, and
    key/parameter migration behavior.

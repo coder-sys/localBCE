@@ -214,6 +214,26 @@ projection, wide sidecar, and all verifier/module identities.
 No partial receipt is reusable and no host comparison substitutes for in-proof equality. Mutating
 any bound field must reject before state acceptance.
 
+Current S4 record: `experiments/bl_pq512_crypto_foundation/atomic_state_composition.py` keeps the
+scalar relation candidate and the S3 commitment-backend identity as separate bound fields. It
+independently replays S2, derives one fixed 12-field projection and BLTR transition, verifies the
+S3 authenticated opening, and constructs a receipt binding the attempt, transition, deferred H4
+reference identity, verifier identity, and commitment. The canonical relation payload hashes
+private membership keys/values and absence keys rather than serializing them. The H4 identity is
+explicitly deferred; `proofSuiteId` is null and activation is false.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py
+6 passed in 10.11s
+```
+
+The attack suite rejects transition-root, commitment, opening, projection, relation-candidate,
+proof-identity, and relation-result mutations. This closes only the synthetic non-spliceable
+composition/reference-receipt boundary. It does not select a relation or commitment, prove a
+production PCS, close migration, or authorize state publication. Proceed to 2E-5/S5.
+
 ### 2E-5 - close migration and failure semantics
 
 Test genesis, layout migration, checkpoint publication, conflicting CAS, reorganization, rollback,

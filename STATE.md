@@ -4219,3 +4219,28 @@ py -3.14 -m pytest -q tests/test_bl_pq512_pq_commitment_screening.py tests/attac
 This is reference test-run timing, not complete-proof or H5 evidence. The next bounded boundary is
 Gate 2E-4/S4 atomic composition: independently replay the S2 relation, bind the S3 transcript and
 transition, and reject every field mutation before any state acceptance.
+
+## 2026-08-01 Gate 2E-4/S4 atomic composition - REFERENCE COMPLETE, NO ADMISSION
+
+Gate 2E-4/S4 is implemented at the bounded synthetic composition boundary in
+`experiments/bl_pq512_crypto_foundation/atomic_state_composition.py`. The composition keeps the S2
+relation candidate separate from the S3 commitment-backend identity; independently replays the S2
+candidate; derives one fixed 12-field projection, layout identity, old/new aggregate roots,
+manifest, and strict `BLTR` transition; verifies the S3 authenticated public-coin opening; and
+binds the deferred H4 reference identity, independent verifier identity, attempt identity,
+commitment, transition, and receipt. The canonical relation payload hashes private membership
+keys/values and absence keys rather than serializing raw private keys. The H4 binding is explicitly
+deferred, `proofSuiteId=null`, activation is false, and no backend or relation is selected.
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py
+6 passed in 10.11s
+```
+
+The attack suite rejects transition-root, commitment, opening, projection, relation-candidate,
+proof-identity, and relation-result mutations. This closes only a synthetic non-spliceable
+composition/reference-receipt boundary. It is not a production proof, PCS, H4 acceptance,
+migration proof, H5 measurement, selection, or activation result. The next bounded boundary is
+Gate 2E-5/S5 migration, rollback, recovery, and failure semantics.

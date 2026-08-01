@@ -38,6 +38,15 @@ verifier in `pq_commitment_screening.py`. All four descriptors are rejected beca
 source/parameters, native-hiding theorem composition, or complete-proof evidence is missing. This
 is screening evidence only; no PCS, state plane, H4 binding, or activation decision is closed.
 
+Gate 2E-4/S4 now has a synthetic non-spliceable composition reference in
+`atomic_state_composition.py`. It keeps the scalar relation candidate distinct from the screened
+commitment-backend identity, independently replays S2, derives the fixed 12-field projection and
+BLTR transition, verifies the S3 authenticated opening, and binds a deferred H4 identity,
+independent-verifier identity, attempt identity, and receipt. The canonical relation payload
+hashes private membership material instead of serializing raw keys. S4 focused and attack tests
+pass 6/6. This is reference binding evidence only: no backend is admitted, no `proofSuiteId` is
+set, and activation remains false.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from
@@ -305,9 +314,7 @@ lanes.
 
 ## Current execution order
 
-1. Compose the screened S3 reference behind the completed C1-C4 scalar relations and close S4
-   atomic-binding mutations.
-2. Close S5 migration, rollback, recovery, and failure semantics, then run S6/S7 selection and
+1. Close S5 migration, rollback, recovery, and failure semantics, then run S6/S7 selection and
    sealed-handoff evidence.
 3. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
 4. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
@@ -316,18 +323,17 @@ lanes.
 6. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.
 
-The next code-writing action is Gate 2E stage S4/2E-4 atomic composition, not H5 and not another
-complete-proof backend bake-off: bind the screened reference envelope to the scalar relation through
-one non-spliceable transcript and independently verified receipt. Do not start the repeated H5
-campaign until one state plane is selected and atomically bound into the H4 parent, transcript,
-proof grammar, verifier, and receipt.
+The next code-writing action is Gate 2E stage S5/2E-5 migration and failure semantics, not H5 and
+not another complete-proof backend bake-off. The S4 composition is a synthetic reference only;
+do not start the repeated H5 campaign until one state plane is selected and atomically bound into
+the H4 parent, transcript, proof grammar, verifier, and receipt.
 
 ## Open boundaries and nonclaims
 
-- Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls
-  and S3 commitment envelopes are correctness/differential screening evidence only; no candidate has
-  reviewed native-hiding composition, complete proof composition, migration proof, or complete-boundary
-  measurement.
+- Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,
+  S3 commitment envelopes, and S4 atomic composition are correctness/differential reference evidence
+  only; no candidate has reviewed native-hiding composition, complete proof composition, migration
+  proof, or complete-boundary measurement.
 - The complete semantic-STARK/state/GKR/PCS zero-knowledge simulator and composed 256-bit ledger are
   not closed.
 - H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.
