@@ -7,10 +7,15 @@ use crate::{
     production_air::ProductionAirInputV1,
     production_air_winterfell::{
         CLAIM_SOURCE_ROOT_WIDTH, FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_SCHEMA_VERSION,
-        PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION,
+        FEE_SCHEDULE_ROOT_WIDTH, PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION,
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionAirProofInputV2, ProductionAirPublicInputsV2,
         ProductionFelt, TRACE_LENGTH, TRACE_WIDTH, pack_public_input_root_bytes32,
         prove_production_air, unpack_public_input_root_bytes32, verify_production_air_result,
+    },
+    production_fee_schedule_root::{
+        FEE_SCHEDULE_ROOT_ENCODING, FEE_SCHEDULE_ROOT_HASH_FUNCTION, FEE_SCHEDULE_ROOT_LEAF_INDEX,
+        FEE_SCHEDULE_ROOT_SCHEMA_VERSION, FEE_SCHEDULE_ROOT_TREE_DEPTH,
+        ProductionFeeScheduleRootArtifactV1,
     },
     source_roots::{
         CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION, CLAIM_SOURCE_ROOT_LEAF_INDEX,
@@ -21,7 +26,7 @@ use crate::{
     },
 };
 
-pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 22] = [
+pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 26] = [
     "claim_hash_be_u32_limb_0",
     "claim_hash_be_u32_limb_1",
     "claim_hash_be_u32_limb_2",
@@ -42,6 +47,10 @@ pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 22] = [
     "oracle_facts_root_element_1",
     "oracle_facts_root_element_2",
     "oracle_facts_root_element_3",
+    "fee_schedule_root_element_0",
+    "fee_schedule_root_element_1",
+    "fee_schedule_root_element_2",
+    "fee_schedule_root_element_3",
     "decision",
     "failure_code",
 ];
@@ -76,6 +85,15 @@ pub struct ProductionStarkProofArtifactV4 {
     pub oracle_facts_root_binding: String,
     pub oracle_facts_attestation_status: String,
     pub oracle_facts_governance_status: String,
+    pub fee_schedule_root_schema_version: String,
+    pub fee_schedule_root_hash: String,
+    pub fee_schedule_root_encoding: String,
+    pub fee_schedule_root_bytes32: String,
+    pub fee_schedule_root_tree_depth: usize,
+    pub fee_schedule_root_leaf_index: usize,
+    pub fee_schedule_root_binding: String,
+    pub fee_schedule_source_verification_status: String,
+    pub fee_schedule_governance_status: String,
     pub claim_id: String,
     pub claim_id_binding: String,
     pub claim_hash: String,
@@ -135,9 +153,13 @@ pub type ProductionStarkProofBytesV1 = ProductionStarkProofBytesV4;
 pub type ProductionStarkProofParametersV3 = ProductionStarkProofParametersV4;
 pub type ProductionStarkProofParametersV2 = ProductionStarkProofParametersV4;
 pub type ProductionStarkProofParametersV1 = ProductionStarkProofParametersV4;
+pub type ProductionStarkProofArtifactV5 = ProductionStarkProofArtifactV4;
+pub type ProductionStarkPublicInputsV5 = ProductionStarkPublicInputsV4;
+pub type ProductionStarkProofBytesV5 = ProductionStarkProofBytesV4;
+pub type ProductionStarkProofParametersV5 = ProductionStarkProofParametersV4;
 
 impl ProductionStarkProofArtifactV4 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v4";
+    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v5";
     pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionAirProofInputV2::SCHEMA_VERSION;
     pub const ARTIFACT_STATUS: &'static str = "locally_verified_feature_gated_not_runtime";
     pub const PROOF_SYSTEM: &'static str = "winterfell";
@@ -148,6 +170,8 @@ impl ProductionStarkProofArtifactV4 {
         "air_constrained_canonical_leaf_and_depth_10_merkle_path";
     pub const ORACLE_FACTS_ROOT_BINDING: &'static str =
         "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path";
+    pub const FEE_SCHEDULE_ROOT_BINDING: &'static str =
+        "air_constrained_canonical_verified_fee_leaf_depth_10_merkle_path_and_claim_source_links";
     pub const LOCAL_VERIFICATION_STATUS: &'static str = "verified_from_serialized_proof_bytes";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
@@ -172,6 +196,8 @@ impl ProductionStarkProofArtifactV4 {
             pack_public_input_root_bytes32(&public_inputs.claim_source_root);
         let oracle_facts_root_bytes32 =
             pack_public_input_root_bytes32(&public_inputs.oracle_facts_root);
+        let fee_schedule_root_bytes32 =
+            pack_public_input_root_bytes32(&public_inputs.fee_schedule_root);
         let public_inputs = ProductionStarkPublicInputsV4::from_air_public_inputs(&public_inputs);
         let adjudication = &input.adjudication;
         let artifact = Self {
@@ -204,6 +230,17 @@ impl ProductionStarkProofArtifactV4 {
             oracle_facts_attestation_status:
                 ProductionOracleFactsRootArtifactV1::ATTESTATION_STATUS.to_string(),
             oracle_facts_governance_status: ProductionOracleFactsRootArtifactV1::GOVERNANCE_STATUS
+                .to_string(),
+            fee_schedule_root_schema_version: FEE_SCHEDULE_ROOT_SCHEMA_VERSION.to_string(),
+            fee_schedule_root_hash: FEE_SCHEDULE_ROOT_HASH_FUNCTION.to_string(),
+            fee_schedule_root_encoding: FEE_SCHEDULE_ROOT_ENCODING.to_string(),
+            fee_schedule_root_bytes32,
+            fee_schedule_root_tree_depth: FEE_SCHEDULE_ROOT_TREE_DEPTH,
+            fee_schedule_root_leaf_index: FEE_SCHEDULE_ROOT_LEAF_INDEX,
+            fee_schedule_root_binding: Self::FEE_SCHEDULE_ROOT_BINDING.to_string(),
+            fee_schedule_source_verification_status:
+                ProductionFeeScheduleRootArtifactV1::SOURCE_VERIFICATION_STATUS.to_string(),
+            fee_schedule_governance_status: ProductionFeeScheduleRootArtifactV1::GOVERNANCE_STATUS
                 .to_string(),
             claim_id: adjudication.claim_id.clone(),
             claim_id_binding: Self::CLAIM_ID_BINDING.to_string(),
@@ -361,6 +398,42 @@ impl ProductionStarkProofArtifactV4 {
             ProductionOracleFactsRootArtifactV1::GOVERNANCE_STATUS,
             &mut errors,
         );
+        validate_exact(
+            "fee_schedule_root_schema_version",
+            &self.fee_schedule_root_schema_version,
+            FEE_SCHEDULE_ROOT_SCHEMA_VERSION,
+            &mut errors,
+        );
+        validate_exact(
+            "fee_schedule_root_hash",
+            &self.fee_schedule_root_hash,
+            FEE_SCHEDULE_ROOT_HASH_FUNCTION,
+            &mut errors,
+        );
+        validate_exact(
+            "fee_schedule_root_encoding",
+            &self.fee_schedule_root_encoding,
+            FEE_SCHEDULE_ROOT_ENCODING,
+            &mut errors,
+        );
+        validate_exact(
+            "fee_schedule_root_binding",
+            &self.fee_schedule_root_binding,
+            Self::FEE_SCHEDULE_ROOT_BINDING,
+            &mut errors,
+        );
+        validate_exact(
+            "fee_schedule_source_verification_status",
+            &self.fee_schedule_source_verification_status,
+            ProductionFeeScheduleRootArtifactV1::SOURCE_VERIFICATION_STATUS,
+            &mut errors,
+        );
+        validate_exact(
+            "fee_schedule_governance_status",
+            &self.fee_schedule_governance_status,
+            ProductionFeeScheduleRootArtifactV1::GOVERNANCE_STATUS,
+            &mut errors,
+        );
         if self.claim_source_root_tree_depth != CLAIM_SOURCE_ROOT_TREE_DEPTH {
             errors.push(format!(
                 "claim_source_root_tree_depth must be {CLAIM_SOURCE_ROOT_TREE_DEPTH}, got {}",
@@ -383,6 +456,18 @@ impl ProductionStarkProofArtifactV4 {
             errors.push(format!(
                 "oracle_facts_root_leaf_index must be {ORACLE_FACTS_ROOT_LEAF_INDEX}, got {}",
                 self.oracle_facts_root_leaf_index
+            ));
+        }
+        if self.fee_schedule_root_tree_depth != FEE_SCHEDULE_ROOT_TREE_DEPTH {
+            errors.push(format!(
+                "fee_schedule_root_tree_depth must be {FEE_SCHEDULE_ROOT_TREE_DEPTH}, got {}",
+                self.fee_schedule_root_tree_depth
+            ));
+        }
+        if self.fee_schedule_root_leaf_index != FEE_SCHEDULE_ROOT_LEAF_INDEX {
+            errors.push(format!(
+                "fee_schedule_root_leaf_index must be {FEE_SCHEDULE_ROOT_LEAF_INDEX}, got {}",
+                self.fee_schedule_root_leaf_index
             ));
         }
         validate_exact(
@@ -508,6 +593,25 @@ impl ProductionStarkProofArtifactV4 {
             (Err(error), _) => errors.push(error),
             (_, Err(_)) => {}
         }
+        match (
+            unpack_public_input_root_bytes32(&self.fee_schedule_root_bytes32),
+            self.public_inputs.parsed_values(),
+        ) {
+            (Ok(packed), Ok(values))
+                if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() =>
+            {
+                let public_values = packed.map(|value| value.as_int());
+                if values[20..24] != public_values {
+                    errors.push(
+                        "fee_schedule_root_bytes32 does not match AIR public input root elements"
+                            .to_string(),
+                    );
+                }
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(error), _) => errors.push(error),
+            (_, Err(_)) => {}
+        }
         if let Err(mut proof_errors) = self.proof.validate() {
             errors.append(&mut proof_errors);
         }
@@ -544,7 +648,7 @@ impl ProductionStarkProofArtifactV4 {
 }
 
 impl ProductionStarkPublicInputsV4 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v4";
+    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v5";
     pub const ENCODING: &'static str = "winterfell-f64-canonical-decimal";
 
     fn from_air_public_inputs(public_inputs: &ProductionAirPublicInputsV2) -> Self {
@@ -568,6 +672,12 @@ impl ProductionStarkPublicInputsV4 {
         values.extend(
             public_inputs
                 .oracle_facts_root
+                .iter()
+                .map(|value| value.as_int()),
+        );
+        values.extend(
+            public_inputs
+                .fee_schedule_root
                 .iter()
                 .map(|value| value.as_int()),
         );
@@ -605,9 +715,10 @@ impl ProductionStarkPublicInputsV4 {
         );
 
         if self.order != expected_public_input_order() {
-            errors.push(
-                "public_inputs.order does not match the required 22-element order".to_string(),
-            );
+            errors.push(format!(
+                "public_inputs.order does not match the required {}-element order",
+                PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len()
+            ));
         }
         if self.count != PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() {
             errors.push(format!(
@@ -646,10 +757,10 @@ impl ProductionStarkPublicInputsV4 {
                 }
 
                 if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() {
-                    if values[20] != u64::from(decision) {
+                    if values[24] != u64::from(decision) {
                         errors.push("public decision does not match artifact decision".to_string());
                     }
-                    if values[21] != u64::from(failure_code) {
+                    if values[25] != u64::from(failure_code) {
                         errors.push(
                             "public failure_code does not match artifact failure_code".to_string(),
                         );
@@ -725,8 +836,11 @@ impl ProductionStarkPublicInputsV4 {
             oracle_facts_root: field_values[16..20]
                 .try_into()
                 .expect("validated oracle-facts root width"),
-            decision: field_values[20],
-            failure_code: field_values[21],
+            fee_schedule_root: field_values[20..20 + FEE_SCHEDULE_ROOT_WIDTH]
+                .try_into()
+                .expect("validated fee-schedule root width"),
+            decision: field_values[24],
+            failure_code: field_values[25],
         })
     }
 }

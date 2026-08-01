@@ -150,10 +150,10 @@ localBCE/
 - A feature-gated Winterfell PoC proof preview exists in stark-engine/ and is
   covered by the STARK smoke chain.
 - The feature-gated production G1-G10 AIR can package its real Winterfell proof
-  bytes and exact 22-element public input vector into a versioned JSON artifact.
-- The AIR constrains canonical claim-source and verified-oracle-facts leaves,
-  their depth-10 Merkle paths, and the resulting `claimSourceRoot` and
-  `oracleFactsRoot`.
+  bytes and exact 26-element public input vector into a versioned JSON artifact.
+- The AIR constrains canonical claim-source, verified-oracle-facts, and
+  verified-fee-schedule leaves, their depth-10 Merkle paths, and the resulting
+  `claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot`.
 - The production artifact validator deserializes the saved proof bytes and
   re-verifies them locally; it does not trust a stored success flag.
 - No STARK prover is wired into runtime yet.
@@ -212,25 +212,36 @@ cargo run --features production-air-winterfell \
 cargo run --features production-air-winterfell \
   --bin validate_production_oracle_facts_root -- \
   production_oracle_facts_root.json
+
+cargo run --features production-air-winterfell \
+  --bin generate_production_fee_schedule_root -- \
+  ../rust-engine/stark_bridge_input.json production_fee_schedule_root.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_fee_schedule_root -- \
+  production_fee_schedule_root.json
 ```
 
 The artifact labels `claim_id` as metadata-only. The proof binds the existing
 32-byte claim hash, all G1-G10 facts through an internal Rescue-Prime
 commitment, decision, failure code, a canonical claim-source leaf and
-depth-10 Merkle path, a canonical verified-oracle-facts leaf and path, the
-resulting `claimSourceRoot` and `oracleFactsRoot`, and a four-element
+depth-10 Merkle path, a canonical verified-oracle-facts leaf and path, a
+canonical verified-fee-schedule leaf and path, the resulting
+`claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot`, and a four-element
 Rescue-Prime `publicInputRoot`. Each root is canonically packed as four
 big-endian 64-bit field elements into one Solidity `bytes32`. Oracle source
 labels, HTTPS URLs, and attestation references are committed but are not
-externally or cryptographically attested by this code. Runtime wiring, a
+externally or cryptographically attested by this code. Fee source URLs and
+effective schedule entries are committed and checked, but governance approval
+is external. Runtime wiring, a
 Solidity STARK verifier, governed root approval, and chain submission remain
 disabled.
 
-The verifier handoff locks the proof, 22 AIR inputs, and all three
+The verifier handoff locks the proof, 26 AIR inputs, and all four
 AIR-constrained roots to the exact field order and Solidity types in
 `IStarkClaimsVerifierV1Candidate`. It remains non-call-ready because
-`feeScheduleRoot`, `nullifierRootBefore`, `nullifierRootAfter`, and `batchRoot`
-are not present in the production artifact.
+`nullifierRootBefore`, `nullifierRootAfter`, and `batchRoot` are not present in
+the production artifact.
 
 The claim-source command independently materializes the same canonical
 depth-10 `Rp64_256` Merkle opening from bridge-supplied member, provider,

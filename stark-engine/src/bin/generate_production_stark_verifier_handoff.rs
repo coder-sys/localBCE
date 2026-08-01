@@ -50,6 +50,7 @@ fn run() -> Result<(), Vec<String>> {
             "public_input_root": handoff.public_input_root,
             "claim_source_root": handoff.claim_source_root,
             "oracle_facts_root": handoff.oracle_facts_root,
+            "fee_schedule_root": handoff.fee_schedule_root,
             "proof_size_bytes": handoff.proof_size_bytes,
             "proof_bytes_sha256": handoff.proof_bytes_sha256,
             "binding_digest_sha256": handoff.binding_digest_sha256,

@@ -67,6 +67,17 @@ struct ClaimOracleFact {
     verification_status: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ClaimFeeScheduleEntry {
+    fee_code: String,
+    unit_amount_cents: u64,
+    currency: String,
+    effective_from: u64,
+    effective_thru: Option<u64>,
+    source_url: Option<String>,
+    verification_status: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ClaimInput {
     claim_id: String,
@@ -85,6 +96,10 @@ struct ClaimInput {
     oracle_facts: Vec<ClaimOracleFact>,
     #[serde(default)]
     oracle_attestation_refs: Vec<String>,
+    #[serde(default)]
+    fee_schedule_id: Option<String>,
+    #[serde(default)]
+    fee_schedule_entries: Vec<ClaimFeeScheduleEntry>,
 
     eligibility_active: u8,
     aid_code: u64,
@@ -226,6 +241,8 @@ struct StarkBridgeClaim {
     oracle_source_manifest_id: Option<String>,
     oracle_facts: Vec<ClaimOracleFact>,
     oracle_attestation_refs: Vec<String>,
+    fee_schedule_id: Option<String>,
+    fee_schedule_entries: Vec<ClaimFeeScheduleEntry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -363,6 +380,8 @@ impl StarkBridgeInput {
                 oracle_source_manifest_id: claim.oracle_source_manifest_id.clone(),
                 oracle_facts: claim.oracle_facts.clone(),
                 oracle_attestation_refs: claim.oracle_attestation_refs.clone(),
+                fee_schedule_id: claim.fee_schedule_id.clone(),
+                fee_schedule_entries: claim.fee_schedule_entries.clone(),
             },
             adjudication: StarkBridgeAdjudication {
                 decision,
@@ -905,6 +924,8 @@ mod tests {
             oracle_source_manifest_id: None,
             oracle_facts: Vec::new(),
             oracle_attestation_refs: Vec::new(),
+            fee_schedule_id: None,
+            fee_schedule_entries: Vec::new(),
             eligibility_active: 1,
             aid_code: 53,
             benefit_level_exists: 1,
@@ -1700,6 +1721,16 @@ status                  1";
             verification_status: "verified".to_string(),
         }];
         claim.oracle_attestation_refs = vec!["demo-attestation:eligibility_active".to_string()];
+        claim.fee_schedule_id = Some("DEMO-FEE-SCHEDULE-V1".to_string());
+        claim.fee_schedule_entries = vec![ClaimFeeScheduleEntry {
+            fee_code: "99213".to_string(),
+            unit_amount_cents: 100_000,
+            currency: "USD".to_string(),
+            effective_from: 20240101,
+            effective_thru: Some(20251231),
+            source_url: Some("https://example.gov/demo/fee-schedule".to_string()),
+            verification_status: "verified".to_string(),
+        }];
         let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
         let value =
             serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
@@ -1735,6 +1766,19 @@ status                  1";
         assert_eq!(
             value["claim"]["oracle_attestation_refs"],
             json!(["demo-attestation:eligibility_active"])
+        );
+        assert_eq!(value["claim"]["fee_schedule_id"], "DEMO-FEE-SCHEDULE-V1");
+        assert_eq!(
+            value["claim"]["fee_schedule_entries"],
+            json!([{
+                "fee_code": "99213",
+                "unit_amount_cents": 100000,
+                "currency": "USD",
+                "effective_from": 20240101,
+                "effective_thru": 20251231,
+                "source_url": "https://example.gov/demo/fee-schedule",
+                "verification_status": "verified"
+            }])
         );
         assert_eq!(
             value["winterfell_poc_mapping"]["unmapped"]["member_id"],

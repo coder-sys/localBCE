@@ -171,12 +171,39 @@ committed, but their external truth and attestation signatures are not
 verified. Governance approval, runtime wiring, and on-chain submission remain
 disabled.
 
-## ProductionStarkProofArtifactV4
+## ProductionFeeScheduleRootV1
 
-Schema version: `stark-production-proof-artifact-v4`
+Schema version: `stark-fee-schedule-root-v1`
+
+Purpose: commit bridge-supplied fee schedule entries and exact effective-date
+service-line matches into a canonical depth-10 `Rp64_256` Merkle opening at
+leaf index `13`.
+
+Entries must be unique, USD-denominated, marked `verified`, and reference HTTPS
+sources. Each service line must match exactly one effective fee entry; charged
+amounts may not exceed the matched allowance. The production AIR constrains the
+leaf, path, resulting root, and links the fee leaf's service digest, service
+date, and total charge to the claim-source witness. Governance approval,
+runtime wiring, and on-chain submission remain disabled.
+
+Commands:
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_fee_schedule_root -- \
+  stark_bridge_input.json production_fee_schedule_root.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_fee_schedule_root -- \
+  production_fee_schedule_root.json
+```
+
+## ProductionStarkProofArtifactV5
+
+Schema version: `stark-production-proof-artifact-v5`
 
 Purpose: package a locally verified Winterfell proof together with the exact
-22-element public-input vector consumed by the production AIR.
+26-element public-input vector consumed by the production AIR.
 
 The ordered public inputs are:
 
@@ -184,25 +211,26 @@ The ordered public inputs are:
 2. four `publicInputRoot` elements
 3. four `claimSourceRoot` elements
 4. four `oracleFactsRoot` elements
-5. decision
-6. failure code
+5. four `feeScheduleRoot` elements
+6. decision
+7. failure code
 
 The artifact includes canonical proof bytes, proof and public-input digests,
-all three roots as canonical Solidity `bytes32` values, claim-source and
-oracle-facts tree metadata, and explicit non-runtime safety flags. Validation
-deserializes and locally re-verifies the proof instead of trusting stored
-status fields.
+all four roots as canonical Solidity `bytes32` values, claim-source,
+oracle-facts, and fee-schedule tree metadata, and explicit non-runtime safety
+flags. Validation deserializes and locally re-verifies the proof instead of
+trusting stored status fields.
 
-## ProductionStarkVerifierHandoffV4
+## ProductionStarkVerifierHandoffV5
 
-Schema version: `stark-production-verifier-handoff-v4`
+Schema version: `stark-production-verifier-handoff-v5`
 
-Purpose: bind the v4 proof artifact to
+Purpose: bind the v5 proof artifact to
 `IStarkClaimsVerifierV1Candidate` field ordering and Solidity types.
 
 `claimHash`, `decision`, `failureCode`, `publicInputRoot`,
-`claimSourceRoot`, `oracleFactsRoot`, and `proof` are direct. The handoff is not
-call-ready because `feeScheduleRoot`, `nullifierRootBefore`,
+`claimSourceRoot`, `oracleFactsRoot`, `feeScheduleRoot`, and `proof` are direct.
+The handoff is not call-ready because `nullifierRootBefore`,
 `nullifierRootAfter`, and `batchRoot` are unresolved and no production Solidity
 STARK verifier is active.
 

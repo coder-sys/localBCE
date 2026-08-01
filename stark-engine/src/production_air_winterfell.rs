@@ -16,6 +16,12 @@ use std::fmt::Write as _;
 use crate::{
     StarkBridgeInput,
     production_air::{ProductionAirInputV1, ProductionAirSemanticsTraceV1},
+    production_fee_schedule_root::{
+        FEE_SCHEDULE_ROOT_DOMAIN_TAG, FEE_SCHEDULE_ROOT_HASH_TAG, FEE_SCHEDULE_ROOT_LEAF_INDEX,
+        FEE_SCHEDULE_ROOT_LEAF_PREIMAGE_LENGTH, FEE_SCHEDULE_ROOT_NORMALIZATION_TAG,
+        FEE_SCHEDULE_ROOT_SCHEMA_TAG, FEE_SCHEDULE_ROOT_TREE_DEPTH,
+        ProductionFeeScheduleRootArtifactV1,
+    },
     source_roots::{
         CLAIM_SOURCE_ROOT_DOMAIN_TAG, CLAIM_SOURCE_ROOT_HASH_TAG, CLAIM_SOURCE_ROOT_LEAF_INDEX,
         CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH, CLAIM_SOURCE_ROOT_SCHEMA_TAG,
@@ -35,10 +41,10 @@ pub const FACT_COMMITMENT_SCHEMA_VERSION: &str = "stark-claim-fact-commitment-v1
 pub const FACT_COMMITMENT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const FACT_COMMITMENT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCFACT\0");
 pub const FACT_COMMITMENT_RULESET_TAG: u64 = u64::from_le_bytes(*b"G1G10V1\0");
-pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v3";
+pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v4";
 pub const PUBLIC_INPUT_ROOT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const PUBLIC_INPUT_ROOT_ENCODING: &str = "bytes32-four-canonical-f64-big-endian";
-pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR03");
+pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR04");
 pub const PUBLIC_INPUT_ROOT_RULESET_TAG: u64 = FACT_COMMITMENT_RULESET_TAG;
 pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "eligibility_active",
@@ -58,7 +64,7 @@ pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "recipient_not_deceased",
     "physician_certification_valid",
 ];
-pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 22] = [
+pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 26] = [
     "claim_hash_be_u32_limb_0",
     "claim_hash_be_u32_limb_1",
     "claim_hash_be_u32_limb_2",
@@ -79,6 +85,10 @@ pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 22] = [
     "oracle_facts_root_element_1",
     "oracle_facts_root_element_2",
     "oracle_facts_root_element_3",
+    "fee_schedule_root_element_0",
+    "fee_schedule_root_element_1",
+    "fee_schedule_root_element_2",
+    "fee_schedule_root_element_3",
     "decision",
     "failure_code",
 ];
@@ -88,10 +98,11 @@ const FACT_COMMITMENT_WIDTH: usize = 4;
 const FACT_COMMITMENT_PREIMAGE_LENGTH: usize = 28;
 pub const CLAIM_SOURCE_ROOT_WIDTH: usize = 4;
 pub const ORACLE_FACTS_ROOT_WIDTH: usize = 4;
+pub const FEE_SCHEDULE_ROOT_WIDTH: usize = 4;
 const PUBLIC_INPUT_ROOT_WIDTH: usize = 4;
-const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 26;
+const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 30;
 const FACT_COUNT: u64 = 16;
-const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 22;
+const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 26;
 const FACT_HASH_TRACE_LENGTH: usize = 32;
 const CLAIM_SOURCE_LEAF_TRACE_START: usize = FACT_HASH_TRACE_LENGTH;
 const CLAIM_SOURCE_LEAF_TRACE_LENGTH: usize = 40;
@@ -108,8 +119,16 @@ const ORACLE_FACTS_MERKLE_TRACE_START: usize =
 const ORACLE_FACTS_MERKLE_LEVEL_LENGTH: usize = 8;
 const ORACLE_FACTS_MERKLE_TRACE_LENGTH: usize =
     ORACLE_FACTS_ROOT_TREE_DEPTH * ORACLE_FACTS_MERKLE_LEVEL_LENGTH;
-const PUBLIC_ROOT_TRACE_START: usize =
+const FEE_SCHEDULE_LEAF_TRACE_START: usize =
     ORACLE_FACTS_MERKLE_TRACE_START + ORACLE_FACTS_MERKLE_TRACE_LENGTH;
+const FEE_SCHEDULE_LEAF_TRACE_LENGTH: usize = 32;
+const FEE_SCHEDULE_MERKLE_TRACE_START: usize =
+    FEE_SCHEDULE_LEAF_TRACE_START + FEE_SCHEDULE_LEAF_TRACE_LENGTH;
+const FEE_SCHEDULE_MERKLE_LEVEL_LENGTH: usize = 8;
+const FEE_SCHEDULE_MERKLE_TRACE_LENGTH: usize =
+    FEE_SCHEDULE_ROOT_TREE_DEPTH * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH;
+const PUBLIC_ROOT_TRACE_START: usize =
+    FEE_SCHEDULE_MERKLE_TRACE_START + FEE_SCHEDULE_MERKLE_TRACE_LENGTH;
 const RESCUE_STATE_WIDTH: usize = 12;
 const RESCUE_RATE_START: usize = 4;
 const RESCUE_RATE_WIDTH: usize = 8;
@@ -118,6 +137,7 @@ const HASH_ROUND_SELECTOR_COUNT: usize = RESCUE_ROUND_COUNT;
 const FACT_HASH_ABSORB_SELECTOR_COUNT: usize = 3;
 const CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_COUNT: usize = 4;
 const ORACLE_FACTS_LEAF_ABSORB_SELECTOR_COUNT: usize = 3;
+const FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_COUNT: usize = 3;
 const PUBLIC_ROOT_ABSORB_SELECTOR_COUNT: usize = 3;
 const FACT_HASH_ABSORB_SELECTOR_START: usize = HASH_ROUND_SELECTOR_COUNT;
 const CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_START: usize =
@@ -130,8 +150,13 @@ const ORACLE_FACTS_LEAF_ABSORB_SELECTOR_START: usize =
 const ORACLE_FACTS_LEAF_RESET_SELECTOR: usize =
     ORACLE_FACTS_LEAF_ABSORB_SELECTOR_START + ORACLE_FACTS_LEAF_ABSORB_SELECTOR_COUNT;
 const ORACLE_FACTS_MERKLE_RESET_SELECTOR_START: usize = ORACLE_FACTS_LEAF_RESET_SELECTOR + 1;
-const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+const FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_START: usize =
     ORACLE_FACTS_MERKLE_RESET_SELECTOR_START + ORACLE_FACTS_ROOT_TREE_DEPTH;
+const FEE_SCHEDULE_LEAF_RESET_SELECTOR: usize =
+    FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_START + FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_COUNT;
+const FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START: usize = FEE_SCHEDULE_LEAF_RESET_SELECTOR + 1;
+const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+    FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START + FEE_SCHEDULE_ROOT_TREE_DEPTH;
 const PUBLIC_ROOT_RESET_SELECTOR: usize =
     PUBLIC_ROOT_ABSORB_SELECTOR_START + PUBLIC_ROOT_ABSORB_SELECTOR_COUNT;
 const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
@@ -180,37 +205,52 @@ const ORACLE_FACTS_PREIMAGE_START: usize = CLAIM_SOURCE_PREIMAGE_START;
 const ORACLE_FACTS_PATH_START: usize = CLAIM_SOURCE_PATH_START;
 const ORACLE_FACTS_ROOT_RESULT_START: usize =
     CLAIM_SOURCE_ROOT_RESULT_START + CLAIM_SOURCE_ROOT_WIDTH;
-const COL_CLAIM_SOURCE_DATE_BINDING: usize =
+const FEE_SCHEDULE_PREIMAGE_START: usize = CLAIM_SOURCE_PREIMAGE_START;
+const FEE_SCHEDULE_PATH_START: usize = CLAIM_SOURCE_PATH_START;
+const FEE_SCHEDULE_ROOT_RESULT_START: usize =
     ORACLE_FACTS_ROOT_RESULT_START + ORACLE_FACTS_ROOT_WIDTH;
+const COL_CLAIM_SOURCE_DATE_BINDING: usize =
+    FEE_SCHEDULE_ROOT_RESULT_START + FEE_SCHEDULE_ROOT_WIDTH;
+const CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START: usize = COL_CLAIM_SOURCE_DATE_BINDING + 1;
+const COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING: usize =
+    CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + 4;
 
-pub const TRACE_WIDTH: usize = COL_CLAIM_SOURCE_DATE_BINDING + 1;
+pub const TRACE_WIDTH: usize = COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING + 1;
 const GATE_COUNT: usize = 13;
 const RANGE_BITS: usize = 32;
 const BASE_SEMANTIC_CONSTRAINT_COUNT: usize = 129;
 const CLAIM_SOURCE_LINK_CONSTRAINT_COUNT: usize = 1;
 const ORACLE_FACTS_LINK_CONSTRAINT_COUNT: usize = 0;
+const FEE_SCHEDULE_LINK_CONSTRAINT_COUNT: usize = 0;
 const SEMANTIC_CONSTRAINT_COUNT: usize = BASE_SEMANTIC_CONSTRAINT_COUNT
     + CLAIM_SOURCE_LINK_CONSTRAINT_COUNT
-    + ORACLE_FACTS_LINK_CONSTRAINT_COUNT;
+    + ORACLE_FACTS_LINK_CONSTRAINT_COUNT
+    + FEE_SCHEDULE_LINK_CONSTRAINT_COUNT;
 const COMMITMENT_BOUND_COLUMN_COUNT: usize = 16
     + CLAIM_HASH_LIMB_COUNT
     + FACT_COMMITMENT_WIDTH
     + CLAIM_SOURCE_ROOT_WIDTH
     + ORACLE_FACTS_ROOT_WIDTH
+    + FEE_SCHEDULE_ROOT_WIDTH
+    + 1
+    + 4
     + 1;
 const HASH_CONSTRAINT_COUNT: usize = RESCUE_STATE_WIDTH;
 const FACT_COMMITMENT_BIND_CONSTRAINT_COUNT: usize = FACT_COMMITMENT_WIDTH;
 const CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT: usize = CLAIM_SOURCE_ROOT_WIDTH;
 const ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT: usize = ORACLE_FACTS_ROOT_WIDTH;
+const FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT: usize = FEE_SCHEDULE_ROOT_WIDTH;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
     + FACT_COMMITMENT_BIND_CONSTRAINT_COUNT
     + CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT
     + ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT
+    + FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT
     + 1;
 const CLAIM_SOURCE_FIXED_ASSERTION_COUNT: usize = 8;
 const ORACLE_FACTS_FIXED_ASSERTION_COUNT: usize = 9;
+const FEE_SCHEDULE_FIXED_ASSERTION_COUNT: usize = 7;
 const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + 2
     + 1
@@ -218,9 +258,11 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + PUBLIC_INPUT_ROOT_WIDTH
     + CLAIM_SOURCE_ROOT_WIDTH
     + ORACLE_FACTS_ROOT_WIDTH
+    + FEE_SCHEDULE_ROOT_WIDTH
     + CLAIM_SOURCE_FIXED_ASSERTION_COUNT
     + ORACLE_FACTS_FIXED_ASSERTION_COUNT
-    + CLAIM_HASH_LIMB_COUNT * 2;
+    + FEE_SCHEDULE_FIXED_ASSERTION_COUNT
+    + CLAIM_HASH_LIMB_COUNT * 3;
 
 const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
     COL_ELIGIBILITY_ACTIVE,
@@ -239,10 +281,11 @@ const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
 const FAILURE_CODES: [u32; GATE_COUNT] = [1, 201, 202, 3, 4, 501, 502, 601, 602, 7, 8, 9, 10];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductionAirProofInputV3 {
+pub struct ProductionAirProofInputV4 {
     pub adjudication: ProductionAirInputV1,
     pub claim_source: ProductionClaimSourceWitnessV2,
     pub oracle_facts: ProductionOracleFactsWitnessV3,
+    pub fee_schedule: ProductionFeeScheduleWitnessV4,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -259,34 +302,45 @@ pub struct ProductionOracleFactsWitnessV3 {
     pub root: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionFeeScheduleWitnessV4 {
+    pub leaf_preimage: [ProductionFelt; FEE_SCHEDULE_ROOT_LEAF_PREIMAGE_LENGTH],
+    pub merkle_path: [[ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH]; FEE_SCHEDULE_ROOT_TREE_DEPTH],
+    pub root: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+}
+
 #[derive(Clone, Copy, Debug)]
-pub struct ProductionAirPublicInputsV3 {
+pub struct ProductionAirPublicInputsV4 {
     pub claim_hash_limbs: [ProductionFelt; CLAIM_HASH_LIMB_COUNT],
     pub public_input_root: [ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
     pub claim_source_root: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     pub oracle_facts_root: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    pub fee_schedule_root: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
     pub decision: ProductionFelt,
     pub failure_code: ProductionFelt,
 }
 
-pub type ProductionAirProofInputV2 = ProductionAirProofInputV3;
-pub type ProductionAirPublicInputsV2 = ProductionAirPublicInputsV3;
-pub type ProductionAirPublicInputsV1 = ProductionAirPublicInputsV3;
+pub type ProductionAirProofInputV3 = ProductionAirProofInputV4;
+pub type ProductionAirProofInputV2 = ProductionAirProofInputV4;
+pub type ProductionAirPublicInputsV3 = ProductionAirPublicInputsV4;
+pub type ProductionAirPublicInputsV2 = ProductionAirPublicInputsV4;
+pub type ProductionAirPublicInputsV1 = ProductionAirPublicInputsV4;
 
-impl ToElements<ProductionFelt> for ProductionAirPublicInputsV3 {
+impl ToElements<ProductionFelt> for ProductionAirPublicInputsV4 {
     fn to_elements(&self) -> Vec<ProductionFelt> {
         let mut elements = self.claim_hash_limbs.to_vec();
         elements.extend(self.public_input_root);
         elements.extend(self.claim_source_root);
         elements.extend(self.oracle_facts_root);
+        elements.extend(self.fee_schedule_root);
         elements.push(self.decision);
         elements.push(self.failure_code);
         elements
     }
 }
 
-impl ProductionAirProofInputV3 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-air-proof-input-v3";
+impl ProductionAirProofInputV4 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-air-proof-input-v4";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
         let adjudication = ProductionAirInputV1::from_bridge_input(bridge)?;
@@ -295,6 +349,9 @@ impl ProductionAirProofInputV3 {
         let oracle_facts_artifact = ProductionOracleFactsRootArtifactV1::from_bridge_input(bridge)?;
         let (oracle_leaf_preimage, oracle_merkle_path, oracle_root) =
             oracle_facts_artifact.air_witness_components()?;
+        let fee_schedule_artifact = ProductionFeeScheduleRootArtifactV1::from_bridge_input(bridge)?;
+        let (fee_leaf_preimage, fee_merkle_path, fee_root) =
+            fee_schedule_artifact.air_witness_components()?;
         let input = Self {
             adjudication,
             claim_source: ProductionClaimSourceWitnessV2 {
@@ -306,6 +363,11 @@ impl ProductionAirProofInputV3 {
                 leaf_preimage: oracle_leaf_preimage,
                 merkle_path: oracle_merkle_path,
                 root: oracle_root,
+            },
+            fee_schedule: ProductionFeeScheduleWitnessV4 {
+                leaf_preimage: fee_leaf_preimage,
+                merkle_path: fee_merkle_path,
+                root: fee_root,
             },
         };
         input.validate()?;
@@ -321,6 +383,12 @@ impl ProductionAirProofInputV3 {
             errors.append(&mut witness_errors);
         }
         if let Err(mut witness_errors) = self.oracle_facts.validate(&self.adjudication) {
+            errors.append(&mut witness_errors);
+        }
+        if let Err(mut witness_errors) = self
+            .fee_schedule
+            .validate(&self.adjudication, &self.claim_source)
+        {
             errors.append(&mut witness_errors);
         }
         if errors.is_empty() {
@@ -389,6 +457,83 @@ impl ProductionOracleFactsWitnessV3 {
     }
 }
 
+impl ProductionFeeScheduleWitnessV4 {
+    pub fn validate(
+        &self,
+        adjudication: &ProductionAirInputV1,
+        claim_source: &ProductionClaimSourceWitnessV2,
+    ) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        let expected_header = [
+            felt(FEE_SCHEDULE_ROOT_DOMAIN_TAG),
+            felt(FEE_SCHEDULE_ROOT_SCHEMA_TAG),
+            felt(FEE_SCHEDULE_ROOT_HASH_TAG),
+            felt(FEE_SCHEDULE_ROOT_NORMALIZATION_TAG),
+        ];
+        if self.leaf_preimage[..4] != expected_header {
+            errors.push("fee-schedule leaf header is not canonical".to_string());
+        }
+        if self.leaf_preimage[24..27] != [ProductionFelt::ONE; 3] {
+            errors.push("fee-schedule presence flags must all be one".to_string());
+        }
+        if self.leaf_preimage[27] == ProductionFelt::ZERO
+            || self.leaf_preimage[28] == ProductionFelt::ZERO
+        {
+            errors.push("fee-schedule entry and match counts must be nonzero".to_string());
+        }
+
+        match parse_claim_hash_limbs(&adjudication.claim_hash) {
+            Ok(claim_hash_limbs) if self.leaf_preimage[4..12] != claim_hash_limbs => {
+                errors.push(
+                    "fee-schedule leaf claim hash limbs do not match adjudication claim hash"
+                        .to_string(),
+                );
+            }
+            Ok(_) => {}
+            Err(mut claim_hash_errors) => errors.append(&mut claim_hash_errors),
+        }
+        if self.leaf_preimage[20..24] != claim_source.leaf_preimage[28..32] {
+            errors.push(
+                "fee-schedule service-line digest does not match claim-source leaf".to_string(),
+            );
+        }
+        if self.leaf_preimage[29].as_int() != adjudication.facts.date_of_service_from
+            || self.leaf_preimage[29] != claim_source.leaf_preimage[27]
+        {
+            errors.push(
+                "fee-schedule service date does not match adjudication and claim-source leaf"
+                    .to_string(),
+            );
+        }
+        if self.leaf_preimage[31] != claim_source.leaf_preimage[26] {
+            errors.push(
+                "fee-schedule charged amount does not match claim-source total charge".to_string(),
+            );
+        }
+        if self.leaf_preimage[30].as_int() < self.leaf_preimage[31].as_int() {
+            errors.push("fee-schedule allowed amount must cover charged amount".to_string());
+        }
+
+        let leaf = Rp64_256::hash_elements(&self.leaf_preimage);
+        let mut current: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH] = leaf
+            .as_elements()
+            .try_into()
+            .expect("Rp64_256 digest must contain four field elements");
+        for (level, sibling) in self.merkle_path.iter().enumerate() {
+            current = merge_fee_schedule_level(current, *sibling, level);
+        }
+        if current != self.root {
+            errors.push("fee-schedule Merkle path does not produce the supplied root".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 impl ProductionClaimSourceWitnessV2 {
     pub fn validate(&self, adjudication: &ProductionAirInputV1) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
@@ -444,12 +589,12 @@ impl ProductionClaimSourceWitnessV2 {
 
 pub struct ProductionG1G10Air {
     context: AirContext<ProductionFelt>,
-    public_inputs: ProductionAirPublicInputsV3,
+    public_inputs: ProductionAirPublicInputsV4,
 }
 
 impl Air for ProductionG1G10Air {
     type BaseField = ProductionFelt;
-    type PublicInputs = ProductionAirPublicInputsV3;
+    type PublicInputs = ProductionAirPublicInputsV4;
 
     fn new(
         trace_info: TraceInfo,
@@ -621,6 +766,11 @@ impl Air for ProductionG1G10Air {
             oracle_facts_leaf_absorption_block(current, 2),
             oracle_facts_leaf_absorption_block(current, 3),
         ];
+        let fee_schedule_leaf_absorption_blocks = [
+            fee_schedule_leaf_absorption_block(current, 1),
+            fee_schedule_leaf_absorption_block(current, 2),
+            fee_schedule_leaf_absorption_block(current, 3),
+        ];
         let public_root_absorption_blocks = [
             public_input_root_absorption_block(current, 1),
             public_input_root_absorption_block(current, 2),
@@ -628,6 +778,7 @@ impl Air for ProductionG1G10Air {
         ];
         let claim_source_leaf_initial_state = initial_claim_source_leaf_hash_state(current);
         let oracle_facts_leaf_initial_state = initial_oracle_facts_leaf_hash_state(current);
+        let fee_schedule_leaf_initial_state = initial_fee_schedule_leaf_hash_state(current);
         let public_root_initial_state = initial_public_input_root_hash_state(current);
 
         let mut hash_degree_adjustment = clock_transition;
@@ -690,6 +841,25 @@ impl Air for ProductionG1G10Air {
                 constraint += periodic_values[ORACLE_FACTS_MERKLE_RESET_SELECTOR_START + level]
                     * (next_hash[state_index] - merge_initial_state[state_index]);
             }
+            for (block_index, block) in fee_schedule_leaf_absorption_blocks.iter().enumerate() {
+                let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
+                    .contains(&state_index)
+                {
+                    block[state_index - RESCUE_RATE_START]
+                } else {
+                    E::ZERO
+                };
+                constraint += periodic_values
+                    [FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_START + block_index]
+                    * (next_hash[state_index] - current_hash[state_index] - absorbed);
+            }
+            constraint += periodic_values[FEE_SCHEDULE_LEAF_RESET_SELECTOR]
+                * (next_hash[state_index] - fee_schedule_leaf_initial_state[state_index]);
+            for level in 0..FEE_SCHEDULE_ROOT_TREE_DEPTH {
+                let merge_initial_state = initial_fee_schedule_merkle_state(current, level);
+                constraint += periodic_values[FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START + level]
+                    * (next_hash[state_index] - merge_initial_state[state_index]);
+            }
             for (block_index, block) in public_root_absorption_blocks.iter().enumerate() {
                 let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
                     .contains(&state_index)
@@ -724,9 +894,15 @@ impl Air for ProductionG1G10Air {
             index += 1;
         }
         for digest_index in 0..ORACLE_FACTS_ROOT_WIDTH {
-            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+            result[index] = periodic_values[FEE_SCHEDULE_LEAF_RESET_SELECTOR]
                 * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
                     - current[ORACLE_FACTS_ROOT_RESULT_START + digest_index]);
+            index += 1;
+        }
+        for digest_index in 0..FEE_SCHEDULE_ROOT_WIDTH {
+            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+                * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
+                    - current[FEE_SCHEDULE_ROOT_RESULT_START + digest_index]);
             index += 1;
         }
 
@@ -749,6 +925,11 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 ORACLE_FACTS_PREIMAGE_START + 4 + limb,
                 ORACLE_FACTS_LEAF_TRACE_START - 1,
+                *value,
+            ));
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_PREIMAGE_START + 4 + limb,
+                FEE_SCHEDULE_LEAF_TRACE_START - 1,
                 *value,
             ));
         }
@@ -792,6 +973,13 @@ impl Air for ProductionG1G10Air {
                 *value,
             ));
         }
+        for (digest_index, value) in self.public_inputs.fee_schedule_root.iter().enumerate() {
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_ROOT_RESULT_START + digest_index,
+                0,
+                *value,
+            ));
+        }
         for (offset, value) in [
             (0, felt(CLAIM_SOURCE_ROOT_DOMAIN_TAG)),
             (1, felt(CLAIM_SOURCE_ROOT_SCHEMA_TAG)),
@@ -805,6 +993,21 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 CLAIM_SOURCE_PREIMAGE_START + offset,
                 0,
+                value,
+            ));
+        }
+        for (offset, value) in [
+            (0, felt(FEE_SCHEDULE_ROOT_DOMAIN_TAG)),
+            (1, felt(FEE_SCHEDULE_ROOT_SCHEMA_TAG)),
+            (2, felt(FEE_SCHEDULE_ROOT_HASH_TAG)),
+            (3, felt(FEE_SCHEDULE_ROOT_NORMALIZATION_TAG)),
+            (24, ProductionFelt::ONE),
+            (25, ProductionFelt::ONE),
+            (26, ProductionFelt::ONE),
+        ] {
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_PREIMAGE_START + offset,
+                FEE_SCHEDULE_LEAF_TRACE_START - 1,
                 value,
             ));
         }
@@ -878,6 +1081,9 @@ impl Prover for ProductionG1G10Prover {
             }),
             oracle_facts_root: core::array::from_fn(|limb| {
                 trace.get(ORACLE_FACTS_ROOT_RESULT_START + limb, 0)
+            }),
+            fee_schedule_root: core::array::from_fn(|limb| {
+                trace.get(FEE_SCHEDULE_ROOT_RESULT_START + limb, 0)
             }),
             decision: trace.get(COL_DECISION, 0),
             failure_code: trace.get(COL_FAILURE_CODE, 0),
@@ -973,11 +1179,31 @@ pub fn build_production_air_trace(
             "oracle-facts trace root does not match validated witness root".to_string(),
         ]);
     }
+    let fee_schedule_leaf_hash_states =
+        build_fee_schedule_leaf_hash_states(&input.fee_schedule.leaf_preimage);
+    let fee_schedule_leaf: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            fee_schedule_leaf_hash_states[FEE_SCHEDULE_LEAF_TRACE_LENGTH - 1]
+                [RESCUE_RATE_START + index]
+        });
+    let fee_schedule_merkle_hash_states =
+        build_fee_schedule_merkle_hash_states(fee_schedule_leaf, &input.fee_schedule.merkle_path);
+    let computed_fee_schedule_root: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            fee_schedule_merkle_hash_states[FEE_SCHEDULE_MERKLE_TRACE_LENGTH - 1]
+                [RESCUE_RATE_START + index]
+        });
+    if computed_fee_schedule_root != input.fee_schedule.root {
+        return Err(vec![
+            "fee-schedule trace root does not match validated witness root".to_string(),
+        ]);
+    }
     let public_root_preimage = canonical_public_input_root_preimage_with_commitments(
         adjudication,
         &fact_commitment,
         &computed_claim_source_root,
         &computed_oracle_facts_root,
+        &computed_fee_schedule_root,
     )?;
     let public_root_hash_states = build_public_input_root_hash_states(&public_root_preimage);
     let mut rows = Vec::with_capacity(TRACE_LENGTH);
@@ -994,13 +1220,21 @@ pub fn build_production_air_trace(
                 let start = CLAIM_SOURCE_PATH_START + level * CLAIM_SOURCE_ROOT_WIDTH;
                 row[start..start + CLAIM_SOURCE_ROOT_WIDTH].copy_from_slice(sibling);
             }
-        } else {
+        } else if step < FEE_SCHEDULE_LEAF_TRACE_START - 1 {
             row[ORACLE_FACTS_PREIMAGE_START
                 ..ORACLE_FACTS_PREIMAGE_START + ORACLE_FACTS_ROOT_LEAF_PREIMAGE_LENGTH]
                 .copy_from_slice(&input.oracle_facts.leaf_preimage);
             for (level, sibling) in input.oracle_facts.merkle_path.iter().enumerate() {
                 let start = ORACLE_FACTS_PATH_START + level * ORACLE_FACTS_ROOT_WIDTH;
                 row[start..start + ORACLE_FACTS_ROOT_WIDTH].copy_from_slice(sibling);
+            }
+        } else {
+            row[FEE_SCHEDULE_PREIMAGE_START
+                ..FEE_SCHEDULE_PREIMAGE_START + FEE_SCHEDULE_ROOT_LEAF_PREIMAGE_LENGTH]
+                .copy_from_slice(&input.fee_schedule.leaf_preimage);
+            for (level, sibling) in input.fee_schedule.merkle_path.iter().enumerate() {
+                let start = FEE_SCHEDULE_PATH_START + level * FEE_SCHEDULE_ROOT_WIDTH;
+                row[start..start + FEE_SCHEDULE_ROOT_WIDTH].copy_from_slice(sibling);
             }
         }
         row[CLAIM_SOURCE_ROOT_RESULT_START
@@ -1009,7 +1243,14 @@ pub fn build_production_air_trace(
         row[ORACLE_FACTS_ROOT_RESULT_START
             ..ORACLE_FACTS_ROOT_RESULT_START + ORACLE_FACTS_ROOT_WIDTH]
             .copy_from_slice(&computed_oracle_facts_root);
+        row[FEE_SCHEDULE_ROOT_RESULT_START
+            ..FEE_SCHEDULE_ROOT_RESULT_START + FEE_SCHEDULE_ROOT_WIDTH]
+            .copy_from_slice(&computed_fee_schedule_root);
         row[COL_CLAIM_SOURCE_DATE_BINDING] = felt(adjudication.facts.date_of_service_from);
+        row[CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START
+            ..CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + 4]
+            .copy_from_slice(&input.claim_source.leaf_preimage[28..32]);
+        row[COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING] = input.claim_source.leaf_preimage[26];
 
         let hash_state = if step < CLAIM_SOURCE_LEAF_TRACE_START {
             fact_hash_states[step]
@@ -1019,8 +1260,12 @@ pub fn build_production_air_trace(
             claim_source_merkle_hash_states[step - CLAIM_SOURCE_MERKLE_TRACE_START]
         } else if step < ORACLE_FACTS_MERKLE_TRACE_START {
             oracle_facts_leaf_hash_states[step - ORACLE_FACTS_LEAF_TRACE_START]
-        } else if step < PUBLIC_ROOT_TRACE_START {
+        } else if step < FEE_SCHEDULE_LEAF_TRACE_START {
             oracle_facts_merkle_hash_states[step - ORACLE_FACTS_MERKLE_TRACE_START]
+        } else if step < FEE_SCHEDULE_MERKLE_TRACE_START {
+            fee_schedule_leaf_hash_states[step - FEE_SCHEDULE_LEAF_TRACE_START]
+        } else if step < PUBLIC_ROOT_TRACE_START {
+            fee_schedule_merkle_hash_states[step - FEE_SCHEDULE_MERKLE_TRACE_START]
         } else {
             public_root_hash_states[step - PUBLIC_ROOT_TRACE_START]
         };
@@ -1114,6 +1359,7 @@ pub fn canonical_public_input_root_preimage(
         &fact_commitment,
         &input.claim_source.root,
         &input.oracle_facts.root,
+        &input.fee_schedule.root,
     )
 }
 
@@ -1253,6 +1499,10 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -1275,6 +1525,17 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
     round_block_starts.extend(
         (0..ORACLE_FACTS_ROOT_TREE_DEPTH).map(|level| {
             ORACLE_FACTS_MERKLE_TRACE_START + level * ORACLE_FACTS_MERKLE_LEVEL_LENGTH
+        }),
+    );
+    round_block_starts.extend([
+        FEE_SCHEDULE_LEAF_TRACE_START,
+        FEE_SCHEDULE_LEAF_TRACE_START + 8,
+        FEE_SCHEDULE_LEAF_TRACE_START + 16,
+        FEE_SCHEDULE_LEAF_TRACE_START + 24,
+    ]);
+    round_block_starts.extend(
+        (0..FEE_SCHEDULE_ROOT_TREE_DEPTH).map(|level| {
+            FEE_SCHEDULE_MERKLE_TRACE_START + level * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH
         }),
     );
     round_block_starts.extend([
@@ -1316,6 +1577,22 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
         columns[ORACLE_FACTS_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
     }
     for (selector, step) in [
+        FEE_SCHEDULE_LEAF_TRACE_START + 7,
+        FEE_SCHEDULE_LEAF_TRACE_START + 15,
+        FEE_SCHEDULE_LEAF_TRACE_START + 23,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        columns[FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_START + selector][step] = ProductionFelt::ONE;
+    }
+    columns[FEE_SCHEDULE_LEAF_RESET_SELECTOR][FEE_SCHEDULE_LEAF_TRACE_START - 1] =
+        ProductionFelt::ONE;
+    for level in 0..FEE_SCHEDULE_ROOT_TREE_DEPTH {
+        let step = FEE_SCHEDULE_MERKLE_TRACE_START - 1 + level * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH;
+        columns[FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
+    }
+    for (selector, step) in [
         PUBLIC_ROOT_TRACE_START + 7,
         PUBLIC_ROOT_TRACE_START + 15,
         PUBLIC_ROOT_TRACE_START + 23,
@@ -1344,7 +1621,16 @@ fn commitment_bound_columns() -> Vec<usize> {
             ORACLE_FACTS_ROOT_RESULT_START
                 ..ORACLE_FACTS_ROOT_RESULT_START + ORACLE_FACTS_ROOT_WIDTH,
         )
+        .chain(
+            FEE_SCHEDULE_ROOT_RESULT_START
+                ..FEE_SCHEDULE_ROOT_RESULT_START + FEE_SCHEDULE_ROOT_WIDTH,
+        )
         .chain(core::iter::once(COL_CLAIM_SOURCE_DATE_BINDING))
+        .chain(
+            CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START
+                ..CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + 4,
+        )
+        .chain(core::iter::once(COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING))
         .collect()
 }
 
@@ -1360,7 +1646,7 @@ fn commitment_header() -> [ProductionFelt; 4] {
 fn public_input_root_header() -> [ProductionFelt; 4] {
     [
         felt(PUBLIC_INPUT_ROOT_DOMAIN_TAG),
-        felt(3),
+        felt(4),
         felt(PUBLIC_INPUT_ROOT_RULESET_TAG),
         felt(PUBLIC_INPUT_ROOT_ELEMENT_COUNT),
     ]
@@ -1371,6 +1657,7 @@ fn canonical_public_input_root_preimage_with_commitments(
     fact_commitment: &[ProductionFelt; FACT_COMMITMENT_WIDTH],
     claim_source_root: &[ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     oracle_facts_root: &[ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
+    fee_schedule_root: &[ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
 ) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH], Vec<String>> {
     input.validate()?;
     validate_commitment_field_range(input)?;
@@ -1382,8 +1669,9 @@ fn canonical_public_input_root_preimage_with_commitments(
     elements[12..16].copy_from_slice(fact_commitment);
     elements[16..20].copy_from_slice(claim_source_root);
     elements[20..24].copy_from_slice(oracle_facts_root);
-    elements[24] = felt(input.expected_outcome.decision as u64);
-    elements[25] = felt(input.expected_outcome.failure_code as u64);
+    elements[24..28].copy_from_slice(fee_schedule_root);
+    elements[28] = felt(input.expected_outcome.decision as u64);
+    elements[29] = felt(input.expected_outcome.failure_code as u64);
     Ok(elements)
 }
 
@@ -1456,6 +1744,17 @@ fn initial_oracle_facts_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
     state
 }
 
+fn initial_fee_schedule_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(FEE_SCHEDULE_ROOT_LEAF_PREIMAGE_LENGTH as u64));
+    for rate_index in 0..RESCUE_RATE_WIDTH {
+        state[RESCUE_RATE_START + rate_index] = row[FEE_SCHEDULE_PREIMAGE_START + rate_index];
+    }
+    state
+}
+
 fn initial_claim_source_merkle_state<E: FieldElement + From<ProductionFelt>>(
     row: &[E],
     level: usize,
@@ -1496,6 +1795,28 @@ fn initial_oracle_facts_merkle_state<E: FieldElement + From<ProductionFelt>>(
     };
     state[RESCUE_RATE_START..RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH].copy_from_slice(&left);
     state[RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&right);
+    state
+}
+
+fn initial_fee_schedule_merkle_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    level: usize,
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(RESCUE_RATE_WIDTH as u64));
+    let current: [E; FEE_SCHEDULE_ROOT_WIDTH] =
+        core::array::from_fn(|index| row[HASH_STATE_START + RESCUE_RATE_START + index]);
+    let sibling_start = FEE_SCHEDULE_PATH_START + level * FEE_SCHEDULE_ROOT_WIDTH;
+    let sibling: [E; FEE_SCHEDULE_ROOT_WIDTH] =
+        core::array::from_fn(|index| row[sibling_start + index]);
+    let (left, right) = if fee_schedule_index_bit(level) == 0 {
+        (current, sibling)
+    } else {
+        (sibling, current)
+    };
+    state[RESCUE_RATE_START..RESCUE_RATE_START + FEE_SCHEDULE_ROOT_WIDTH].copy_from_slice(&left);
+    state[RESCUE_RATE_START + FEE_SCHEDULE_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
         .copy_from_slice(&right);
     state
 }
@@ -1601,6 +1922,38 @@ fn build_oracle_facts_leaf_hash_states(
     states
 }
 
+fn build_fee_schedule_leaf_hash_states(
+    elements: &[ProductionFelt; FEE_SCHEDULE_ROOT_LEAF_PREIMAGE_LENGTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; FEE_SCHEDULE_LEAF_TRACE_LENGTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(FEE_SCHEDULE_ROOT_LEAF_PREIMAGE_LENGTH as u64);
+    state[RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&elements[..RESCUE_RATE_WIDTH]);
+
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; FEE_SCHEDULE_LEAF_TRACE_LENGTH];
+    states[0] = state;
+    let mut step = 0;
+
+    for block in 0..4 {
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            step += 1;
+            states[step] = state;
+        }
+        if block < 3 {
+            let next_block_start = (block + 1) * RESCUE_RATE_WIDTH;
+            for rate_index in 0..RESCUE_RATE_WIDTH {
+                state[RESCUE_RATE_START + rate_index] += elements[next_block_start + rate_index];
+            }
+            step += 1;
+            states[step] = state;
+        }
+    }
+
+    debug_assert_eq!(step, FEE_SCHEDULE_LEAF_TRACE_LENGTH - 1);
+    states
+}
+
 fn build_claim_source_merkle_hash_states(
     leaf: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     path: &[[ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH]; CLAIM_SOURCE_ROOT_TREE_DEPTH],
@@ -1642,6 +1995,29 @@ fn build_oracle_facts_merkle_hash_states(
         current = state[RESCUE_RATE_START..RESCUE_RATE_START + ORACLE_FACTS_ROOT_WIDTH]
             .try_into()
             .expect("oracle-facts Merkle digest width");
+    }
+
+    states
+}
+
+fn build_fee_schedule_merkle_hash_states(
+    leaf: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    path: &[[ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH]; FEE_SCHEDULE_ROOT_TREE_DEPTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; FEE_SCHEDULE_MERKLE_TRACE_LENGTH] {
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; FEE_SCHEDULE_MERKLE_TRACE_LENGTH];
+    let mut current = leaf;
+
+    for (level, sibling) in path.iter().copied().enumerate() {
+        let start = level * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH;
+        let mut state = initial_fee_schedule_merge_state(current, sibling, level);
+        states[start] = state;
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            states[start + round + 1] = state;
+        }
+        current = state[RESCUE_RATE_START..RESCUE_RATE_START + FEE_SCHEDULE_ROOT_WIDTH]
+            .try_into()
+            .expect("fee-schedule Merkle digest width");
     }
 
     states
@@ -1711,12 +2087,48 @@ fn merge_oracle_facts_level(
         .expect("oracle-facts Merkle digest width")
 }
 
+fn initial_fee_schedule_merge_state(
+    current: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    sibling: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    level: usize,
+) -> [ProductionFelt; RESCUE_STATE_WIDTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(RESCUE_RATE_WIDTH as u64);
+    let (left, right) = if fee_schedule_index_bit(level) == 0 {
+        (current, sibling)
+    } else {
+        (sibling, current)
+    };
+    state[RESCUE_RATE_START..RESCUE_RATE_START + FEE_SCHEDULE_ROOT_WIDTH].copy_from_slice(&left);
+    state[RESCUE_RATE_START + FEE_SCHEDULE_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&right);
+    state
+}
+
+fn merge_fee_schedule_level(
+    current: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    sibling: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    level: usize,
+) -> [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH] {
+    let mut state = initial_fee_schedule_merge_state(current, sibling, level);
+    for round in 0..RESCUE_ROUND_COUNT {
+        Rp64_256::apply_round(&mut state, round);
+    }
+    state[RESCUE_RATE_START..RESCUE_RATE_START + FEE_SCHEDULE_ROOT_WIDTH]
+        .try_into()
+        .expect("fee-schedule Merkle digest width")
+}
+
 fn claim_source_index_bit(level: usize) -> u8 {
     ((CLAIM_SOURCE_ROOT_LEAF_INDEX >> level) & 1) as u8
 }
 
 fn oracle_facts_index_bit(level: usize) -> u8 {
     ((ORACLE_FACTS_ROOT_LEAF_INDEX >> level) & 1) as u8
+}
+
+fn fee_schedule_index_bit(level: usize) -> u8 {
+    ((FEE_SCHEDULE_ROOT_LEAF_INDEX >> level) & 1) as u8
 }
 
 fn build_public_input_root_hash_states(
@@ -1809,8 +2221,12 @@ fn claim_source_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
     let start = CLAIM_SOURCE_PREIMAGE_START + block * RESCUE_RATE_WIDTH;
     core::array::from_fn(|offset| {
         let element_index = block * RESCUE_RATE_WIDTH + offset;
-        if element_index == 27 {
+        if element_index == 26 {
+            row[COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING]
+        } else if element_index == 27 {
             row[COL_CLAIM_SOURCE_DATE_BINDING]
+        } else if (28..32).contains(&element_index) {
+            row[CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + element_index - 28]
         } else if element_index < CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH {
             row[start + offset]
         } else {
@@ -1826,6 +2242,26 @@ fn oracle_facts_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
     debug_assert!((1..=3).contains(&block));
     let start = ORACLE_FACTS_PREIMAGE_START + block * RESCUE_RATE_WIDTH;
     core::array::from_fn(|offset| row[start + offset])
+}
+
+fn fee_schedule_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    block: usize,
+) -> [E; RESCUE_RATE_WIDTH] {
+    debug_assert!((1..=3).contains(&block));
+    let start = FEE_SCHEDULE_PREIMAGE_START + block * RESCUE_RATE_WIDTH;
+    core::array::from_fn(|offset| {
+        let element_index = block * RESCUE_RATE_WIDTH + offset;
+        if (20..24).contains(&element_index) {
+            row[CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + element_index - 20]
+        } else if element_index == 29 {
+            row[COL_CLAIM_SOURCE_DATE_BINDING]
+        } else if element_index == 31 {
+            row[COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING]
+        } else {
+            row[start + offset]
+        }
+    })
 }
 
 fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
@@ -1854,12 +2290,12 @@ fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
             row[ORACLE_FACTS_ROOT_RESULT_START + 3],
         ],
         3 => [
+            row[FEE_SCHEDULE_ROOT_RESULT_START],
+            row[FEE_SCHEDULE_ROOT_RESULT_START + 1],
+            row[FEE_SCHEDULE_ROOT_RESULT_START + 2],
+            row[FEE_SCHEDULE_ROOT_RESULT_START + 3],
             row[COL_DECISION],
             row[COL_FAILURE_CODE],
-            E::ZERO,
-            E::ZERO,
-            E::ZERO,
-            E::ZERO,
             E::ZERO,
             E::ZERO,
         ],

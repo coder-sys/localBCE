@@ -29,6 +29,18 @@
   "oracle_attestation_refs": [
     "demo-attestation:eligibility:CLAIM-DEMO-011:v1"
   ],
+  "fee_schedule_id": "DEMO-FEE-SCHEDULE-V1",
+  "fee_schedule_entries": [
+    {
+      "fee_code": "99213",
+      "unit_amount_cents": 100000,
+      "currency": "USD",
+      "effective_from": 19000,
+      "effective_thru": 22000,
+      "source_url": "https://example.gov/demo/fee-schedule",
+      "verification_status": "verified"
+    }
+  ],
 
   "eligibility_active": 1,
   "aid_code": 53,

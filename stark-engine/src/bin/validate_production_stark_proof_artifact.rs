@@ -40,6 +40,7 @@ fn run() -> Result<(), Vec<String>> {
             "public_input_root": artifact.public_input_root_bytes32,
             "claim_source_root": artifact.claim_source_root_bytes32,
             "oracle_facts_root": artifact.oracle_facts_root_bytes32,
+            "fee_schedule_root": artifact.fee_schedule_root_bytes32,
             "proof_size_bytes": artifact.proof.size_bytes,
             "proof_sha256": artifact.proof.sha256,
             "local_verification_status": artifact.local_verification_status,

@@ -95,14 +95,17 @@ Completed:
 - constrain a canonical verified-oracle-facts leaf and depth-10 Merkle path
 - expose `oracleFactsRoot` as four public inputs and include it in
   `publicInputRoot`
-- package 22 public inputs and all three constrained roots in v4 artifact and
+- constrain a canonical verified-fee-schedule leaf and depth-10 Merkle path
+- expose `feeScheduleRoot` as four public inputs and include it in
+  `publicInputRoot`
+- package 26 public inputs and all four constrained roots in v5 artifact and
   verifier-handoff schemas
 
 Remaining:
 
 - define governance and approval semantics for `claimSourceRoot`
 - define governance and external attestation semantics for `oracleFactsRoot`
-- implement and bind fee, nullifier-before, nullifier-after, and batch roots
+- implement and bind nullifier-before, nullifier-after, and batch roots
 - independently validate the locked prover and verifier parameters
 
 Exit criteria:

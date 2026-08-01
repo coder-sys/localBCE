@@ -37,7 +37,17 @@ fn approved_bridge() -> StarkBridgeInput {
             }],
             "oracle_attestation_refs": [
                 "demo-attestation:eligibility_active:CLAIM-PRODUCTION-HANDOFF-001"
-            ]
+            ],
+            "fee_schedule_id": "DEMO-FEE-SCHEDULE-V1",
+            "fee_schedule_entries": [{
+                "fee_code": "99213",
+                "unit_amount_cents": 100000,
+                "currency": "USD",
+                "effective_from": 19000,
+                "effective_thru": 22000,
+                "source_url": "https://example.gov/demo/fee-schedule/99213",
+                "verification_status": "verified"
+            }]
         },
         "adjudication": {
             "decision": 1,
@@ -148,7 +158,15 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
         handoff.oracle_facts_root_status,
         "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path"
     );
-    assert_eq!(handoff.air_public_input_count, 22);
+    assert_eq!(
+        handoff.fee_schedule_root,
+        artifact.fee_schedule_root_bytes32
+    );
+    assert_eq!(
+        handoff.fee_schedule_root_status,
+        "air_constrained_canonical_verified_fee_leaf_depth_10_merkle_path_and_claim_source_links"
+    );
+    assert_eq!(handoff.air_public_input_count, 26);
     assert_eq!(handoff.proof_bytes_sha256, artifact.proof.sha256);
     assert!(!handoff.call_readiness.abi_call_ready);
     assert!(!handoff.call_readiness.runtime_activation_allowed);
@@ -173,6 +191,12 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
             .call_readiness
             .directly_available_abi_fields
             .contains(&"oracleFactsRoot".to_string())
+    );
+    assert!(
+        handoff
+            .call_readiness
+            .directly_available_abi_fields
+            .contains(&"feeScheduleRoot".to_string())
     );
     assert!(
         handoff
@@ -219,6 +243,12 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     fake_oracle_facts_root.abi_fields[5].value =
         Some("0x3333333333333333333333333333333333333333333333333333333333333333".to_string());
     assert!(fake_oracle_facts_root.validate().is_err());
+
+    let mut fake_fee_schedule_root =
+        ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
+    fake_fee_schedule_root.abi_fields[6].value =
+        Some("0x4444444444444444444444444444444444444444444444444444444444444444".to_string());
+    assert!(fake_fee_schedule_root.validate().is_err());
 }
 
 #[test]

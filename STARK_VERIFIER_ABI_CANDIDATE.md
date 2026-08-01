@@ -56,10 +56,11 @@ Winterfell 0.13.1 serialized proof bytes. Runtime use remains blocked on root
 semantics and a real Solidity verifier implementation.
 
 The feature-gated production AIR now emits real Winterfell proof bytes in
-`stark-production-proof-artifact-v4`. A separate
-`stark-production-verifier-handoff-v4` envelope aligns those bytes, the 22
+`stark-production-proof-artifact-v5`. A separate
+`stark-production-verifier-handoff-v5` envelope aligns those bytes, the 26
 ordered AIR public inputs, and the packed `publicInputRoot`,
-`claimSourceRoot`, and `oracleFactsRoot` values with this candidate interface.
+`claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot` values with this
+candidate interface.
 
 `publicInputRoot` is now constrained by the production AIR. It is an
 `Rp64_256` digest of a domain-separated preimage containing the claim hash, the
@@ -78,8 +79,14 @@ commits the source manifest, normalized verified facts, HTTPS source references,
 and attestation references, then executes a fixed depth-10 `Rp64_256` Merkle
 path. The references are committed but not externally attested by the proof.
 
-The handoff remains intentionally non-call-ready because four source/state
-roots are unavailable, the claim-source and oracle-facts roots are not
+`feeScheduleRoot` is now constrained by the production AIR. Its canonical leaf
+commits a verified HTTPS USD fee schedule and exact effective-date service-line
+matches. The AIR validates the fixed depth-10 path and links the fee leaf to the
+claim-source service digest, service date, and total charge. Governance approval
+of that schedule remains external.
+
+The handoff remains intentionally non-call-ready because three state roots are
+unavailable, the claim-source, oracle-facts, and fee-schedule roots are not
 governed, external oracle attestations are not verified, and no Solidity STARK
 verifier exists.
 

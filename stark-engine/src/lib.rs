@@ -28,6 +28,9 @@ pub mod production_air_winterfell;
 pub mod production_proof_artifact;
 
 #[cfg(feature = "production-air-winterfell")]
+pub mod production_fee_schedule_root;
+
+#[cfg(feature = "production-air-winterfell")]
 pub mod production_verifier_handoff;
 
 /// Mapping quality from the active Rust claim model into the imported
@@ -266,6 +269,10 @@ pub struct BridgeClaim {
     pub oracle_facts: Vec<OracleFactInput>,
     #[serde(default)]
     pub oracle_attestation_refs: Vec<String>,
+    #[serde(default)]
+    pub fee_schedule_id: Option<String>,
+    #[serde(default)]
+    pub fee_schedule_entries: Vec<FeeScheduleEntryInput>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -8538,14 +8545,13 @@ impl FeeScheduleRootInput {
             input_status: Self::INPUT_STATUS.to_string(),
             claim_id: input.claim.claim_id.clone(),
             claim_hash: input.claim.claim_hash.clone(),
-            fee_schedule_id: None,
-            entries: Vec::new(),
+            fee_schedule_id: input.claim.fee_schedule_id.clone(),
+            entries: input.claim.fee_schedule_entries.clone(),
             root_generation_status: Self::ROOT_GENERATION_STATUS.to_string(),
             notes: vec![
-                "This input is a normalized source schema for future feeScheduleRoot work."
-                    .to_string(),
-                "The current rust-engine bridge exports claim amount and billing validity flags, not source-backed fee schedule entries.".to_string(),
-                "No fee schedule leaf, hash, Merkle root, pricing calculation, or STARK proof is generated from this object.".to_string(),
+                "This input carries optional source-backed fee schedule entries supplied to rust-engine.".to_string(),
+                "The local application does not fetch URLs, scrape fee schedules, or grant governance approval.".to_string(),
+                "Root generation and proof binding occur only in the feature-gated production STARK path.".to_string(),
                 "The active Groth16 workflow remains unchanged.".to_string(),
             ],
         })

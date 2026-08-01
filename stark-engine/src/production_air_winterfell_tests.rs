@@ -51,7 +51,17 @@ fn approved_bridge() -> StarkBridgeInput {
             }],
             "oracle_attestation_refs": [
                 "demo-attestation:eligibility_active:CLAIM-PRODUCTION-AIR-PROOF-001"
-            ]
+            ],
+            "fee_schedule_id": "DEMO-FEE-SCHEDULE-V1",
+            "fee_schedule_entries": [{
+                "fee_code": "99213",
+                "unit_amount_cents": 100000,
+                "currency": "USD",
+                "effective_from": 19000,
+                "effective_thru": 22000,
+                "source_url": "https://example.gov/demo/fee-schedule/99213",
+                "verification_status": "verified"
+            }]
         },
         "adjudication": {
             "decision": 1,
@@ -149,7 +159,7 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         compute_public_input_root(&input).unwrap()
     );
     let serialized_public_inputs = public_inputs.to_elements();
-    assert_eq!(serialized_public_inputs.len(), 22);
+    assert_eq!(serialized_public_inputs.len(), 26);
     assert_eq!(
         &serialized_public_inputs[..8],
         &public_inputs.claim_hash_limbs
@@ -166,8 +176,12 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         &serialized_public_inputs[16..20],
         &public_inputs.oracle_facts_root
     );
-    assert_eq!(serialized_public_inputs[20], public_inputs.decision);
-    assert_eq!(serialized_public_inputs[21], public_inputs.failure_code);
+    assert_eq!(
+        &serialized_public_inputs[20..24],
+        &public_inputs.fee_schedule_root
+    );
+    assert_eq!(serialized_public_inputs[24], public_inputs.decision);
+    assert_eq!(serialized_public_inputs[25], public_inputs.failure_code);
     verify_production_air_result(proof, public_inputs).unwrap();
 }
 
@@ -281,6 +295,15 @@ fn tampered_public_oracle_facts_root_is_rejected() {
 }
 
 #[test]
+fn tampered_public_fee_schedule_root_is_rejected() {
+    let input = approved_proof_input();
+    let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
+    public_inputs.fee_schedule_root[0] += ProductionFelt::ONE;
+
+    assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[test]
 fn forged_claim_source_leaf_path_and_root_are_rejected_before_proving() {
     let original = approved_proof_input();
 
@@ -312,6 +335,35 @@ fn forged_oracle_facts_leaf_path_and_root_are_rejected_before_proving() {
     let mut forged_root = original;
     forged_root.oracle_facts.root[0] += ProductionFelt::ONE;
     assert!(prove_production_air(&forged_root).is_err());
+}
+
+#[test]
+fn forged_fee_schedule_leaf_path_and_root_are_rejected_before_proving() {
+    let original = approved_proof_input();
+
+    let mut forged_leaf = original.clone();
+    forged_leaf.fee_schedule.leaf_preimage[12] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_leaf).is_err());
+
+    let mut forged_path = original.clone();
+    forged_path.fee_schedule.merkle_path[0][0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_path).is_err());
+
+    let mut forged_root = original.clone();
+    forged_root.fee_schedule.root[0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_root).is_err());
+
+    let mut forged_service_digest = original.clone();
+    forged_service_digest.fee_schedule.leaf_preimage[20] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_service_digest).is_err());
+
+    let mut forged_service_date = original.clone();
+    forged_service_date.fee_schedule.leaf_preimage[29] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_service_date).is_err());
+
+    let mut forged_total_charge = original;
+    forged_total_charge.fee_schedule.leaf_preimage[31] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_total_charge).is_err());
 }
 
 #[test]
@@ -466,15 +518,15 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
     assert_eq!(
         root.map(|element| element.as_int()),
         [
-            9_538_893_036_631_690_078,
-            6_674_994_727_422_009_091,
-            5_313_352_181_200_654_963,
-            2_538_945_094_103_489_475,
+            14_479_853_540_525_913_849,
+            8_686_931_081_684_315_161,
+            4_375_887_550_537_809_645,
+            15_319_138_672_495_749_567,
         ]
     );
     assert_eq!(
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
-        "stark-public-input-root-v3"
+        "stark-public-input-root-v4"
     );
     assert_eq!(PUBLIC_INPUT_ROOT_HASH_FUNCTION, "winterfell-rp64-256");
     assert_eq!(
@@ -482,9 +534,9 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
         "bytes32-four-canonical-f64-big-endian"
     );
     assert_eq!(elements[0].as_int(), PUBLIC_INPUT_ROOT_DOMAIN_TAG);
-    assert_eq!(elements[1].as_int(), 3);
+    assert_eq!(elements[1].as_int(), 4);
     assert_eq!(elements[2].as_int(), PUBLIC_INPUT_ROOT_RULESET_TAG);
-    assert_eq!(elements[3].as_int(), 22);
+    assert_eq!(elements[3].as_int(), 26);
     assert_eq!(
         PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
         [
@@ -508,6 +560,10 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
             "oracle_facts_root_element_1",
             "oracle_facts_root_element_2",
             "oracle_facts_root_element_3",
+            "fee_schedule_root_element_0",
+            "fee_schedule_root_element_1",
+            "fee_schedule_root_element_2",
+            "fee_schedule_root_element_3",
             "decision",
             "failure_code",
         ]
@@ -524,8 +580,9 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
     );
     assert_eq!(&elements[16..20], &input.claim_source.root);
     assert_eq!(&elements[20..24], &input.oracle_facts.root);
-    assert_eq!(elements[24].as_int(), 1);
-    assert_eq!(elements[25].as_int(), 0);
+    assert_eq!(&elements[24..28], &input.fee_schedule.root);
+    assert_eq!(elements[28].as_int(), 1);
+    assert_eq!(elements[29].as_int(), 0);
     assert_eq!(packed.len(), 66);
     assert_eq!(unpack_public_input_root_bytes32(&packed).unwrap(), root);
 }
@@ -563,6 +620,8 @@ fn v1_32_bit_date_boundary_proves_without_field_wraparound() {
     bridge.active_rust_facts.date_of_service_from = u32::MAX as u64;
     bridge.active_rust_facts.eligibility_period_from = 0;
     bridge.active_rust_facts.eligibility_period_thru = u32::MAX as u64;
+    bridge.claim.fee_schedule_entries[0].effective_from = 1;
+    bridge.claim.fee_schedule_entries[0].effective_thru = Some(u32::MAX as u64);
     let input = ProductionAirProofInputV2::from_bridge_input(&bridge).unwrap();
 
     let (proof, public_inputs) = prove_production_air(&input).unwrap();

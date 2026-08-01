@@ -10,6 +10,10 @@ use crate::{
         PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION,
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION, unpack_public_input_root_bytes32,
     },
+    production_fee_schedule_root::{
+        FEE_SCHEDULE_ROOT_ENCODING, FEE_SCHEDULE_ROOT_HASH_FUNCTION,
+        FEE_SCHEDULE_ROOT_SCHEMA_VERSION,
+    },
     source_roots::{
         CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION,
         CLAIM_SOURCE_ROOT_SCHEMA_VERSION, ORACLE_FACTS_ROOT_ENCODING,
@@ -48,7 +52,17 @@ fn approved_bridge() -> StarkBridgeInput {
             }],
             "oracle_attestation_refs": [
                 "demo-attestation:eligibility_active:CLAIM-PRODUCTION-ARTIFACT-001"
-            ]
+            ],
+            "fee_schedule_id": "DEMO-FEE-SCHEDULE-V1",
+            "fee_schedule_entries": [{
+                "fee_code": "99213",
+                "unit_amount_cents": 100000,
+                "currency": "USD",
+                "effective_from": 19000,
+                "effective_thru": 22000,
+                "source_url": "https://example.gov/demo/fee-schedule/99213",
+                "verification_status": "verified"
+            }]
         },
         "adjudication": {
             "decision": 1,
@@ -125,7 +139,7 @@ fn approved_bridge() -> StarkBridgeInput {
 fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
 
-    assert_eq!(artifact.public_inputs.count, 22);
+    assert_eq!(artifact.public_inputs.count, 26);
     assert_eq!(
         artifact.public_inputs.order,
         PRODUCTION_STARK_PUBLIC_INPUT_ORDER
@@ -134,11 +148,11 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert_eq!(artifact.failure_code, 0);
     assert_eq!(
         artifact.schema_version,
-        "stark-production-proof-artifact-v4"
+        "stark-production-proof-artifact-v5"
     );
     assert_eq!(
         artifact.public_inputs.schema_version,
-        "stark-production-public-inputs-v4"
+        "stark-production-public-inputs-v5"
     );
     assert_eq!(
         artifact.public_input_root_schema_version,
@@ -197,6 +211,26 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
         &artifact.public_inputs.values_decimal[16..20],
         &packed_oracle_facts_root
     );
+    assert_eq!(
+        artifact.fee_schedule_root_schema_version,
+        FEE_SCHEDULE_ROOT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        artifact.fee_schedule_root_hash,
+        FEE_SCHEDULE_ROOT_HASH_FUNCTION
+    );
+    assert_eq!(
+        artifact.fee_schedule_root_encoding,
+        FEE_SCHEDULE_ROOT_ENCODING
+    );
+    let packed_fee_schedule_root =
+        unpack_public_input_root_bytes32(&artifact.fee_schedule_root_bytes32)
+            .unwrap()
+            .map(|value| value.as_int().to_string());
+    assert_eq!(
+        &artifact.public_inputs.values_decimal[20..24],
+        &packed_fee_schedule_root
+    );
     assert!(artifact.locally_verified);
     assert!(!artifact.runtime_wired);
     assert!(!artifact.on_chain_verifier_wired);
@@ -226,7 +260,7 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert!(trailing_proof.validate().is_err());
 
     let mut tampered_public_input = decoded;
-    tampered_public_input.public_inputs.values_decimal[20] = "0".to_string();
+    tampered_public_input.public_inputs.values_decimal[24] = "0".to_string();
     assert!(tampered_public_input.validate().is_err());
 
     let mut tampered_root = artifact;
@@ -245,6 +279,12 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     tampered_oracle_facts_root.oracle_facts_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_oracle_facts_root.validate().is_err());
+
+    let mut tampered_fee_schedule_root =
+        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    tampered_fee_schedule_root.fee_schedule_root_bytes32 =
+        "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(tampered_fee_schedule_root.validate().is_err());
 }
 
 #[test]
@@ -261,8 +301,8 @@ fn denied_artifact_preserves_and_proves_the_failure_code() {
 
     assert_eq!(artifact.decision, 0);
     assert_eq!(artifact.failure_code, 7);
-    assert_eq!(artifact.public_inputs.values_decimal[20], "0");
-    assert_eq!(artifact.public_inputs.values_decimal[21], "7");
+    assert_eq!(artifact.public_inputs.values_decimal[24], "0");
+    assert_eq!(artifact.public_inputs.values_decimal[25], "7");
     artifact.validate().unwrap();
 }
 

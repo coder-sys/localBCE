@@ -1,6 +1,8 @@
 use std::{env, fs, process};
 
-use stark_engine::{StarkBridgeInput, production_proof_artifact::ProductionStarkProofArtifactV4};
+use stark_engine::{
+    StarkBridgeInput, production_fee_schedule_root::ProductionFeeScheduleRootArtifactV1,
+};
 
 fn main() {
     if let Err(errors) = run() {
@@ -24,34 +26,32 @@ fn run() -> Result<(), Vec<String>> {
         .map_err(|error| vec![format!("could not read {input_path}: {error}")])?;
     let bridge: StarkBridgeInput = serde_json::from_str(&input_json)
         .map_err(|error| vec![format!("invalid StarkBridgeInput JSON: {error}")])?;
-    let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&bridge)?;
+    let artifact = ProductionFeeScheduleRootArtifactV1::from_bridge_input(&bridge)?;
     let output_json = serde_json::to_string_pretty(&artifact)
-        .map_err(|error| vec![format!("could not serialize proof artifact: {error}")])?;
+        .map_err(|error| vec![format!("could not serialize fee-schedule root: {error}")])?;
     fs::write(&output_path, format!("{output_json}\n"))
         .map_err(|error| vec![format!("could not write {output_path}: {error}")])?;
 
     println!(
         "{}",
         serde_json::json!({
-            "event": "production_stark_proof_artifact_generation",
+            "event": "production_fee_schedule_root_generation",
             "status": "ok",
             "input": input_path,
             "output": output_path,
             "schema_version": artifact.schema_version,
             "claim_id": artifact.claim_id,
             "claim_hash": artifact.claim_hash,
-            "decision": artifact.decision,
-            "failure_code": artifact.failure_code,
-            "public_input_count": artifact.public_inputs.count,
-            "public_input_root": artifact.public_input_root_bytes32,
-            "claim_source_root": artifact.claim_source_root_bytes32,
-            "oracle_facts_root": artifact.oracle_facts_root_bytes32,
             "fee_schedule_root": artifact.fee_schedule_root_bytes32,
-            "proof_size_bytes": artifact.proof.size_bytes,
-            "proof_sha256": artifact.proof.sha256,
-            "locally_verified": artifact.locally_verified,
+            "tree_depth": artifact.tree_depth,
+            "leaf_index": artifact.leaf_index,
+            "entry_count": artifact.entry_count,
+            "matched_service_line_count": artifact.matched_service_line_count,
+            "total_allowed_cents": artifact.total_allowed_cents,
+            "total_charged_cents": artifact.total_charged_cents,
+            "governance_status": artifact.governance_status,
+            "air_binding_status": artifact.air_binding_status,
             "runtime_wired": artifact.runtime_wired,
-            "on_chain_verifier_wired": artifact.on_chain_verifier_wired,
             "groth16_flow_unchanged": artifact.groth16_flow_unchanged,
         })
     );
@@ -60,7 +60,7 @@ fn run() -> Result<(), Vec<String>> {
 
 fn usage() -> Vec<String> {
     vec![
-        "usage: generate_production_stark_proof_artifact <stark_bridge_input.json> <production_stark_proof_artifact.json>"
+        "usage: generate_production_fee_schedule_root <stark_bridge_input.json> <production_fee_schedule_root.json>"
             .to_string(),
     ]
 }

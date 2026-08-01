@@ -1821,10 +1821,13 @@ Feature-gated tests cover:
 - claim identity hash binding
 - canonical claim-source leaf and depth-10 Merkle path validation
 - canonical verified-oracle-facts leaf and depth-10 Merkle path validation
+- canonical verified-fee-schedule leaf and depth-10 Merkle path validation
 - forged claim-source leaf, path, or supplied root rejection
 - forged oracle-facts leaf, path, or supplied root rejection
-- tampered public claim-hash, `claimSourceRoot`, `oracleFactsRoot`, and
-  `publicInputRoot` rejection
+- forged fee-schedule leaf, path, service digest, service date, total charge,
+  or supplied root rejection
+- tampered public claim-hash, `claimSourceRoot`, `oracleFactsRoot`,
+  `feeScheduleRoot`, and `publicInputRoot` rejection
 - fixed `publicInputRoot` regression vector and `bytes32` round trip
 - field-range rejection
 
@@ -1843,18 +1846,19 @@ groth16_flow_unchanged = true
 
 ## Production Proof Artifact
 
-The feature-gated `stark-production-proof-artifact-v4` contract packages:
+The feature-gated `stark-production-proof-artifact-v5` contract packages:
 
 - real Winterfell 0.13.1 proof bytes as lower-case hex
 - SHA-256 and exact byte length for the serialized proof
-- all 22 Winterfell public inputs in locked order as canonical decimal field
+- all 26 Winterfell public inputs in locked order as canonical decimal field
   values
 - the AIR-constrained `publicInputRoot`, `claimSourceRoot`, and
-  `oracleFactsRoot` elements and their canonical Solidity `bytes32`
-  representations
-- claim-source and oracle-facts tree depth, leaf index, and AIR-binding metadata
+  `oracleFactsRoot` and `feeScheduleRoot` elements and their canonical Solidity
+  `bytes32` representations
+- claim-source, oracle-facts, and fee-schedule tree depth, leaf index, and
+  AIR-binding metadata
 - oracle attestation-reference and governance status
-- SHA-256 of the canonical 22 x 8-byte big-endian public-input encoding
+- SHA-256 of the canonical 26 x 8-byte big-endian public-input encoding
 - the claim hash binding, fact commitment schema, AIR parameters, decision,
   and failure code
 - explicit non-runtime, non-chain, Groth16-unchanged status flags
@@ -1881,7 +1885,7 @@ identity value carried by the proof.
 
 ## Production Verifier Handoff
 
-`stark-production-verifier-handoff-v4` embeds and re-validates the complete
+`stark-production-verifier-handoff-v5` embeds and re-validates the complete
 production proof artifact, then locks it to the exact field order and Solidity
 types in `IStarkClaimsVerifierV1Candidate`.
 
@@ -1889,11 +1893,11 @@ The handoff records:
 
 - the exact candidate interface and canonical ABI signatures
 - all 11 candidate ABI fields in order
-- the 22-element AIR public-input order and digest
+- the 26-element AIR public-input order and digest
 - the proof byte length and SHA-256
 - a domain-separated digest binding the source artifact, proof, public inputs,
-  claim hash, claim-source root, oracle-facts root, decision, failure code, and
-  ABI candidate
+  claim hash, claim-source root, oracle-facts root, fee-schedule root, decision,
+  failure code, and ABI candidate
 - explicit call-readiness and runtime flags
 
 The current mapping is:
@@ -1905,16 +1909,16 @@ failureCode     -> direct AIR public input
 publicInputRoot -> direct AIR-constrained Rp64_256 root packed as bytes32
 claimSourceRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
 oracleFactsRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
+feeScheduleRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
 proof           -> locally verified Winterfell proof bytes
 
-feeScheduleRoot    -> unresolved
 nullifierRootBefore -> unresolved
 nullifierRootAfter  -> unresolved
 batchRoot           -> unresolved
 ```
 
-`publicInputRoot`, `claimSourceRoot`, and `oracleFactsRoot` are direct
-AIR-constrained public inputs packed into Solidity `bytes32`. The four
+`publicInputRoot`, `claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot`
+are direct AIR-constrained public inputs packed into Solidity `bytes32`. The three
 remaining roots are absent. Therefore:
 
 ```text
