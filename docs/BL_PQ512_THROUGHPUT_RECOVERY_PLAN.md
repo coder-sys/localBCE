@@ -237,6 +237,11 @@ failure semantics are now recorded. Gate 2E-5/S5 has a tested synthetic migratio
 failure evidence only; it does not select a backend or qualify complete-proof throughput. Gate
 2E-6/S6 and 2E-7/S7 now measure 16 repeated reference-component observations across four rejected
 backends and two profiles, retain exact rejection evidence, and leave complete-boundary work
-unauthorized; their focused/attack result is 6 passed in 34.04 seconds. Execute the complete
-composition/simulator/leakage/state-proof receipt ledger next. Do not start H5 or another
-complete-proof backend bake-off.
+unauthorized; their focused/attack result is 6 passed in 34.04 seconds. The terminal ledger
+reference is now implemented and independently rechecked: it has 11 ordered obligation records,
+focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger result 73 passed in
+91.58 seconds, and status `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. Its blockers remain no
+backend admission, missing complete simulator/leakage evidence, deferred H4 binding, missing
+canonical `../ops`, and unset `proofSuiteId`. This is reference evidence only; do not start H5 or
+another complete-proof backend bake-off until a reviewed state plane is selected and atomically
+bound.

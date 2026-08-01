@@ -21,8 +21,11 @@ boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen
 K128/K512 fixture identities, independent negative controls, and fresh-process state-only and
  complete-boundary measurements. S1/2E-1 bounded interfaces is also frozen and tested. S2/2E-2
 scalar C1-C4 controls are now implemented and parity-tested; S3/2E-3 reference commitment screening
-is complete with no backend admitted; the immediate work is S4/2E-4 atomic composition. Do not begin
-with a paper benchmark or treat scalar work counters as throughput evidence.
+is complete with no backend admitted; S4/2E-4 through S7/2E-7 reference boundaries and the
+terminal composition/simulator/leakage/state-proof receipt ledger are now implemented, tested, and
+still unsealed. The immediate work is reviewed state/commitment admission and atomic H4 binding,
+not another paper benchmark; scalar work counters and reference-ledger timing are not throughput
+or selection evidence.
 
 ## 1. Decision
 
@@ -213,6 +216,26 @@ The selected candidate must:
 
 Failure of a paper number, asymptotic claim, microbenchmark, or isolated state proof to meet these
 conditions is a normal candidate rejection, not permission to relax a gate.
+
+## 6.2 Terminal Gate 2E evidence ledger
+
+`experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py` now provides the bounded
+terminal evidence record for the current synthetic references. It replays S4, derives S5
+checkpoints, verifies both C0 profile shapes and all seven C0 negative classes, checks the fixed
+12-field/public-private boundary, and recomputes S6/S7 selection and handoff identities. The
+11-record ledger remains reference-only and unsealed with
+`status=UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`; its focused/attack result is 7 passed in 29.70
+seconds and the containing S1-S7 plus ledger result is 73 passed in 91.58 seconds. It does not
+admit a relation or commitment, close the complete simulator or leakage scan, bind H4, qualify H5,
+assign `proofSuiteId`, or authorize activation. The missing canonical `../ops` sibling remains a
+fail-closed blocker.
+
+When a reviewed candidate is eventually admitted, the resulting decision has the following
+meaning: This selects the Gate 2E candidate; it is not H5 qualification. The admission handoff
+must:
+
+Bind the selected state plane into
+   the actual H4 parent, transcript, proof grammar, independent verifier, and atomic receipt.
 
 ## 7. Primary research record
 

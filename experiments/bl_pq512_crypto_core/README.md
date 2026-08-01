@@ -140,9 +140,10 @@ throughput evidence.
 
 ## Current next dependency
 
-Gate 2E must close its complete composition/simulator/leakage/state-proof receipt ledger and
-atomically bind a reviewed state relation and PQ commitment into the H4 parent, transcript, proof
-grammar, independent verifier, and receipt. H5 then runs one warm-up plus ten
+The terminal Gate 2E composition/simulator/leakage/state-proof receipt ledger reference is now
+implemented and tested, but it is deliberately unsealed. Gate 2E must still admit and atomically
+bind a reviewed state relation and PQ commitment into the H4 parent, transcript, proof grammar,
+independent verifier, and receipt. H5 then runs one warm-up plus ten
 unique K128 and ten unique K512 proofs; H6 closes the theorem, simulator, parser, attack,
 reproducibility, resource, and identity obligations.
 

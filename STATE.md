@@ -4301,3 +4301,48 @@ This closes only the S6/S7 synthetic measurement/rejection/handoff boundary. It 
 PQ backend, close complete composition/simulator/leakage/state-proof receipt obligations, qualify
 H5, assign `proofSuiteId`, authorize activation, or establish production throughput. The next
 bounded boundary is the complete composition/simulator/leakage/state-proof receipt ledger.
+
+## 2026-08-02 Gate 2E terminal composition/simulator/leakage/state-proof receipt ledger - REFERENCE COMPLETE, BLOCKED
+
+The terminal evidence boundary is now implemented in
+`experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py`. It independently replays the
+S4 composition, derives and checks the S5 before/after checkpoints, verifies both frozen C0 profile
+shapes and the exact seven positive/negative parity classes, checks the fixed 12-field public
+boundary, confirms that raw private relation keys/values are absent from the public ledger, and
+recomputes the S6/S7 selection and handoff identities. The ledger contains 11 ordered obligation
+records and serializes only bounded public identities, statuses, sources, and blocker labels.
+
+The ledger is deliberately unsealed:
+
+```text
+status=UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER
+ledger_digest_sha3_512=2cbc9e48ea14e4e6dfeae9eebe46c34ad4ed551d63f946fcb696abc480c407d5893f7d29acd7349858e6ed9f496db121c1d00940504bc050f264502eae098964
+canonical_bytes=388
+canonical_sha256=ac0331a2631361e85631095a8cc039004cb39bdcc0ad6d52883051f60c40d66d
+source_sha256=98d959e0a614dd6938c1d3d47a3f127f68f6b9be1fb841a8fb26030a72386381
+blockers=canonical_ops_missing,complete_leakage_scan_missing,complete_simulator_missing,h4_atomic_binding_deferred,no_backend_admitted,proof_suite_unselected
+proofSuiteId=null
+activation_allowed=false
+```
+
+Focused command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py
+7 passed in 29.70s
+```
+
+Containing S1-S7 plus terminal-ledger command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_interface.py tests/attacks/test_bl_pq512_state_interface_attacks.py tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py
+73 passed in 91.58s
+```
+
+This closes only the synthetic terminal ledger/reference replay. It does not close the complete
+semantic/state/PCS simulator, side-channel or unlinkability campaign, strict-PQ security ledger,
+reviewed state/commitment admission, H4 parent/transcript/proof/verifier binding, canonical ops
+identity, H5, H6, `proofSuiteId`, activation, or production throughput. The next authorized
+boundary is a reviewed replacement state/commitment admission path or, while that remains absent,
+the fail-closed H5/H6 preflight and qualification ledger; no complete-proof run receives credit
+from this reference record.

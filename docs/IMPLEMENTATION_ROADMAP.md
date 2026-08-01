@@ -53,7 +53,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
 | H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds | State binding, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 through 2E-3/S3 reference screening complete; 2E-4 next | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, dual-PQ S3 reference transcript, and candidate rejection records are tested and documented | Admit a reviewed backend and atomically compose the state plane |
+| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, and the 11-record terminal ledger are tested and documented | Admit a reviewed backend and atomically bind the state plane into H4; close simulator/leakage/PQ/ops blockers |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -291,6 +291,18 @@ py -3.14 -m pytest -q tests/test_bl_pq512_gate_2e_selection.py tests/attacks/tes
 S7 emits an explicitly unsealed handoff with the no-admission, no-complete-boundary, deferred-H4,
 and missing-canonical-ops blockers. Timing is retained as measured reference-component evidence,
 not selection credit. No candidate is selected or activated.
+
+The terminal Gate 2E ledger is now implemented in
+`experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py`. Its builder independently
+replays the S4 composition and S5 checkpoints, verifies both C0 profile shapes and all seven C0
+negative classes, checks the fixed 12-field boundary and public/private encoding boundary, and
+recomputes the S6/S7 identities. It emits 11 ordered records and remains
+`UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER` with
+`ledger_digest_sha3_512=2cbc9e48ea14e4e6dfeae9eebe46c34ad4ed551d63f946fcb696abc480c407d5893f7d29acd7349858e6ed9f496db121c1d00940504bc050f264502eae098964`.
+The exact blockers are `canonical_ops_missing`, `complete_leakage_scan_missing`,
+`complete_simulator_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
+`proof_suite_unselected`. The terminal ledger is reference evidence only; it cannot select a
+backend, assign `proofSuiteId`, bind H4, or authorize H5/H6.
 
 ### 2E-7 - seal the selection handoff
 

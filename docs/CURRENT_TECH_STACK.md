@@ -62,6 +62,16 @@ grant timing credit when no backend is admitted. All four backends remain reject
 as an unselected control, complete warm-up/complete-boundary runs are not authorized, and the
 selection handoff is explicitly unsealed. Focused positive/attack tests pass 6/6.
 
+The terminal Gate 2E evidence boundary is now implemented in
+`gate_2e_terminal_ledger.py`. It independently replays S4, derives S5 checkpoints, checks the
+frozen C0 positive/negative parity and exact 12-field boundary, checks that raw private relation
+material is absent from its public encoding, and binds the S6/S7 decision/handoff identities. It
+records 11 ordered obligation records for atomic composition, the semantic/PCS/public-coin
+simulator, fixed-shape leakage, state/proof receipt, migration, strict-PQ selection, canonical
+ops, and independent verification. The ledger is reference-only and unsealed; its current blockers
+are `no_backend_admitted`, `complete_simulator_missing`, `complete_leakage_scan_missing`,
+`h4_atomic_binding_deferred`, `canonical_ops_missing`, and `proof_suite_unselected`.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from
@@ -329,18 +339,19 @@ lanes.
 
 ## Current execution order
 
-1. Close the complete composition, simulator, leakage, and state/proof receipt ledger.
-3. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
+1. Admit and atomically bind a reviewed state relation/commitment plane into the H4 parent,
+   transcript, proof grammar, independent verifier, and receipt; the terminal evidence ledger is
+   now the fail-closed record of what remains open.
+2. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
   driver monitoring; qualify p95 below 30/180 seconds.
-4. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
-5. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
+3. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
+4. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.
 
-The next code-writing action is the complete composition/simulator/leakage/state-proof receipt
-ledger, not H5 and not another complete-proof backend bake-off. S6/S7 retained C0 without selecting
-a PQ backend because S3 admission is closed; do not start the repeated H5 campaign until one state
-plane is selected and atomically bound into the H4 parent, transcript, proof grammar, verifier, and
-receipt.
+The terminal ledger reference is implemented, but it is not the Gate 2E close: S6/S7 retained C0
+without selecting a PQ backend because S3 admission is closed. Do not start the repeated H5
+campaign until one state plane is selected and atomically bound into the H4 parent, transcript,
+proof grammar, verifier, and receipt.
 
 ## Open boundaries and nonclaims
 
@@ -350,7 +361,7 @@ receipt.
   native-hiding composition, complete proof composition, migration theorem, or complete-boundary
   measurement.
 - The complete semantic-STARK/state/GKR/PCS zero-knowledge simulator and composed 256-bit ledger are
-  not closed.
+  not closed; the new terminal ledger records this as an explicit open obligation.
 - H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.
 - H6 has not frozen `proofSuiteId`, final module identities, reproducible artifacts, custody, or the
   production parser/verifier.
