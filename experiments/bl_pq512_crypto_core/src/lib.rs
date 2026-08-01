@@ -45,7 +45,6 @@ pub mod disk_permutation;
 pub mod field;
 #[cfg(feature = "parallel")]
 pub mod file_backed_sumcheck;
-pub mod fp16_basefold_hiding;
 pub mod fp16_relay_free_gkr_schedule;
 pub mod fp16_relay_free_gkr_source;
 pub mod fp16_relay_free_gkr_uniform;

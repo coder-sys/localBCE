@@ -1137,14 +1137,10 @@ authoritative state do not exist and free-memory preflight failed the 8 GiB mini
 ## Test commands to preserve
 
 ```powershell
-python -m pytest -q --ignore=tests/attacks --ignore=tests/test_risc0_complete_claim_differential.py
-$env:BL_RISC0_MODEL_TARGET_DIR = 'cache/<current-run-owned-risc-target>'
-# Either omit both variables below for one offline locked build, or set both to the exact
-# current-run-owned release/host file and its freshly measured SHA-256.
-$env:BL_RISC0_MODEL_BINARY = 'cache/<current-run-owned-risc-target>/release/host'
-$env:BL_RISC0_MODEL_BINARY_SHA256 = '<64 lowercase hex characters>'
-python -m pytest -q -s tests/test_risc0_complete_claim_differential.py::Risc0CompleteClaimDifferentialTests::test_python_rust_cairo_and_risc0_agree_on_complete_synthetic_claim
-python -m pytest -q tests/attacks
+py -3.14 -m pytest -q --ignore=tests/attacks
+py -3.14 -m pytest -q tests/attacks
+cargo test --release --offline --locked --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --features std,parallel
+cargo clippy --release --offline --locked --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --all-targets --features std,parallel -- -D warnings
 ```
 
 Do not weaken tests, policy pins, or security checks to make a run pass.
@@ -1171,7 +1167,7 @@ The current source delta against the immutable transfer ZIP is exactly:
 - modified
   `experiments/bl_pq512_crypto_core/src/bin/gkr_coherent_chain_benchmark.rs`; and
 - added
-  `experiments/bl_pq512_crypto_core/src/bin/gkr_coherent_chain_benchmark_fixture_coin.rs`.
+  `experiments/bl_pq512_crypto_core/src/bin/support/gkr_coherent_chain_benchmark_fixture_coin.rs`.
 
 No protected path changed. Release/offline/locked builds passed with the feature both disabled and
 enabled. One debug test invocation was excluded: repeated SLH signing exceeded the 428.613-second
@@ -1300,8 +1296,8 @@ qualification, or activation credit.
 The source delta for this step is:
 
 - modified `experiments/bl_pq512_crypto_core/Cargo.toml`; and
-- added
-  `experiments/bl_pq512_crypto_core/src/bin/packed_boolean_sumcheck_b64_spike.rs`.
+- added a standalone B=64 spike binary that was removed from the active tree on 2026-07-31 and
+  remains recoverable only through Git history.
 
 The candidate packs 64 instances per `u64`. It does not construct a flat `2^64` table. Each word is
 split into eight 8-bit chunks. A 1,121,284-byte public table contains chunk evaluations over the
@@ -1311,14 +1307,8 @@ is first used during final class weighting, interpolation, and multiplication by
 query polynomial. The M31 accumulator is 130,048 bytes. This is one concrete measurement candidate,
 not a production-validity or general-equality-weight selection result.
 
-Exact build and focused parity commands:
-
-```powershell
-rustfmt --edition 2024 src\bin\packed_boolean_sumcheck_b64_spike.rs
-$env:CARGO_TARGET_DIR='C:\Users\neers\Documents\Codex\2026-07-27\he\work\cargo-target-phase2-b64'
-cargo build --release --locked --offline --features std --bin packed_boolean_sumcheck_b64_spike
-& 'C:\Users\neers\Documents\Codex\2026-07-27\he\work\cargo-target-phase2-b64\release\packed_boolean_sumcheck_b64_spike.exe' --self-check
-```
+The historical build commands are intentionally removed because the nonprotocol binary is no
+longer an executable target.
 
 The release build exited zero. It emitted three pre-existing library warnings: unused
 `alloc::vec` in `merkle.rs`, unread `DualBoundaryFoldCommitmentProver::final_values`, and unused
@@ -2583,7 +2573,7 @@ F364EDD1A95DFBEB97175C29EA868EB6C39D6377254E210C3F7FD4544ED0D405  src/bin/gkr_co
 8F305DEFA8C6627562D878929215F8DF63F501BD4CED669CCCE5EF077B4DA5D3  src/bin/support/gkr_coherent_chain_benchmark_fixture_coin.rs
 27DCFF67091399DF45B0525274F454A2CFE2B58B7DBC789F1BCE2674C3F97765  src/bin/gkr_compact_chain_benchmark.rs
 66FEFB1B27DFDE0A27AA8E9B8A8178DF7D5A0E93313A31811D89E5DB3D8AA016  src/bin/gkr_cuda_worker_benchmark.rs
-838FB591AB163BC0EC4C22970B1E89E3D1EE86E28D3DB093F20F5291BF216238  src/bin/packed_boolean_sumcheck_b64_spike.rs
+838FB591AB163BC0EC4C22970B1E89E3D1EE86E28D3DB093F20F5291BF216238  removed B=64 spike (Git history)
 ```
 
 Protected-path edits: zero. Skipped Clippy findings: zero. Remaining Clippy warnings: zero.
@@ -3736,3 +3726,44 @@ latency, correctness, independent-verification, driver, scratch, RSS, and no-pag
 This closes H4's functional and prototype-latency boundary. H5's warm-up-plus-ten p95/resource
 campaign and H6 suite qualification remain open. Therefore `proofSuiteId=null`, activation=false,
 `complete_pcs_qualification=false`, and `complete_proof_qualification=false` remain correct.
+
+## 2026-07-31 current-stack and retired-source cleanup
+
+The active source and documentation surface now has one concise entrypoint,
+`docs/CURRENT_TECH_STACK.md`, and one non-executable rejection ledger,
+`docs/REJECTED_ARCHITECTURES.md`. The standalone RISC Zero and vendored Stwo experiments were not
+imported by the application or selected proof crate. Their 259 tracked source/vendor files and two
+backend-specific test files were removed. Exact source, lock, license, measurement, and rejection
+identities remain in the rejection ledger and Git history. The two originally ignored RISC lockfiles
+were moved intact to `cache/retired-source-locks/20260731-risc0/`; their SHA-256 values remain
+`2D4B81A46864741474432DE6C01FCE0AAA119E7D10F96B29788CB3C0A7C084A7` and
+`F8B76FE443668B989FC71C2C310755CC5A79F8C14F292B92F44DEFFD4B1342C6`.
+
+Inside `bl_pq512_crypto_core`, five standalone BaseFold benchmark/ledger binaries, the isolated
+BaseFold hiding module, and the B=64 nonprotocol spike binary had no current importer and were
+removed. The unreferenced 2026-07-13 archive manifest for a different package name/layout was also
+removed. In total the cleanup deletes 269 tracked files and 50,648 lines. The Construction 8.2
+implementation, five-claim verifier, native masks, authenticated coordinator, migration-equivalence
+test, two-claim differential controls, and retired-format rejection KAT remain unchanged.
+
+Post-cleanup containing Rust verification is 264/264 optimized library tests with zero failures and
+zero ignored tests; every remaining binary and doc-test group passed. Format, strict all-target
+Clippy with warnings denied, and release no-default/no-std check all exit zero. The prior 266-test
+count included the removed isolated BaseFold module's two self-tests and is historical.
+
+Current Python collection finds 1,093 ordinary tests before the known absent canonical sibling
+`../ops` stops collection. The full attack run completed 351 passes and 45 failures with one warning
+and 10 passing subtests; every failure reached a protected batch/policy path that attempted to read
+the absent `../ops/policy_spec_v1.yaml`. The focused foundation/security cleanup slice passes 14
+tests with one canonical-ops mirror test deselected. The roadmap contract passes two tests and its
+third test fails closed only because `../ops/launch_blockers.json` is absent. No check was weakened
+to bypass that layout condition.
+
+A broad ordinary run excluding the already-uncollectable `tests/test_batch_layer.py` remained
+CPU-active through the 3,604.1-second command-wrapper timeout and finished immediately afterward,
+but its terminal summary was no longer recoverable from the wrapper. The pytest cache recorded the
+same missing-`../ops` families plus the previously observed attack failures. The run receives no
+pass-count credit; focused gates and Rust containing gates above have complete terminal output.
+
+H4 proof evidence and manifest identity do not change. Gate 2E state selection and atomic binding,
+composition/simulator closure, H5 repeated p95, and H6 qualification remain the active order.

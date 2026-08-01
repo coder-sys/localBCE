@@ -13,7 +13,7 @@ Wave 2's release priority is the shared-bus Boolean GKR coprocessor in
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`; this changes how SHA3 is proved, not the call
 schedule, bytes, digests, state semantics, fixed shape, or external 12-field ABI.
 
-Status: **SYNTHETIC-ONLY REVIEW DRAFT — NOT A PRODUCTION FREEZE**
+Status: **SYNTHETIC-ONLY REVIEW DRAFT -- NOT A PRODUCTION FREEZE**
 
 This draft is an internally finishable input under `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`.
 Independent audit occurs after the exact AIR, proof suite, verifier, state, rollup, and release are

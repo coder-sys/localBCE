@@ -2,16 +2,16 @@
 
 Updated: 2026-07-19
 
-Status: **the internal replacement construction is selected and foundation work may continue;
-R35 Wave 1B implementation is active; promotion of the old kernel, full proof-suite selection, and
-activation must still stop.**
+Status: **historical S09 stop record. H4 has superseded the R35 implementation checkpoint, but
+full proof-suite selection and activation must still stop.**
 
-Current superseding implementation note: the active roadmap name is Wave 2, and its primary
-physical path is `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. The old direct-SHA3-STARK
-resource layouts are retired. This stop record still governs suite activation and forbids guessing
-the shared-bus bridge, GKR masking/simulator, or final theorem constants.
+Current superseding implementation note: `docs/CURRENT_TECH_STACK.md` is the active inventory. H4
+now executes the shared-bus bridge, native-masked GKR, Construction 8.2 PCS, and atomic K128/K512
+coordinator. The old direct-SHA3-STARK and Circle-FRI/BaseFold resource layouts are retired. This
+record still governs suite activation and forbids guessing the remaining state, simulator,
+composition, custody, or theorem constants.
 
-Machine-readable result:
+Historical machine-readable result from this checkpoint (not current runtime state):
 
 ```text
 R35_WAVE1B_THEOREM_BACKEND_IN_PROGRESS_S09_ACTIVATION_STOPS_OPEN

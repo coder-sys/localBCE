@@ -48,11 +48,12 @@ Relevant source:
 - `app/batch/batch_orchestrator.py`
 - `tests/test_batch_layer.py`
 
-## Application-specific Stwo AIR
+## Retired application-specific Stwo AIR
 
-`experiments/stwo_batch_air` is pinned to official Stwo commit
-`aeceb74c58184d7886ebd7f34a7453fee714ca40`. Each trace row represents one claim lane. The AIR
-enforces:
+The removed Stwo experiment was pinned to official commit
+`aeceb74c58184d7886ebd7f34a7453fee714ca40`. Its evidence is retained in
+`REJECTED_ARCHITECTURES.md`; no buildable Stwo backend remains in the active tree. Each historical
+trace row represented one claim lane, and the AIR enforced:
 
 - Decision is zero or one.
 - Approved cents equal requested cents multiplied by the decision.

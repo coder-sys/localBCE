@@ -1,21 +1,22 @@
 # Experimental implementations
 
-Everything under this directory is isolated research code. It is not imported by the running
-Blind Ledger application and is not a production proof or settlement path unless a separate,
-reviewed integration explicitly says otherwise.
+This directory contains the sealed Wave 1 semantic references and the active Wave 2 proof
+prototype. It is not production-activated or a settlement path.
 
 The current integration target is
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`: sealed M31 semantic AIR plus one hiding committed
-bus and masked Fp16 Boolean GKR SHA3 coprocessor. Existing Cairo, RISC Zero, direct SHA3 AIR, and
-narrow S-two experiments are differential or scale controls, not competing active release lanes.
+bus, masked Fp16 Boolean GKR SHA3 coprocessor, Construction 8.2 PCS, authenticated public coin, and
+Rust-authoritative independent verifier. Standalone RISC Zero and Stwo source trees were removed
+because they are not imported by or compatible with the selected proof boundary.
 
-## Current experiment
+## Current implementation
 
-- `stwo_batch_air/`: official-Stwo custom AIR for aggregate decision and value-conservation
-  constraints, with packed SIMD claim lanes, Rayon proving, a LogUp running-state relation,
-  positive proof verification, and negative tamper tests.
-- `risc0_privacy_v2/`: pinned RISC Zero 3.0.5 witness-hiding qualification for the exact
-  12-field Privacy V2 journal and Python-generated Poseidon known-answer vector. It is not yet the
-  full adjudication proof or an Ethereum verifier integration.
+- `fixed_shape_claim_air/`: sealed, nonactivating semantic relation and exact hash-call schedule.
+- `bl_pq512_crypto_foundation/`: current cross-language semantic and cryptographic references.
+- `bl_pq512_crypto_core/`: authoritative Rust proof core plus untrusted CUDA workers.
+- `bl_pq512_hint_mlwe_392/`: Gate 2E state/commitment research controls only; not a selected suite.
+
+Removed backend evidence is retained in `../docs/REJECTED_ARCHITECTURES.md` and Git history, not as
+buildable alternative stacks.
 
 Read `docs/EXPERIMENTAL_PROVING_AND_PRIVACY.md` before evaluating performance or security claims.

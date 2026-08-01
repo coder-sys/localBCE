@@ -4,8 +4,9 @@ Original qualification decision: 2026-07-12
 
 Updated: 2026-07-31
 
-Status: the RISC Zero qualification remains valid historical evidence, but its selection as the
-leading production path is superseded by `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`. The custom strict-PQ
+Status: the removed RISC Zero qualification remains dated historical evidence only. Its active
+selection and source tree are superseded by `docs/CURRENT_TECH_STACK.md` and the rejection record
+in `docs/REJECTED_ARCHITECTURES.md`. The custom strict-PQ
 path now produces manifest-bound K128 and four-shard K512 H4 prototypes through independent
 verification in 29.974129/120.460733 seconds. Gate 2E state selection, the H5 repeated p95/resource
 campaign, H6 suite qualification, and final suite selection remain open.
@@ -154,8 +155,10 @@ later measurements, strict-PQ requirement, or selected custom-AIR design.
 
 ## Qualification scope
 
-`experiments/risc0_privacy_v2/` proves and locally verifies the exact 12-field V2 commitment
-envelope against a Python-generated Starknet Poseidon vector. It deliberately contains no PHI.
+The removed RISC Zero experiment proved and locally verified the exact 12-field V2 commitment
+envelope against a Python-generated Starknet Poseidon vector. Its identities and rejection record
+are preserved in `REJECTED_ARCHITECTURES.md` and Git history; no RISC Zero source or build path
+remains active.
 
 The experiment does not close production blockers. Full adjudication, oracle and policy membership,
 Merkle paths, sequential nullifier updates, fixed-size padding, payment state, Ethereum-compatible

@@ -6,6 +6,10 @@ Status: authoritative Wave 2 architecture and qualification contract. This selec
 priority, not a production proof suite. `proofSuiteId` remains null, activation and real PHI/payment
 use remain forbidden, and every unresolved theorem and measurement gate below remains fail closed.
 
+`CURRENT_TECH_STACK.md` is the concise active inventory. `REJECTED_ARCHITECTURES.md` holds removed
+and dominated alternatives. Earlier dated design stages in this file are evidence only wherever
+section 8.3 or the 2026-07-31 H4 closure supersedes them.
+
 Current evidence boundary: the newest dated section of `../STATE.md` supersedes the transfer-time
 status in `../WAVE2_HANDOFF_2026-07-26.md`. The real semantic source, 168-layer GKR producer,
 native masks, Construction 8.2 PCS, authenticated public coin, atomic one/four-shard coordinator,
@@ -564,41 +568,14 @@ remaining overhead is theorem- or privacy-required: full-Fp16 challenges, 640 qu
 random-padding coefficients, independent main/aux random companions, two different-size PCS
 instances, SHA3-512 roots, native masks, authenticated dual-PQ coin, and independent verification.
 
-#### 8.2.4 Resource and proof-size boundary
+#### 8.2.4--8.2.5 retired resource and attempt boundary
 
-- The three-main-codeword PCS control used 1,712.097984 MB of device memory and 145.867 MB of host
-  memory, committed 1,610.612736 MB, and used no scratch file.
-- The complete B=16 group-message control used 3,304.930 MB of device memory and 215.822 MB of host
-  memory. It passes the formal 5,000 MB ceiling but not the tighter 200 MB host engineering target.
-- The bounded arithmetic layout used 1,207.959552 MB of device memory, but it did not perform the
-  complete packed bridge/reduction. The production implementation must combine its bounded chunks
-  with the exact bridge and deterministic reduction before receiving memory credit.
-- Canonical PCS multiproofs contribute 5.253824 MB and the authenticated 6,241-round coin record
-  contributes 2.796261 MB. Roots and bounded framing remain to be added. No second GKR-message copy
-  is permitted.
-
-Production implementation must use one device owner at a time, bounded reduction chunks, no host
-codeword copy, no swap, zero scratch by default, and deterministic cleanup. The engineering targets
-are at most 200 MB host memory and at most 1,800 MB device memory; the immutable acceptance gate
-remains at most 5,000 MB peak resident memory, strictly below 5,000 MB scratch, and no swap.
-
-#### 8.2.5 Mandatory attempt/stop gates
-
-Proceed because the measured closed critical path is below 30 seconds. Do not call the architecture
-qualified until all of the following pass:
-
-1. freeze the exact K128 semantic-AIR table, lookup, masking, and PCS mapping and prove that its
-   concurrent lane finishes within the GPU critical path;
-2. implement the exact bridge plus bounded deterministic reduction without the 3,304.930 MB
-   calibration allocation;
-3. implement and verify the open wire, mask, fold, multiproof, setup, and atomic-join stages inside
-   the 3.140308-second envelope;
-4. close the arbitrary-field BaseFold hiding simulator and complete composed-error proof; the
-   binary-field paper is supporting evidence, not a theorem substitution;
-5. run one complete fresh synthetic K128 proof, then one warm-up plus ten unique runs and require
-   complete input-to-independently-verified-output p95 below 30 seconds;
-6. reject or redesign if any complete run exceeds 30 seconds, 200 MB host memory, 1,800 MB device
-   memory, the immutable 5,000 MB gates, or zero-swap/zero-default-scratch requirements.
+The former BaseFold, 6,241-round, 200 MB host, and 1,800 MB device planning boundary is retired.
+It is neither an acceptance gate nor a fallback. Section 8.3 replaces the PCS and transcript; the
+2026-07-31 H4 closure supplies the current measurements. The immutable acceptance gates remain at
+most 5,000 MB resident memory, strictly below 5,000 MB scratch, no swap, complete K128 below 30
+seconds, and complete K512 below 180 seconds. Detailed rejection evidence is centralized in
+`REJECTED_ARCHITECTURES.md`.
 
 ### 8.3 Construction 8.2 linear-time RS correction (2026-07-29)
 

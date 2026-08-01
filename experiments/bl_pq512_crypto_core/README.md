@@ -239,7 +239,8 @@ process-tree peak, 2,770.337792 MB externally sampled total GPU residency, and 0
 Both accepted attempts had zero pagefile growth and zero driver events. All memory figures are
 decimal MB.
 
-The optimized library suite passes 266/266 with zero ignored tests; every binary and doc-test group
+The active optimized library suite passes 264/264 with zero ignored tests after removing the
+isolated BaseFold module's two self-tests; every remaining binary and doc-test group
 passes; strict all-target Clippy has zero warnings. Seven host cryptographic KATs pass. The
 segment-32 KAT verifies all 20 trees and rejects every tested leaf/frontier/root mutation; the
 retired-format KAT rejects 10/10 old or incomplete forms. Static compilation emits 36 CUDA entry

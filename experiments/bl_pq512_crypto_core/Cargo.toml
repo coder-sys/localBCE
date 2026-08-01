@@ -44,11 +44,6 @@ path = "src/bin/packed_boolean_sumcheck_benchmark.rs"
 required-features = ["parallel"]
 
 [[bin]]
-name = "packed_boolean_sumcheck_b64_spike"
-path = "src/bin/packed_boolean_sumcheck_b64_spike.rs"
-required-features = ["std"]
-
-[[bin]]
 name = "gkr_cuda_worker_benchmark"
 path = "src/bin/gkr_cuda_worker_benchmark.rs"
 required-features = ["parallel"]
@@ -82,31 +77,6 @@ required-features = ["std"]
 name = "mlpcs_merkle_benchmark"
 path = "src/bin/mlpcs_merkle_benchmark.rs"
 required-features = ["parallel"]
-
-[[bin]]
-name = "zk_basefold_stateless_merkle_benchmark"
-path = "src/bin/zk_basefold_stateless_merkle_benchmark.rs"
-required-features = ["parallel"]
-
-[[bin]]
-name = "zk_basefold_security_ledger"
-path = "src/bin/zk_basefold_security_ledger.rs"
-required-features = ["std"]
-
-[[bin]]
-name = "fp16_basefold_security_ledger"
-path = "src/bin/fp16_basefold_security_ledger.rs"
-required-features = ["std"]
-
-[[bin]]
-name = "zk_basefold_query_verifier_benchmark"
-path = "src/bin/zk_basefold_query_verifier_benchmark.rs"
-required-features = ["std"]
-
-[[bin]]
-name = "fp16_basefold_query_verifier_benchmark"
-path = "src/bin/fp16_basefold_query_verifier_benchmark.rs"
-required-features = ["std"]
 
 [[bin]]
 name = "fp16_zk_rs_interleaved_verify"

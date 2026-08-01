@@ -1,11 +1,12 @@
 # Blind Ledger supply-chain foundation baseline
 
-Current proof-topology note (2026-07-22): the release candidate must pin and reconcile the semantic
-STARK, shared-bus PCS, Boolean GKR circuit/compiler, masking/simulator, and atomic verifier defined
-by `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. Existing S-two, Cairo, and RISC Zero pins are
-historical/differential inputs and cannot serve as the final heterogeneous module identity.
+Current proof-topology note (2026-07-31): the active source contains the semantic AIR,
+`bl_pq512_crypto_core`, shared-bus Boolean GKR, Construction 8.2 PCS, native masking, authenticated
+public coin, and atomic verifier prototype defined by `docs/CURRENT_TECH_STACK.md`. The standalone
+RISC Zero and vendored Stwo experiments were removed; their identities remain only in
+`docs/REJECTED_ARCHITECTURES.md` and Git history.
 
-Updated: 2026-07-19
+Updated: 2026-07-31
 
 Status: **Python dependency boundary qualified; wider S11 inventory remains incomplete and is not
 release evidence.**
@@ -93,17 +94,10 @@ at each reviewed run; they are not immutable release pins by themselves.
 | `docs/SBOM.python.spdx.json` | `5B50546F69C55CCC65B869598BF5200A7F261DFBA5D5C92514801159820C7EB7` | SPDX 2.3 logical-package inventory reconciled to all 26 reviewed Python packages |
 | `rules-engine-rust/Cargo.lock` | `41F3EA56CF81155CFFBF915A52DB129686EA62B497DC6057676079BEB7B43068` | Cargo registry versions/checksums captured by lock v4 |
 | `app/batch/poseidon_helper/Cargo.lock` | `16361544525B678209E42802CB3D8B7AC0F682D54AA6AE2B98125377AD8AC8D0` | Cargo registry versions/checksums captured by lock v4 |
-| `experiments/bl_pq512_crypto_core/Cargo.lock` | `F5FE2606A295772D25CAC08F16384C9138D93E0903AF822BA95CD4EB5398A433` | R32 isolated `no_std` Fp16/SHA3-512 substrate; exact `sha3=0.10.9` resolution |
-| `experiments/stwo_batch_air/Cargo.lock` | `D8136C780F28D9503E979AA895DAEE51D63B293EE414E739AD1D6FFA660B402F` | Experimental S-two wrapper dependencies |
-| `experiments/risc0_privacy_v2/Cargo.lock` | `2D4B81A46864741474432DE6C01FCE0AAA119E7D10F96B29788CB3C0A7C084A7` | RISC Zero experimental workspace resolution; not a production selection |
-| `experiments/risc0_privacy_v2/methods/guest/Cargo.lock` | `F8B76FE443668B989FC71C2C310755CC5A79F8C14F292B92F44DEFFD4B1342C6` | Nested RISC Zero guest resolution; not a separate production selection |
-| `experiments/stwo_batch_air/vendor/stwo-aeceb74/Cargo.lock` | `F245C0DFCB724F1D40DCACE6B3D58C8827F2D647C7CB22FA02A1026F985E62D5` | Vendored upstream S-two workspace resolution |
-| `experiments/stwo_batch_air/vendor/stwo-aeceb74/ensure-verifier-no_std/Cargo.lock` | `7EFC72ECC6FAB4CF014AD5676200FAB10B7528CB75800C6EF2507C1EC184A342` | Vendored no-std verifier-check resolution |
+| `experiments/bl_pq512_crypto_core/Cargo.lock` | `D607C77AD4DCD384A848FB514145B44A862731A983580397354BE157B91B9360` | Current H4 `no_std` Fp16/SHA3-512/GKR/PCS substrate resolution |
 | `zk-cairo-sharp/Scarb.lock` | `FF53F3FF8C739DFE844C38E2A72347AAEAAE257F27BCCDC2217938B60BD19588` | Root-package-only lock; dependency resolution is absent and the unbounded manifest dependency is not closed |
-| Vendored S-two `LICENSE` | `6FC3AE0CC00EEAC4C08B33D060CE3725438DCDE152DC571E08F3D8E6F86B3B8F` | Existing provenance document identifies Apache-2.0 |
 
-This is the complete current governed native-language source-lock inventory: eight `Cargo.lock` files and one
-`Scarb.lock`, plus the four Python artifact locks and their canonical dual-hash
+This is the complete current governed native-language source-lock inventory: three `Cargo.lock` files and one `Scarb.lock`, plus the four Python artifact locks and their canonical dual-hash
 manifest above. Generated caches, build targets, rollback copies, wheelhouses, and release-tree
 copies are not source locks and are deliberately excluded. Lock coverage does not make the wider
 multi-language baseline a complete reproducible build.
@@ -135,9 +129,7 @@ drift. `docs/PYTHON_DEPENDENCY_LOCKING.md` defines the review and rotation contr
 | --- | --- | --- |
 | Rules engine | Package `0.1.0`; Cargo lock v4; R34 requalified Windows Rust 1.96 format, locked/offline checks, strict Clippy, and 48 tests | No repository toolchain pin; manifest uses broad `serde` ranges |
 | Poseidon helper | Package `0.1.0`; Cargo lock v4; `starknet-crypto 0.8.1` manifest entry; R28 requalified the known-answer test and exact differential | Compiler/toolchain not pinned locally; a local target hash is not reproducible-build evidence |
-| BL-PQ512 crypto core | Package `0.1.0`; Rust 1.96.0 toolchain pin; lock v4; exact `sha3=0.10.9` with default features disabled; R35 passes format, locked/offline check, `no_default_features`/`no_std` check, strict Clippy over all targets, and 51 library tests plus zero-test binaries in the short run-owned target. Coverage includes OODS, scalar Circle-FRI, cross-domain SHA3-512 PCS, the Wave 1A dimension mirror, the cross-language K512 FRI schedule, direct Circle evaluation, canonical quotient split/mask, and independent SHA3-512 permutation/shape KATs. | Scalar branch-minimized theorem substrate only; no constant-time/SIMD qualification, complete application hash-port/interaction/AIR/prover/verifier integration, independent release build, complete transitive license reconciliation, or production module identity. The Windows 1.96 distribution lacks `rustdoc.exe`; the crate contains zero doctest fences. |
-| S-two experiment | Repository provenance pins upstream commit `aeceb74c58184d7886ebd7f34a7453fee714ca40`, source tree `debdb3804a656654016896c4d292293fe07ccff3`, archive SHA-256 `AF979C0BA6F6D1F1BCFDF4AB8D6B444E83F65FC2C6471BF404CCE5B063C329E6`, and a local allocator patch; R34 requalified the owned wrapper's pinned-nightly format, locked/offline check, strict Clippy, 25 unit/binary tests, one allocator integration test, and zero-doctest compile without modifying the vendor | Local patch is not upstream or independently audited; one local binary is not reproducible-build evidence and this is not the future isolated ZK fork |
-| RISC Zero experiment | Direct `risc0-zkvm` and `risc0-build` version `3.0.5`; Cargo lock v4; R34 requalified the 48-test model plus the fresh and hash-pinned exact differentials | One local artifact is not reproducible-build evidence; the toolchain file still says only `stable`, and the foundation SBOM does not yet reconcile every locked transitive package and license |
+| BL-PQ512 crypto core | Package `0.1.0`; Rust 1.96.0 toolchain pin; lock v4; exact `sha3=0.10.9` with default features disabled. The current H4 core attaches the 168-layer masked GKR, Construction 8.2 PCS, dual-PQ public coin, atomic one/four-shard coordinator, canonical parser, and independent verifier. Format, locked/offline checks, `no_default_features`/`no_std`, strict all-target Clippy, and 264 optimized library tests plus every remaining binary/doc-test group pass. | H4 is a one-run prototype boundary. Complete transitive Cargo-license reconciliation, independent reproducible release build, constant-time/side-channel qualification, Gate 2E state binding, H5 repeated p95, H6 suite qualification, production module identity, and activation remain open. |
 | Cairo statement | Package `0.1.0`; observed Scarb/Cairo 2.18.0; R34 requalified a fresh serialized format/build/10-declaration pass | `cairo_execute >=2.18.0` is unbounded and the packaged Scarb lock does not resolve it |
 | Solidity tests | Foundry configuration pins `solc 0.8.24`; R34 used the 9,398,784-byte cached compiler with SHA-256 `580ee56b61bbcaad953117e1e4a0874d90e6af5cb4ce4359571d7da25f6620e9` and passed 23 tests offline | Forge executable is observed, not source-pinned |
 | `forge-std` | App-layer documentation points to sibling vendored source and license files outside this run's authorized path | License, upstream commit, source-tree hash, and archive provenance are `NOASSERTION` until an authorized provenance check captures them |
@@ -154,8 +146,6 @@ dependency version, compiler version, or proof parameter changed as part of thos
 
 | Component | Declared or observed license | Evidence boundary |
 | --- | --- | --- |
-| Vendored S-two | Apache-2.0 | Vendored `LICENSE` and existing provenance document |
-| RISC Zero experiment copy | Apache-2.0 | `experiments/risc0_privacy_v2/LICENSE` |
 | Vendored `forge-std` | `NOASSERTION` in this foundation SBOM | The asserted sibling license files were outside the exact authorized workspace and were not independently read in this run |
 | Portal fonts | SIL Open Font License 1.1 | `portal_shared/FONT_SOURCES.md`; individual font-file license payloads are not embedded |
 | Blind Ledger application source | `NOASSERTION` | No top-level project license is present |

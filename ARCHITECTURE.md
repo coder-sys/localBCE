@@ -2,6 +2,10 @@
 
 Updated: 2026-07-31
 
+Canonical navigation: `docs/CURRENT_TECH_STACK.md` defines the current implementation inventory;
+`docs/REJECTED_ARCHITECTURES.md` is the only rejection ledger. Historical measurements in other
+documents never override this architecture or re-enable removed code.
+
 The current execution checkpoint is the newest dated section of `STATE.md`; the original transfer
 boundary remains `WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 is an untrusted field-arithmetic
 accelerator, while Rust retains authoritative SHA3-512 commitment, transcript, canonical decoding,

@@ -15,21 +15,7 @@ ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
 CANONICAL_OPS_PATH = ROOT.parent / "ops"
 MIRRORED_OPS_PATH = ROOT / "ops"
 ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
-STWO_MAIN_PATH = ROOT / "experiments" / "stwo_batch_air" / "src" / "main.rs"
-STWO_PCS_PATH = (
-    ROOT
-    / "experiments"
-    / "stwo_batch_air"
-    / "vendor"
-    / "stwo-aeceb74"
-    / "crates"
-    / "stwo"
-    / "src"
-    / "core"
-    / "pcs"
-    / "mod.rs"
-)
-STWO_FRI_PATH = STWO_PCS_PATH.parent.parent / "fri.rs"
+REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
 SOLIDITY_PATH = ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlementV2.sol"
 
 EXPECTED_ABI = [
@@ -64,12 +50,10 @@ def test_app_layer_ops_is_an_exact_recursive_mirror_of_canonical_ops() -> None:
     assert _file_hashes(MIRRORED_OPS_PATH) == _file_hashes(CANONICAL_OPS_PATH)
 
 
-def test_security_freeze_rejects_current_suite_and_keeps_replacement_nonactivating() -> None:
+def test_security_freeze_rejects_retired_suite_and_keeps_replacement_nonactivating() -> None:
     freeze = _read(FREEZE_PATH)
     hardening = json.loads(_read(HARDENING_PATH))
-    stwo_main = _read(STWO_MAIN_PATH)
-    stwo_pcs = _read(STWO_PCS_PATH)
-    stwo_fri = _read(STWO_FRI_PATH)
+    rejection = _read(REJECTION_PATH)
 
     assert "current S-two parameters rejected" in freeze
     assert "no\nproduction proof suite selected or activated" in freeze
@@ -101,15 +85,11 @@ def test_security_freeze_rejects_current_suite_and_keeps_replacement_nonactivati
     assert hardening["conditional_lead"]["qrom_reduction_required_for_authoritative_mode"] is False
     assert hardening["conditional_lead"]["grinding_security_credit_bits"] == 0
 
-    assert "fields::qm31::{SecureField, QM31}" in stwo_main
-    assert "Blake2sChannel" in stwo_main
-    assert "Blake2sMerkleChannel" in stwo_main
-    assert "Blake2sMerkleHasher" in stwo_main
-    assert "prove_batch(&claims, PcsConfig::default())" in stwo_main
-    assert "pow_bits: 10" in stwo_pcs
-    assert "fri_config: FriConfig::new(0, 1, 3, 1)" in stwo_pcs
-    assert "self.pow_bits + self.fri_config.security_bits()" in stwo_pcs
-    assert "self.log_blowup_factor * self.n_queries as u32" in stwo_fri
+    assert not (ROOT / "experiments" / "stwo_batch_air").exists()
+    assert "Official Stwo/QM31/Blake2s experiment" in rejection
+    assert "witness_hiding=false" in rejection
+    assert "nominally about 13 security bits" in rejection
+    assert "D8136C780F28D9503E979AA895DAEE51D63B293EE414E739AD1D6FFA660B402F" in rejection
 
 
 def test_hardening_artifacts_are_complete_and_snapshot_consistent() -> None:

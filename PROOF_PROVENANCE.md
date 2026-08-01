@@ -6,11 +6,11 @@ This archive does not include generated Cairo build outputs, execution traces, o
 
 ## Current Wave 2 proof topology
 
-The release target is now the heterogeneous semantic-STARK/shared-bus/Boolean-GKR construction in
-`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. No complete K128 proof for that topology has yet
-been generated. The independently verified 28,643,096-byte strict-parameter kernel remains genuine
-regression evidence only; every Cairo, RISC Zero, and narrow S-two proof below remains historical or
-differential evidence and is not the active release proof.
+The active target is the heterogeneous semantic-STARK/shared-bus/Boolean-GKR/Construction-8.2
+construction in `docs/CURRENT_TECH_STACK.md`. Complete one-run H4 K128 and K512 prototypes now pass
+through independent verification in 29.974129 and 120.460733 seconds. H5 repeated p95 and H6 suite
+qualification have not run, so `proofSuiteId` remains null. Cairo, removed RISC Zero/Stwo backends,
+and the 28,643,096-byte regression kernel are historical or differential evidence only.
 
 The CBAM, state-topology alternatives, conflict-DAG scheduler, WHIR/STIR bake-off, three-plane
 Shout-like/Twist-like/GKR memory-proof candidate, VEIL hiding wrapper, Neo/SuperNeo or Hachi

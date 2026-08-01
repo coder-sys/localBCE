@@ -12,6 +12,7 @@ SPEC_PATH = ROOT / "docs" / "BL_PQ512_FOUNDATION_SPEC.md"
 BASELINE_PATH = ROOT / "docs" / "SUPPLY_CHAIN_BASELINE.md"
 SBOM_PATH = ROOT / "docs" / "SBOM.foundation.spdx.json"
 ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
+REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
 
 EXPECTED_ABI = [
     (0, "protocolVersion", "bytes32"),
@@ -69,28 +70,10 @@ EXPECTED_INPUT_HASHES = {
         "16361544525B678209E42802CB3D8B7AC0F682D54AA6AE2B98125377AD8AC8D0"
     ),
     "experiments/bl_pq512_crypto_core/Cargo.lock": (
-        "F5FE2606A295772D25CAC08F16384C9138D93E0903AF822BA95CD4EB5398A433"
-    ),
-    "experiments/stwo_batch_air/Cargo.lock": (
-        "D8136C780F28D9503E979AA895DAEE51D63B293EE414E739AD1D6FFA660B402F"
-    ),
-    "experiments/risc0_privacy_v2/Cargo.lock": (
-        "2D4B81A46864741474432DE6C01FCE0AAA119E7D10F96B29788CB3C0A7C084A7"
-    ),
-    "experiments/risc0_privacy_v2/methods/guest/Cargo.lock": (
-        "F8B76FE443668B989FC71C2C310755CC5A79F8C14F292B92F44DEFFD4B1342C6"
-    ),
-    "experiments/stwo_batch_air/vendor/stwo-aeceb74/Cargo.lock": (
-        "F245C0DFCB724F1D40DCACE6B3D58C8827F2D647C7CB22FA02A1026F985E62D5"
-    ),
-    "experiments/stwo_batch_air/vendor/stwo-aeceb74/ensure-verifier-no_std/Cargo.lock": (
-        "7EFC72ECC6FAB4CF014AD5676200FAB10B7528CB75800C6EF2507C1EC184A342"
+        "D607C77AD4DCD384A848FB514145B44A862731A983580397354BE157B91B9360"
     ),
     "zk-cairo-sharp/Scarb.lock": (
         "FF53F3FF8C739DFE844C38E2A72347AAEAAE257F27BCCDC2217938B60BD19588"
-    ),
-    "experiments/stwo_batch_air/vendor/stwo-aeceb74/LICENSE": (
-        "6FC3AE0CC00EEAC4C08B33D060CE3725438DCDE152DC571E08F3D8E6F86B3B8F"
     ),
 }
 
@@ -267,22 +250,45 @@ def test_supply_chain_hashes_match_current_source_bytes_and_documented_values() 
     for relative, expected in EXPECTED_INPUT_HASHES.items():
         observed = sha256((ROOT / relative).read_bytes()).hexdigest().upper()
         assert observed == expected
-        label = (
-            "Vendored S-two `LICENSE`"
-            if relative == "experiments/stwo_batch_air/vendor/stwo-aeceb74/LICENSE"
-            else f"`{relative}`"
-        )
-        assert f"| {label} | `{expected}` |" in baseline
+        assert f"| `{relative}` | `{expected}` |" in baseline
     assert "NOASSERTION" in baseline
     assert "incomplete and not release evidence" in baseline
-    assert (ROOT / "experiments" / "risc0_privacy_v2" / "Cargo.lock").is_file()
     documented_locks = sorted(
         relative
         for relative in EXPECTED_INPUT_HASHES
         if relative.endswith(("Cargo.lock", "Scarb.lock"))
     )
     assert _governed_source_locks() == documented_locks
-    assert "eight `Cargo.lock` files and one\n`Scarb.lock`" in baseline
+    assert "three `Cargo.lock` files and one `Scarb.lock`" in baseline
+
+
+def test_retired_backend_sources_are_absent_and_rejection_evidence_is_pinned() -> None:
+    rejection = _read(REJECTION_PATH)
+    assert not (ROOT / "experiments" / "risc0_privacy_v2").exists()
+    assert not (ROOT / "experiments" / "stwo_batch_air").exists()
+    core = ROOT / "experiments" / "bl_pq512_crypto_core"
+    for relative in (
+        "src/fp16_basefold_hiding.rs",
+        "src/bin/zk_basefold_stateless_merkle_benchmark.rs",
+        "src/bin/zk_basefold_security_ledger.rs",
+        "src/bin/fp16_basefold_security_ledger.rs",
+        "src/bin/zk_basefold_query_verifier_benchmark.rs",
+        "src/bin/fp16_basefold_query_verifier_benchmark.rs",
+        "src/bin/packed_boolean_sumcheck_b64_spike.rs",
+    ):
+        assert not (core / relative).exists()
+    assert "basefold" not in _read(core / "Cargo.toml").lower()
+    assert "pub mod fp16_basefold_hiding;" not in _read(core / "src" / "lib.rs")
+    for identity in (
+        "2D4B81A46864741474432DE6C01FCE0AAA119E7D10F96B29788CB3C0A7C084A7",
+        "F8B76FE443668B989FC71C2C310755CC5A79F8C14F292B92F44DEFFD4B1342C6",
+        "aeceb74c58184d7886ebd7f34a7453fee714ca40",
+        "D8136C780F28D9503E979AA895DAEE51D63B293EE414E739AD1D6FFA660B402F",
+        "F245C0DFCB724F1D40DCACE6B3D58C8827F2D647C7CB22FA02A1026F985E62D5",
+        "7EFC72ECC6FAB4CF014AD5676200FAB10B7528CB75800C6EF2507C1EC184A342",
+        "6FC3AE0CC00EEAC4C08B33D060CE3725438DCDE152DC571E08F3D8E6F86B3B8F",
+    ):
+        assert identity in rejection
 
 
 def test_foundation_sbom_is_valid_internal_spdx_inventory_with_honest_unknowns() -> None:
@@ -305,8 +311,7 @@ def test_foundation_sbom_is_valid_internal_spdx_inventory_with_honest_unknowns()
     assert versions["pqcrypto"] == "0.4.0"
     assert versions["pytest"] == "9.0.3"
     assert versions["httpx"] == "0.28.1"
-    assert versions["risc0-zkvm"] == "3.0.5"
-    assert versions["risc0-build"] == "3.0.5"
+    assert versions["bl_pq512_crypto_core"] == "0.1.0"
     assert versions["cairo_execute"] == "NOASSERTION"
     assert versions["forge-std"] == "NOASSERTION"
     forge_std = next(package for package in packages if package["name"] == "forge-std")

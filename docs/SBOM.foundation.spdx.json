@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "Blind Ledger synthetic foundation SBOM draft",
-  "documentNamespace": "https://blind-ledger.invalid/spdx/foundation/2026-07-13/bl-pq512-draft",
+  "documentNamespace": "https://blind-ledger.invalid/spdx/foundation/2026-07-31/bl-pq512-draft",
   "creationInfo": {
-    "created": "2026-07-13T00:00:00Z",
+    "created": "2026-07-31T00:00:00Z",
     "creators": [
       "Tool: Codex source-inspection foundation inventory"
     ],
@@ -151,51 +151,15 @@
       "comment": "Workspace component. Cargo.lock exists; compiler/toolchain and package license remain unresolved."
     },
     {
-      "name": "stwo",
-      "SPDXID": "SPDXRef-Package-Rust-Stwo-Vendored",
-      "versionInfo": "git-aeceb74c58184d7886ebd7f34a7453fee714ca40-local-patch",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0",
-      "copyrightText": "NOASSERTION",
-      "comment": "Vendored experimental source at a repository-documented upstream commit plus a local allocator-safety patch. The patched bytes are not downloadable at one verified location, and R24 did not independently rederive the inherited upstream/archive identities. Not the future production witness-hiding fork."
-    },
-    {
-      "name": "risc0-zkvm",
-      "SPDXID": "SPDXRef-Package-Rust-Risc0-zkvm",
-      "versionInfo": "3.0.5",
+      "name": "bl_pq512_crypto_core",
+      "SPDXID": "SPDXRef-Package-Rust-BL-PQ512-Crypto-Core",
+      "versionInfo": "0.1.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
       "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/risc0-zkvm@3.0.5"
-        }
-      ],
-      "comment": "Direct experiment manifest pin. A Cargo.lock is present, but this foundation SBOM has not reconciled every locked transitive package and license."
-    },
-    {
-      "name": "risc0-build",
-      "SPDXID": "SPDXRef-Package-Rust-Risc0-build",
-      "versionInfo": "3.0.5",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:cargo/risc0-build@3.0.5"
-        }
-      ],
-      "comment": "Direct build dependency in the RISC Zero experiment manifest. The foundation inventory does not infer license or supplier metadata."
+      "comment": "Current no_std Fp16/SHA3-512/GKR/PCS substrate. Cargo.lock exists; complete transitive license reconciliation and release reproducibility remain open."
     },
     {
       "name": "cairo_execute",
@@ -269,17 +233,7 @@
     {
       "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-Package-Rust-Stwo-Vendored"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
-      "relationshipType": "DEPENDS_ON",
-      "relatedSpdxElement": "SPDXRef-Package-Rust-Risc0-zkvm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-Rust-Risc0-build",
-      "relationshipType": "BUILD_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-App-Layer"
+      "relatedSpdxElement": "SPDXRef-Package-Rust-BL-PQ512-Crypto-Core"
     },
     {
       "spdxElementId": "SPDXRef-Package-Blind-Ledger-App-Layer",
@@ -295,7 +249,7 @@
   "annotations": [
     {
       "annotator": "Tool: Codex source-inspection foundation inventory",
-      "annotationDate": "2026-07-13T00:00:00Z",
+      "annotationDate": "2026-07-31T00:00:00Z",
       "annotationType": "OTHER",
       "comment": "INCOMPLETE FOUNDATION DRAFT: transitive Python artifacts, full Cargo-lock license reconciliation, exact Cairo resolution, Forge identity, forge-std provenance, most licenses, compiler environments, and future BL-PQ512 proof-suite dependencies remain unresolved. NOASSERTION is intentional."
     }

@@ -4,6 +4,10 @@ Updated: 2026-07-31
 
 Status: authoritative implementation sequence for the isolated architecture workspace.
 
+Use `CURRENT_TECH_STACK.md` for the active code inventory and `REJECTED_ARCHITECTURES.md` for
+non-executable alternatives. Dated sections below preserve evidence and sequencing decisions; only
+the current execution boundary and still-open package gates authorize new work.
+
 Current execution boundary: read the newest dated section of `../STATE.md`; the original transfer
 record is `../WAVE2_HANDOFF_2026-07-26.md`. H4's manifest-bound semantic source, real 168-layer
 native-masked GKR, Construction 8.2 PCS, authenticated public coin, atomic one/four-shard
@@ -169,7 +173,9 @@ Three different evidence/qualification bundles must not be confused:
   non-dense application ports or selected a final rate or lookup-interaction packing. The successor
   kernel now generates and independently verifies a real 28,643,096-byte proof, but has not proved
   the complete K128 relation, completed the Circle simulator/native-hiding qualification, assigned
-  a final module ID, or closed a package.
+  a final module ID, or closed a package. These last sentences describe the R35 checkpoint, not the
+  current implementation: H4 supersedes its active proof path with the manifest-bound 168-layer
+  masked GKR and Construction 8.2 PCS prototype described in `docs/CURRENT_TECH_STACK.md`.
 - **R26 interrupted private-proof-engine foundation wave:** its unsealed stage records report a
   narrow physical calibration AIR, strengthened nonactivating sidecar/verifier/replay/state
   references, 51 synthetic physical proof combinations, and a software/cross-language gate matrix.
@@ -286,9 +292,9 @@ begin with `Complete` remains in the outstanding count.
 | S04 | Specify the canonical authenticated proof sidecar and state plainly that it enlarges authenticated context outside `bytes32[12]`. | Open; R24 supplies an exact tested 744-byte local format candidate and R28 requalifies the strict nonactivating verifier/reference-state path, but suite/schema/artifact identity and payment qualification remain required. |
 | S05 | Update the threat model for malicious provers, compromised workers, metadata inference, quantum attacks, parser disagreement, and governance. | Complete as a repository/application specification in `docs/BL_PQ512_THREAT_MODEL.md`; implementation packages and the final audit remain open. |
 | S06 | Write a per-field security-notion table: equality, replay, target preimage, second preimage, arbitrary collision, hiding, or compatibility identifier. | Complete in `docs/BL_PQ512_FOUNDATION_SPEC.md`, including the attacker-influence, lifetime-target, authority, and consequence handoff to S07. |
-| S07 | Produce the complete at-least-128-quantum-bit budget across AIR, FRI, PCS, transcript, roots, commitments, salts, encryption, and signatures. | Open; R24 corrects the worksheet and targets the explicit work/advantage pair `(2^128 queries, 2^-32 residual advantage)`, with a 57-bit combined pre-constant exponent, 25 bits of multiplicative slack, and `D_eff<=2^111`. R33 supplies the interface physical envelope; R35 now evaluates exact interface-only LogUp/composition/DEEP/FRI terms for six rate candidates. Concrete SHA3-expanded AIR/PCS dimensions, every final positive term, custody reductions, internal lifetime approval, and audit-ready evidence remain mandatory. |
-| S08 | Prove or reject the M31 extension, challenge count, FRI parameters, grinding, and query count against `S07`. | Open; current QM31/Blake2s/default parameters are conclusively rejected. R35 adds authenticated Fp8-excluding OODS, scalar conjugate-pair degree correction and Circle-FRI, and an exact unselected blowup-2-through-64 sweep with query counts `926,567,463,421,402,393`; grinding credit stays zero. No candidate may be selected until the concrete SHA3/AIR expansion is substituted and the full theorem/error ledger passes. |
-| S09 | Select and pin the wide PCS/transcript/tree primitives, encodings, domain tags, and multi-target treatment. | Open; the authoritative path is PQ-authenticated interactive public coin. R35 adds projection-consistent SHA3-512 mixed-domain tree domains, typed 144-byte theorem messages, exact 22-round interface-candidate schedules, and mandatory FRI-mask roots before batching. Vendored S-two remains byte-stable and the registry remains nonactivating with `proofSuiteId=null`. Production scalar/SIMD, concrete AIR/PCS integration, final schedule/parameter selection, durable HSM challenge services, complete hiding, final proof sections, and module IDs remain open. |
+| S07 | Produce the complete at-least-128-quantum-bit budget across AIR, FRI, PCS, transcript, roots, commitments, salts, encryption, and signatures. | Open. R24 corrects the worksheet as historical security-budget evidence. H4 fixes the executed GKR/Construction-8.2 dimensions, 6,086-round authenticated schedule, native mask counts, and dual-PQ public coin for one K128/K512 prototype. The complete composed theorem/error/abort ledger, semantic-STARK terms, state commitment, custody reductions, internal lifetime approval, and audit-ready evidence remain mandatory. |
+| S08 | Prove or reject the M31 extension, challenge count, FRI parameters, grinding, and query count against `S07`. | Open. QM31/Blake2s/default Stwo parameters are conclusively rejected and their executable backend is removed. H4 exercises the selected degree-16 Fp16 GKR/Construction-8.2 lane with zero grinding credit, but H6 cannot select the suite until every final positive term and composition bound passes S07. |
+| S09 | Select and pin the wide PCS/transcript/tree primitives, encodings, domain tags, and multi-target treatment. | Open. H4 pins and executes Construction 8.2 random-padded interleaved Reed--Solomon, SHA3-512 trees/transcript domains, exact accepted grammar, 6,086 authenticated rounds, and one/four-shard manifest binding. Durable PQ challenge custody, complete composition/simulator proof, final suite/module identities, reproducible release evidence, H5, and H6 remain open; `proofSuiteId=null`. |
 | S10 | Specify genesis, migration, activation, rollback, epoch changes, and mixed-profile rejection. | Open; R24 supplies the lifecycle candidate and R28 requalifies frozen-registry, drift, replay, sequential-transition, and compare-and-swap reference work, but selected identities, durable authoritative state, payment semantics, migration, and final internal approval remain mandatory. |
 | S11 | Pin upstream commits, compiler/toolchain versions, licenses, reproducible-build inputs, and SBOM. | Open; R30 closes the supported Python artifact boundary, while remaining compiler, standard-library, Cargo, Scarb, Foundry, OS/container, native-library, verifier, license, full-SBOM, and reproducible-release inputs remain open. |
 | S12 | Freeze the complete formal statement, invariants, error taxonomy, and acceptance gates. | Open; R24 supplies a formal-statement draft and blocker ledger. R33 supplies historical host/reference evidence, and current Wave 1 seals the synthetic executable relation. S07-S11, complete low-degree application/hash/PCS expansion, native hiding, authoritative state, missing-data authority, and final internal review remain required. |
@@ -318,18 +324,18 @@ begin with `Complete` remains in the outstanding count.
 
 | ID | Work package | Status and dependency |
 | --- | --- | --- |
-| Z01 | Create and pin an isolated S-two fork and reproduce a verifier-clean non-ZK baseline. | Complete as an isolated validity-only baseline in sealed R25. Unsealed R26 stage evidence repeated it but does not requalify it terminally. Exact upstream commit `aeceb74c58184d7886ebd7f34a7453fee714ca40` remains vendored and pinned. This is not a privacy, strict-PQ, full-claim, or production claim. |
+| Z01 | Create and pin an isolated Stwo fork and reproduce a verifier-clean non-ZK baseline. | Complete only as historical validity evidence from sealed R25. The incompatible executable fork is removed from the active tree; its exact source, lock, license, and rejection identities remain in `docs/REJECTED_ARCHITECTURES.md` and Git history. This is not a privacy, strict-PQ, full-claim, or production claim, fallback, or current dependency. |
 | Z02 | Add OS-CSPRNG integration, deterministic-test-only separation, entropy failure handling, and zeroization. | Open. |
-| Z03 | Mask every private semantic-AIR/bus polynomial and every Boolean-GKR/sumcheck message or terminal evaluation. | Open; the earlier worksheet covers frozen AIR tables, while the shared-bus and GKR masks, exact simulator, and generated circuit dimensions remain H0-H3 work. |
+| Z03 | Mask every private semantic-AIR/bus polynomial and every Boolean-GKR/sumcheck message or terminal evaluation. | In progress. H4 implements and independently verifies 508 native GKR mask constraints per shard and the 73-word masked auxiliary plane. Complete semantic-AIR masking and the cross-module simulator remain open. |
 | Z04 | Mask every auxiliary, interaction, lookup, LogUp, and permutation column, or eliminate those arguments. | Open. |
 | Z05 | Randomize quotient/composition polynomials and every quotient split. | Open; R35 implements the canonical two-component kernel mask `left+phi*t,right-t`, freezes `h_q=n_oods+n_fri=927`, and matches the source split factor `phi(Q)=x([2^(L-1)]Q)` across Python/Rust. Final AIR-derived `L`, prover integration, full conditional simulator, and production randomness remain. |
 | Z06 | Enforce disjoint trace and commitment/evaluation domains; prohibit unmasked openings. | Open. |
-| Z07 | Inventory and mask every DEEP, FRI, neighboring-row, conjugate, bus, GKR/sumcheck, bridge, and implicit query. | Open; R35 inventories nine semantic-STARK oracle families and implements conjugate-pair DEEP degree correction; the shared-bus/coprocessor coverage and complete cross-module simulator remain open. |
-| Z08 | Add the independent FRI batch mask committed before the batching challenge and preserve entropy through folding. | Open; R35 makes one typed mask column per FRI input domain mandatory, commits its SHA3-512 root before the batching challenge, uses global nonresetting data-column powers, and carries masks through every gap-complete fold. The exact 16-table K512 interface schedule is cross-language bound; final SHA3-expanded oracle widths, low-degree mask generation, Circle simulator proof, entropy provenance/zeroization, and production integration remain. |
-| Z09 | Version and domain-separate the authoritative interactive public-coin transcript, binding all 12 fields and the full sidecar before challenges; keep Fiat-Shamir disabled. | Open; R35 adds exact typed theorem-message ordering on top of the existing bound session root. Durable services, final expanded schedule, and operational retry/liveness evidence remain. |
-| Z10 | Qualify SHA3-512 commitments, Fp16 challenges, the semantic PCS, shared-bus hiding PCS, Boolean GKR, and query parameters. | Hard security gate; scalar SHA3-512/Fp16 references and independently evaluated SHA3 constraints exist. The direct SHA3 AIR is now a differential oracle, not the release layout. The independently scoped AST inventory reconciles 79/79 callsites, 39 `AIR_REQUIRED`, with all five post-R36 additions dynamically measured and new-file/noncanonical-form bypass attacks rejected. H0-H4 must still freeze the bus/circuit and complete current K128 mapping/resources, parameters, SIMD, masking, simulator, and production-verifier qualification. |
-| Z11 | Produce a simulator/entropy analysis covering incompleteness, aborts, retries, malformed traces, and retained artifacts. | Open; R35 provides an exact conservative entropy/mask-degree worksheet, a cross-language constructive direct trace-evaluation map, and the canonical quotient-mask/split-rule kernel. Final split log-degree/prover integration and the complete interactive simulator are not yet proved. The remaining proof, constants, corpus, and audit-ready analysis remain internal deliverables. |
-| Z12 | Update serialization and verification, fail closed on non-ZK mode, fuzz malformed proofs, and test repeated-proof unlinkability. | Open; R28 requalifies malformed-proof/configuration mutation and nonactivation scaffolding for the rejected calibration path, but native-hiding proof serialization and unlinkability evidence remain absent. Depends on Z03-Z11. |
+| Z07 | Inventory and mask every DEEP, FRI, neighboring-row, conjugate, bus, GKR/sumcheck, bridge, and implicit query. | In progress. H4 covers the selected GKR/sumcheck, five-claim bridge, PCS continuation, and accepted opening grammar. Semantic-STARK oracle coverage and the complete cross-module simulator remain open. |
+| Z08 | Add the independent PCS batch mask committed before the batching challenge and preserve entropy through folding. | In progress. The retired Circle-FRI/BaseFold lane is not current architecture. H4 commits and verifies the selected Construction 8.2 random-padded auxiliary plane before dependent challenges; complete entropy provenance, zeroization, semantic-PCS composition, and simulator evidence remain open. |
+| Z09 | Version and domain-separate the authoritative interactive public-coin transcript, binding all 12 fields and the full sidecar before challenges; keep Fiat-Shamir disabled. | In progress. H4 executes an exact 6,086-round transcript under ML-DSA-87 plus SLH-DSA-SHAKE-256f authentication and independently replays it. Durable challenge services, retry/crash governance, custody, and liveness evidence remain open. |
+| Z10 | Qualify SHA3-512 commitments, Fp16 challenges, the semantic PCS, shared-bus hiding PCS, Boolean GKR, and query parameters. | Hard security gate, in progress. H4 freezes and independently verifies the current bus/circuit, Fp16 GKR, Construction 8.2 PCS, canonical grammar, K128/K512 resource use, and manifest binding. Gate 2E state composition, the complete theorem/simulator ledger, H5 repeated p95, H6 qualification, and the production verifier remain open. |
+| Z11 | Produce a simulator/entropy analysis covering incompleteness, aborts, retries, malformed traces, and retained artifacts. | Open. H4 provides executable native masks and fail-closed transcript/worker behavior but does not by itself prove the complete interactive, semantic-STARK, state, abort, retry, and artifact-lifetime simulator. |
+| Z12 | Update serialization and verification, fail closed on non-ZK mode, fuzz malformed proofs, and test repeated-proof unlinkability. | In progress. H4 accepts only the complete current grammar, independently verifies it, rejects 10/10 retired forms, and covers segment-32 Merkle mutations. Repeated-proof unlinkability, broad fuzzing, side channels, and production parser qualification remain open. |
 
 ### `BL-PQ512-v1` state, verifier, and custody integration - 12 packages
 
@@ -1213,10 +1219,10 @@ The selected segment-32 launch preflight is architecture-specific. It requires a
 at least 2,000 MB decimal free device memory, no competing build/prover process, and zero swap
 growth during the run. Until a complete-proof peak exists, the 1,000 MB floor governs; the measured
 191.533 MB component host peak is the supporting calibration. This replaces the earlier blanket
-8,589.934592 MB decimal free-host-RAM floor for this selected bounded architecture only. It does
-not relax the
-200 MB host and 1,800 MB device engineering targets or the immutable 5,000,000,000-byte RSS,
-strictly-below-5,000,000,000-byte scratch, and no-swap acceptance gates.
+8,589.934592 MB decimal free-host-RAM floor for this selected bounded architecture only. It did not
+relax the immutable 5,000,000,000-byte RSS, strictly-below-5,000,000,000-byte scratch, and no-swap
+acceptance gates. The former 200 MB host and 1,800 MB device component-selection targets are
+historical evidence only.
 
 The corrected authenticated-public-coin schedule is 6,086 rounds: 6,072 GKR
 transcript challenges, one independent post-GKR mask-functional batching challenge, and 13
@@ -1265,25 +1271,11 @@ and host verified. The sealed semantic AIR/bus, retry-stable atomic state/proof 
 cryptographic composition, and complete K128 verifier have not yet completed one independently
 verified CUDA session together.
 
-The ordered remaining H3/2F work is:
-
-1. after a clean GPU-driver reset, run one fresh segment-32 K128 proof with external decimal-MB
-   monitoring, no swap, 0.000000 MB default scratch, complete parsing, and independent verification;
-2. if the proof is not below 30 seconds, profile the measured complete-run dominant stage and
-   redesign it from first principles without weakening any theorem, privacy, or verification gate;
-3. run the bounded semantic AIR concurrently and bind both lanes, program/bus, roots, parameters,
-   verifier identity, state transition, retry identity, and ordered 12-field statement atomically;
-4. if and only if the complete result is below 30 seconds and within 200 MB host and 1,800 MB device
-   engineering targets, run one warm-up plus ten unique K128 proofs and require p95 below 30
-   seconds;
-5. close the complete GKR+PCS+coin+dual-PQ+retry security/error ledger and full simulator/leakage
-   boundary; and
-6. then implement and qualify K512 below 180 seconds under its frozen complete-proof method.
-
-The Windows reboot at `2026-07-29 18:06:49 -06:00` cleared the prior reset gate, but the failed
-complete attempt produced a new `nvlddmkm` Event 153 at `2026-07-29 21:46:13 -06:00`, record
-229363. Production CUDA is blocked again until a clean reset and fresh pre-launch System-log audit;
-no failed or pre-reset GPU run receives qualification credit.
+This 2026-07-29 remaining-work list and driver incident are closed historical evidence. The final
+2026-07-31 H4 section supersedes them: clean-reset K128/K512 prototypes passed, and the active order
+is Gate 2E state binding, composition/simulator closure, H5 repeated p95, then H6 qualification.
+The current driver-integrity rule still requires a fresh System-log audit before every production
+CUDA proof.
 
 ## Internally finishable build and external boundary
 
@@ -1472,61 +1464,22 @@ complete RISC Zero path.
 
 ## Latest observed regression inventory
 
-R30 remains the sealed Python supply-chain baseline, R32 is the prior nonactivating S09 terminal,
-and R28 remains the prior broad native-language/toolchain baseline. R33 added its Wave 1A relation
-and dimension coverage. R34 adds seven Python nodes to the R33 source: six ordinary non-attack nodes
-and one scope-substitution attack node. Current exact collection is:
+Current source collection on 2026-07-31 found 1,093 ordinary Python tests before the known missing
+canonical `../ops` tree stopped collection, plus 396 attack tests collected cleanly. The missing
+sibling is an environment/layout fail-closed condition, not a test deletion or semantic failure.
+The active BL-PQ512 Rust library contains 264 tests with zero ignored after removing two
+BaseFold-only self-tests with their isolated retired module; every remaining binary and doc-test
+group passed in the H4 closure, and strict Clippy had zero warnings.
 
-| Surface | Current observed count |
-| --- | ---: |
-| Python non-attack tests | 768 |
-| Python exact cross-language differentials | 2 |
-| Python attack tests | 181 |
-| Rust rules tests | 48 |
-| RISC semantic-model tests | 48 |
-| S-two tests | 26 (22 library, three main-binary, one allocator integration) |
-| BL-PQ512 `no_std` Rust crypto/dimension tests | 19 |
-| Cairo executable tests | 10 |
-| Solidity test functions | 23 |
-| **Unique current top-level tests/declarations** | **1,125** |
+The standalone RISC Zero and Stwo backend-specific suites were removed with their unselected source
+trees. Replacement architecture tests require those trees to remain absent and pin their exact
+rejection identities in `REJECTED_ARCHITECTURES.md`. The V1-layer compaction equivalence, exact
+two-claim GKR/PCS differential, and retired-format rejection KAT remain because they protect current
+migration and fail-closed invariants. No active acceptance test was removed.
 
-The R34 Python schedule is `768` non-attack tests, two separately run exact differentials, and `181`
-attack tests exactly once each: `951` unique nodes. The RISC differential still requires its
-run-owned hash-pinned host; the new dimension differential builds the locked Rust mirror into a
-temporary out-of-source target. The single Windows account-capability symlink skip remains expected,
-and R30's locked Linux qualification passed that case. Every successor manifest must pin these
-counts and reject unexplained decreases. These are regression and relation-interface measurements,
-not proof latency, proof size, or a production capacity acceptance threshold.
-
-R34 final-source results are: `768 passed`, `1 skipped`, `63 warnings`, and `176` subtests in
-`582.96s` for the broad non-attack-plus-dimension command; the fresh Python/Rust/Cairo/RISC build
-and eight subtests passed in `698.92s` before the final scope-type-only hardening; its current-source
-hash-pinned replay passes in `17.72s`; and the final attack lane reports `181 passed`, `31 warnings`,
-and `36` subtests in `86.25s`. The final focused payment-map/relation/attack slice reports `19 passed`
-in `53.07s`; the earlier broader physical/cross-language slice reported `27 passed` in `84.95s`. The RISC
-host remains `129,297,728` bytes with SHA-256
-`be1049e11c795cf7268b1fc00ed540a340538c273183d29c7512b1c9c5dfeafe` and SHA3-512
-`fa5062189062958d544b771e6aa33896e0e9e0382d3f657db9438d7a77933138e9db22c66e166451b6e6aceb23bd8e8a472465bc9825f4c67bfa09891def91a3`.
-All 174 native entries pass their owned format, locked/offline check or build, strict-Clippy where
-applicable, and executable-test gates. The pinned S-two wrapper also passes its one integration test
-and zero-doctest compile. The Rust 1.96 BL-PQ512 crate contains zero doctest fences; its Windows
-distribution lacks an applicable `rustdoc.exe`, so no crypto doctest content is omitted.
-
-The prior R33 corrected-source results were: `762 passed`, `1 skipped`, `63 warnings`, and `176` subtests
-in `596.19s` for the broad non-attack-plus-dimension command; the physical Python/Rust dimension
-differential separately passes in `6.52s`; the exact-source Python/Rust/Cairo/RISC differential plus
-eight subtests passes in `886.00s`; its hash-pinned replay passes in `14.49s`; and the attack lane
-reports `180 passed`, `31 warnings`, and `36` subtests in `72.12s`. The RISC host is `129,297,728`
-bytes with SHA-256 `be1049e11c795cf7268b1fc00ed540a340538c273183d29c7512b1c9c5dfeafe`.
-The run caught and repaired a stale RISC ruleset-root pin after pinned formatting changed the
-governed source-byte digest; all derived roots, commitments, and application leaf/payment vectors
-were rebaselined from computed current values. The verified `6,249`-file, `3,531,384,703`-byte
-generated target was removed after replay. No proof was generated and no activation flag changed.
-
-Historical parallel Cargo work encountered shared-cache waits and a Windows linker failure.
-Unsealed R26 stage logs also show that concurrent Scarb work and deep Windows generated paths can fail before a
-semantic comparison. Overnight builds must therefore be serialized and use unique reviewed short,
-out-of-tree targets. Do not treat failed setup attempts as test evidence.
+Older R26--R34 counts and timings are historical run evidence in `STATE.md`; they are not current
+suite inventory. Successor manifests must record current collected, passed, failed, skipped, and
+warning counts without treating a setup failure as semantic evidence.
 
 ## Historical Wave 2 checkpoint: bounded real-GKR/PCS join (2026-07-29)
 
@@ -1814,7 +1767,8 @@ component-selection targets as acceptance criteria. They do not weaken the immut
 host, below-5,000 MB scratch, or no-swap gates; the accepted implementation remains in the low
 hundreds of MB internally and below 3,000 MB of sampled total GPU residency.
 
-Containing gates pass: 266 optimized library tests with zero failures or ignored tests, every
+Containing H4 gates passed 266 optimized library tests. The active post-cleanup suite passes 264
+tests with zero failures or ignored tests after the two isolated BaseFold-only tests were removed; every remaining
 binary and doc-test group, strict all-target Clippy with zero warnings, seven host cryptographic
 KATs, the complete 20-tree segment-32 mutation KAT, 10/10 retired-format rejections, and static
 compilation of all 36 CUDA entry points.

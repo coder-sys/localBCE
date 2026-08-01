@@ -1,7 +1,9 @@
 # Quickstart
 
-Current truth: Wave 1 is sealed synthetic/nonactivating; Wave 2 is active; 6 of 93 packages are
-complete; `proofSuiteId` is null; real PHI/payments are forbidden. Read
+Current truth: H4 has complete one-run K128/K512 prototypes through independent verification;
+Gate 2E state selection, H5 repeated p95, and H6 qualification remain open. Wave 1 is sealed
+synthetic/nonactivating; Wave 2 is active; 6 of 93 packages are complete; `proofSuiteId` is null;
+real PHI/payments are forbidden. Read `docs/CURRENT_TECH_STACK.md`, then
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` after the throughput and heterogeneous-proof
 contracts. Its projections are prospective and must not be reported as benchmarks.
 
@@ -56,23 +58,15 @@ If a tool is missing, report the exact missing tool and stop unless the owner as
 ## Python tests
 
 ```powershell
-python -m pytest -q --ignore=tests/attacks --ignore=tests/test_risc0_complete_claim_differential.py
-$runId = Get-Date -Format 'yyyyMMddTHHmmssZ'
-$env:BL_RISC0_MODEL_TARGET_DIR = Join-Path $PWD "cache\quickstart-risc0-$runId"
-python -m pytest -q -s tests/test_risc0_complete_claim_differential.py::Risc0CompleteClaimDifferentialTests::test_python_rust_cairo_and_risc0_agree_on_complete_synthetic_claim
-python -m pytest -q tests/attacks
+py -3.14 -m pytest -q --ignore=tests/attacks
+py -3.14 -m pytest -q tests/attacks
 ```
 
-R30 remains the reviewed offline Python supply-chain baseline. R34 is the corrected historical Wave 1A
-semantic-reference rollback point: 768 ordinary non-attack tests, two exact differentials, 181 attack tests, and 174 native
-entries, or 1,125 unique Python/native entries. The 2026-07-21 Wave 1A executable-relation seal is
-current Wave 1's nonactivating boundary. The broad non-attack command includes the physical-
-dimension differential and has one explicit Windows account-capability skip because the account
-cannot create symlinks; R30's locked Linux qualification passes that capability case.
-Treat the counts as lower bounds for successor work: reject unexplained decreases, but
-do not hard-code them to suppress new tests. Run focused affected tests during development and the
-three complete lanes at a convergence milestone. Any Python/Rust/Cairo/RISC semantic mismatch is a
-hard stop.
+R30 remains the reviewed offline Python supply-chain baseline. R34 counts are historical and include
+the now-removed RISC Zero/Stwo suites. Current 2026-07-31 collection found 1,093 ordinary Python
+tests before the known missing canonical `../ops` tree stopped collection, plus 396 attack tests
+collected cleanly. Run focused affected tests during development and both complete Python lanes at a
+convergence milestone. Any current Python/Rust/Cairo semantic mismatch is a hard stop.
 
 The historical Wave 1A structural/authenticated-reference slice can still be checked independently.
 It does not substitute for the selected executable-relation seal:
@@ -140,10 +134,11 @@ python -m tools.measure_proving --claim-count 100 --witness-only
 python -m tools.measure_poseidon --rows 256 --iterations 20
 ```
 
-The currently available S-two measurements are validity-only. Wave 1 has since sealed the complete
-synthetic fixed-shape semantic AIR, but the shared-bus Boolean SHA3 coprocessor, native hiding,
-authoritative durable SHA3-512 state, and selected strict-PQ suite remain incomplete. Use synthetic
-data only and never interpret a fast calibration proof as a complete private claim proof.
+The standalone Stwo and RISC Zero experiments are retired and absent from the active tree. The H4
+shared-bus Boolean GKR/Construction-8.2 prototype is complete for one K128 and K512 run, but the
+authoritative state selection, full composition/simulator ledger, H5 p95 campaign, and H6 suite
+qualification remain incomplete. Use synthetic data only and never interpret a component or one-run
+prototype result as production qualification.
 
 If `scarb`, CUDA, or an external prover is missing, report the exact tool output. Do not guess flags or rewrite trust-critical code to force a pass.
 

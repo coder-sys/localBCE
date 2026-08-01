@@ -1,7 +1,7 @@
 # Project map
 
-Current transfer entrypoint: `WAVE2_HANDOFF_2026-07-26.md`. Read it before using this map to resume
-Wave 2.
+Current entrypoint: `docs/CURRENT_TECH_STACK.md`. `WAVE2_HANDOFF_2026-07-26.md` is historical
+recovery evidence and does not define the current proof architecture.
 
 | Path | What it is | Edit risk |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ Wave 2.
 | `tests/` | Unit, integration, known-answer, and readiness tests. | Medium. Do not weaken tests. |
 | `tests/attacks/` | Security/attack regression tests. | High. Do not skip or weaken. |
 | `tools/` | Measurement and utility scripts. | Medium. |
-| `experiments/` | Isolated research code, including the non-production RISC Zero Privacy V2 qualification. | Medium to high. |
+| `experiments/` | Sealed semantic references and the selected BL-PQ512 proof prototype. Standalone RISC Zero and Stwo backends are retired and removed. | Medium to high. |
 | `experiments/fixed_shape_claim_air/claim_truth_reference.py` | Fixed-length synthetic claim/oracle/policy/ruleset records and fail-closed governed dual-root comparison. Not an AIR or verifier. | High for Wave 1A reference semantics. |
 | `experiments/fixed_shape_claim_air/authenticated_payment_reference.py` | Synthetic aggregate payment state and fixed per-slot operation-log transition. Not the future per-member/provider authenticated maps. | High for money/state semantics. |
 | `experiments/fixed_shape_claim_air/wave1a_relation_reference.py` | Composed K128 host relation over governed paths, A12-derived authoritative wide keys, cursor-authenticated depth-64 replay transitions, payment state, projected 12-field compatibility ABI, and wide commitments. It is not itself an AIR. | High; never promote its REFERENCE domains or `physical_air_constrained=false` boundary. |
@@ -38,7 +38,7 @@ Wave 2.
 | `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` | Cross-wave contract for CBAM, state-topology bake-off, conflict-DAG scheduling, proof-carrying adapters, formal spine, and maturity-gated Ethereum alignment. | Prospective work allocation. It adds no package, changes no status, and makes no measured speed or activation claim. |
 | `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` | Mandatory Wave 2 gate for persistent sparse memory, transparent dictionaries, touched-projection RAM, compact memory consistency, and native-hiding PQ commitment selection against the existing SHA3-512 control. | Trust-critical prospective architecture. It selects no primitive by documentation and requires exact theorem, migration, independent-verifier, and laptop evidence. |
 | `CONTINUATION_MANDATE.md` | Mandatory post-compaction persistence, product-ideology, recovery, download, evidence, and legitimate-hard-stop instructions. | Read immediately after `AGENTS.md`; it never authorizes weakening a gate or bypassing higher-priority instructions. |
-| `experiments/stwo_batch_air/vendor/stwo-aeceb74/` | Pinned upstream S-two source used by validity-only experiments. Its high-level proof path is hard-wired to QM31/Blake2s and remains byte-stable/rejected for BL-PQ512. | Vendored soundness-critical code; follow its nested `AGENTS.md` and never treat a feature toggle as a suite migration. |
+| `docs/REJECTED_ARCHITECTURES.md` | Non-executable ledger for removed or dominated proof backends, layouts, formats, and optimizations. | Preserve exact identities and rejection reasons; never treat it as a fallback catalog. |
 | `ops/` | App-layer compatibility mirror of the sibling `../ops` policy/verifier artifacts. | High for deployment integrity. Keep mirrored. |
 | `../ops/` | Canonical operational artifacts used by code paths that resolve from the app layer to a sibling ops directory. | High for deployment integrity. |
 | `../third_party/forge-std/` | Vendored Forge standard library. | Low unless changing Solidity test toolchain. |

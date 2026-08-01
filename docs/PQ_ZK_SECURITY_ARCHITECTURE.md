@@ -149,8 +149,8 @@ disposition and staged measurements.
 | --- | --- | --- |
 | Observed | The current application manifest defines exactly 12 ordered `bytes32` values, and the Solidity boundary requires each value to be a canonical Stark-field element. | `ops/native_stark_public_inputs_v2.json`; `contracts/src/stark/StarkBatchSettlementV2.sol` |
 | Observed | Current S-two does not provide zero knowledge and exposes unmasked commitments to witness values. | https://docs.starknet.io/learn/S-two-book/why-stwo |
-| Historical observed | The legacy RISC Zero denied path required `nullifierRootAfter == nullifierRootBefore`; the sealed Wave 1 relation instead uses witness-class-independent attempt/cover transitions. | `experiments/risc0_privacy_v2/model/src/lib.rs`; `STATE.md` |
-| Observed | The current settlement commitment hashes version, domain, nonce, and fields 9 and 10; it does not directly bind roots 3 through 8. | `experiments/risc0_privacy_v2/model/src/lib.rs` |
+| Historical observed | The removed RISC Zero denied path required `nullifierRootAfter == nullifierRootBefore`; the sealed Wave 1 relation instead uses witness-class-independent attempt/cover transitions. | `REJECTED_ARCHITECTURES.md`; Git history; `STATE.md` |
+| Historical observed | The removed RISC Zero settlement commitment hashed version, domain, nonce, and fields 9 and 10; it did not directly bind roots 3 through 8. | `REJECTED_ARCHITECTURES.md`; Git history |
 | Observed | The verified RISC Zero qualification proved only the commitment envelope. The complete RISC-V claim computation was measured as operationally unsuitable, and its default security target does not establish strict 128-bit quantum security. | `STATE.md`; `docs/PRIVACY_V2_INTERNAL_AUDIT.md`; RISC Zero official security statement |
 | Inferred | Salting public outputs cannot repair an unmasked STARK transcript or a public before/after-root equality leak. | The proof transcript and public statement are separate privacy channels. |
 | Inferred | A single approximately 251-bit field cannot provide strict 128-bit quantum resistance against freely chosen collisions. | Generic quantum collision work is approximately `2^(251/3) = 2^83.67`; at least 384 authenticated output bits are required for a bare `2^128` collision target. |
@@ -536,7 +536,9 @@ and that commitment is present in the state root and member-benefit keys. Scope 
 the wide batch binding, while before/after scope drift fails closed. The scope is authenticated as
 part of the supplied before-state; durable authoritative publication remains a Wave 1C requirement.
 
-R35 starts the sibling proof engine without modifying the rejected vendor kernel. It implements
+Historical R33-R36 lineage follows; it explains how the selected direction was reached and does
+not override the H4 implementation in `docs/CURRENT_TECH_STACK.md`. R35 starts the sibling proof
+engine without modifying the rejected vendor kernel. It implements
 authenticated Fp8-excluding OODS, scalar conjugate-pair degree correction and Circle-FRI in Python/
 `no_std` Rust, projection-consistent SHA3-512 mixed-domain trees, mandatory pre-challenge FRI mask
 commitments, six exact but unselected interface parameter candidates, typed theorem messages, and a
@@ -554,8 +556,8 @@ core and 1,704-column/1,096-first-round-lookup sponge envelope at composed degre
 inventory checkpoints classified 52 and later 50 live SHA3 callsites, followed by an interim 55-site
 drift reconciliation. H0 now independently enumerates both governed source trees, reconciles 79/79
 callsites, classifies 39 `AIR_REQUIRED`, dynamically measures all five post-R36 additions, and rejects
-new-file and noncanonical SHA3-512 bypasses. Current K128 bus-mapping/resource evidence remains before
-the inventory can become shared-bus authority. Both
+new-file and noncanonical SHA3-512 bypasses. H4 later binds that inventory to the exact `BLHBB101`
+source and closes one-run K128/K512 bus-mapping/resource evidence. Both
 earlier K128 host-recomputation envelopes are retained only as historical evidence. R36 proved a
 lossless fixed bundle containing all six facts and 50
 authorization slots, so the proof hashes K exact 2,133-byte bundles and one ordered execution root;
@@ -564,9 +566,9 @@ tree plus packed-oracle schedule uses 896/2,048/4,608 membership links and
 14,322/28,644/57,288 permutations at K128/K256/K512. Non-dense application-port scheduling and masked lookup-
 interaction packing remain unselected.
 
-The S-two soundness review retains two hard gates. First, R35's interface sweep cannot select exact
-Circle-FRI rate, proximity, list, fold, and query constants until Wave 1B expands the concrete SHA3/
-PCS tables and reruns the theorem worksheet. Second, the Fp16 two-point OODS sampler must reject the
+The historical Stwo/Circle-FRI soundness review retained two hard gates for that retired lane. Its
+interface sweep never selected exact Circle-FRI rate, proximity, list, fold, and query constants;
+the active H4 PCS is Construction 8.2 instead. Separately, the Fp16 two-point OODS sampler must reject the
 embedded Fp8 fixed subfield before stereographic conversion. R35 now implements that rejection with
 a fixed authenticated-attempt cap; the remaining work is production integration and complete abort
 accounting. The rejected fixed-subfield probability is roughly `2^-248`, so it cannot be charged to

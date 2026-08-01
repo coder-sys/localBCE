@@ -2,6 +2,10 @@
 
 Date: 2026-07-12
 
+Status: historical audit record. It is not a current implementation inventory. The removed RISC
+Zero experiment and its measurements are retained here as dated evidence only; current proof and
+rejection boundaries are `docs/CURRENT_TECH_STACK.md` and `docs/REJECTED_ARCHITECTURES.md`.
+
 Scope: Privacy V2 Python construction, ordered public-input encoding, Cairo V2 statement, Solidity
 V2 settlement, manifest parity, metadata leakage, and prover operations.
 
@@ -13,10 +17,10 @@ Current planning addendum: every remediation below is internal engineering under
 completed release; live government endpoints, credentials, HSM handles, signers, and accounts are
 operator activation inputs.
 
-Current topology addendum: this 2026-07-12 audit predates the sealed Wave 1 relation and the Wave 2
-shared-bus Boolean hash-coprocessor decision. Its findings remain historical inputs. The current
-proof/privacy gates are the semantic AIR, hiding bus PCS, masked Fp16 Boolean GKR, complete adaptive
-simulator, and atomic verifier in `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`.
+Current topology addendum: this 2026-07-12 audit predates the sealed Wave 1 relation and the H4
+shared-bus Boolean GKR/Construction-8.2 prototype. Its findings remain historical inputs. H4 now
+attaches native masks and independent verification for one K128/K512 run; Gate 2E state binding,
+the complete adaptive simulator/composition ledger, H5, H6, and the production verifier remain open.
 The later frontier addendum adds CBAM, state/scheduler, adapter-evidence, and public-DA privacy gates;
 it does not retroactively change this audit's evidence or close a finding.
 

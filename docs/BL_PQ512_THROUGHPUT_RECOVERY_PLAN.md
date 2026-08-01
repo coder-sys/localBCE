@@ -122,9 +122,9 @@ mask-batch and downstream PCS descriptors in that same session.
 | Joined production GPU row state | 12.058624 MB |
 
 All memory measurements above use decimal MB. Scratch was 0.000000 MB in the successful PCS
-geometry controls. The segment-32 measurements pass the engineering targets of at most 200 MB host
-memory and at most 1,800 MB device memory. They remain component evidence, not a complete-proof
-resource qualification.
+geometry controls. The segment-32 measurements passed the then-current 200 MB host and 1,800 MB
+device component-selection screen. Those numbers are now historical evidence, not acceptance
+gates, and the controls are not complete-proof resource qualification.
 
 The selected segment-32 launch gate now follows this bounded architecture rather than the retired
 blanket 8,589.935 MB decimal free-host-RAM campaign floor. Preflight requires at least
@@ -1352,7 +1352,9 @@ at 30.150084 seconds failed the 30-second gate and also observed 2.097152 MB pag
 cryptographically valid 121.195125-second K512 proof observed 1.048576 MB pagefile growth and was
 rejected. Neither receives acceptance credit.
 
-Containing verification on the final source is 266/266 optimized library tests, every binary and
+Containing H4 verification was 266/266 optimized library tests. After the 2026-07-31 cleanup removed
+the isolated BaseFold module and its two self-tests, current containing verification is 264/264,
+every remaining binary and
 doc-test group, strict all-target Clippy with zero warnings, all seven host cryptographic KATs,
 20-tree segment-32 verification with every tested mutation rejected, 10/10 retired-format
 rejections, and static CUDA compilation of 36 entry points. The PTX is 3.494439 MB with SHA-256

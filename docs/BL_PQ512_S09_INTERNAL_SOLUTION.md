@@ -2,14 +2,11 @@
 
 Updated: 2026-07-22
 
-Status: **authoritative construction direction selected. Current Wave 1 (historical Wave 1A) is a
-sealed synthetic executable relation. Current Wave 2 (historical Wave 1B/R35 lineage) now produces
-and independently verifies a real, nonactivating strict-PQ kernel proof, but S09 remains open: that
-kernel is not the complete K128 application proof, its 28,643,096-byte v1 grammar contains avoidable
-FRI authentication duplication, and the current full-interface resource model still rejects the
-monolithic layout. The final PCS/FRI parameters, complete Circle simulator and native-hiding claim,
-streamed production prover, durable public-coin/PQ custody, and final security ledger must all pass
-before `proofSuiteId` can be assigned.**
+Status: **historical construction-lineage record. H4 supersedes this document's R35 kernel and
+BaseFold/Circle-FRI implementation status with the current 168-layer native-masked GKR plus
+Construction 8.2 prototype in `docs/CURRENT_TECH_STACK.md`. S09 remains open for complete
+composition/simulator and security-ledger closure, durable public-coin/PQ custody, final module
+identity, H5, and H6 before `proofSuiteId` can be assigned.**
 
 Machine-readable safety state:
 
