@@ -990,3 +990,29 @@ pub fn validated_execution_public_inputs(encoded: &[u8]) -> Result<Vec<M31>, Air
     }
     Ok(parsed.supplied_public_inputs)
 }
+
+/// Return the complete witness columns after the binary execution has passed
+/// its public-input consistency checks.  Callers must run
+/// [`evaluate_air_execution`] first when they need the identities, fixed
+/// columns, and lookup multisets checked as well; this accessor intentionally
+/// performs no second, partial evaluation that could be mistaken for the
+/// full verifier.
+pub fn validated_execution_traces(encoded: &[u8]) -> Result<Vec<Vec<Vec<M31>>>, AirIrError> {
+    let parsed = parse_execution(encoded)?;
+    for (binding, supplied) in parsed
+        .public_inputs
+        .iter()
+        .zip(&parsed.supplied_public_inputs)
+    {
+        let observed = parsed
+            .traces
+            .get(binding.table)
+            .and_then(|columns| columns.get(binding.column))
+            .and_then(|values| values.get(binding.row))
+            .ok_or(AirIrError::PublicInput)?;
+        if observed != supplied {
+            return Err(AirIrError::PublicInputMismatch);
+        }
+    }
+    Ok(parsed.traces)
+}

@@ -5369,3 +5369,127 @@ readiness, roadmap/security contracts, and the deterministic archive builder. Gi
 `VERIFIED_TRACKED_SHA3_512_AUTHORITY`, active source/doc stale hits are limited to the four
 intentional safeguards/provenance classes recorded above, and all three archive readbacks still
 report `match=True` and `all_three_byte_identical=True`.
+
+## 2026-08-02 Round 2 compact state-AIR/FRI composition - VERIFIED, NONACTIVATING
+
+This continuation corrected the actual proof-native state boundary rather than stopping at the
+earlier digest-only state-AIR seam. The live checkout remained
+`C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`.
+Protected paths were not edited. No PHI, payment credential, production CUDA, activation input, or
+`proofSuiteId` value was introduced.
+
+The compact relation in
+`experiments/fixed_shape_claim_air/state_relation_executable_air.py` packs each 64-byte key/value
+into 22 three-byte M31 chunks, retains boolean presence and empty-slot zeroing identities, and
+keeps the two 64-byte state roots as the only public AIR values. H4's existing authenticated
+state-root SHA3 calls remain the hash relation; the compact FRI component does not duplicate their
+Boolean SHA3 traces. The native `air_ir` verifier now exposes validated execution columns, and the
+H4 coordinator compares every packed relation/root column with the exact parsed state operations
+before it accepts the component.
+
+The streamed worker now exports a private `BLPQSPK1` package containing the verifier-visible AIR
+program, public inputs, selected challenge bundle, DEEP claims, final FRI constant, and canonical
+v2 proof bytes. `state_air_proof.py` validates the package grammar and commitment, emits the v3
+`BLSB01`/`BLSA02` state envelope, and binds the component evidence into the v2-separated fragment,
+composition, parent, authenticated transcript, child grammar, and receipt contexts. The public
+sidecar remains digest-only; private snapshots, operations, masks, trace, claims, and proof bytes
+are not placed in public outputs.
+
+Exact implementation verification:
+
+```text
+py -3.14 -m py_compile experiments/bl_pq512_crypto_foundation/state_air_proof.py experiments/fixed_shape_claim_air/state_relation_executable_air.py experiments/bl_pq512_crypto_foundation/selected_prover_orchestrator.py
+exit=0
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_relation_executable_air.py
+..                                                                       [100%]
+2 passed in 0.26s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane_native.py
+...                                                                      [100%]
+3 passed in 81.65s (0:01:21)
+
+cargo +1.96.0 fmt --all -- --check
+exit 0
+
+cargo +1.96.0 check --offline --locked --features parallel --bin selected_streaming_prover_worker --bin k512_atomic_semantic_prototype
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.80s
+```
+
+The first combined Python diagnostic also included the known expensive full state-envelope lane
+and timed out after `120000 ms` without a pytest summary; it receives no pass credit. The exact
+pytest process cleanup reported `stopped_exact_pytest_processes=1` and
+`remaining_pytest_processes=0`. The compact lane above was rerun in isolation and passed.
+
+The real streamed dual-PQ fixture used capacity 8 only; it was not a K128/K512 qualification run:
+
+```text
+status STATE_AIR_PROOF_COMPONENT_VERIFIED_NONACTIVATING
+program 6f6965838ce9f3a369027dc0b94259c0cb812c38edf3ee05bf2c964be082ee0f60db581d6972819db70b8cc5843d9c924dbbff0e6d1612d3b24ea12983dbcc81
+execution d6a95ffd77ae4a6219544b4b84e8d1029b902242bd41ab52906349159d314e1e4c80b4515407ae4b02d4ba33a352fdc7f31bda7ecd61a1671cb0882fd1535208
+package 0d8c52e2e47430d565f6660b9fea7a0b229c314305eb1fc797cd2615f5d995f169f9cffe942a866cfcfcc63e7535bfe1047a76b032d0da73128b63f1e2b4e2ac
+suite c2cd70b801dcd7665ca7b40cbf4d0599baf2e9eb7143f2260019a0cc2817c4aa9332c91912072f7e57644f25993d5e700633a261b4801a465c6e1920e1c8ae2b
+schedule 67445bd618b1d38e6530e76934078866e163f18245f402a14066fa4540524a363ed1cd3290a313244c84164382fbe734b4accc1a09f52b254964d62cfaafec71
+transcript 4fc66ae754fdc20a75d019077041fb0fc4d25e1a0c403869e22ddca78fd369a98ead4ce4ad0a788beb348ff1109ccd71941fe95852552cef5cf247c36ba9c4c1
+proof_identity 9020f05dfe960a1b9b2a9b359666f376ca77c45131dc8af82226af383fb6721c2b69890429477a2954b6ac6ced0695a4fecb140c1b34037c28772ebf3de3c1b6
+proof_bytes 8324389
+package_bytes 8370223
+evidence_canonical_bytes 771
+binding_bytes 8407706
+worker_and_python_replay success
+scratch_entries_after 0
+```
+
+Independent native H4 state-file verification of that exact envelope:
+
+```text
+& k512_atomic_semantic_prototype.exe --verify-state-binding blpq-state-air-binding-v3-20260802.bin
+state_plane_binding_verified=true
+state_plane_statement_sha3_512=f839410300674014ed4204e116c4b4c6b297e0d9603a55629a6b9c2d7cad651f72aecac54d2911693c435fbd5b8009d4b92c374db80446daa785c18490301760
+state_plane_binding_digest_sha3_512=b0d1366b13e832d4438b56db703ce8c28174fcab218e6d4032921284b89a5842ed72b8b5b23b78368ad05f7a3ead8a59d78b7e3603b65e5de44fc64c4e768b32
+exit=0
+```
+
+Adversarial native readback was fail-closed:
+
+```text
+trace mutation exit=2
+ERR:state_air_trace_after_key_0_0
+package mutation exit=2
+ERR:state_binding_proof_package:Rejected
+mutation_files_remaining=0
+```
+
+This closes the native state-file proof component boundary, not Gate 2E. The full state relation
+is still not algebraically composed inside the custom H4 GKR/PCS proof; no reviewed commitment
+backend is admitted, the complete simulator/leakage/security composition is open, H5's exact 22
+launches have not started, H6 is open, `proofSuiteId=null`, activation=false, no production CUDA
+proof was run, and no real PHI/payments are authorized.
+
+Final source verification for this continuation, before the archive refresh:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_relation_executable_air.py tests/test_bl_pq512_state_plane_executable_air.py tests/test_bl_pq512_selected_proof_parameters.py
+........                                                                 [100%]
+8 passed in 297.47s (0:04:57)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider -k "not native_state_binding_kat" tests/test_bl_pq512_state_plane.py
+.......                                                                  [100%]
+7 passed, 1 deselected in 0.17s
+
+cargo +1.96.0 fmt --all -- --check
+exit=0
+
+cargo +1.96.0 check --offline --locked --features parallel --bin selected_streaming_prover_worker --bin k512_atomic_semantic_prototype
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.93s
+
+git diff --check
+exit=0
+```
+
+The full Rust library-test batch was attempted in an external target and timed out after
+`604046 ms` without a test summary; it receives no pass credit, and exact process cleanup found
+`remaining_target_test_processes=0`. An earlier Python command named the nonexistent
+`tests/test_bl_pq512_selected_prover_parameters.py`; it ran `no tests ran in 0.00s` and is not
+evidence. The corrected lanes above are the credited results. No stale test file was removed:
+`0`; existing tests remain because they cover compatibility, mutation, and fail-closed behavior.

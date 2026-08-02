@@ -13,14 +13,16 @@ coprocessor, native GKR hiding, Construction 8.2 PCS, authenticated public coin,
 grammar, atomic one/four-shard coordinator, and authoritative independent verifier.
 
 It does not select persistent state, assign H5/H6 qualification, assign a suite identity, authorize
-production activation, or provide Ethereum settlement. The native coordinator now has a bounded
-`--verify-state-binding` path and accepts `state-file:<path>` for a canonical private state envelope;
-it recomputes the state statement, pad commitment, proof identity, and receipt before the H4 parent
-uses that statement. The versioned state-root bus seam now admits `BLHBSN02`/`BLHBB102` source
-formats and independently checks the two appended state-root calls before child spawn. The state
-relation is still independently replayed reference evidence, not a complete state AIR inside the
-custom H4 GKR/PCS proof or a qualified proof backend. Direct SHA3 AIR and other retained narrow
-controls are differential or fail-closed regression machinery, not alternate proof backends.
+production activation, or provide Ethereum settlement. The native coordinator has a bounded
+`--verify-state-binding` path and accepts `state-file:<path>` for both the version-2 compatibility
+envelope and the nonactivating version-3 compact state-AIR/FRI envelope. Version 3 exports a
+private streamed dual-PQ FRI package; native Rust replays the state, compares the compact trace
+with exact operations, verifies the package, and recomputes the state/component/receipt identities
+before the H4 parent uses that statement. The versioned state-root bus seam independently checks
+the two appended state-root calls before child spawn. This is a real state-proof component
+boundary, not yet the full state AIR inside the custom H4 GKR/PCS proof or a qualified backend.
+Direct SHA3 AIR and other retained narrow controls are differential or fail-closed regression
+machinery, not alternate proof backends.
 
 ## Current accepted profiles
 
@@ -37,8 +39,9 @@ controls are differential or fail-closed regression machinery, not alternate pro
 The state-composed formats are separate, nonactivating extensions: `BLHBSN02`/`BLHBB102` append
 two root calls at capacity 18,048 (K128) or 70,656 (K512), adding 266 or 1,040 live permutations.
 Their resulting descriptor totals are 113,996 and 412,446 live permutations. The original
-`BLHBSN01`/`BLHBB101` source remains byte-compatible. No new manifest-bound H4 proof was run after
-this source change.
+`BLHBSN01`/`BLHBB101` source remains byte-compatible. The v3 compact state-AIR fixture was
+independently verified at the native state-file boundary, but no new manifest-bound H4 K128/K512
+proof was run after this source change.
 
 The proof uses 6,073 GKR rounds plus 13 PCS rounds, 6,086 combined. The standalone PCS protocol
 uses 14 rounds because its boundary authenticates the complete GKR claims before continuation.

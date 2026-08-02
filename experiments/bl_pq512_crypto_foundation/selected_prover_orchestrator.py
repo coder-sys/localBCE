@@ -314,6 +314,7 @@ def prove_selected_air(
     _streaming_traces: Mapping[str, TraceTable] | None = None,
     _streaming_chunk_values: int = MAX_STREAMING_CHUNK_VALUES,
     _scratch_parent: Path | None = None,
+    _proof_export_path: Path | None = None,
 ) -> SelectedProofResult:
     """Build and independently verify one exact selected-suite proof.
 
@@ -343,6 +344,16 @@ def prove_selected_air(
                 or not _scratch_parent.is_dir()
             )
         )
+        or (
+            _proof_export_path is not None
+            and (
+                not streaming
+                or not isinstance(_proof_export_path, Path)
+                or not _proof_export_path.is_absolute()
+                or _proof_export_path.parent != _scratch_parent
+                or _proof_export_path.exists()
+            )
+        )
         or type(contributors) is not tuple
         or len(contributors) < 2
         or tuple(sorted(contributors, key=lambda item: item.contributor_id)) != contributors
@@ -364,7 +375,8 @@ def prove_selected_air(
 
     process = subprocess.Popen(
         [str(worker_executable)]
-        + ([str(_scratch_parent)] if streaming else []),
+        + ([str(_scratch_parent)] if streaming else [])
+        + ([str(_proof_export_path)] if _proof_export_path is not None else []),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -642,6 +654,7 @@ def prove_selected_air_streaming(
     contributors: tuple[Contributor, ...],
     adapters: Mapping[str, object],
     secret_keys: Mapping[bytes, bytes],
+    proof_export_path: Path | None = None,
 ) -> SelectedProofResult:
     """Build and independently verify the same proof through bounded storage."""
 
@@ -663,6 +676,7 @@ def prove_selected_air_streaming(
         _streaming_traces=traces,
         _streaming_chunk_values=chunk_values,
         _scratch_parent=scratch_parent,
+        _proof_export_path=proof_export_path,
     )
 
 

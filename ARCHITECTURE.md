@@ -155,6 +155,14 @@ current SHA3-512 endpoint-multiproof path and all admitted sparse-state/PQ-commi
 be implemented and measured before the H5 repeated K128/K512 qualification campaign. The H4
 one-run prototype does not select a state layout or close gate 2E.
 
+The native state boundary now has a nonactivating v3 component path in
+`experiments/bl_pq512_crypto_foundation/state_air_proof.py`: a compact packed transition AIR,
+private streamed dual-PQ FRI package, and native exact-witness cross-check. This is real
+component-verification evidence and is bound by the v3 state envelope before the H4 parent,
+transcript, child grammar, and receipt. It does not turn the unselected state plane into a selected
+backend, and it does not claim the full state relation is algebraically inside the custom H4 GKR/PCS
+proof; the simulator, leakage/security composition, H5, H6, and activation gates remain open.
+
 The next measured boundary is authenticated state: 46,208 of 46,858 K128 SHA3 calls arise from
 replay/payment state. Current maps remain authoritative while a versioned topology bake-off,
 privacy-padded access manifest, and deterministic conflict DAG are tested. Structural call-count

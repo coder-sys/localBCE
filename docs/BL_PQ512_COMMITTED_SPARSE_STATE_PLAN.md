@@ -183,23 +183,24 @@ fail closed.
 The smallest nonactivating state boundary is implemented separately in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
 all-slot replay, a pad-masked commitment, independent verification, and crash-safe file CAS. The
-native H4 coordinator now consumes a version-2 binding envelope containing the executable
-state-transition AIR program/execution, independently evaluates it before parent construction,
-and binds the state transition, commitment, verifier, attempt, receipt, ordered 12-field
-projection, AIR identities, and composition identity into the v3 parent, authenticated interactive
-session/schedule, exact child grammar, and atomic receipt. The composable
-`experiments/fixed_shape_claim_air/state_plane_executable_air.py` constrains every bounded old/new
-operation and slot, both SHA3-512 roots, and the ordered root public inputs; `compose_state_plane_air`
-merges it into one executable AIR input. This is still implementation evidence only: the current
-hash-pad review rejects Gate 2E admission, no reviewed PQ backend or proof-native H4 PCS/ZK
-composition is available, and the simulator/leakage ledger remains open. `proofSuiteId` and
-activation remain closed.
+native H4 coordinator consumes the version-2 compatibility envelope and now also consumes a
+version-3 `BLSB01`/`BLSA02` envelope from `state_air_proof.py`. Version 3 contains a compact packed
+state-transition AIR, a private streamed dual-PQ FRI package, and a fixed evidence record; Rust
+independently evaluates it, compares every packed trace column with the exact operations, verifies
+the FRI package, and binds the component into the v3 parent, authenticated interactive
+session/schedule, exact child grammar, and atomic receipt. The full
+`state_plane_executable_air.py` remains the version-2 compatibility path; the compact path keeps
+SHA3 roots on H4's authenticated bus rather than duplicating their Boolean traces. This is still
+component/prerequisite evidence only: the current hash-pad review rejects Gate 2E admission, no
+reviewed PQ backend or full proof-native H4 PCS/ZK composition is available, and the
+simulator/leakage ledger remains open. `proofSuiteId` and activation remain closed.
 
 The next admission boundary is explicit:
 
-Bind the selected state plane into
-   the actual H4 parent only after the reviewed backend, proof-native composition, simulator,
-   leakage, and state-receipt obligations close.
+Complete the remaining admission obligations before selecting the state plane: a reviewed backend,
+full proof-native H4 GKR/PCS composition, simulator, leakage, and state-receipt/security closure.
+The v3 component is the native verifier boundary needed for that work; it is not itself backend
+selection or Gate 2E closure.
 
 ### Current state-bus prerequisite
 
@@ -212,9 +213,10 @@ checks the two root-call input/output patterns before child proof creation, and 
 the totals from the descriptor rather than a duplicated profile constant. The original
 `BLHBSN01`/`BLHBB101` bytes and descriptor commitment remain unchanged for the state-free profile.
 
-This seam proves that state roots enter the authenticated source/child boundary; it does not yet
-put the complete state relation inside the custom H4 GKR/PCS proof, and it is not a qualified
-backend or a new manifest-bound H4 proof. H5 remains blocked.
+This seam proves that state roots enter the authenticated source/child boundary. Together with the
+v3 compact state-AIR/FRI component it provides native state-file composition evidence, but it does
+not yet put the complete state relation inside the custom H4 GKR/PCS proof, select a qualified
+backend, or produce a new manifest-bound H4 K128/K512 proof. H5 remains blocked.
 
 The new isolated candidate is `TRANSPARENT_SHAKE256_1024`,
 `BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`: SHAKE256-1024 with a 128-byte mask and 128-byte
@@ -286,8 +288,8 @@ must:
 
 Close the remaining admission work by selecting a reviewed state/commitment backend and completing
 the proof-native H4 PCS/ZK composition, simulator/leakage ledger, and qualification evidence. The
-native executable-AIR consumption and canonical-envelope seam above are necessary prerequisite
-evidence, not admission or H5 credit.
+native executable-AIR consumption, exact-witness v3 FRI composition, and canonical-envelope seams
+above are necessary prerequisite/component evidence, not admission or H5 credit.
 
 ## 6.3 H5 qualification preflight
 

@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
     time::Instant,
@@ -9,8 +10,9 @@ use std::{
 use bl_pq512_crypto_core::{
     air_ir::{
         AIR_PROGRAM_MAGIC, evaluate_air_execution, validate_air_program,
-        validated_execution_public_inputs,
+        validated_execution_public_inputs, validated_execution_traces,
     },
+    field::M31,
     hash_bus::{
         GROUP_COUNT, PERMUTATIONS_PER_COPROCESSOR_SHARD, build_hash_bus_descriptor,
         build_hash_bus_descriptor_with_state, state_root_capacity,
@@ -18,6 +20,7 @@ use bl_pq512_crypto_core::{
     hash_bus_b16_boundary::{HashBusB16BoundaryFile, HashBusB16Shard},
     hash_bus_b16_gkr_plan::HashBusB16GkrPlan,
     hash_bus_source::KECCAK_STATE_BITS,
+    selected_proof_package::verify_selected_proof_package,
     sha3_air::{RATE_BYTES, for_each_sha3_512_permutation_boundary},
     wave1a_global_schedule::Profile,
 };
@@ -38,6 +41,10 @@ const STATE_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/RECEIPT/v1\0";
 const STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v1\0";
 const STATE_AIR_FRAGMENT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v1\0";
 const H4_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v1\0";
+const COMPOSED_STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v2\0";
+const COMPOSED_STATE_AIR_FRAGMENT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v2\0";
+const COMPOSED_H4_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v2\0";
+const STATE_AIR_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF/v1\0";
 const EXECUTION_MANIFEST_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/EXECUTION-MANIFEST/v1\0";
 const STATE_BINDING_MAGIC: &[u8] = b"BLSB01";
 const STATE_AIR_FRAGMENT_MAGIC: &[u8] = b"BLSA01";
@@ -48,8 +55,13 @@ const STATE_BINDING_VERSION: u8 = 2;
 const STATE_AIR_FRAGMENT_VERSION: u8 = 1;
 const COMMITMENT_VERSION: u8 = 1;
 const STATE_MAX_CAPACITY: u64 = 4_096;
+const STATE_AIR_PACKED_CHUNK_BYTES: usize = 3;
+const STATE_AIR_PACKED_CHUNKS: usize = 22;
+const STATE_AIR_RELATION_COLUMNS: usize = 91;
 const STATE_BINDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-ROOT-AIR-v1";
+const STATE_RELATION_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-RELATION-AIR-v1";
+const STATE_AIR_COMPONENT_ID: &[u8] = b"BL-PQ512-STATE-AIR-PROOF-V1";
 const STATE_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-STATE-PLANE-V1";
 const HASH_PAD_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-SHA3-HASH-PAD-V1";
 const K128_SHARDS: u16 = 1;
@@ -813,6 +825,79 @@ fn parse_state_operation(
     Ok((before_index, before, after, encoded))
 }
 
+fn packed_state_chunk(value: &[u8; 64], chunk: usize) -> u32 {
+    let start = chunk * STATE_AIR_PACKED_CHUNK_BYTES;
+    value[start..(start + STATE_AIR_PACKED_CHUNK_BYTES).min(value.len())]
+        .iter()
+        .fold(0_u32, |accumulator, byte| {
+            (accumulator << 8) | u32::from(*byte)
+        })
+}
+
+fn require_trace_value(value: M31, expected: u32, label: &str) -> Result<(), String> {
+    if value.as_u32() != expected {
+        return Err(format!("state_air_trace_{label}"));
+    }
+    Ok(())
+}
+
+fn verify_compact_state_trace(
+    traces: &[Vec<Vec<M31>>],
+    operations: &[(StateEntryWire, StateEntryWire)],
+    before_root: &[u8; 64],
+    after_root: &[u8; 64],
+) -> Result<(), String> {
+    let capacity = operations.len();
+    if traces.len() != 2 {
+        return Err("state_air_trace_table_count".to_string());
+    }
+    let relation = &traces[0];
+    let roots = &traces[1];
+    if relation.len() != STATE_AIR_RELATION_COLUMNS
+        || relation.iter().any(|column| column.len() != capacity)
+        || roots.len() != 65
+        || roots.iter().any(|column| column.len() != 2)
+    {
+        return Err("state_air_trace_shape".to_string());
+    }
+    for (row, (before, after)) in operations.iter().enumerate() {
+        require_trace_value(
+            relation[0][row],
+            u32::try_from(row).map_err(|_| "state_air_trace_index".to_string())?,
+            "index",
+        )?;
+        for (entry, present_column, key_column, value_column, label) in [
+            (before, 1_usize, 2_usize, 24_usize, "before"),
+            (after, 46_usize, 47_usize, 69_usize, "after"),
+        ] {
+            require_trace_value(
+                relation[present_column][row],
+                u32::from(entry.present),
+                &format!("{label}_present_{row}"),
+            )?;
+            for chunk in 0..STATE_AIR_PACKED_CHUNKS {
+                require_trace_value(
+                    relation[key_column + chunk][row],
+                    packed_state_chunk(&entry.key, chunk),
+                    &format!("{label}_key_{row}_{chunk}"),
+                )?;
+                require_trace_value(
+                    relation[value_column + chunk][row],
+                    packed_state_chunk(&entry.value, chunk),
+                    &format!("{label}_value_{row}_{chunk}"),
+                )?;
+            }
+        }
+    }
+    for (row, root) in [before_root, after_root].into_iter().enumerate() {
+        require_trace_value(roots[0][row], row as u32, "root_call_index")?;
+        for (byte, expected) in root.iter().copied().enumerate() {
+            require_trace_value(roots[byte + 1][row], u32::from(expected), "root_byte")?;
+        }
+    }
+    Ok(())
+}
+
 struct CommitmentWire {
     parameter: Vec<u8>,
     public_coin: [u8; 64],
@@ -849,7 +934,7 @@ fn parse_commitment(encoded: &[u8]) -> Result<CommitmentWire, String> {
     })
 }
 
-fn validate_state_air_program_id(encoded: &[u8]) -> Result<(), String> {
+fn validate_state_air_program_id(encoded: &[u8], expected_program_id: &[u8]) -> Result<(), String> {
     let header_length = AIR_PROGRAM_MAGIC.len() + 2 + 64 + 2;
     if encoded.len() < header_length
         || encoded.get(..AIR_PROGRAM_MAGIC.len()) != Some(AIR_PROGRAM_MAGIC.as_slice())
@@ -866,13 +951,36 @@ fn validate_state_air_program_id(encoded: &[u8]) -> Result<(), String> {
     let identifier_end = identifier_start
         .checked_add(identifier_length)
         .ok_or_else(|| "state_binding_air_program_identifier_overflow".to_string())?;
-    if encoded.get(identifier_start..identifier_end) != Some(STATE_AIR_PROGRAM_ID) {
+    if encoded.get(identifier_start..identifier_end) != Some(expected_program_id) {
         return Err("state_binding_air_program_identifier".to_string());
     }
     Ok(())
 }
 
 fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String> {
+    if path.is_symlink() {
+        return Err("state_binding_symlink_forbidden".to_string());
+    }
+    let metadata = fs::metadata(path).map_err(|error| format!("state_binding_metadata:{error}"))?;
+    if !metadata.is_file() || metadata.len() < 7 || metadata.len() > STATE_BINDING_MAX_BYTES {
+        return Err("state_binding_file_shape".to_string());
+    }
+    let mut prefix = [0_u8; 7];
+    fs::File::open(path)
+        .map_err(|error| format!("state_binding_read:{error}"))?
+        .read_exact(&mut prefix)
+        .map_err(|error| format!("state_binding_read:{error}"))?;
+    if prefix[..6] != STATE_BINDING_MAGIC[..] {
+        return Err("state_binding_magic".to_string());
+    }
+    match prefix[6] {
+        2 => verify_state_binding_v2(path),
+        3 => verify_state_binding_v3(path),
+        _ => Err("state_binding_version".to_string()),
+    }
+}
+
+fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, String> {
     if path.is_symlink() {
         return Err("state_binding_symlink_forbidden".to_string());
     }
@@ -967,7 +1075,7 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
     if !cursor.done() {
         return Err("state_binding_trailing_bytes".to_string());
     }
-    validate_state_air_program_id(air_program)?;
+    validate_state_air_program_id(air_program, STATE_AIR_PROGRAM_ID)?;
     let air_program_report = validate_air_program(air_program)
         .map_err(|error| format!("state_binding_air_program:{error:?}"))?;
     let air_execution_report = evaluate_air_execution(air_execution)
@@ -1128,6 +1236,415 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
     );
     let binding_digest = hash_parts(
         STATE_BINDING_DOMAIN,
+        &[
+            &before.root,
+            &after.root,
+            &statement,
+            &transition,
+            &commitment.digest,
+            &proof,
+            &receipt,
+            &composition,
+            &state_air_fragment,
+        ],
+    );
+    let projection: [[u8; 32]; 12] = projection
+        .try_into()
+        .map_err(|_| "state_binding_projection_count".to_string())?;
+    Ok(StateBindingVerification {
+        state_profile: before.profile.clone(),
+        state_capacity: before.capacity,
+        before_snapshot: before.encoded,
+        after_snapshot: after.encoded,
+        statement,
+        binding_digest,
+        projection,
+        projection_digest,
+        public_coin,
+        transition,
+        commitment: commitment.digest,
+        proof,
+        verifier: verifier_identity,
+        attempt,
+        receipt,
+        state_air_program,
+        state_air_execution,
+        state_air_fragment,
+        composition,
+    })
+}
+
+fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, String> {
+    if path.is_symlink() {
+        return Err("state_binding_symlink_forbidden".to_string());
+    }
+    let metadata = fs::metadata(path).map_err(|error| format!("state_binding_metadata:{error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > STATE_BINDING_MAX_BYTES {
+        return Err("state_binding_file_shape".to_string());
+    }
+    let encoded = fs::read(path).map_err(|error| format!("state_binding_read:{error}"))?;
+    let mut cursor = StateCursor::new(&encoded);
+    if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC {
+        return Err("state_binding_magic".to_string());
+    }
+    if cursor.u8("binding_version")? != 3 {
+        return Err("state_binding_version".to_string());
+    }
+    let before_length = usize::try_from(cursor.u32("before_length")?)
+        .map_err(|_| "state_binding_before_length".to_string())?;
+    let before = parse_state_snapshot(cursor.take(before_length, "before")?)?;
+    let after_length = usize::try_from(cursor.u32("after_length")?)
+        .map_err(|_| "state_binding_after_length".to_string())?;
+    let after = parse_state_snapshot(cursor.take(after_length, "after")?)?;
+    if before.profile != after.profile
+        || before.parameter != after.parameter
+        || before.capacity != after.capacity
+        || before.epoch != after.epoch
+        || after.sequence != before.sequence + 1
+        || before.parameter != STATE_PARAMETER_IDENTITY
+    {
+        return Err("state_binding_snapshot_layout".to_string());
+    }
+
+    let operation_count = cursor.u64("operation_count")?;
+    if operation_count != before.capacity {
+        return Err("state_binding_operation_count".to_string());
+    }
+    let mut operations_encoded = Vec::new();
+    let mut operation_witness = Vec::with_capacity(operation_count as usize);
+    let mut expected_after = before.entries.clone();
+    for expected_index in 0..operation_count {
+        let (index, operation_before, operation_after, operation_encoded) =
+            parse_state_operation(&mut cursor)?;
+        if index != expected_index || operation_before != before.entries[index as usize] {
+            return Err("state_binding_operation_before".to_string());
+        }
+        expected_after[index as usize] = operation_after.clone();
+        operation_witness.push((operation_before, operation_after));
+        operations_encoded.extend(operation_encoded);
+    }
+    if expected_after != after.entries {
+        return Err("state_binding_operation_after".to_string());
+    }
+
+    let mut projection = Vec::with_capacity(12);
+    for _ in 0..12 {
+        let field: [u8; 32] = cursor
+            .take(32, "projection")?
+            .try_into()
+            .expect("projection length");
+        if field == [0; 32] {
+            return Err("state_binding_projection_zero".to_string());
+        }
+        projection.push(field);
+    }
+    let public_coin = cursor.array64("public_coin")?;
+    if public_coin == [0; 64] {
+        return Err("state_binding_public_coin_zero".to_string());
+    }
+    let commitment_length = usize::try_from(cursor.u32("commitment_length")?)
+        .map_err(|_| "state_binding_commitment_length".to_string())?;
+    let commitment = parse_commitment(cursor.take(commitment_length, "commitment")?)?;
+    let opening_statement = cursor.array64("opening_statement")?;
+    let opening_mask = cursor.array64("opening_mask")?;
+    if commitment.public_coin != public_coin {
+        return Err("state_binding_commitment_public_coin".to_string());
+    }
+
+    if cursor.take(6, "air_fragment_magic")? != b"BLSA02" {
+        return Err("state_binding_air_fragment_magic".to_string());
+    }
+    if cursor.u8("air_fragment_version")? != 1 {
+        return Err("state_binding_air_fragment_version".to_string());
+    }
+    let air_program_length = usize::try_from(cursor.u32("air_program_length")?)
+        .map_err(|_| "state_binding_air_program_length".to_string())?;
+    if air_program_length == 0 {
+        return Err("state_binding_air_program_empty".to_string());
+    }
+    let air_program = cursor.take(air_program_length, "air_program")?;
+    let air_execution_length = usize::try_from(cursor.u32("air_execution_length")?)
+        .map_err(|_| "state_binding_air_execution_length".to_string())?;
+    if air_execution_length == 0 {
+        return Err("state_binding_air_execution_empty".to_string());
+    }
+    let air_execution = cursor.take(air_execution_length, "air_execution")?;
+    let package_length = usize::try_from(cursor.u64("proof_package_length")?)
+        .map_err(|_| "state_binding_proof_package_length".to_string())?;
+    if package_length == 0 || package_length > STATE_BINDING_MAX_BYTES as usize {
+        return Err("state_binding_proof_package_shape".to_string());
+    }
+    let proof_package = cursor.take(package_length, "proof_package")?;
+    let component_id = cursor.text(128, "component_id")?;
+    let component_program_id = cursor.text(128, "component_program_id")?;
+    let proof_suite_id = cursor.array64("proof_suite_id")?;
+    let schedule_commitment = cursor.array64("schedule_commitment")?;
+    let transcript_root = cursor.array64("transcript_root")?;
+    let evidence_commitment = cursor.array64("evidence_commitment")?;
+    let package_commitment_field = cursor.array64("proof_package_commitment")?;
+    let component_proof_identity = cursor.array64("component_proof_identity")?;
+    let public_input_digest = cursor.array64("public_input_digest")?;
+    let attribution_digest = cursor.array64("attribution_digest")?;
+    let component_proof_bytes = cursor.u64("component_proof_bytes")?;
+    if component_proof_bytes == 0 {
+        return Err("state_binding_component_proof_size".to_string());
+    }
+    let worker_report_digest = cursor.array64("worker_report_digest")?;
+    let canonical_length = usize::try_from(cursor.u32("component_canonical_length")?)
+        .map_err(|_| "state_binding_component_canonical_length".to_string())?;
+    let canonical_evidence = cursor.take(canonical_length, "component_canonical")?;
+    if !cursor.done() {
+        return Err("state_binding_trailing_bytes".to_string());
+    }
+
+    validate_state_air_program_id(air_program, STATE_RELATION_AIR_PROGRAM_ID)?;
+    let air_program_report = validate_air_program(air_program)
+        .map_err(|error| format!("state_binding_air_program:{error:?}"))?;
+    let air_execution_report = evaluate_air_execution(air_execution)
+        .map_err(|error| format!("state_binding_air_execution:{error:?}"))?;
+    if air_program_report.source_program_commitment
+        != air_execution_report.source_program_commitment
+        || air_program_report.public_input_count != 128
+    {
+        return Err("state_binding_air_program_execution_identity".to_string());
+    }
+    let public_inputs = validated_execution_public_inputs(air_execution)
+        .map_err(|error| format!("state_binding_air_public_inputs:{error:?}"))?;
+    if public_inputs.len() != 128
+        || public_inputs.iter().enumerate().any(|(index, value)| {
+            let expected = if index < 64 {
+                before.root[index]
+            } else {
+                after.root[index - 64]
+            };
+            value.as_u32() != u32::from(expected)
+        })
+    {
+        return Err("state_binding_air_public_roots".to_string());
+    }
+    let traces = validated_execution_traces(air_execution)
+        .map_err(|error| format!("state_binding_air_traces:{error:?}"))?;
+    verify_compact_state_trace(&traces, &operation_witness, &before.root, &after.root)?;
+
+    let (package_commitment, package) =
+        verify_selected_proof_package(proof_package, air_program, &public_inputs)
+            .map_err(|error| format!("state_binding_proof_package:{error:?}"))?;
+    let package_proof_bytes = u64::try_from(package.proof.len())
+        .map_err(|_| "state_binding_proof_package_size".to_string())?;
+    if package_commitment_field != package_commitment
+        || component_id != STATE_AIR_COMPONENT_ID
+        || component_program_id != STATE_RELATION_AIR_PROGRAM_ID
+        || proof_suite_id != package.bundle.proof_suite_id
+        || schedule_commitment != package.bundle.schedule_commitment
+        || transcript_root != package.bundle.final_transcript_root
+        || evidence_commitment != package.bundle.evidence_commitment
+        || component_proof_bytes != package_proof_bytes
+        || component_proof_identity == [0; 64]
+        || public_input_digest == [0; 64]
+        || attribution_digest == [0; 64]
+        || worker_report_digest == [0; 64]
+    {
+        return Err("state_binding_proof_package_metadata".to_string());
+    }
+    let component_proof_identity_expected = hash_parts(
+        STATE_AIR_PROOF_DOMAIN,
+        &[
+            b"proof-identity",
+            &package_commitment,
+            &package.bundle.proof_suite_id,
+            &package.bundle.schedule_commitment,
+            &package.bundle.final_transcript_root,
+            &package.bundle.evidence_commitment,
+            &package.bundle.main_trace_root,
+            &package.bundle.interaction_trace_root,
+            &package.bundle.composition_root,
+            &package.bundle.oods_claims_commitment,
+            &package.bundle.fri_mask_root,
+            &package.bundle.fri_batch_derivation_commitment,
+            &package
+                .bundle
+                .fri_layer_roots
+                .iter()
+                .flat_map(|root| root.iter().copied())
+                .collect::<Vec<_>>(),
+        ],
+    );
+    if component_proof_identity != component_proof_identity_expected {
+        return Err("state_binding_component_proof_identity".to_string());
+    }
+    let mut public_input_bytes = Vec::with_capacity(public_inputs.len() * 4);
+    for value in &public_inputs {
+        public_input_bytes.extend_from_slice(&value.as_u32().to_be_bytes());
+    }
+    let projection_bytes = projection
+        .iter()
+        .flat_map(|field| field.iter().copied())
+        .collect::<Vec<_>>();
+    let expected_public_input_digest = hash_parts(
+        STATE_AIR_PROOF_DOMAIN,
+        &[b"public-inputs", &public_input_bytes, &projection_bytes],
+    );
+    if public_input_digest != expected_public_input_digest {
+        return Err("state_binding_component_public_inputs".to_string());
+    }
+    let mut expected_canonical = Vec::new();
+    expected_canonical.extend_from_slice(STATE_AIR_COMPONENT_ID);
+    expected_canonical.push(0);
+    expected_canonical.extend_from_slice(STATE_RELATION_AIR_PROGRAM_ID);
+    expected_canonical.push(0);
+    expected_canonical.extend_from_slice(&air_program_report.program_binary_commitment);
+    expected_canonical.extend_from_slice(&air_execution_report.binary_commitment);
+    expected_canonical.extend_from_slice(&package_commitment);
+    expected_canonical.extend_from_slice(&proof_suite_id);
+    expected_canonical.extend_from_slice(&schedule_commitment);
+    expected_canonical.extend_from_slice(&transcript_root);
+    expected_canonical.extend_from_slice(&evidence_commitment);
+    expected_canonical.extend_from_slice(&component_proof_identity);
+    expected_canonical.extend_from_slice(&public_input_digest);
+    expected_canonical.extend_from_slice(&attribution_digest);
+    expected_canonical.extend_from_slice(&component_proof_bytes.to_be_bytes());
+    expected_canonical.extend_from_slice(&worker_report_digest);
+    if canonical_evidence != expected_canonical {
+        return Err("state_binding_component_canonical".to_string());
+    }
+
+    let operation_count_bytes = operation_count.to_be_bytes();
+    let manifest = hash_parts(
+        STATE_MANIFEST_DOMAIN,
+        &[
+            &before.root,
+            &after.root,
+            &operation_count_bytes,
+            &operations_encoded,
+        ],
+    );
+    let projection_parts = projection
+        .iter()
+        .map(|field| field.as_slice())
+        .collect::<Vec<_>>();
+    let projection_digest = hash_parts(STATE_PROJECTION_DOMAIN, &projection_parts);
+    let mut transition_bytes = Vec::new();
+    transition_bytes.extend(&before.profile);
+    transition_bytes.extend(&before.parameter);
+    transition_bytes.extend(before.capacity.to_be_bytes());
+    transition_bytes.extend(before.epoch.to_be_bytes());
+    transition_bytes.extend(before.sequence.to_be_bytes());
+    transition_bytes.extend(after.sequence.to_be_bytes());
+    transition_bytes.extend(before.root);
+    transition_bytes.extend(after.root);
+    transition_bytes.extend(manifest);
+    transition_bytes.extend(projection_digest);
+    let transition = hash_parts(STATE_TRANSITION_DOMAIN, &[&transition_bytes]);
+    let statement = hash_parts(STATE_STATEMENT_DOMAIN, &[&transition_bytes, &transition]);
+    if opening_statement != statement {
+        return Err("state_binding_statement".to_string());
+    }
+
+    let mut expected_ciphertext = [0_u8; 64];
+    for index in 0..64 {
+        expected_ciphertext[index] = statement[index] ^ opening_mask[index];
+    }
+    if expected_ciphertext != commitment.ciphertext {
+        return Err("state_binding_ciphertext".to_string());
+    }
+    let tag = hash_parts(
+        HASH_PAD_TAG_DOMAIN,
+        &[
+            &commitment.parameter,
+            &public_coin,
+            &commitment.ciphertext,
+            &statement,
+            &opening_mask,
+        ],
+    );
+    if tag != commitment.tag {
+        return Err("state_binding_commitment_tag".to_string());
+    }
+    let commitment_digest = hash_parts(
+        HASH_PAD_COMMITMENT_DOMAIN,
+        &[
+            &commitment.parameter,
+            &public_coin,
+            &commitment.ciphertext,
+            &commitment.tag,
+        ],
+    );
+    if commitment_digest != commitment.digest {
+        return Err("state_binding_commitment_digest".to_string());
+    }
+
+    let verifier_identity: [u8; 64] =
+        Sha3_512::digest(b"BL/PQ512/STATE-PLANE/INDEPENDENT-VERIFIER/v1\0").into();
+    let proof = hash_parts(
+        STATE_PROOF_DOMAIN,
+        &[
+            &statement,
+            &transition,
+            &commitment.digest,
+            &verifier_identity,
+        ],
+    );
+    let attempt = hash_parts(
+        STATE_ATTEMPT_DOMAIN,
+        &[
+            &before.profile,
+            &before.parameter,
+            &before.epoch.to_be_bytes(),
+            &before.sequence.to_be_bytes(),
+            &before.root,
+            &statement,
+        ],
+    );
+    let receipt = hash_parts(
+        STATE_RECEIPT_DOMAIN,
+        &[
+            &attempt,
+            &transition,
+            &commitment.digest,
+            &proof,
+            &verifier_identity,
+        ],
+    );
+    let state_air_program = air_program_report.program_binary_commitment;
+    let state_air_execution = air_execution_report.binary_commitment;
+    let state_air_fragment = hash_parts(
+        COMPOSED_STATE_AIR_FRAGMENT_DOMAIN,
+        &[
+            &before.root,
+            &after.root,
+            &projection_digest,
+            &statement,
+            &transition,
+            &commitment.digest,
+            &proof,
+            &receipt,
+            &state_air_program,
+            &state_air_execution,
+            &package_commitment,
+            &component_proof_identity,
+            canonical_evidence,
+        ],
+    );
+    let composition = hash_parts(
+        COMPOSED_H4_COMPOSITION_DOMAIN,
+        &[
+            &statement,
+            &transition,
+            &projection_digest,
+            &public_coin,
+            &commitment.digest,
+            &proof,
+            &receipt,
+            &state_air_program,
+            &state_air_execution,
+            &package_commitment,
+            &component_proof_identity,
+            canonical_evidence,
+            &state_air_fragment,
+        ],
+    );
+    let binding_digest = hash_parts(
+        COMPOSED_STATE_BINDING_DOMAIN,
         &[
             &before.root,
             &after.root,

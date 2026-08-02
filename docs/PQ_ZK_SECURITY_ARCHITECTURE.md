@@ -105,6 +105,16 @@ high-cardinality state lookup, proof-native H4 equality, the complete hiding/com
 and PQ backend admission are absent. No simulator, soundness, strict-PQ, H5, or H6 credit is taken
 from it, and the frozen K512 complete-proof target remains unmet.
 
+The next state-proof slice is materially stronger but remains a component boundary. The compact
+state relation packs 64-byte key/value fields into 22 three-byte M31 chunks, leaves the two SHA3
+roots on H4's authenticated state-root bus, and exports a private `BLPQSPK1` package containing
+the canonical FRI proof, challenge bundle, DEEP claims, and final constant. The native v3 state
+verifier compares every packed execution column with the exact parsed old/new operations and then
+independently verifies the selected v2 FRI package. A real capacity-8 streamed fixture completed
+in 175.3 seconds with 8,324,389 proof bytes; native trace and proof mutations were rejected.
+This closes neither the full custom-H4 GKR/PCS composition nor the hiding/simulator/leakage
+security ledger, backend admission, H5, H6, or `proofSuiteId`.
+
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
 one shared commitment bus, a constrained byte/bit bridge, native hiding, a complete adaptive

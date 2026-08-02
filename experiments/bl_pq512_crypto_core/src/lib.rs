@@ -105,6 +105,7 @@ pub mod resource_preflight;
 pub mod salt_use;
 pub mod sampler;
 pub mod selected_challenge;
+pub mod selected_proof_package;
 pub mod sha3_air;
 pub mod sha3_boolean_air;
 pub mod sha3_coprocessor;

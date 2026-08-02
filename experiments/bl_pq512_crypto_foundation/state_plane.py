@@ -9,10 +9,12 @@ It implements the smallest useful state boundary that those controls lacked:
 * an independent replay verifier; and
 * crash-safe, compare-and-swap file publication.
 
-The relation is independently replayable reference evidence, not a zero-
-knowledge proof.  Its executable AIR fragment is consumed by the native H4
-coordinator, but the commitment's hiding/binding composition and proof-native
-H4 PCS/ZK integration remain H6/Gate 2E obligations.  This module therefore
+The version-2 envelope remains independently replayable reference evidence,
+not a zero-knowledge proof.  The separate state-air-proof module supplies the
+version-3 composed envelope: a compact transition AIR, an authenticated
+streamed FRI component, and native H4 cross-checking against these exact
+operations.  Full custom-H4 GKR/PCS composition, backend admission, the
+complete simulator/leakage ledger, and activation remain open.  This module
 never selects a proof suite or enables activation.
 """
 

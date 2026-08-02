@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use bl_pq512_crypto_core::air_ir::MAX_AIR_BINARY_BYTES;
-use bl_pq512_crypto_core::deep_quotient::deep_claims_commitment;
+use bl_pq512_crypto_core::deep_quotient::{DomainOodsClaims, deep_claims_commitment};
 use bl_pq512_crypto_core::disk_air::build_disk_air_main_trace_oracle;
 use bl_pq512_crypto_core::disk_composition::build_disk_air_composition_oracle;
 use bl_pq512_crypto_core::disk_deep::build_disk_deep_quotient_plan;
@@ -11,7 +11,7 @@ use bl_pq512_crypto_core::disk_fri::{
     build_disk_fri_mask_oracle, prove_disk_fri_pipeline, start_disk_interactive_fri,
 };
 use bl_pq512_crypto_core::disk_logup::build_disk_air_logup_oracle_from_streaming;
-use bl_pq512_crypto_core::field::Fp16;
+use bl_pq512_crypto_core::field::{Fp16, M31};
 use bl_pq512_crypto_core::proof_format::{
     decode_fri_pipeline_proof_v2, encode_fri_pipeline_proof_v2_with_attribution,
 };
@@ -31,6 +31,9 @@ use bl_pq512_crypto_core::streaming_store::StreamingScratchStore;
 use sha3::{Digest, Sha3_512};
 
 const WORKER_MAGIC: &[u8; 8] = b"BLPQSDW2";
+const PRIVATE_PROOF_PACKAGE_MAGIC: &[u8; 8] = b"BLPQSPK1";
+const PRIVATE_PROOF_PACKAGE_VERSION: u16 = 1;
+const MAX_PRIVATE_PROOF_PACKAGE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_CHUNK_BYTES: usize = (1 << 22) + 1024;
 const MAX_CHUNK_COUNT: usize = 1 << 20;
 
@@ -138,14 +141,108 @@ fn emit(writer: &mut impl Write, line: &str) -> Result<(), String> {
     writer.flush().map_err(|_| "response_flush".to_string())
 }
 
+fn push_u32(output: &mut Vec<u8>, value: usize) -> Result<(), String> {
+    output.extend_from_slice(
+        &u32::try_from(value)
+            .map_err(|_| "private_proof_package_count".to_string())?
+            .to_be_bytes(),
+    );
+    Ok(())
+}
+
+fn push_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), String> {
+    push_u32(output, value.len())?;
+    output.extend_from_slice(value);
+    Ok(())
+}
+
+fn encode_private_proof_package(
+    program: &[u8],
+    public_inputs: &[M31],
+    bundle: &[u8],
+    claims: &[DomainOodsClaims],
+    final_constant: Fp16,
+    proof: &[u8],
+) -> Result<Vec<u8>, String> {
+    if program.is_empty()
+        || public_inputs.is_empty()
+        || bundle.is_empty()
+        || claims.is_empty()
+        || proof.is_empty()
+    {
+        return Err("private_proof_package_empty".into());
+    }
+    let mut encoded = Vec::with_capacity(
+        PRIVATE_PROOF_PACKAGE_MAGIC.len() + 2 + program.len() + bundle.len() + proof.len(),
+    );
+    encoded.extend_from_slice(PRIVATE_PROOF_PACKAGE_MAGIC);
+    encoded.extend_from_slice(&PRIVATE_PROOF_PACKAGE_VERSION.to_be_bytes());
+    push_bytes(&mut encoded, program)?;
+    push_u32(&mut encoded, public_inputs.len())?;
+    for value in public_inputs {
+        encoded.extend_from_slice(&value.as_u32().to_be_bytes());
+    }
+    push_bytes(&mut encoded, bundle)?;
+    push_u32(&mut encoded, claims.len())?;
+    for claim in claims {
+        if claim.values.is_empty() || claim.values.len() != claim.conjugate_values.len() {
+            return Err("private_proof_package_claim_shape".into());
+        }
+        encoded.push(claim.log_size);
+        push_u32(&mut encoded, claim.values.len())?;
+        for value in &claim.values {
+            encoded.extend_from_slice(&value.encode());
+        }
+        for value in &claim.conjugate_values {
+            encoded.extend_from_slice(&value.encode());
+        }
+    }
+    encoded.extend_from_slice(&final_constant.encode());
+    encoded.extend_from_slice(
+        &u64::try_from(proof.len())
+            .map_err(|_| "private_proof_package_proof_length".to_string())?
+            .to_be_bytes(),
+    );
+    encoded.extend_from_slice(proof);
+    if encoded.len() > MAX_PRIVATE_PROOF_PACKAGE_BYTES {
+        return Err("private_proof_package_too_large".into());
+    }
+    Ok(encoded)
+}
+
+fn write_private_proof_package(path: &std::path::Path, encoded: &[u8]) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("private_proof_package_create:{error}"))?;
+    file.write_all(encoded)
+        .map_err(|error| format!("private_proof_package_write:{error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("private_proof_package_sync:{error}"))?;
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let total_started = Instant::now();
-    let scratch_parent = std::env::args_os()
-        .nth(1)
+    let mut arguments = std::env::args_os();
+    arguments.next();
+    let scratch_parent = arguments
+        .next()
         .map(PathBuf::from)
         .ok_or_else(|| "scratch_parent_missing".to_string())?;
     if !scratch_parent.is_absolute() || !scratch_parent.is_dir() {
         return Err("scratch_parent_invalid".into());
+    }
+    let proof_export_path = arguments.next().map(PathBuf::from);
+    if arguments.next().is_some() {
+        return Err("worker_argument_shape".into());
+    }
+    if let Some(path) = proof_export_path.as_ref()
+        && (!path.is_absolute() || path.parent() != Some(scratch_parent.as_path()) || path.exists())
+    {
+        return Err("private_proof_package_path_invalid".into());
     }
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -477,6 +574,17 @@ fn run() -> Result<(), String> {
         return Err("proof_rejected".into());
     }
     let verify_ms = verify_started.elapsed().as_millis();
+    if let Some(path) = proof_export_path.as_ref() {
+        let package = encode_private_proof_package(
+            &program,
+            &public_inputs,
+            &bundle_encoded,
+            &fri.plan.claims,
+            fri.final_constant,
+            &encoded_proof.bytes,
+        )?;
+        write_private_proof_package(path, &package)?;
+    }
     emit(
         &mut writer,
         &format!(

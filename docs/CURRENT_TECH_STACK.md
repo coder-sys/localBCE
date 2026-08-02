@@ -85,27 +85,28 @@ The smallest real state boundary is implemented in
 all-slot old/new replay, a 512-bit pad-masked SHA3 commitment, independent replay verification,
 and crash-safe compare-and-swap publication. Its decoder rejects every presence byte except exact
 `0` or `1`, requires byte-for-byte canonical re-encoding, and therefore rejects corrupted
-persisted state before root comparison or publication. The native H4 coordinator accepts an explicit
-`state-file:<path>` version-2 binding envelope. Before constructing the v3 parent, Rust independently
-replays the fixed-shape transition, validates the exact state AIR program identifier, evaluates the
-embedded AIR program/execution with the native `air_ir` verifier, checks the ordered 128-byte root
-public inputs, and recomputes the SHA3-512 state/AIR identities. The v3 parent binds the full state
-statement, transition, commitment, verifier, attempt, receipt, exact ordered 12-field projection,
-AIR program/execution commitments, and fragment/composition digests. The authenticated interactive
-child session and schedule bind the same state context before challenges; each child shard must echo
-the exact state proof grammar, and the atomic receipt binds the same full context. The composable
-`experiments/fixed_shape_claim_air/state_plane_executable_air.py` now constrains every bounded
-old/new operation and slot, empty-slot zeroing, both canonical snapshot encodings, real SHA3-512
-root calls, and ordered public roots; `compose_state_plane_air` merges it into one executable AIR
-encoding. Native consumption is independently tested against a generated binding and mutation
-failures. A versioned state-root bus bridge now appends exactly two fixed-capacity SHA3 calls to the
-authenticated B16 source when a state binding is supplied: `BLHBSN02`/version 2 snapshots and
-`BLHBB102`/version 2 boundaries use capacity `claim_slots*137+512` (18,048 for K128 and 70,656
-for K512), adding 266 and 1,040 live permutations respectively. The base
-`BLHBSN01`/`BLHBB101` profile remains byte-compatible. The coordinator independently checks those
-two root-call input/output patterns before child spawn, but the state relation is still not inside
-the H4 custom GKR proof. No reviewed PQ commitment backend is available, `proofSuiteId` remains
-null, and activation remains closed.
+persisted state before root comparison or publication. The native H4 coordinator accepts the
+legacy `state-file:<path>` version-2 envelope and the new nonactivating version-3 envelope emitted
+by `state_air_proof.py`. Version 3 carries a compact packed state-relation AIR, a private streamed
+dual-PQ FRI package, and a fixed evidence record. Rust independently replays the transition,
+evaluates the compact AIR, compares every packed trace column with the exact parsed operations,
+checks the ordered 128-value roots, decodes/verifies the FRI package, and recomputes the
+SHA3-512 state/AIR identities before constructing the v3 parent. This closes the native state-file
+component boundary; it does not claim that the full state relation is inside the custom H4 GKR/PCS
+proof. The v3 parent binds the full state statement, transition, commitment, verifier, attempt,
+receipt, exact ordered 12-field projection, compact AIR/proof-package identities, and
+fragment/composition digests. The authenticated interactive child session and schedule bind the
+same state context before challenges; each child shard must echo the exact state proof grammar, and
+the atomic receipt binds the same full context. The full state-root AIR remains available as the
+version-2 compatibility path, while the compact path removes duplicate SHA3 Boolean traces and
+keeps root hashing on H4's shared bus. Native v3 consumption is independently tested against a
+real streamed proof and trace/package mutations. A versioned state-root bus bridge now appends
+exactly two fixed-capacity SHA3 calls to the authenticated B16 source when a state binding is
+supplied: `BLHBSN02`/version 2 snapshots and `BLHBB102`/version 2 boundaries use capacity
+`claim_slots*137+512` (18,048 for K128 and 70,656 for K512), adding 266 and 1,040 live
+permutations respectively. The base `BLHBSN01`/`BLHBB101` profile remains byte-compatible. No
+reviewed PQ commitment backend is available, `proofSuiteId` remains null, and activation remains
+closed.
 
 ## Gate 2E state-composed bus and candidate boundary
 
@@ -160,6 +161,39 @@ tables, the high-cardinality state-slot lookup, and proof-native H4 state equali
 therefore implementation evidence only; it does not select a PQ backend, close Gate 2E, qualify
 H4/H5/H6, set `proofSuiteId`, or permit activation. The derived resource model is not a resident
 peak measurement, and the 537.419-second wall time misses the frozen K512 complete-proof target.
+
+## Round 2 proof-native state component boundary
+
+The compact state relation is now a real nonactivating proof component in
+`experiments/fixed_shape_claim_air/state_relation_executable_air.py` and
+`experiments/bl_pq512_crypto_foundation/state_air_proof.py`. It packs each 64-byte key/value
+into 22 three-byte M31 chunks, keeps the two state roots as the only AIR public values, and
+leaves SHA3 root evaluation on H4's already authenticated state-root bus. The v3 private envelope
+(`BLSB01` version 3 / `BLSA02`) carries the compact program/execution, a bounded private
+`BLPQSPK1` package, and a fixed digest-only evidence record. The native verifier checks the exact
+old/new operation columns against the parsed state witness before independently verifying the
+selected v2 FRI proof and its dual-PQ challenge bundle. A public sidecar still contains only
+fixed-width roots/digests and the ordered projection; private snapshots, operations, masks, trace,
+claims, and proof bytes remain in the private envelope/package.
+
+Measured fixture evidence on 2026-08-02 (capacity 8, not a K128/K512 qualification run):
+
+```text
+worker_result=STATE_AIR_PROOF_COMPONENT_VERIFIED_NONACTIVATING
+proof_bytes=8324389
+proof_package_bytes=8370223
+binding_bytes=8407706
+worker_and_python_replay=success
+native_state_file_verifier=success
+trace_mutation=ERR:state_air_trace_after_key_0_0
+proof_mutation=ERR:state_binding_proof_package:Rejected
+```
+
+This closes the native state-file component boundary, not Gate 2E admission. The full state
+relation is still not algebraically composed inside the custom H4 GKR/PCS proof; the selected
+commitment backend, complete simulator, leakage/security composition, repeated resource campaign,
+and proof-suite admission remain open. `proofSuiteId=null`, activation remains false, H5 has not
+started, and no production CUDA or real PHI/payment data was used.
 
 ## How a successor must interpret this repository
 
