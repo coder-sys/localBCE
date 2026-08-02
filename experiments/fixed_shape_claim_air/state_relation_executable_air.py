@@ -10,9 +10,10 @@ hash calls.
 
 The state-root hash relation and this compact transition relation are joined
 by the versioned state-binding envelope and the H4 parent/transcript receipt.
-The native verifier also compares the decoded packed trace columns with the
-exact state operations in that envelope; the AIR proof is never admitted on
-public-root equality alone.
+The operation table is linked algebraically to fixed-capacity before/after
+snapshot tables with typed multiset lookups.  The native verifier also
+compares the decoded packed trace columns with the exact state operations in
+that envelope; the AIR proof is never admitted on public-root equality alone.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from typing import Final, Mapping
 from experiments.bl_pq512_crypto_foundation.state_plane import (
     SHA3_512_LENGTH,
     StateEntry,
+    StateSnapshot,
     StateTransitionProof,
     independently_verify_state_transition,
 )
@@ -42,7 +44,7 @@ from experiments.fixed_shape_claim_air.executable_air import (
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
-PROGRAM_ID: Final[str] = "BL-PQ512-STATE-RELATION-AIR-v1"
+PROGRAM_ID: Final[str] = "BL-PQ512-STATE-RELATION-AIR-v2"
 MAX_STATE_AIR_CAPACITY: Final[int] = 4_096
 PACKED_CHUNK_BYTES: Final[int] = 3
 PACKED_CHUNK_COUNT: Final[int] = (
@@ -144,6 +146,113 @@ def _entry_table(
     return table, trace
 
 
+def _snapshot_table(
+    name: str,
+    snapshot: StateSnapshot,
+) -> tuple[AirTable, TraceTable]:
+    """Expose every fixed slot so operation rows cannot hide a state mismatch."""
+
+    columns: dict[str, list[int]] = {"index": []}
+    columns["present"] = []
+    for field in ("key", "value"):
+        for chunk in range(PACKED_CHUNK_COUNT):
+            columns[f"{field}_{chunk}"] = []
+    for index in range(snapshot.capacity):
+        entry = snapshot._slot(index)
+        columns["index"].append(index)
+        columns["present"].append(int(entry.present))
+        for field, value in (("key", entry.key), ("value", entry.value)):
+            for chunk in range(PACKED_CHUNK_COUNT):
+                columns[f"{field}_{chunk}"].append(
+                    _pack(value, chunk * PACKED_CHUNK_BYTES)
+                )
+    frozen = freeze_columns(
+        {name: tuple(values) for name, values in columns.items()}
+    )
+    trace = TraceTable(name, frozen)
+    present = cell("present")
+    identities: list[Identity] = [
+        Identity(
+            f"{name}_present_boolean",
+            present * (present - 1),
+            0,
+            snapshot.capacity,
+        )
+    ]
+    for field in ("key", "value"):
+        for chunk in range(PACKED_CHUNK_COUNT):
+            identities.append(
+                Identity(
+                    f"{name}_empty_{field}_{chunk}_zero",
+                    (1 - present) * cell(f"{field}_{chunk}"),
+                    0,
+                    snapshot.capacity,
+                )
+            )
+    table = AirTable(
+        name,
+        tuple(trace.columns),
+        snapshot.capacity,
+        tuple(identities),
+        MappingProxyType({"index": tuple(range(snapshot.capacity))}),
+    )
+    return table, trace
+
+
+def _relation_entry_values(phase: str) -> tuple[object, ...]:
+    return (
+        cell("index"),
+        cell(_column(phase, "present")),
+        *(
+            cell(_column(phase, field, chunk))
+            for field in ("key", "value")
+            for chunk in range(PACKED_CHUNK_COUNT)
+        ),
+    )
+
+
+def _snapshot_entry_values() -> tuple[object, ...]:
+    return (
+        cell("index"),
+        cell("present"),
+        *(
+            cell(f"{field}_{chunk}")
+            for field in ("key", "value")
+            for chunk in range(PACKED_CHUNK_COUNT)
+        ),
+    )
+
+
+def _operation_snapshot_lookup(
+    phase: str,
+    snapshot_name: str,
+    capacity: int,
+) -> LookupArgument:
+    """Bind one operation phase to the exact fixed snapshot slot multiset."""
+
+    return LookupArgument(
+        f"state_relation_{phase}_snapshot",
+        (
+            LookupSide(
+                "state_relation",
+                const(1),
+                _relation_entry_values(phase),
+                0,
+                capacity,
+            ),
+        ),
+        (
+            LookupSide(
+                snapshot_name,
+                const(1),
+                _snapshot_entry_values(),
+                0,
+                capacity,
+            ),
+        ),
+    )
+
+
 def _root_call_lookup() -> LookupArgument:
     return LookupArgument(
         "state_root_call_order",
@@ -206,6 +315,12 @@ def build_state_relation_air(proof: StateTransitionProof) -> StateRelationAirIns
     relation_table, relation_trace = _entry_table(
         "state_relation", operation_rows
     )
+    before_table, before_trace = _snapshot_table(
+        "state_before_snapshot", proof.before
+    )
+    after_table, after_trace = _snapshot_table(
+        "state_after_snapshot", proof.after
+    )
     roots_table, roots_trace = _roots_table(proof)
     public_inputs = tuple(
         PublicInputBinding(
@@ -219,13 +334,23 @@ def build_state_relation_air(proof: StateTransitionProof) -> StateRelationAirIns
     )
     program = AirProgram(
         PROGRAM_ID,
-        (relation_table, roots_table),
-        (_root_call_lookup(),),
+        (relation_table, before_table, after_table, roots_table),
+        (
+            _operation_snapshot_lookup(
+                "before", "state_before_snapshot", capacity
+            ),
+            _operation_snapshot_lookup(
+                "after", "state_after_snapshot", capacity
+            ),
+            _root_call_lookup(),
+        ),
         public_inputs,
     )
     traces = MappingProxyType(
         {
             relation_trace.name: relation_trace,
+            before_trace.name: before_trace,
+            after_trace.name: after_trace,
             roots_trace.name: roots_trace,
         }
     )

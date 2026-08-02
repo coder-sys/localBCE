@@ -107,11 +107,15 @@ from it, and the frozen K512 complete-proof target remains unmet.
 
 The next state-proof slice is materially stronger but remains a component boundary. The compact
 state relation packs 64-byte key/value fields into 22 three-byte M31 chunks, leaves the two SHA3
-roots on H4's authenticated state-root bus, and exports a private `BLPQSPK1` package containing
-the canonical FRI proof, challenge bundle, DEEP claims, and final constant. The native v3 state
-verifier compares every packed execution column with the exact parsed old/new operations and then
-independently verifies the selected v2 FRI package. A real capacity-8 streamed fixture completed
-in 175.3 seconds with 8,324,389 proof bytes; native trace and proof mutations were rejected.
+roots on H4's authenticated state-root bus, and now links every ordered operation row to the
+corresponding before/after fixed-capacity snapshot row through two 46-wide multiset lookups. The
+versioned program identity is `BL-PQ512-STATE-RELATION-AIR-v2`. It exports a private `BLPQSPK1`
+package containing the canonical FRI proof, challenge bundle, DEEP claims, and final constant.
+The native v3 state verifier evaluates the lookup-bearing execution, compares every packed
+operation/snapshot column with the exact parsed witness, and independently verifies the selected
+v2 FRI package. A fresh capacity-8 streamed fixture completed with 11,616,597 proof bytes and
+11,741,761 binding bytes; native lookup mutation rejected with
+`ERR:state_binding_air_execution:LookupMultisetMismatch`.
 This closes neither the full custom-H4 GKR/PCS composition nor the hiding/simulator/leakage
 security ledger, backend admission, H5, H6, or `proofSuiteId`.
 

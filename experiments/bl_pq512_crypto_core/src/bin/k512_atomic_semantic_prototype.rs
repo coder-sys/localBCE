@@ -58,9 +58,10 @@ const STATE_MAX_CAPACITY: u64 = 4_096;
 const STATE_AIR_PACKED_CHUNK_BYTES: usize = 3;
 const STATE_AIR_PACKED_CHUNKS: usize = 22;
 const STATE_AIR_RELATION_COLUMNS: usize = 91;
+const STATE_AIR_SNAPSHOT_COLUMNS: usize = 1 + 1 + (2 * STATE_AIR_PACKED_CHUNKS);
 const STATE_BINDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-ROOT-AIR-v1";
-const STATE_RELATION_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-RELATION-AIR-v1";
+const STATE_RELATION_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-RELATION-AIR-v2";
 const STATE_AIR_COMPONENT_ID: &[u8] = b"BL-PQ512-STATE-AIR-PROOF-V1";
 const STATE_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-STATE-PLANE-V1";
 const HASH_PAD_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-SHA3-HASH-PAD-V1";
@@ -844,17 +845,25 @@ fn require_trace_value(value: M31, expected: u32, label: &str) -> Result<(), Str
 fn verify_compact_state_trace(
     traces: &[Vec<Vec<M31>>],
     operations: &[(StateEntryWire, StateEntryWire)],
+    before_snapshot: &[StateEntryWire],
+    after_snapshot: &[StateEntryWire],
     before_root: &[u8; 64],
     after_root: &[u8; 64],
 ) -> Result<(), String> {
     let capacity = operations.len();
-    if traces.len() != 2 {
+    if traces.len() != 4 {
         return Err("state_air_trace_table_count".to_string());
     }
     let relation = &traces[0];
-    let roots = &traces[1];
+    let before_slots = &traces[1];
+    let after_slots = &traces[2];
+    let roots = &traces[3];
     if relation.len() != STATE_AIR_RELATION_COLUMNS
         || relation.iter().any(|column| column.len() != capacity)
+        || before_slots.len() != STATE_AIR_SNAPSHOT_COLUMNS
+        || before_slots.iter().any(|column| column.len() != capacity)
+        || after_slots.len() != STATE_AIR_SNAPSHOT_COLUMNS
+        || after_slots.iter().any(|column| column.len() != capacity)
         || roots.len() != 65
         || roots.iter().any(|column| column.len() != 2)
     {
@@ -883,6 +892,38 @@ fn verify_compact_state_trace(
                 )?;
                 require_trace_value(
                     relation[value_column + chunk][row],
+                    packed_state_chunk(&entry.value, chunk),
+                    &format!("{label}_value_{row}_{chunk}"),
+                )?;
+            }
+        }
+    }
+    for (table, entries, label) in [
+        (before_slots, before_snapshot, "before_snapshot"),
+        (after_slots, after_snapshot, "after_snapshot"),
+    ] {
+        if entries.len() != capacity {
+            return Err(format!("state_air_{label}_entry_count"));
+        }
+        for (row, entry) in entries.iter().enumerate() {
+            require_trace_value(
+                table[0][row],
+                u32::try_from(row).map_err(|_| "state_air_trace_index".to_string())?,
+                &format!("{label}_index_{row}"),
+            )?;
+            require_trace_value(
+                table[1][row],
+                u32::from(entry.present),
+                &format!("{label}_present_{row}"),
+            )?;
+            for chunk in 0..STATE_AIR_PACKED_CHUNKS {
+                require_trace_value(
+                    table[2 + chunk][row],
+                    packed_state_chunk(&entry.key, chunk),
+                    &format!("{label}_key_{row}_{chunk}"),
+                )?;
+                require_trace_value(
+                    table[2 + STATE_AIR_PACKED_CHUNKS + chunk][row],
                     packed_state_chunk(&entry.value, chunk),
                     &format!("{label}_value_{row}_{chunk}"),
                 )?;
@@ -1424,7 +1465,14 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
     }
     let traces = validated_execution_traces(air_execution)
         .map_err(|error| format!("state_binding_air_traces:{error:?}"))?;
-    verify_compact_state_trace(&traces, &operation_witness, &before.root, &after.root)?;
+    verify_compact_state_trace(
+        &traces,
+        &operation_witness,
+        &before.entries,
+        &after.entries,
+        &before.root,
+        &after.root,
+    )?;
 
     let (package_commitment, package) =
         verify_selected_proof_package(proof_package, air_program, &public_inputs)

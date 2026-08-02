@@ -199,12 +199,14 @@ appended calls before the child proof starts; the worker derives the totals from
 has a durable wire-major/little-endian regression test.
 
 This is proof-native source and child-boundary evidence. A separate nonactivating v3 state envelope
-now adds a compact packed transition-AIR/streamed-FRI component whose native verifier compares the
-exact state witness and independently verifies the selected FRI package. It is still not a
-qualified H4 state proof: the full state relation is not yet constrained inside the custom H4
-GKR/PCS composition. This component phase did not run a manifest-bound H4 qualification: the
-measured fixture was capacity 8 only, so the state-free manifest above remains historical evidence
-for the accepted prototype. Production CUDA, H5, `proofSuiteId`, and activation remain forbidden.
+now adds the versioned `BL-PQ512-STATE-RELATION-AIR-v2` compact packed transition-AIR/streamed-FRI
+component. Its two 46-wide multiset lookups bind ordered operation rows to the complete fixed
+before/after snapshot tables; the native verifier also compares those columns with the exact state
+witness and independently verifies the selected FRI package. It is still not a qualified H4 state
+proof: the full state relation is not yet constrained inside the custom H4 GKR/PCS composition.
+This component phase did not run a manifest-bound H4 qualification: the measured fixture was
+capacity 8 only, so the state-free manifest above remains historical evidence for the accepted
+prototype. Production CUDA, H5, `proofSuiteId`, and activation remain forbidden.
 
 ## 9. Required green evidence
 

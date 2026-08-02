@@ -184,10 +184,11 @@ The smallest nonactivating state boundary is implemented separately in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
 all-slot replay, a pad-masked commitment, independent verification, and crash-safe file CAS. The
 native H4 coordinator consumes the version-2 compatibility envelope and now also consumes a
-version-3 `BLSB01`/`BLSA02` envelope from `state_air_proof.py`. Version 3 contains a compact packed
-state-transition AIR, a private streamed dual-PQ FRI package, and a fixed evidence record; Rust
-independently evaluates it, compares every packed trace column with the exact operations, verifies
-the FRI package, and binds the component into the v3 parent, authenticated interactive
+version-3 `BLSB01`/`BLSA02` envelope from `state_air_proof.py`. Version 3 contains the
+`BL-PQ512-STATE-RELATION-AIR-v2` compact packed state-transition AIR, including two fixed-capacity
+46-wide operation-to-snapshot lookups, a private streamed dual-PQ FRI package, and a fixed evidence
+record; Rust independently evaluates it, compares every packed operation/snapshot column with the
+exact witness, verifies the FRI package, and binds the component into the v3 parent, authenticated interactive
 session/schedule, exact child grammar, and atomic receipt. The full
 `state_plane_executable_air.py` remains the version-2 compatibility path; the compact path keeps
 SHA3 roots on H4's authenticated bus rather than duplicating their Boolean traces. This is still
@@ -199,6 +200,9 @@ The next admission boundary is explicit:
 
 Complete the remaining admission obligations before selecting the state plane: a reviewed backend,
 full proof-native H4 GKR/PCS composition, simulator, leakage, and state-receipt/security closure.
+Bind the selected state plane into
+   the actual H4 parent, transcript, proof, independent verifier, and atomic receipt only after
+those obligations pass.
 The v3 component is the native verifier boundary needed for that work; it is not itself backend
 selection or Gate 2E closure.
 
@@ -214,9 +218,10 @@ the totals from the descriptor rather than a duplicated profile constant. The or
 `BLHBSN01`/`BLHBB101` bytes and descriptor commitment remain unchanged for the state-free profile.
 
 This seam proves that state roots enter the authenticated source/child boundary. Together with the
-v3 compact state-AIR/FRI component it provides native state-file composition evidence, but it does
-not yet put the complete state relation inside the custom H4 GKR/PCS proof, select a qualified
-backend, or produce a new manifest-bound H4 K128/K512 proof. H5 remains blocked.
+v3 compact state-AIR/FRI component it provides native state-file composition evidence and an
+algebraic ordered operation-to-snapshot equality boundary, but it does not yet put the complete
+state relation inside the custom H4 GKR/PCS proof, select a qualified backend, or produce a new
+manifest-bound H4 K128/K512 proof. H5 remains blocked.
 
 The new isolated candidate is `TRANSPARENT_SHAKE256_1024`,
 `BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`: SHAKE256-1024 with a 128-byte mask and 128-byte

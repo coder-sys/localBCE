@@ -52,8 +52,8 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
-| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; a real compact state-AIR streamed FRI component now passes native v3 envelope verification with exact witness-column and proof mutations rejected | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS, complete proof-native H4 composition, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, five-candidate dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, versioned state-root bus, native v2 compatibility and v3 proof-native state-component verification, and compact AIR/FRI mutation coverage are tested and documented | Admit a reviewed backend and complete the full state relation inside H4 GKR/PCS; close simulator/leakage/PQ blockers |
+| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; a real compact `BL-PQ512-STATE-RELATION-AIR-v2` streamed FRI component now passes native v3 envelope verification with fixed snapshot lookups and mutation rejection | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS, complete proof-native H4 composition, repeated p95, final suite identity |
+| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, five-candidate dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, versioned state-root bus, native v2 compatibility and v3 proof-native state-component verification, and compact AIR v2 fixed-snapshot lookup/mutation coverage are tested and documented | Admit a reviewed backend and complete the full state relation inside H4 GKR/PCS; close simulator/leakage/PQ blockers |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -333,9 +333,10 @@ input generator, and STOP conditions.
 2E closes only when the selected state plane is present in the H4 parent, transcript, proof,
 independent verifier, and atomic receipt. The current versioned `BLHBSN02`/`BLHBB102` root-bus seam
 and the v3 compact state-AIR/FRI component are prerequisite/native-consumption evidence for that
-boundary, not its closure: the full state relation is not yet algebraically composed inside the
-custom H4 GKR/PCS proof, no reviewed backend is admitted, and no new manifest-bound H4 K128/K512
-proof was run after the source change.
+boundary, not its closure. The compact relation now algebraically links ordered operation rows to
+both fixed-capacity snapshots through the v2 46-wide lookup grammar, but the full state relation is
+not yet composed inside the custom H4 GKR/PCS proof, no reviewed backend is admitted, and no
+manifest-bound H4 K128/K512 proof was run after the source change.
 
 ## H5: repeated complete-proof qualification campaign
 
@@ -350,7 +351,7 @@ the unsealed Gate 2E terminal ledger, validates the reference hardware record, v
 tracked `ops/` SHA3-512 authority inventory, and freezes the
 one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
 preflight is `BLOCKED_H5_PREFLIGHT` with digest
-`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass, the external monitor is not configured, and no complete-proof campaign has started. The native v3 compact state-AIR/FRI component is implemented and independently verified, but full custom-H4 state composition, PQ commitment admission, and the complete simulator/leakage ledger remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
+`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass, the external monitor is not configured, and no complete-proof campaign has started. The native v3 compact state-AIR/FRI component, including its v2 fixed-snapshot lookup grammar, is implemented and independently verified, but full custom-H4 state composition, PQ commitment admission, and the complete simulator/leakage ledger remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
 
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |

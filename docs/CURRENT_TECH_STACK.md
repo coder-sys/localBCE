@@ -89,11 +89,12 @@ persisted state before root comparison or publication. The native H4 coordinator
 legacy `state-file:<path>` version-2 envelope and the new nonactivating version-3 envelope emitted
 by `state_air_proof.py`. Version 3 carries a compact packed state-relation AIR, a private streamed
 dual-PQ FRI package, and a fixed evidence record. Rust independently replays the transition,
-evaluates the compact AIR, compares every packed trace column with the exact parsed operations,
-checks the ordered 128-value roots, decodes/verifies the FRI package, and recomputes the
-SHA3-512 state/AIR identities before constructing the v3 parent. This closes the native state-file
-component boundary; it does not claim that the full state relation is inside the custom H4 GKR/PCS
-proof. The v3 parent binds the full state statement, transition, commitment, verifier, attempt,
+evaluates the compact AIR, including the fixed-capacity before/after snapshot tables and their
+46-wide operation-to-snapshot lookups, compares every packed trace column with the exact parsed
+operations, checks the ordered 128-value roots, decodes/verifies the FRI package, and recomputes
+the SHA3-512 state/AIR identities before constructing the v3 parent. This closes the native
+state-file component boundary; it does not claim that the full state relation is inside the custom
+H4 GKR/PCS proof. The v3 parent binds the full state statement, transition, commitment, verifier, attempt,
 receipt, exact ordered 12-field projection, compact AIR/proof-package identities, and
 fragment/composition digests. The authenticated interactive child session and schedule bind the
 same state context before challenges; each child shard must echo the exact state proof grammar, and
@@ -167,12 +168,16 @@ peak measurement, and the 537.419-second wall time misses the frozen K512 comple
 The compact state relation is now a real nonactivating proof component in
 `experiments/fixed_shape_claim_air/state_relation_executable_air.py` and
 `experiments/bl_pq512_crypto_foundation/state_air_proof.py`. It packs each 64-byte key/value
-into 22 three-byte M31 chunks, keeps the two state roots as the only AIR public values, and
-leaves SHA3 root evaluation on H4's already authenticated state-root bus. The v3 private envelope
+into 22 three-byte M31 chunks, keeps the two state roots as the only AIR public values, and links
+each operation's before/after slot to a fixed-capacity 46-column snapshot table with a full-width
+multiset lookup. The fixed index columns enforce one ordered row per slot; empty-slot zeroing and
+presence boolean identities remain local constraints. SHA3 root evaluation stays on H4's already
+authenticated state-root bus. The relation program identity is now
+`BL-PQ512-STATE-RELATION-AIR-v2`. The v3 private envelope
 (`BLSB01` version 3 / `BLSA02`) carries the compact program/execution, a bounded private
 `BLPQSPK1` package, and a fixed digest-only evidence record. The native verifier checks the exact
-old/new operation columns against the parsed state witness before independently verifying the
-selected v2 FRI proof and its dual-PQ challenge bundle. A public sidecar still contains only
+old/new operation and snapshot columns against the parsed state witness before independently
+verifying the selected v2 FRI proof and its dual-PQ challenge bundle. A public sidecar still contains only
 fixed-width roots/digests and the ordered projection; private snapshots, operations, masks, trace,
 claims, and proof bytes remain in the private envelope/package.
 
@@ -180,13 +185,17 @@ Measured fixture evidence on 2026-08-02 (capacity 8, not a K128/K512 qualificati
 
 ```text
 worker_result=STATE_AIR_PROOF_COMPONENT_VERIFIED_NONACTIVATING
-proof_bytes=8324389
-proof_package_bytes=8370223
-binding_bytes=8407706
+program_id=BL-PQ512-STATE-RELATION-AIR-v2
+program_commitment=9a9df7f23eaa1f31f276df87e681268a40a10f4629926826de20131194197ea9968874a216eaa978e9df4818ea5756b22b5991375db25f4564ee8f184c4e078c
+execution_commitment=a4fc9c65ab0273d412bfd67d6b8ddf18de8255852893bd5ce986a9a37bbccb5140c6f202f3d26f7109e46979fad206498659536dcddac93a698d97a1f1ae3a48
+package_commitment=bd07d54f37243c3b78e5ed3cec6ca4f0c1e2585798a032e424498c6e1db3a001a02e4776b312d193c868a35372fb05f325614a965172452c31c97de73ce9440a
+proof_bytes=11616597
+proof_package_bytes=11684436
+binding_bytes=11741761
 worker_and_python_replay=success
+scratch_entries_after=0
 native_state_file_verifier=success
-trace_mutation=ERR:state_air_trace_after_key_0_0
-proof_mutation=ERR:state_binding_proof_package:Rejected
+snapshot_trace_mutation=ERR:state_binding_air_execution:LookupMultisetMismatch
 ```
 
 This closes the native state-file component boundary, not Gate 2E admission. The full state

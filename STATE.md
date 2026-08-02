@@ -5540,3 +5540,116 @@ complete, no H5/H6 qualification, no production CUDA proof, and no real PHI/paym
 state relation inside custom H4 GKR/PCS, reviewed backend admission, complete simulator/leakage
 composition, and H5's exact 22 launches remain the next real blockers; this seal does not claim
 Gate 2E completion.
+
+## 2026-08-02 Compact state-AIR snapshot equality boundary - VERIFIED, NONACTIVATING
+
+This phase continued from the actual authoritative checkout
+`C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`.
+The protected paths were not edited. No PHI, payment credential, production CUDA proof,
+activation input, or `proofSuiteId` value was introduced.
+
+The concrete trust gap was that the compact state AIR had an operation table and a two-row root
+table, while native Rust compared operation columns with parsed state outside the AIR. The compact
+program is now versioned as `BL-PQ512-STATE-RELATION-AIR-v2` and has four tables: the existing
+91-column operation relation, fixed-capacity 46-column before/after snapshot tables, and the
+two-row root table. Two width-46 constant-selector multiset lookups bind each operation phase's
+`(index,present,key_chunks,value_chunks)` to the corresponding snapshot table. Fixed index columns
+on both sides enforce one ordered row per slot; local identities retain boolean presence and
+zero-private-bytes-for-empty-slot constraints. The native Rust verifier requires the four-table
+grammar, checks both snapshot tables against the parsed fixed-capacity snapshots, and then
+continues with the selected dual-PQ FRI package verification.
+
+Focused relation tests now cover canonical encoding, empty-slot identity rejection, a valid-shape
+snapshot lookup mismatch, and snapshot index reordering:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_relation_executable_air.py
+....                                                                     [100%]
+4 passed in 0.27s
+```
+
+The containing compact state-AIR regression passed:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane_executable_air.py
+...                                                                      [100%]
+3 passed in 282.18s (0:04:42)
+```
+
+The existing native state-plane fixture also remained green after the Rust grammar change:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane_native.py
+...                                                                      [100%]
+3 passed in 66.13s (0:01:06)
+```
+
+The fresh compact capacity-8 streamed dual-PQ fixture was generated after the version bump and
+exported a private v3 envelope. This is a component run, not K128/K512 qualification evidence:
+
+```text
+status=STATE_AIR_PROOF_COMPONENT_VERIFIED_NONACTIVATING
+program_id=BL-PQ512-STATE-RELATION-AIR-v2
+program_commitment=9a9df7f23eaa1f31f276df87e681268a40a10f4629926826de20131194197ea9968874a216eaa978e9df4818ea5756b22b5991375db25f4564ee8f184c4e078c
+execution_commitment=a4fc9c65ab0273d412bfd67d6b8ddf18de8255852893bd5ce986a9a37bbccb5140c6f202f3d26f7109e46979fad206498659536dcddac93a698d97a1f1ae3a48
+package_commitment=bd07d54f37243c3b78e5ed3cec6ca4f0c1e2585798a032e424498c6e1db3a001a02e4776b312d193c868a35372fb05f325614a965172452c31c97de73ce9440a
+suite=17eb5574a77c011050ff52f9dbb8023b356527946c6bbe569996303922464009ee8bf0886029ef90aba679360e8ffab56db4624ed49b9de91cc3f05d46d0f30d
+schedule=c419abe698712f68ab09536ebd1d53a83a5e75fa6d1f7e6ba76f2de486ca925471b5b8f6f4690394b723bafaea1b8817e755b6ed52bca930aa60f2dfb6561689
+transcript=55374eced434682caf43be936e8a6a1b1db39538519221975a2cef077ef4c8740d8974d7971a0f8f64c53937fba51484cc14c3d7891ecf63fa72e684cb0c9312
+proof_identity=971942ec980bb2e0a2e038b0752eabbd09ca1b0bc6a69cdbb157b3e3f93cefddbbac9a54126768abd13fc66ecc97ce16783cab5a1271fd2a81adeea61ccb9ead
+proof_bytes=11616597
+package_bytes=11684436
+binding_bytes=11741761
+scratch_entries=0
+```
+
+The rebuilt native verifier consumed that exact envelope:
+
+```text
+& k512_atomic_semantic_prototype.exe --verify-state-binding compact-state-binding-v2.bin
+state_plane_binding_verified=true
+state_plane_statement_sha3_512=f839410300674014ed4204e116c4b4c6b297e0d9603a55629a6b9c2d7cad651f72aecac54d2911693c435fbd5b8009d4b92c374db80446daa785c18490301760
+state_plane_binding_digest_sha3_512=eea81434f1bbdc8e57569f327ef6fc46f96f1de9c5202af36601375d10a805fe1f033804dbdd40dadcd00ff25121052c0644236cf74676eafc4ac2710a09ce8e
+exit=0
+```
+
+A targeted mutation changed the before-snapshot `present` cell in the serialized execution from
+`0` to `1`. Native verification rejected the mutated AIR at the new lookup boundary:
+
+```text
+exit=2
+ERR:state_binding_air_execution:LookupMultisetMismatch
+```
+
+The first fresh fixture attempt was not credited: the existing release worker was stale and did
+not create the requested private package, producing:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: '...\\compact-state-scratch\\bl-state-air-proof-...bin'
+```
+
+The exact worker was rebuilt with `cargo +1.96.0 build --release --offline --locked --features
+parallel --bin selected_streaming_prover_worker` into its declared target before the successful
+rerun. This was a build-artifact correction; no source gate was weakened.
+
+Additional source checks:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_relation_executable_air.py
+4 passed in 0.27s
+
+cargo +1.96.0 fmt --all -- --check
+exit=0
+
+cargo +1.96.0 check --offline --locked --features parallel --bin selected_streaming_prover_worker --bin k512_atomic_semantic_prototype
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.38s
+
+git diff --check
+exit=0
+```
+
+This phase closes the compact component's algebraic operation-to-snapshot equality/order boundary,
+not Gate 2E admission. The full state relation remains outside the custom H4 GKR/PCS composition;
+no reviewed PQ commitment backend is admitted, the complete simulator/leakage/security ledger is
+open, H5's exact 22 launches have not started, H6 is open, `proofSuiteId=null`, activation=false,
+no production CUDA proof was run, and no real PHI/payments are authorized.
