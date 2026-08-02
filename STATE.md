@@ -5270,3 +5270,95 @@ not changed by archive creation; no remote push was performed. The archive is a 
 source/test/docs artifact only: `proofSuiteId=null`, activation=false, no PHI/payments, and no
 production CUDA.
 ```
+
+## 2026-08-02 Repository-root cleanup and three-archive refresh - VERIFIED, NONACTIVATING
+
+The active source/document/test cleanup was committed before archive creation as
+`c84efa7591e43b2a440145db73cbae9ef0624242`, tree
+`4ce8e369a7186e74fc9700763aae6b9e5d22706e`. No protected path was edited. The active checkout is
+the repository root; tracked `ops/` remains the sole operational authority.
+
+The stale active documentation and path references were corrected in `README.md`, `ARCHITECTURE.md`,
+`PROJECT_MAP.md`, `QUICKSTART.md`, `docs/ARCHITECTURE_TECHNICAL.md`,
+`docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md`,
+`experiments/bl_pq512_crypto_foundation/README.md`, `ops/DEPLOYMENT_RUNBOOK.md`, and
+`ops/PRODUCTION_CONFIG_CHECKLIST.md`. The changes remove nested app-root, sibling-ops, missing-ops,
+obsolete four-candidate, stale Forge-vendor, and historical collection-count claims from active
+guidance. The active source/test corrections were `app/operator_portal.py`,
+`app/policy_spec.py`, `app/production_readiness.py`,
+`experiments/bl_pq512_crypto_foundation/gate_2e_selection.py`,
+`ops/native_stark_public_inputs_v1.json`, `ops/verifier_artifact_pin.example.json`,
+`tests/attacks/test_harder_attack_surface_hunt.py`,
+`tests/test_evidence_and_public_inputs.py`, and `tests/test_operational_readiness.py`.
+The V1 21-field artifact remains an intentional legacy/compatibility control; only its stale source
+path was corrected and its exact SHA256/SHA3-512 identities were resealed.
+
+The active stale-reference scan returned no nested `blind-ledger-app-layer`, sibling `../ops`,
+missing-canonical-ops, old four-candidate, or external `third_party/forge` references. Retained
+matches are intentional and were not edited: the `AGENTS.md` prohibition, current closed-blocker
+notes in `KNOWN_ISSUES.md` and `docs/CURRENT_TECH_STACK.md`, the generic sibling-copy prohibition
+in `docs/ARCHITECTURE_TECHNICAL.md`, dated historical evidence in
+`docs/PHASE1_EXECUTION_LOG_2026-07-13.md`, protected historical provenance in
+`zk-cairo-sharp/SECURITY_ATTACK_NOTES.md`, the legacy-marker rejection in
+`app/operational_readiness.py`, its matching rejection fixture in
+`tests/test_production_readiness.py`, the SPDX package identifier in
+`tests/test_foundation_spec.py`, and the protected batch label in
+`app/batch/batch_orchestrator.py`.
+
+No stale test file was removed (`0`). The retained V1, Circle-FRI, Cairo, rejection, and fixture
+tests protect current compatibility, migration, differential, or fail-closed boundaries; deleting
+them would remove evidence rather than remove dead behavior. The two stale test-root calculations
+were corrected. Ordinary collection was `1205 tests collected in 6.40s`; attack collection was
+`448 tests collected`. The full attack lane passed `448 passed, 31 warnings, 36 subtests passed in
+448.59s (0:07:28)`. The final bounded active-source/readiness/Gate-2E lane passed `142 passed, 7
+warnings, 8 subtests passed in 80.91s (0:01:20)`. The ordinary full execution lane was attempted
+but timed out with exit `124` after `1078570 ms` without a pytest summary; it receives no pass
+credit. The exact pytest process check found `remaining_exact_processes=0` after cleanup.
+Warnings were the expected local-dev rules-engine fallback and the existing Starlette/httpx
+deprecation warning; no warning was promoted to a pass or silently suppressed.
+
+Bounded generated bloat cleanup removed `19` files and `5,443,857` bytes from exact targets:
+`experiments/bl_pq512_crypto_core/cuda/nvrtc-cache` (`1` file, `5,202,967` bytes),
+`app/__pycache__` (`3`, `19,844`), `app/batch/__pycache__` (`5`, `137,961`), and
+`tests/attacks/__pycache__` (`10`, `83,085`). Earlier parent-work cleanup removed the exact
+recorded generated targets totaling `3,657` files and `3,646,692,083` bytes. The live
+`experiments/bl_pq512_crypto_core/cuda/cuda_nvrtc` runtime remains (`11` files,
+`187,059,841` bytes) because the current CUDA source directly loads `nvrtc64_120_0.dll`; it is
+not disposable cache. No `.pyc` or selected temporary proof/witness artifact remains.
+
+The release builder staged the exact source commit and selected `770` of `787` tracked files after
+the unchanged structural privacy gate excluded `17` paths. The first builder attempt failed closed
+with `source root contains missing, unknown, or unlisted entries` because the excluded files were
+still physically present in the staging root; exactly those `17` staging files were removed, no
+source file was removed, and the builder then passed. The deterministic archive test passed
+`18 passed, 54 subtests passed in 0.85s`. A first post-replacement readback command had a shell
+quoting syntax error and wrote nothing; the literal-script readback below passed independently.
+
+All three current output ZIPs now contain the identical bytes from source commit
+`c84efa7591e43b2a440145db73cbae9ef0624242`:
+
+```text
+blind-ledger-wave2-state-bus-pq-candidate-2026-08-02.zip
+blind-ledger-wave3-p01-p03-candidate-2026-08-02.zip
+blind-ledger-current-clean-2026-08-02.zip
+
+archive_bytes=10783587
+archive_sha256=2b3da27068e1ddba0a78bab10e1a824081d23de93168bd81e1332227985359e9
+zip_entry_count=771
+zip_crc_result=None
+manifest_sha256=f03ef370ef48e36731eeb81651ac349ebebd1f4c906cda836c06be343af9560e
+manifest_payload_file_count=770
+manifest_payload_bytes=10501210
+entries_match=True
+all_three_byte_identical=True
+```
+
+The ZIPs are outside the source checkout at
+`C:\Users\neers\Documents\Codex\2026-08-01\files-mentioned-by-the-user-continue\outputs`.
+The old two archives were replaced only after fresh builder and independent readback success. The
+exact temporary stage (`771` files, `10,616,535` bytes), tar (`1` file, `11,765,760` bytes), and
+superseded-archive backup (`2` files, `21,558,859` bytes) were then removed and each path verified
+missing. No remote push was performed.
+
+The repository remains nonactivating: `proofSuiteId=null`, activation=false, six of 93 packages
+complete, no H5/H6 qualification, no production CUDA proof, and no real PHI or payments.
