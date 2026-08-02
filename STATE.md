@@ -5493,3 +5493,48 @@ The full Rust library-test batch was attempted in an external target and timed o
 `tests/test_bl_pq512_selected_prover_parameters.py`; it ran `no tests ran in 0.00s` and is not
 evidence. The corrected lanes above are the credited results. No stale test file was removed:
 `0`; existing tests remain because they cover compatibility, mutation, and fail-closed behavior.
+
+## 2026-08-02 Final compact-state source/archive/hygiene seal - VERIFIED, NONACTIVATING
+
+The implementation, tests, and active documentation were committed on `main` as
+`561cacb893e54ca9638228a8cffd1fdf732130d6`, tree
+`67b31a69d48690a4644cc9c7733bce0634c829b0`. The staged protected-path check reported
+`protected_path_changes=0`; the source checkout was clean after that commit. No remote push was
+performed.
+
+All three requested output ZIPs were rebuilt from that exact implementation commit in a separate
+stage. The privacy/allowlist gate selected 774 payload files from 791 tracked files and excluded
+the same 17 deliberate privacy/opaque-fixture paths used by the existing release policy. The
+builder produced identical receipts for all three:
+
+```text
+archive_bytes=10889447
+archive_sha256=08b638a02e5dd875201f4362afa5c74713d7c0fff0fd54a27bbbf9da7edb19ca
+builder_version=blind-ledger-release-archive-v1
+zip_entry_count=775
+manifest_sha256=ed55cf0ce27ef25c0a2e419f64f72951676153c482630836e83ccca8165081b4
+manifest_payload_file_count=774
+manifest_payload_bytes=10575278
+```
+
+The final independent readback of each output reported `zip_crc_result=None`,
+`manifest_entries_match=True`, `forbidden_entries=0`, and
+`all_three_byte_identical=True`. The four new state-component source/test files are present in
+each archive; no `.bin`, `.zip`, `.pyc`, `.pyo`, log, target, scratch, or proof directory entry is
+present. `tests/test_build_release_archive.py` passed `18 passed, 54 subtests passed in 0.97s`.
+The first post-replacement readback wrapper passed the literal `$args` token and therefore failed
+before reading a ZIP; it changed no artifact. The corrected readback above is the credited result.
+
+After readback, bounded cleanup removed exactly 14 generated targets containing 4,141 files and
+2,362,002,793 bytes: source/external Cargo targets, native proof/test targets, proof binding,
+scratch, archive staging/tar, superseded archive backups, and Python cache directories. Final
+checks report zero `__pycache__` directories and zero `.pyc`/`.pyo` files. The runtime CUDA
+package was retained intentionally: 11 files, 187,059,841 bytes under
+`experiments/bl_pq512_crypto_core/cuda/cuda_nvrtc`; it is loaded by the source and is not a
+disposable cache.
+
+The repository remains nonactivating: `proofSuiteId=null`, activation=false, six of 93 packages
+complete, no H5/H6 qualification, no production CUDA proof, and no real PHI/payments. The full
+state relation inside custom H4 GKR/PCS, reviewed backend admission, complete simulator/leakage
+composition, and H5's exact 22 launches remain the next real blockers; this seal does not claim
+Gate 2E completion.
