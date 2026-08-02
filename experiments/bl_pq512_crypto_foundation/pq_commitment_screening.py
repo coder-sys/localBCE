@@ -30,6 +30,9 @@ from experiments.bl_pq512_crypto_foundation.pq_signature_adapters import (
     SPHINCS_SHAKE_256F_SIMPLE_SUITE_ID,
     is_exact_supported_adapter,
 )
+from experiments.bl_pq512_crypto_foundation.hash_pad_security_review import (
+    hash_pad_security_review,
+)
 
 
 STATUS: Final[str] = "S3_PQ_COMMITMENT_SCREENING_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
@@ -436,6 +439,10 @@ def screen_backend(backend_id: str) -> BackendScreenResult:
         reasons.append("implementation_not_complete_reviewed_reference")
     if not descriptor.complete_composition:
         reasons.append("complete_composition_missing")
+    if descriptor.backend_id == "TRANSPARENT_HASH_CODE":
+        review = hash_pad_security_review()
+        if review.decision != "ADMITTED_GATE_2E_BACKEND":
+            reasons.append("hash_pad_security_review_rejected")
     reasons_tuple = tuple(dict.fromkeys(reasons))
     digest = _hash(
         _DESCRIPTOR_DOMAIN,

@@ -2960,6 +2960,32 @@ def atomic_parent_binding():
     return binding
 
 
+def atomic_state_binding():
+    statement_encoded = os.environ.get("BL_STATE_PLANE_STATEMENT_DIGEST")
+    binding_encoded = os.environ.get("BL_STATE_PLANE_BINDING_DIGEST")
+    if (statement_encoded is None) != (binding_encoded is None):
+        raise SystemExit("state_plane_binding_env_pair")
+    if statement_encoded is None:
+        return None
+    values = []
+    for label, encoded in (
+        ("state_plane_statement", statement_encoded),
+        ("state_plane_binding", binding_encoded),
+    ):
+        if len(encoded) != 128:
+            raise SystemExit(f"{label}_length")
+        try:
+            value = bytes.fromhex(encoded)
+        except ValueError as error:
+            raise SystemExit(f"{label}_encoding") from error
+        if len(value) != 64 or not any(value):
+            raise SystemExit(f"{label}_shape")
+        values.append(value)
+    if atomic_parent_binding() is None:
+        raise SystemExit("state_plane_binding_without_parent")
+    return tuple(values)
+
+
 def public_coin_identity(gkr_mask_root):
     parent_binding = atomic_parent_binding()
     parent_suffix = (
@@ -3008,6 +3034,7 @@ def main():
     if len(sys.argv) != 1:
         raise SystemExit("usage: cuda_fp16_zk_rs_theorem8_1_k128_prototype.py")
     proof_process_started = time.perf_counter()
+    state_binding = atomic_state_binding()
     semantic_boundary_path = os.environ.get(
         "BL_HASH_BUS_B16_BOUNDARY"
     )
@@ -4439,6 +4466,18 @@ def main():
         print(
             "atomic_parent_binding_sha3_512="
             + ("none" if parent_binding is None else parent_binding.hex())
+        )
+        print(
+            "state_plane_binding_attached="
+            + ("false" if state_binding is None else "true")
+        )
+        print(
+            "state_plane_statement_sha3_512="
+            + ("00" * 64 if state_binding is None else state_binding[0].hex())
+        )
+        print(
+            "state_plane_binding_digest_sha3_512="
+            + ("00" * 64 if state_binding is None else state_binding[1].hex())
         )
         print(f"sumcheck_seconds={sumcheck_seconds:.6f}")
         print(

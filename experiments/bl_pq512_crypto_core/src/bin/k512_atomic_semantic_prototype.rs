@@ -12,7 +12,7 @@ use bl_pq512_crypto_core::{
 };
 use sha3::{Digest, Sha3_512};
 
-const ATOMIC_PARENT_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/ATOMIC-SEMANTIC-PARENT/v2\0";
+const ATOMIC_PARENT_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/ATOMIC-SEMANTIC-PARENT/v3\0";
 const ATOMIC_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/ATOMIC-SEMANTIC-RECEIPT/v2\0";
 const STATE_ROOT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/ROOT/v1\0";
 const STATE_MANIFEST_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/MANIFEST/v1\0";
@@ -211,6 +211,10 @@ fn run() -> Result<(), String> {
             hex(&expected_manifest)
         ));
     }
+    let state_binding_digest = state_binding
+        .as_ref()
+        .map(|binding| binding.binding_digest)
+        .unwrap_or([0; 64]);
     let parent_binding = atomic_parent_binding(
         header.profile as u8,
         header.semantic_program_commitment,
@@ -224,15 +228,23 @@ fn run() -> Result<(), String> {
         plan_commitment,
         execution_manifest,
         statement,
+        state_binding_digest,
     );
     let parent_hex = hex(&parent_binding);
     let file_hex = hex(&header.file_sha3_512);
+    let expected_state_statement = state_binding
+        .as_ref()
+        .map(|binding| hex(&binding.statement));
+    let expected_state_binding = state_binding
+        .as_ref()
+        .map(|binding| hex(&binding.binding_digest));
 
     let total_started = Instant::now();
     let mut evidence = Vec::with_capacity(usize::from(expected_shards));
     for shard in 0..expected_shards {
         let shard_started = Instant::now();
-        let output = Command::new(&python)
+        let mut child = Command::new(&python);
+        child
             .arg("-S")
             .arg(&prototype)
             .env("BL_HASH_BUS_B16_BOUNDARY", &boundary)
@@ -247,7 +259,16 @@ fn run() -> Result<(), String> {
             .env(
                 "BL_SPOTCHECK_VERIFIER",
                 native_directory.join(NATIVE_EXECUTABLES[2]),
-            )
+            );
+        if let Some(binding) = state_binding.as_ref() {
+            child
+                .env("BL_STATE_PLANE_STATEMENT_DIGEST", hex(&binding.statement))
+                .env(
+                    "BL_STATE_PLANE_BINDING_DIGEST",
+                    hex(&binding.binding_digest),
+                );
+        }
+        let output = child
             .output()
             .map_err(|error| format!("shard_spawn:{shard}:{error}"))?;
         if output.stdout.len() > MAX_CHILD_STDOUT || output.stderr.len() > MAX_CHILD_STDERR {
@@ -261,7 +282,15 @@ fn run() -> Result<(), String> {
             ));
         }
         let fields = parse_fields(&output.stdout)?;
-        validate_shard_fields(&fields, shard, header.profile as u8, &file_hex, &parent_hex)?;
+        validate_shard_fields(
+            &fields,
+            shard,
+            header.profile as u8,
+            &file_hex,
+            &parent_hex,
+            expected_state_statement.as_deref(),
+            expected_state_binding.as_deref(),
+        )?;
         let wall_seconds = parse_f64(&fields, "complete_process_wall_seconds")?;
         let host_peak_mb = parse_f64(&fields, "proof_phase_host_peak_mb")?
             .max(parse_f64(&fields, "parent_process_lifetime_host_peak_mb")?)
@@ -297,10 +326,6 @@ fn run() -> Result<(), String> {
         );
     }
 
-    let state_binding_digest = state_binding
-        .as_ref()
-        .map(|binding| binding.binding_digest)
-        .unwrap_or([0; 64]);
     let receipt = match state_binding {
         Some(_) => {
             atomic_receipt_with_state(parent_binding, statement, state_binding_digest, &evidence)
@@ -372,6 +397,7 @@ fn atomic_parent_binding(
     plan_commitment: [u8; 64],
     execution_manifest: [u8; 64],
     statement: [u8; 64],
+    state_binding_digest: [u8; 64],
 ) -> [u8; 64] {
     let mut hash = Sha3_512::new();
     hash.update(ATOMIC_PARENT_DOMAIN);
@@ -387,6 +413,7 @@ fn atomic_parent_binding(
     hash.update(plan_commitment);
     hash.update(execution_manifest);
     hash.update(statement);
+    hash.update(state_binding_digest);
     hash.finalize().into()
 }
 
@@ -947,6 +974,8 @@ fn validate_shard_fields(
     profile: u8,
     file_digest: &str,
     parent_binding: &str,
+    state_statement_digest: Option<&str>,
+    state_binding_digest: Option<&str>,
 ) -> Result<(), String> {
     for key in [
         "sumcheck_chain_verified",
@@ -997,6 +1026,36 @@ fn validate_shard_fields(
         || required(fields, "atomic_parent_binding_sha3_512")? != parent_binding
     {
         return Err(format!("shard_binding:{shard}"));
+    }
+    validate_state_binding_fields(fields, shard, state_statement_digest, state_binding_digest)?;
+    Ok(())
+}
+
+fn validate_state_binding_fields(
+    fields: &BTreeMap<String, String>,
+    shard: u16,
+    expected_statement: Option<&str>,
+    expected_binding: Option<&str>,
+) -> Result<(), String> {
+    let zero = hex(&[0; 64]);
+    match (expected_statement, expected_binding) {
+        (Some(statement), Some(binding)) => {
+            if required(fields, "state_plane_binding_attached")? != "true"
+                || required(fields, "state_plane_statement_sha3_512")? != statement
+                || required(fields, "state_plane_binding_digest_sha3_512")? != binding
+            {
+                return Err(format!("shard_state_binding:{shard}"));
+            }
+        }
+        (None, None) => {
+            if required(fields, "state_plane_binding_attached")? != "false"
+                || required(fields, "state_plane_statement_sha3_512")? != zero
+                || required(fields, "state_plane_binding_digest_sha3_512")? != zero
+            {
+                return Err(format!("shard_state_binding:{shard}"));
+            }
+        }
+        _ => return Err(format!("shard_state_binding_shape:{shard}")),
     }
     Ok(())
 }
@@ -1222,6 +1281,7 @@ mod tests {
             [5; 64],
             [10; 64],
             [6; 64],
+            [11; 64],
         );
         let changed = atomic_parent_binding(
             3,
@@ -1236,6 +1296,7 @@ mod tests {
             [5; 64],
             [10; 64],
             [7; 64],
+            [11; 64],
         );
         assert_ne!(parent, changed);
         let evidence = [ShardEvidence {
@@ -1249,6 +1310,38 @@ mod tests {
         assert_ne!(
             atomic_receipt(parent, [6; 64], &evidence),
             atomic_receipt(changed, [6; 64], &evidence)
+        );
+    }
+
+    #[test]
+    fn state_binding_fields_are_exactly_replayed() {
+        let statement = hex(&[11; 64]);
+        let binding = hex(&[12; 64]);
+        let mut fields = BTreeMap::from([
+            (
+                "state_plane_binding_attached".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "state_plane_statement_sha3_512".to_string(),
+                statement.clone(),
+            ),
+            (
+                "state_plane_binding_digest_sha3_512".to_string(),
+                binding.clone(),
+            ),
+        ]);
+        assert!(
+            validate_state_binding_fields(&fields, 0, Some(&statement), Some(&binding),).is_ok()
+        );
+        fields.insert(
+            "state_plane_binding_digest_sha3_512".to_string(),
+            hex(&[13; 64]),
+        );
+        assert_eq!(
+            validate_state_binding_fields(&fields, 0, Some(&statement), Some(&binding))
+                .unwrap_err(),
+            "shard_state_binding:0"
         );
     }
 }

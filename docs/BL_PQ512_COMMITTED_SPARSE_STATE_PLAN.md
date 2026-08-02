@@ -178,13 +178,17 @@ fail closed.
    `../ops` blocker remains recorded. A production state plane is not selected until a reviewed
    backend and complete H4 binding exist.
 
-The smallest nonactivating state boundary is now implemented separately in
+The smallest nonactivating state boundary is implemented separately in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
-all-slot replay, a pad-masked commitment, independent verification, and crash-safe file CAS, and
-the native H4 coordinator can verify its canonical envelope and bind the resulting statement into
-the existing parent/receipt seam. This is implementation evidence only: it does not select a PQ
-backend, establish the state relation inside the H4 AIR, close native hiding, or authorize
-`proofSuiteId` or activation.
+all-slot replay, a pad-masked commitment, independent verification, and crash-safe file CAS. The
+native H4 coordinator now binds the state digest into the v3 parent, each child shard's exact
+statement/digest echo, and the atomic receipt. The composable
+`experiments/fixed_shape_claim_air/state_plane_executable_air.py` constrains every bounded old/new
+slot and both SHA3-512 roots; `compose_state_plane_air` merges it into one executable AIR input.
+This is still implementation evidence only: the native H4 coordinator does not yet consume that
+AIR fragment, the full transition/commitment relation is not admitted, and the digest-bound
+hash-pad security review rejects the current candidate for Gate 2E. `proofSuiteId` and activation
+remain closed.
 
 ## 6. Acceptance gates
 
@@ -238,6 +242,11 @@ identity as `STATE_PLANE_IMPLEMENTED_H4_PENDING`; the default preflight remains
 complete simulator or leakage scan, establish state constraints inside H4, qualify H5, assign
 `proofSuiteId`, or authorize activation. The missing canonical `../ops` sibling remains a
 fail-closed blocker.
+
+The hash-pad review at `docs/BL_PQ512_HASH_PAD_COMMITMENT_SECURITY_REVIEW.md` is an explicit
+rejection record, not selection evidence. It credits only the exact one-time-pad condition for
+ciphertext hiding and the independently replayed reference opening. It gives no generic SHA3
+collision, QROM, Fiat-Shamir, grinding, or unfrozen public-coin-order credit.
 
 When a reviewed candidate is eventually admitted, the resulting decision has the following
 meaning: This selects the Gate 2E candidate; it is not H5 qualification. The admission handoff

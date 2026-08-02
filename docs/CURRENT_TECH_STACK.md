@@ -72,14 +72,19 @@ ops, and independent verification. The ledger is reference-only and unsealed; it
 are `no_backend_admitted`, `complete_simulator_missing`, `complete_leakage_scan_missing`,
 `h4_atomic_binding_deferred`, `canonical_ops_missing`, and `proof_suite_unselected`.
 
-The smallest real state boundary is now implemented in
+The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
 all-slot old/new replay, a 512-bit pad-masked SHA3 commitment, independent replay verification,
 and crash-safe compare-and-swap publication. The native H4 coordinator accepts an explicit
-`state-file:<path>` binding envelope and recomputes the same statement, commitment, proof identity,
-and receipt before using the statement in the parent; Python/Rust K128-shape KATs match byte for
-byte. This is implemented nonactivating evidence, not a selected PQ proof suite: native H4 AIR
-state constraints, complete hiding/composition review, and the terminal Gate 2E seal remain open.
+`state-file:<path>` binding envelope, includes the state-binding digest in the v3 parent, requires
+each child shard to echo the exact state statement and binding digest, and includes that digest in
+the atomic receipt. The composable
+`experiments/fixed_shape_claim_air/state_plane_executable_air.py` now constrains every bounded
+old/new slot, empty-slot zeroing, both canonical snapshot encodings, real SHA3-512 root calls,
+and ordered public roots; `compose_state_plane_air` merges it into one executable AIR encoding.
+This remains nonactivating evidence: the native H4 coordinator does not yet consume the AIR
+fragment, the full transition/commitment composition is not admitted, and the hash-pad security
+review rejects the current candidate for Gate 2E.
 
 ## How a successor must interpret this repository
 

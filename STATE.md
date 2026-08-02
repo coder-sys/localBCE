@@ -4579,3 +4579,55 @@ This is real implementation progress, not Gate 2E closure: the four existing PQ 
 reject, the native H4 AIR does not yet constrain the persistent state relation itself, the complete
 hiding/composition theorem and simulator remain open, the trusted canonical `../ops` sibling is
 still unavailable, and H5 has not launched. No production CUDA, PHI, or payments are authorized.
+
+## 2026-08-02 state-binding hardening, state-root AIR, and hash-pad security review - VERIFIED, NO ADMISSION
+
+The native state seam is now stricter. The v3 atomic parent includes the state-binding digest;
+each child shard receives the exact state statement and binding digest through dedicated
+environment inputs; the child emits exact `state_plane_*` fields; and the Rust coordinator rejects
+missing, zero, mismatched, or legacy state metadata before recording shard evidence. The digest is
+also retained in the state-aware atomic receipt. Legacy non-state execution requires explicit
+false/zero state fields and remains nonactivating.
+
+The new
+`experiments/fixed_shape_claim_air/state_plane_executable_air.py` is a real composable AIR
+fragment, not a host-only check. It constrains every fixed-capacity old/new slot, boolean presence,
+empty-slot zeroing, dynamic slot bytes to both canonical snapshot encodings, both encodings to
+executable SHA3-512 message AIR, and each SHA3 digest to ordered public before/after root bytes.
+`compose_state_plane_air` namespaces and merges that fragment into one executable AIR instance.
+It does not yet include the full transition/manifest/projection/hash-pad receipt relation, and the
+native H4 coordinator does not yet consume the fragment; those remain admission work.
+
+Raw focused verification:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py tests/test_bl_pq512_state_plane_executable_air.py tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py tests/test_bl_pq512_hash_pad_security_review.py tests/attacks/test_bl_pq512_hash_pad_security_review_attacks.py tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+45 passed in 164.27s (0:02:44)
+
+Set-Location experiments/bl_pq512_crypto_core; cargo fmt --all -- --check
+exit 0
+cargo test --offline --locked --features std --bin k512_atomic_semantic_prototype
+5 passed; 0 failed
+```
+
+The composed state AIR was also accepted by the independent Rust AIR evaluator:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_plane_executable_air.py::test_rust_independent_evaluator_accepts_composed_state_air
+1 passed in 47.28s
+```
+
+The digest-bound review in
+`docs/BL_PQ512_HASH_PAD_COMMITMENT_SECURITY_REVIEW.md` rejects the current hash-pad candidate
+for Gate 2E: its full 256-bit quantum binding/composition theorem and commit-before-coin lifecycle
+are not closed, and no generic SHA3 collision/QROM/Fiat-Shamir/grinding credit is taken. This
+replaces the vague `unreviewed` state with a specific negative decision; it does not admit a
+backend. `proofSuiteId=None`, activation remains false, H5 remains unlaunched, and the trusted
+canonical `../ops` sibling remains an external fail-closed blocker.
+
+Review/screening readback with the explicit synthetic test environment:
+
+```text
+review_digest_sha3_512=24cdd3790d6aeab257491a3c089a267ebc21fcb9ce5968617df469442e36fabd10957097ed84421189919f74d27a8abb7c0a4f11c613138e4142fe1717931b63
+transparent_screen_reasons=strict_pq_assumption_not_reviewed,native_hiding_theorem_unreviewed,authenticated_public_coin_composition_unreviewed,implementation_not_complete_reviewed_reference,complete_composition_missing,hash_pad_security_review_rejected
+```

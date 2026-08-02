@@ -234,6 +234,14 @@ proof-identity, and relation-result mutations. This closes only the synthetic no
 composition/reference-receipt boundary. It does not select a relation or commitment, prove a
 production PCS, close migration, or authorize state publication. Proceed to 2E-5/S5.
 
+The follow-on state work now has two bounded implementation boundaries: the native coordinator
+binds the state digest into its v3 parent, exact child-shard echoes, and atomic receipt, while
+`fixed_shape_claim_air/state_plane_executable_air.py` constrains every fixed-capacity old/new slot
+and links both canonical snapshot roots to executable SHA3-512 AIR. The fragment is composable but
+is not yet consumed by the native H4 coordinator. The separate hash-pad security review rejects
+the current candidate because its full 256-bit quantum binding/composition theorem and
+commit-before-coin lifecycle are not closed; no backend is admitted and H5 remains blocked.
+
 ### 2E-5 - close migration and failure semantics
 
 Test genesis, layout migration, checkpoint publication, conflicting CAS, reorganization, rollback,
