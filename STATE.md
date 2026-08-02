@@ -4977,5 +4977,59 @@ py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_wave3_nullifier_au
 ```
 
 No production verifier command was run, no proof artifact was generated, no package was marked
-complete, and no activation input changed. The next safe action is a deliberately nonactivating
-document/Git/archive seal; durable custody and verifier work must remain downstream of Gate 2E/H6.
+complete, and no activation input changed. Durable custody and verifier work remain downstream of
+Gate 2E/H6.
+
+## 2026-08-02 Wave 3 Git/archive/hygiene seal - VERIFIED, NONACTIVATING
+
+The candidate and its documentation were committed on `main` as
+`261e5bbe0740ce6c655dbe3dab8af85f7277cf81`, tree
+`b81fb8f8ad35ccf41b4b68248f9b7defadaff64b`. The source checkout was clean immediately after that
+commit. No remote push was performed.
+
+The deterministic archive was built from that exact commit in a separate staging directory. The
+privacy gate selected 767 of 784 tracked files and excluded 17 without weakening the gate:
+
+```text
+tracked_paths=784
+privacy_safe_paths=767
+privacy_excluded_paths=17
+exclude_reason_count=2 reason=release JSON failed the structural privacy gate
+exclude_reason_count=5 reason=release payload contains an opaque non-text file
+exclude_reason_count=10 reason=release payload failed the structural privacy gate
+```
+
+Excluded paths were `STATE.md`, `WAVE2_HANDOFF_2026-07-26.md`, `app/operational_readiness.py`,
+`docs/security-freeze/BL-PQ512-v1/hardening.json`, `sample_claim_input.json`,
+`schemas/bl_pq512_witness_v0.schema.json`, `tests/attacks/test_proving_evidence_policy_attacks.py`,
+`tests/test_build_release_archive.py`, `tests/test_measure_proving.py`,
+`tests/test_privacy_artifact_scan.py`, `tools/measure_proving.py`, `tools/privacy_artifact_scan.py`,
+and the five `portal_shared/fonts/*.woff2` files. The exclusions are recorded because those files
+contain deliberate privacy-test fixtures, historical host paths, sensitive JSON fields, or opaque
+font bytes; they were not edited to make packaging pass.
+
+The first file-path invocation of the builder failed before archive validation with
+`ModuleNotFoundError: No module named 'tools'` and created no ZIP. Running the same builder as the
+repository module corrected only the import surface and then passed deterministic capture and
+readback:
+
+```text
+py -3.14 -m tools.build_release_archive --source-root <separate-stage> --manifest <stage>/APP_RELEASE_FILE_MANIFEST.json --output <outputs>/blind-ledger-wave3-p01-p03-candidate-2026-08-02.zip
+{"archive_bytes":10745658,"archive_sha256":"7e39b2d453c1c14fc3e72a1e8cecc3f79c6bdc1d223fcbc1f3b032e29f095592","builder_version":"blind-ledger-release-archive-v1","entry_count":768,"manifest_sha256":"ffffd7c1d7e665b7a9f050a72143f7467f67df5b0d4cc0eefcddd85796ea9a03","payload_bytes":10438366,"payload_file_count":767,"receipt_version":1}
+```
+
+The resulting ZIP is outside the source checkout at
+`C:\Users\neers\Documents\Codex\2026-08-01\files-mentioned-by-the-user-continue\outputs\blind-ledger-wave3-p01-p03-candidate-2026-08-02.zip`.
+Independent readback reported `zip_entry_count=768`, `zip_crc_result=None`, first entry
+`Blind-Ledger-Release/RELEASE_FILE_MANIFEST.json`, last entry
+`Blind-Ledger-Release/zk-cairo-sharp/src/lib.cairo`, and manifest SHA-256
+`ffffd7c1d7e665b7a9f050a72143f7467f67df5b0d4cc0eefcddd85796ea9a03`.
+`tests/test_build_release_archive.py` passed `18 passed, 54 subtests passed in 0.99s`.
+
+Generated bloat cleanup was bounded to exact generated paths. The first purge removed 16 targets
+and `11,338,995,599` bytes, including the 9.25 GB Rust target, 1.47 GB runtime/proof cache, and
+615 MB secondary Cargo target. The final purge removed the separate archive staging directory and
+two regenerated Python-cache targets: 3 targets and `10,681,750` bytes. Both purges left zero
+remaining selected targets and zero `.pyc` files. The tracked `_handoff_support` source file was
+retained. Git remains nonactivating: `proofSuiteId=null`, activation=false, 6/93 complete, and no
+real PHI or payments.
