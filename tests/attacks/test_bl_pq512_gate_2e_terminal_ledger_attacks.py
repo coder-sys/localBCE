@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from hashlib import sha3_512
 import os
+import subprocess
 from unittest import mock
 
 import pytest
@@ -24,6 +25,7 @@ from experiments.bl_pq512_crypto_foundation.pq_signature_adapters import (
     MlDsa87PqcryptoAdapter,
     SphincsShake256fSimplePqcryptoAdapter,
 )
+from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority
 from experiments.bl_pq512_crypto_foundation.state_migration_recovery import (
     checkpoint_from_composition,
 )
@@ -133,3 +135,31 @@ def test_canonical_ops_authority_readback_cannot_be_forged(context) -> None:
         build_terminal_ledger(
             replace(context, handoff=forged_handoff, canonical_ops_available=False)
         )
+
+
+def test_alternate_ops_authority_root_is_rejected(tmp_path) -> None:
+    alternate = tmp_path / "ops"
+    alternate.mkdir()
+    with pytest.raises(ValueError, match="ops_authority_root_not_canonical"):
+        verify_ops_authority(alternate)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS junction regression is Windows-specific")
+def test_ops_authority_junction_root_is_rejected(tmp_path) -> None:
+    external = tmp_path / "external"
+    junction = tmp_path / "ops-junction"
+    external.mkdir()
+    created = subprocess.run(
+        ("cmd", "/c", "mklink", "/J", str(junction), str(external)),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if created.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {created.stderr.strip()}")
+    try:
+        assert junction.is_junction()
+        with pytest.raises(ValueError, match="ops_authority_root_not_canonical"):
+            verify_ops_authority(junction)
+    finally:
+        junction.rmdir()

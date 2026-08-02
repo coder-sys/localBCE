@@ -66,6 +66,10 @@ The terminal Gate 2E evidence boundary is now implemented in
 `gate_2e_terminal_ledger.py`. It independently replays S4, derives S5 checkpoints, checks the
 frozen C0 positive/negative parity and exact 12-field boundary, checks that raw private relation
 material is absent from its public encoding, and binds the S6/S7 decision/handoff identities. It
+rejects a caller-supplied state proof unless its independently replayed profile, parameter,
+capacity, epoch, sequence, old/new roots, manifest, and exact ordered 12-field projection match
+the independently replayed S4 transition and S5 checkpoints. This is a fail-closed pre-admission
+check, not proof-native H4 equality or state-plane admission. It
 records 11 ordered obligation records for atomic composition, the semantic/PCS/public-coin
 simulator, fixed-shape leakage, state/proof receipt, migration, strict-PQ selection, canonical
 ops, and independent verification. The ledger is reference-only and unsealed; its current blockers
@@ -75,7 +79,9 @@ are `no_backend_admitted`, `complete_simulator_missing`, `complete_leakage_scan_
 The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
 all-slot old/new replay, a 512-bit pad-masked SHA3 commitment, independent replay verification,
-and crash-safe compare-and-swap publication. The native H4 coordinator accepts an explicit
+and crash-safe compare-and-swap publication. Its decoder rejects every presence byte except exact
+`0` or `1`, requires byte-for-byte canonical re-encoding, and therefore rejects corrupted
+persisted state before root comparison or publication. The native H4 coordinator accepts an explicit
 `state-file:<path>` binding envelope, includes the state-binding digest in the v3 parent, requires
 each child shard to echo the exact state statement and binding digest, and includes that digest in
 the atomic receipt. The composable
@@ -346,9 +352,9 @@ helpers; name cleanup must never change proof bytes or silently drop an authenti
 - Gate 2E-2/S2 scalar positive/negative parity for both frozen profiles, including the independent
   verifier and all seven C0 negative classes.
 
-The former sibling-ops collection stop is closed. Broad suites now resolve the single tracked
-`ops/` authority and fail on any file-set, length, digest, or symlink mismatch; no outward copy or
-fallback tree is permitted.
+The former sibling-ops collection stop is closed. Broad suites now resolve only the exact tracked
+`ops/` authority and fail on any alternate root, file-set, length, digest, symlink, junction, or
+Windows reparse-point mismatch; no outward copy or fallback tree is permitted.
 
 ## Current execution order
 

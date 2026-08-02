@@ -257,6 +257,8 @@ class StateSnapshot:
         for index in range(capacity):
             raw = encoded[cursor : cursor + ENTRY_WIDTH]
             cursor += ENTRY_WIDTH
+            if raw[0] not in (0, 1):
+                raise StatePlaneError("state_plane_snapshot_entry_presence_invalid")
             entry = StateEntry(
                 index=int.from_bytes(raw[1:9], "big"),
                 present=raw[0] == 1,
@@ -267,7 +269,17 @@ class StateSnapshot:
                 raise StatePlaneError("state_plane_snapshot_entry_index_mismatch")
             if entry.present:
                 entries.append(entry)
-        return cls(profile_id, parameter_identity, capacity, epoch, sequence, tuple(entries))
+        snapshot = cls(
+            profile_id,
+            parameter_identity,
+            capacity,
+            epoch,
+            sequence,
+            tuple(entries),
+        )
+        if snapshot.encoded != encoded:
+            raise StatePlaneError("state_plane_snapshot_encoding_noncanonical")
+        return snapshot
 
 
 @dataclass(frozen=True, slots=True)

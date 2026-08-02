@@ -4672,3 +4672,50 @@ and downstream leaf identities. The containing policy/Gate 2E/H5/H6 suite passed
 py -3.14 -m pytest -q tests/test_security_freeze_spec.py tests/test_batch_layer.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
 55 passed, 20 expected local-dev fallback warnings in 160.55s (0:02:40)
 ```
+
+## 2026-08-02 Wave 2 continuation security remediation - VERIFIED, NO ADMISSION
+
+A diff-scoped security audit reviewed all 16 source-like files changed from
+`1efe11badd8d03e183624528d246279b80662eeb` through
+`8b5f58c35127a5e3f7403ccd9fd3b7ebfdda382d`. Three defects were reproduced:
+an unrelated but internally valid state proof could be mixed into the terminal receipt evidence,
+an alternate NTFS junction could be accepted as an operations authority root, and a non-boolean
+persisted-state presence byte could be normalized before CAS. Attack-path policy suppressed all
+three from the external reportable set because the demonstrated paths require local
+developer/operator-equivalent control and create no current privilege escalation. That policy
+classification did not grant correctness credit; all three were remediated.
+
+`StateSnapshot.decode` now accepts only exact `0` or `1` presence bytes and requires the decoded
+snapshot to re-encode byte-for-byte. `FileStateStore.publish` therefore rejects corrupted bytes
+before root comparison or publication. `verify_ops_authority` now accepts only the exact tracked
+`ops/` path and rejects symlink, junction, or Windows reparse redirection on the checkout root,
+operations root, and every authority file. The terminal ledger now rejects a supplied state proof
+unless its independently replayed profile, parameter identity, capacity, epoch, sequences, roots,
+manifest, and exact ordered projection match the independently replayed S4 transition and S5
+checkpoints.
+
+Pre-fix reproduction:
+
+```text
+5 failed in 17.35s
+```
+
+Post-fix focused security closure:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane.py::test_state_snapshot_rejects_noncanonical_presence_byte tests/test_bl_pq512_state_plane.py::test_file_store_rejects_noncanonical_persisted_state_before_cas tests/test_bl_pq512_gate_2e_terminal_ledger.py::test_terminal_ledger_rejects_unrelated_state_plane_proof tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py::test_alternate_ops_authority_root_is_rejected tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py::test_ops_authority_junction_root_is_rejected
+5 passed in 17.10s
+```
+
+Containing state/AIR/Gate-2E/H5/H6/security-freeze verification:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py tests/test_bl_pq512_state_plane_executable_air.py tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/test_bl_pq512_h6_qualification_preflight.py tests/test_security_freeze_spec.py
+36 passed in 150.58s (0:02:30)
+```
+
+This closes the three audited software defects only. The supplied state-proof check remains a
+host-side fail-closed precondition and receives no H4 proof credit. The full state transition AIR,
+reviewed PQ commitment, complete simulator/leakage ledger, proof-native H4 composition, H5 campaign,
+and H6 qualification remain open. `proofSuiteId=None`, activation is false, H5 remains unlaunched,
+and no production CUDA, real PHI, or real payment is authorized.

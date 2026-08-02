@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from hashlib import sha3_512
 from pathlib import Path
+from stat import S_ISDIR, S_ISLNK, S_ISREG
 from typing import Final
 
 
 ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 CANONICAL_OPS_ROOT: Final[Path] = ROOT / "ops"
 OPS_AUTHORITY_STATUS: Final[str] = "VERIFIED_TRACKED_SHA3_512_AUTHORITY"
+_WINDOWS_REPARSE_POINT: Final[int] = 0x400
 
 EXPECTED_OPS_FILES: Final[tuple[tuple[str, int, str], ...]] = (
     ("DEPLOYMENT_RUNBOOK.md", 3108, "2f7ad8e83da5b9d37edb23fbf2b38581504d5fa822ea03914a1e43fe96cf748d9a560f0067fcba69cccdf533ac612c87c1faecb00e70ccd47e4e01376757b3e3"),
@@ -35,17 +37,33 @@ EXPECTED_OPS_FILES: Final[tuple[tuple[str, int, str], ...]] = (
 )
 
 
+def _reject_redirect(path: Path, *, label: str):
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"ops_authority_{label}_invalid") from exc
+    if S_ISLNK(metadata.st_mode) or (
+        getattr(metadata, "st_file_attributes", 0) & _WINDOWS_REPARSE_POINT
+    ):
+        raise ValueError(f"ops_authority_{label}_redirected")
+    return metadata
+
+
 def verify_ops_authority(root: Path = CANONICAL_OPS_ROOT) -> str:
     """Verify the exact regular-file set, lengths, and SHA3-512 identities."""
 
     if not isinstance(root, Path):
         raise TypeError("ops_authority_root_must_be_path")
-    if not root.is_dir() or root.is_symlink():
+    if root != CANONICAL_OPS_ROOT:
+        raise ValueError("ops_authority_root_not_canonical")
+    root_metadata = _reject_redirect(root, label="root")
+    _reject_redirect(ROOT, label="checkout")
+    if not S_ISDIR(root_metadata.st_mode):
         raise ValueError("ops_authority_root_invalid")
     expected_names = tuple(item[0] for item in EXPECTED_OPS_FILES)
     observed_paths = tuple(
         sorted(
-            (path for path in root.rglob("*") if path.is_file()),
+            root.iterdir(),
             key=lambda path: path.relative_to(root).as_posix(),
         )
     )
@@ -53,9 +71,13 @@ def verify_ops_authority(root: Path = CANONICAL_OPS_ROOT) -> str:
     if observed_names != expected_names:
         raise ValueError("ops_authority_file_set_mismatch")
     for path, (name, length, digest) in zip(observed_paths, EXPECTED_OPS_FILES, strict=True):
-        if path.is_symlink() or path.stat().st_size != length:
+        metadata = _reject_redirect(path, label="file")
+        if not S_ISREG(metadata.st_mode):
             raise ValueError(f"ops_authority_file_shape_mismatch:{name}")
-        if sha3_512(path.read_bytes()).hexdigest() != digest:
+        data = path.read_bytes()
+        if len(data) != length:
+            raise ValueError(f"ops_authority_file_shape_mismatch:{name}")
+        if sha3_512(data).hexdigest() != digest:
             raise ValueError(f"ops_authority_digest_mismatch:{name}")
     return OPS_AUTHORITY_STATUS
 

@@ -88,6 +88,29 @@ def test_state_snapshot_encoding_is_fixed_shape_and_exact() -> None:
         StateSnapshot.decode(proof.before.encoded + b"x")
 
 
+def test_state_snapshot_rejects_noncanonical_presence_byte() -> None:
+    proof = _proof()
+    malformed = bytearray(proof.before.encoded)
+    entry_width = len(StateEntry.empty(0).encoded)
+    malformed[len(malformed) - proof.before.capacity * entry_width] = 2
+    with pytest.raises(StatePlaneError, match="snapshot_entry_presence_invalid"):
+        StateSnapshot.decode(bytes(malformed))
+
+
+def test_file_store_rejects_noncanonical_persisted_state_before_cas(tmp_path) -> None:
+    proof = _proof()
+    store = FileStateStore(tmp_path / "state.bin")
+    store.initialize(proof.before)
+    malformed = bytearray(proof.before.encoded)
+    entry_width = len(StateEntry.empty(0).encoded)
+    malformed[len(malformed) - proof.before.capacity * entry_width] = 2
+    store.path.write_bytes(malformed)
+
+    with pytest.raises(StatePlaneError, match="snapshot_entry_presence_invalid"):
+        store.publish(proof)
+    assert store.path.read_bytes() == malformed
+
+
 def test_native_state_binding_kat_is_stable_for_the_k128_shape() -> None:
     before = StateSnapshot.empty("K128_CALIBRATION", capacity=128, epoch=7)
     operations = tuple(

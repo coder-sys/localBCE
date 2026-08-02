@@ -398,6 +398,25 @@ def _validate_reference_binding(context: TerminalLedgerContext) -> None:
         raise TerminalLedgerError("terminal_ledger_before_checkpoint_mismatch")
     if context.after_checkpoint != expected_after:
         raise TerminalLedgerError("terminal_ledger_after_checkpoint_mismatch")
+    proof = context.state_plane_proof
+    if proof is None:
+        return
+    transition = context.composition.transition
+    if (
+        proof.before.profile_id != transition.profile_id
+        or proof.before.parameter_identity != transition.parameter_identity
+        or proof.before.capacity != context.batch.claim_slots
+        or proof.before.epoch != transition.epoch
+        or proof.after.epoch != transition.epoch
+        or proof.before.sequence != transition.sequence_before
+        or proof.after.sequence != transition.sequence_after
+        or proof.before.root_512 != transition.old_root
+        or proof.after.root_512 != transition.new_root
+        or proof.manifest_digest_512 != transition.manifest_digest
+        or proof.projection_12 != context.composition.projection_12
+        or proof.projection_digest_512 != transition.public_projection_digest
+    ):
+        raise TerminalLedgerError("terminal_ledger_state_plane_binding_mismatch")
 
 
 def _state_plane_evidence(context: TerminalLedgerContext) -> tuple[str, bytes]:
