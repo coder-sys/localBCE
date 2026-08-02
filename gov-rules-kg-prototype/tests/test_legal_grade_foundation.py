@@ -20,11 +20,12 @@ from gov_rules_kg.citations import citations_exactly_match, parse_citations
 from gov_rules_kg.claude_web_audit import build_claude_web_audit, write_claude_web_audit
 from gov_rules_kg.claude_web_coverage import write_claude_web_coverage
 from gov_rules_kg.claude_web_executable import classify_executable_rule_type, normalize_executable_candidate, write_claude_web_executable_candidates, write_claude_web_proof_report
-from gov_rules_kg.claude_web_mapping import extract_effective_date, extract_exception_text, extract_threshold, infer_inputs_required, map_deterministic_candidate, write_claude_web_deterministic_mapping
-from gov_rules_kg.claude_web_mapping_qa import build_mapping_qa, malformed_exception_text, write_claude_web_mapping_qa
+from gov_rules_kg.claude_web_mapping import extract_effective_date, extract_exception_text, extract_threshold, infer_inputs_required, infer_operator, map_deterministic_candidate, write_claude_web_deterministic_mapping
+from gov_rules_kg.claude_web_mapping_qa import build_mapping_qa, malformed_exception_text, threshold_expected, write_claude_web_mapping_qa
 from gov_rules_kg.claude_web_research import RESEARCH_MODE, ClaudeWebResearchOptions, call_claude_web_search_batches, candidate_id, deterministic_web_research_plan, extract_web_research_payload, merge_candidate_corpus, should_preserve_existing_report, write_claude_web_research
 from gov_rules_kg.claude_web_research import taxonomy_branches
 from gov_rules_kg.claude_web_review import preferred_candidate_source_path, review_claude_web_candidates, review_candidate
+from gov_rules_kg.claude_web_rust_shadow import build_rust_shadow_bundle, validate_rust_shadow_bundle, write_claude_web_rust_shadow_bundle
 from gov_rules_kg.claude_web_scale_plan import build_claude_web_scale_plan, write_claude_web_scale_plan
 from gov_rules_kg.domain import classify_family_and_type, classify_government_hierarchy, infer_jurisdiction, valid_vertical
 from gov_rules_kg.extract import extract_text
@@ -556,6 +557,28 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertEqual(extract_exception_text("People residing in the US (except Puerto Rico) are automatically enrolled."), "except Puerto Rico")
         self.assertEqual(extract_exception_text("Veterans separated under any condition other than dishonorable may qualify."), "other than dishonorable")
 
+    def test_claude_web_mapping_extracts_business_dates_ratios_and_minor_currency(self) -> None:
+        self.assertEqual(extract_threshold("The appeal must be decided within 20 business days."), {"kind": "business_duration", "value": "20", "unit": "business_days", "text": "20 business days"})
+        self.assertEqual(extract_threshold("The employer must act within three business days."), {"kind": "business_duration", "value": "3", "unit": "business_days", "text": "three business days"})
+        self.assertEqual(extract_threshold("The federal deadline is June 30, 2026.")["kind"], "calendar_date")
+        self.assertEqual(extract_threshold("Refunds are held until mid-February.")["kind"], "month_window")
+        self.assertEqual(extract_threshold("The grant requires an equal amount of matching funds.")["unit"], "one_to_one")
+        self.assertEqual(extract_threshold("The payment is nine cents per lunch."), {"kind": "currency", "value": "9", "unit": "cents", "text": "nine cents"})
+
+    def test_claude_web_mapping_infers_actionable_rule_families_without_promoting_descriptions(self) -> None:
+        self.assertEqual(infer_operator("The OIG may impose civil monetary penalties.", {"rule_type": "enforcement_rule"}), "enforcement")
+        self.assertEqual(infer_operator("The pass-through entity makes a case-by-case determination.", {"rule_type": "verification_rule"}), "verify_or_determine")
+        self.assertEqual(infer_operator("Program regulations are codified at 24 CFR Part 982.", {"rule_type": "administration_rule"}), "administration")
+        self.assertEqual(infer_operator("A DMV may issue a REAL ID only to a person with lawful status.", {"rule_type": "eligibility_rule"}), "determine_eligibility")
+        self.assertEqual(infer_operator("This document discusses a program.", {"rule_type": "other"}), "unknown")
+        self.assertFalse(threshold_expected("payment_rule", "The agency calculates assistance using local market data."))
+        self.assertTrue(threshold_expected("payment_rule", "The tax rate is 15.3%."))
+        self.assertTrue(threshold_expected("deadline_rule", "The application has a filing deadline."))
+
+    def test_input_keyword_matching_does_not_treat_agency_as_age(self) -> None:
+        inputs = infer_inputs_required("The agency administers the federal program.")
+        self.assertNotIn("age", inputs)
+
     def test_claude_web_mapping_maps_executable_candidate(self) -> None:
         candidate = normalize_executable_candidate(
             {
@@ -650,6 +673,82 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "CLAUDE_WEB_MAPPING_QA_READY")
         self.assertEqual(result["input_candidates"], 1)
         self.assertIn("deadline_operator_without_threshold", markdown)
+
+    def test_claude_web_rust_shadow_exports_only_strong_qa_pass_candidates(self) -> None:
+        strong = {
+            "mapping_candidate_id": "map:exec:test",
+            "source_executable_rule_id": "exec:test",
+            "source_candidate_id": "claude-web:test",
+            "vertical": "healthcare_benefits",
+            "program": "medicaid",
+            "rule_type": "eligibility_rule",
+            "jurisdiction_level": "federal",
+            "jurisdiction_state": None,
+            "authority_level": "federal",
+            "condition_text": "Applicants must have qualifying income.",
+            "normalized_condition": "applicants must have qualifying income",
+            "operator": "determine_eligibility",
+            "inputs_required": ["income"],
+            "threshold": None,
+            "effective_date": None,
+            "exception_text": None,
+            "outcome_text": "Determine eligibility based on qualifying income.",
+            "source_url": "https://www.medicaid.gov/example",
+            "citation_text": "Applicants must have qualifying income.",
+            "confidence_score": 0.97,
+            "mapping_confidence": 0.95,
+            "mapping_status": "strong_mapping_candidate",
+            "qa_status": "qa_pass",
+            "qa_issues": [],
+        }
+        weak = {**strong, "mapping_candidate_id": "map:weak", "qa_status": "qa_attention_required", "qa_issues": ["partial_mapping_candidate"]}
+        first = build_rust_shadow_bundle([weak, strong])
+        second = build_rust_shadow_bundle([strong, weak])
+        validate_rust_shadow_bundle(first)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first["rules"]), 1)
+        self.assertFalse(first["runtime_activation"])
+        self.assertFalse(first["rules"][0]["runtime_compatible"])
+
+    def test_claude_web_rust_shadow_writes_deterministic_reports(self) -> None:
+        candidate = {
+            "mapping_candidate_id": "map:exec:test",
+            "source_executable_rule_id": "exec:test",
+            "source_candidate_id": "claude-web:test",
+            "vertical": "healthcare_benefits",
+            "program": "medicaid",
+            "rule_type": "eligibility_rule",
+            "jurisdiction_level": "federal",
+            "jurisdiction_state": None,
+            "authority_level": "federal",
+            "condition_text": "Applicants must have qualifying income.",
+            "normalized_condition": "applicants must have qualifying income",
+            "operator": "determine_eligibility",
+            "inputs_required": ["income"],
+            "threshold": None,
+            "effective_date": None,
+            "exception_text": None,
+            "outcome_text": "Determine eligibility based on qualifying income.",
+            "source_url": "https://www.medicaid.gov/example",
+            "citation_text": "Applicants must have qualifying income.",
+            "confidence_score": 0.97,
+            "mapping_confidence": 0.95,
+            "mapping_status": "strong_mapping_candidate",
+            "qa_status": "qa_pass",
+            "qa_issues": [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workdir = Path(tmpdir)
+            reports = workdir / "reports"
+            reports.mkdir()
+            (reports / "claude_web_mapping_qa.json").write_text(
+                json.dumps({"candidates": [candidate]}), encoding="utf-8"
+            )
+            result = write_claude_web_rust_shadow_bundle(workdir)
+            bundle = json.loads(Path(result["rust_shadow_rules"]).read_text(encoding="utf-8"))
+        self.assertEqual(result["verdict"], "CLAUDE_WEB_RUST_SHADOW_READY")
+        self.assertEqual(result["exported_shadow_rules"], 1)
+        self.assertFalse(bundle["runtime_activation"])
 
     def test_claude_web_scale_plan_builds_structured_batches(self) -> None:
         plan = build_claude_web_scale_plan(

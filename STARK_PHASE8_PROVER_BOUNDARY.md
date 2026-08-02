@@ -2,12 +2,18 @@
 
 ## Status
 
-Phase 8 now includes a feature-gated production Winterfell AIR, locally
-verified proof bytes, artifact schema v2, and verifier-handoff schema v2. The
-older planning sections in this document remain as implementation history.
+Phase 8 has progressed beyond its original planning boundary. The repository
+now contains a production-shaped Winterfell AIR, real locally verified proof
+bytes, persistent indexed nullifier state, versioned artifacts, an atomic
+settlement executor, and opt-in controlled-attestation settlement through
+`StarkClaimsRegistry`.
 
-The active runtime is still Groth16. No STARK proof is submitted on-chain and no
-active `ClaimsRegistry.sol` behavior changes.
+Groth16 remains the default backend and its contracts are unchanged. The
+`stark_attested` backend is explicit and opt-in. It submits a commitment to the
+real Winterfell proof plus an authorized secp256k1 signature; Solidity does not
+run a native Winterfell verifier. See `STARK_RUNTIME.md` for the current source
+of truth. Older sections below are retained as implementation history and may
+describe artifacts before they were promoted.
 
 ## New Boundary Artifact
 
@@ -1846,19 +1852,19 @@ groth16_flow_unchanged = true
 
 ## Production Proof Artifact
 
-The feature-gated `stark-production-proof-artifact-v5` contract packages:
+The feature-gated `stark-production-proof-artifact-v6` contract packages:
 
 - real Winterfell 0.13.1 proof bytes as lower-case hex
 - SHA-256 and exact byte length for the serialized proof
-- all 26 Winterfell public inputs in locked order as canonical decimal field
+- all 34 Winterfell public inputs in locked order as canonical decimal field
   values
-- the AIR-constrained `publicInputRoot`, `claimSourceRoot`, and
-  `oracleFactsRoot` and `feeScheduleRoot` elements and their canonical Solidity
-  `bytes32` representations
+- the AIR-constrained `publicInputRoot`, `claimSourceRoot`, `oracleFactsRoot`,
+  `feeScheduleRoot`, `nullifierRootBefore`, and `nullifierRootAfter` elements
+  and their canonical Solidity `bytes32` representations
 - claim-source, oracle-facts, and fee-schedule tree depth, leaf index, and
   AIR-binding metadata
 - oracle attestation-reference and governance status
-- SHA-256 of the canonical 26 x 8-byte big-endian public-input encoding
+- SHA-256 of the canonical 34 x 8-byte big-endian public-input encoding
 - the claim hash binding, fact commitment schema, AIR parameters, decision,
   and failure code
 - explicit non-runtime, non-chain, Groth16-unchanged status flags
@@ -1885,7 +1891,7 @@ identity value carried by the proof.
 
 ## Production Verifier Handoff
 
-`stark-production-verifier-handoff-v5` embeds and re-validates the complete
+`stark-production-verifier-handoff-v6` embeds and re-validates the complete
 production proof artifact, then locks it to the exact field order and Solidity
 types in `IStarkClaimsVerifierV1Candidate`.
 
@@ -1893,11 +1899,11 @@ The handoff records:
 
 - the exact candidate interface and canonical ABI signatures
 - all 11 candidate ABI fields in order
-- the 26-element AIR public-input order and digest
+- the 34-element AIR public-input order and digest
 - the proof byte length and SHA-256
 - a domain-separated digest binding the source artifact, proof, public inputs,
-  claim hash, claim-source root, oracle-facts root, fee-schedule root, decision,
-  failure code, and ABI candidate
+  claim hash, claim-source root, oracle-facts root, fee-schedule root,
+  nullifier roots before and after, decision, failure code, and ABI candidate
 - explicit call-readiness and runtime flags
 
 The current mapping is:
@@ -1910,16 +1916,17 @@ publicInputRoot -> direct AIR-constrained Rp64_256 root packed as bytes32
 claimSourceRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
 oracleFactsRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
 feeScheduleRoot -> direct AIR-constrained depth-10 Rp64_256 Merkle root
+nullifierRootBefore -> direct AIR-constrained canonical bootstrap root
+nullifierRootAfter  -> direct AIR-constrained decision-dependent root
 proof           -> locally verified Winterfell proof bytes
 
-nullifierRootBefore -> unresolved
-nullifierRootAfter  -> unresolved
 batchRoot           -> unresolved
 ```
 
-`publicInputRoot`, `claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot`
-are direct AIR-constrained public inputs packed into Solidity `bytes32`. The three
-remaining roots are absent. Therefore:
+All six artifact roots are direct AIR-constrained public inputs packed into
+Solidity `bytes32`. `batchRoot` is absent. The nullifier transition is also a
+bootstrap-only leaf-zero state transition, so the handoff remains non-call-ready.
+Therefore:
 
 ```text
 verifier_handoff_complete = true
@@ -1974,7 +1981,7 @@ cargo run --features production-air-winterfell \
 
 The production proof input validates this artifact, constrains its canonical
 leaf and every depth-10 Merkle path level, exposes the resulting root as four
-public inputs, and places its canonical `bytes32` value in the v4 verifier
+public inputs, and places its canonical `bytes32` value in the v6 verifier
 handoff. The standalone artifact remains an independently reproducible witness
 description; governance approval, runtime wiring, and on-chain acceptance are
 still disabled.
@@ -2012,10 +2019,32 @@ The AIR proves consistency with the committed evidence. It does not fetch the
 URLs, establish the external truth of fact values, verify attestation
 signatures, or grant governance approval.
 
+## Nullifier-Root Transition
+
+The feature-gated `stark-nullifier-root-transition-v1` artifact derives a
+domain-separated `Rp64_256` nullifier from the claim hash. Production AIR v5
+constrains the derivation, a canonical empty depth-10 Merkle path at leaf zero,
+and roots before and after adjudication. Approved claims insert the nullifier;
+denied claims preserve the root.
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_nullifier_root_transition -- \
+  ../rust-engine/stark_bridge_input.json production_nullifier_root_transition.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_nullifier_root_transition -- \
+  production_nullifier_root_transition.json
+```
+
+This is deliberately not a production state store. It has no persistent tree,
+historical root lookup, concurrency control, governance, or on-chain registry.
+Those capabilities are required before the roots can authorize settlement.
+
 ## Next Safe Step
 
-Define governed approval for the AIR-bound `claimSourceRoot` and
-`oracleFactsRoot`, including external oracle attestation verification, without
-activating runtime behavior. Then implement the four remaining source/state
-roots and a verifier for the locked proof and public-input encoding. Mark the
-envelope call-ready only after positive and negative verifier tests.
+Replace the bootstrap nullifier tree with a persistent concurrency-safe state
+provider, define governed approval and external oracle attestation semantics,
+and implement `batchRoot`. Then build and independently test a verifier for the
+locked proof and public-input encoding. Mark the envelope call-ready only after
+positive and negative verifier tests.

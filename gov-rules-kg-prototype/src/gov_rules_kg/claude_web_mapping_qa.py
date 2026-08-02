@@ -72,19 +72,39 @@ def qa_mapping_candidate(candidate: dict) -> dict:
         issues.append("partial_mapping_candidate")
     if not inputs_required:
         issues.append("missing_inputs_required")
-    if rule_type in THRESHOLD_EXPECTED_RULE_TYPES and not threshold:
+    expects_threshold = threshold_expected(rule_type, str(item.get("condition_text") or ""))
+    if expects_threshold and not threshold:
         issues.append("expected_threshold_missing")
     if exception_text and malformed_exception_text(exception_text):
         issues.append("malformed_exception_text")
-    if operator == "deadline" and not threshold:
+    if operator == "deadline" and expects_threshold and not threshold:
         issues.append("deadline_operator_without_threshold")
-    if operator == "payment" and not threshold:
+    if operator == "payment" and expects_threshold and not threshold:
         issues.append("payment_operator_without_threshold")
 
     item["qa_status"] = "qa_attention_required" if issues else "qa_pass"
     item["qa_issues"] = sorted(set(issues))
     item["qa_recommended_fix"] = recommended_fix(item["qa_issues"])
     return item
+
+
+def threshold_expected(rule_type: str, condition_text: str) -> bool:
+    if rule_type == "deadline_rule":
+        return True
+    if rule_type != "payment_rule":
+        return False
+    lowered = condition_text.lower()
+    if any(term in lowered for term in ["%", "$", "equal amount", "mid-"]):
+        return True
+    numeric_amount = re.search(
+        r"\b\d+(?:\.\d+)?\s*(?:cents?|dollars?|days?|months?|years?)\b",
+        lowered,
+    )
+    word_amount = re.search(
+        r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:cents?|dollars?)\b",
+        lowered,
+    )
+    return numeric_amount is not None or word_amount is not None
 
 
 def build_mapping_qa_summary(reviewed: list[dict], input_count: int) -> dict:

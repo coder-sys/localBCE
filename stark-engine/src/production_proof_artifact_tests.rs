@@ -14,6 +14,10 @@ use crate::{
         FEE_SCHEDULE_ROOT_ENCODING, FEE_SCHEDULE_ROOT_HASH_FUNCTION,
         FEE_SCHEDULE_ROOT_SCHEMA_VERSION,
     },
+    production_nullifier_root_transition::{
+        NULLIFIER_ROOT_ENCODING, NULLIFIER_ROOT_HASH_FUNCTION,
+        NULLIFIER_ROOT_TRANSITION_SCHEMA_VERSION, NULLIFIER_ROOT_TREE_DEPTH,
+    },
     source_roots::{
         CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION,
         CLAIM_SOURCE_ROOT_SCHEMA_VERSION, ORACLE_FACTS_ROOT_ENCODING,
@@ -139,7 +143,7 @@ fn approved_bridge() -> StarkBridgeInput {
 fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
 
-    assert_eq!(artifact.public_inputs.count, 26);
+    assert_eq!(artifact.public_inputs.count, 38);
     assert_eq!(
         artifact.public_inputs.order,
         PRODUCTION_STARK_PUBLIC_INPUT_ORDER
@@ -148,11 +152,11 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     assert_eq!(artifact.failure_code, 0);
     assert_eq!(
         artifact.schema_version,
-        "stark-production-proof-artifact-v5"
+        "stark-production-proof-artifact-v7"
     );
     assert_eq!(
         artifact.public_inputs.schema_version,
-        "stark-production-public-inputs-v5"
+        "stark-production-public-inputs-v7"
     );
     assert_eq!(
         artifact.public_input_root_schema_version,
@@ -231,6 +235,43 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
         &artifact.public_inputs.values_decimal[20..24],
         &packed_fee_schedule_root
     );
+    assert_eq!(
+        artifact.nullifier_root_schema_version,
+        NULLIFIER_ROOT_TRANSITION_SCHEMA_VERSION
+    );
+    assert_eq!(artifact.nullifier_root_hash, NULLIFIER_ROOT_HASH_FUNCTION);
+    assert_eq!(artifact.nullifier_root_encoding, NULLIFIER_ROOT_ENCODING);
+    assert_eq!(
+        artifact.nullifier_root_tree_depth,
+        NULLIFIER_ROOT_TREE_DEPTH
+    );
+    assert_eq!(
+        artifact.nullifier_root_leaf_index,
+        crate::production_nullifier_root_transition::canonical_nullifier_leaf_index(
+            &artifact.claim_hash,
+        )
+        .unwrap()
+    );
+    let packed_nullifier_root_before =
+        unpack_public_input_root_bytes32(&artifact.nullifier_root_before_bytes32)
+            .unwrap()
+            .map(|value| value.as_int().to_string());
+    assert_eq!(
+        &artifact.public_inputs.values_decimal[24..28],
+        &packed_nullifier_root_before
+    );
+    let packed_nullifier_root_after =
+        unpack_public_input_root_bytes32(&artifact.nullifier_root_after_bytes32)
+            .unwrap()
+            .map(|value| value.as_int().to_string());
+    assert_eq!(
+        &artifact.public_inputs.values_decimal[28..32],
+        &packed_nullifier_root_after
+    );
+    assert_ne!(
+        artifact.nullifier_root_before_bytes32,
+        artifact.nullifier_root_after_bytes32
+    );
     assert!(artifact.locally_verified);
     assert!(!artifact.runtime_wired);
     assert!(!artifact.on_chain_verifier_wired);
@@ -259,32 +300,44 @@ fn approved_artifact_round_trips_and_reverifies_from_saved_bytes() {
     trailing_proof.proof.size_bytes += 1;
     assert!(trailing_proof.validate().is_err());
 
-    let mut tampered_public_input = decoded;
-    tampered_public_input.public_inputs.values_decimal[24] = "0".to_string();
+    let mut tampered_public_input = artifact.clone();
+    tampered_public_input.public_inputs.values_decimal[32] = "0".to_string();
     assert!(tampered_public_input.validate().is_err());
 
-    let mut tampered_root = artifact;
+    let mut tampered_root = artifact.clone();
     tampered_root.public_input_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_root.validate().is_err());
 
-    let mut tampered_claim_source_root =
-        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    let mut tampered_claim_source_root = artifact.clone();
     tampered_claim_source_root.claim_source_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_claim_source_root.validate().is_err());
 
-    let mut tampered_oracle_facts_root =
-        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    let mut tampered_oracle_facts_root = artifact.clone();
     tampered_oracle_facts_root.oracle_facts_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_oracle_facts_root.validate().is_err());
 
-    let mut tampered_fee_schedule_root =
-        ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    let mut tampered_fee_schedule_root = artifact.clone();
     tampered_fee_schedule_root.fee_schedule_root_bytes32 =
         "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
     assert!(tampered_fee_schedule_root.validate().is_err());
+
+    let mut tampered_nullifier_root_before = artifact.clone();
+    tampered_nullifier_root_before.nullifier_root_before_bytes32 =
+        "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(tampered_nullifier_root_before.validate().is_err());
+
+    let mut tampered_nullifier_root_after = artifact.clone();
+    tampered_nullifier_root_after.nullifier_root_after_bytes32 =
+        "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(tampered_nullifier_root_after.validate().is_err());
+
+    let mut tampered_nullifier = artifact;
+    tampered_nullifier.nullifier_bytes32 =
+        "0x0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(tampered_nullifier.validate().is_err());
 }
 
 #[test]
@@ -301,8 +354,22 @@ fn denied_artifact_preserves_and_proves_the_failure_code() {
 
     assert_eq!(artifact.decision, 0);
     assert_eq!(artifact.failure_code, 7);
-    assert_eq!(artifact.public_inputs.values_decimal[24], "0");
-    assert_eq!(artifact.public_inputs.values_decimal[25], "7");
+    let decision_index = artifact.public_inputs.values_decimal.len() - 2;
+    let failure_code_index = artifact.public_inputs.values_decimal.len() - 1;
+    assert_eq!(artifact.public_inputs.order[decision_index], "decision");
+    assert_eq!(
+        artifact.public_inputs.order[failure_code_index],
+        "failure_code"
+    );
+    assert_eq!(artifact.public_inputs.values_decimal[decision_index], "0");
+    assert_eq!(
+        artifact.public_inputs.values_decimal[failure_code_index],
+        "7"
+    );
+    assert_eq!(
+        artifact.nullifier_root_before_bytes32,
+        artifact.nullifier_root_after_bytes32
+    );
     artifact.validate().unwrap();
 }
 

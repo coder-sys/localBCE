@@ -22,6 +22,11 @@ use crate::{
         FEE_SCHEDULE_ROOT_SCHEMA_TAG, FEE_SCHEDULE_ROOT_TREE_DEPTH,
         ProductionFeeScheduleRootArtifactV1,
     },
+    production_nullifier_root_transition::{
+        NULLIFIER_DOMAIN_TAG, NULLIFIER_HASH_TAG, NULLIFIER_PREIMAGE_LENGTH,
+        NULLIFIER_ROOT_TREE_DEPTH, NULLIFIER_RULESET_TAG, NULLIFIER_SCHEMA_TAG,
+        ProductionNullifierRootTransitionArtifactV1, canonical_nullifier_leaf_index,
+    },
     source_roots::{
         CLAIM_SOURCE_ROOT_DOMAIN_TAG, CLAIM_SOURCE_ROOT_HASH_TAG, CLAIM_SOURCE_ROOT_LEAF_INDEX,
         CLAIM_SOURCE_ROOT_LEAF_PREIMAGE_LENGTH, CLAIM_SOURCE_ROOT_SCHEMA_TAG,
@@ -35,16 +40,22 @@ use crate::{
 
 pub type ProductionFelt = BaseElement;
 
-pub const TRACE_LENGTH: usize = 512;
+pub const TRACE_LENGTH: usize = 1024;
 
 pub const FACT_COMMITMENT_SCHEMA_VERSION: &str = "stark-claim-fact-commitment-v1";
 pub const FACT_COMMITMENT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const FACT_COMMITMENT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCFACT\0");
 pub const FACT_COMMITMENT_RULESET_TAG: u64 = u64::from_le_bytes(*b"G1G10V1\0");
-pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v4";
+pub const PUBLIC_INPUT_ROOT_SCHEMA_VERSION: &str = "stark-public-input-root-v5";
 pub const PUBLIC_INPUT_ROOT_HASH_FUNCTION: &str = "winterfell-rp64-256";
 pub const PUBLIC_INPUT_ROOT_ENCODING: &str = "bytes32-four-canonical-f64-big-endian";
-pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR04");
+pub const BATCH_ROOT_SCHEMA_VERSION: &str = "stark-single-claim-batch-root-v1";
+pub const BATCH_ROOT_HASH_FUNCTION: &str = "winterfell-rp64-256";
+pub const BATCH_ROOT_ENCODING: &str = "bytes32-four-canonical-f64-big-endian";
+pub const BATCH_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCBAT01");
+pub const BATCH_ROOT_SCHEMA_TAG: u64 = 1;
+pub const BATCH_ROOT_SIZE: u64 = 1;
+pub const PUBLIC_INPUT_ROOT_DOMAIN_TAG: u64 = u64::from_le_bytes(*b"LBCPIR05");
 pub const PUBLIC_INPUT_ROOT_RULESET_TAG: u64 = FACT_COMMITMENT_RULESET_TAG;
 pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "eligibility_active",
@@ -64,7 +75,7 @@ pub const FACT_COMMITMENT_FACT_ORDER: [&str; 16] = [
     "recipient_not_deceased",
     "physician_certification_valid",
 ];
-pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 26] = [
+pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 34] = [
     "claim_hash_be_u32_limb_0",
     "claim_hash_be_u32_limb_1",
     "claim_hash_be_u32_limb_2",
@@ -89,6 +100,14 @@ pub const PUBLIC_INPUT_ROOT_PREIMAGE_ORDER: [&str; 26] = [
     "fee_schedule_root_element_1",
     "fee_schedule_root_element_2",
     "fee_schedule_root_element_3",
+    "nullifier_root_before_element_0",
+    "nullifier_root_before_element_1",
+    "nullifier_root_before_element_2",
+    "nullifier_root_before_element_3",
+    "nullifier_root_after_element_0",
+    "nullifier_root_after_element_1",
+    "nullifier_root_after_element_2",
+    "nullifier_root_after_element_3",
     "decision",
     "failure_code",
 ];
@@ -99,10 +118,13 @@ const FACT_COMMITMENT_PREIMAGE_LENGTH: usize = 28;
 pub const CLAIM_SOURCE_ROOT_WIDTH: usize = 4;
 pub const ORACLE_FACTS_ROOT_WIDTH: usize = 4;
 pub const FEE_SCHEDULE_ROOT_WIDTH: usize = 4;
+pub const NULLIFIER_ROOT_WIDTH: usize = 4;
 const PUBLIC_INPUT_ROOT_WIDTH: usize = 4;
-const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 30;
+pub const BATCH_ROOT_WIDTH: usize = 4;
+const PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH: usize = 38;
+const BATCH_ROOT_PREIMAGE_LENGTH: usize = 8;
 const FACT_COUNT: u64 = 16;
-const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 26;
+const PUBLIC_INPUT_ROOT_ELEMENT_COUNT: u64 = 34;
 const FACT_HASH_TRACE_LENGTH: usize = 32;
 const CLAIM_SOURCE_LEAF_TRACE_START: usize = FACT_HASH_TRACE_LENGTH;
 const CLAIM_SOURCE_LEAF_TRACE_LENGTH: usize = 40;
@@ -127,8 +149,21 @@ const FEE_SCHEDULE_MERKLE_TRACE_START: usize =
 const FEE_SCHEDULE_MERKLE_LEVEL_LENGTH: usize = 8;
 const FEE_SCHEDULE_MERKLE_TRACE_LENGTH: usize =
     FEE_SCHEDULE_ROOT_TREE_DEPTH * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH;
-const PUBLIC_ROOT_TRACE_START: usize =
+const NULLIFIER_LEAF_TRACE_START: usize =
     FEE_SCHEDULE_MERKLE_TRACE_START + FEE_SCHEDULE_MERKLE_TRACE_LENGTH;
+const NULLIFIER_LEAF_TRACE_LENGTH: usize = 16;
+const NULLIFIER_BEFORE_MERKLE_TRACE_START: usize =
+    NULLIFIER_LEAF_TRACE_START + NULLIFIER_LEAF_TRACE_LENGTH;
+const NULLIFIER_MERKLE_LEVEL_LENGTH: usize = 8;
+const NULLIFIER_MERKLE_TRACE_LENGTH: usize =
+    NULLIFIER_ROOT_TREE_DEPTH * NULLIFIER_MERKLE_LEVEL_LENGTH;
+const NULLIFIER_AFTER_MERKLE_TRACE_START: usize =
+    NULLIFIER_BEFORE_MERKLE_TRACE_START + NULLIFIER_MERKLE_TRACE_LENGTH;
+const PUBLIC_ROOT_TRACE_START: usize =
+    NULLIFIER_AFTER_MERKLE_TRACE_START + NULLIFIER_MERKLE_TRACE_LENGTH;
+const PUBLIC_ROOT_TRACE_LENGTH: usize = 40;
+const BATCH_ROOT_TRACE_START: usize = PUBLIC_ROOT_TRACE_START + PUBLIC_ROOT_TRACE_LENGTH;
+const BATCH_ROOT_TRACE_LENGTH: usize = TRACE_LENGTH - BATCH_ROOT_TRACE_START;
 const RESCUE_STATE_WIDTH: usize = 12;
 const RESCUE_RATE_START: usize = 4;
 const RESCUE_RATE_WIDTH: usize = 8;
@@ -138,7 +173,8 @@ const FACT_HASH_ABSORB_SELECTOR_COUNT: usize = 3;
 const CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_COUNT: usize = 4;
 const ORACLE_FACTS_LEAF_ABSORB_SELECTOR_COUNT: usize = 3;
 const FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_COUNT: usize = 3;
-const PUBLIC_ROOT_ABSORB_SELECTOR_COUNT: usize = 3;
+const NULLIFIER_LEAF_ABSORB_SELECTOR_COUNT: usize = 1;
+const PUBLIC_ROOT_ABSORB_SELECTOR_COUNT: usize = 4;
 const FACT_HASH_ABSORB_SELECTOR_START: usize = HASH_ROUND_SELECTOR_COUNT;
 const CLAIM_SOURCE_LEAF_ABSORB_SELECTOR_START: usize =
     FACT_HASH_ABSORB_SELECTOR_START + FACT_HASH_ABSORB_SELECTOR_COUNT;
@@ -155,12 +191,21 @@ const FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_START: usize =
 const FEE_SCHEDULE_LEAF_RESET_SELECTOR: usize =
     FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_START + FEE_SCHEDULE_LEAF_ABSORB_SELECTOR_COUNT;
 const FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START: usize = FEE_SCHEDULE_LEAF_RESET_SELECTOR + 1;
-const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+const NULLIFIER_LEAF_ABSORB_SELECTOR_START: usize =
     FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START + FEE_SCHEDULE_ROOT_TREE_DEPTH;
+const NULLIFIER_LEAF_RESET_SELECTOR: usize =
+    NULLIFIER_LEAF_ABSORB_SELECTOR_START + NULLIFIER_LEAF_ABSORB_SELECTOR_COUNT;
+const NULLIFIER_BEFORE_MERKLE_RESET_SELECTOR_START: usize = NULLIFIER_LEAF_RESET_SELECTOR + 1;
+const NULLIFIER_AFTER_MERKLE_RESET_SELECTOR_START: usize =
+    NULLIFIER_BEFORE_MERKLE_RESET_SELECTOR_START + NULLIFIER_ROOT_TREE_DEPTH;
+const PUBLIC_ROOT_ABSORB_SELECTOR_START: usize =
+    NULLIFIER_AFTER_MERKLE_RESET_SELECTOR_START + NULLIFIER_ROOT_TREE_DEPTH;
 const PUBLIC_ROOT_RESET_SELECTOR: usize =
     PUBLIC_ROOT_ABSORB_SELECTOR_START + PUBLIC_ROOT_ABSORB_SELECTOR_COUNT;
 const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
-const HASH_PERIODIC_COLUMN_COUNT: usize = PUBLIC_ROOT_HOLD_SELECTOR + 1;
+const BATCH_ROOT_RESET_SELECTOR: usize = PUBLIC_ROOT_HOLD_SELECTOR + 1;
+const BATCH_ROOT_HOLD_SELECTOR: usize = BATCH_ROOT_RESET_SELECTOR + 1;
+const HASH_PERIODIC_COLUMN_COUNT: usize = BATCH_ROOT_HOLD_SELECTOR + 1;
 
 const COL_ELIGIBILITY_ACTIVE: usize = 0;
 const COL_AID_CODE: usize = 1;
@@ -214,8 +259,16 @@ const COL_CLAIM_SOURCE_DATE_BINDING: usize =
 const CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START: usize = COL_CLAIM_SOURCE_DATE_BINDING + 1;
 const COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING: usize =
     CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + 4;
+const NULLIFIER_PREIMAGE_START: usize = CLAIM_SOURCE_PREIMAGE_START;
+const NULLIFIER_PATH_START: usize = CLAIM_SOURCE_PATH_START;
+const COL_NULLIFIER_PATH_DIRECTION: usize = COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING + 1;
+const NULLIFIER_DIGEST_RESULT_START: usize = COL_NULLIFIER_PATH_DIRECTION + 1;
+const NULLIFIER_ROOT_BEFORE_RESULT_START: usize =
+    NULLIFIER_DIGEST_RESULT_START + NULLIFIER_ROOT_WIDTH;
+const NULLIFIER_ROOT_AFTER_RESULT_START: usize =
+    NULLIFIER_ROOT_BEFORE_RESULT_START + NULLIFIER_ROOT_WIDTH;
 
-pub const TRACE_WIDTH: usize = COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING + 1;
+pub const TRACE_WIDTH: usize = NULLIFIER_ROOT_AFTER_RESULT_START + NULLIFIER_ROOT_WIDTH;
 const GATE_COUNT: usize = 13;
 const RANGE_BITS: usize = 32;
 const BASE_SEMANTIC_CONSTRAINT_COUNT: usize = 129;
@@ -232,6 +285,7 @@ const COMMITMENT_BOUND_COLUMN_COUNT: usize = 16
     + CLAIM_SOURCE_ROOT_WIDTH
     + ORACLE_FACTS_ROOT_WIDTH
     + FEE_SCHEDULE_ROOT_WIDTH
+    + NULLIFIER_ROOT_WIDTH * 3
     + 1
     + 4
     + 1;
@@ -240,6 +294,9 @@ const FACT_COMMITMENT_BIND_CONSTRAINT_COUNT: usize = FACT_COMMITMENT_WIDTH;
 const CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT: usize = CLAIM_SOURCE_ROOT_WIDTH;
 const ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT: usize = ORACLE_FACTS_ROOT_WIDTH;
 const FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT: usize = FEE_SCHEDULE_ROOT_WIDTH;
+const NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
+const NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
+const NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -247,6 +304,9 @@ const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + CLAIM_SOURCE_ROOT_BIND_CONSTRAINT_COUNT
     + ORACLE_FACTS_ROOT_BIND_CONSTRAINT_COUNT
     + FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT
+    + NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT
+    + NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT
+    + NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT
     + 1;
 const CLAIM_SOURCE_FIXED_ASSERTION_COUNT: usize = 8;
 const ORACLE_FACTS_FIXED_ASSERTION_COUNT: usize = 9;
@@ -259,10 +319,14 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + CLAIM_SOURCE_ROOT_WIDTH
     + ORACLE_FACTS_ROOT_WIDTH
     + FEE_SCHEDULE_ROOT_WIDTH
+    + NULLIFIER_ROOT_WIDTH * 2
     + CLAIM_SOURCE_FIXED_ASSERTION_COUNT
     + ORACLE_FACTS_FIXED_ASSERTION_COUNT
     + FEE_SCHEDULE_FIXED_ASSERTION_COUNT
-    + CLAIM_HASH_LIMB_COUNT * 3;
+    + CLAIM_HASH_LIMB_COUNT * 4
+    + 8
+    + NULLIFIER_ROOT_TREE_DEPTH * 2
+    + BATCH_ROOT_WIDTH;
 
 const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
     COL_ELIGIBILITY_ACTIVE,
@@ -281,11 +345,12 @@ const BOOLEAN_FACT_COLUMNS: [usize; 11] = [
 const FAILURE_CODES: [u32; GATE_COUNT] = [1, 201, 202, 3, 4, 501, 502, 601, 602, 7, 8, 9, 10];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductionAirProofInputV4 {
+pub struct ProductionAirProofInputV5 {
     pub adjudication: ProductionAirInputV1,
     pub claim_source: ProductionClaimSourceWitnessV2,
     pub oracle_facts: ProductionOracleFactsWitnessV3,
     pub fee_schedule: ProductionFeeScheduleWitnessV4,
+    pub nullifier: ProductionNullifierWitnessV5,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -309,40 +374,78 @@ pub struct ProductionFeeScheduleWitnessV4 {
     pub root: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionNullifierWitnessV5 {
+    pub preimage: [ProductionFelt; NULLIFIER_PREIMAGE_LENGTH],
+    pub merkle_path: [[ProductionFelt; NULLIFIER_ROOT_WIDTH]; NULLIFIER_ROOT_TREE_DEPTH],
+    pub root_before: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    pub root_after: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    pub leaf_index: usize,
+    pub state_generation_before: u64,
+    pub state_generation_after: u64,
+    pub state_source_status: String,
+}
+
 #[derive(Clone, Copy, Debug)]
-pub struct ProductionAirPublicInputsV4 {
+pub struct ProductionAirPublicInputsV5 {
     pub claim_hash_limbs: [ProductionFelt; CLAIM_HASH_LIMB_COUNT],
     pub public_input_root: [ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
     pub claim_source_root: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     pub oracle_facts_root: [ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
     pub fee_schedule_root: [ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    pub nullifier_root_before: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    pub nullifier_root_after: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    pub batch_root: [ProductionFelt; BATCH_ROOT_WIDTH],
     pub decision: ProductionFelt,
     pub failure_code: ProductionFelt,
 }
 
-pub type ProductionAirProofInputV3 = ProductionAirProofInputV4;
-pub type ProductionAirProofInputV2 = ProductionAirProofInputV4;
-pub type ProductionAirPublicInputsV3 = ProductionAirPublicInputsV4;
-pub type ProductionAirPublicInputsV2 = ProductionAirPublicInputsV4;
-pub type ProductionAirPublicInputsV1 = ProductionAirPublicInputsV4;
+pub type ProductionAirProofInputV4 = ProductionAirProofInputV5;
+pub type ProductionAirProofInputV3 = ProductionAirProofInputV5;
+pub type ProductionAirProofInputV2 = ProductionAirProofInputV5;
+pub type ProductionAirPublicInputsV4 = ProductionAirPublicInputsV5;
+pub type ProductionAirPublicInputsV3 = ProductionAirPublicInputsV5;
+pub type ProductionAirPublicInputsV2 = ProductionAirPublicInputsV5;
+pub type ProductionAirPublicInputsV1 = ProductionAirPublicInputsV5;
 
-impl ToElements<ProductionFelt> for ProductionAirPublicInputsV4 {
+impl ToElements<ProductionFelt> for ProductionAirPublicInputsV5 {
     fn to_elements(&self) -> Vec<ProductionFelt> {
         let mut elements = self.claim_hash_limbs.to_vec();
         elements.extend(self.public_input_root);
         elements.extend(self.claim_source_root);
         elements.extend(self.oracle_facts_root);
         elements.extend(self.fee_schedule_root);
+        elements.extend(self.nullifier_root_before);
+        elements.extend(self.nullifier_root_after);
+        elements.extend(self.batch_root);
         elements.push(self.decision);
         elements.push(self.failure_code);
         elements
     }
 }
 
-impl ProductionAirProofInputV4 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-air-proof-input-v4";
+impl ProductionAirProofInputV5 {
+    pub const SCHEMA_VERSION: &'static str = "stark-production-air-proof-input-v6";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
+        let nullifier_artifact =
+            ProductionNullifierRootTransitionArtifactV1::from_bridge_input(bridge)?;
+        Self::from_bridge_input_with_nullifier_transition(bridge, &nullifier_artifact)
+    }
+
+    pub fn from_bridge_input_with_nullifier_transition(
+        bridge: &StarkBridgeInput,
+        nullifier_artifact: &ProductionNullifierRootTransitionArtifactV1,
+    ) -> Result<Self, Vec<String>> {
+        nullifier_artifact.validate()?;
+        if nullifier_artifact.claim_id != bridge.claim.claim_id
+            || nullifier_artifact.claim_hash != bridge.claim.claim_hash
+            || nullifier_artifact.decision != bridge.adjudication.decision
+        {
+            return Err(vec![
+                "nullifier transition does not belong to the supplied bridge input".to_string(),
+            ]);
+        }
         let adjudication = ProductionAirInputV1::from_bridge_input(bridge)?;
         let claim_source_artifact = ProductionClaimSourceRootArtifactV1::from_bridge_input(bridge)?;
         let (leaf_preimage, merkle_path, root) = claim_source_artifact.air_witness_components()?;
@@ -352,6 +455,7 @@ impl ProductionAirProofInputV4 {
         let fee_schedule_artifact = ProductionFeeScheduleRootArtifactV1::from_bridge_input(bridge)?;
         let (fee_leaf_preimage, fee_merkle_path, fee_root) =
             fee_schedule_artifact.air_witness_components()?;
+        let nullifier_components = nullifier_artifact.air_witness_components()?;
         let input = Self {
             adjudication,
             claim_source: ProductionClaimSourceWitnessV2 {
@@ -368,6 +472,16 @@ impl ProductionAirProofInputV4 {
                 leaf_preimage: fee_leaf_preimage,
                 merkle_path: fee_merkle_path,
                 root: fee_root,
+            },
+            nullifier: ProductionNullifierWitnessV5 {
+                preimage: nullifier_components.preimage,
+                merkle_path: nullifier_components.merkle_path,
+                root_before: nullifier_components.root_before,
+                root_after: nullifier_components.root_after,
+                leaf_index: nullifier_components.leaf_index,
+                state_generation_before: nullifier_artifact.state_generation_before,
+                state_generation_after: nullifier_artifact.state_generation_after,
+                state_source_status: nullifier_artifact.state_source_status.clone(),
             },
         };
         input.validate()?;
@@ -389,6 +503,9 @@ impl ProductionAirProofInputV4 {
             .fee_schedule
             .validate(&self.adjudication, &self.claim_source)
         {
+            errors.append(&mut witness_errors);
+        }
+        if let Err(mut witness_errors) = self.nullifier.validate(&self.adjudication) {
             errors.append(&mut witness_errors);
         }
         if errors.is_empty() {
@@ -524,6 +641,92 @@ impl ProductionFeeScheduleWitnessV4 {
         }
         if current != self.root {
             errors.push("fee-schedule Merkle path does not produce the supplied root".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl ProductionNullifierWitnessV5 {
+    pub fn validate(&self, adjudication: &ProductionAirInputV1) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        let expected_header = [
+            felt(NULLIFIER_DOMAIN_TAG),
+            felt(NULLIFIER_SCHEMA_TAG),
+            felt(NULLIFIER_HASH_TAG),
+            felt(NULLIFIER_RULESET_TAG),
+        ];
+        if self.preimage[..4] != expected_header {
+            errors.push("nullifier preimage header is not canonical".to_string());
+        }
+        if self.preimage[12..] != [ProductionFelt::ZERO; 4] {
+            errors.push("nullifier reserved preimage fields must be zero".to_string());
+        }
+
+        match parse_claim_hash_limbs(&adjudication.claim_hash) {
+            Ok(claim_hash_limbs) if self.preimage[4..12] != claim_hash_limbs => errors.push(
+                "nullifier preimage claim hash limbs do not match adjudication claim hash"
+                    .to_string(),
+            ),
+            Ok(_) => {}
+            Err(mut claim_hash_errors) => errors.append(&mut claim_hash_errors),
+        }
+
+        match canonical_nullifier_leaf_index(&adjudication.claim_hash) {
+            Ok(expected_index) if self.leaf_index != expected_index => errors.push(
+                "nullifier leaf index must equal the low tree-depth bits of claim_hash".to_string(),
+            ),
+            Ok(_) => {}
+            Err(mut value) => errors.append(&mut value),
+        }
+
+        let nullifier: [ProductionFelt; NULLIFIER_ROOT_WIDTH] =
+            Rp64_256::hash_elements(&self.preimage)
+                .as_elements()
+                .try_into()
+                .expect("Rp64_256 digest must contain four field elements");
+        let empty_leaf = [ProductionFelt::ZERO; NULLIFIER_ROOT_WIDTH];
+        let mut before = empty_leaf;
+        let mut after = if adjudication.expected_outcome.decision == 1 {
+            nullifier
+        } else {
+            empty_leaf
+        };
+        for (level, sibling) in self.merkle_path.iter().copied().enumerate() {
+            before = merge_nullifier_level(before, sibling, self.leaf_index, level);
+            after = merge_nullifier_level(after, sibling, self.leaf_index, level);
+        }
+        if before != self.root_before {
+            errors.push("nullifier Merkle path does not produce root_before".to_string());
+        }
+        if after != self.root_after {
+            errors.push("nullifier Merkle path does not produce root_after".to_string());
+        }
+        if adjudication.expected_outcome.decision == 0 && self.root_after != self.root_before {
+            errors.push("denied claim must leave the nullifier root unchanged".to_string());
+        }
+        if adjudication.expected_outcome.decision == 1 && self.root_after == self.root_before {
+            errors.push("approved claim must change the nullifier root".to_string());
+        }
+        let expected_generation_after = if adjudication.expected_outcome.decision == 1 {
+            self.state_generation_before.checked_add(1)
+        } else {
+            Some(self.state_generation_before)
+        };
+        if expected_generation_after != Some(self.state_generation_after) {
+            errors.push("nullifier state generation transition is invalid".to_string());
+        }
+        if ![
+            ProductionNullifierRootTransitionArtifactV1::BOOTSTRAP_STATE_SOURCE_STATUS,
+            ProductionNullifierRootTransitionArtifactV1::PERSISTENT_STATE_SOURCE_STATUS,
+        ]
+        .contains(&self.state_source_status.as_str())
+        {
+            errors.push("nullifier state source status is unsupported".to_string());
         }
 
         if errors.is_empty() {
@@ -771,14 +974,17 @@ impl Air for ProductionG1G10Air {
             fee_schedule_leaf_absorption_block(current, 2),
             fee_schedule_leaf_absorption_block(current, 3),
         ];
+        let nullifier_leaf_absorption_blocks = [nullifier_leaf_absorption_block(current, 1)];
         let public_root_absorption_blocks = [
             public_input_root_absorption_block(current, 1),
             public_input_root_absorption_block(current, 2),
             public_input_root_absorption_block(current, 3),
+            public_input_root_absorption_block(current, 4),
         ];
         let claim_source_leaf_initial_state = initial_claim_source_leaf_hash_state(current);
         let oracle_facts_leaf_initial_state = initial_oracle_facts_leaf_hash_state(current);
         let fee_schedule_leaf_initial_state = initial_fee_schedule_leaf_hash_state(current);
+        let nullifier_leaf_initial_state = initial_nullifier_leaf_hash_state(current);
         let public_root_initial_state = initial_public_input_root_hash_state(current);
 
         let mut hash_degree_adjustment = clock_transition;
@@ -860,6 +1066,29 @@ impl Air for ProductionG1G10Air {
                 constraint += periodic_values[FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START + level]
                     * (next_hash[state_index] - merge_initial_state[state_index]);
             }
+            for (block_index, block) in nullifier_leaf_absorption_blocks.iter().enumerate() {
+                let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
+                    .contains(&state_index)
+                {
+                    block[state_index - RESCUE_RATE_START]
+                } else {
+                    E::ZERO
+                };
+                constraint += periodic_values[NULLIFIER_LEAF_ABSORB_SELECTOR_START + block_index]
+                    * (next_hash[state_index] - current_hash[state_index] - absorbed);
+            }
+            constraint += periodic_values[NULLIFIER_LEAF_RESET_SELECTOR]
+                * (next_hash[state_index] - nullifier_leaf_initial_state[state_index]);
+            for level in 0..NULLIFIER_ROOT_TREE_DEPTH {
+                let merge_initial_state = initial_nullifier_before_merkle_state(current, level);
+                constraint += periodic_values[NULLIFIER_BEFORE_MERKLE_RESET_SELECTOR_START + level]
+                    * (next_hash[state_index] - merge_initial_state[state_index]);
+            }
+            for level in 0..NULLIFIER_ROOT_TREE_DEPTH {
+                let merge_initial_state = initial_nullifier_after_merkle_state(current, level);
+                constraint += periodic_values[NULLIFIER_AFTER_MERKLE_RESET_SELECTOR_START + level]
+                    * (next_hash[state_index] - merge_initial_state[state_index]);
+            }
             for (block_index, block) in public_root_absorption_blocks.iter().enumerate() {
                 let absorbed = if (RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH)
                     .contains(&state_index)
@@ -874,6 +1103,11 @@ impl Air for ProductionG1G10Air {
             constraint += periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
                 * (next_hash[state_index] - public_root_initial_state[state_index]);
             constraint += periodic_values[PUBLIC_ROOT_HOLD_SELECTOR]
+                * (next_hash[state_index] - current_hash[state_index]);
+            let batch_root_initial_state = initial_batch_root_state(current);
+            constraint += periodic_values[BATCH_ROOT_RESET_SELECTOR]
+                * (next_hash[state_index] - batch_root_initial_state[state_index]);
+            constraint += periodic_values[BATCH_ROOT_HOLD_SELECTOR]
                 * (next_hash[state_index] - current_hash[state_index]);
             constraint += hash_degree_adjustment * E::from((state_index + 1) as u32);
             result[index] = constraint;
@@ -900,9 +1134,27 @@ impl Air for ProductionG1G10Air {
             index += 1;
         }
         for digest_index in 0..FEE_SCHEDULE_ROOT_WIDTH {
-            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+            result[index] = periodic_values[NULLIFIER_LEAF_RESET_SELECTOR]
                 * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
                     - current[FEE_SCHEDULE_ROOT_RESULT_START + digest_index]);
+            index += 1;
+        }
+        for digest_index in 0..NULLIFIER_ROOT_WIDTH {
+            result[index] = periodic_values[NULLIFIER_BEFORE_MERKLE_RESET_SELECTOR_START]
+                * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
+                    - current[NULLIFIER_DIGEST_RESULT_START + digest_index]);
+            index += 1;
+        }
+        for digest_index in 0..NULLIFIER_ROOT_WIDTH {
+            result[index] = periodic_values[NULLIFIER_AFTER_MERKLE_RESET_SELECTOR_START]
+                * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
+                    - current[NULLIFIER_ROOT_BEFORE_RESULT_START + digest_index]);
+            index += 1;
+        }
+        for digest_index in 0..NULLIFIER_ROOT_WIDTH {
+            result[index] = periodic_values[PUBLIC_ROOT_RESET_SELECTOR]
+                * (current[HASH_STATE_START + RESCUE_RATE_START + digest_index]
+                    - current[NULLIFIER_ROOT_AFTER_RESULT_START + digest_index]);
             index += 1;
         }
 
@@ -932,6 +1184,11 @@ impl Air for ProductionG1G10Air {
                 FEE_SCHEDULE_LEAF_TRACE_START - 1,
                 *value,
             ));
+            assertions.push(Assertion::single(
+                NULLIFIER_PREIMAGE_START + 4 + limb,
+                NULLIFIER_LEAF_TRACE_START - 1,
+                *value,
+            ));
         }
         assertions.push(Assertion::single(
             COL_DECISION,
@@ -955,7 +1212,7 @@ impl Air for ProductionG1G10Air {
         for (digest_index, value) in self.public_inputs.public_input_root.iter().enumerate() {
             assertions.push(Assertion::single(
                 HASH_STATE_START + RESCUE_RATE_START + digest_index,
-                TRACE_LENGTH - 1,
+                PUBLIC_ROOT_TRACE_START + PUBLIC_ROOT_TRACE_LENGTH - 1,
                 *value,
             ));
         }
@@ -980,6 +1237,42 @@ impl Air for ProductionG1G10Air {
                 *value,
             ));
         }
+        for (digest_index, value) in self.public_inputs.nullifier_root_before.iter().enumerate() {
+            assertions.push(Assertion::single(
+                NULLIFIER_ROOT_BEFORE_RESULT_START + digest_index,
+                0,
+                *value,
+            ));
+        }
+        for (digest_index, value) in self.public_inputs.nullifier_root_after.iter().enumerate() {
+            assertions.push(Assertion::single(
+                NULLIFIER_ROOT_AFTER_RESULT_START + digest_index,
+                0,
+                *value,
+            ));
+        }
+        for (digest_index, value) in self.public_inputs.batch_root.iter().enumerate() {
+            assertions.push(Assertion::single(
+                HASH_STATE_START + RESCUE_RATE_START + digest_index,
+                BATCH_ROOT_TRACE_START + RESCUE_ROUND_COUNT,
+                *value,
+            ));
+        }
+        let nullifier_leaf_index = (self.public_inputs.claim_hash_limbs[7].as_int() as usize)
+            & ((1 << NULLIFIER_ROOT_TREE_DEPTH) - 1);
+        for level in 0..NULLIFIER_ROOT_TREE_DEPTH {
+            let direction = ProductionFelt::from(((nullifier_leaf_index >> level) & 1) as u32);
+            assertions.push(Assertion::single(
+                COL_NULLIFIER_PATH_DIRECTION,
+                NULLIFIER_BEFORE_MERKLE_TRACE_START - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH,
+                direction,
+            ));
+            assertions.push(Assertion::single(
+                COL_NULLIFIER_PATH_DIRECTION,
+                NULLIFIER_AFTER_MERKLE_TRACE_START - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH,
+                direction,
+            ));
+        }
         for (offset, value) in [
             (0, felt(CLAIM_SOURCE_ROOT_DOMAIN_TAG)),
             (1, felt(CLAIM_SOURCE_ROOT_SCHEMA_TAG)),
@@ -993,6 +1286,22 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 CLAIM_SOURCE_PREIMAGE_START + offset,
                 0,
+                value,
+            ));
+        }
+        for (offset, value) in [
+            (0, felt(NULLIFIER_DOMAIN_TAG)),
+            (1, felt(NULLIFIER_SCHEMA_TAG)),
+            (2, felt(NULLIFIER_HASH_TAG)),
+            (3, felt(NULLIFIER_RULESET_TAG)),
+            (12, ProductionFelt::ZERO),
+            (13, ProductionFelt::ZERO),
+            (14, ProductionFelt::ZERO),
+            (15, ProductionFelt::ZERO),
+        ] {
+            assertions.push(Assertion::single(
+                NULLIFIER_PREIMAGE_START + offset,
+                NULLIFIER_LEAF_TRACE_START - 1,
                 value,
             ));
         }
@@ -1073,7 +1382,7 @@ impl Prover for ProductionG1G10Prover {
             public_input_root: core::array::from_fn(|limb| {
                 trace.get(
                     HASH_STATE_START + RESCUE_RATE_START + limb,
-                    TRACE_LENGTH - 1,
+                    PUBLIC_ROOT_TRACE_START + PUBLIC_ROOT_TRACE_LENGTH - 1,
                 )
             }),
             claim_source_root: core::array::from_fn(|limb| {
@@ -1084,6 +1393,18 @@ impl Prover for ProductionG1G10Prover {
             }),
             fee_schedule_root: core::array::from_fn(|limb| {
                 trace.get(FEE_SCHEDULE_ROOT_RESULT_START + limb, 0)
+            }),
+            nullifier_root_before: core::array::from_fn(|limb| {
+                trace.get(NULLIFIER_ROOT_BEFORE_RESULT_START + limb, 0)
+            }),
+            nullifier_root_after: core::array::from_fn(|limb| {
+                trace.get(NULLIFIER_ROOT_AFTER_RESULT_START + limb, 0)
+            }),
+            batch_root: core::array::from_fn(|limb| {
+                trace.get(
+                    HASH_STATE_START + RESCUE_RATE_START + limb,
+                    BATCH_ROOT_TRACE_START + RESCUE_ROUND_COUNT,
+                )
             }),
             decision: trace.get(COL_DECISION, 0),
             failure_code: trace.get(COL_FAILURE_CODE, 0),
@@ -1198,14 +1519,60 @@ pub fn build_production_air_trace(
             "fee-schedule trace root does not match validated witness root".to_string(),
         ]);
     }
+    let nullifier_leaf_hash_states = build_nullifier_leaf_hash_states(&input.nullifier.preimage);
+    let nullifier_digest: [ProductionFelt; NULLIFIER_ROOT_WIDTH] = core::array::from_fn(|index| {
+        nullifier_leaf_hash_states[NULLIFIER_LEAF_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+    });
+    let nullifier_before_merkle_hash_states = build_nullifier_merkle_hash_states(
+        [ProductionFelt::ZERO; NULLIFIER_ROOT_WIDTH],
+        &input.nullifier.merkle_path,
+        input.nullifier.leaf_index,
+    );
+    let computed_nullifier_root_before: [ProductionFelt; NULLIFIER_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            nullifier_before_merkle_hash_states[NULLIFIER_MERKLE_TRACE_LENGTH - 1]
+                [RESCUE_RATE_START + index]
+        });
+    if computed_nullifier_root_before != input.nullifier.root_before {
+        return Err(vec![
+            "nullifier trace root_before does not match validated witness root".to_string(),
+        ]);
+    }
+    let nullifier_after_leaf = if adjudication.expected_outcome.decision == 1 {
+        nullifier_digest
+    } else {
+        [ProductionFelt::ZERO; NULLIFIER_ROOT_WIDTH]
+    };
+    let nullifier_after_merkle_hash_states = build_nullifier_merkle_hash_states(
+        nullifier_after_leaf,
+        &input.nullifier.merkle_path,
+        input.nullifier.leaf_index,
+    );
+    let computed_nullifier_root_after: [ProductionFelt; NULLIFIER_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            nullifier_after_merkle_hash_states[NULLIFIER_MERKLE_TRACE_LENGTH - 1]
+                [RESCUE_RATE_START + index]
+        });
+    if computed_nullifier_root_after != input.nullifier.root_after {
+        return Err(vec![
+            "nullifier trace root_after does not match validated witness root".to_string(),
+        ]);
+    }
     let public_root_preimage = canonical_public_input_root_preimage_with_commitments(
         adjudication,
         &fact_commitment,
         &computed_claim_source_root,
         &computed_oracle_facts_root,
         &computed_fee_schedule_root,
+        &computed_nullifier_root_before,
+        &computed_nullifier_root_after,
     )?;
     let public_root_hash_states = build_public_input_root_hash_states(&public_root_preimage);
+    let computed_public_input_root: [ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH] =
+        core::array::from_fn(|index| {
+            public_root_hash_states[PUBLIC_ROOT_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+        });
+    let batch_root_hash_states = build_batch_root_hash_states(&computed_public_input_root);
     let mut rows = Vec::with_capacity(TRACE_LENGTH);
     for step in 0..TRACE_LENGTH {
         let mut row = build_trace_row(adjudication, &semantics)?;
@@ -1251,6 +1618,24 @@ pub fn build_production_air_trace(
             ..CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + 4]
             .copy_from_slice(&input.claim_source.leaf_preimage[28..32]);
         row[COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING] = input.claim_source.leaf_preimage[26];
+        row[COL_NULLIFIER_PATH_DIRECTION] =
+            nullifier_direction_for_step(step, input.nullifier.leaf_index);
+        if step >= NULLIFIER_LEAF_TRACE_START - 1 {
+            row[NULLIFIER_PREIMAGE_START..NULLIFIER_PREIMAGE_START + NULLIFIER_PREIMAGE_LENGTH]
+                .copy_from_slice(&input.nullifier.preimage);
+            for (level, sibling) in input.nullifier.merkle_path.iter().enumerate() {
+                let start = NULLIFIER_PATH_START + level * NULLIFIER_ROOT_WIDTH;
+                row[start..start + NULLIFIER_ROOT_WIDTH].copy_from_slice(sibling);
+            }
+        }
+        row[NULLIFIER_DIGEST_RESULT_START..NULLIFIER_DIGEST_RESULT_START + NULLIFIER_ROOT_WIDTH]
+            .copy_from_slice(&nullifier_digest);
+        row[NULLIFIER_ROOT_BEFORE_RESULT_START
+            ..NULLIFIER_ROOT_BEFORE_RESULT_START + NULLIFIER_ROOT_WIDTH]
+            .copy_from_slice(&computed_nullifier_root_before);
+        row[NULLIFIER_ROOT_AFTER_RESULT_START
+            ..NULLIFIER_ROOT_AFTER_RESULT_START + NULLIFIER_ROOT_WIDTH]
+            .copy_from_slice(&computed_nullifier_root_after);
 
         let hash_state = if step < CLAIM_SOURCE_LEAF_TRACE_START {
             fact_hash_states[step]
@@ -1264,10 +1649,18 @@ pub fn build_production_air_trace(
             oracle_facts_merkle_hash_states[step - ORACLE_FACTS_MERKLE_TRACE_START]
         } else if step < FEE_SCHEDULE_MERKLE_TRACE_START {
             fee_schedule_leaf_hash_states[step - FEE_SCHEDULE_LEAF_TRACE_START]
-        } else if step < PUBLIC_ROOT_TRACE_START {
+        } else if step < NULLIFIER_LEAF_TRACE_START {
             fee_schedule_merkle_hash_states[step - FEE_SCHEDULE_MERKLE_TRACE_START]
-        } else {
+        } else if step < NULLIFIER_BEFORE_MERKLE_TRACE_START {
+            nullifier_leaf_hash_states[step - NULLIFIER_LEAF_TRACE_START]
+        } else if step < NULLIFIER_AFTER_MERKLE_TRACE_START {
+            nullifier_before_merkle_hash_states[step - NULLIFIER_BEFORE_MERKLE_TRACE_START]
+        } else if step < PUBLIC_ROOT_TRACE_START {
+            nullifier_after_merkle_hash_states[step - NULLIFIER_AFTER_MERKLE_TRACE_START]
+        } else if step < BATCH_ROOT_TRACE_START {
             public_root_hash_states[step - PUBLIC_ROOT_TRACE_START]
+        } else {
+            batch_root_hash_states[step - BATCH_ROOT_TRACE_START]
         };
         row[HASH_STATE_START..HASH_STATE_START + RESCUE_STATE_WIDTH].copy_from_slice(&hash_state);
         rows.push(row);
@@ -1360,6 +1753,8 @@ pub fn canonical_public_input_root_preimage(
         &input.claim_source.root,
         &input.oracle_facts.root,
         &input.fee_schedule.root,
+        &input.nullifier.root_before,
+        &input.nullifier.root_after,
     )
 }
 
@@ -1372,6 +1767,24 @@ pub fn compute_public_input_root(
         .as_elements()
         .try_into()
         .expect("Rp64_256 digest must contain four field elements"))
+}
+
+pub fn canonical_batch_root_preimage(
+    public_input_root: &[ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
+) -> [ProductionFelt; BATCH_ROOT_PREIMAGE_LENGTH] {
+    let mut elements = [ProductionFelt::ZERO; BATCH_ROOT_PREIMAGE_LENGTH];
+    elements[..4].copy_from_slice(&batch_root_header());
+    elements[4..].copy_from_slice(public_input_root);
+    elements
+}
+
+pub fn compute_single_claim_batch_root(
+    public_input_root: &[ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
+) -> [ProductionFelt; BATCH_ROOT_WIDTH] {
+    Rp64_256::hash_elements(&canonical_batch_root_preimage(public_input_root))
+        .as_elements()
+        .try_into()
+        .expect("Rp64_256 digest must contain four field elements")
 }
 
 pub fn pack_public_input_root_bytes32(
@@ -1503,6 +1916,18 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
+    degrees.extend(
+        (0..NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
+    degrees.extend(
+        (0..NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -1538,12 +1963,25 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
             FEE_SCHEDULE_MERKLE_TRACE_START + level * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH
         }),
     );
+    round_block_starts.extend([NULLIFIER_LEAF_TRACE_START, NULLIFIER_LEAF_TRACE_START + 8]);
+    round_block_starts.extend(
+        (0..NULLIFIER_ROOT_TREE_DEPTH).map(|level| {
+            NULLIFIER_BEFORE_MERKLE_TRACE_START + level * NULLIFIER_MERKLE_LEVEL_LENGTH
+        }),
+    );
+    round_block_starts.extend(
+        (0..NULLIFIER_ROOT_TREE_DEPTH).map(|level| {
+            NULLIFIER_AFTER_MERKLE_TRACE_START + level * NULLIFIER_MERKLE_LEVEL_LENGTH
+        }),
+    );
     round_block_starts.extend([
         PUBLIC_ROOT_TRACE_START,
         PUBLIC_ROOT_TRACE_START + 8,
         PUBLIC_ROOT_TRACE_START + 16,
         PUBLIC_ROOT_TRACE_START + 24,
+        PUBLIC_ROOT_TRACE_START + 32,
     ]);
+    round_block_starts.push(BATCH_ROOT_TRACE_START);
     for block_start in round_block_starts {
         for round in 0..RESCUE_ROUND_COUNT {
             columns[round][block_start + round] = ProductionFelt::ONE;
@@ -1592,10 +2030,22 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
         let step = FEE_SCHEDULE_MERKLE_TRACE_START - 1 + level * FEE_SCHEDULE_MERKLE_LEVEL_LENGTH;
         columns[FEE_SCHEDULE_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
     }
+    columns[NULLIFIER_LEAF_ABSORB_SELECTOR_START][NULLIFIER_LEAF_TRACE_START + 7] =
+        ProductionFelt::ONE;
+    columns[NULLIFIER_LEAF_RESET_SELECTOR][NULLIFIER_LEAF_TRACE_START - 1] = ProductionFelt::ONE;
+    for level in 0..NULLIFIER_ROOT_TREE_DEPTH {
+        let step = NULLIFIER_BEFORE_MERKLE_TRACE_START - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH;
+        columns[NULLIFIER_BEFORE_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
+    }
+    for level in 0..NULLIFIER_ROOT_TREE_DEPTH {
+        let step = NULLIFIER_AFTER_MERKLE_TRACE_START - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH;
+        columns[NULLIFIER_AFTER_MERKLE_RESET_SELECTOR_START + level][step] = ProductionFelt::ONE;
+    }
     for (selector, step) in [
         PUBLIC_ROOT_TRACE_START + 7,
         PUBLIC_ROOT_TRACE_START + 15,
         PUBLIC_ROOT_TRACE_START + 23,
+        PUBLIC_ROOT_TRACE_START + 31,
     ]
     .into_iter()
     .enumerate()
@@ -1603,8 +2053,12 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
         columns[PUBLIC_ROOT_ABSORB_SELECTOR_START + selector][step] = ProductionFelt::ONE;
     }
     columns[PUBLIC_ROOT_RESET_SELECTOR][PUBLIC_ROOT_TRACE_START - 1] = ProductionFelt::ONE;
-    for step in PUBLIC_ROOT_TRACE_START + 31..TRACE_LENGTH - 1 {
+    for step in PUBLIC_ROOT_TRACE_START + 39..BATCH_ROOT_TRACE_START - 1 {
         columns[PUBLIC_ROOT_HOLD_SELECTOR][step] = ProductionFelt::ONE;
+    }
+    columns[BATCH_ROOT_RESET_SELECTOR][BATCH_ROOT_TRACE_START - 1] = ProductionFelt::ONE;
+    for step in BATCH_ROOT_TRACE_START + RESCUE_ROUND_COUNT..TRACE_LENGTH - 1 {
+        columns[BATCH_ROOT_HOLD_SELECTOR][step] = ProductionFelt::ONE;
     }
     columns
 }
@@ -1631,6 +2085,15 @@ fn commitment_bound_columns() -> Vec<usize> {
                 ..CLAIM_SOURCE_SERVICE_LINES_DIGEST_BINDING_START + 4,
         )
         .chain(core::iter::once(COL_CLAIM_SOURCE_TOTAL_CHARGE_BINDING))
+        .chain(NULLIFIER_DIGEST_RESULT_START..NULLIFIER_DIGEST_RESULT_START + NULLIFIER_ROOT_WIDTH)
+        .chain(
+            NULLIFIER_ROOT_BEFORE_RESULT_START
+                ..NULLIFIER_ROOT_BEFORE_RESULT_START + NULLIFIER_ROOT_WIDTH,
+        )
+        .chain(
+            NULLIFIER_ROOT_AFTER_RESULT_START
+                ..NULLIFIER_ROOT_AFTER_RESULT_START + NULLIFIER_ROOT_WIDTH,
+        )
         .collect()
 }
 
@@ -1646,9 +2109,18 @@ fn commitment_header() -> [ProductionFelt; 4] {
 fn public_input_root_header() -> [ProductionFelt; 4] {
     [
         felt(PUBLIC_INPUT_ROOT_DOMAIN_TAG),
-        felt(4),
+        felt(5),
         felt(PUBLIC_INPUT_ROOT_RULESET_TAG),
         felt(PUBLIC_INPUT_ROOT_ELEMENT_COUNT),
+    ]
+}
+
+fn batch_root_header() -> [ProductionFelt; 4] {
+    [
+        felt(BATCH_ROOT_DOMAIN_TAG),
+        felt(BATCH_ROOT_SCHEMA_TAG),
+        felt(BATCH_ROOT_SIZE),
+        felt(BATCH_ROOT_SIZE),
     ]
 }
 
@@ -1658,6 +2130,8 @@ fn canonical_public_input_root_preimage_with_commitments(
     claim_source_root: &[ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     oracle_facts_root: &[ProductionFelt; ORACLE_FACTS_ROOT_WIDTH],
     fee_schedule_root: &[ProductionFelt; FEE_SCHEDULE_ROOT_WIDTH],
+    nullifier_root_before: &[ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    nullifier_root_after: &[ProductionFelt; NULLIFIER_ROOT_WIDTH],
 ) -> Result<[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH], Vec<String>> {
     input.validate()?;
     validate_commitment_field_range(input)?;
@@ -1670,8 +2144,10 @@ fn canonical_public_input_root_preimage_with_commitments(
     elements[16..20].copy_from_slice(claim_source_root);
     elements[20..24].copy_from_slice(oracle_facts_root);
     elements[24..28].copy_from_slice(fee_schedule_root);
-    elements[28] = felt(input.expected_outcome.decision as u64);
-    elements[29] = felt(input.expected_outcome.failure_code as u64);
+    elements[28..32].copy_from_slice(nullifier_root_before);
+    elements[32..36].copy_from_slice(nullifier_root_after);
+    elements[36] = felt(input.expected_outcome.decision as u64);
+    elements[37] = felt(input.expected_outcome.failure_code as u64);
     Ok(elements)
 }
 
@@ -1722,6 +2198,20 @@ fn initial_public_input_root_hash_state<E: FieldElement + From<ProductionFelt>>(
     state
 }
 
+fn initial_batch_root_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(BATCH_ROOT_PREIMAGE_LENGTH as u64));
+    for (offset, value) in batch_root_header().into_iter().enumerate() {
+        state[RESCUE_RATE_START + offset] = E::from(value);
+    }
+    for offset in 0..PUBLIC_INPUT_ROOT_WIDTH {
+        state[RESCUE_RATE_START + 4 + offset] = row[HASH_STATE_START + RESCUE_RATE_START + offset];
+    }
+    state
+}
+
 fn initial_claim_source_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
     row: &[E],
 ) -> [E; RESCUE_STATE_WIDTH] {
@@ -1753,6 +2243,78 @@ fn initial_fee_schedule_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
         state[RESCUE_RATE_START + rate_index] = row[FEE_SCHEDULE_PREIMAGE_START + rate_index];
     }
     state
+}
+
+fn initial_nullifier_leaf_hash_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(NULLIFIER_PREIMAGE_LENGTH as u64));
+    for rate_index in 0..RESCUE_RATE_WIDTH {
+        state[RESCUE_RATE_START + rate_index] = row[NULLIFIER_PREIMAGE_START + rate_index];
+    }
+    state
+}
+
+fn initial_nullifier_before_merkle_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    level: usize,
+) -> [E; RESCUE_STATE_WIDTH] {
+    let current = if level == 0 {
+        [E::ZERO; NULLIFIER_ROOT_WIDTH]
+    } else {
+        core::array::from_fn(|index| row[HASH_STATE_START + RESCUE_RATE_START + index])
+    };
+    initial_nullifier_merkle_state(row, current, level)
+}
+
+fn initial_nullifier_after_merkle_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    level: usize,
+) -> [E; RESCUE_STATE_WIDTH] {
+    let current = if level == 0 {
+        core::array::from_fn(|index| row[COL_DECISION] * row[NULLIFIER_DIGEST_RESULT_START + index])
+    } else {
+        core::array::from_fn(|index| row[HASH_STATE_START + RESCUE_RATE_START + index])
+    };
+    initial_nullifier_merkle_state(row, current, level)
+}
+
+fn initial_nullifier_merkle_state<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    current: [E; NULLIFIER_ROOT_WIDTH],
+    level: usize,
+) -> [E; RESCUE_STATE_WIDTH] {
+    let mut state = [E::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = E::from(felt(RESCUE_RATE_WIDTH as u64));
+    let sibling_start = NULLIFIER_PATH_START + level * NULLIFIER_ROOT_WIDTH;
+    let sibling: [E; NULLIFIER_ROOT_WIDTH] =
+        core::array::from_fn(|index| row[sibling_start + index]);
+    let direction = row[COL_NULLIFIER_PATH_DIRECTION];
+    let left: [E; NULLIFIER_ROOT_WIDTH] = core::array::from_fn(|index| {
+        current[index] * (E::ONE - direction) + sibling[index] * direction
+    });
+    let right: [E; NULLIFIER_ROOT_WIDTH] = core::array::from_fn(|index| {
+        sibling[index] * (E::ONE - direction) + current[index] * direction
+    });
+    state[RESCUE_RATE_START..RESCUE_RATE_START + NULLIFIER_ROOT_WIDTH].copy_from_slice(&left);
+    state[RESCUE_RATE_START + NULLIFIER_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&right);
+    state
+}
+
+fn nullifier_direction_for_step(step: usize, leaf_index: usize) -> ProductionFelt {
+    for trace_start in [
+        NULLIFIER_BEFORE_MERKLE_TRACE_START,
+        NULLIFIER_AFTER_MERKLE_TRACE_START,
+    ] {
+        for level in 0..NULLIFIER_ROOT_TREE_DEPTH {
+            if step == trace_start - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH {
+                return ProductionFelt::from(((leaf_index >> level) & 1) as u32);
+            }
+        }
+    }
+    ProductionFelt::ZERO
 }
 
 fn initial_claim_source_merkle_state<E: FieldElement + From<ProductionFelt>>(
@@ -1954,6 +2516,34 @@ fn build_fee_schedule_leaf_hash_states(
     states
 }
 
+fn build_nullifier_leaf_hash_states(
+    elements: &[ProductionFelt; NULLIFIER_PREIMAGE_LENGTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; NULLIFIER_LEAF_TRACE_LENGTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(NULLIFIER_PREIMAGE_LENGTH as u64);
+    state[RESCUE_RATE_START..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&elements[..RESCUE_RATE_WIDTH]);
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; NULLIFIER_LEAF_TRACE_LENGTH];
+    states[0] = state;
+    let mut step = 0;
+    for block in 0..2 {
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            step += 1;
+            states[step] = state;
+        }
+        if block == 0 {
+            for rate_index in 0..RESCUE_RATE_WIDTH {
+                state[RESCUE_RATE_START + rate_index] += elements[RESCUE_RATE_WIDTH + rate_index];
+            }
+            step += 1;
+            states[step] = state;
+        }
+    }
+    debug_assert_eq!(step, NULLIFIER_LEAF_TRACE_LENGTH - 1);
+    states
+}
+
 fn build_claim_source_merkle_hash_states(
     leaf: [ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH],
     path: &[[ProductionFelt; CLAIM_SOURCE_ROOT_WIDTH]; CLAIM_SOURCE_ROOT_TREE_DEPTH],
@@ -2021,6 +2611,62 @@ fn build_fee_schedule_merkle_hash_states(
     }
 
     states
+}
+
+fn build_nullifier_merkle_hash_states(
+    leaf: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    path: &[[ProductionFelt; NULLIFIER_ROOT_WIDTH]; NULLIFIER_ROOT_TREE_DEPTH],
+    leaf_index: usize,
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; NULLIFIER_MERKLE_TRACE_LENGTH] {
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; NULLIFIER_MERKLE_TRACE_LENGTH];
+    let mut current = leaf;
+    for (level, sibling) in path.iter().copied().enumerate() {
+        let start = level * NULLIFIER_MERKLE_LEVEL_LENGTH;
+        let mut state = initial_nullifier_merge_state(current, sibling, leaf_index, level);
+        states[start] = state;
+        for round in 0..RESCUE_ROUND_COUNT {
+            Rp64_256::apply_round(&mut state, round);
+            states[start + round + 1] = state;
+        }
+        current = state[RESCUE_RATE_START..RESCUE_RATE_START + NULLIFIER_ROOT_WIDTH]
+            .try_into()
+            .expect("nullifier Merkle digest width");
+    }
+    states
+}
+
+fn initial_nullifier_merge_state(
+    current: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    sibling: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    leaf_index: usize,
+    level: usize,
+) -> [ProductionFelt; RESCUE_STATE_WIDTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(RESCUE_RATE_WIDTH as u64);
+    let (left, right) = if ((leaf_index >> level) & 1) == 0 {
+        (current, sibling)
+    } else {
+        (sibling, current)
+    };
+    state[RESCUE_RATE_START..RESCUE_RATE_START + NULLIFIER_ROOT_WIDTH].copy_from_slice(&left);
+    state[RESCUE_RATE_START + NULLIFIER_ROOT_WIDTH..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(&right);
+    state
+}
+
+fn merge_nullifier_level(
+    current: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    sibling: [ProductionFelt; NULLIFIER_ROOT_WIDTH],
+    leaf_index: usize,
+    level: usize,
+) -> [ProductionFelt; NULLIFIER_ROOT_WIDTH] {
+    let mut state = initial_nullifier_merge_state(current, sibling, leaf_index, level);
+    for round in 0..RESCUE_ROUND_COUNT {
+        Rp64_256::apply_round(&mut state, round);
+    }
+    state[RESCUE_RATE_START..RESCUE_RATE_START + NULLIFIER_ROOT_WIDTH]
+        .try_into()
+        .expect("nullifier Merkle digest width")
 }
 
 fn initial_claim_source_merge_state(
@@ -2133,7 +2779,7 @@ fn fee_schedule_index_bit(level: usize) -> u8 {
 
 fn build_public_input_root_hash_states(
     elements: &[ProductionFelt; PUBLIC_INPUT_ROOT_PREIMAGE_LENGTH],
-) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; TRACE_LENGTH - PUBLIC_ROOT_TRACE_START] {
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; PUBLIC_ROOT_TRACE_LENGTH] {
     let first_claim_hash_limbs: [ProductionFelt; 4] = elements[4..8]
         .try_into()
         .expect("canonical public input root contains four initial claim hash limbs");
@@ -2143,18 +2789,17 @@ fn build_public_input_root_hash_states(
     state[RESCUE_RATE_START + 4..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
         .copy_from_slice(&first_claim_hash_limbs);
 
-    let mut states =
-        [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; TRACE_LENGTH - PUBLIC_ROOT_TRACE_START];
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; PUBLIC_ROOT_TRACE_LENGTH];
     states[0] = state;
     let mut step = 0;
 
-    for block in 0..4 {
+    for block in 0..5 {
         for round in 0..RESCUE_ROUND_COUNT {
             Rp64_256::apply_round(&mut state, round);
             step += 1;
             states[step] = state;
         }
-        if block < 3 {
+        if block < 4 {
             let next_block_start = (block + 1) * RESCUE_RATE_WIDTH;
             for rate_index in 0..RESCUE_RATE_WIDTH {
                 let element_index = next_block_start + rate_index;
@@ -2167,9 +2812,27 @@ fn build_public_input_root_hash_states(
         }
     }
 
-    debug_assert_eq!(step, 31);
-    for hold_step in step + 1..states.len() {
-        states[hold_step] = state;
+    debug_assert_eq!(step, 39);
+    states
+}
+
+fn build_batch_root_hash_states(
+    public_input_root: &[ProductionFelt; PUBLIC_INPUT_ROOT_WIDTH],
+) -> [[ProductionFelt; RESCUE_STATE_WIDTH]; BATCH_ROOT_TRACE_LENGTH] {
+    let mut state = [ProductionFelt::ZERO; RESCUE_STATE_WIDTH];
+    state[0] = felt(BATCH_ROOT_PREIMAGE_LENGTH as u64);
+    state[RESCUE_RATE_START..RESCUE_RATE_START + 4].copy_from_slice(&batch_root_header());
+    state[RESCUE_RATE_START + 4..RESCUE_RATE_START + RESCUE_RATE_WIDTH]
+        .copy_from_slice(public_input_root);
+
+    let mut states = [[ProductionFelt::ZERO; RESCUE_STATE_WIDTH]; BATCH_ROOT_TRACE_LENGTH];
+    states[0] = state;
+    for round in 0..RESCUE_ROUND_COUNT {
+        Rp64_256::apply_round(&mut state, round);
+        states[round + 1] = state;
+    }
+    for held in states.iter_mut().skip(RESCUE_ROUND_COUNT + 1) {
+        *held = state;
     }
     states
 }
@@ -2264,6 +2927,14 @@ fn fee_schedule_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
     })
 }
 
+fn nullifier_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
+    row: &[E],
+    block: usize,
+) -> [E; RESCUE_RATE_WIDTH] {
+    debug_assert_eq!(block, 1);
+    core::array::from_fn(|offset| row[NULLIFIER_PREIMAGE_START + RESCUE_RATE_WIDTH + offset])
+}
+
 fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
     row: &[E],
     block: usize,
@@ -2294,12 +2965,22 @@ fn public_input_root_absorption_block<E: FieldElement + From<ProductionFelt>>(
             row[FEE_SCHEDULE_ROOT_RESULT_START + 1],
             row[FEE_SCHEDULE_ROOT_RESULT_START + 2],
             row[FEE_SCHEDULE_ROOT_RESULT_START + 3],
+            row[NULLIFIER_ROOT_BEFORE_RESULT_START],
+            row[NULLIFIER_ROOT_BEFORE_RESULT_START + 1],
+            row[NULLIFIER_ROOT_BEFORE_RESULT_START + 2],
+            row[NULLIFIER_ROOT_BEFORE_RESULT_START + 3],
+        ],
+        4 => [
+            row[NULLIFIER_ROOT_AFTER_RESULT_START],
+            row[NULLIFIER_ROOT_AFTER_RESULT_START + 1],
+            row[NULLIFIER_ROOT_AFTER_RESULT_START + 2],
+            row[NULLIFIER_ROOT_AFTER_RESULT_START + 3],
             row[COL_DECISION],
             row[COL_FAILURE_CODE],
             E::ZERO,
             E::ZERO,
         ],
-        _ => unreachable!("public input root absorption block must be 1, 2, or 3"),
+        _ => unreachable!("public input root absorption block must be 1, 2, 3, or 4"),
     }
 }
 

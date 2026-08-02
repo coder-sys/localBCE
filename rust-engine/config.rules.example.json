@@ -1,0 +1,11 @@
+{
+  "claims_registry_address": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+  "private_key": "REPLACE_WITH_LOCAL_OR_SECRET_MANAGED_KEY",
+  "rpc_url": "http://127.0.0.1:8545",
+  "transaction_value": "0.001ether",
+  "enable_stark_sidecar_artifacts": false,
+  "proof_backend": "groth16",
+  "rules_backend": "versioned_g1_g10",
+  "rules_file": "rules_active_v1.json",
+  "rules_sha256": "95d38b6d8fc9c44b65feace024a07c22b4f11771fe6b23283ce73bbe0a7cb8e3"
+}

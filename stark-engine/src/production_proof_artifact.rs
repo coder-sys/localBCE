@@ -1,21 +1,32 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use winterfell::Proof;
+use winterfell::{
+    Proof,
+    crypto::{ElementHasher, hashers::Rp64_256},
+};
 
 use crate::{
     StarkBridgeInput,
     production_air::ProductionAirInputV1,
     production_air_winterfell::{
+        BATCH_ROOT_ENCODING, BATCH_ROOT_HASH_FUNCTION, BATCH_ROOT_SCHEMA_VERSION,
         CLAIM_SOURCE_ROOT_WIDTH, FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_SCHEMA_VERSION,
-        FEE_SCHEDULE_ROOT_WIDTH, PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION,
-        PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionAirProofInputV2, ProductionAirPublicInputsV2,
-        ProductionFelt, TRACE_LENGTH, TRACE_WIDTH, pack_public_input_root_bytes32,
+        FEE_SCHEDULE_ROOT_WIDTH, NULLIFIER_ROOT_WIDTH, PUBLIC_INPUT_ROOT_ENCODING,
+        PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
+        ProductionAirProofInputV2, ProductionAirPublicInputsV2, ProductionFelt, TRACE_LENGTH,
+        TRACE_WIDTH, compute_single_claim_batch_root, pack_public_input_root_bytes32,
         prove_production_air, unpack_public_input_root_bytes32, verify_production_air_result,
     },
     production_fee_schedule_root::{
         FEE_SCHEDULE_ROOT_ENCODING, FEE_SCHEDULE_ROOT_HASH_FUNCTION, FEE_SCHEDULE_ROOT_LEAF_INDEX,
         FEE_SCHEDULE_ROOT_SCHEMA_VERSION, FEE_SCHEDULE_ROOT_TREE_DEPTH,
         ProductionFeeScheduleRootArtifactV1,
+    },
+    production_nullifier_root_transition::{
+        NULLIFIER_ROOT_ENCODING, NULLIFIER_ROOT_HASH_FUNCTION,
+        NULLIFIER_ROOT_TRANSITION_SCHEMA_VERSION, NULLIFIER_ROOT_TREE_DEPTH,
+        ProductionNullifierRootTransitionArtifactV1,
+        canonical_nullifier_digest_bytes32_from_claim_hash, canonical_nullifier_leaf_index,
     },
     source_roots::{
         CLAIM_SOURCE_ROOT_ENCODING, CLAIM_SOURCE_ROOT_HASH_FUNCTION, CLAIM_SOURCE_ROOT_LEAF_INDEX,
@@ -26,7 +37,7 @@ use crate::{
     },
 };
 
-pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 26] = [
+pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 38] = [
     "claim_hash_be_u32_limb_0",
     "claim_hash_be_u32_limb_1",
     "claim_hash_be_u32_limb_2",
@@ -51,6 +62,18 @@ pub const PRODUCTION_STARK_PUBLIC_INPUT_ORDER: [&str; 26] = [
     "fee_schedule_root_element_1",
     "fee_schedule_root_element_2",
     "fee_schedule_root_element_3",
+    "nullifier_root_before_element_0",
+    "nullifier_root_before_element_1",
+    "nullifier_root_before_element_2",
+    "nullifier_root_before_element_3",
+    "nullifier_root_after_element_0",
+    "nullifier_root_after_element_1",
+    "nullifier_root_after_element_2",
+    "nullifier_root_after_element_3",
+    "batch_root_element_0",
+    "batch_root_element_1",
+    "batch_root_element_2",
+    "batch_root_element_3",
     "decision",
     "failure_code",
 ];
@@ -94,6 +117,24 @@ pub struct ProductionStarkProofArtifactV4 {
     pub fee_schedule_root_binding: String,
     pub fee_schedule_source_verification_status: String,
     pub fee_schedule_governance_status: String,
+    pub nullifier_root_schema_version: String,
+    pub nullifier_root_hash: String,
+    pub nullifier_root_encoding: String,
+    pub nullifier_bytes32: String,
+    pub nullifier_root_before_bytes32: String,
+    pub nullifier_root_after_bytes32: String,
+    pub nullifier_root_tree_depth: usize,
+    pub nullifier_root_leaf_index: usize,
+    pub nullifier_root_binding: String,
+    pub nullifier_state_source_status: String,
+    pub nullifier_state_generation_before: u64,
+    pub nullifier_state_generation_after: u64,
+    pub nullifier_governance_status: String,
+    pub batch_root_schema_version: String,
+    pub batch_root_hash: String,
+    pub batch_root_encoding: String,
+    pub batch_root_bytes32: String,
+    pub batch_root_binding: String,
     pub claim_id: String,
     pub claim_id_binding: String,
     pub claim_hash: String,
@@ -157,9 +198,13 @@ pub type ProductionStarkProofArtifactV5 = ProductionStarkProofArtifactV4;
 pub type ProductionStarkPublicInputsV5 = ProductionStarkPublicInputsV4;
 pub type ProductionStarkProofBytesV5 = ProductionStarkProofBytesV4;
 pub type ProductionStarkProofParametersV5 = ProductionStarkProofParametersV4;
+pub type ProductionStarkProofArtifactV6 = ProductionStarkProofArtifactV4;
+pub type ProductionStarkPublicInputsV6 = ProductionStarkPublicInputsV4;
+pub type ProductionStarkProofBytesV6 = ProductionStarkProofBytesV4;
+pub type ProductionStarkProofParametersV6 = ProductionStarkProofParametersV4;
 
 impl ProductionStarkProofArtifactV4 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v5";
+    pub const SCHEMA_VERSION: &'static str = "stark-production-proof-artifact-v7";
     pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionAirProofInputV2::SCHEMA_VERSION;
     pub const ARTIFACT_STATUS: &'static str = "locally_verified_feature_gated_not_runtime";
     pub const PROOF_SYSTEM: &'static str = "winterfell";
@@ -172,10 +217,24 @@ impl ProductionStarkProofArtifactV4 {
         "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path";
     pub const FEE_SCHEDULE_ROOT_BINDING: &'static str =
         "air_constrained_canonical_verified_fee_leaf_depth_10_merkle_path_and_claim_source_links";
+    pub const NULLIFIER_ROOT_BINDING: &'static str =
+        "air_constrained_claim_hash_indexed_nullifier_empty_leaf_depth_10_before_after_transition";
+    pub const BATCH_ROOT_BINDING: &'static str =
+        "air_constrained_single_claim_batch_hash_of_public_input_root";
     pub const LOCAL_VERIFICATION_STATUS: &'static str = "verified_from_serialized_proof_bytes";
 
     pub fn from_bridge_input(bridge: &StarkBridgeInput) -> Result<Self, Vec<String>> {
         let input = ProductionAirProofInputV2::from_bridge_input(bridge)?;
+        Self::from_proof_input(&input)
+    }
+
+    pub fn from_bridge_input_with_nullifier_transition(
+        bridge: &StarkBridgeInput,
+        transition: &ProductionNullifierRootTransitionArtifactV1,
+    ) -> Result<Self, Vec<String>> {
+        let input = ProductionAirProofInputV2::from_bridge_input_with_nullifier_transition(
+            bridge, transition,
+        )?;
         Self::from_proof_input(&input)
     }
 
@@ -198,6 +257,17 @@ impl ProductionStarkProofArtifactV4 {
             pack_public_input_root_bytes32(&public_inputs.oracle_facts_root);
         let fee_schedule_root_bytes32 =
             pack_public_input_root_bytes32(&public_inputs.fee_schedule_root);
+        let nullifier_root_before_bytes32 =
+            pack_public_input_root_bytes32(&public_inputs.nullifier_root_before);
+        let nullifier_root_after_bytes32 =
+            pack_public_input_root_bytes32(&public_inputs.nullifier_root_after);
+        let batch_root_bytes32 = pack_public_input_root_bytes32(&public_inputs.batch_root);
+        let nullifier_bytes32 = pack_public_input_root_bytes32(
+            &Rp64_256::hash_elements(&input.nullifier.preimage)
+                .as_elements()
+                .try_into()
+                .expect("Rp64_256 digest must contain four field elements"),
+        );
         let public_inputs = ProductionStarkPublicInputsV4::from_air_public_inputs(&public_inputs);
         let adjudication = &input.adjudication;
         let artifact = Self {
@@ -242,6 +312,25 @@ impl ProductionStarkProofArtifactV4 {
                 ProductionFeeScheduleRootArtifactV1::SOURCE_VERIFICATION_STATUS.to_string(),
             fee_schedule_governance_status: ProductionFeeScheduleRootArtifactV1::GOVERNANCE_STATUS
                 .to_string(),
+            nullifier_root_schema_version: NULLIFIER_ROOT_TRANSITION_SCHEMA_VERSION.to_string(),
+            nullifier_root_hash: NULLIFIER_ROOT_HASH_FUNCTION.to_string(),
+            nullifier_root_encoding: NULLIFIER_ROOT_ENCODING.to_string(),
+            nullifier_bytes32,
+            nullifier_root_before_bytes32,
+            nullifier_root_after_bytes32,
+            nullifier_root_tree_depth: NULLIFIER_ROOT_TREE_DEPTH,
+            nullifier_root_leaf_index: input.nullifier.leaf_index,
+            nullifier_root_binding: Self::NULLIFIER_ROOT_BINDING.to_string(),
+            nullifier_state_source_status: input.nullifier.state_source_status.clone(),
+            nullifier_state_generation_before: input.nullifier.state_generation_before,
+            nullifier_state_generation_after: input.nullifier.state_generation_after,
+            nullifier_governance_status:
+                ProductionNullifierRootTransitionArtifactV1::GOVERNANCE_STATUS.to_string(),
+            batch_root_schema_version: BATCH_ROOT_SCHEMA_VERSION.to_string(),
+            batch_root_hash: BATCH_ROOT_HASH_FUNCTION.to_string(),
+            batch_root_encoding: BATCH_ROOT_ENCODING.to_string(),
+            batch_root_bytes32,
+            batch_root_binding: Self::BATCH_ROOT_BINDING.to_string(),
             claim_id: adjudication.claim_id.clone(),
             claim_id_binding: Self::CLAIM_ID_BINDING.to_string(),
             claim_hash: adjudication.claim_hash.clone(),
@@ -434,6 +523,68 @@ impl ProductionStarkProofArtifactV4 {
             ProductionFeeScheduleRootArtifactV1::GOVERNANCE_STATUS,
             &mut errors,
         );
+        validate_exact(
+            "nullifier_root_schema_version",
+            &self.nullifier_root_schema_version,
+            NULLIFIER_ROOT_TRANSITION_SCHEMA_VERSION,
+            &mut errors,
+        );
+        validate_exact(
+            "nullifier_root_hash",
+            &self.nullifier_root_hash,
+            NULLIFIER_ROOT_HASH_FUNCTION,
+            &mut errors,
+        );
+        validate_exact(
+            "nullifier_root_encoding",
+            &self.nullifier_root_encoding,
+            NULLIFIER_ROOT_ENCODING,
+            &mut errors,
+        );
+        validate_exact(
+            "nullifier_root_binding",
+            &self.nullifier_root_binding,
+            Self::NULLIFIER_ROOT_BINDING,
+            &mut errors,
+        );
+        if ![
+            ProductionNullifierRootTransitionArtifactV1::BOOTSTRAP_STATE_SOURCE_STATUS,
+            ProductionNullifierRootTransitionArtifactV1::PERSISTENT_STATE_SOURCE_STATUS,
+        ]
+        .contains(&self.nullifier_state_source_status.as_str())
+        {
+            errors.push("nullifier_state_source_status is unsupported".to_string());
+        }
+        validate_exact(
+            "nullifier_governance_status",
+            &self.nullifier_governance_status,
+            ProductionNullifierRootTransitionArtifactV1::GOVERNANCE_STATUS,
+            &mut errors,
+        );
+        validate_exact(
+            "batch_root_schema_version",
+            &self.batch_root_schema_version,
+            BATCH_ROOT_SCHEMA_VERSION,
+            &mut errors,
+        );
+        validate_exact(
+            "batch_root_hash",
+            &self.batch_root_hash,
+            BATCH_ROOT_HASH_FUNCTION,
+            &mut errors,
+        );
+        validate_exact(
+            "batch_root_encoding",
+            &self.batch_root_encoding,
+            BATCH_ROOT_ENCODING,
+            &mut errors,
+        );
+        validate_exact(
+            "batch_root_binding",
+            &self.batch_root_binding,
+            Self::BATCH_ROOT_BINDING,
+            &mut errors,
+        );
         if self.claim_source_root_tree_depth != CLAIM_SOURCE_ROOT_TREE_DEPTH {
             errors.push(format!(
                 "claim_source_root_tree_depth must be {CLAIM_SOURCE_ROOT_TREE_DEPTH}, got {}",
@@ -469,6 +620,28 @@ impl ProductionStarkProofArtifactV4 {
                 "fee_schedule_root_leaf_index must be {FEE_SCHEDULE_ROOT_LEAF_INDEX}, got {}",
                 self.fee_schedule_root_leaf_index
             ));
+        }
+        if self.nullifier_root_tree_depth != NULLIFIER_ROOT_TREE_DEPTH {
+            errors.push(format!(
+                "nullifier_root_tree_depth must be {NULLIFIER_ROOT_TREE_DEPTH}, got {}",
+                self.nullifier_root_tree_depth
+            ));
+        }
+        match canonical_nullifier_leaf_index(&self.claim_hash) {
+            Ok(expected) if self.nullifier_root_leaf_index != expected => errors.push(format!(
+                "nullifier_root_leaf_index must be {expected}, got {}",
+                self.nullifier_root_leaf_index
+            )),
+            Ok(_) => {}
+            Err(mut value) => errors.append(&mut value),
+        }
+        let expected_generation_after = if self.decision == 1 {
+            self.nullifier_state_generation_before.checked_add(1)
+        } else {
+            Some(self.nullifier_state_generation_before)
+        };
+        if expected_generation_after != Some(self.nullifier_state_generation_after) {
+            errors.push("nullifier state generation transition is invalid".to_string());
         }
         validate_exact(
             "claim_id_binding",
@@ -612,6 +785,80 @@ impl ProductionStarkProofArtifactV4 {
             (Err(error), _) => errors.push(error),
             (_, Err(_)) => {}
         }
+        match (
+            unpack_public_input_root_bytes32(&self.nullifier_root_before_bytes32),
+            self.public_inputs.parsed_values(),
+        ) {
+            (Ok(packed), Ok(values))
+                if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() =>
+            {
+                let public_values = packed.map(|value| value.as_int());
+                if values[24..28] != public_values {
+                    errors.push(
+                        "nullifier_root_before_bytes32 does not match AIR public inputs"
+                            .to_string(),
+                    );
+                }
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(error), _) => errors.push(error),
+            (_, Err(_)) => {}
+        }
+        match (
+            unpack_public_input_root_bytes32(&self.nullifier_root_after_bytes32),
+            self.public_inputs.parsed_values(),
+        ) {
+            (Ok(packed), Ok(values))
+                if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() =>
+            {
+                let public_values = packed.map(|value| value.as_int());
+                if values[28..32] != public_values {
+                    errors.push(
+                        "nullifier_root_after_bytes32 does not match AIR public inputs".to_string(),
+                    );
+                }
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(error), _) => errors.push(error),
+            (_, Err(_)) => {}
+        }
+        match (
+            unpack_public_input_root_bytes32(&self.batch_root_bytes32),
+            self.public_inputs.parsed_values(),
+        ) {
+            (Ok(packed), Ok(values))
+                if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() =>
+            {
+                let public_values = packed.map(|value| value.as_int());
+                if values[32..36] != public_values {
+                    errors.push("batch_root_bytes32 does not match AIR public inputs".to_string());
+                }
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(error), _) => errors.push(error),
+            (_, Err(_)) => {}
+        }
+        match canonical_nullifier_digest_bytes32_from_claim_hash(&self.claim_hash) {
+            Ok(expected) if self.nullifier_bytes32 != expected => errors.push(
+                "nullifier_bytes32 does not match the canonical claim-hash nullifier digest"
+                    .to_string(),
+            ),
+            Ok(_) => {}
+            Err(mut digest_errors) => errors.append(&mut digest_errors),
+        }
+        if let Ok(public_input_root) =
+            unpack_public_input_root_bytes32(&self.public_input_root_bytes32)
+        {
+            let expected_batch_root = pack_public_input_root_bytes32(
+                &compute_single_claim_batch_root(&public_input_root),
+            );
+            if self.batch_root_bytes32 != expected_batch_root {
+                errors.push(
+                    "batch_root_bytes32 does not match the canonical single-claim batch root"
+                        .to_string(),
+                );
+            }
+        }
         if let Err(mut proof_errors) = self.proof.validate() {
             errors.append(&mut proof_errors);
         }
@@ -648,7 +895,7 @@ impl ProductionStarkProofArtifactV4 {
 }
 
 impl ProductionStarkPublicInputsV4 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v5";
+    pub const SCHEMA_VERSION: &'static str = "stark-production-public-inputs-v7";
     pub const ENCODING: &'static str = "winterfell-f64-canonical-decimal";
 
     fn from_air_public_inputs(public_inputs: &ProductionAirPublicInputsV2) -> Self {
@@ -681,6 +928,19 @@ impl ProductionStarkPublicInputsV4 {
                 .iter()
                 .map(|value| value.as_int()),
         );
+        values.extend(
+            public_inputs
+                .nullifier_root_before
+                .iter()
+                .map(|value| value.as_int()),
+        );
+        values.extend(
+            public_inputs
+                .nullifier_root_after
+                .iter()
+                .map(|value| value.as_int()),
+        );
+        values.extend(public_inputs.batch_root.iter().map(|value| value.as_int()));
         values.push(public_inputs.decision.as_int());
         values.push(public_inputs.failure_code.as_int());
 
@@ -757,10 +1017,10 @@ impl ProductionStarkPublicInputsV4 {
                 }
 
                 if values.len() == PRODUCTION_STARK_PUBLIC_INPUT_ORDER.len() {
-                    if values[24] != u64::from(decision) {
+                    if values[36] != u64::from(decision) {
                         errors.push("public decision does not match artifact decision".to_string());
                     }
-                    if values[25] != u64::from(failure_code) {
+                    if values[37] != u64::from(failure_code) {
                         errors.push(
                             "public failure_code does not match artifact failure_code".to_string(),
                         );
@@ -839,8 +1099,17 @@ impl ProductionStarkPublicInputsV4 {
             fee_schedule_root: field_values[20..20 + FEE_SCHEDULE_ROOT_WIDTH]
                 .try_into()
                 .expect("validated fee-schedule root width"),
-            decision: field_values[24],
-            failure_code: field_values[25],
+            nullifier_root_before: field_values[24..24 + NULLIFIER_ROOT_WIDTH]
+                .try_into()
+                .expect("validated nullifier root-before width"),
+            nullifier_root_after: field_values[28..28 + NULLIFIER_ROOT_WIDTH]
+                .try_into()
+                .expect("validated nullifier root-after width"),
+            batch_root: field_values[32..36]
+                .try_into()
+                .expect("validated batch root width"),
+            decision: field_values[36],
+            failure_code: field_values[37],
         })
     }
 }

@@ -103,9 +103,13 @@ STARK_SETTLEMENT_IMPLEMENTATION_PLAN="${TMP_DIR}/stark_settlement_implementation
 STARK_SETTLEMENT_RUNTIME_READINESS_REPORT="${TMP_DIR}/stark_settlement_runtime_readiness_report.json"
 PRODUCTION_STARK_PROOF_ARTIFACT="${TMP_DIR}/production_stark_proof_artifact.json"
 PRODUCTION_STARK_VERIFIER_HANDOFF="${TMP_DIR}/production_stark_verifier_handoff.json"
+PRODUCTION_STARK_ATTESTATION_ENVELOPE="${TMP_DIR}/production_stark_attestation_envelope.json"
 PRODUCTION_CLAIM_SOURCE_ROOT="${TMP_DIR}/production_claim_source_root.json"
 PRODUCTION_ORACLE_FACTS_ROOT="${TMP_DIR}/production_oracle_facts_root.json"
 PRODUCTION_FEE_SCHEDULE_ROOT="${TMP_DIR}/production_fee_schedule_root.json"
+PRODUCTION_NULLIFIER_ROOT_TRANSITION="${TMP_DIR}/production_nullifier_root_transition.json"
+PRODUCTION_NULLIFIER_STATE="${TMP_DIR}/production_nullifier_state.json"
+PRODUCTION_NULLIFIER_APPLY_RECEIPT="${TMP_DIR}/production_nullifier_apply_receipt.json"
 
 run_in_dir "Generate STARK bridge input dry-run" "rust-engine" \
   cargo run -- stark-bridge-input-dry-run
@@ -144,6 +148,21 @@ run_in_dir "Validate production fee-schedule root candidate" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin validate_production_fee_schedule_root -- \
     "${PRODUCTION_FEE_SCHEDULE_ROOT}"
+
+run_in_dir "Initialize production nullifier state" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin initialize_production_nullifier_state -- \
+    "${PRODUCTION_NULLIFIER_STATE}"
+
+run_in_dir "Prepare persistent production nullifier-root transition" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin prepare_production_nullifier_transition -- \
+    "${BRIDGE_INPUT}" "${PRODUCTION_NULLIFIER_STATE}" "${PRODUCTION_NULLIFIER_ROOT_TRANSITION}"
+
+run_in_dir "Validate production nullifier-root transition" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_production_nullifier_root_transition -- \
+    "${PRODUCTION_NULLIFIER_ROOT_TRANSITION}"
 
 run_in_dir "Generate STARK proof artifact V1 candidate" "stark-engine" \
   cargo run --bin generate_stark_proof_artifact_v1_candidate -- "${BRIDGE_INPUT}" "${STARK_PROOF_ARTIFACT_V1_CANDIDATE}"
@@ -542,14 +561,15 @@ run_in_dir "Generate Winterfell adapter gap plan" "stark-engine" \
 run_in_dir "Generate production STARK proof artifact" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin generate_production_stark_proof_artifact -- \
-    "${BRIDGE_INPUT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}"
+    "${BRIDGE_INPUT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" \
+    "${PRODUCTION_NULLIFIER_ROOT_TRANSITION}"
 
 run_in_dir "Validate production STARK proof artifact" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin validate_production_stark_proof_artifact -- \
     "${PRODUCTION_STARK_PROOF_ARTIFACT}"
 
-python3 - "${PRODUCTION_CLAIM_SOURCE_ROOT}" "${PRODUCTION_ORACLE_FACTS_ROOT}" "${PRODUCTION_FEE_SCHEDULE_ROOT}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" <<'PY'
+python3 - "${PRODUCTION_CLAIM_SOURCE_ROOT}" "${PRODUCTION_ORACLE_FACTS_ROOT}" "${PRODUCTION_FEE_SCHEDULE_ROOT}" "${PRODUCTION_NULLIFIER_ROOT_TRANSITION}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" <<'PY'
 import json
 import sys
 
@@ -559,7 +579,9 @@ with open(sys.argv[2], encoding="utf-8") as oracle_root_file:
     oracle_root_artifact = json.load(oracle_root_file)
 with open(sys.argv[3], encoding="utf-8") as fee_root_file:
     fee_root_artifact = json.load(fee_root_file)
-with open(sys.argv[4], encoding="utf-8") as proof_file:
+with open(sys.argv[4], encoding="utf-8") as nullifier_root_file:
+    nullifier_root_artifact = json.load(nullifier_root_file)
+with open(sys.argv[5], encoding="utf-8") as proof_file:
     proof_artifact = json.load(proof_file)
 
 expected = claim_root_artifact["claim_source_root_bytes32"]
@@ -594,6 +616,41 @@ if proof_artifact["fee_schedule_root_binding"] != (
     "air_constrained_canonical_verified_fee_leaf_depth_10_merkle_path_and_claim_source_links"
 ):
     raise SystemExit("production proof feeScheduleRoot is not marked AIR-constrained")
+
+for suffix, public_slice in (("before", slice(24, 28)), ("after", slice(28, 32))):
+    field = f"nullifier_root_{suffix}_bytes32"
+    expected = nullifier_root_artifact[field]
+    actual = proof_artifact[field]
+    if actual != expected:
+        raise SystemExit(
+            f"production proof nullifierRoot{suffix.title()} mismatch: "
+            f"expected {expected}, got {actual}"
+        )
+    packed = "0x" + "".join(
+        f"{int(value):016x}"
+        for value in proof_artifact["public_inputs"]["values_decimal"][public_slice]
+    )
+    if packed != expected:
+        raise SystemExit(
+            f"production public inputs do not pack to nullifierRoot{suffix.title()}"
+        )
+
+if proof_artifact["public_inputs"]["count"] != 38:
+    raise SystemExit("production proof must expose the canonical 38 public inputs")
+packed_batch_root = "0x" + "".join(
+    f"{int(value):016x}"
+    for value in proof_artifact["public_inputs"]["values_decimal"][32:36]
+)
+if packed_batch_root != proof_artifact["batch_root_bytes32"]:
+    raise SystemExit("production public inputs do not pack to batchRoot")
+if proof_artifact["nullifier_state_source_status"] != (
+    "persistent_file_state_compare_and_swap_v1"
+):
+    raise SystemExit("production proof must use the persistent nullifier state boundary")
+if proof_artifact["nullifier_state_generation_before"] != 0:
+    raise SystemExit("first persistent transition must start at generation zero")
+if proof_artifact["nullifier_state_generation_after"] != 1:
+    raise SystemExit("approved persistent transition must advance generation to one")
 PY
 
 run_in_dir "Generate production STARK verifier handoff" "stark-engine" \
@@ -605,6 +662,92 @@ run_in_dir "Validate production STARK verifier handoff" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin validate_production_stark_verifier_handoff -- \
     "${PRODUCTION_STARK_VERIFIER_HANDOFF}"
+
+python3 - "${PRODUCTION_STARK_PROOF_ARTIFACT}" "${PRODUCTION_STARK_VERIFIER_HANDOFF}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as proof_file:
+    proof_artifact = json.load(proof_file)
+with open(sys.argv[2], encoding="utf-8") as handoff_file:
+    handoff = json.load(handoff_file)
+
+for suffix in ("before", "after"):
+    artifact_field = f"nullifier_root_{suffix}_bytes32"
+    handoff_field = f"nullifier_root_{suffix}"
+    if handoff[handoff_field] != proof_artifact[artifact_field]:
+        raise SystemExit(f"verifier handoff {handoff_field} does not match proof artifact")
+
+if handoff["batch_root"] != proof_artifact["batch_root_bytes32"]:
+    raise SystemExit("verifier handoff batch_root does not match proof artifact")
+
+if handoff["air_public_input_count"] != 38:
+    raise SystemExit("verifier handoff must preserve all 38 AIR public inputs")
+if handoff["call_readiness"]["unresolved_abi_fields"]:
+    raise SystemExit("verifier handoff must have no unresolved ABI fields")
+if not handoff["call_readiness"]["abi_call_ready"]:
+    raise SystemExit("verifier handoff must be ABI-call-ready")
+if handoff["call_readiness"]["runtime_activation_allowed"]:
+    raise SystemExit("ABI readiness must not activate runtime settlement")
+PY
+
+run_in_dir "Generate production STARK attestation envelope" "stark-engine" \
+  env STARK_ATTESTOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  cargo run --features production-air-winterfell \
+    --bin generate_production_stark_attestation_envelope -- \
+    "${PRODUCTION_STARK_VERIFIER_HANDOFF}" 31337 \
+    0x0000000000000000000000000000000000000001 \
+    0x0000000000000000000000000000000000000002 \
+    50000 \
+    "${PRODUCTION_STARK_ATTESTATION_ENVELOPE}"
+
+run_in_dir "Validate production STARK attestation envelope" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_production_stark_attestation_envelope -- \
+    "${PRODUCTION_STARK_ATTESTATION_ENVELOPE}"
+
+python3 - "${PRODUCTION_STARK_ATTESTATION_ENVELOPE}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    envelope = json.load(source)
+if envelope["proof_envelope_size_bytes"] != 129:
+    raise SystemExit("controlled-attestation proof envelope must be exactly 129 bytes")
+if envelope["registry_address"] != "0x0000000000000000000000000000000000000002":
+    raise SystemExit("controlled-attestation envelope did not bind the registry")
+if envelope["claim_amount"] != 50000:
+    raise SystemExit("controlled-attestation envelope did not bind the claim amount")
+if not envelope["locally_validated"] or not envelope["settlement_ready"]:
+    raise SystemExit("controlled-attestation proof envelope is not settlement-ready")
+if envelope["native_on_chain_stark_verification"]:
+    raise SystemExit("controlled-attestation smoke must not claim native STARK verification")
+PY
+
+run_in_dir "Simulate post-settlement persistent nullifier transition apply" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin apply_production_nullifier_transition -- \
+    "${PRODUCTION_NULLIFIER_STATE}" "${PRODUCTION_NULLIFIER_ROOT_TRANSITION}" \
+    "${PRODUCTION_NULLIFIER_APPLY_RECEIPT}"
+
+python3 - "${PRODUCTION_NULLIFIER_STATE}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" "${PRODUCTION_NULLIFIER_APPLY_RECEIPT}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as state_file:
+    state = json.load(state_file)
+with open(sys.argv[2], encoding="utf-8") as proof_file:
+    proof = json.load(proof_file)
+with open(sys.argv[3], encoding="utf-8") as receipt_file:
+    receipt = json.load(receipt_file)
+
+if state["generation"] != 1 or len(state["leaves"]) != 1:
+    raise SystemExit("persistent nullifier state did not commit exactly one approved leaf")
+if state["root_bytes32"] != proof["nullifier_root_after_bytes32"]:
+    raise SystemExit("persistent nullifier state root does not match verified proof rootAfter")
+if receipt["root_after_bytes32"] != state["root_bytes32"]:
+    raise SystemExit("nullifier apply receipt does not match persisted state root")
+PY
 
 echo
 echo "==> STARK bridge CLI chain smoke test passed"

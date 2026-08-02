@@ -15,6 +15,7 @@ from .claude_web_mapping import write_claude_web_deterministic_mapping
 from .claude_web_mapping_qa import write_claude_web_mapping_qa
 from .claude_web_research import ClaudeWebResearchOptions, write_claude_web_research
 from .claude_web_review import review_claude_web_candidates
+from .claude_web_rust_shadow import write_claude_web_rust_shadow_bundle
 from .claude_web_scale_plan import DEFAULT_JURISDICTIONS, DEFAULT_SOURCE_TYPES, allowed_source_types, parse_csv_or_default, write_claude_web_scale_plan
 from .config import make_config
 from .discovery import DiscoveryEngine
@@ -81,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claude-web-audit", help="Run deterministic quality gates over Claude web executable candidates")
     subparsers.add_parser("claude-web-map-deterministic", help="Map Claude web executable candidates into deterministic rule-shape candidates")
     subparsers.add_parser("claude-web-mapping-qa", help="Report deterministic mapping weaknesses and next fix buckets")
+    subparsers.add_parser("claude-web-export-rust-shadow", help="Export QA-passed Claude mappings into a deterministic non-runtime Rust shadow bundle")
     claude_scale_parser = subparsers.add_parser("claude-web-scale-plan", help="Plan structured Claude web expansion batches across programs, jurisdictions, and source types")
     claude_scale_parser.add_argument("--target-candidates-per-branch", type=int, default=10)
     claude_scale_parser.add_argument("--batch-size", type=int, default=5)
@@ -307,6 +309,15 @@ def main() -> None:
         try:
             payload = write_claude_web_mapping_qa(workdir)
         except FileNotFoundError as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "claude-web-export-rust-shadow":
+        try:
+            payload = write_claude_web_rust_shadow_bundle(workdir)
+        except (FileNotFoundError, ValueError) as exc:
             print(str(exc))
             raise SystemExit(2) from exc
         print(json.dumps(payload, indent=2, sort_keys=True))

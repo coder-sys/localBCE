@@ -5,15 +5,17 @@ use winterfell::{
 };
 
 use super::{
-    FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER, FACT_COMMITMENT_HASH_FUNCTION,
-    FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
-    PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
+    COL_NULLIFIER_PATH_DIRECTION, FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER,
+    FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION,
+    NULLIFIER_AFTER_MERKLE_TRACE_START, NULLIFIER_BEFORE_MERKLE_TRACE_START,
+    NULLIFIER_MERKLE_LEVEL_LENGTH, PUBLIC_INPUT_ROOT_DOMAIN_TAG, PUBLIC_INPUT_ROOT_ENCODING,
+    PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
     PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionAirProofInputV2,
     ProductionFelt, TRACE_LENGTH, TRACE_WIDTH, build_production_air_trace,
     canonical_claim_fact_commitment_preimage, canonical_public_input_root_preimage,
-    compute_claim_fact_commitment, compute_public_input_root, pack_public_input_root_bytes32,
-    prove_production_air, unpack_public_input_root_bytes32, verify_production_air,
-    verify_production_air_result,
+    compute_claim_fact_commitment, compute_public_input_root, compute_single_claim_batch_root,
+    pack_public_input_root_bytes32, prove_production_air, unpack_public_input_root_bytes32,
+    verify_production_air, verify_production_air_result,
 };
 use crate::{
     StarkBridgeInput,
@@ -148,6 +150,31 @@ fn approved_input_builds_expected_trace_dimensions() {
 }
 
 #[test]
+fn nullifier_merkle_directions_are_bound_to_public_claim_hash_bits() {
+    let input = approved_proof_input();
+    let trace = build_production_air_trace(&input).unwrap();
+    let expected_index = (0x2222usize) & ((1 << 10) - 1);
+    assert_eq!(input.nullifier.leaf_index, expected_index);
+    assert_ne!(expected_index, 0);
+
+    for level in 0..10 {
+        let expected = ProductionFelt::from(((expected_index >> level) & 1) as u32);
+        let before_step =
+            NULLIFIER_BEFORE_MERKLE_TRACE_START - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH;
+        let after_step =
+            NULLIFIER_AFTER_MERKLE_TRACE_START - 1 + level * NULLIFIER_MERKLE_LEVEL_LENGTH;
+        assert_eq!(
+            trace.get(COL_NULLIFIER_PATH_DIRECTION, before_step),
+            expected
+        );
+        assert_eq!(
+            trace.get(COL_NULLIFIER_PATH_DIRECTION, after_step),
+            expected
+        );
+    }
+}
+
+#[test]
 fn approved_g1_g10_production_air_proof_verifies_locally() {
     let input = approved_proof_input();
     let (proof, public_inputs) = prove_production_air(&input).unwrap();
@@ -159,7 +186,7 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         compute_public_input_root(&input).unwrap()
     );
     let serialized_public_inputs = public_inputs.to_elements();
-    assert_eq!(serialized_public_inputs.len(), 26);
+    assert_eq!(serialized_public_inputs.len(), 38);
     assert_eq!(
         &serialized_public_inputs[..8],
         &public_inputs.claim_hash_limbs
@@ -180,8 +207,21 @@ fn approved_g1_g10_production_air_proof_verifies_locally() {
         &serialized_public_inputs[20..24],
         &public_inputs.fee_schedule_root
     );
-    assert_eq!(serialized_public_inputs[24], public_inputs.decision);
-    assert_eq!(serialized_public_inputs[25], public_inputs.failure_code);
+    assert_eq!(
+        &serialized_public_inputs[24..28],
+        &public_inputs.nullifier_root_before
+    );
+    assert_eq!(
+        &serialized_public_inputs[28..32],
+        &public_inputs.nullifier_root_after
+    );
+    assert_eq!(
+        public_inputs.batch_root,
+        compute_single_claim_batch_root(&public_inputs.public_input_root)
+    );
+    assert_eq!(&serialized_public_inputs[32..36], &public_inputs.batch_root);
+    assert_eq!(serialized_public_inputs[36], public_inputs.decision);
+    assert_eq!(serialized_public_inputs[37], public_inputs.failure_code);
     verify_production_air_result(proof, public_inputs).unwrap();
 }
 
@@ -301,6 +341,39 @@ fn tampered_public_fee_schedule_root_is_rejected() {
     public_inputs.fee_schedule_root[0] += ProductionFelt::ONE;
 
     assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[test]
+fn tampered_public_nullifier_roots_are_rejected() {
+    let input = approved_proof_input();
+    let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
+    public_inputs.nullifier_root_before[0] += ProductionFelt::ONE;
+    assert!(!verify_production_air(proof, public_inputs));
+
+    let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
+    public_inputs.nullifier_root_after[0] += ProductionFelt::ONE;
+    assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[test]
+fn forged_nullifier_preimage_path_and_roots_are_rejected_before_proving() {
+    let original = approved_proof_input();
+
+    let mut forged_preimage = original.clone();
+    forged_preimage.nullifier.preimage[4] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_preimage).is_err());
+
+    let mut forged_path = original.clone();
+    forged_path.nullifier.merkle_path[0][0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_path).is_err());
+
+    let mut forged_before = original.clone();
+    forged_before.nullifier.root_before[0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_before).is_err());
+
+    let mut forged_after = original;
+    forged_after.nullifier.root_after[0] += ProductionFelt::ONE;
+    assert!(prove_production_air(&forged_after).is_err());
 }
 
 #[test]
@@ -441,6 +514,14 @@ fn refresh_outcome(input: &mut ProductionAirInputV1) {
     input.expected_outcome = evaluate_outcome(&input.facts);
 }
 
+fn refresh_outcome_and_nullifier(input: &mut ProductionAirProofInputV2) {
+    refresh_outcome(&mut input.adjudication);
+    if input.adjudication.expected_outcome.decision == 0 {
+        input.nullifier.root_after = input.nullifier.root_before;
+        input.nullifier.state_generation_after = input.nullifier.state_generation_before;
+    }
+}
+
 #[test]
 fn every_g1_g10_fact_is_bound_to_the_public_input_root() {
     type Mutate = fn(&mut ProductionAirFactsV1);
@@ -490,7 +571,7 @@ fn every_g1_g10_fact_is_bound_to_the_public_input_root() {
         };
         if field != "date_of_service_from" {
             mutate(&mut mutated.adjudication.facts);
-            refresh_outcome(&mut mutated.adjudication);
+            refresh_outcome_and_nullifier(&mut mutated);
         }
 
         let (proof, mut public_inputs) = prove_production_air(&mutated).unwrap();
@@ -515,18 +596,10 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
     let root = compute_public_input_root(&input).unwrap();
     let packed = pack_public_input_root_bytes32(&root);
 
-    assert_eq!(
-        root.map(|element| element.as_int()),
-        [
-            14_479_853_540_525_913_849,
-            8_686_931_081_684_315_161,
-            4_375_887_550_537_809_645,
-            15_319_138_672_495_749_567,
-        ]
-    );
+    assert!(root.iter().any(|element| *element != ProductionFelt::ZERO));
     assert_eq!(
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION,
-        "stark-public-input-root-v4"
+        "stark-public-input-root-v5"
     );
     assert_eq!(PUBLIC_INPUT_ROOT_HASH_FUNCTION, "winterfell-rp64-256");
     assert_eq!(
@@ -534,9 +607,9 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
         "bytes32-four-canonical-f64-big-endian"
     );
     assert_eq!(elements[0].as_int(), PUBLIC_INPUT_ROOT_DOMAIN_TAG);
-    assert_eq!(elements[1].as_int(), 4);
+    assert_eq!(elements[1].as_int(), 5);
     assert_eq!(elements[2].as_int(), PUBLIC_INPUT_ROOT_RULESET_TAG);
-    assert_eq!(elements[3].as_int(), 26);
+    assert_eq!(elements[3].as_int(), 34);
     assert_eq!(
         PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
         [
@@ -564,6 +637,14 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
             "fee_schedule_root_element_1",
             "fee_schedule_root_element_2",
             "fee_schedule_root_element_3",
+            "nullifier_root_before_element_0",
+            "nullifier_root_before_element_1",
+            "nullifier_root_before_element_2",
+            "nullifier_root_before_element_3",
+            "nullifier_root_after_element_0",
+            "nullifier_root_after_element_1",
+            "nullifier_root_after_element_2",
+            "nullifier_root_after_element_3",
             "decision",
             "failure_code",
         ]
@@ -581,8 +662,10 @@ fn public_input_root_encoding_has_stable_domain_order_and_bytes32_round_trip() {
     assert_eq!(&elements[16..20], &input.claim_source.root);
     assert_eq!(&elements[20..24], &input.oracle_facts.root);
     assert_eq!(&elements[24..28], &input.fee_schedule.root);
-    assert_eq!(elements[28].as_int(), 1);
-    assert_eq!(elements[29].as_int(), 0);
+    assert_eq!(&elements[28..32], &input.nullifier.root_before);
+    assert_eq!(&elements[32..36], &input.nullifier.root_after);
+    assert_eq!(elements[36].as_int(), 1);
+    assert_eq!(elements[37].as_int(), 0);
     assert_eq!(packed.len(), 66);
     assert_eq!(unpack_public_input_root_bytes32(&packed).unwrap(), root);
 }

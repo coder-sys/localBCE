@@ -2,126 +2,88 @@
 
 Reference used: the supplied `ARCHITECTURE_TECHNICAL.md` document.
 
-Scope: this file aligns the current localBCE repository with the technical
-architecture reference without changing runtime behavior. The reference document
-describes a broader hardened app, batch, native STARK, payment, and operations
-architecture. The active localBCE repo still keeps the Groth16 one-claim demo
-path green while STARK and hardened components are staged behind explicit
-bridges and reference bundles.
-
 ## Maturity Tags
 
-- `[BUILT+TESTED]` - active code exists in this repo and has passing local tests.
-- `[BUILT-STUBBED]` - code exists, but a critical production dependency is mocked,
-  fail-closed, or not wired into production.
-- `[SCAFFOLDED]` - a model, adapter, or planning surface exists, but is not
-  enough to rely on as production behavior.
-- `[REFERENCE]` - imported material exists for audit/research/porting, but is
-  not active runtime code.
-- `[DEFERRED]` - explicitly named work that is not built in the active path.
+- `[BUILT+TESTED]`: active code exists and has focused local validation.
+- `[BUILT-CONTROLLED]`: active code exists behind an explicit trust or config
+  boundary and is not production approved.
+- `[SCAFFOLDED]`: a planning or compatibility surface exists but is not active.
+- `[REFERENCE]`: imported material exists only for audit and selective porting.
+- `[DEFERRED]`: named future work is intentionally absent.
 
-## Current Active Architecture
+## Active Proof Paths
 
-The active runtime path remains:
+Default compatibility path:
 
 ```text
-rust-engine/claim_input.json
--> rust-engine adjudication
--> zk/input.json
--> Circom witness generation
--> Groth16 proof generation
--> Solidity Verifier
--> blind-ledger ClaimsRegistry
--> rust-engine/adjudication_result.json
+rust-engine adjudication
+-> Circom/Groth16
+-> Verifier.sol
+-> ClaimsRegistry.sol
 ```
 
-Status: `[BUILT+TESTED]` compatibility/demo path.
+Status: `[BUILT+TESTED]`.
 
-This path does not yet include:
+Opt-in STARK path:
 
-- 837 EDI ingestion
-- batch orchestration
-- claim-source/oracle/fee/nullifier roots
-- Cairo execution
-- native STARK proof generation
-- native STARK settlement contracts
-- live payment triggers
+```text
+rust-engine adjudication
+-> StarkBridgeInput
+-> persistent indexed nullifier state
+-> Winterfell G1-G10 proof
+-> local proof verification
+-> controlled secp256k1 attestation
+-> StarkAttestationVerifier
+-> StarkClaimsRegistry
+```
 
-Those components are either imported as reference material or represented by
-pre-prover planning interfaces.
+Status: `[BUILT-CONTROLLED]`.
+
+The STARK path is a complete technical runtime for the selected controlled-
+attestation profile. It does not claim native on-chain Winterfell verification
+or production approval. See `STARK_RUNTIME.md`.
 
 ## Reference-To-Repo Map
 
-| Reference architecture area | Current localBCE location | Current status | Notes |
+| Architecture area | Active location | Status | Boundary |
 | --- | --- | --- | --- |
-| 837 ingestion and shared context | `blind-ledger-app-layer/app/` and hardened bundle | `[REFERENCE]` | Not wired into active `rust-engine/claim_input.json` flow. |
-| Rules engine gates | `rust-engine/src/main.rs`; imported `blind-ledger-app-layer/rules-engine-rust/` | `[BUILT+TESTED]` active G1-G10, `[REFERENCE]` imported engine | Active engine still evaluates current prototype fields, not the full shared-context model. |
-| Groth16 proof path | `rust-engine/`, `zk/`, `blind-ledger/` | `[BUILT+TESTED]` | This is the active compatibility/demo path. |
-| Claim-source, oracle-facts, fee roots | `stark-engine/`; `blind-ledger-app-layer/app/batch/` and hardened bundle | `[SCAFFOLDED]` active schemas, `[REFERENCE]` imported implementations | Phase 4 has planning-only root input schemas/generators/validators. No roots are generated. |
-| Indexed nullifier root transition | `stark-engine/`; `blind-ledger-app-layer/app/batch/` and hardened bundle | `[SCAFFOLDED]` active schema, `[REFERENCE]` imported implementations | Phase 4 has a planning-only transition input. Active ClaimsRegistry has duplicate claim checks, but not the hardened indexed nullifier tree. |
-| Public input vector | `blind-ledger-app-layer/app/public_inputs.py`; ops scaffolds | `[REFERENCE]` / `[SCAFFOLDED]` | Native STARK public inputs are not active local runtime inputs yet. |
-| Hardened claim witness serializer | `stark-engine/`; `blind-ledger-app-layer/zk-stark/`, `zk-cairo-sharp/`, hardened bundle | `[SCAFFOLDED]` active bridge and feature-gated proof preview, `[REFERENCE]` imported research lanes | Active `stark-engine/` can produce complete Winterfell witness candidates and a feature-gated proof preview, but it is not runtime settlement. |
-| Cairo/STARK statement | `blind-ledger-app-layer/zk-cairo-sharp/` and hardened bundle | `[REFERENCE]` | Cairo and native STARK settlement statements are not active localBCE runtime behavior. |
-| Native STARK settlement contract | imported app-layer/hardened contracts | `[REFERENCE]` | Active Solidity settlement remains `ClaimsRegistry.sol` with Groth16 verifier compatibility. |
-| Ops/governance scaffolding | `ops/` | `[SCAFFOLDED]` | Docs and inactive JSON scaffolds are present with a validator. They are not production approval. |
-| Claude rules knowledge graph | `gov-rules-kg-prototype/` | `[SCAFFOLDED]` | Candidate extraction/review lane only; not active adjudication policy. |
+| Claim adjudication | `rust-engine/` | `[BUILT+TESTED]` | G1-G10 `denial_reason()` remains runtime policy. |
+| Groth16 compatibility | `rust-engine/`, `zk/`, `blind-ledger/` | `[BUILT+TESTED]` | Default backend; preserved unchanged. |
+| Winterfell AIR/prover | `stark-engine/` | `[BUILT+TESTED]` | Real proofs are generated, serialized, and locally reverified. |
+| Claim/oracle/fee roots | `stark-engine/` | `[BUILT+TESTED]` | AIR-bound; external source truth and governance remain operational trust. |
+| Nullifier state | `stark-engine/` | `[BUILT+TESTED]` | Persistent indexed tree with lock, CAS generation, atomic writes, and replay rejection. |
+| Batch/public-input roots | `stark-engine/` | `[BUILT+TESTED]` | AIR-bound and included in the 38-element verifier handoff. |
+| STARK settlement | `blind-ledger/` | `[BUILT-CONTROLLED]` | Authorized attestation over inputs and proof commitment; not native STARK verification. |
+| Runtime selection | `rust-engine/config.json` | `[BUILT+TESTED]` | `groth16` default; `stark_attested` explicit opt-in. |
+| Ops/governance | `ops/` | `[SCAFFOLDED]` | Planning scaffolds and validator; not production approval. |
+| Rules discovery | `gov-rules-kg-prototype/` | `[SCAFFOLDED]` | Promotion-ready candidates are not active policy. |
+| 837 ingestion/app orchestration | `blind-ledger-app-layer/` | `[REFERENCE]` | Imported cofounder lane, not silently wired. |
+| Hardened bundle | `localBCE-codex-dev-hardened-20260616/` | `[REFERENCE]` | Selective reviewed ports only. |
+| Native Solidity STARK verifier | none | `[DEFERRED]` | Optional trust-model upgrade. |
+| Cairo path | imported reference folders | `[REFERENCE]` | Winterfell is the selected active STARK implementation. |
 
-## STARK Alignment Path
+## Validation
 
-The production direction in the reference is native STARK settlement with
-hardened roots, public inputs, and proof-verifier artifacts. The current repo is
-aligned through a staged pre-prover path:
-
-```text
-rust-engine stark-bridge-input-dry-run
--> stark-engine validate_bridge_input
--> stark-engine generate/validate claimSourceRoot input
--> stark-engine generate/validate oracleFactsRoot input
--> stark-engine generate/validate feeScheduleRoot input
--> stark-engine generate/validate nullifier root transition input
--> stark-engine generate/validate batch root plan
--> stark-engine generate batch root gap report
--> stark-engine generate_proof_intent
--> stark-engine generate_witness_plan
--> stark-engine validate_witness_plan
--> stark-engine generate_mock_trace
--> stark-engine generate_winterfell_compat_report
--> stark-engine generate_winterfell_gap_plan
--> stark-engine generate/validate feature-gated Winterfell proof preview
+```bash
+bash scripts/validate_stark_bridge_chain.sh
+bash scripts/validate_stark_runtime_settlement.sh
+RUN_STARK_RUNTIME_SETTLEMENT=1 bash scripts/validate_localbce.sh
 ```
 
-Status: `[SCAFFOLDED]`.
+The live STARK validator deploys disposable contracts and checks approved and
+denied settlement, local/on-chain root agreement, replay rejection, and that
+Groth16 is not executed by the STARK backend.
 
-This proves that active Rust claim facts can be normalized into a future STARK
-adapter contract and exercised through a feature-gated Winterfell proof-preview
-lane. It does not run Cairo, does not replace Groth16, and does not submit
-on-chain.
+## Remaining Architecture Work
 
-## What Should Stay Separate For Now
-
-- `blind-ledger-app-layer/` remains a standalone cofounder handoff and
-  audit/research lane.
-- `localBCE-codex-dev-hardened-20260616/` remains a reference bundle.
-- `gov-rules-kg-prototype/` remains a candidate discovery/review/export lane.
-- `stark-engine/` remains a first-class bridge/planning crate until a real
-  prover adapter is explicitly added.
-- `rust-engine/`, `zk/`, and `blind-ledger/` remain the active Groth16 flow.
-
-## Deferred Production Work
-
-- Replace one-claim Groth16 demo settlement with batch-native STARK settlement.
-- Port only reviewed pieces of app-layer ingestion, batching, roots, and public
-  input logic into active folders.
-- Add a real prover adapter and audited verifier artifact.
-- Define production native STARK public input schemas in active ops/docs.
-- Bridge reviewed deterministic policy rules into Rust as shadow tests before
-  runtime use.
-- Add governed oracle/source policy and signer controls.
-- Keep payment execution fail-closed until proof verification and governance
-  controls are production-ready.
+- deterministic reviewed rules bridge and versioned runtime rulesets
+- independent audits of AIR, proof packaging, state, executor, and contracts
+- production key custody, quorum/rotation, source governance, and monitoring
+- batch ingestion and payment orchestration after proof and policy controls
+- optional native or recursively wrapped on-chain STARK verification
 
 ## Alignment Rule
 
-Do not claim a reference component is active merely because it exists in an
-imported folder. A component becomes active only after a later explicit porting
-task wires it into the current runtime and adds focused tests.
+Imported folders remain reference material until a specific reviewed change is
+ported into active code and validated. A technically active component is not
+automatically production approved; audit and governance gates remain explicit.

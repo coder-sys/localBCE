@@ -121,11 +121,19 @@ fn approved_bridge() -> StarkBridgeInput {
 }
 
 #[test]
-fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
+fn approved_artifact_generates_abi_complete_non_runtime_handoff() {
     let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
     let handoff = ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
 
     handoff.validate().unwrap();
+    assert_eq!(
+        handoff.schema_version,
+        "stark-production-verifier-handoff-v7"
+    );
+    assert_eq!(
+        handoff.source_schema_version,
+        "stark-production-proof-artifact-v7"
+    );
     assert_eq!(
         handoff
             .abi_fields
@@ -166,9 +174,26 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
         handoff.fee_schedule_root_status,
         "air_constrained_canonical_verified_fee_leaf_depth_10_merkle_path_and_claim_source_links"
     );
-    assert_eq!(handoff.air_public_input_count, 26);
+    assert_eq!(
+        handoff.nullifier_root_before,
+        artifact.nullifier_root_before_bytes32
+    );
+    assert_eq!(
+        handoff.nullifier_root_after,
+        artifact.nullifier_root_after_bytes32
+    );
+    assert_eq!(
+        handoff.nullifier_root_status,
+        "air_constrained_canonical_indexed_before_after_transition"
+    );
+    assert_eq!(handoff.batch_root, artifact.batch_root_bytes32);
+    assert_eq!(
+        handoff.batch_root_status,
+        "air_constrained_single_claim_batch_hash_of_public_input_root"
+    );
+    assert_eq!(handoff.air_public_input_count, 38);
     assert_eq!(handoff.proof_bytes_sha256, artifact.proof.sha256);
-    assert!(!handoff.call_readiness.abi_call_ready);
+    assert!(handoff.call_readiness.abi_call_ready);
     assert!(!handoff.call_readiness.runtime_activation_allowed);
     assert_eq!(
         handoff.call_readiness.unresolved_abi_fields,
@@ -201,6 +226,28 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     assert!(
         handoff
             .call_readiness
+            .directly_available_abi_fields
+            .contains(&"nullifierRootBefore".to_string())
+    );
+    assert!(
+        handoff
+            .call_readiness
+            .directly_available_abi_fields
+            .contains(&"nullifierRootAfter".to_string())
+    );
+    assert!(
+        handoff
+            .call_readiness
+            .directly_available_abi_fields
+            .contains(&"batchRoot".to_string())
+    );
+    assert_eq!(
+        handoff.call_readiness.unresolved_abi_fields,
+        Vec::<String>::new()
+    );
+    assert!(
+        handoff
+            .call_readiness
             .derived_candidate_abi_fields
             .is_empty()
     );
@@ -223,7 +270,7 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     assert!(tampered_proof.validate().is_err());
 
     let mut false_readiness = decoded.clone();
-    false_readiness.call_readiness.abi_call_ready = true;
+    false_readiness.call_readiness.abi_call_ready = false;
     false_readiness.call_readiness.runtime_activation_allowed = true;
     assert!(false_readiness.validate().is_err());
 
@@ -249,6 +296,18 @@ fn approved_artifact_generates_strict_non_call_ready_abi_handoff() {
     fake_fee_schedule_root.abi_fields[6].value =
         Some("0x4444444444444444444444444444444444444444444444444444444444444444".to_string());
     assert!(fake_fee_schedule_root.validate().is_err());
+
+    let mut fake_nullifier_root_before =
+        ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
+    fake_nullifier_root_before.abi_fields[7].value =
+        Some("0x5555555555555555555555555555555555555555555555555555555555555555".to_string());
+    assert!(fake_nullifier_root_before.validate().is_err());
+
+    let mut fake_nullifier_root_after =
+        ProductionStarkVerifierHandoffV4::from_proof_artifact(&artifact).unwrap();
+    fake_nullifier_root_after.abi_fields[8].value =
+        Some("0x6666666666666666666666666666666666666666666666666666666666666666".to_string());
+    assert!(fake_nullifier_root_after.validate().is_err());
 }
 
 #[test]

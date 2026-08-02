@@ -23,6 +23,14 @@ INPUT_KEYWORDS = {
     "coverage_status": ["coverage", "covered", "insurance", "benefits", "health care"],
     "household_status": ["household", "family", "families", "child", "children", "pregnant"],
     "compliance_status": ["compliance", "audit", "penalty", "fraud", "abuse", "violation"],
+    "filing_status": ["filing status", "tax return", "form 1040", "form w-2", "schedule a", "schedule se"],
+    "employment_status": ["employee", "employer", "employment", "wages", "self-employed", "work participation"],
+    "lawful_status": ["lawful status", "lawful permanent resident", "green card", "visa"],
+    "education_or_training": ["education", "training", "transcript", "test score", "qualification"],
+    "jurisdiction_or_authority": ["jurisdiction", "licensing authority", "local government", "state agency", "federal agency"],
+    "grant_or_award_status": ["grant", "award", "recipient", "subrecipient", "pass-through entity"],
+    "property_status": ["property", "real estate", "land", "home", "market value"],
+    "benefit_or_package_status": ["food package", "allowance", "assistance", "voucher", "meal"],
 }
 
 NUMBER_WORDS = {
@@ -119,11 +127,11 @@ def infer_operator(text: str, candidate: dict) -> str:
         return "appeal_right"
     if rule_type == "reporting_rule":
         return "reporting"
-    if rule_type == "payment_rule" and any(term in lowered for term in ["payment", "premium", "paid", "benefit", "reimburse", "refund", "credit"]):
+    if rule_type == "payment_rule" and any(term in lowered for term in ["payment", "premium", "paid", "benefit", "reimburse", "refund", "credit", "allowance", "assistance", "amount", "rate", "tax", "food package"]):
         return "payment"
     if rule_type == "eligibility_rule" and any(term in lowered for term in ["eligibility", "eligible", "qualify", "qualifies", "is determined", "are determined"]):
         return "determine_eligibility"
-    if any(term in lowered for term in ["prohibited", "may not", "must not", "ineligible", "deny", "denied"]):
+    if any(term in lowered for term in ["prohibited", "not permitted", "may not", "must not", "ineligible", "deny", "denied", "only request", "only impose"]):
         return "prohibit_or_deny"
     if any(term in lowered for term in ["must", "shall", "required", "requires"]):
         return "require"
@@ -132,6 +140,8 @@ def infer_operator(text: str, candidate: dict) -> str:
     if any(term in lowered for term in ["within", "no later than", "before", "after"]) or rule_type == "deadline_rule":
         return "deadline"
     if any(term in lowered for term in ["pay", "payment", "premium", "reimburse", "refund", "credit"]):
+        return "payment"
+    if any(term in lowered for term in ["withhold", "withholding", "entitled to between", "entitled to a payment", "entitled to proceeds"]):
         return "payment"
     if any(term in lowered for term in ["report", "submit", "notify"]):
         return "reporting"
@@ -143,6 +153,18 @@ def infer_operator(text: str, candidate: dict) -> str:
         return "prohibit_or_deny"
     if any(term in lowered for term in ["are assigned", "is assigned", "provides", "covers", "includes"]):
         return "require"
+    if rule_type == "eligibility_rule" and any(term in lowered for term in ["requirements", "requirement", "prerequisite", "may issue", "need to file", "excluded from", "only to a person", "responsible for"]):
+        return "determine_eligibility"
+    if rule_type == "verification_rule" or any(term in lowered for term in ["case-by-case determination", "verify whether", "verification of"]):
+        return "verify_or_determine"
+    if rule_type == "enforcement_rule" and any(term in lowered for term in ["impose", "penalt", "assessment", "exclusion", "enforcement", "refusal", "denial of entry"]):
+        return "enforcement"
+    if rule_type == "administration_rule" and any(term in lowered for term in ["codified", "authorized", "responsible for", "administer", "govern", "established", "means", "is a block-grant", "is a block grant"]):
+        return "administration"
+    if any(term in lowered for term in ["consolidated", "enacts", "official interpretation", "is authorized by", "block grant providing", "govern matters related to"]):
+        return "administration"
+    if any(term in lowered for term in ["issues special fraud alerts", "issues guidance", "published periodically"]):
+        return "reporting"
     return "unknown"
 
 
@@ -150,9 +172,15 @@ def extract_threshold(text: str) -> dict | None:
     patterns = [
         (r"(\d+(?:\.\d+)?)\s*%(\s*(?:of)?\s*(?:the)?\s*(?:federal poverty level|fpl))?", "percent"),
         (r"\$(\d+(?:,\d{3})*(?:\.\d+)?)", "currency"),
+        (r"\b(\d+)\s+business\s+days\b", "business_duration"),
+        (r"\b(\d+)[-\s]+(day|days|month|months|year|years)\b", "duration"),
         (r"\b(\d+)\s+(days|months|years)\b", "duration"),
-        (r"\b(" + "|".join(NUMBER_WORDS) + r")[-\s]+(day|days|month|months|year|years)\b", "word_duration"),
+        (r"\b(" + "|".join(NUMBER_WORDS) + r")[-\s]+(business\s+days|day|days|month|months|year|years)\b", "word_duration"),
+        (r"\b(" + "|".join(NUMBER_WORDS) + r")\s+cents?\b", "word_cents"),
         (r"\b([A-Z][a-z]+\s+\d{1,2})\s+to\s+([A-Z][a-z]+\s+\d{1,2})\b", "date_range"),
+        (r"\b(?:deadline(?:\s+is)?|until|no later than|by)\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})\b", "calendar_date"),
+        (r"\b(mid-[A-Z][a-z]+)\b", "month_window"),
+        (r"\b(equal amount)\b", "matching_ratio"),
         (r"\bage\s+(\d+)\b|\b(\d+)\s+or\s+older\b", "age"),
     ]
     lowered = text.lower()
@@ -164,15 +192,27 @@ def extract_threshold(text: str) -> dict | None:
         if kind == "word_duration":
             value = NUMBER_WORDS[match.group(1).lower()]
             unit = match.group(2).lower()
+            if unit == "business days":
+                return {"kind": "business_duration", "value": value, "unit": "business_days", "text": match.group(0)}
             if not unit.endswith("s"):
                 unit = f"{unit}s"
             return {"kind": "duration", "value": value, "unit": unit, "text": match.group(0)}
+        if kind == "word_cents":
+            return {"kind": "currency", "value": NUMBER_WORDS[match.group(1).lower()], "unit": "cents", "text": match.group(0)}
         if kind == "date_range":
             return {"kind": "date_range", "value": f"{match.group(1)} to {match.group(2)}", "unit": "date_range", "text": match.group(0)}
+        if kind == "calendar_date":
+            return {"kind": "calendar_date", "value": match.group(1), "unit": "date", "text": match.group(0)}
+        if kind == "month_window":
+            return {"kind": "month_window", "value": match.group(1), "unit": "month_window", "text": match.group(0)}
+        if kind == "matching_ratio":
+            return {"kind": "ratio", "value": "1", "unit": "one_to_one", "text": match.group(0)}
         value = next(group for group in match.groups() if group and re.match(r"^\d", group.replace(",", "")))
         unit = kind
         if kind == "duration" and len(match.groups()) >= 2:
             unit = match.group(2)
+        if kind == "business_duration":
+            unit = "business_days"
         return {"kind": kind, "value": value.replace(",", ""), "unit": unit, "text": match.group(0)}
     return None
 
@@ -219,9 +259,13 @@ def infer_inputs_required(text: str) -> list[str]:
     inputs = [
         input_name
         for input_name, keywords in INPUT_KEYWORDS.items()
-        if any(keyword in lowered for keyword in keywords)
+        if any(contains_keyword(lowered, keyword) for keyword in keywords)
     ]
     return sorted(set(inputs))
+
+
+def contains_keyword(lowered_text: str, keyword: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(keyword.lower())}(?!\w)", lowered_text) is not None
 
 
 def infer_outcome_text(text: str, operator: str) -> str:
@@ -239,6 +283,12 @@ def infer_outcome_text(text: str, operator: str) -> str:
         return f"Provide appeal or hearing right described by condition: {text}"
     if operator == "require":
         return f"Require action described by condition: {text}"
+    if operator == "verify_or_determine":
+        return f"Verify or determine status described by condition: {text}"
+    if operator == "enforcement":
+        return f"Apply enforcement outcome described by condition: {text}"
+    if operator == "administration":
+        return f"Apply administrative authority or definition described by condition: {text}"
     return f"Manual mapping required for outcome: {text}"
 
 

@@ -1,0 +1,14 @@
+{
+  "claims_registry_address": "0x0000000000000000000000000000000000000000",
+  "private_key": "REPLACE_WITH_LOCAL_OR_SECRET_MANAGED_KEY",
+  "rpc_url": "http://127.0.0.1:8545",
+  "transaction_value": "0.001ether",
+  "enable_stark_sidecar_artifacts": false,
+  "proof_backend": "stark_attested",
+  "stark_engine_binary": "../stark-engine/target/debug/execute_production_stark_settlement",
+  "stark_claims_registry_address": "REPLACE_WITH_STARK_CLAIMS_REGISTRY_ADDRESS",
+  "stark_attestation_verifier_address": "REPLACE_WITH_STARK_ATTESTATION_VERIFIER_ADDRESS",
+  "stark_nullifier_state_path": "../stark-engine/runtime-state/nullifier_state.json",
+  "stark_artifacts_directory": "../stark-engine/runtime-artifacts",
+  "stark_chain_id": 31337
+}

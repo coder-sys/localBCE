@@ -1,8 +1,14 @@
+mod rules_engine;
+
+use rules_engine::{
+    CURRENT_RULESET_SHA256, ClaimRuleFacts, DeterministicRuleBundle, validate_claude_shadow_bundle,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const STARK_SIDECAR_OUTPUT_PATH: &str = "stark_adjudication_result.json";
@@ -46,6 +52,22 @@ impl AdjudicationResult {
             reason: Some(reason.to_string()),
             tx_submitted: false,
             tx_hash: None,
+        }
+    }
+
+    fn denied_submitted(
+        claim_id: String,
+        claim_hash: String,
+        reason: &str,
+        tx_hash: String,
+    ) -> Self {
+        Self {
+            claim_id,
+            claim_hash,
+            status: AdjudicationStatus::Denied,
+            reason: Some(reason.to_string()),
+            tx_submitted: true,
+            tx_hash: Some(tx_hash),
         }
     }
 }
@@ -125,6 +147,29 @@ struct ClaimInput {
     physician_certification_valid: u8,
 }
 
+impl From<&ClaimInput> for ClaimRuleFacts {
+    fn from(claim: &ClaimInput) -> Self {
+        Self {
+            eligibility_active: u64::from(claim.eligibility_active),
+            aid_code: claim.aid_code,
+            benefit_level_exists: u64::from(claim.benefit_level_exists),
+            date_of_service_from: claim.date_of_service_from,
+            eligibility_period_from: claim.eligibility_period_from,
+            eligibility_period_thru: claim.eligibility_period_thru,
+            soc_amount: claim.soc_amount,
+            soc_met: u64::from(claim.soc_met),
+            provider_enrolled: u64::from(claim.provider_enrolled),
+            provider_type_valid: u64::from(claim.provider_type_valid),
+            billing_code_valid: u64::from(claim.billing_code_valid),
+            units_valid: u64::from(claim.units_valid),
+            is_duplicate: u64::from(claim.is_duplicate),
+            disability_determination_valid: u64::from(claim.disability_determination_valid),
+            recipient_not_deceased: u64::from(claim.recipient_not_deceased),
+            physician_certification_valid: u64::from(claim.physician_certification_valid),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AppConfig {
     claims_registry_address: String,
@@ -132,11 +177,41 @@ struct AppConfig {
     rpc_url: String,
     transaction_value: String,
     enable_stark_sidecar_artifacts: Option<bool>,
+    proof_backend: Option<String>,
+    stark_engine_binary: Option<String>,
+    stark_claims_registry_address: Option<String>,
+    stark_attestation_verifier_address: Option<String>,
+    stark_nullifier_state_path: Option<String>,
+    stark_artifacts_directory: Option<String>,
+    stark_chain_id: Option<u64>,
+    rules_backend: Option<String>,
+    rules_file: Option<String>,
+    rules_sha256: Option<String>,
 }
 
 impl AppConfig {
     fn stark_sidecar_enabled(&self) -> bool {
         self.enable_stark_sidecar_artifacts.unwrap_or(false)
+    }
+
+    fn proof_backend(&self) -> Result<&str, String> {
+        let value = self.proof_backend.as_deref().unwrap_or("groth16");
+        match value {
+            "groth16" | "stark_attested" => Ok(value),
+            _ => Err(format!(
+                "unsupported proof_backend '{value}'; expected groth16 or stark_attested"
+            )),
+        }
+    }
+
+    fn rules_backend(&self) -> Result<&str, String> {
+        let value = self.rules_backend.as_deref().unwrap_or("hardcoded_g1_g10");
+        match value {
+            "hardcoded_g1_g10" | "versioned_g1_g10" => Ok(value),
+            _ => Err(format!(
+                "unsupported rules_backend '{value}'; expected hardcoded_g1_g10 or versioned_g1_g10"
+            )),
+        }
     }
 }
 
@@ -655,6 +730,45 @@ fn denial_reason(claim: &ClaimInput) -> Option<&'static str> {
     None
 }
 
+fn configured_denial_reason(
+    config: &AppConfig,
+    claim: &ClaimInput,
+) -> Result<Option<String>, String> {
+    let built_in = denial_reason(claim).map(str::to_string);
+    if config.rules_backend()? == "hardcoded_g1_g10" {
+        return Ok(built_in);
+    }
+
+    let rules_path = config
+        .rules_file
+        .as_deref()
+        .ok_or_else(|| "rules_file is required for versioned_g1_g10".to_string())?;
+    let configured_hash = config
+        .rules_sha256
+        .as_deref()
+        .ok_or_else(|| "rules_sha256 is required for versioned_g1_g10".to_string())?;
+    if configured_hash != CURRENT_RULESET_SHA256 {
+        return Err(format!(
+            "rules_sha256 must match the binary pin {CURRENT_RULESET_SHA256}, got {configured_hash}"
+        ));
+    }
+
+    let bundle = DeterministicRuleBundle::from_path(Path::new(rules_path))?;
+    if bundle.rules_sha256 != configured_hash {
+        return Err(format!(
+            "configured rules_sha256 does not match loaded bundle: expected {configured_hash}, got {}",
+            bundle.rules_sha256
+        ));
+    }
+    let versioned = bundle.evaluate(&ClaimRuleFacts::from(claim));
+    if versioned != built_in {
+        return Err(format!(
+            "versioned G1-G10 result failed hardcoded parity: versioned={versioned:?}, hardcoded={built_in:?}"
+        ));
+    }
+    Ok(versioned)
+}
+
 fn write_result(result: &AdjudicationResult) -> Result<(), String> {
     let result_json = serde_json::to_string_pretty(result)
         .map_err(|err| format!("could not serialize adjudication_result.json: {}", err))?;
@@ -699,16 +813,19 @@ fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) 
 }
 
 fn read_config() -> Result<AppConfig, String> {
-    let config_json = fs::read_to_string("config.json")
-        .map_err(|err| format!("could not read config.json: {}", err))?;
-    serde_json::from_str(&config_json).map_err(|err| format!("invalid config.json: {}", err))
+    let path = env::var("LOCALBCE_CONFIG_PATH").unwrap_or_else(|_| "config.json".to_string());
+    let config_json =
+        fs::read_to_string(&path).map_err(|err| format!("could not read {path}: {err}"))?;
+    serde_json::from_str(&config_json).map_err(|err| format!("invalid {path}: {err}"))
 }
 
 fn read_claim_input() -> Result<ClaimInput, String> {
-    let claim_json = fs::read_to_string("claim_input.json")
-        .map_err(|err| format!("could not read claim_input.json: {}", err))?;
+    let path =
+        env::var("LOCALBCE_CLAIM_INPUT_PATH").unwrap_or_else(|_| "claim_input.json".to_string());
+    let claim_json =
+        fs::read_to_string(&path).map_err(|err| format!("could not read {path}: {err}"))?;
 
-    serde_json::from_str(&claim_json).map_err(|err| format!("invalid claim_input.json: {}", err))
+    serde_json::from_str(&claim_json).map_err(|err| format!("invalid {path}: {err}"))
 }
 
 fn is_stark_sidecar_dry_run_arg(arg: Option<&str>) -> bool {
@@ -726,11 +843,24 @@ fn is_stark_bridge_input_dry_run_arg(arg: Option<&str>) -> bool {
 }
 
 fn main() {
-    let arg = env::args().nth(1);
+    let mut args = env::args().skip(1);
+    let arg = args.next();
     let result = if is_stark_sidecar_dry_run_arg(arg.as_deref()) {
         run_stark_sidecar_dry_run()
     } else if is_stark_bridge_input_dry_run_arg(arg.as_deref()) {
         run_stark_bridge_input_dry_run()
+    } else if arg.as_deref() == Some("rules-validate") {
+        args.next()
+            .ok_or_else(|| "rules-validate requires a ruleset path".to_string())
+            .and_then(|path| run_rules_validate(Path::new(&path)))
+    } else if arg.as_deref() == Some("rules-evaluate") {
+        args.next()
+            .ok_or_else(|| "rules-evaluate requires a ruleset path".to_string())
+            .and_then(|path| run_rules_evaluate(Path::new(&path)))
+    } else if arg.as_deref() == Some("rules-shadow-validate") {
+        args.next()
+            .ok_or_else(|| "rules-shadow-validate requires a bundle path".to_string())
+            .and_then(|path| run_rules_shadow_validate(Path::new(&path)))
     } else {
         run_app()
     };
@@ -739,6 +869,71 @@ fn main() {
         eprintln!("{}", err);
         std::process::exit(1);
     }
+}
+
+fn run_rules_shadow_validate(path: &Path) -> Result<(), String> {
+    let validation = validate_claude_shadow_bundle(path)?;
+    println!(
+        "{}",
+        json!({
+            "event": "claude_web_rust_shadow_validation",
+            "status": "ok",
+            "path": path,
+            "bundle_id": validation.bundle_id,
+            "rules_sha256": validation.rules_sha256,
+            "rule_count": validation.rule_count,
+            "program_count": validation.program_count,
+            "runtime_activation": false,
+            "proof_binding": false,
+        })
+    );
+    Ok(())
+}
+
+fn run_rules_validate(path: &Path) -> Result<(), String> {
+    let bundle = DeterministicRuleBundle::from_path(path)?;
+    println!(
+        "{}",
+        json!({
+            "event": "deterministic_rules_validation",
+            "status": "ok",
+            "path": path,
+            "schema_version": bundle.schema_version,
+            "ruleset_id": bundle.ruleset_id,
+            "rules_sha256": bundle.rules_sha256,
+            "rule_count": bundle.rules.len(),
+            "runtime_status": bundle.runtime_status,
+        })
+    );
+    Ok(())
+}
+
+fn run_rules_evaluate(path: &Path) -> Result<(), String> {
+    let bundle = DeterministicRuleBundle::from_path(path)?;
+    let claim = read_claim_input()?;
+    let denial = bundle.evaluate(&ClaimRuleFacts::from(&claim));
+    let built_in = denial_reason(&claim).map(str::to_string);
+    if denial != built_in {
+        return Err(format!(
+            "versioned G1-G10 result failed hardcoded parity: versioned={denial:?}, hardcoded={built_in:?}"
+        ));
+    }
+    println!(
+        "{}",
+        json!({
+            "event": "deterministic_rules_evaluation",
+            "status": "ok",
+            "ruleset_id": bundle.ruleset_id,
+            "rules_sha256": bundle.rules_sha256,
+            "claim_id": claim.claim_id,
+            "decision": if denial.is_none() { 1 } else { 0 },
+            "denial_reason": denial,
+            "hardcoded_parity": true,
+            "proof_generation": false,
+            "chain_submission": false,
+        })
+    );
+    Ok(())
 }
 
 fn run_stark_sidecar_dry_run() -> Result<(), String> {
@@ -787,16 +982,21 @@ fn run_stark_bridge_input_dry_run() -> Result<(), String> {
 
 fn run_app() -> Result<(), String> {
     let config = read_config()?;
+    let proof_backend = config.proof_backend()?;
+    let claim = read_claim_input()?;
+    let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+    let configured_reason = configured_denial_reason(&config, &claim)?;
+
+    if proof_backend == "stark_attested" {
+        return run_stark_attested_app(&config, &claim, &claim_hash, configured_reason.as_deref());
+    }
+
     let contract = config.claims_registry_address.as_str();
     let private_key = config.private_key.as_str();
     let rpc_url = config.rpc_url.as_str();
     let transaction_value = config.transaction_value.as_str();
 
-    let claim = read_claim_input()?;
-
-    let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-
-    if let Some(reason) = denial_reason(&claim) {
+    if let Some(reason) = configured_reason.as_deref() {
         if config.stark_sidecar_enabled() {
             write_stark_sidecar_artifact(&claim, &claim_hash)?;
         }
@@ -904,6 +1104,177 @@ fn run_app() -> Result<(), String> {
     write_result(&result)?;
     println!("Wrote adjudication_result.json");
 
+    Ok(())
+}
+
+fn run_stark_attested_app(
+    config: &AppConfig,
+    claim: &ClaimInput,
+    claim_hash: &str,
+    expected_reason: Option<&str>,
+) -> Result<(), String> {
+    let attestor_private_key = env::var("STARK_ATTESTOR_PRIVATE_KEY").map_err(|_| {
+        "STARK_ATTESTOR_PRIVATE_KEY is required for stark_attested mode".to_string()
+    })?;
+    let binary = config
+        .stark_engine_binary
+        .as_deref()
+        .ok_or_else(|| "stark_engine_binary is required for stark_attested mode".to_string())?;
+    let registry = config
+        .stark_claims_registry_address
+        .as_deref()
+        .ok_or_else(|| {
+            "stark_claims_registry_address is required for stark_attested mode".to_string()
+        })?;
+    let verifier = config
+        .stark_attestation_verifier_address
+        .as_deref()
+        .ok_or_else(|| {
+            "stark_attestation_verifier_address is required for stark_attested mode".to_string()
+        })?;
+    let state_path = config
+        .stark_nullifier_state_path
+        .as_deref()
+        .ok_or_else(|| {
+            "stark_nullifier_state_path is required for stark_attested mode".to_string()
+        })?;
+    let artifacts_base = config
+        .stark_artifacts_directory
+        .as_deref()
+        .unwrap_or("../stark-engine/runtime-artifacts");
+    let chain_id = config
+        .stark_chain_id
+        .ok_or_else(|| "stark_chain_id is required for stark_attested mode".to_string())?;
+    if chain_id == 0 {
+        return Err("stark_chain_id must be nonzero".to_string());
+    }
+
+    write_stark_bridge_input(claim, claim_hash)?;
+    let artifact_directory =
+        PathBuf::from(artifacts_base).join(claim_hash.trim_start_matches("0x"));
+    fs::create_dir_all(&artifact_directory).map_err(|error| {
+        format!(
+            "could not create STARK artifact directory {}: {error}",
+            artifact_directory.display()
+        )
+    })?;
+
+    log_proof_event("stark_settlement", "started", &claim.claim_id, claim_hash);
+    let output = Command::new(binary)
+        .arg(STARK_BRIDGE_INPUT_OUTPUT_PATH)
+        .arg(state_path)
+        .arg(&artifact_directory)
+        .arg(chain_id.to_string())
+        .arg(verifier)
+        .arg(registry)
+        .arg(&config.rpc_url)
+        .arg(&config.transaction_value)
+        .env("STARK_ATTESTOR_PRIVATE_KEY", attestor_private_key)
+        .env("STARK_SUBMITTER_PRIVATE_KEY", &config.private_key)
+        .output()
+        .map_err(|error| format!("could not execute STARK settlement engine: {error}"))?;
+    if !output.status.success() {
+        return Err(command_failure_message(
+            binary,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+        ));
+    }
+
+    let receipt_path = artifact_directory.join("settlement_receipt.json");
+    let receipt_json = fs::read_to_string(&receipt_path).map_err(|error| {
+        format!(
+            "STARK settlement completed without readable receipt {}: {error}",
+            receipt_path.display()
+        )
+    })?;
+    let receipt: Value = serde_json::from_str(&receipt_json)
+        .map_err(|error| format!("invalid STARK settlement receipt: {error}"))?;
+    validate_stark_runtime_receipt(&receipt, claim, claim_hash, expected_reason)?;
+    let tx_hash = receipt["transaction_hash"]
+        .as_str()
+        .expect("validated transaction_hash")
+        .to_string();
+    log_proof_event("stark_settlement", "completed", &claim.claim_id, claim_hash);
+
+    let result = if let Some(reason) = expected_reason {
+        AdjudicationResult::denied_submitted(
+            claim.claim_id.clone(),
+            claim_hash.to_string(),
+            reason,
+            tx_hash,
+        )
+    } else {
+        AdjudicationResult::approved(claim.claim_id.clone(), claim_hash.to_string(), tx_hash)
+    };
+    if config.stark_sidecar_enabled() {
+        write_stark_sidecar_artifact(claim, claim_hash)?;
+    }
+    write_result(&result)?;
+    println!("STARK claim settled on-chain with controlled attestation.");
+    println!("Wrote adjudication_result.json");
+    Ok(())
+}
+
+fn validate_stark_runtime_receipt(
+    receipt: &Value,
+    _claim: &ClaimInput,
+    claim_hash: &str,
+    expected_reason: Option<&str>,
+) -> Result<(), String> {
+    let expected_decision = bool_u8(expected_reason.is_none());
+    let expected_failure = expected_reason.map(stark_failure_code).unwrap_or(0);
+    let checks = [
+        (
+            receipt["schema_version"].as_str() == Some("stark-production-settlement-receipt-v1"),
+            "unexpected settlement receipt schema",
+        ),
+        (
+            receipt["settlement_status"].as_str()
+                == Some("settled_on_chain_and_local_state_committed"),
+            "STARK settlement is not final",
+        ),
+        (
+            receipt["claim_hash"].as_str() == Some(claim_hash),
+            "receipt claim_hash does not match adjudicated claim",
+        ),
+        (
+            receipt["decision"].as_u64() == Some(u64::from(expected_decision)),
+            "receipt decision does not match denial_reason()",
+        ),
+        (
+            receipt["failure_code"].as_u64() == Some(u64::from(expected_failure)),
+            "receipt failure_code does not match denial_reason()",
+        ),
+        (
+            receipt["proof_locally_verified"].as_bool() == Some(true),
+            "Winterfell proof was not locally verified",
+        ),
+        (
+            receipt["batch_consumed_on_chain"].as_bool() == Some(true),
+            "batch root was not consumed on-chain",
+        ),
+        (
+            receipt["local_state_committed"].as_bool() == Some(true),
+            "local nullifier state was not committed",
+        ),
+        (
+            receipt["groth16_executed"].as_bool() == Some(false),
+            "Groth16 unexpectedly executed in STARK mode",
+        ),
+    ];
+    for (valid, message) in checks {
+        if !valid {
+            return Err(message.to_string());
+        }
+    }
+    let tx_hash = receipt["transaction_hash"]
+        .as_str()
+        .ok_or_else(|| "settlement receipt is missing transaction_hash".to_string())?;
+    if tx_hash.len() != 66 || !tx_hash.starts_with("0x") {
+        return Err("settlement receipt transaction_hash is invalid".to_string());
+    }
     Ok(())
 }
 
@@ -1329,6 +1700,130 @@ mod tests {
         let config: AppConfig = serde_json::from_str(&config_json(Some(true))).unwrap();
 
         assert!(config.stark_sidecar_enabled());
+    }
+
+    #[test]
+    fn config_missing_proof_backend_preserves_groth16_default() {
+        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
+
+        assert_eq!(config.proof_backend(), Ok("groth16"));
+    }
+
+    #[test]
+    fn config_accepts_explicit_stark_attested_backend() {
+        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        value["proof_backend"] = json!("stark_attested");
+        let config: AppConfig = serde_json::from_value(value).unwrap();
+
+        assert_eq!(config.proof_backend(), Ok("stark_attested"));
+    }
+
+    #[test]
+    fn config_rejects_unknown_proof_backend() {
+        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        value["proof_backend"] = json!("mystery");
+        let config: AppConfig = serde_json::from_value(value).unwrap();
+
+        assert!(config.proof_backend().unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn config_missing_rules_backend_preserves_hardcoded_default() {
+        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
+
+        assert_eq!(config.rules_backend(), Ok("hardcoded_g1_g10"));
+    }
+
+    #[test]
+    fn versioned_rules_match_hardcoded_g1_g10_for_every_branch() {
+        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        value["rules_backend"] = json!("versioned_g1_g10");
+        value["rules_file"] = json!("rules_active_v1.json");
+        value["rules_sha256"] = json!(CURRENT_RULESET_SHA256);
+        let config: AppConfig = serde_json::from_value(value).unwrap();
+
+        let valid = valid_claim();
+        assert_eq!(configured_denial_reason(&config, &valid), Ok(None));
+        for (expected, claim) in current_gate_cases().into_iter().skip(1) {
+            assert_eq!(
+                configured_denial_reason(&config, &claim)
+                    .unwrap()
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn versioned_rules_require_binary_pinned_hash() {
+        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        value["rules_backend"] = json!("versioned_g1_g10");
+        value["rules_file"] = json!("rules_active_v1.json");
+        value["rules_sha256"] = json!("00");
+        let config: AppConfig = serde_json::from_value(value).unwrap();
+
+        assert!(
+            configured_denial_reason(&config, &valid_claim())
+                .unwrap_err()
+                .contains("binary pin")
+        );
+    }
+
+    #[test]
+    fn stark_runtime_receipt_must_match_active_adjudication() {
+        let claim = valid_claim();
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+        let receipt = json!({
+            "schema_version": "stark-production-settlement-receipt-v1",
+            "settlement_status": "settled_on_chain_and_local_state_committed",
+            "claim_hash": claim_hash,
+            "decision": 1,
+            "failure_code": 0,
+            "proof_locally_verified": true,
+            "batch_consumed_on_chain": true,
+            "local_state_committed": true,
+            "groth16_executed": false,
+            "transaction_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        });
+
+        assert_eq!(
+            validate_stark_runtime_receipt(
+                &receipt,
+                &claim,
+                receipt["claim_hash"].as_str().unwrap(),
+                None,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn stark_runtime_receipt_rejects_decision_mismatch() {
+        let claim = valid_claim();
+        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
+        let receipt = json!({
+            "schema_version": "stark-production-settlement-receipt-v1",
+            "settlement_status": "settled_on_chain_and_local_state_committed",
+            "claim_hash": claim_hash,
+            "decision": 0,
+            "failure_code": 7,
+            "proof_locally_verified": true,
+            "batch_consumed_on_chain": true,
+            "local_state_committed": true,
+            "groth16_executed": false,
+            "transaction_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        });
+
+        assert!(
+            validate_stark_runtime_receipt(
+                &receipt,
+                &claim,
+                receipt["claim_hash"].as_str().unwrap(),
+                None,
+            )
+            .unwrap_err()
+            .contains("decision")
+        );
     }
 
     #[test]

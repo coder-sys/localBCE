@@ -3,5 +3,6 @@
   "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
   "rpc_url": "http://127.0.0.1:8545",
   "transaction_value": "0.001ether",
-  "enable_stark_sidecar_artifacts": false
+  "enable_stark_sidecar_artifacts": false,
+  "proof_backend": "groth16"
 }

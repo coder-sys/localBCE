@@ -1,0 +1,99 @@
+{
+  "schema_version": "localbce-deterministic-rules-v1",
+  "ruleset_id": "current_g1_g10_denial_reason",
+  "rules_sha256": "95d38b6d8fc9c44b65feace024a07c22b4f11771fe6b23283ce73bbe0a7cb8e3",
+  "legal_review_status": "prototype_reviewed_not_legal_advice",
+  "runtime_status": "opt_in_exact_g1_g10_parity",
+  "rules": [
+    {
+      "id": "G1_IDENTITY_VERIFICATION",
+      "priority": 10,
+      "denial_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "condition": { "op": "not_equal", "field": "eligibility_active", "value": 1 }
+    },
+    {
+      "id": "G2_PROGRAM_ELIGIBILITY",
+      "priority": 20,
+      "denial_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "condition": { "op": "not_in", "field": "aid_code", "values": [13, 23, 53, 103, 104] }
+    },
+    {
+      "id": "G2_BENEFIT_LEVEL",
+      "priority": 30,
+      "denial_reason": "G2_BENEFIT_LEVEL_MISSING",
+      "condition": { "op": "not_equal", "field": "benefit_level_exists", "value": 1 }
+    },
+    {
+      "id": "G3_MONTH_OF_SERVICE",
+      "priority": 40,
+      "denial_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "condition": {
+        "op": "any",
+        "conditions": [
+          { "op": "field_less_than", "left": "date_of_service_from", "right": "eligibility_period_from" },
+          { "op": "field_greater_than", "left": "date_of_service_from", "right": "eligibility_period_thru" }
+        ]
+      }
+    },
+    {
+      "id": "G4_SHARE_OF_COST",
+      "priority": 50,
+      "denial_reason": "G4_SHARE_OF_COST_FAILED",
+      "condition": {
+        "op": "all",
+        "conditions": [
+          { "op": "greater_than", "field": "soc_amount", "value": 0 },
+          { "op": "not_equal", "field": "soc_met", "value": 1 }
+        ]
+      }
+    },
+    {
+      "id": "G5_PROVIDER_ENROLLMENT",
+      "priority": 60,
+      "denial_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "condition": { "op": "not_equal", "field": "provider_enrolled", "value": 1 }
+    },
+    {
+      "id": "G5_PROVIDER_TYPE",
+      "priority": 70,
+      "denial_reason": "G5_PROVIDER_TYPE_INVALID",
+      "condition": { "op": "not_equal", "field": "provider_type_valid", "value": 1 }
+    },
+    {
+      "id": "G6_BILLING_CODE",
+      "priority": 80,
+      "denial_reason": "G6_BILLING_CODE_INVALID",
+      "condition": { "op": "not_equal", "field": "billing_code_valid", "value": 1 }
+    },
+    {
+      "id": "G6_UNITS",
+      "priority": 90,
+      "denial_reason": "G6_UNITS_INVALID",
+      "condition": { "op": "not_equal", "field": "units_valid", "value": 1 }
+    },
+    {
+      "id": "G7_DUPLICATE",
+      "priority": 100,
+      "denial_reason": "G7_DUPLICATE_CLAIM",
+      "condition": { "op": "not_equal", "field": "is_duplicate", "value": 0 }
+    },
+    {
+      "id": "G8_DISABILITY",
+      "priority": 110,
+      "denial_reason": "G8_DISABILITY_DETERMINATION_FAILED",
+      "condition": { "op": "not_equal", "field": "disability_determination_valid", "value": 1 }
+    },
+    {
+      "id": "G9_RECIPIENT_LIFE_STATUS",
+      "priority": 120,
+      "denial_reason": "G9_RECIPIENT_DECEASED",
+      "condition": { "op": "not_equal", "field": "recipient_not_deceased", "value": 1 }
+    },
+    {
+      "id": "G10_PHYSICIAN_CERTIFICATION",
+      "priority": 130,
+      "denial_reason": "G10_PHYSICIAN_CERTIFICATION_FAILED",
+      "condition": { "op": "not_equal", "field": "physician_certification_valid", "value": 1 }
+    }
+  ]
+}

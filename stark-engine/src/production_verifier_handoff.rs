@@ -17,8 +17,7 @@ pub const STARK_VERIFIER_V1_ABI_FIELDS: [(&str, &str); 11] = [
     ("proof", "bytes"),
 ];
 
-pub const STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS: [&str; 3] =
-    ["nullifierRootBefore", "nullifierRootAfter", "batchRoot"];
+pub const STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS: [&str; 0] = [];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProductionStarkVerifierHandoffV4 {
@@ -43,6 +42,11 @@ pub struct ProductionStarkVerifierHandoffV4 {
     pub oracle_facts_root_status: String,
     pub fee_schedule_root: String,
     pub fee_schedule_root_status: String,
+    pub nullifier_root_before: String,
+    pub nullifier_root_after: String,
+    pub nullifier_root_status: String,
+    pub batch_root: String,
+    pub batch_root_status: String,
     pub proof_bytes_reference: String,
     pub proof_bytes_sha256: String,
     pub proof_size_bytes: usize,
@@ -92,15 +96,18 @@ pub type ProductionStarkVerifierCallReadinessV1 = ProductionStarkVerifierCallRea
 pub type ProductionStarkVerifierHandoffV5 = ProductionStarkVerifierHandoffV4;
 pub type ProductionStarkVerifierAbiFieldV5 = ProductionStarkVerifierAbiFieldV4;
 pub type ProductionStarkVerifierCallReadinessV5 = ProductionStarkVerifierCallReadinessV4;
+pub type ProductionStarkVerifierHandoffV6 = ProductionStarkVerifierHandoffV4;
+pub type ProductionStarkVerifierAbiFieldV6 = ProductionStarkVerifierAbiFieldV4;
+pub type ProductionStarkVerifierCallReadinessV6 = ProductionStarkVerifierCallReadinessV4;
 
 impl ProductionStarkVerifierHandoffV4 {
-    pub const SCHEMA_VERSION: &'static str = "stark-production-verifier-handoff-v5";
+    pub const SCHEMA_VERSION: &'static str = "stark-production-verifier-handoff-v7";
     pub const SOURCE_SCHEMA_VERSION: &'static str = ProductionStarkProofArtifactV4::SCHEMA_VERSION;
-    pub const HANDOFF_STATUS: &'static str = "abi_aligned_not_call_ready_three_state_roots_missing";
+    pub const HANDOFF_STATUS: &'static str = "abi_aligned_call_ready_not_runtime";
     pub const INTERFACE_NAME: &'static str = "IStarkClaimsVerifierV1Candidate";
     pub const FUNCTION_SIGNATURE: &'static str = "verifyStarkClaim((bytes32,uint8,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32) publicInputs,bytes proof) external view returns (bool)";
     pub const CANONICAL_ABI_SIGNATURE: &'static str = "verifyStarkClaim((bytes32,uint8,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32),bytes)";
-    pub const SOURCE_ARTIFACT_DIGEST_ENCODING: &'static str = "serde-json-compact-struct-order-v5";
+    pub const SOURCE_ARTIFACT_DIGEST_ENCODING: &'static str = "serde-json-compact-struct-order-v7";
     pub const PUBLIC_INPUT_ROOT_STATUS: &'static str = "air_constrained_rp64_256_packed_bytes32";
     pub const CLAIM_SOURCE_ROOT_STATUS: &'static str =
         "air_constrained_canonical_leaf_and_depth_10_merkle_path";
@@ -108,6 +115,10 @@ impl ProductionStarkVerifierHandoffV4 {
         "air_constrained_canonical_verified_fact_leaf_and_depth_10_merkle_path";
     pub const FEE_SCHEDULE_ROOT_STATUS: &'static str =
         "air_constrained_canonical_verified_fee_leaf_depth_10_merkle_path_and_claim_source_links";
+    pub const NULLIFIER_ROOT_STATUS: &'static str =
+        "air_constrained_canonical_indexed_before_after_transition";
+    pub const BATCH_ROOT_STATUS: &'static str =
+        "air_constrained_single_claim_batch_hash_of_public_input_root";
     pub const PROOF_BYTES_REFERENCE: &'static str = "source_artifact.proof.bytes_hex";
 
     pub fn from_proof_artifact(
@@ -121,6 +132,9 @@ impl ProductionStarkVerifierHandoffV4 {
         let claim_source_root = artifact.claim_source_root_bytes32.clone();
         let oracle_facts_root = artifact.oracle_facts_root_bytes32.clone();
         let fee_schedule_root = artifact.fee_schedule_root_bytes32.clone();
+        let nullifier_root_before = artifact.nullifier_root_before_bytes32.clone();
+        let nullifier_root_after = artifact.nullifier_root_after_bytes32.clone();
+        let batch_root = artifact.batch_root_bytes32.clone();
         let abi_fields = expected_abi_fields(artifact);
         let call_readiness = ProductionStarkVerifierCallReadinessV4::expected();
         let binding_digest_sha256 = binding_digest_sha256(
@@ -134,6 +148,9 @@ impl ProductionStarkVerifierHandoffV4 {
             &claim_source_root,
             &oracle_facts_root,
             &fee_schedule_root,
+            &nullifier_root_before,
+            &nullifier_root_after,
+            &batch_root,
         );
 
         let handoff = Self {
@@ -158,6 +175,11 @@ impl ProductionStarkVerifierHandoffV4 {
             oracle_facts_root_status: Self::ORACLE_FACTS_ROOT_STATUS.to_string(),
             fee_schedule_root,
             fee_schedule_root_status: Self::FEE_SCHEDULE_ROOT_STATUS.to_string(),
+            nullifier_root_before,
+            nullifier_root_after,
+            nullifier_root_status: Self::NULLIFIER_ROOT_STATUS.to_string(),
+            batch_root,
+            batch_root_status: Self::BATCH_ROOT_STATUS.to_string(),
             proof_bytes_reference: Self::PROOF_BYTES_REFERENCE.to_string(),
             proof_bytes_sha256: artifact.proof.sha256.clone(),
             proof_size_bytes: artifact.proof.size_bytes,
@@ -172,7 +194,7 @@ impl ProductionStarkVerifierHandoffV4 {
                     .to_string(),
                 "publicInputRoot is constrained by the production AIR and canonically packed into bytes32."
                     .to_string(),
-                "Three state roots remain unavailable, so this envelope is not valid call-ready calldata."
+                "batchRoot is AIR-constrained, so every verifier ABI field is available."
                     .to_string(),
                 "The active Groth16 settlement path remains unchanged.".to_string(),
             ],
@@ -251,6 +273,18 @@ impl ProductionStarkVerifierHandoffV4 {
             &mut errors,
         );
         validate_exact(
+            "nullifier_root_status",
+            &self.nullifier_root_status,
+            Self::NULLIFIER_ROOT_STATUS,
+            &mut errors,
+        );
+        validate_exact(
+            "batch_root_status",
+            &self.batch_root_status,
+            Self::BATCH_ROOT_STATUS,
+            &mut errors,
+        );
+        validate_exact(
             "proof_bytes_reference",
             &self.proof_bytes_reference,
             Self::PROOF_BYTES_REFERENCE,
@@ -316,6 +350,23 @@ impl ProductionStarkVerifierHandoffV4 {
                     .to_string(),
             );
         }
+        if self.nullifier_root_before != self.source_artifact.nullifier_root_before_bytes32 {
+            errors.push(
+                "nullifier_root_before must equal the AIR-constrained source artifact root"
+                    .to_string(),
+            );
+        }
+        if self.nullifier_root_after != self.source_artifact.nullifier_root_after_bytes32 {
+            errors.push(
+                "nullifier_root_after must equal the AIR-constrained source artifact root"
+                    .to_string(),
+            );
+        }
+        if self.batch_root != self.source_artifact.batch_root_bytes32 {
+            errors.push(
+                "batch_root must equal the AIR-constrained source artifact batch root".to_string(),
+            );
+        }
         if self.proof_bytes_sha256 != self.source_artifact.proof.sha256 {
             errors.push("proof_bytes_sha256 does not match source artifact proof".to_string());
         }
@@ -345,6 +396,9 @@ impl ProductionStarkVerifierHandoffV4 {
             &self.claim_source_root,
             &self.oracle_facts_root,
             &self.fee_schedule_root,
+            &self.nullifier_root_before,
+            &self.nullifier_root_after,
+            &self.batch_root,
         );
         if self.binding_digest_sha256 != expected_binding_digest {
             errors.push(
@@ -378,7 +432,7 @@ impl ProductionStarkVerifierHandoffV4 {
 }
 
 impl ProductionStarkVerifierCallReadinessV4 {
-    pub const READINESS_STATUS: &'static str = "not_call_ready_three_state_roots_missing";
+    pub const READINESS_STATUS: &'static str = "abi_call_ready_runtime_activation_disabled";
 
     fn expected() -> Self {
         Self {
@@ -386,7 +440,7 @@ impl ProductionStarkVerifierCallReadinessV4 {
             proof_bytes_available: true,
             proof_locally_verified: true,
             air_public_inputs_available: true,
-            air_public_input_count: 26,
+            air_public_input_count: 38,
             directly_available_abi_fields: vec![
                 "claimHash".to_string(),
                 "decision".to_string(),
@@ -395,6 +449,9 @@ impl ProductionStarkVerifierCallReadinessV4 {
                 "claimSourceRoot".to_string(),
                 "oracleFactsRoot".to_string(),
                 "feeScheduleRoot".to_string(),
+                "nullifierRootBefore".to_string(),
+                "nullifierRootAfter".to_string(),
+                "batchRoot".to_string(),
                 "proof".to_string(),
             ],
             derived_candidate_abi_fields: Vec::new(),
@@ -402,7 +459,7 @@ impl ProductionStarkVerifierCallReadinessV4 {
                 .iter()
                 .map(|field| (*field).to_string())
                 .collect(),
-            abi_call_ready: false,
+            abi_call_ready: true,
             runtime_activation_allowed: false,
         }
     }
@@ -413,7 +470,7 @@ impl ProductionStarkVerifierCallReadinessV4 {
             Ok(())
         } else {
             Err(vec![
-                "call_readiness must preserve the exact non-runtime V1 ABI readiness state"
+                "call_readiness must preserve the exact ABI-complete non-runtime readiness state"
                     .to_string(),
             ])
         }
@@ -431,9 +488,9 @@ fn expected_abi_fields(
         Some(artifact.claim_source_root_bytes32.clone()),
         Some(artifact.oracle_facts_root_bytes32.clone()),
         Some(artifact.fee_schedule_root_bytes32.clone()),
-        None,
-        None,
-        None,
+        Some(artifact.nullifier_root_before_bytes32.clone()),
+        Some(artifact.nullifier_root_after_bytes32.clone()),
+        Some(artifact.batch_root_bytes32.clone()),
         None,
     ];
     let source_paths = [
@@ -444,9 +501,9 @@ fn expected_abi_fields(
         "source_artifact.claim_source_root_bytes32",
         "source_artifact.oracle_facts_root_bytes32",
         "source_artifact.fee_schedule_root_bytes32",
-        "unresolved.nullifier_root_before",
-        "unresolved.nullifier_root_after",
-        "unresolved.batch_root",
+        "source_artifact.nullifier_root_before_bytes32",
+        "source_artifact.nullifier_root_after_bytes32",
+        "source_artifact.batch_root_bytes32",
         "source_artifact.proof.bytes_hex",
     ];
     let statuses = [
@@ -457,9 +514,9 @@ fn expected_abi_fields(
         "direct_air_constrained_merkle_root",
         "direct_air_constrained_merkle_root",
         "direct_air_constrained_merkle_root",
-        "unresolved_root_not_in_production_artifact",
-        "unresolved_root_not_in_production_artifact",
-        "unresolved_root_not_in_production_artifact",
+        "direct_air_constrained_nullifier_root",
+        "direct_air_constrained_nullifier_root",
+        "direct_air_constrained_batch_root",
         "available_locally_verified_winterfell_bytes",
     ];
 
@@ -504,9 +561,12 @@ fn binding_digest_sha256(
     claim_source_root: &str,
     oracle_facts_root: &str,
     fee_schedule_root: &str,
+    nullifier_root_before: &str,
+    nullifier_root_after: &str,
+    batch_root: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"localbce-stark-verifier-handoff-v5\0");
+    hasher.update(b"localbce-stark-verifier-handoff-v7\0");
     update_len_prefixed(
         &mut hasher,
         ProductionStarkVerifierHandoffV4::INTERFACE_NAME,
@@ -525,6 +585,9 @@ fn binding_digest_sha256(
     update_len_prefixed(&mut hasher, claim_source_root);
     update_len_prefixed(&mut hasher, oracle_facts_root);
     update_len_prefixed(&mut hasher, fee_schedule_root);
+    update_len_prefixed(&mut hasher, nullifier_root_before);
+    update_len_prefixed(&mut hasher, nullifier_root_after);
+    update_len_prefixed(&mut hasher, batch_root);
     for field in STARK_VERIFIER_V1_UNRESOLVED_ROOT_FIELDS {
         update_len_prefixed(&mut hasher, field);
     }

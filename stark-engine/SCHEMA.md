@@ -198,12 +198,32 @@ cargo run --features production-air-winterfell \
   production_fee_schedule_root.json
 ```
 
-## ProductionStarkProofArtifactV5
+## ProductionNullifierRootTransitionArtifactV1
 
-Schema version: `stark-production-proof-artifact-v5`
+Schema version: `stark-nullifier-root-transition-v1`
+
+Purpose: derive a canonical claim-hash nullifier and materialize the depth-10
+root transition consumed by production AIR v5. The current artifact uses leaf
+index zero in a canonical empty tree. Approved claims replace the empty leaf;
+denied claims preserve the root. It is bootstrap-only and does not represent a
+persistent, governed, or concurrency-safe nullifier state provider.
+
+```bash
+cargo run --features production-air-winterfell \
+  --bin generate_production_nullifier_root_transition -- \
+  stark_bridge_input.json production_nullifier_root_transition.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_nullifier_root_transition -- \
+  production_nullifier_root_transition.json
+```
+
+## ProductionStarkProofArtifactV6
+
+Schema version: `stark-production-proof-artifact-v6`
 
 Purpose: package a locally verified Winterfell proof together with the exact
-26-element public-input vector consumed by the production AIR.
+34-element public-input vector consumed by the production AIR.
 
 The ordered public inputs are:
 
@@ -212,27 +232,29 @@ The ordered public inputs are:
 3. four `claimSourceRoot` elements
 4. four `oracleFactsRoot` elements
 5. four `feeScheduleRoot` elements
-6. decision
-7. failure code
+6. four `nullifierRootBefore` elements
+7. four `nullifierRootAfter` elements
+8. decision
+9. failure code
 
 The artifact includes canonical proof bytes, proof and public-input digests,
-all four roots as canonical Solidity `bytes32` values, claim-source,
+all six roots as canonical Solidity `bytes32` values, claim-source,
 oracle-facts, and fee-schedule tree metadata, and explicit non-runtime safety
 flags. Validation deserializes and locally re-verifies the proof instead of
 trusting stored status fields.
 
-## ProductionStarkVerifierHandoffV5
+## ProductionStarkVerifierHandoffV6
 
-Schema version: `stark-production-verifier-handoff-v5`
+Schema version: `stark-production-verifier-handoff-v6`
 
-Purpose: bind the v5 proof artifact to
+Purpose: bind the v6 proof artifact to
 `IStarkClaimsVerifierV1Candidate` field ordering and Solidity types.
 
 `claimHash`, `decision`, `failureCode`, `publicInputRoot`,
-`claimSourceRoot`, `oracleFactsRoot`, `feeScheduleRoot`, and `proof` are direct.
-The handoff is not call-ready because `nullifierRootBefore`,
-`nullifierRootAfter`, and `batchRoot` are unresolved and no production Solidity
-STARK verifier is active.
+`claimSourceRoot`, `oracleFactsRoot`, `feeScheduleRoot`,
+`nullifierRootBefore`, `nullifierRootAfter`, and `proof` are direct. The
+handoff is not call-ready because `batchRoot` is unresolved, nullifier state is
+bootstrap-only, and no production Solidity STARK verifier is active.
 
 ## StarkProofIntent
 

@@ -2,11 +2,16 @@
 
 ## Status
 
-This is a candidate ABI for future production STARK verification. It is not
-active runtime behavior and is not wired into `ClaimsRegistry.sol`.
+This document records the ABI design history that led to the implemented
+controlled-attestation STARK settlement path. The active opt-in contracts are
+`StarkAttestationVerifier.sol` and `StarkClaimsRegistry.sol`; the existing
+Groth16 contracts remain the default path and are unchanged.
 
-Active settlement remains Groth16 until a real STARK verifier/prover path is
-implemented and explicitly enabled.
+The selected STARK profile generates and locally verifies a real Winterfell
+proof, then verifies an authorized secp256k1 attestation on-chain over the
+exact public inputs, proof commitment, target registry, and claim amount. It
+is not a native Solidity Winterfell verifier. See `STARK_RUNTIME.md` for the
+current runtime contract.
 
 ## Candidate Interface
 
@@ -56,11 +61,12 @@ Winterfell 0.13.1 serialized proof bytes. Runtime use remains blocked on root
 semantics and a real Solidity verifier implementation.
 
 The feature-gated production AIR now emits real Winterfell proof bytes in
-`stark-production-proof-artifact-v5`. A separate
-`stark-production-verifier-handoff-v5` envelope aligns those bytes, the 26
+`stark-production-proof-artifact-v6`. A separate
+`stark-production-verifier-handoff-v6` envelope aligns those bytes, the 34
 ordered AIR public inputs, and the packed `publicInputRoot`,
-`claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot` values with this
-candidate interface.
+`claimSourceRoot`, `oracleFactsRoot`, `feeScheduleRoot`,
+`nullifierRootBefore`, and `nullifierRootAfter` values with this candidate
+interface.
 
 `publicInputRoot` is now constrained by the production AIR. It is an
 `Rp64_256` digest of a domain-separated preimage containing the claim hash, the
@@ -85,9 +91,14 @@ matches. The AIR validates the fixed depth-10 path and links the fee leaf to the
 claim-source service digest, service date, and total charge. Governance approval
 of that schedule remains external.
 
-The handoff remains intentionally non-call-ready because three state roots are
-unavailable, the claim-source, oracle-facts, and fee-schedule roots are not
-governed, external oracle attestations are not verified, and no Solidity STARK
+The nullifier roots are constrained by a canonical depth-10 empty-tree
+bootstrap at leaf zero. Approved claims insert the claim-hash-derived
+nullifier; denied claims preserve the root. This is not persistent state and
+does not handle concurrent claims.
+
+The handoff remains intentionally non-call-ready because `batchRoot` is
+unavailable, the nullifier state provider and source-root governance do not
+exist, external oracle attestations are not verified, and no Solidity STARK
 verifier exists.
 
 ## Current Tests
@@ -152,17 +163,16 @@ bash scripts/validate_stark_bridge_chain.sh
 
 This ABI candidate does not mean:
 
-- a real STARK verifier exists
-- real STARK proofs are generated
+- a Solidity-compatible STARK verifier exists
 - `ClaimsRegistry.sol` accepts STARK proofs
 - Groth16 has been replaced
 - deployment scripts use this interface
 
 ## Next Step
 
-Define governance for the AIR-bound `claimSourceRoot` and `oracleFactsRoot`,
-define external oracle attestation verification, implement the four remaining
-source/state roots, then build and independently test a Solidity-compatible
+Define governance for the AIR-bound source roots and external oracle
+attestation verification, replace bootstrap nullifier state with a persistent
+provider, implement `batchRoot`, then build and independently test a Solidity-compatible
 verifier for the locked proof and public-input encoding. Do not wire
 ClaimsRegistry until those roots and the verifier pass positive and negative
 proof tests.

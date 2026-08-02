@@ -8,6 +8,7 @@ Maintain a working local prototype for privacy-preserving claims adjudication us
 - Circom + Groth16 proofs
 - Solidity verifier
 - ClaimsRegistry smart contract
+- Winterfell STARK prover and controlled-attestation settlement contracts
 - Imported standalone app/audit layer from the cofounder handoff
 - Imported hardened reference bundle
 
@@ -20,6 +21,17 @@ claim_input.json
 -> Groth16 proof
 -> Solidity verification
 -> ClaimsRegistry submission
+-> adjudication_result.json
+
+Opt-in STARK workflow:
+
+claim_input.json
+-> Rust adjudication
+-> StarkBridgeInput
+-> persistent nullifier transition
+-> real Winterfell proof and local verification
+-> controlled secp256k1 attestation
+-> StarkClaimsRegistry submission
 -> adjudication_result.json
 
 ---
@@ -105,6 +117,12 @@ When integrating from this bundle, copy or adapt only the specific reviewed file
 - active Foundry tests for ClaimsRegistry
 - deployment.json smoke test
 - STARK pre-prover planning pipeline in stark-engine/
+- feature-gated production G1-G10 Winterfell AIR and real proof artifacts
+- persistent indexed nullifier state with atomic compare-and-swap updates
+- opt-in `stark_attested` Rust runtime backend
+- controlled-attestation `StarkAttestationVerifier` and `StarkClaimsRegistry`
+- hash-pinned `rules_active_v1.json` evaluator behind `versioned_g1_g10`
+- Rust-validated, non-runtime Claude shadow rules bundle
 
 Current STARK pre-prover planning commands:
 
@@ -124,6 +142,17 @@ stark-engine:
 
 These commands do not generate real STARK proofs and do not replace the active Groth16 flow.
 
+The separate production-shaped STARK runtime is documented in
+`STARK_RUNTIME.md`. It generates and locally verifies real Winterfell proofs,
+but Solidity verifies an authorized attestation over the public inputs and
+proof commitment rather than natively verifying Winterfell. Groth16 remains
+the default backend.
+
+The deterministic rules boundary is documented in `RULES_ENGINE.md`.
+`rules_active_v1.json` is the only typed runtime candidate and is pinned to
+exact G1-G10 parity. Claude web rules remain shadow-only and not legally
+verified.
+
 ---
 
 # Important Constraints
@@ -134,6 +163,8 @@ These commands do not generate real STARK proofs and do not replace the active G
 - denial_reason() must remain
 - rules_v9.json is NOT active yet
 - rules.json and rules_v9.json must remain parallel
+- rules_active_v1.json may be used only through the explicit
+  `versioned_g1_g10` backend and must preserve the pinned hash/parity gate
 - adjudication_result.json must continue working
 - approved claims require unique claim_id
 - active ClaimsRegistry address lives in rust-engine/config.json

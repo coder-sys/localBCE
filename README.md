@@ -5,16 +5,22 @@ Blind Ledger is a local prototype for privacy-preserving healthcare claims adjud
 - Rust
 - Circom
 - Groth16
+- Winterfell STARK
 - Solidity
 - Foundry
 
 The system validates claims off-chain, generates zero-knowledge proofs for approved claims, and records approved adjudications on-chain.
 
-Groth16 is the active compatibility/demo proof path. STARK is the production proof-system direction and is being added incrementally through sidecar artifacts and a first-class bridge crate.
+Groth16 remains the default compatibility path. An opt-in `stark_attested`
+backend now generates and locally verifies a real Winterfell proof and settles
+through controlled-attestation Solidity contracts. See `STARK_RUNTIME.md` for
+the exact trust boundary and operating commands.
 
 ---
 
-# Current Workflow
+# Current Workflows
+
+Default Groth16 backend:
 
 claim_input.json
 -> Rust adjudication
@@ -24,6 +30,17 @@ claim_input.json
 -> Groth16 proof
 -> Solidity verifier
 -> ClaimsRegistry
+-> adjudication_result.json
+
+Opt-in STARK backend:
+
+claim_input.json
+-> Rust adjudication
+-> StarkBridgeInput
+-> persistent nullifier transition
+-> Winterfell proof and local verification
+-> controlled-attestation envelope
+-> StarkClaimsRegistry
 -> adjudication_result.json
 
 ---
@@ -39,9 +56,13 @@ bash scripts/validate_localbce.sh
 This runs:
 
 - `python3 scripts/validate_ops_scaffold.py`
+- `bash scripts/validate_rules_pipeline.sh`
 - `cargo test` and `cargo check` in `rust-engine/`
 - `cargo test` and `cargo check` in `stark-engine/`
 - `forge test` and `forge build` in `blind-ledger/`
+
+Set `RUN_STARK_RUNTIME_SETTLEMENT=1` to add the disposable-Anvil live STARK
+settlement gate.
 
 Foundry may print lint notes for generated verifier constants and deployment
 JSON smoke-test file cheatcodes. Those notes are not failures when the test and
@@ -54,8 +75,8 @@ build commands exit successfully.
 The repository is aligned to the broader hardened technical architecture through
 an explicit staging model:
 
-- active Groth16 compatibility/demo path: `rust-engine/`, `zk/`, `blind-ledger/`
-- STARK pre-prover bridge path: `stark-engine/`
+- default Groth16 path: `rust-engine/`, `zk/`, `blind-ledger/`
+- opt-in STARK runtime: `rust-engine/`, `stark-engine/`, `blind-ledger/`
 - imported app/audit reference lane: `blind-ledger-app-layer/`
 - imported hardened reference bundle: `localBCE-codex-dev-hardened-20260616/`
 - rules discovery/review lane: `gov-rules-kg-prototype/`
@@ -74,24 +95,23 @@ See `STARK_PHASE4_CHECKPOINT.md` for the completed Phase 4 STARK bridge
 checkpoint and initial smoke-test summary.
 
 See `STARK_PHASE6_CHECKPOINT.md` for the feature-gated Winterfell proof-preview
-checkpoint. This is still isolated from the active Groth16 runtime.
+checkpoint that preceded the current production AIR.
 
 See `STARK_SOLIDITY_PREVIEW_CHECKPOINT.md` for the preview-only Solidity STARK
-verifier and ClaimsRegistry adapter interface lane. These interfaces and tests
-are not wired into the active Groth16 `ClaimsRegistry.sol`.
+verifier and ClaimsRegistry adapter interface history. The current opt-in
+contracts are documented in `STARK_RUNTIME.md`.
 
-See `STARK_TRANSITION_REMAINING.md` for the remaining transition sequence from
-preview interfaces and proof previews to real STARK prover, verifier,
-settlement, runtime selection, and ops gates.
+See `STARK_RUNTIME.md` for the implemented controlled-attestation runtime and
+`STARK_TRANSITION_REMAINING.md` for production-hardening gates.
 
 See `STARK_VERIFIER_ABI_CANDIDATE.md` for the current preview-only production
 STARK verifier ABI candidate and public-input expectations.
 
-See `STARK_PHASE8_PROVER_BOUNDARY.md` for the feature-gated production G1-G10
-Winterfell AIR, its Rescue-Prime fact commitment and ABI-facing public-input
-root, the AIR-constrained claim-source Merkle root, and the remaining
-verifier/runtime integration work. This lane generates and verifies local
-STARK proofs but is not wired into runtime or Solidity.
+See `STARK_PHASE8_PROVER_BOUNDARY.md` for implementation history and the
+production G1-G10 Winterfell AIR boundary.
+
+See `RULES_ENGINE.md` for the hash-pinned G1-G10 JSON evaluator and the
+non-runtime Claude candidate shadow boundary.
 
 ---
 
@@ -131,6 +151,8 @@ localBCE/
 - runtime config via config.json
 - structured proof-stage logging
 - Rust unit tests
+- Typed, hash-pinned G1-G10 JSON ruleset with opt-in exact-parity evaluation
+- Rust validation of the 51-program Claude shadow bundle
 
 ## ZK Layer
 
@@ -144,32 +166,35 @@ localBCE/
 
 ## STARK Bridge
 
-- stark-engine/ is a first-class localBCE crate for STARK compatibility modeling.
+- stark-engine/ is the first-class localBCE STARK proving and settlement crate.
 - blind-ledger-app-layer/zk-stark/ remains the imported Winterfell reference/audit source.
-- rust-engine/ remains the active Groth16 runtime.
+- rust-engine/ defaults to Groth16 and supports explicit `stark_attested` routing.
 - A feature-gated Winterfell PoC proof preview exists in stark-engine/ and is
   covered by the STARK smoke chain.
-- The feature-gated production G1-G10 AIR can package its real Winterfell proof
-  bytes and exact 26-element public input vector into a versioned JSON artifact.
-- The AIR constrains canonical claim-source, verified-oracle-facts, and
-  verified-fee-schedule leaves, their depth-10 Merkle paths, and the resulting
-  `claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot`.
+- The production G1-G10 AIR packages real Winterfell proof bytes and its exact
+  38-element public-input vector into a versioned JSON artifact.
+- The AIR constrains canonical claim-source, verified-oracle-facts,
+  verified-fee-schedule, persistent nullifier, public-input, and batch-root
+  semantics.
 - The production artifact validator deserializes the saved proof bytes and
   re-verifies them locally; it does not trust a stored success flag.
-- No STARK prover is wired into runtime yet.
-- No STARK verifier is wired into ClaimsRegistry yet.
-- No STARK proof is submitted on-chain yet.
+- The atomic executor reconciles persistent local nullifier state with the
+  on-chain registry, submits settlement, and applies state only after receipt
+  confirmation.
+- `StarkAttestationVerifier` and `StarkClaimsRegistry` provide the opt-in
+  controlled-attestation settlement path.
+- Solidity verifies a secp256k1 attestation over the exact inputs and proof
+  commitment; it does not natively verify the full Winterfell proof.
 
-Current STARK pre-prover planning workflow:
+Current STARK artifact and compatibility workflow:
 
 ```bash
 bash scripts/validate_stark_bridge_chain.sh
 ```
 
-This chain validates and normalizes the future STARK path, then produces root
-input plans, a mock trace, Winterfell PoC compatibility artifacts, and a
-feature-gated Winterfell proof preview. It does not replace Groth16 or submit
-STARK proofs on-chain.
+This chain validates bridge schemas, root inputs, mock traces, production
+proof artifacts, verifier handoffs, attestation envelopes, and persistent
+state transitions. The separate runtime validator exercises live settlement.
 
 The script writes temporary artifacts under `/tmp`, removes generated runtime
 artifacts on exit, and is the source of truth for command ordering.
@@ -220,35 +245,34 @@ cargo run --features production-air-winterfell \
 cargo run --features production-air-winterfell \
   --bin validate_production_fee_schedule_root -- \
   production_fee_schedule_root.json
+
+cargo run --features production-air-winterfell \
+  --bin generate_production_nullifier_root_transition -- \
+  ../rust-engine/stark_bridge_input.json production_nullifier_root_transition.json
+
+cargo run --features production-air-winterfell \
+  --bin validate_production_nullifier_root_transition -- \
+  production_nullifier_root_transition.json
 ```
 
-The artifact labels `claim_id` as metadata-only. The proof binds the existing
-32-byte claim hash, all G1-G10 facts through an internal Rescue-Prime
-commitment, decision, failure code, a canonical claim-source leaf and
-depth-10 Merkle path, a canonical verified-oracle-facts leaf and path, a
-canonical verified-fee-schedule leaf and path, the resulting
-`claimSourceRoot`, `oracleFactsRoot`, and `feeScheduleRoot`, and a four-element
-Rescue-Prime `publicInputRoot`. Each root is canonically packed as four
-big-endian 64-bit field elements into one Solidity `bytes32`. Oracle source
-labels, HTTPS URLs, and attestation references are committed but are not
-externally or cryptographically attested by this code. Fee source URLs and
-effective schedule entries are committed and checked, but governance approval
-is external. Runtime wiring, a
-Solidity STARK verifier, governed root approval, and chain submission remain
-disabled.
+The proof binds the 32-byte claim hash, G1-G10 facts, decision, failure code,
+all seven public roots, and the locked 38-element input vector. Root values are
+canonically packed from four big-endian 64-bit field elements into Solidity
+`bytes32`. Source labels and references are committed by the proof, while
+external truth, governance approval, and attestor custody remain operational
+trust responsibilities.
 
-The verifier handoff locks the proof, 26 AIR inputs, and all four
-AIR-constrained roots to the exact field order and Solidity types in
-`IStarkClaimsVerifierV1Candidate`. It remains non-call-ready because
-`nullifierRootBefore`, `nullifierRootAfter`, and `batchRoot` are not present in
-the production artifact.
+The verifier handoff and 129-byte settlement envelope bind the proof
+commitment, target registry, and claim amount to the exact Solidity inputs.
+The complete Winterfell proof remains in the audit artifact and is reverified
+locally before the attestor authorizes the on-chain transition.
 
 The claim-source command independently materializes the same canonical
 depth-10 `Rp64_256` Merkle opening from bridge-supplied member, provider,
 service-line, diagnosis, charge, and service-date facts. The production AIR
 now consumes that opening, constrains its leaf and path, and exposes the root
-through the proof artifact and verifier handoff. The root is still ungoverned
-and not runtime-wired or accepted on-chain.
+through the proof artifact and verifier handoff. The root is consumed by the
+opt-in STARK runtime; governance approval remains external.
 
 Schema details for the STARK bridge artifacts are documented in:
 
@@ -265,6 +289,8 @@ stark-engine/SCHEMA.md
 - Deployment JSON smoke test for deployment.json
 - Preview-only STARK verifier and adapter interfaces/tests
 - Preview-only STARK verifier V1 ABI candidate
+- Controlled-attestation STARK verifier and ClaimsRegistry
+- STARK deployment script and approved/denied/replay Foundry tests
 
 ---
 
@@ -514,15 +540,16 @@ REDEPLOY_WORKFLOW.md
 
 Near-term next steps:
 
-- Keep Groth16 demo flow green.
-- Add real, governed source/state root generation before producing call-ready
-  STARK verifier calldata.
-- Implement and independently test a real STARK verifier before changing
-  ClaimsRegistry or runtime proof selection.
+- Keep Groth16 green as the default backend.
+- Independently audit the controlled-attestation STARK path and formalize key
+  custody, root governance, monitoring, and recovery.
+- Consider native or recursively wrapped on-chain STARK verification as a
+  separate trust-model upgrade.
 - Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.
 - Use ROADMAP_TO_TARGET_ARCHITECTURE.md to choose the next safe integration phase.
 - Port hardened/app-layer assets only through explicit reviewed integration steps.
-- Bridge reviewed deterministic rule candidates into rust-engine as shadow tests before runtime use.
+- Bridge reviewed deterministic rule candidates into a versioned Rust shadow
+  bundle, prove G1-G10 parity, and gate runtime activation explicitly.
 - oracle attestations
 - off-circuit rules engine
 - ZK Bouncer architecture

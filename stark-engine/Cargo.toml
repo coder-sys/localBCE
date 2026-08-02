@@ -15,6 +15,8 @@ blind-ledger-stark = { path = "../blind-ledger-app-layer/zk-stark", optional = t
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+sha3 = "0.10"
+secp256k1 = { version = "0.31", features = ["recovery"] }
 winterfell = { version = "0.13.1", optional = true }
 
 [[bin]]
@@ -70,4 +72,44 @@ required-features = ["production-air-winterfell"]
 [[bin]]
 name = "validate_production_fee_schedule_root"
 path = "src/bin/validate_production_fee_schedule_root.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "generate_production_nullifier_root_transition"
+path = "src/bin/generate_production_nullifier_root_transition.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "validate_production_nullifier_root_transition"
+path = "src/bin/validate_production_nullifier_root_transition.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "initialize_production_nullifier_state"
+path = "src/bin/initialize_production_nullifier_state.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "prepare_production_nullifier_transition"
+path = "src/bin/prepare_production_nullifier_transition.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "apply_production_nullifier_transition"
+path = "src/bin/apply_production_nullifier_transition.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "generate_production_stark_attestation_envelope"
+path = "src/bin/generate_production_stark_attestation_envelope.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "validate_production_stark_attestation_envelope"
+path = "src/bin/validate_production_stark_attestation_envelope.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "execute_production_stark_settlement"
+path = "src/bin/execute_production_stark_settlement.rs"
 required-features = ["production-air-winterfell"]

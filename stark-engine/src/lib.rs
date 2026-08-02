@@ -31,7 +31,19 @@ pub mod production_proof_artifact;
 pub mod production_fee_schedule_root;
 
 #[cfg(feature = "production-air-winterfell")]
+pub mod production_nullifier_root_transition;
+
+#[cfg(feature = "production-air-winterfell")]
+pub mod production_nullifier_state;
+
+#[cfg(feature = "production-air-winterfell")]
 pub mod production_verifier_handoff;
+
+#[cfg(feature = "production-air-winterfell")]
+pub mod production_stark_attestation;
+
+#[cfg(feature = "production-air-winterfell")]
+pub mod production_stark_settlement;
 
 /// Mapping quality from the active Rust claim model into the imported
 /// Winterfell STARK proof-of-concept input model.
