@@ -16,7 +16,7 @@ from app.operational_readiness import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 OPS = REPO_ROOT / "ops"
 
 

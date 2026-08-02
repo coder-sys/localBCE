@@ -38,14 +38,14 @@ adapters and public Ethereum data remains non-PHI. Its INHERIT/L1-COMPAT/L2-PARI
 RESEARCH classes explain which benefits arrive through L1, which require direct L2 work, and when
 each change becomes actionable.
 
-This directory is the source root and sole operational source of truth. The archive root also contains one vendored sibling used by this source tree:
+This checkout is the source root and sole operational source of truth. Tracked `ops/` is the sole
+commit-bound policy and verifier authority. Its exact file set, lengths, and SHA3-512 identities
+are checked; do not create a sibling mirror or fallback copy. The release builder may add a
+`Blind-Ledger-Release/` ZIP wrapper, but it does not create another source root.
 
-| Sibling path | Purpose |
-| --- | --- |
-| `../third_party/forge-std/` | Vendored Forge standard library for Solidity tests. |
-
-Tracked `ops/` is the sole commit-bound policy and verifier authority. Its exact file set, lengths,
-and SHA3-512 identities are checked; do not create a sibling mirror or fallback copy.
+The checkout does not include the external `forge-std` dependency expected by the Solidity
+Foundry configuration. A Forge run receives no release or production credit unless that reviewed
+dependency is explicitly provisioned and its source identity is recorded.
 
 ## Start here
 

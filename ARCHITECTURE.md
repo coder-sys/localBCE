@@ -63,16 +63,19 @@ semantic/differential references; the 554-951 GB direct-SHA3-STARK layouts are r
 
 ## System shape
 
-Blind Ledger is organized as a source-first app-layer handoff:
+This checkout is already the application source root:
 
 ```text
-Blind Ledger Neer Version/
+repository root/
+  app/                         application and portal code
+  experiments/                 sealed relation and proof prototypes
   ops/                         canonical operational artifacts
-  third_party/forge-std/        vendored Solidity test dependency
-  blind-ledger-app-layer/       application source root
+  contracts/                   protected settlement shell
+  tests/                       ordinary and attack regression suites
 ```
 
-Run application, test, and measurement commands from `blind-ledger-app-layer/` unless a tool specifically requires another directory.
+Run application, test, and measurement commands from this repository root unless a tool
+specifically requires another directory, such as the Rust crate or `zk-cairo-sharp/`.
 
 ## Components
 

@@ -14,14 +14,14 @@ file.
 
 Required checks:
 
-1. Confirm this checklist is being run from a release package that contains
-   `blind-ledger-app-layer/`, `ops/`, and `third_party/`.
-2. Run `python -m pytest tests/test_production_readiness.py` from
-   `blind-ledger-app-layer`.
-3. Run `python -m pytest -q` from `blind-ledger-app-layer`.
-4. Run `cargo test --manifest-path rules-engine-rust/Cargo.toml --lib --tests`
-   from `blind-ledger-app-layer`.
-5. Confirm `BL_PROOF_LANE=CAIRO_STARK_NATIVE`.
+1. Confirm this checklist is being run from a release package whose repository root contains
+   `app/`, `contracts/`, `experiments/`, `ops/`, `tests/`, and `tools/`.
+2. Run `py -3.14 -B -m pytest tests/test_production_readiness.py` from the repository root.
+3. Run `py -3.14 -B -m pytest -q` from the repository root.
+4. Run `cargo test --manifest-path rules-engine-rust/Cargo.toml --lib --tests` from the repository
+   root.
+5. Confirm the proof lane is the exact internally qualified suite recorded by the final release
+   manifest; the current `proofSuiteId=null` state is not deployable.
 6. Confirm `BL_ONCHAIN_PROOF_ANCHOR=NATIVE_STARK_DIRECT_ANCHOR`.
 7. Confirm `BL_ALLOW_TEST_DOUBLES=false`.
 8. Confirm `BL_FORCE_PYTHON_RULES_ENGINE=false`.

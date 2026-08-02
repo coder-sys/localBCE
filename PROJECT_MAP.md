@@ -42,7 +42,7 @@ recovery evidence and does not define the current proof architecture.
 | `CONTINUATION_MANDATE.md` | Mandatory post-compaction persistence, product-ideology, recovery, download, evidence, and legitimate-hard-stop instructions. | Read immediately after `AGENTS.md`; it never authorizes weakening a gate or bypassing higher-priority instructions. |
 | `docs/REJECTED_ARCHITECTURES.md` | Non-executable ledger for removed or dominated proof backends, layouts, formats, and optimizations. | Preserve exact identities and rejection reasons; never treat it as a fallback catalog. |
 | `ops/` | Sole commit-bound policy/verifier authority; exact file set, lengths, and SHA3-512 identities are frozen by `ops_authority.py`. | High for deployment integrity. No mirror or fallback path. |
-| `../third_party/forge-std/` | Vendored Forge standard library. | Low unless changing Solidity test toolchain. |
+| `contracts/` Foundry dependency | `forge-std` is not included in this checkout; provision it explicitly and record its reviewed source identity before running Solidity tests. | Low unless changing Solidity test toolchain. |
 | `docs/` | Architecture and operating docs. | Low to medium. Keep aligned with code. |
 
 The architectural source of truth is `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`. Read it and
@@ -76,4 +76,6 @@ current measured work.
 
 ## Source organization rule
 
-The app-layer root is not the archive root. Engineers and agents should enter `blind-ledger-app-layer/` first, then run tests and tools there. Sibling directories exist only for path compatibility and external tool dependencies.
+This checkout is the source root. Engineers and agents should run tests and tools here unless a
+command explicitly names a subdirectory. `ops/` is the only operational authority; sibling copies,
+mirrors, symlinks, and fallback paths are forbidden.

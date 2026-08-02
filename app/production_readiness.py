@@ -87,7 +87,7 @@ def _contains_unsupported_production_marker(value: str) -> bool:
 
 
 def _default_repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[1]
 
 
 def _forbidden_production_sources(repo_root: Path) -> tuple[str, ...]:

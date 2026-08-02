@@ -25,7 +25,7 @@ from app.shared_context import build_shared_context
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = APP_ROOT.parent
+REPO_ROOT = APP_ROOT
 DECISION_FACTS = (
     "eligibility_active",
     "provider_enrolled",

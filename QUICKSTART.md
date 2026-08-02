@@ -11,7 +11,7 @@ and the frontier projections must not be confused with implemented or measured e
 fork/EIP, read its impact class, activation trigger, package owners and required tests; never infer
 that “inherited from L1” means no compatibility work or that “available” means enabled.
 
-Run commands from `blind-ledger-app-layer/` unless a command says otherwise.
+Run commands from this repository root unless a command says otherwise.
 
 Before treating any successful command as release progress, read
 `docs/IMPLEMENTATION_ROADMAP.md`, `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`, and
@@ -67,10 +67,9 @@ py -3.14 -m pytest -q tests/attacks
 ```
 
 R30 remains the reviewed offline Python supply-chain baseline. R34 counts are historical and include
-the now-removed RISC Zero/Stwo suites. Current 2026-07-31 collection found 1,093 ordinary Python
-tests before the known missing canonical `../ops` tree stopped collection, plus 396 attack tests
-collected cleanly. Run focused affected tests during development and both complete Python lanes at a
-convergence milestone. Any current Python/Rust/Cairo semantic mismatch is a hard stop.
+the now-removed RISC Zero/Stwo suites; they are not current collection totals. Run focused affected
+tests during development and both complete Python lanes at a convergence milestone. Any current
+Python/Rust/Cairo semantic mismatch is a hard stop.
 
 The historical Wave 1A structural/authenticated-reference slice can still be checked independently.
 It does not substitute for the selected executable-relation seal:
@@ -114,7 +113,9 @@ cargo test --manifest-path rules-engine-rust/Cargo.toml --lib --tests -q
 
 ## Solidity tests
 
-Forge support is vendored at `../third_party/forge-std/`.
+The checkout does not include the external `forge-std` dependency expected by the Foundry
+configuration. Do not count a Forge run as release evidence unless that reviewed dependency is
+explicitly provisioned and its source identity is recorded.
 
 ```powershell
 forge test

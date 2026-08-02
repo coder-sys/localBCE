@@ -74,13 +74,14 @@ testable without pretending that a proof suite exists.
    roots remain differential identities; no candidate is selected or bound to H4.
 - `pq_commitment_screening.py` implements the Gate 2E-3/S3 common fixed-width masked commitment
   envelope, exact descriptor/parameter identities, dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated
-  public-coin round, and independent opening verifier. The four screening descriptors all reject
+  public-coin round, and independent opening verifier. The five screening descriptors all reject
   closed because reviewed native-hiding, strict-PQ theorem, or complete-proof evidence is missing;
   the reference envelope is not a PCS, proof suite, H4 binding, or activation path.
 - `atomic_state_composition.py`, `state_migration_recovery.py`, and `gate_2e_selection.py` provide
   the S4-S7 synthetic composition, migration/recovery, measurement, rejection, and unsealed
   handoff references. `gate_2e_terminal_ledger.py` independently replays those boundaries and
-  preserves the unresolved simulator, leakage, strict-PQ, canonical-ops, and H4-binding blockers.
+  preserves the unresolved simulator, leakage, strict-PQ, and H4-binding blockers; tracked
+  `ops/` authority is verified.
 - `h5_qualification_preflight.py` freezes one uncounted warm-up plus ten unique measured launches
   for each K128/K512 profile (22 fresh launches total) without starting CUDA. It remains blocked
   while Gate 2E is unsealed. The tracked ops authority and reference-hardware disk floor now pass;

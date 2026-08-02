@@ -75,15 +75,15 @@ Public L1/L2 data contains only public state, roots, commitments, and proofs. PH
 
 ## Path layout
 
-The archive root is a wrapper. The source root is `blind-ledger-app-layer/`.
+This checkout is already the source root. The release builder adds only a
+`Blind-Ledger-Release/` wrapper inside the ZIP; it does not create a nested app-layer root.
+`ops/` is the sole canonical operational tree. Sibling copies, compatibility mirrors, symlinks,
+junctions, environment overrides, and fallback paths are forbidden and are rejected by the
+authority verifier.
 
-The design requires both `../ops/` and `ops/`. The sibling `../ops/` is canonical for code paths
-that hash policy artifacts outside the app root; the app-root `ops/` is its compatibility mirror.
-The 2026-07-31 workspace readback found 14 mirror files but no canonical sibling directory, so
-readiness and attack suites fail closed before their substantive assertions. The exact canonical
-tree must be recovered and recursively matched; the mirror must not be promoted by assumption.
-
-Forge support is under `../third_party/forge-std/`. The app-layer root Foundry config points there, and the contracts subproject also resolves the same sibling dependency.
+The checkout does not include the external `forge-std` dependency expected by the Foundry
+configuration. Solidity tests require an explicitly provisioned, reviewed dependency and must not
+be treated as release evidence without its source identity.
 
 ## Proof and build outputs
 

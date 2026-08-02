@@ -22,13 +22,13 @@ finality and bridge conservation before crediting an inherited improvement.
 
 ## Preflight
 
-1. Confirm the release zip packages `blind-ledger-app-layer/`, `ops/`, and
-   `third_party/` together, and does not include generated `out/` artifacts or
-   nested stale copies of `Blind Ledger Neer Version.zip`.
-2. From `blind-ledger-app-layer`, run `python -m pytest -q`.
-3. From `blind-ledger-app-layer`, run
+1. Confirm the release ZIP packages the repository-root paths `app/`, `contracts/`, `experiments/`,
+   `ops/`, `tests/`, and `tools/`, and does not include generated `out/` artifacts, nested source
+   roots, or stale archive copies.
+2. From the repository root, run `py -3.14 -B -m pytest -q`.
+3. From the repository root, run
    `cargo test --manifest-path rules-engine-rust/Cargo.toml --lib --tests`.
-4. From `blind-ledger-app-layer/zk-cairo-sharp`, run `scarb build` and, where
+4. From `zk-cairo-sharp/`, run `scarb build` and, where
    the prover is available, `scarb prove` plus `scarb verify` for the pinned
    witness path.
 5. Confirm no filled production secrets are present in the repo.

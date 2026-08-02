@@ -370,7 +370,7 @@ def measure_all_reference_components(
     *,
     repetitions: int = MIN_REPETITIONS,
 ) -> tuple[CandidateMeasurement, ...]:
-    """Run the exact repeated component boundary for all four backends/profiles."""
+    """Run the exact repeated component boundary for all five screened backends/profiles."""
 
     _synthetic()
     result: list[CandidateMeasurement] = []

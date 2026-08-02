@@ -311,8 +311,8 @@ activation_allowed=False
 ```
 
 It remains blocked by the unsealed/unselected Gate 2E state, deferred H4 binding, incomplete
-simulator/leakage/strict-PQ evidence, missing canonical ops, absent
-external monitoring, absent source readback, and no complete-proof campaign. The preflight suite
+simulator/leakage/strict-PQ evidence, absent external monitoring, absent source readback, and no
+complete-proof campaign. The preflight suite
 passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed. The recorded disk reserve
 is 15,000 ppm (1.5%), requiring 7,310,026,937 free bytes; the immutable 5,000,000,000-byte
 RSS/scratch and zero-swap gates remain unchanged.

@@ -9,16 +9,16 @@
   "public_input_schema": "ops/native_stark_public_inputs_v1.json",
   "source_hashes": [
     {
-      "path": "blind-ledger-app-layer/contracts/src/stark/INativeStarkVerifier.sol",
+      "path": "contracts/src/stark/INativeStarkVerifier.sol",
       "sha256": "f7cbd15fffcbc5c7ed6f78d6d7cbad40b0428a7b361726048fbffe37ec6d33f1"
     },
     {
-      "path": "blind-ledger-app-layer/contracts/src/stark/StarkBatchSettlement.sol",
+      "path": "contracts/src/stark/StarkBatchSettlement.sol",
       "sha256": "cdb238d0b9b7798a02d1f3eb669f249cd104e48a55f72a049979c8a5353ed2d2"
     },
     {
       "path": "ops/native_stark_public_inputs_v1.json",
-      "sha256": "6b3cff83c5f1ba5b6dbf75d1a153c4857c1c8086b26149ad8badff4b78a1b465"
+      "sha256": "fd75b6d63fb93f4d0d4388ff9b4157e317213db9eec23819760917295b8cb6a2"
     }
   ]
 }

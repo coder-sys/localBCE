@@ -35,7 +35,7 @@ PROVIDER_STATIC_ROOT = APP_ROOT / "provider_portal"
 SHARED_STATIC_ROOT = APP_ROOT / "portal_shared"
 PROVIDER_PACKET_STORAGE_ROOT = APP_ROOT / "cache" / "provider_packets"
 SAMPLE_CLAIM_PATH = APP_ROOT / "sample_claim_input.json"
-OPS_ROOT = APP_ROOT.parent / "ops"
+OPS_ROOT = APP_ROOT / "ops"
 PRODUCTION_ENVS = {"prod", "production"}
 LOCAL_PORTAL_ENVS = {"dev", "development", "local", "test"}
 PORTAL_ADMIN_TOKEN_ENV = "BL_ADMIN_OPERATOR_PORTAL_TOKEN"
@@ -638,7 +638,7 @@ def _readiness_payload() -> dict[str, Any]:
     launch_blockers = load_json(OPS_ROOT / "launch_blockers.json")
     launch_report = validate_launch_blockers(launch_blockers)
     verifier_pin = load_json(OPS_ROOT / "verifier_artifact_pin.example.json")
-    verifier_report = validate_verifier_pin_manifest(verifier_pin, repo_root=APP_ROOT.parent)
+    verifier_report = validate_verifier_pin_manifest(verifier_pin, repo_root=APP_ROOT)
     open_blockers = [
         {
             "id": str(item.get("id", "")),
