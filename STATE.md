@@ -5193,4 +5193,80 @@ commit=6a2a7ec124fca97a4b6dfbeb1125e71e737944e6
 tree=30e9bdfc4901f30e8a9636a1c1796f3fac3958d1
 git status --short
 (empty)
+
+## 2026-08-02 Gate 2E state-bus/candidate archive readback - VERIFIED, NONACTIVATING
+
+The deterministic archive source was the clean implementation commit
+`969b03ba579487cc8ab5f708e4d9509dc32a34a0`, tree
+`e92e4b8b911cabd8fec6071fa91fb81b61bd3708`. The staged privacy gate selected 770 of 787 tracked
+files and excluded 17 without weakening the gate:
+
+```text
+tracked_paths=787
+privacy_safe_paths=770
+privacy_excluded_paths=17
+exclude_reason_count=2 reason=release JSON failed the structural privacy gate
+exclude_reason_count=5 reason=release path has a forbidden generated or archive suffix
+exclude_reason_count=10 reason=release payload failed the structural privacy gate
+```
+
+Excluded paths were `app/operational_readiness.py`,
+`docs/security-freeze/BL-PQ512-v1/hardening.json`, the five
+`portal_shared/fonts/*.woff2` files, `sample_claim_input.json`,
+`schemas/bl_pq512_witness_v0.schema.json`,
+`tests/attacks/test_proving_evidence_policy_attacks.py`,
+`tests/test_build_release_archive.py`, `tests/test_measure_proving.py`,
+`tests/test_privacy_artifact_scan.py`, `tools/measure_proving.py`,
+`tools/privacy_artifact_scan.py`, `STATE.md`, and `WAVE2_HANDOFF_2026-07-26.md`. These are
+recorded exclusions from the unchanged structural/privacy gate, not source edits.
+
+The first staging attempt failed before archive validation because PowerShell text-coerced the
+binary tar pipeline:
+
+```text
+staged_tracked_files=2
+tar.exe: Damaged tar archive (bad header checksum)
+```
+
+The failed stage contained 2 files and 25,438 bytes and was removed exactly. Re-running with
+`git archive --format=tar --output=<tar>` preserved the bytes and staged all 787 tracked files.
+The first builder attempt then failed closed on generated manifest order:
+
+```text
+release_status=blocked reason=release file entries must be strictly path-sorted
+```
+
+The generated manifest was sorted by its exact POSIX `path` field and rebuilt. No output ZIP was
+created by either failed attempt.
+
+Final builder receipt:
+
+```text
+{"archive_bytes":10813201,"archive_sha256":"d76cb8bc0f42e51a14d048b2ad19f473ae7966d282473dc5aa44f4de36a2f9b4","builder_version":"blind-ledger-release-archive-v1","entry_count":771,"manifest_sha256":"56d28508042aabecb254bae1b7b8ae0425deaf50ddf470e5b0862e1961976aeb","payload_bytes":10500773,"payload_file_count":770,"receipt_version":1}
+```
+
+The ZIP is outside the checkout at
+`C:\Users\neers\Documents\Codex\2026-08-01\files-mentioned-by-the-user-continue\outputs\blind-ledger-wave2-state-bus-pq-candidate-2026-08-02.zip`.
+
+Independent readback was:
+
+```text
+zip_entry_count=771
+zip_crc_result=None
+first_entry=Blind-Ledger-Release/RELEASE_FILE_MANIFEST.json
+last_entry=Blind-Ledger-Release/zk-cairo-sharp/src/lib.cairo
+manifest_sha256=56d28508042aabecb254bae1b7b8ae0425deaf50ddf470e5b0862e1961976aeb
+manifest_payload_file_count=770
+manifest_payload_bytes=10500773
+manifest_entries_match=True
+archive_bytes=10813201
+archive_sha256=d76cb8bc0f42e51a14d048b2ad19f473ae7966d282473dc5aa44f4de36a2f9b4
+```
+
+`py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_build_release_archive.py` passed
+`18 passed, 54 subtests passed in 1.01s`. The exact generated tar and staging paths were then
+removed: 22,411,909 bytes total, with both paths verified missing. The final source checkout was
+not changed by archive creation; no remote push was performed. The archive is a nonactivating
+source/test/docs artifact only: `proofSuiteId=null`, activation=false, no PHI/payments, and no
+production CUDA.
 ```
