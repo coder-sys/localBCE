@@ -98,12 +98,15 @@ POLICY_UPPER_SENTINEL_KEY = (1 << 128) - 1
 POLICY_MAX_CENTS = MAX_AMOUNT_CENTS_EXCLUSIVE
 MAX_CLAIMS_PER_SUBMISSION = 1024
 POLICY_ARTIFACTS = (
-    "../ops/policy_spec_v1.yaml",
-    "rarc_mapping.tsv",
-    "rules-engine-rust/src/lib.rs",
-    "rules-engine-rust/src/main.rs",
-    "app/rules_engine_fallback.py",
-    "app/rules_engine_adapter.py",
+    # The first element is the immutable v1 commitment label, not a path.
+    # Retaining it prevents a packaging-layout migration from changing every
+    # existing ruleset identity; bytes resolve only from the second element.
+    ("../ops/policy_spec_v1.yaml", "ops/policy_spec_v1.yaml"),
+    ("rarc_mapping.tsv", "rarc_mapping.tsv"),
+    ("rules-engine-rust/src/lib.rs", "rules-engine-rust/src/lib.rs"),
+    ("rules-engine-rust/src/main.rs", "rules-engine-rust/src/main.rs"),
+    ("app/rules_engine_fallback.py", "app/rules_engine_fallback.py"),
+    ("app/rules_engine_adapter.py", "app/rules_engine_adapter.py"),
 )
 
 
@@ -394,7 +397,10 @@ def ruleset_policy_record(ruleset_version: str, policy_content: str | None = Non
     if policy_content is None:
         return ruleset_policy_digest_hex(
             ruleset_version,
-            artifacts={artifact: _file_sha256(ROOT / artifact) for artifact in POLICY_ARTIFACTS},
+            artifacts={
+                label: _file_sha256(ROOT / path)
+                for label, path in POLICY_ARTIFACTS
+            },
         )
     return ruleset_policy_digest_hex(ruleset_version, policy_content=policy_content)
 

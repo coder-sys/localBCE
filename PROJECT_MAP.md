@@ -41,8 +41,7 @@ recovery evidence and does not define the current proof architecture.
 | `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` | Mandatory Wave 2 gate for persistent sparse memory, transparent dictionaries, touched-projection RAM, compact memory consistency, and native-hiding PQ commitment selection against the existing SHA3-512 control. | Trust-critical prospective architecture. It selects no primitive by documentation and requires exact theorem, migration, independent-verifier, and laptop evidence. |
 | `CONTINUATION_MANDATE.md` | Mandatory post-compaction persistence, product-ideology, recovery, download, evidence, and legitimate-hard-stop instructions. | Read immediately after `AGENTS.md`; it never authorizes weakening a gate or bypassing higher-priority instructions. |
 | `docs/REJECTED_ARCHITECTURES.md` | Non-executable ledger for removed or dominated proof backends, layouts, formats, and optimizations. | Preserve exact identities and rejection reasons; never treat it as a fallback catalog. |
-| `ops/` | App-layer compatibility mirror of the sibling `../ops` policy/verifier artifacts. | High for deployment integrity. Keep mirrored. |
-| `../ops/` | Canonical operational artifacts used by code paths that resolve from the app layer to a sibling ops directory. | High for deployment integrity. |
+| `ops/` | Sole commit-bound policy/verifier authority; exact file set, lengths, and SHA3-512 identities are frozen by `ops_authority.py`. | High for deployment integrity. No mirror or fallback path. |
 | `../third_party/forge-std/` | Vendored Forge standard library. | Low unless changing Solidity test toolchain. |
 | `docs/` | Architecture and operating docs. | Low to medium. Keep aligned with code. |
 

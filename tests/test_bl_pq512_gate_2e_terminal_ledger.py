@@ -26,6 +26,7 @@ from experiments.bl_pq512_crypto_foundation.gate_2e_selection import (
 )
 from experiments.bl_pq512_crypto_foundation.gate_2e_terminal_ledger import (
     BLOCKED,
+    CLOSED,
     LEDGER_STATUS,
     OBLIGATION_IDS,
     OPEN,
@@ -166,7 +167,7 @@ def _composition(authority_material):
     return batch, result, opening, adapters, composition, before, after
 
 
-def _decision_and_handoff():
+def _decision_and_handoff(*, canonical_ops_available: bool = True):
     measurements = []
     for profile_id in PROFILE_CLAIM_SLOTS:
         for backend_id in CANDIDATE_IDS:
@@ -192,7 +193,7 @@ def _decision_and_handoff():
         tree_id="0c34de0fe9122f9716dc86e850aa4515ffec7da9",
         git_clean=True,
         protected_paths_clean=True,
-        canonical_ops_available=False,
+        canonical_ops_available=canonical_ops_available,
     )
     return decision, handoff
 
@@ -216,7 +217,7 @@ def context(authority_material):
         handoff,
         True,
         True,
-        False,
+        True,
     )
 
 
@@ -231,11 +232,14 @@ def test_terminal_ledger_replays_reference_boundary_and_remains_blocked(context)
     assert ledger.records[0].status == REFERENCE_ONLY
     assert ledger.records[1].status == OPEN
     assert ledger.records[7].status == BLOCKED
-    assert ledger.records[9].status == BLOCKED
     assert "no_backend_admitted" in ledger.blockers
     assert "complete_simulator_missing" in ledger.blockers
     assert "complete_leakage_scan_missing" in ledger.blockers
-    assert "canonical_ops_missing" in ledger.blockers
+    assert ledger.records[9].status == CLOSED
+    assert not {
+        "canonical_ops_missing",
+        "canonical_ops_recursive_identity_unverified",
+    } & set(ledger.blockers)
     independently_verify_terminal_ledger(ledger, context)
 
 

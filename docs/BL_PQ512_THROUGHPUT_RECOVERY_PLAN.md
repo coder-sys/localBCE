@@ -131,7 +131,7 @@ fastest fully compliant complete candidate. A paper number or microbenchmark can
 Preflight:
 
 - sealed clean Gate 2E commit and locked/offline build;
-- canonical `../ops` restored from trusted material and recursively identical to `ops/`;
+- tracked `ops/` exact file-set, length, SHA3-512, and symlink authority readback;
 - execution manifest recomputed by coordinator and external monitor;
 - exclusive host with no competing build/proof/cache scan;
 - clean Windows driver-reset boundary and no later Event 153 or Display Event 4101;
@@ -241,8 +241,8 @@ unauthorized; their focused/attack result is 6 passed in 34.04 seconds. The term
 reference is now implemented and independently rechecked: it has 11 ordered obligation records,
 focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger result 73 passed in
 91.58 seconds, and status `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. Its blockers remain no
-backend admission, missing complete simulator/leakage evidence, deferred H4 binding, missing
-canonical `../ops`, and unset `proofSuiteId`. This is reference evidence only; do not start H5 or
+backend admission, missing complete simulator/leakage evidence, deferred H4 binding, and unset
+`proofSuiteId`. The former sibling-ops blocker is closed. This is reference evidence only; do not start H5 or
 another complete-proof backend bake-off until a reviewed state plane is selected and atomically
 bound.
 
@@ -250,8 +250,8 @@ bound.
 
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now provides a read-only,
 fail-closed preflight for the next campaign. It independently replays the 11-record terminal
-ledger, validates the recorded reference hardware, checks the real canonical `../ops` sibling
-against the app-layer mirror, and freezes exactly one uncounted warm-up plus ten unique measured
+ledger, validates the recorded reference hardware, checks the one tracked commit-bound `ops/`
+authority, and freezes exactly one uncounted warm-up plus ten unique measured
 launches for each profile: 22 fresh launches total. It never starts CUDA, accepts cached proofs or
 witnesses, substitutes a failed run, assigns `proofSuiteId`, or authorizes activation.
 
@@ -259,8 +259,8 @@ Current preflight evidence:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
-canonical_ops_status=MISSING_CANONICAL_SIBLING
+preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
+canonical_ops_status=VERIFIED_TRACKED_SHA3_512_AUTHORITY
 reference_hardware_status=READY
 fresh_launch_count=22
 proofSuiteId=None
@@ -281,7 +281,7 @@ zero-swap gates.
 qualification ledger. It independently replays H5 and Gate 2E, validates the unselected suite
 registry, and records all twelve H6 obligations without assigning timing or qualification credit.
 The current record is `BLOCKED_H6_PREFLIGHT`: five obligations are blocked, five are open, and two
-are reference-only, with 24 distinct blockers. No proof, witness, retry, state admission,
+are reference-only, with 22 distinct blockers. No proof, witness, retry, state admission,
 `proofSuiteId`, or activation path is accepted by this boundary.
 
 Focused H6 preflight/attack verification passed `6 passed in 30.02s`; the containing S1-S7,

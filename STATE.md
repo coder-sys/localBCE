@@ -4631,3 +4631,44 @@ Review/screening readback with the explicit synthetic test environment:
 review_digest_sha3_512=24cdd3790d6aeab257491a3c089a267ebc21fcb9ce5968617df469442e36fabd10957097ed84421189919f74d27a8abb7c0a4f11c613138e4142fe1717931b63
 transparent_screen_reasons=strict_pq_assumption_not_reviewed,native_hiding_theorem_unreviewed,authenticated_public_coin_composition_unreviewed,implementation_not_complete_reviewed_reference,complete_composition_missing,hash_pad_security_review_rejected
 ```
+
+## 2026-08-02 tracked operational authority migration - VERIFIED, OPS BLOCKER CLOSED
+
+The old two-copy operational layout is retired. The owner's checkout-only source-of-truth rule is
+now implemented directly: tracked `ops/` is the sole policy/verifier authority, and the one
+policy-hashing call site resolves `ops/policy_spec_v1.yaml`. No policy bytes, verifier pins, or
+operational artifacts changed, and no sibling directory or outward copy was created.
+
+`ops_authority.py` independently requires the exact 14 regular files, exact lengths, and exact
+SHA3-512 identities. Missing, extra, modified, or symlinked material rejects. The terminal Gate 2E
+ledger performs that readback, closes only `CANONICAL_OPS_IDENTITY`, and removes only the ops
+blocker. Its remaining blockers are exactly:
+
+```text
+complete_leakage_scan_missing
+complete_simulator_missing
+h4_atomic_binding_deferred
+no_backend_admitted
+proof_suite_unselected
+```
+
+Current identities:
+
+```text
+terminal_ledger_digest_sha3_512=ce3bda2eb79b554cc56fc9631b40792068fd953d18fc945ea9a567a5b3caa0f8a57a2c9ab785361f4658903080aa02cce99f7a96c5291507d37af0192bb96d28
+h5_preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
+canonical_ops_status=VERIFIED_TRACKED_SHA3_512_AUTHORITY
+```
+
+The H5 campaign remains unlaunched because Gate 2E/state/PQ/simulator/leakage/H4 prerequisites are
+still open. `proofSuiteId=None`, activation is false, and no real PHI, payments, or production CUDA
+is authorized.
+
+The ruleset commitment preserves the historical v1 artifact label while resolving bytes only from
+tracked `ops/`. This prevents a packaging-only path migration from changing retry-stable ruleset
+and downstream leaf identities. The containing policy/Gate 2E/H5/H6 suite passed:
+
+```text
+py -3.14 -m pytest -q tests/test_security_freeze_spec.py tests/test_batch_layer.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+55 passed, 20 expected local-dev fallback warnings in 160.55s (0:02:40)
+```

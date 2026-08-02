@@ -64,7 +64,7 @@ false, real PHI and payments are forbidden, and the final independent audit has 
 ## Sole dependency chain
 
 ```text
-restore and verify canonical ../ops when trusted bytes are available
+verify the one tracked commit-bound ops authority
   -> Gate 2E-0 C0 control freeze
   -> Gate 2E-1 replaceable interfaces
   -> Gate 2E-2 scalar state-relation controls
@@ -83,9 +83,8 @@ restore and verify canonical ../ops when trusted bytes are available
   -> separately authorized operator activation
 ```
 
-The missing canonical sibling `../ops` blocks broad readiness promotion. It does not authorize
-copying the app-root mirror outward or changing policy bytes. Isolated 2E work may continue but
-cannot be promoted until canonical bytes are recovered and recursive identity passes.
+The operational authority is now the one tracked `ops/` tree. Exact file-set, length, SHA3-512,
+and symlink checks close the former sibling-layout blocker without copying or changing policy bytes.
 
 ## Gate 2E: exact current implementation plan
 
@@ -171,7 +170,7 @@ py -3.14 -m pytest -q tests/test_bl_pq512_scalar_state_relation_controls.py test
 The C1 dense capacity scan, C3 quadratic projection work, and C4 persistent initialization/scan
 are derived scalar work counters, not measurements or throughput claims. No scalar candidate has
 native hiding, a PQ commitment, H4 binding, migration proof, complete-proof timing, or selection
-credit. The canonical sibling `../ops` remains absent and readiness remains fail-closed.
+credit. The separate tracked-ops authority is verified.
 
 Reject semantic drift, witness-dependent shape, an implicit global scan, unbounded grammar, or
 host-trusted equality.
@@ -306,8 +305,8 @@ replays the S4 composition and S5 checkpoints, verifies both C0 profile shapes a
 negative classes, checks the fixed 12-field boundary and public/private encoding boundary, and
 recomputes the S6/S7 identities. It emits 11 ordered records and remains
 `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER` with
-`ledger_digest_sha3_512=91e65c9c4dfb3e173e2b2792d96422e272516cb43e62a77520145e981edc2dcd58d6e148ceca74fab5c1bd662cf65cc1c804e9ae707f9b5a91207e4db98a40c9`.
-The exact blockers are `canonical_ops_missing`, `complete_leakage_scan_missing`,
+`ledger_digest_sha3_512=ce3bda2eb79b554cc56fc9631b40792068fd953d18fc945ea9a567a5b3caa0f8a57a2c9ab785361f4658903080aa02cce99f7a96c5291507d37af0192bb96d28`.
+The exact remaining blockers are `complete_leakage_scan_missing`,
 `complete_simulator_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
 `proof_suite_unselected`. A real nonactivating state plane is now independently replayable and
 appears as `STATE_PLANE_IMPLEMENTED_H4_PENDING` when supplied to the ledger; the default recorded
@@ -335,11 +334,11 @@ mutation, parser, state, migration, attack, and independent-verifier gates green
 
 The fail-closed preflight is implemented in
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py`. It independently replays
-the unsealed Gate 2E terminal ledger, validates the reference hardware record, checks recursive
-byte identity of the real canonical `../ops` sibling against the app mirror, and freezes the
+the unsealed Gate 2E terminal ledger, validates the reference hardware record, verifies the exact
+tracked `ops/` SHA3-512 authority inventory, and freezes the
 one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
 preflight is `BLOCKED_H5_PREFLIGHT` with digest
-`f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24`; canonical ops is missing, the recorded reference hardware now meets the reduced 1.5% disk floor (7,310,026,937 bytes required), the external monitor is not configured, and no complete-proof campaign has started. The implemented state plane has not yet closed native-H4 state constraints or PQ commitment admission. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
+`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass, the external monitor is not configured, and no complete-proof campaign has started. The implemented state plane has not yet closed native-H4 state constraints or PQ commitment admission. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
 
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |

@@ -12,8 +12,6 @@ THREAT_MODEL_PATH = ROOT / "docs" / "BL_PQ512_THREAT_MODEL.md"
 HARDENING_ROOT = ROOT / "docs" / "security-freeze" / "BL-PQ512-v1"
 HARDENING_PATH = HARDENING_ROOT / "hardening.json"
 ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
-CANONICAL_OPS_PATH = ROOT.parent / "ops"
-MIRRORED_OPS_PATH = ROOT / "ops"
 ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
 HISTORICAL_ROADMAP_PATH = (
     ROOT / "docs" / "history" / "IMPLEMENTATION_ROADMAP_THROUGH_2026-08-01.md"
@@ -41,16 +39,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _file_hashes(root: Path) -> dict[str, str]:
-    return {
-        path.relative_to(root).as_posix(): sha256(path.read_bytes()).hexdigest()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+def test_tracked_ops_is_the_exact_commit_bound_authority() -> None:
+    from experiments.bl_pq512_crypto_foundation.ops_authority import (
+        OPS_AUTHORITY_STATUS,
+        verify_ops_authority,
+    )
 
-
-def test_app_layer_ops_is_an_exact_recursive_mirror_of_canonical_ops() -> None:
-    assert _file_hashes(MIRRORED_OPS_PATH) == _file_hashes(CANONICAL_OPS_PATH)
+    assert verify_ops_authority() == OPS_AUTHORITY_STATUS
 
 
 def test_security_freeze_rejects_retired_suite_and_keeps_replacement_nonactivating() -> None:

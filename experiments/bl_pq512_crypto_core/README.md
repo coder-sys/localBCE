@@ -153,10 +153,10 @@ reproducibility, resource, and identity obligations.
 
 The read-only H5 preflight now freezes that campaign boundary and returns
 `BLOCKED_H5_PREFLIGHT`: 22 fresh launches are required, but the current terminal ledger is
-unsealed, no state plane is selected, canonical `../ops` is missing, and no complete-proof
+unsealed, no state plane is selected, and no complete-proof
 campaign or external monitor has run. The recorded reference hardware now meets the reduced
 1.5% operational disk floor (7,310,026,937 bytes required); its refreshed preflight digest is
-`f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24`. This does not assign
+`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`. This does not assign
 `proofSuiteId`, authorize CUDA, or grant qualification credit.
 
 `proofSuiteId=null`, activation is false, and real PHI/payments remain forbidden.

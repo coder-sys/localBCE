@@ -70,7 +70,7 @@ records 11 ordered obligation records for atomic composition, the semantic/PCS/p
 simulator, fixed-shape leakage, state/proof receipt, migration, strict-PQ selection, canonical
 ops, and independent verification. The ledger is reference-only and unsealed; its current blockers
 are `no_backend_admitted`, `complete_simulator_missing`, `complete_leakage_scan_missing`,
-`h4_atomic_binding_deferred`, `canonical_ops_missing`, and `proof_suite_unselected`.
+`h4_atomic_binding_deferred`, and `proof_suite_unselected`. The ops obligation is closed.
 
 The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
@@ -306,7 +306,7 @@ proof with fresh randomness; no proof fragment, challenge tail, mask, or partial
 | Current GPU workers | `experiments/bl_pq512_crypto_core/cuda/cuda_hash_bus_b16_gkr_worker.py`, `cuda_fp16_zk_rs_interleaved_k128_prototype.py`, and their manifest-bound local verifier modules | Untrusted acceleration only |
 | Historical semantic reference | `zk-cairo-sharp/` | Protected differential source; not the selected proof backend |
 | Settlement shell | `contracts/` | Protected mock/test settlement boundary; no production `INativeStarkVerifier` exists |
-| Operations | `ops/` plus required canonical sibling `../ops/` | Policy and verifier artifacts; the sibling canonical tree is currently absent in this workspace |
+| Operations | tracked `ops/` | Sole commit-bound policy/verifier authority with exact file-set, length, and SHA3-512 verification |
 
 ### Proof-core ownership map
 
@@ -346,10 +346,9 @@ helpers; name cleanup must never change proof bytes or silently drop an authenti
 - Gate 2E-2/S2 scalar positive/negative parity for both frozen profiles, including the independent
   verifier and all seven C0 negative classes.
 
-The current Python-wide suite cannot receive a clean pass while the canonical sibling `../ops/` is
-absent. Do not copy `ops/` outward or skip mirror checks. Recover the authoritative sibling from
-trusted material, prove recursive byte identity, and then rerun the complete ordinary and attack
-lanes.
+The former sibling-ops collection stop is closed. Broad suites now resolve the single tracked
+`ops/` authority and fail on any file-set, length, digest, or symlink mismatch; no outward copy or
+fallback tree is permitted.
 
 ## Current execution order
 
@@ -370,11 +369,11 @@ proof grammar, verifier, and receipt.
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now records that boundary
 without launching a prover. It independently replays the terminal ledger, freezes one uncounted
 warm-up plus ten unique measured launches for each K128/K512 profile (22 fresh launches total),
-checks the actual canonical `../ops` tree and reference-hardware readiness, and keeps cached
+checks the tracked commit-bound `ops/` authority and reference-hardware readiness, and keeps cached
 proofs, cached witnesses, automatic retry, activation, and `proofSuiteId` disabled. The current
 record is `BLOCKED_H5_PREFLIGHT` with preflight digest
-`f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24`; it records
-`MISSING_CANONICAL_SIBLING`, `READY` reference hardware, no campaign, no external monitor, and
+`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; it records
+`VERIFIED_TRACKED_SHA3_512_AUTHORITY`, `READY` reference hardware, no campaign, no external monitor, and
 the unresolved Gate 2E/H4/simulator/leakage/PQ blockers. The recorded 487,335,129,088-byte disk
 now uses a literal 10x lower operational reserve: 15,000 ppm (1.5%), requiring 7,310,026,937
 free bytes; the immutable 5,000,000,000-byte RSS/scratch, zero-swap, privacy, proof, and
@@ -409,7 +408,7 @@ superseded historical values remain historical evidence.
 - H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.
 - H6 has not frozen `proofSuiteId`, final module identities, reproducible artifacts, custody, or the
   production parser/verifier.
-- The canonical sibling `../ops/` is missing, so broad readiness and policy-bound tests fail closed.
+- The tracked ops authority passes exact SHA3-512 inventory readback; this former blocker is closed.
 - No production `INativeStarkVerifier` implementation exists; the Solidity test verifier is a mock.
 - The containing based rollup, bridge, forced inclusion, data availability, exits, finality, and
   deployment rehearsal are not implemented.

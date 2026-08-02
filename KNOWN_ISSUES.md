@@ -10,7 +10,7 @@ As of 2026-07-31. Historical measurements are retained only where the row labels
 | Proof artifacts | Not packaged. Regenerate locally when needed. |
 | External CUDA prover | A local WSL CUDA proof run was recorded, but the custom external prover build is not included in this archive. |
 | Production verifier acceptance | Do not claim production verification unless a verifier command is run in the current environment and succeeds. |
-| `ops` layout | The app-root `ops/` mirror is present, but the required canonical sibling `../ops/` is absent. Readiness and attack gates correctly fail closed until authoritative recovery material restores it and recursive byte identity is proven. |
+| `ops` authority | Closed on 2026-08-02: tracked `ops/` is the sole commit-bound authority. Its exact 14-file set, lengths, and SHA3-512 identities are independently checked; sibling copies and fallback paths are forbidden. |
 | Python rules-engine fallback | Local fallback is for tests/benchmarks only and must not be used as production adjudication. |
 | Oracle feeds | Development/test attestation paths exist; production oracle feed operation still needs deployment hardening. |
 | Protected paths | Cryptographic circuit, settlement contracts, and core batch/public-input files are protected from casual edits. |
@@ -45,7 +45,7 @@ As of 2026-07-31. Historical measurements are retained only where the row labels
 | Later repeat-scan status | A later repeat deep review was stopped before fourth-pass reconciliation, validation, and final reporting. Successful reviewer process exits are not validated findings. Do not claim four-pass saturation or treat its unmerged candidates as vulnerabilities. |
 | Python supply-chain closure | R30 closes the supported CPython 3.14.4 Windows x86-64 and Linux x86-64/glibc >=2.28 boundary: four exact transitive locks, 52 dual-hashed platform artifacts, offline hash-enforced installation, exact graph readback, and a reconciled 26-package SPDX SBOM. Other platforms fail closed and require reviewed lock rotation. Wider S11/O12 toolchain, native, container, and release reproducibility remains open. |
 | Local Git provenance | Git 2.54.0 is active in this authoritative workspace with no remote. The current Git history starts at the recovered source checkpoint; older run artifacts retain their own hashes and are not retroactively authenticated by this repository. |
-| Qualification inventory | The current Rust core passes 264 optimized library tests plus every remaining binary/doc-test group, with strict Clippy clean. Python collection is presently fail-closed on the absent canonical `../ops` sibling; focused cleanup/security gates pass as recorded in `STATE.md`. Historical R30/R34 counts are evidence only and are not current collection totals. |
+| Qualification inventory | The current Rust core passes 264 optimized library tests plus every remaining binary/doc-test group, with strict Clippy clean. The former missing-sibling ops collection stop is closed by the tracked authority migration; current containing results are recorded in `STATE.md`. Historical R30/R34 counts are evidence only and are not current collection totals. |
 | Final independent audit | Not started. It is one uncounted gate over AIR soundness, witness hiding/PQ, wide-state cryptography, implementation/contracts/rollup/supply chain, and privacy/side-channel/operations. It begins only after all 93 internal packages close. |
 
 If a check fails because an artifact is missing, report the missing artifact and path. Do not weaken the check.

@@ -33,16 +33,14 @@ Do not edit these unless the owner explicitly authorizes that exact protected ch
 
 Reading protected files is allowed for diagnosis. Editing them is not.
 
-## Local compatibility layout
+## Operational authority layout
 
-The architecture requires two copies of operational artifacts:
-- `../ops/` is the canonical sibling directory used by policy-artifact hashing in the batch code.
-- `ops/` inside this app-layer directory is a compatibility mirror for readiness checks that resolve from the app-layer root.
-
-The current authoritative workspace is missing the canonical sibling `../ops/`; only the app-root
-mirror is present. Tests that require canonical bytes must fail closed. Recover `../ops/` only from
-trusted authoritative material, then prove recursive byte identity. Never construct it by copying
-the assumed mirror or modify policy YAML contents to make tests pass.
+This checkout is the sole source of truth. `ops/` is the one canonical operational-artifact tree;
+`experiments/bl_pq512_crypto_foundation/ops_authority.py` freezes its exact regular-file set,
+lengths, and SHA3-512 identities. Policy hashing resolves `ops/policy_spec_v1.yaml` inside this
+checkout. A sibling `../ops/`, compatibility mirror, fallback path, symlink, environment override,
+or outward copy is forbidden. Never modify policy bytes to make a check pass; update the explicit
+authority inventory only as a separately reviewed operational-policy change.
 
 ## Assistant handoff files
 

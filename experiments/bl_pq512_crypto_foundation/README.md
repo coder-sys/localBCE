@@ -83,8 +83,8 @@ testable without pretending that a proof suite exists.
   preserves the unresolved simulator, leakage, strict-PQ, canonical-ops, and H4-binding blockers.
 - `h5_qualification_preflight.py` freezes one uncounted warm-up plus ten unique measured launches
   for each K128/K512 profile (22 fresh launches total) without starting CUDA. It remains blocked
-  while Gate 2E is unsealed, the canonical sibling `../ops` is missing, and reference hardware is
-  not ready.
+  while Gate 2E is unsealed. The tracked ops authority and reference-hardware disk floor now pass;
+  no campaign has started.
 - `h6_qualification_preflight.py` replays the blocked H5/2E context, validates the unselected
   candidate registry, and records all twelve H6 obligations with explicit evidence classes and
   blockers. It cannot close an obligation, assign `proofSuiteId`, or enable activation.

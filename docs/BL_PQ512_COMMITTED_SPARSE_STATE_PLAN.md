@@ -240,8 +240,7 @@ checkpoints, verifies both C0 profile shapes and all seven C0 negative classes, 
 identity as `STATE_PLANE_IMPLEMENTED_H4_PENDING`; the default preflight remains
 `STATE_PLANE_NOT_PROVIDED`. The ledger does not admit a relation or PQ commitment, close the
 complete simulator or leakage scan, establish state constraints inside H4, qualify H5, assign
-`proofSuiteId`, or authorize activation. The missing canonical `../ops` sibling remains a
-fail-closed blocker.
+`proofSuiteId`, or authorize activation. The separate tracked-ops authority is verified.
 
 The hash-pad review at `docs/BL_PQ512_HASH_PAD_COMMITMENT_SECURITY_REVIEW.md` is an explicit
 rejection record, not selection evidence. It credits only the exact one-time-pad condition for
@@ -260,8 +259,8 @@ inside the H4 AIR rather than only the current canonical-envelope seam.
 
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` is the current bounded
 H5 boundary while admission is absent. It independently replays the terminal ledger, validates
-the reference hardware record, verifies the real canonical `../ops` sibling rather than copying
-the app mirror, and freezes one uncounted warm-up plus ten unique measured launches for each
+the reference hardware record, verifies the one tracked commit-bound `ops/` authority, and freezes
+one uncounted warm-up plus ten unique measured launches for each
 profile. The total is exactly 22 fresh launches. Cached proofs, cached witnesses, automatic retry,
 partial-campaign substitution, CUDA launch, `proofSuiteId`, and activation remain forbidden.
 
@@ -269,8 +268,8 @@ The current record is:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
-canonical_ops_status=MISSING_CANONICAL_SIBLING
+preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
+canonical_ops_status=VERIFIED_TRACKED_SHA3_512_AUTHORITY
 reference_hardware_status=READY
 fresh_launch_count=22
 proofSuiteId=None
@@ -291,16 +290,16 @@ and terminal Gate 2E context and independently reads
 `docs/bl_pq512_suite_candidate_v1.json`. It requires the candidate registry to remain
 `CANDIDATE_UNQUALIFIED`, with eight null module identities, null `proofSuiteId`, and activation
 disabled. It emits exactly twelve H6 obligation records: five `BLOCKED`, five `OPEN`, and two
-`REFERENCE_ONLY`, with 24 distinct blockers. No record may be closed by this preflight.
+`REFERENCE_ONLY`, with 22 distinct blockers. No record may be closed by this preflight.
 
 Current raw record:
 
 ```text
 status=BLOCKED_H6_PREFLIGHT
-h5_preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
+h5_preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
 suite_registry_digest_sha3_512=307439093721aeaa9a70ef00d546f06af5f50b73781f9f19b8b02cca8c3d36ee1ef36e9981d49a59d10d8d7768fec079d40e05b6c008d7913c9caf4cc52cf974
 suite_registry_canonical_digest_sha3_512=d082aaec00392f6ae7c7c37a52b6b18ab0fccd5fb08654ec9e326d8c20dd355e13f02b240577823f18b06f50aa165d25f5479d2ba1067beb80dd20ab9d6724e0
-preflight_digest_sha3_512=87c914f7c007fbe6615d51f7a19e81c4adad894147704af40801475093b91d2d9a9a94e9c0f1604d31d0eb86ed937f42d104a49a12c947cfc72a8e3605e7d554
+preflight_digest_sha3_512=aaadf06e7416be5d20fb35b815fff3ccf419c1689e03dfb0a5ec62f0c2cedc89e0dd2856a11096f0225a9799fc61e25642656f679e9dd179126d8c6df66cae5c
 proofSuiteId=None
 activation_allowed=False
 ```

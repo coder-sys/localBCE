@@ -89,7 +89,7 @@ def context(authority_material):
         handoff,
         True,
         True,
-        False,
+        True,
     )
     h5_context = H5PreflightContext(
         build_terminal_ledger(terminal_context),

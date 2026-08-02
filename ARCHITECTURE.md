@@ -83,7 +83,7 @@ Run application, test, and measurement commands from `blind-ledger-app-layer/` u
 | Rules engine | `rules-engine-rust/` plus Python adapter/fallback | Policy adjudication. Local Python fallback is for tests/benchmarks only, not production adjudication. |
 | Claim-proof references | `zk-cairo-sharp/`, `experiments/fixed_shape_claim_air/`, `experiments/bl_pq512_crypto_core/` | Cairo is historical semantic evidence; the sealed M31 AIR is the semantic module; Wave 2 builds the shared-bus Boolean hash coprocessor, mandatory committed sparse-state/PQ-commitment bake-off, and atomic verifier. |
 | Solidity contracts | `contracts/` | Verifier and settlement-facing on-chain code. Protected from casual edits. |
-| Operations | `ops/` and `../ops/` | Policy spec, verifier pin manifest, deployment config, and readiness artifacts. |
+| Operations | `ops/` | Sole commit-bound policy spec, verifier pin manifest, deployment config, and readiness authority. |
 | Tests | `tests/` and `tests/attacks/` | Known-answer, readiness, integration, and attack-regression checks. |
 | Tools | `tools/` | Measurement and utility scripts. |
 | Integration ports | future I01-I08 modules | Provider-neutral government, oracle, KMS/HSM, governance, and payment contracts with local simulators and shared conformance tests. |
@@ -159,16 +159,10 @@ projections are not proof-throughput results.
 
 ## Operational artifact layout
 
-The required package layout has two `ops` locations:
-
-- `../ops/` is the canonical sibling required by code that hashes policy artifacts.
-- `ops/` inside this directory is the compatibility mirror for app-root tooling.
-
-The 2026-07-31 readback found 14 files in the compatibility mirror and no `../ops/` directory in
-this authoritative workspace. The trees therefore cannot currently be claimed byte-identical, and
-ops/readiness tests correctly fail closed with `FileNotFoundError` or mirror mismatch. Restore the
-exact canonical sibling from authoritative recovery material and verify recursive byte identity;
-do not synthesize it, edit policy YAML, or change verifier pins merely to hide the layout failure.
+Tracked `ops/` is the sole repository authority. Its exact 14-file regular-file inventory, lengths,
+and SHA3-512 identities are frozen in `ops_authority.py`; policy hashing uses the same tracked path.
+Sibling copies, mirrors, symlinks, and fallback resolution are rejected so one mutable copy cannot
+silently outrank another. Policy bytes and verifier pins remain trust-critical reviewed material.
 
 ## Proof artifacts
 

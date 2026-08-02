@@ -38,14 +38,14 @@ adapters and public Ethereum data remains non-PHI. Its INHERIT/L1-COMPAT/L2-PARI
 RESEARCH classes explain which benefits arrive through L1, which require direct L2 work, and when
 each change becomes actionable.
 
-This directory is the source root for day-to-day work. The archive root also contains sibling directories used by this source tree:
+This directory is the source root and sole operational source of truth. The archive root also contains one vendored sibling used by this source tree:
 
 | Sibling path | Purpose |
 | --- | --- |
-| `../ops/` | Canonical policy and verifier artifacts for code paths that resolve operational files outside the app root. |
 | `../third_party/forge-std/` | Vendored Forge standard library for Solidity tests. |
 
-`ops/` inside this directory is an intentional compatibility mirror of `../ops/`. Keep the two copies byte-identical when repackaging.
+Tracked `ops/` is the sole commit-bound policy and verifier authority. Its exact file set, lengths,
+and SHA3-512 identities are checked; do not create a sibling mirror or fallback copy.
 
 ## Start here
 

@@ -69,7 +69,7 @@ def context(authority_material):
     batch, result, opening, adapters, composition, before, after = _composition(
         authority_material
     )
-    decision, handoff = _decision_and_handoff()
+    decision, handoff = _decision_and_handoff(canonical_ops_available=True)
     terminal_context = TerminalLedgerContext(
         tuple(build_all_c0_control_fixtures()),
         composition,
@@ -83,7 +83,7 @@ def context(authority_material):
         handoff,
         True,
         True,
-        False,
+        True,
     )
     from experiments.bl_pq512_crypto_foundation.h5_qualification_preflight import (
         H5PreflightContext,

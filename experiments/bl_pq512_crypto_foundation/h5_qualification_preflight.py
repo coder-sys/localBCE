@@ -8,15 +8,15 @@ of treating the synthetic benchmark vector or the H4 one-run result as
 qualification evidence.
 
 The preflight independently replays the terminal Gate 2E context, validates
-the reference hardware record, and checks the real canonical ``../ops`` tree
-against the app-layer mirror.  It never creates or copies operational files,
+the reference hardware record, and checks the commit-bound canonical ``ops``
+tree in this checkout.  It never creates or copies operational files,
 launches CUDA, accepts cached proofs/witnesses, or assigns ``proofSuiteId``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hashlib import sha256, sha3_512
+from hashlib import sha3_512
 from pathlib import Path
 from typing import Any, Final, Mapping
 
@@ -34,19 +34,23 @@ from experiments.bl_pq512_crypto_foundation.gate_2e_terminal_ledger import (
     TerminalLedgerError,
     independently_verify_terminal_ledger,
 )
+from experiments.bl_pq512_crypto_foundation.ops_authority import (
+    CANONICAL_OPS_ROOT,
+    OPS_AUTHORITY_STATUS,
+    verify_ops_authority,
+)
 
 
 ROOT: Final[Path] = Path(__file__).resolve().parents[2]
-DEFAULT_CANONICAL_OPS_ROOT: Final[Path] = ROOT.parent / "ops"
-DEFAULT_MIRRORED_OPS_ROOT: Final[Path] = ROOT / "ops"
+DEFAULT_CANONICAL_OPS_ROOT: Final[Path] = CANONICAL_OPS_ROOT
 
 STATUS: Final[str] = "H5_QUALIFICATION_PREFLIGHT_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
 PREFLIGHT_BLOCKED: Final[str] = "BLOCKED_H5_PREFLIGHT"
 CAMPAIGN_NOT_STARTED: Final[str] = "NOT_STARTED_NO_COMPLETE_PROOF_CAMPAIGN"
 EXTERNAL_MONITOR_NOT_CONFIGURED: Final[str] = "NOT_CONFIGURED_EXTERNAL_PROCESS_RESOURCE_MONITOR"
-CANONICAL_OPS_VERIFIED: Final[str] = "VERIFIED_RECURSIVE_BYTE_IDENTITY"
-CANONICAL_OPS_MISSING: Final[str] = "MISSING_CANONICAL_SIBLING"
-CANONICAL_OPS_MISMATCH: Final[str] = "RECURSIVE_BYTE_IDENTITY_MISMATCH"
+CANONICAL_OPS_VERIFIED: Final[str] = OPS_AUTHORITY_STATUS
+CANONICAL_OPS_MISSING: Final[str] = "MISSING_TRACKED_OPS_AUTHORITY"
+CANONICAL_OPS_MISMATCH: Final[str] = "TRACKED_OPS_AUTHORITY_MISMATCH"
 REFERENCE_HARDWARE_READY: Final[str] = "READY"
 REFERENCE_HARDWARE_NOT_READY: Final[str] = "NOT_READY"
 
@@ -107,45 +111,19 @@ def _encode_strings(values: tuple[str, ...], label: str) -> bytes:
     return b"".join(encoded)
 
 
-def _file_hashes(root: Path) -> tuple[tuple[str, str], ...] | None:
-    """Return deterministic file identities, or ``None`` for an unsafe tree."""
-
-    if not root.is_dir() or root.is_symlink():
-        return None
-    files: list[tuple[str, str]] = []
-    try:
-        paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
-        for path in paths:
-            if path.is_symlink():
-                return None
-            if path.is_file():
-                files.append(
-                    (
-                        path.relative_to(root).as_posix(),
-                        sha256(path.read_bytes()).hexdigest(),
-                    )
-                )
-    except (OSError, ValueError) as exc:
-        raise H5PreflightError("h5_preflight_ops_read_failed") from exc
-    return tuple(files)
-
-
 def canonical_ops_identity_status(
     *,
     canonical_root: Path = DEFAULT_CANONICAL_OPS_ROOT,
-    mirrored_root: Path = DEFAULT_MIRRORED_OPS_ROOT,
 ) -> str:
-    """Check canonical sibling/mirror identity without creating either tree."""
+    """Check the one commit-bound ops authority without fallback paths."""
 
-    if not isinstance(canonical_root, Path) or not isinstance(mirrored_root, Path):
-        raise TypeError("h5_preflight_ops_paths_must_be_path")
-    canonical = _file_hashes(canonical_root)
-    if canonical is None:
+    if not isinstance(canonical_root, Path):
+        raise TypeError("h5_preflight_ops_path_must_be_path")
+    if not canonical_root.exists():
         return CANONICAL_OPS_MISSING
-    mirrored = _file_hashes(mirrored_root)
-    if mirrored is None or canonical != mirrored:
-        return CANONICAL_OPS_MISMATCH
-    if not any(name == "launch_blockers.json" for name, _ in canonical):
+    try:
+        verify_ops_authority(canonical_root)
+    except (OSError, ValueError):
         return CANONICAL_OPS_MISMATCH
     return CANONICAL_OPS_VERIFIED
 
@@ -158,7 +136,6 @@ class H5PreflightContext:
     terminal_context: TerminalLedgerContext
     hardware_config: Mapping[str, Any] | None = None
     canonical_ops_root: Path = DEFAULT_CANONICAL_OPS_ROOT
-    mirrored_ops_root: Path = DEFAULT_MIRRORED_OPS_ROOT
 
     def __post_init__(self) -> None:
         _synthetic()
@@ -168,8 +145,8 @@ class H5PreflightContext:
             raise H5PreflightError("h5_preflight_terminal_context_type_invalid")
         if self.hardware_config is not None and not isinstance(self.hardware_config, Mapping):
             raise H5PreflightError("h5_preflight_hardware_config_mapping_required")
-        if not isinstance(self.canonical_ops_root, Path) or not isinstance(self.mirrored_ops_root, Path):
-            raise H5PreflightError("h5_preflight_ops_paths_must_be_path")
+        if not isinstance(self.canonical_ops_root, Path):
+            raise H5PreflightError("h5_preflight_ops_path_must_be_path")
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,7 +304,6 @@ def build_h5_preflight(context: H5PreflightContext) -> H5Preflight:
         raise H5PreflightError("h5_preflight_terminal_activation_boundary_invalid")
     canonical_status = canonical_ops_identity_status(
         canonical_root=context.canonical_ops_root,
-        mirrored_root=context.mirrored_ops_root,
     )
     context_ops_available = canonical_status == CANONICAL_OPS_VERIFIED
     if context_ops_available != context.terminal_context.canonical_ops_available:

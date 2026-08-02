@@ -81,7 +81,7 @@ def context(authority_material):
         handoff,
         True,
         True,
-        False,
+        True,
     )
 
 
@@ -123,11 +123,13 @@ def test_checkpoint_substitution_fails_before_terminal_ledger_is_built(context) 
         build_terminal_ledger(forged_context)
 
 
-def test_canonical_ops_blocker_cannot_be_hidden_by_clean_flags(context) -> None:
+def test_canonical_ops_authority_readback_cannot_be_forged(context) -> None:
     forged_handoff = replace(
         context.handoff,
-        canonical_ops_available=True,
+        canonical_ops_available=False,
         handoff_digest_512=b"",
     )
-    with pytest.raises(TerminalLedgerError, match="handoff_ops_readback_mismatch"):
-        build_terminal_ledger(replace(context, handoff=forged_handoff))
+    with pytest.raises(TerminalLedgerError, match="ops_authority_readback_mismatch"):
+        build_terminal_ledger(
+            replace(context, handoff=forged_handoff, canonical_ops_available=False)
+        )

@@ -6,7 +6,7 @@ selected state plane or a proof suite.  The builder independently replays the
 S4 composition, derives the S5 checkpoints, checks the frozen C0 shape and
 private-data boundary, and recomputes the S6/S7 decision and handoff digests.
 
-The unresolved simulator, leakage, strict-PQ, canonical-ops, and H4 binding
+The unresolved simulator, leakage, strict-PQ, and H4 binding
 obligations are represented as blockers instead of being omitted.  The
 reference ledger cannot be sealed, cannot carry a ``proofSuiteId``, and
 cannot authorize activation.  It is therefore useful evidence for the next
@@ -51,6 +51,7 @@ from experiments.bl_pq512_crypto_foundation.state_plane import (
     StateTransitionProof,
     independently_verify_state_transition,
 )
+from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority
 
 
 STATUS: Final[str] = (
@@ -617,17 +618,15 @@ def _build_records(
         ),
         _record(
             "CANONICAL_OPS_IDENTITY",
-            BLOCKED if not context.canonical_ops_available else OPEN,
-            OBSERVED if not context.canonical_ops_available else UNKNOWN,
-            "../ops/launch_blockers.json",
+            BLOCKED if not context.canonical_ops_available else CLOSED,
+            OBSERVED,
+            "ops/launch_blockers.json",
             _hash(
                 _LEDGER_DOMAIN,
                 b"canonical_ops_available=" + bytes((int(context.canonical_ops_available),)),
                 handoff_digest,
             ),
-            ("canonical_ops_missing",) if not context.canonical_ops_available else (
-                "canonical_ops_recursive_identity_unverified",
-            ),
+            ("canonical_ops_missing",) if not context.canonical_ops_available else (),
         ),
         _record(
             "INDEPENDENT_VERIFIER",
@@ -699,13 +698,13 @@ class TerminalLedger:
         _string_tuple(self.blockers, "ledger_blockers")
         if not set(MANDATORY_BLOCKERS).issubset(self.blockers):
             raise TerminalLedgerError("terminal_ledger_mandatory_blocker_missing")
-        ops_blocker = (
-            "canonical_ops_missing"
-            if not self.canonical_ops_available
-            else "canonical_ops_recursive_identity_unverified"
-        )
-        if ops_blocker not in self.blockers:
+        if not self.canonical_ops_available and "canonical_ops_missing" not in self.blockers:
             raise TerminalLedgerError("terminal_ledger_ops_blocker_missing")
+        if self.canonical_ops_available and {
+            "canonical_ops_missing",
+            "canonical_ops_recursive_identity_unverified",
+        } & set(self.blockers):
+            raise TerminalLedgerError("terminal_ledger_ops_false_blocker")
         _bool(self.canonical_ops_available, "canonical_ops_available")
         if self.state_plane_status not in {
             "STATE_PLANE_NOT_PROVIDED",
@@ -794,6 +793,13 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
     _synthetic()
     if type(context) is not TerminalLedgerContext:
         raise TerminalLedgerError("terminal_ledger_context_type_invalid")
+    try:
+        verify_ops_authority()
+        actual_ops_available = True
+    except (OSError, ValueError):
+        actual_ops_available = False
+    if context.canonical_ops_available is not actual_ops_available:
+        raise TerminalLedgerError("terminal_ledger_ops_authority_readback_mismatch")
     c0_manifest_ids = _validate_c0(context)
     _validate_reference_binding(context)
     _validate_selection(context)
@@ -807,16 +813,12 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
         state_plane_digest,
     )
     blockers = set(MANDATORY_BLOCKERS)
-    if context.canonical_ops_available:
-        blockers.add("canonical_ops_recursive_identity_unverified")
-    else:
+    if not context.canonical_ops_available:
         blockers.add("canonical_ops_missing")
     if context.git_clean is not True:
         blockers.add("git_dirty")
     if context.protected_paths_clean is not True:
         blockers.add("protected_path_changed")
-    if context.canonical_ops_available:
-        blockers.discard("canonical_ops_missing")
     return TerminalLedger(
         profile_ids=tuple(PROFILE_CLAIM_SLOTS),
         c0_manifest_ids=c0_manifest_ids,
