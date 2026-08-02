@@ -193,6 +193,12 @@ hash-pad review rejects Gate 2E admission, no reviewed PQ backend or proof-nativ
 composition is available, and the simulator/leakage ledger remains open. `proofSuiteId` and
 activation remain closed.
 
+The next admission boundary is explicit:
+
+Bind the selected state plane into
+   the actual H4 parent only after the reviewed backend, proof-native composition, simulator,
+leakage, and state-receipt obligations close.
+
 ## 6. Acceptance gates
 
 ## 6.1 Current S2 evidence boundary

@@ -4921,3 +4921,61 @@ Post-commit readback for this verified phase: implementation commit
 `68c522422f0f63007c4c5b8df79fcebd426f27f6`, branch `main`, with no status entries immediately
 after the commit. The documentation-only seal that records this readback is the next commit;
 the proof, geometry, and DEEP implementation are unchanged by that seal.
+
+## 2026-08-02 Wave 3 P01-P03 nullifier-authority candidate - IMPLEMENTED, NONACTIVATING
+
+The first concrete Wave 3 run began without promoting synthetic reference helpers or changing
+the Gate 2E/H5/H6 dependency chain. `experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`
+is a new nonactivating candidate boundary. It accepts only the A12 attempt-v1 (`BLPQNF01`,
+domain 257) and cover-v2 (`BLPQNF02`, domain 514) canonical preimages. It independently computes
+the legacy Poseidon felt from the raw preimage chunks and the authoritative full SHA3-512 key
+from the same raw bytes; caller-supplied wide digests are rejected by exact re-derivation.
+
+P01 is represented by a depth-64 sparse ordered tree with explicit canonical SHA3-512 frames for
+leaf, empty subtree, node, and root items. Every frame binds item type, record type, physical
+position, child height, and the root's entry count/next append index. Empty subtrees are
+position-bound and no 2**64 logical array is materialized. P03 uses the existing append-indexed
+ordered-tree invariant: an authenticated predecessor update and fresh append slot produce a
+two-path witness that independently recomputes both old and new 512-bit roots. A corner case where
+the new append slot shares a subtree with the current successor is covered by the verifier's
+authenticated insertion path; the verifier does not assume the whole branch is empty.
+
+The in-memory authority stages cloned wide and legacy trees and swaps both roots together after
+the transition verifier passes. It is not durable anti-rollback custody, a production verifier,
+proof-native H4 composition, a Gate 2E admission, or an activation path. P04-P12 remain open;
+the repository remains at 6/93 complete, `proofSuiteId=null`, activation=false, and no real PHI or
+payments are authorized.
+
+Trust-critical verification for this phase:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_wave3_nullifier_authority.py
+6 passed in 0.22s
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_pq_strong_nullifier_reference.py tests/test_a12_nullifier_derivation.py tests/attacks/test_pq_state_reference_attacks.py
+34 passed, 10 subtests passed in 0.50s
+py -3.14 -m py_compile experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py tests/test_bl_pq512_wave3_nullifier_authority.py
+exit 0
+git diff --check
+exit 0
+40-record transition stress: status=success, stress_records=40, stress_sequence=40, stress_root_bytes=64
+```
+
+The environment has no `ruff` module (`No module named ruff`); no lint result is claimed. No
+production verifier command was run, no proof artifact was generated, no package was marked
+complete, and no activation input changed. The first containing run passed 113 tests and 16
+subtests but found one existing documentation-contract mismatch in
+`test_current_stack_and_roadmap_form_a_context_free_execution_contract`: the committed state plan
+was missing the exact required phrase `Bind the selected state plane into` followed by
+`the actual H4 parent`. The smallest fix added that explicit admission-boundary sentence; the
+affected `tests/test_foundation_spec.py` rerun passed `12 passed in 0.20s`.
+
+After the final A12 body-validation hardening, the containing command and raw result were:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py tests/test_bl_pq512_state_plane_executable_air.py tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py tests/test_bl_pq512_state_plane_native.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/test_bl_pq512_h6_qualification_preflight.py tests/test_security_freeze_spec.py tests/test_foundation_spec.py
+58 passed in 302.45s (0:05:02)
+```
+
+No production verifier command was run, no proof artifact was generated, no package was marked
+complete, and no activation input changed. The next safe action is a deliberately nonactivating
+document/Git/archive seal; durable custody and verifier work must remain downstream of Gate 2E/H6.

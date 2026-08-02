@@ -98,6 +98,24 @@ failures, but it is not a proof-native H4 PCS/ZK composition or backend admissio
 commitment backend is available, the hash-pad review rejects the current candidate for Gate 2E,
 `proofSuiteId` remains null, and activation remains closed.
 
+## Wave 3 P01-P03 candidate boundary
+
+The first Wave 3 state work is now concrete but nonactivating in
+`experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`. It accepts only the
+frozen A12 attempt-v1 and cover-v2 preimages, derives the legacy felt with the independent
+Poseidon path and the authoritative 512-bit key with SHA3-512 from those identical raw bytes,
+and rejects historical cover-v1 framing. Its depth-64 sparse ordered tree binds leaf, empty,
+node, and root type, position, height, entry count, and append index in canonical SHA3-512
+preimages. A two-path predecessor/insertion witness recomputes both old and new wide roots;
+the authority stages cloned legacy and wide trees and swaps them together only after independent
+replay. Focused tests cover type/position binding, cover profile rejection, stale transitions,
+path mutation, three committed transitions, and a 40-record stress chain.
+
+This is candidate state evidence, not a production verifier, a proof-native transition, durable
+anti-rollback custody, a Gate 2E selection, or a package-completion claim. `proofSuiteId` remains
+null, activation remains false, the six-of-93 count is unchanged, and PHI/payments remain
+forbidden. P04-P12 and the production integration gates remain open.
+
 ## Round 1 diagnostic implementation boundary
 
 The proof-core DEEP path now has a verified LogUp geometry correction: only tables that participate

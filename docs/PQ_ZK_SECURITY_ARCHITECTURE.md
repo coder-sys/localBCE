@@ -440,6 +440,17 @@ leaf is written only at the authenticated `nextAppendIndex`, which increments wi
 The 64-bit capacity index never truncates or replaces the key. Exact canonical nodes, update
 constraints, and review remain P01-P03 work.
 
+The current nonactivating candidate for that work is
+`experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`. It consumes only the
+frozen A12 attempt-v1/cover-v2 preimages, derives the legacy felt and full-width SHA3-512 key
+independently from those raw bytes, and uses a depth-64 sparse tree whose leaf, empty, node, and
+root frames bind item type, record type, physical position, child height, entry count, and
+append index. Its transition witness authenticates the ordered predecessor and fresh append
+slot, then recomputes both roots. The in-memory dual-root publication stages cloned trees and
+swaps them together. This is useful P01-P03 implementation evidence only: no proof suite is
+selected, no production verifier or durable anti-rollback custody exists, and the candidate is
+not an activation or Gate 2E admission.
+
 ### Governed roots
 
 Each claim-source, oracle-facts, policy, and ruleset root is registered as an immutable tuple:

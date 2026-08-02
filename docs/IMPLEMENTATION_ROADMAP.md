@@ -482,9 +482,9 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| P01 | Freeze canonical SHA3-512 leaf/node/empty/type/position encodings. | Open; Gate 2E selection remains. |
-| P02 | Derive legacy and wide state independently from identical raw records. | Open; production integration remains. |
-| P03 | Prove authoritative 512-bit nullifier roots and transitions. | Open; Gate 2E remains. |
+| P01 | Freeze canonical SHA3-512 leaf/node/empty/type/position encodings. | Candidate v1 implemented nonactivating in `wave3_nullifier_authority.py`; production freeze/review remains open. |
+| P02 | Derive legacy and wide state independently from identical raw records. | Candidate v1 implemented and tested from A12 raw bytes; production integration remains open. |
+| P03 | Prove authoritative 512-bit nullifier roots and transitions. | Candidate depth-64 predecessor/insertion transition implemented and independently replayed; Gate 2E/H6 and production custody remain open. |
 | P04 | Implement governed wide-root registry, epochs, identifiers, and PQ authority. | Open. |
 | P05 | Implement wide master/value commitments and fresh 512-bit salts. | Open; durable state and hiding remain. |
 | P06 | Freeze one fixed-length canonical sidecar encoder/parser. | Open; selected suite/state identity remains. |
