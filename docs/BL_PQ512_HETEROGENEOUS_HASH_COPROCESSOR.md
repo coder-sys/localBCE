@@ -184,6 +184,26 @@ This closes H4 functional and one-run prototype latency only. It does not select
 run H5 p95 qualification, close the simulator/security ledger, assign `proofSuiteId`, activate a
 verifier, or authorize production.
 
+## 8.4 Versioned state-composed bridge (nonactivating)
+
+The state-bound source seam is versioned separately from the accepted state-free profile. A
+`BLHBSN02`/version 2 snapshot is converted to a `BLHBB102`/version 2 boundary. The descriptor
+clones the base hash-bus runs and appends exactly two SHA3 root calls whose message is
+`STATE_ROOT_DOMAIN || len(snapshot.encoded).to_bytes(4,"big") || snapshot.encoded`.
+
+The fixed state-root capacity is `claim_slots*137+512`: 18,048 for K128 and 70,656 for K512.
+Those two calls add 266 and 1,040 live permutations, producing state-composed totals of 113,996
+and 412,446 respectively. The state-free `BLHBSN01`/`BLHBB101` descriptor and bytes remain
+byte-compatible. Rust independently verifies the exact input and output bit patterns of the two
+appended calls before the child proof starts; the worker derives the totals from the descriptor and
+has a durable wire-major/little-endian regression test.
+
+This is proof-native source and child-boundary evidence, not a qualified H4 state proof: the full
+state relation is still independently replayed and is not yet constrained inside the custom H4
+GKR/PCS composition. No new manifest-bound H4 proof was run after the source change, so the
+state-free manifest above remains historical evidence for the accepted prototype. Production CUDA,
+H5, `proofSuiteId`, and activation remain forbidden.
+
 ## 9. Required green evidence
 
 - 264 optimized Rust library tests, zero failures and zero ignored, plus every binary/doc-test group;
@@ -201,9 +221,10 @@ boundary is established. This is a driver-integrity gate, not a VRAM-capacity ga
 
 ## 10. Next dependency
 
-Gate 2E must select and atomically bind the persistent state relation and PQ commitment into the
-H4 parent, transcript, proof grammar, independent verifier, and receipt. Then H5 runs the exact
-22-launch campaign and H6 closes the theorem/simulator/identity seal.
+Gate 2E must complete the state relation inside the H4 proof and select/admit a reviewed PQ
+commitment, then atomically bind the state plane into the H4 parent, transcript, proof grammar,
+independent verifier, and receipt. Only then does H5 run the exact 22-launch campaign and H6 close
+the theorem/simulator/identity seal.
 
 Do not start another proof-backend bake-off, revive BaseFold/zkDeepFold, run H5 on the state-free
 H4 proof, increase worker lifetime, parallelize K512 shards without a theorem, duplicate source

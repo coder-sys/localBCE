@@ -153,9 +153,11 @@ fail closed.
    malformed-state corpora.
 4. **S3 - commitment prototypes (reference screening complete).** The common fixed-width commitment
    interface, exact descriptor identities, dual-PQ authenticated-public-coin round, and independent
-   verifier are implemented in `pq_commitment_screening.py`. All four descriptors remain rejected
-   because exact reviewed theorem/source/parameter and complete-proof evidence is missing; no backend
-   is admitted or selected.
+   verifier are implemented in `pq_commitment_screening.py`. Five descriptors are screened. The
+   three lattice families lack pinned construction evidence, the retired hash-pad control fails its
+   public-coin/quantum review, and the clean-room `TRANSPARENT_SHAKE256_1024` candidate is rejected
+   only for missing complete H4 composition. All five remain rejected; no backend is admitted or
+   selected.
 5. **S4 - atomic composition (reference complete).** `atomic_state_composition.py` independently
    replays the scalar relation, binds the S3 authenticated opening to the fixed projection and BLTR
    transition, hashes private relation material in the canonical payload, and constructs an
@@ -168,15 +170,15 @@ fail closed.
    cases fail closed; the 10-test focused/attack suite passes. This is not a production migration
    theorem or durable custody result.
 7. **S6 - exact bake-off (reference boundary complete).** `gate_2e_selection.py` repeats the
-   identical synthetic S2/S3/S4 component twice for each of the four screened backends and K128/K512
+   identical synthetic S2/S3/S4 component twice for each of the five screened backends and K128/K512
    profiles, with independent verification, observed timing labels, derived work labels, and no
-   proof/complete-boundary credit. All four S3 screens reject, so no finalist receives a complete
+   proof/complete-boundary credit. All five S3 screens reject, so no finalist receives a complete
    warm-up or externally monitored complete proof.
 8. **S7 - selection/handoff (reference boundary complete).** The selector recomputes every rejection,
    retains C0 as an unselected control with no timing credit, and emits an explicitly unsealed
-   handoff. `selected_backend_id=null`, `proofSuiteId=null`, activation is false, and the canonical
-   `../ops` blocker remains recorded. A production state plane is not selected until a reviewed
-   backend and complete H4 binding exist.
+   handoff. `selected_backend_id=null`, `proofSuiteId=null`, and activation is false. Tracked
+   `ops/` authority is verified; the former sibling-layout blocker is closed. A production state
+   plane is not selected until a reviewed backend and complete H4 binding exist.
 
 The smallest nonactivating state boundary is implemented separately in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
@@ -197,7 +199,29 @@ The next admission boundary is explicit:
 
 Bind the selected state plane into
    the actual H4 parent only after the reviewed backend, proof-native composition, simulator,
-leakage, and state-receipt obligations close.
+   leakage, and state-receipt obligations close.
+
+### Current state-bus prerequisite
+
+The native H4 seam now has a versioned, proof-native source boundary without changing the accepted
+state-free profile. `BLHBSN02`/version 2 snapshots and `BLHBB102`/version 2 B16 boundaries append
+exactly two state-root SHA3 calls to the authenticated bus. Their fixed capacity is
+`claim_slots*137+512`: 18,048 for K128 and 70,656 for K512, adding 266 and 1,040 live
+permutations. The resulting live permutation totals are 113,996 and 412,446. Rust independently
+checks the two root-call input/output patterns before child proof creation, and the worker derives
+the totals from the descriptor rather than a duplicated profile constant. The original
+`BLHBSN01`/`BLHBB101` bytes and descriptor commitment remain unchanged for the state-free profile.
+
+This seam proves that state roots enter the authenticated source/child boundary; it does not yet
+put the complete state relation inside the custom H4 GKR/PCS proof, and it is not a qualified
+backend or a new manifest-bound H4 proof. H5 remains blocked.
+
+The new isolated candidate is `TRANSPARENT_SHAKE256_1024`,
+`BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`: SHAKE256-1024 with a 128-byte mask and 128-byte
+commitment, committed before the later authenticated coin. Its conservative ledger is 341-bit
+quantum collision, 32-bit multi-target loss, 309-bit effective binding, and 480-bit effective
+hiding. It is a reviewed reference candidate but remains rejected solely for missing complete H4
+composition; no `proofSuiteId` is assigned.
 
 ## 6. Acceptance gates
 

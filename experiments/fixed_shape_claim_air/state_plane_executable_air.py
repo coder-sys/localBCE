@@ -20,10 +20,14 @@ from experiments.bl_pq512_crypto_foundation.state_plane import (
     StateTransitionProof,
     independently_verify_state_transition,
 )
+from experiments.bl_pq512_crypto_foundation.sha3_512_air_reference import (
+    RATE_BYTES,
+    padded_block_count,
+)
 
-from .application_sha3_executable_air import (
-    Sha3Call,
-    build_application_sha3_executable_air,
+from .sha3_512_boolean_executable_air import (
+    Sha3BooleanCall,
+    build_sha3_boolean_executable_air,
 )
 from .air_composition import AirFragment, merge_air_fragments
 from .executable_air import (
@@ -398,40 +402,68 @@ def _dynamic_slot_lookup(
     )
 
 
-def _encoding_to_sha3_lookup(
-    messages: tuple[bytes, bytes], sha3_message_rows: int
-) -> LookupArgument:
-    return LookupArgument(
-        "state_snapshot_encoding_to_sha3",
-        (
-            LookupSide(
-                "state_snapshot_encoding",
-                const(1),
-                (cell("call_index"), cell("position"), cell("value")),
-                0,
-                sum(len(message) for message in messages),
-            ),
-        ),
-        (
-            LookupSide(
-                "sha3_message_batch",
-                cell("live"),
-                (cell("call_index"), cell("position"), cell("value")),
-                0,
-                sha3_message_rows,
-            ),
-        ),
+def _encoding_to_boolean_sha3_lookups(
+    messages: tuple[bytes, bytes],
+) -> tuple[LookupArgument, ...]:
+    """Link every real message byte to the direct Boolean absorb trace.
+
+    The Boolean sponge exposes one row per absorbed block and one fixed byte
+    column per rate position.  Grouping the exact byte links by rate offset
+    avoids rebuilding the retired 133k-row byte truth table while retaining
+    the complete canonical state-message relation.
+    """
+
+    sources: list[list[LookupSide]] = [[] for _ in range(RATE_BYTES)]
+    destinations: list[list[LookupSide]] = [[] for _ in range(RATE_BYTES)]
+    encoding_row = 0
+    absorb_row = 0
+    for call_index, message in enumerate(messages):
+        block_count = padded_block_count(len(message))
+        for position in range(len(message)):
+            block_index, byte_index = divmod(position, RATE_BYTES)
+            sources[byte_index].append(
+                LookupSide(
+                    "state_snapshot_encoding",
+                    const(1),
+                    (cell("call_index"), const(block_index), cell("value")),
+                    encoding_row + position,
+                    encoding_row + position + 1,
+                )
+            )
+            destinations[byte_index].append(
+                LookupSide(
+                    "sha3_boolean_absorb",
+                    const(1),
+                    (
+                        cell("call_index"),
+                        cell("block_index"),
+                        cell(f"block_byte_{byte_index}"),
+                    ),
+                    absorb_row + block_index,
+                    absorb_row + block_index + 1,
+                )
+            )
+        encoding_row += len(message)
+        absorb_row += block_count
+    return tuple(
+        LookupArgument(
+            f"state_snapshot_encoding_to_sha3_boolean_{byte_index}",
+            tuple(sources[byte_index]),
+            tuple(destinations[byte_index]),
+        )
+        for byte_index in range(RATE_BYTES)
+        if sources[byte_index]
     )
 
 
 def _root_digest_lookup(call_index: int) -> LookupArgument:
     return LookupArgument(
-        f"state_root_digest_{call_index}",
+        f"state_root_boolean_digest_{call_index}",
         (
             LookupSide(
-                "sha3_digest_batch",
+                "sha3_boolean_digest",
                 const(1),
-                tuple(cell(f"value_{byte}") for byte in range(SHA3_512_LENGTH)),
+                tuple(cell(f"digest_byte_{byte}") for byte in range(SHA3_512_LENGTH)),
                 call_index,
                 call_index + 1,
             ),
@@ -457,9 +489,9 @@ def build_state_plane_air(proof: StateTransitionProof) -> StatePlaneAirInstance:
         raise StructuralError("state_air_capacity_exceeds_h4_bound")
     independently_verify_state_transition(proof)
     messages = (_root_message(proof.before), _root_message(proof.after))
-    sha3 = build_application_sha3_executable_air(
+    sha3 = build_sha3_boolean_executable_air(
         tuple(
-            Sha3Call(f"state_root_{index}", message, len(message))
+            Sha3BooleanCall(f"state_root_{index}", message, len(message))
             for index, message in enumerate(messages)
         )
     )
@@ -493,9 +525,7 @@ def build_state_plane_air(proof: StateTransitionProof) -> StatePlaneAirInstance:
             _operation_slot_lookup(proof, "before"),
             _operation_slot_lookup(proof, "after"),
             _dynamic_slot_lookup(proof, dynamic_slots),
-            _encoding_to_sha3_lookup(
-                messages, sha3.traces["sha3_message_batch"].rows
-            ),
+            *_encoding_to_boolean_sha3_lookups(messages),
             _root_digest_lookup(0),
             _root_digest_lookup(1),
         ),

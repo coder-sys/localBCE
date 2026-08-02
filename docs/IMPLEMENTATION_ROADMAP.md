@@ -52,8 +52,8 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
-| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; native state-AIR consumption/binding prerequisite is implemented and independently tested | Reviewed state/PQ admission, proof-native H4 composition, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, native state-AIR H4 prerequisite, and a nonadmitting compact proof-path diagnostic with corrected lookup geometry and bounded DEEP parallelism are tested and documented | Admit a reviewed backend and proof-native composition; close simulator/leakage/PQ/ops blockers |
+| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; native state-AIR consumption and the versioned state-root bus prerequisite are implemented and independently tested | Reviewed state/PQ admission, full state relation inside H4, proof-native H4 composition, repeated p95, final suite identity |
+| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, five-candidate dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, versioned state-root bus and native state-AIR prerequisites, and a nonadmitting compact proof-path diagnostic with corrected lookup geometry and bounded DEEP parallelism are tested and documented | Admit a reviewed backend and complete proof-native state/AIR composition; close simulator/leakage/PQ blockers |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -186,12 +186,13 @@ external service, unsupported knowledge assumption, or any term below the frozen
 label is not security evidence.
 
 Current S3 record: `experiments/bl_pq512_crypto_foundation/pq_commitment_screening.py` defines the
-common fixed-width masked commitment/opening envelope, exact parameter identities, the four admitted
-screening families, a dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated public-coin round, and an
-independent opening verifier. The reference envelope is synthetic and nonproduction. All four
-descriptors fail closed: the three lattice families lack pinned source/parameters/theorem evidence,
-and the transparent hash/code reference lacks reviewed native-hiding composition and complete-proof
-evidence. No candidate is admitted, selected, bound to H4, or assigned `proofSuiteId`.
+common fixed-width masked commitment/opening envelope, exact parameter identities, five screened
+families, a dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated public-coin round, and an independent
+opening verifier. The reference envelope is synthetic and nonproduction. The three lattice
+families lack pinned source/parameters/theorem evidence; the retired hash-pad control fails its
+specific public-coin/quantum review; and `TRANSPARENT_SHAKE256_1024` has a reviewed candidate
+ledger but still lacks complete H4 composition. All five descriptors fail closed. No candidate is
+admitted, selected, bound to H4, or assigned `proofSuiteId`.
 
 Focused command and raw result:
 
@@ -283,8 +284,8 @@ If no candidate beats C0 at the complete boundary, select C0 and retain exact re
 Gate 2E selection is not H5 qualification.
 
 Current S6/S7 record: `experiments/bl_pq512_crypto_foundation/gate_2e_selection.py` measures the
-same synthetic S2/S3/S4 reference component twice for each of the four screened backends and both
-K128/K512 profiles: 16 observations total. Each observation is independently verified at the
+same synthetic S2/S3/S4 reference component twice for each of the five screened backends and both
+K128/K512 profiles: 20 observations total. Each observation is independently verified at the
 reference boundary, carries derived work separately from observed timing, records zero proof bytes,
 and explicitly records that external complete-boundary monitoring was not run. S3 recomputation
 rejects every backend, so no finalist receives a warm-up or complete-proof attempt. The decision
@@ -299,8 +300,9 @@ py -3.14 -m pytest -q tests/test_bl_pq512_gate_2e_selection.py tests/attacks/tes
 ```
 
 S7 emits an explicitly unsealed handoff with the no-admission, no-complete-boundary, deferred-H4,
-and missing-canonical-ops blockers. Timing is retained as measured reference-component evidence,
-not selection credit. No candidate is selected or activated.
+complete-simulator, complete-leakage, and strict-PQ blockers. Tracked `ops/` authority is verified;
+the former sibling-layout blocker is closed. Timing is retained as measured reference-component
+evidence, not selection credit. No candidate is selected or activated.
 
 The terminal Gate 2E ledger is now implemented in
 `experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py`. Its builder independently
@@ -326,7 +328,9 @@ commit/tree/clean status/protected-path readback; and the exact H5 command, moni
 input generator, and STOP conditions.
 
 2E closes only when the selected state plane is present in the H4 parent, transcript, proof,
-independent verifier, and atomic receipt.
+independent verifier, and atomic receipt. The current versioned `BLHBSN02`/`BLHBB102` root-bus seam
+is prerequisite evidence for that boundary, not its closure: the full state relation is not yet
+inside the custom H4 GKR proof, and no new manifest-bound H4 proof was run after the source change.
 
 ## H5: repeated complete-proof qualification campaign
 

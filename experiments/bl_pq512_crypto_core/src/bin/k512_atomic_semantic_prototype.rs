@@ -11,8 +11,14 @@ use bl_pq512_crypto_core::{
         AIR_PROGRAM_MAGIC, evaluate_air_execution, validate_air_program,
         validated_execution_public_inputs,
     },
-    hash_bus_b16_boundary::HashBusB16BoundaryFile,
+    hash_bus::{
+        GROUP_COUNT, PERMUTATIONS_PER_COPROCESSOR_SHARD, build_hash_bus_descriptor,
+        build_hash_bus_descriptor_with_state, state_root_capacity,
+    },
+    hash_bus_b16_boundary::{HashBusB16BoundaryFile, HashBusB16Shard},
     hash_bus_b16_gkr_plan::HashBusB16GkrPlan,
+    hash_bus_source::KECCAK_STATE_BITS,
+    sha3_air::{RATE_BYTES, for_each_sha3_512_permutation_boundary},
     wave1a_global_schedule::Profile,
 };
 use sha3::{Digest, Sha3_512};
@@ -93,6 +99,10 @@ struct ShardEvidence {
 }
 
 struct StateBindingVerification {
+    state_profile: Vec<u8>,
+    state_capacity: u64,
+    before_snapshot: Vec<u8>,
+    after_snapshot: Vec<u8>,
     statement: [u8; 64],
     binding_digest: [u8; 64],
     projection: [[u8; 32]; 12],
@@ -192,9 +202,9 @@ fn run() -> Result<(), String> {
         return Err("statement_zero".to_string());
     }
 
-    let boundary_file =
+    let mut boundary_file =
         HashBusB16BoundaryFile::open(&boundary).map_err(|error| format!("boundary:{error:?}"))?;
-    let header = boundary_file.header();
+    let header = boundary_file.header().clone();
     let (expected_shards, expected_file_bytes, profile_name, latency_limit_seconds) =
         match header.profile {
             Profile::K128Calibration => (K128_SHARDS, K128_FILE_BYTES, "k128", 30.0),
@@ -203,6 +213,13 @@ fn run() -> Result<(), String> {
         };
     if header.coprocessor_shards != expected_shards || header.file_bytes != expected_file_bytes {
         return Err("boundary_shape".to_string());
+    }
+    if header.state_composed != state_binding.is_some() {
+        return Err("state_hash_bus_composition_mode".to_string());
+    }
+    if let Some(binding) = state_binding.as_ref() {
+        validate_state_profile_for_h4(header.profile, binding)?;
+        verify_state_hash_bus_calls(&mut boundary_file, &header, binding)?;
     }
     let plan_commitment = HashBusB16GkrPlan::selected()
         .and_then(|plan| plan.commitment())
@@ -405,6 +422,7 @@ fn run() -> Result<(), String> {
             .as_ref()
             .map_or_else(|| hex(&[0; 64]), |binding| hex(&binding.binding_digest))
     );
+    println!("state_hash_bus_calls_verified={}", state_binding.is_some());
     println!("execution_manifest_sha3_512={}", hex(&execution_manifest));
     println!("semantic_hash_bus_file_sha3_512={file_hex}");
     println!(
@@ -690,6 +708,7 @@ struct StateEntryWire {
 }
 
 struct StateSnapshotWire {
+    encoded: Vec<u8>,
     profile: Vec<u8>,
     parameter: Vec<u8>,
     capacity: u64,
@@ -743,6 +762,7 @@ fn parse_state_snapshot(encoded: &[u8]) -> Result<StateSnapshotWire, String> {
     }
     let root = hash_parts(STATE_ROOT_DOMAIN, &[encoded]);
     Ok(StateSnapshotWire {
+        encoded: encoded.to_vec(),
         profile,
         parameter,
         capacity,
@@ -1124,6 +1144,10 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
         .try_into()
         .map_err(|_| "state_binding_projection_count".to_string())?;
     Ok(StateBindingVerification {
+        state_profile: before.profile.clone(),
+        state_capacity: before.capacity,
+        before_snapshot: before.encoded,
+        after_snapshot: after.encoded,
         statement,
         binding_digest,
         projection,
@@ -1140,6 +1164,154 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
         state_air_fragment,
         composition,
     })
+}
+
+fn validate_state_profile_for_h4(
+    profile: Profile,
+    state: &StateBindingVerification,
+) -> Result<(), String> {
+    let (expected_profile, expected_capacity) = match profile {
+        Profile::K128Calibration => (b"K128_CALIBRATION".as_slice(), 128_u64),
+        Profile::K512Calibration => (b"K512_CALIBRATION".as_slice(), 512_u64),
+        Profile::K256DesignPoint => return Err("state_boundary_profile".to_string()),
+    };
+    if state.state_profile != expected_profile || state.state_capacity != expected_capacity {
+        return Err("state_boundary_profile_shape".to_string());
+    }
+    Ok(())
+}
+
+fn verify_state_hash_bus_calls(
+    boundary: &mut HashBusB16BoundaryFile,
+    header: &bl_pq512_crypto_core::hash_bus_b16_boundary::HashBusB16BoundaryHeader,
+    state: &StateBindingVerification,
+) -> Result<(), String> {
+    if !header.state_composed {
+        return Err("state_hash_bus_boundary_mode".to_string());
+    }
+    let base_descriptor = build_hash_bus_descriptor(header.profile)
+        .map_err(|error| format!("state_hash_bus_base_descriptor:{error:?}"))?;
+    let state_descriptor = build_hash_bus_descriptor_with_state(header.profile)
+        .map_err(|error| format!("state_hash_bus_state_descriptor:{error:?}"))?;
+    if state_descriptor.descriptor_commitment != header.descriptor_commitment
+        || state_descriptor.total_calls != base_descriptor.total_calls + 2
+    {
+        return Err("state_hash_bus_descriptor_mismatch".to_string());
+    }
+    let capacity = state_root_capacity(header.profile)
+        .map_err(|error| format!("state_hash_bus_capacity:{error:?}"))?;
+    let capacity = usize::try_from(capacity).map_err(|_| "state_hash_bus_capacity".to_string())?;
+    let blocks_per_call = u64::try_from(capacity / usize::from(RATE_BYTES) + 1)
+        .map_err(|_| "state_hash_bus_blocks".to_string())?;
+    let snapshots = [&state.before_snapshot, &state.after_snapshot];
+    let roots = [&state.before_snapshot, &state.after_snapshot];
+    let expected_roots = [
+        hash_parts(STATE_ROOT_DOMAIN, &[snapshots[0].as_slice()]),
+        hash_parts(STATE_ROOT_DOMAIN, &[snapshots[1].as_slice()]),
+    ];
+    let mut cached_shard: Option<(u16, HashBusB16Shard)> = None;
+    for (root_index, snapshot) in roots.into_iter().enumerate() {
+        let mut message = Vec::with_capacity(STATE_ROOT_DOMAIN.len() + 4 + snapshot.len());
+        message.extend_from_slice(STATE_ROOT_DOMAIN);
+        message.extend_from_slice(
+            &u32::try_from(snapshot.len())
+                .map_err(|_| "state_hash_bus_message_length".to_string())?
+                .to_be_bytes(),
+        );
+        message.extend_from_slice(snapshot);
+        let call_start = base_descriptor
+            .total_permutations
+            .checked_add(
+                u64::try_from(root_index)
+                    .map_err(|_| "state_hash_bus_call_index".to_string())?
+                    .checked_mul(blocks_per_call)
+                    .ok_or_else(|| "state_hash_bus_call_index".to_string())?,
+            )
+            .ok_or_else(|| "state_hash_bus_call_index".to_string())?;
+        let call_end = call_start
+            .checked_add(blocks_per_call - 1)
+            .ok_or_else(|| "state_hash_bus_call_end".to_string())?;
+        let shard_id = u16::try_from(call_start / PERMUTATIONS_PER_COPROCESSOR_SHARD)
+            .map_err(|_| "state_hash_bus_shard".to_string())?;
+        if call_end / PERMUTATIONS_PER_COPROCESSOR_SHARD != u64::from(shard_id) {
+            return Err("state_hash_bus_call_crosses_shard".to_string());
+        }
+        if cached_shard
+            .as_ref()
+            .map_or(true, |(cached_id, _)| *cached_id != shard_id)
+        {
+            let shard = boundary
+                .read_shard(shard_id)
+                .map_err(|error| format!("state_hash_bus_read_shard:{error:?}"))?;
+            cached_shard = Some((shard_id, shard));
+        }
+        let mut mismatch = None;
+        let digest = for_each_sha3_512_permutation_boundary(
+            &message,
+            capacity,
+            |block_index, _, _, input, output| {
+                if mismatch.is_some() {
+                    return;
+                }
+                let global_index = call_start + u64::try_from(block_index).unwrap_or(u64::MAX);
+                let (cached_id, shard) = cached_shard.as_ref().expect("cached state shard");
+                if *cached_id
+                    != u16::try_from(global_index / PERMUTATIONS_PER_COPROCESSOR_SHARD)
+                        .unwrap_or(u16::MAX)
+                {
+                    mismatch = Some(format!("state_hash_bus_shard:{root_index}"));
+                    return;
+                }
+                mismatch =
+                    compare_state_bus_plane(&shard.input, input, global_index, root_index, "input")
+                        .or_else(|| {
+                            compare_state_bus_plane(
+                                &shard.output,
+                                output,
+                                global_index,
+                                root_index,
+                                "output",
+                            )
+                        });
+            },
+        )
+        .map_err(|error| format!("state_hash_bus_trace:{root_index}:{error:?}"))?;
+        if digest != expected_roots[root_index] {
+            return Err(format!("state_hash_bus_digest:{root_index}"));
+        }
+        if let Some(error) = mismatch {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn compare_state_bus_plane(
+    plane: &[u16],
+    state: &[u64; 25],
+    global_index: u64,
+    root_index: usize,
+    boundary: &str,
+) -> Option<String> {
+    let within_shard = global_index % PERMUTATIONS_PER_COPROCESSOR_SHARD;
+    let packed_lane = usize::try_from(within_shard % 16).ok()?;
+    let group = usize::try_from(within_shard / 16).ok()?;
+    let group_count = usize::try_from(GROUP_COUNT).ok()?;
+    if plane.len() != KECCAK_STATE_BITS * group_count {
+        return Some(format!(
+            "state_hash_bus_plane_shape:{root_index}:{boundary}"
+        ));
+    }
+    for wire in 0..KECCAK_STATE_BITS {
+        let expected = ((state[wire / 64] >> (wire % 64)) & 1) as u16;
+        let actual = (plane[wire * group_count + group] >> packed_lane) & 1;
+        if actual != expected {
+            return Some(format!(
+                "state_hash_bus_mismatch:{root_index}:{boundary}:{global_index}:{wire}"
+            ));
+        }
+    }
+    None
 }
 
 fn parse_fields(stdout: &[u8]) -> Result<BTreeMap<String, String>, String> {
@@ -1247,6 +1419,7 @@ fn validate_state_binding_fields(
     match (expected_statement, expected_binding, expected_state) {
         (Some(statement), Some(binding), Some(state)) => {
             if required(fields, "state_plane_binding_attached")? != "true"
+                || required(fields, "state_hash_bus_calls_verified")? != "true"
                 || required(fields, "state_plane_statement_sha3_512")? != statement
                 || required(fields, "state_plane_binding_digest_sha3_512")? != binding
                 || required(fields, "state_plane_public_abi_count")? != "12"
@@ -1282,6 +1455,7 @@ fn validate_state_binding_fields(
         }
         (None, None, None) => {
             if required(fields, "state_plane_binding_attached")? != "false"
+                || required(fields, "state_hash_bus_calls_verified")? != "false"
                 || required(fields, "state_plane_statement_sha3_512")? != zero
                 || required(fields, "state_plane_binding_digest_sha3_512")? != zero
                 || required(fields, "state_plane_public_abi_count")? != "0"
@@ -1359,6 +1533,12 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bl_pq512_crypto_core::{
+        hash_bus_b16_boundary::{
+            HASH_BUS_B16_HEADER_BYTES, HASH_BUS_B16_STATE_MAGIC, HASH_BUS_B16_STATE_VERSION,
+        },
+        hash_bus_source::{HashBusMessage, for_each_hash_bus_b16_group},
+    };
 
     fn cuda_source(name: &str) -> Option<&'static str> {
         match name {
@@ -1524,8 +1704,183 @@ mod tests {
         assert_eq!(parse_fields(b"a\n").unwrap_err(), "stdout_line");
     }
 
+    fn empty_state_snapshot(profile: &[u8], capacity: u64, sequence: u64) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        let parameter = b"BL-PQ512-STATE-PLANE-V1";
+        encoded.extend_from_slice(b"BLSP01");
+        encoded.push(1);
+        encoded.push(u8::try_from(profile.len()).unwrap());
+        encoded.extend_from_slice(profile);
+        encoded.push(u8::try_from(parameter.len()).unwrap());
+        encoded.extend_from_slice(parameter);
+        encoded.extend_from_slice(&capacity.to_be_bytes());
+        encoded.extend_from_slice(&1_u64.to_be_bytes());
+        encoded.extend_from_slice(&sequence.to_be_bytes());
+        for index in 0..capacity {
+            encoded.push(0);
+            encoded.extend_from_slice(&index.to_be_bytes());
+            encoded.extend_from_slice(&[0_u8; 128]);
+        }
+        encoded
+    }
+
+    fn write_state_bus_fixture(path: &Path, before: &[u8], after: &[u8]) {
+        use std::io::{BufWriter, Write};
+
+        let profile = Profile::K128Calibration;
+        let base = build_hash_bus_descriptor(profile).unwrap();
+        let descriptor = build_hash_bus_descriptor_with_state(profile).unwrap();
+        let root_capacity = state_root_capacity(profile).unwrap();
+        let root_before = [
+            STATE_ROOT_DOMAIN,
+            &u32::try_from(before.len()).unwrap().to_be_bytes(),
+            before,
+        ]
+        .concat();
+        let root_after = [
+            STATE_ROOT_DOMAIN,
+            &u32::try_from(after.len()).unwrap().to_be_bytes(),
+            after,
+        ]
+        .concat();
+        let empty_digest: [u8; 64] = Sha3_512::digest([]).into();
+        let mut messages = Vec::with_capacity(descriptor.total_calls as usize);
+        for run in &base.runs {
+            for _ in 0..run.count {
+                messages.push(HashBusMessage {
+                    message: &[],
+                    capacity: run.capacity,
+                    digest: empty_digest,
+                });
+            }
+        }
+        messages.extend([
+            HashBusMessage {
+                message: &root_before,
+                capacity: root_capacity,
+                digest: Sha3_512::digest(&root_before).into(),
+            },
+            HashBusMessage {
+                message: &root_after,
+                capacity: root_capacity,
+                digest: Sha3_512::digest(&root_after).into(),
+            },
+        ]);
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = BufWriter::with_capacity(1 << 20, file);
+        writer.write_all(HASH_BUS_B16_STATE_MAGIC).unwrap();
+        writer
+            .write_all(&HASH_BUS_B16_STATE_VERSION.to_be_bytes())
+            .unwrap();
+        writer.write_all(&[Profile::K128Calibration as u8]).unwrap();
+        writer.write_all(&[7_u8; 64]).unwrap();
+        writer.write_all(&descriptor.descriptor_commitment).unwrap();
+        writer.write_all(&[9_u8; 64]).unwrap();
+        writer
+            .write_all(&descriptor.coprocessor_shards.to_be_bytes())
+            .unwrap();
+        writer
+            .write_all(&descriptor.padded_permutations.to_be_bytes())
+            .unwrap();
+        writer
+            .write_all(&(KECCAK_STATE_BITS as u16).to_be_bytes())
+            .unwrap();
+        let values = KECCAK_STATE_BITS * GROUP_COUNT as usize;
+        let mut input_plane = vec![0_u16; values];
+        let mut output_plane = vec![0_u16; values];
+        let mut group_index = 0_usize;
+        for_each_hash_bus_b16_group(&descriptor, messages, |_, _, input, output| {
+            for wire in 0..KECCAK_STATE_BITS {
+                input_plane[wire * GROUP_COUNT as usize + group_index] = input[wire];
+                output_plane[wire * GROUP_COUNT as usize + group_index] = output[wire];
+            }
+            group_index += 1;
+            Ok(())
+        })
+        .unwrap();
+        for plane in [&input_plane, &output_plane] {
+            for pattern in plane {
+                writer.write_all(&pattern.to_le_bytes()).unwrap();
+            }
+        }
+        writer.flush().unwrap();
+    }
+
+    fn minimal_state_binding(before: Vec<u8>, after: Vec<u8>) -> StateBindingVerification {
+        StateBindingVerification {
+            state_profile: b"K128_CALIBRATION".to_vec(),
+            state_capacity: 128,
+            before_snapshot: before,
+            after_snapshot: after,
+            statement: [1; 64],
+            binding_digest: [2; 64],
+            projection: [[3; 32]; 12],
+            projection_digest: [4; 64],
+            public_coin: [5; 64],
+            transition: [6; 64],
+            commitment: [7; 64],
+            proof: [8; 64],
+            verifier: [9; 64],
+            attempt: [10; 64],
+            receipt: [11; 64],
+            state_air_program: [12; 64],
+            state_air_execution: [13; 64],
+            state_air_fragment: [14; 64],
+            composition: [15; 64],
+        }
+    }
+
+    #[test]
+    fn state_hash_bus_root_calls_are_native_and_mutation_bound() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let path = std::env::temp_dir().join(format!(
+            "bl-state-hash-bus-native-{}.b16",
+            std::process::id()
+        ));
+        let before = empty_state_snapshot(b"K128_CALIBRATION", 128, 0);
+        let after = empty_state_snapshot(b"K128_CALIBRATION", 128, 1);
+        write_state_bus_fixture(&path, &before, &after);
+        let state = minimal_state_binding(before, after);
+        let mut boundary = HashBusB16BoundaryFile::open(&path).unwrap();
+        let header = boundary.header().clone();
+        verify_state_hash_bus_calls(&mut boundary, &header, &state).unwrap();
+        drop(boundary);
+
+        let base = build_hash_bus_descriptor(Profile::K128Calibration).unwrap();
+        let global_index = base.total_permutations;
+        let group = global_index / 16;
+        let offset = HASH_BUS_B16_HEADER_BYTES + (group * 2);
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        let mut encoded = [0_u8; 2];
+        file.read_exact(&mut encoded).unwrap();
+        let original_value = u16::from_le_bytes(encoded);
+        let value = original_value ^ u16::MAX;
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&value.to_le_bytes()).unwrap();
+        drop(file);
+
+        let mut mutated = HashBusB16BoundaryFile::open(&path).unwrap();
+        let mutated_value = mutated.read_shard(0).unwrap().input[group as usize];
+        assert_eq!(mutated_value, value);
+        assert_ne!(mutated_value, original_value);
+        let mutated_header = mutated.header().clone();
+        assert!(verify_state_hash_bus_calls(&mut mutated, &mutated_header, &state).is_err());
+        drop(mutated);
+        std::fs::remove_file(path).unwrap();
+    }
+
     fn test_state_binding(seed: u8) -> StateBindingVerification {
         StateBindingVerification {
+            state_profile: b"K512_CALIBRATION".to_vec(),
+            state_capacity: 512,
+            before_snapshot: vec![seed; 8],
+            after_snapshot: vec![seed.wrapping_add(1); 8],
             statement: [seed; 64],
             binding_digest: [seed.wrapping_add(1); 64],
             projection: [[seed.wrapping_add(2); 32]; 12],
@@ -1610,6 +1965,10 @@ mod tests {
             (
                 "state_plane_binding_digest_sha3_512".to_string(),
                 binding.clone(),
+            ),
+            (
+                "state_hash_bus_calls_verified".to_string(),
+                "true".to_string(),
             ),
             ("state_plane_public_abi_count".to_string(), "12".to_string()),
             (

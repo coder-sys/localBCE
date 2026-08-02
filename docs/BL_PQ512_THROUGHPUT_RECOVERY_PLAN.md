@@ -227,22 +227,24 @@ C3 quadratic projection counter, and C4 persistent-scan counter are derived risk
 throughput measurements. The four S0 fresh-process measurements remain recorded in
 `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile usage deltas remain observed telemetry, not a
 swap conclusion. Gate 2E-3/S3 now has a tested dual-PQ authenticated commitment-screening reference;
-all four descriptors remain rejected because reviewed native-hiding and complete-proof evidence is
-missing. Gate 2E-4/S4 now has a tested synthetic composition reference that independently replays
+all five descriptors remain rejected: the three lattice families lack pinned reviewed evidence, the
+old hash-pad control fails its public-coin/quantum review, and the new SHAKE256-1024 candidate lacks
+complete H4 composition. Gate 2E-4/S4 now has a tested synthetic composition reference that independently replays
 the scalar relation, verifies the screened opening, and binds the transition, deferred H4 identity,
 verifier identity, and receipt; its focused/attack result is 6 passed in 10.11 seconds. This is not
 complete-proof throughput evidence and does not admit a backend. Execute Gate 2E-5/S5 migration and
 failure semantics are now recorded. Gate 2E-5/S5 has a tested synthetic migration/recovery controller with
 10 focused positive/attack tests passing in 10.10 seconds. It is reference state-equivalence and
 failure evidence only; it does not select a backend or qualify complete-proof throughput. Gate
-2E-6/S6 and 2E-7/S7 now measure 16 repeated reference-component observations across four rejected
+2E-6/S6 and 2E-7/S7 now measure 20 repeated reference-component observations across five rejected
 backends and two profiles, retain exact rejection evidence, and leave complete-boundary work
 unauthorized; their focused/attack result is 6 passed in 34.04 seconds. The terminal ledger
 reference is now implemented and independently rechecked: it has 11 ordered obligation records,
 focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger result 73 passed in
 91.58 seconds, and status `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. Its blockers remain no
 backend admission, missing complete simulator/leakage evidence, deferred H4 binding, and unset
-`proofSuiteId`. The former sibling-ops blocker is closed. This is reference evidence only; do not start H5 or
+`proofSuiteId`. The tracked `ops/` authority is verified and the former sibling-layout blocker is closed.
+This is reference evidence only; do not start H5 or
 another complete-proof backend bake-off until a reviewed state plane is selected and atomically
 bound.
 

@@ -4,12 +4,16 @@ import json
 from pathlib import Path
 import re
 
+from experiments.bl_pq512_crypto_foundation.ops_authority import (
+    OPS_AUTHORITY_STATUS,
+    verify_ops_authority,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ROADMAP = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
 CONTRACT = ROOT / "docs" / "DEPLOYMENT_READY_BUILD_CONTRACT.md"
 BLOCKERS = ROOT / "ops" / "launch_blockers.json"
-CANONICAL_BLOCKERS = ROOT.parent / "ops" / "launch_blockers.json"
 
 
 def _text(path: Path) -> str:
@@ -86,7 +90,7 @@ def test_audit_is_one_uncounted_gate_and_every_package_is_internally_finishable(
 
 
 def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() -> None:
-    assert BLOCKERS.read_bytes() == CANONICAL_BLOCKERS.read_bytes()
+    assert verify_ops_authority() == OPS_AUTHORITY_STATUS
     payload = json.loads(_text(BLOCKERS))
     planning = payload["planning_model"]
     assert planning == {

@@ -117,6 +117,10 @@ def test_all_admitted_backend_descriptors_are_screened_and_fail_closed() -> None
     )
     assert "native_hiding_theorem_unreviewed" in transparent.rejection_reasons
     assert "complete_composition_missing" in transparent.rejection_reasons
+    transparent_shake256 = next(
+        item for item in results if item.descriptor.backend_id == "TRANSPARENT_SHAKE256_1024"
+    )
+    assert transparent_shake256.rejection_reasons == ("complete_composition_missing",)
     assert all("parameter_commitment_sha3_512_hex" in item.as_public_dict() for item in results)
 
 

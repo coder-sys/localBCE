@@ -129,14 +129,14 @@ def test_native_state_binding_kat_is_stable_for_the_k128_shape() -> None:
         sha3_512(b"coin").digest(),
         sha3_512(b"mask").digest(),
     )
-    assert len(proof.binding_bytes) == 103_216_467
+    assert len(proof.binding_bytes) == 118_966_291
     assert proof.statement_digest_512.hex() == (
         "f3c37c25e22d3e4d7b2500b553151bae34bca8fc84ecea1606af8532149cebfc"
         "13f33e014fa3c0a9c4505eacbcb303118965885416a8e634a3c461eb0517a0c7"
     )
     assert proof.binding_digest_512.hex() == (
-        "9470549cac80649a0ced45ff17efa0a3441b1052b7476655f1f29d6807155b8"
-        "7d285f99737f8a5fa2a910093592dba930fcc37d02ae24b9c6f86f2ceddb35a49"
+        "28b553bae9341ee8ccb9d334c852699cc840c4001eb8c0e31661739b23948166"
+        "8eaecf49562d9c85790742a2bab77f1b0539f463fb3a39a2c5e8e12d175db806"
     )
 
 

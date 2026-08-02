@@ -10,13 +10,17 @@ use std::{
 use sha3::{Digest, Sha3_512};
 
 use crate::{
-    hash_bus::{GROUP_COUNT, HashBusError, build_hash_bus_descriptor},
+    hash_bus::{
+        GROUP_COUNT, HashBusError, build_hash_bus_descriptor, build_hash_bus_descriptor_with_state,
+    },
     hash_bus_source::KECCAK_STATE_BITS,
     wave1a_global_schedule::Profile,
 };
 
 pub const HASH_BUS_B16_MAGIC: &[u8; 8] = b"BLHBB101";
 pub const HASH_BUS_B16_VERSION: u16 = 1;
+pub const HASH_BUS_B16_STATE_MAGIC: &[u8; 8] = b"BLHBB102";
+pub const HASH_BUS_B16_STATE_VERSION: u16 = 2;
 pub const HASH_BUS_B16_HEADER_BYTES: u64 = 215;
 pub const HASH_BUS_B16_GKR_STATEMENT_DOMAIN: &[u8] =
     b"BL/PQ512/WAVE2/HASH-BUS-B16/GKR-STATEMENT/v1\0";
@@ -40,6 +44,7 @@ impl From<HashBusError> for HashBusB16BoundaryError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HashBusB16BoundaryHeader {
     pub profile: Profile,
+    pub state_composed: bool,
     pub semantic_program_commitment: [u8; 64],
     pub descriptor_commitment: [u8; 64],
     pub semantic_port_commitment: [u8; 64],
@@ -79,6 +84,9 @@ impl HashBusB16BoundaryHeader {
         let mut hash = Sha3_512::new();
         hash.update(HASH_BUS_B16_GKR_STATEMENT_DOMAIN);
         hash.update([self.profile as u8]);
+        if self.state_composed {
+            hash.update([2_u8]);
+        }
         hash.update(self.semantic_program_commitment);
         hash.update(self.descriptor_commitment);
         hash.update(self.semantic_port_commitment);
@@ -167,11 +175,15 @@ impl HashBusB16BoundaryFile {
         file.read_exact(&mut encoded)
             .map_err(|_| HashBusB16BoundaryError::Io)?;
         let mut cursor = 0_usize;
-        if &read_array::<8>(&encoded, &mut cursor)? != HASH_BUS_B16_MAGIC
-            || u16::from_be_bytes(read_array::<2>(&encoded, &mut cursor)?) != HASH_BUS_B16_VERSION
-        {
+        let magic = read_array::<8>(&encoded, &mut cursor)?;
+        let version = u16::from_be_bytes(read_array::<2>(&encoded, &mut cursor)?);
+        let state_composed = if &magic == HASH_BUS_B16_MAGIC && version == HASH_BUS_B16_VERSION {
+            false
+        } else if &magic == HASH_BUS_B16_STATE_MAGIC && version == HASH_BUS_B16_STATE_VERSION {
+            true
+        } else {
             return Err(HashBusB16BoundaryError::Encoding);
-        }
+        };
         let profile = profile_from_tag(read_array::<1>(&encoded, &mut cursor)?[0])?;
         let semantic_program_commitment = read_array::<64>(&encoded, &mut cursor)?;
         let descriptor_commitment = read_array::<64>(&encoded, &mut cursor)?;
@@ -183,7 +195,11 @@ impl HashBusB16BoundaryFile {
             return Err(HashBusB16BoundaryError::Encoding);
         }
 
-        let descriptor = build_hash_bus_descriptor(profile)?;
+        let descriptor = if state_composed {
+            build_hash_bus_descriptor_with_state(profile)?
+        } else {
+            build_hash_bus_descriptor(profile)?
+        };
         if descriptor.descriptor_commitment != descriptor_commitment
             || descriptor.coprocessor_shards != coprocessor_shards
             || descriptor.padded_permutations != padded_permutations
@@ -199,6 +215,7 @@ impl HashBusB16BoundaryFile {
             file,
             header: HashBusB16BoundaryHeader {
                 profile,
+                state_composed,
                 semantic_program_commitment,
                 descriptor_commitment,
                 semantic_port_commitment,

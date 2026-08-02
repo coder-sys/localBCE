@@ -5033,3 +5033,155 @@ two regenerated Python-cache targets: 3 targets and `10,681,750` bytes. Both pur
 remaining selected targets and zero `.pyc` files. The tracked `_handoff_support` source file was
 retained. Git remains nonactivating: `proofSuiteId=null`, activation=false, 6/93 complete, and no
 real PHI or payments.
+
+## 2026-08-02 Gate 2E state-root bus and reviewed PQ candidate - VERIFIED, NONADMITTING
+
+This continuation started from the sealed Wave 3 parent `c4ef6e9` in the authoritative checkout
+`C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`.
+The protected paths were not edited. No PHI, payment credential, production CUDA, proof artifact,
+activation input, or `proofSuiteId` value was introduced.
+
+The smallest real state composition seam is now versioned and authenticated at the H4 hash-bus
+source boundary. `BLHBSN02`/version 2 snapshots and `BLHBB102`/version 2 B16 boundaries clone the
+accepted base descriptor and append exactly two state-root SHA3 calls. The root message is exactly:
+
+```text
+STATE_ROOT_DOMAIN || len(snapshot.encoded).to_bytes(4,"big") || snapshot.encoded
+```
+
+The fixed state-root capacity is `claim_slots*137+512`: K128 is 18,048 and K512 is 70,656. The
+two calls therefore add 266 and 1,040 live permutations, producing exact state-composed live
+permutation totals of 113,996 and 412,446. The state-free `BLHBSN01`/`BLHBB101` descriptor and
+bytes remain byte-compatible. The Rust coordinator independently checks the exact packed input and
+output bit patterns of both appended root calls before child spawn; the worker derives the totals
+from the descriptor rather than a duplicated profile constant.
+
+Cross-language descriptor KATs are:
+
+```text
+K128 descriptor_commitment=d5aa3a35136e28134f63a120f7f73c1ed3fc35e482efa618c6ba054aef5838e0552aa907ca69ebc2ef1af2b9b499bda48539f51ee04e3c43e10cfc5221e03c89
+K512 descriptor_commitment=31e17d270d51334ec5e2dbaab0fd7433c8a406785de7f5f23210f53cf965694b95d51c661654fb3c04788c43b2abd3df82259d069be10ada046f8bbce7c84480
+```
+
+The manual Python-to-Rust state-boundary readback used only synthetic zero data and was removed
+after verification. Its raw identities and converter output were:
+
+```text
+snapshot_bytes=3596853
+snapshot_sha3_512=3c372bb345a54583f5fd008789cdbf1f97789f3d7a22737889af279a87d3d5a01eae119bc4cbba1040d2ace5a189b79861e5a266604003ae001fc90e066918a8
+profile=K128Calibration
+semantic_program_commitment=0707070707070707070707070707070707070707070707070707070707070707
+descriptor_commitment=d5aa3a35136e28134f63a120f7f73c1ed3fc35e482efa618c6ba054aef5838e0552aa907ca69ebc2ef1af2b9b499bda48539f51ee04e3c43e10cfc5221e03c89
+semantic_port_commitment=20c15042ded22d0e402e67f0479bf13cda1dbfc3efb5899ef00bd2720ca58ab34f03a5ec0f2991b834aafa4306351c9aa668393ee591b986fd2409869a045153
+coprocessor_shards=1
+groups=8192
+live_wires_per_boundary=1600
+output_bytes=52429015
+output_decimal_mb=52.429015
+output_sha3_512=ba41dbc5787f4b55f9ba6323a0226c86739b54319c99b4aaa84345471d8acc5afc15acb9f4793c92e0fdae37c826b68e9353fd796beb671c8ddc403562364ceb
+inspect_padded_permutations=131072
+inspect_decoded_patterns=26214400
+inspect_file_bytes=52429015
+inspect_boundary_verified=true
+```
+
+The B16 worker correction was exact and regression-tested: the initial derived state totals
+`114232/413370` were wrong and were corrected to `113996/412446`; a critical indentation defect
+that nested `shard_start`/`shard_permutations` under the non-little-endian branch was also fixed.
+The durable worker test covers the state header, wire-major packed geometry, and the Windows
+little-endian path.
+
+The new clean-room candidate is `TRANSPARENT_SHAKE256_1024` with parameter identity
+`BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`. It commits before the later authenticated public coin
+using SHAKE256-1024, a 128-byte mask, and a 128-byte commitment. Its explicit conservative ledger
+is:
+
+```text
+output_bits=1024
+quantum_collision_bits=341
+quantum_preimage_bits=512
+multi_target_loss_bits=32
+effective_binding_bits=309
+effective_hiding_bits=480
+required_security_bits=256
+review_decision=REVIEWED_CANDIDATE_H4_COMPOSITION_OPEN
+```
+
+The S3 registry now exercises five candidates. The three lattice descriptors remain unpinned;
+the old `TRANSPARENT_HASH_CODE` remains rejected for its public-coin lifecycle, generic 512-bit
+quantum-collision floor, and missing composition; the new candidate is rejected solely for
+`complete_composition_missing`. No candidate is admitted or selected.
+
+Two test-only fixture defects were reproduced and corrected rather than hidden. The first native
+state-bus fixture wrote group-major payload bytes and failed with:
+
+```text
+state_hash_bus_mismatch:0:input:113730:3
+```
+
+It was corrected to the authenticated file wire-major layout. The next mutation assertion used a
+group-sized offset instead of the wire-major `header + group*2` offset; that test-only offset was
+corrected, and the final mutation-bound native test passed.
+
+Final verification for this slice:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+52 passed in 157.35s (0:02:37)
+
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_transparent_hash_code_candidate.py tests/test_bl_pq512_hash_bus_worker_boundary.py
+4 passed in 0.40s
+
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_foundation_spec.py tests/test_deployment_ready_roadmap_contract.py
+15 passed in 0.23s
+
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_security_freeze_spec.py
+6 passed in 0.09s
+
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_fixed_shape_foundation_spec.py
+14 passed in 0.09s
+
+cargo +1.96.0 fmt --all -- --check
+exit 0
+
+cargo +1.96.0 check --offline --locked --features parallel
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+
+git diff --check
+exit 0
+```
+
+Generated-output cleanup was bounded to eight exact paths and removed `9,322,207,536` bytes:
+`C:\blpq-target` (12,630 files, 4,941,808,695 bytes),
+`C:\tmp\blpq-target-wave2` (2,812 files, 2,031,237,199 bytes), the synthetic state-boundary
+temporary directory (2 files, 56,025,868 bytes), the crate-local Cargo target (4,278 files,
+2,290,296,387 bytes), and four Python `__pycache__` directories (90 files, 2,839,387 bytes).
+All eight exact paths were verified missing after removal. No tracked source, policy, release, or
+protected path was deleted.
+
+The first Rust invocation from the repository root failed before doing work because that directory
+has no `Cargo.toml`:
+
+```text
+error: could not find `Cargo.toml` in `C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26` or any parent directory
+```
+
+The exact same commands passed from `experiments/bl_pq512_crypto_core`, the owning crate. This was
+an invocation-directory correction, not a source or gate failure. Earlier native/Rust readbacks
+also remain green: the hash-bus snapshot tests were `2 passed; 0 failed; 264 filtered out; finished
+in 34.25s`, the full coordinator binary was `6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered
+out; finished in 106.66s`, and the Rust library hash-bus suite was `9 passed; 0 failed; 257 filtered
+out; finished in 70.95s`.
+
+The current CUDA prototype and worker source changed after the accepted state-free manifest
+`51c23310274ccf7c4d7f9abe4ae7eba43266b335bd377b21cbf92409729b91e2a40a39787a157baa080c9d0516c7815af404a4d58d9e76747f652f57cd017ed6`.
+The required current release native executables/cubins are not present in this checkout, so the
+manifest could not be recomputed and no CUDA proof was launched. The manifest and 29.974129/120.460733
+second H4 results remain state-free historical prototype evidence only.
+
+This phase therefore closes a real authenticated state-root bus prerequisite and a reviewed
+reference candidate, but it does not close Gate 2E. The full state relation is still not inside
+the custom H4 GKR/PCS proof; the complete semantic/state/GKR/PCS simulator, leakage scan, strict-PQ
+composition ledger, candidate admission, H5's exact one-warm-up-plus-ten-per-profile campaign
+(22 fresh launches), H6 qualification, and all later Wave 3+ work remain open. `proofSuiteId=null`,
+activation=false, no PHI/payments are authorized, and no production CUDA was run.

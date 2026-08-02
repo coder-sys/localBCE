@@ -45,12 +45,17 @@ collision claim receives credit.
 The current construction also is not yet composed into the actual H4 AIR.
 Accordingly `TRANSPARENT_HASH_CODE` remains rejected with an explicit
 `hash_pad_security_review_rejected` reason; this record does not select a
-backend or authorize H5.
+backend or authorize H5. The newer clean-room `TRANSPARENT_SHAKE256_1024`
+candidate is tracked in the S3 registry separately; its 1,024-bit reference
+ledger closes the two local hash-pad defects but does not close H4 composition,
+the complete simulator, or leakage review.
 
 ## Required next closure
 
 Admission needs a reviewed construction with a frozen public-coin lifecycle,
 an exact 256-bit post-quantum hiding/binding/composition theorem, complete
 state constraints inside the H4 AIR, and independent cross-language evidence.
-The missing canonical sibling `../ops` remains a separate external
-fail-closed blocker.
+The tracked `ops/` authority is now the sole verified canonical tree; the former
+sibling-layout blocker is closed. The remaining blockers are cryptographic
+composition, complete state proof coverage, simulator/leakage closure, and H4
+admission evidence.

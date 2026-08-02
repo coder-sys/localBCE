@@ -33,6 +33,12 @@ from experiments.bl_pq512_crypto_foundation.pq_signature_adapters import (
 from experiments.bl_pq512_crypto_foundation.hash_pad_security_review import (
     hash_pad_security_review,
 )
+from experiments.bl_pq512_crypto_foundation.transparent_hash_code_candidate import (
+    BACKEND_ID as TRANSPARENT_SHAKE256_BACKEND_ID,
+    PARAMETER_IDENTITY as TRANSPARENT_SHAKE256_PARAMETER_IDENTITY,
+    TransparentHashCodeSecurityLedger,
+    security_ledger as transparent_shake256_security_ledger,
+)
 
 
 STATUS: Final[str] = "S3_PQ_COMMITMENT_SCREENING_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
@@ -52,6 +58,7 @@ CANDIDATE_IDS: Final[tuple[str, ...]] = (
     "MODULE_SIS",
     "ROKOKO_STYLE_LATTICE",
     "TRANSPARENT_HASH_CODE",
+    TRANSPARENT_SHAKE256_BACKEND_ID,
 )
 AUTHORITY_SUITE_IDS: Final[tuple[str, ...]] = (
     ML_DSA_87_SUITE_ID,
@@ -68,6 +75,9 @@ _COIN_MESSAGE_DOMAIN = b"BL/PQ512/S3/AUTHENTICATED-COIN-MESSAGE/v1\x00"
 _COIN_CHALLENGE_DOMAIN = b"BL/PQ512/S3/AUTHENTICATED-COIN-CHALLENGE/v1\x00"
 _COIN_TRANSCRIPT_DOMAIN = b"BL/PQ512/S3/AUTHENTICATED-COIN-TRANSCRIPT/v1\x00"
 _PUBLIC_TRANSCRIPT_DOMAIN = b"BL/PQ512/S3/PUBLIC-TRANSCRIPT/v1\x00"
+_SHAKE256_LEDGER: Final[TransparentHashCodeSecurityLedger] = (
+    transparent_shake256_security_ledger()
+)
 
 
 class CommitmentScreeningError(ValueError):
@@ -349,6 +359,22 @@ BACKEND_DESCRIPTORS: Final[tuple[CommitmentBackendDescriptor, ...]] = (
         security_bits=256,
         native_hiding_reviewed=False,
         public_coin_reviewed=False,
+        complete_composition=False,
+    ),
+    _descriptor(
+        TRANSPARENT_SHAKE256_BACKEND_ID,
+        "transparent_hash_code",
+        source_status="INTERNAL_REFERENCE_ONLY",
+        license_status="INTERNAL_REFERENCE",
+        assumption_status="REVIEWED_STRICT_PQ_ASSUMPTION",
+        implementation_status="COMPLETE_REVIEWED_REFERENCE",
+        parameter_identity=TRANSPARENT_SHAKE256_PARAMETER_IDENTITY,
+        field_mapping="fixed-64-byte-state-statements-to-SHAKE256-1024-with-128-byte-mask",
+        parameter_bits=_SHAKE256_LEDGER.output_bits,
+        encryption_bits=_SHAKE256_LEDGER.effective_hiding_bits,
+        security_bits=_SHAKE256_LEDGER.effective_binding_bits,
+        native_hiding_reviewed=True,
+        public_coin_reviewed=True,
         complete_composition=False,
     ),
 )

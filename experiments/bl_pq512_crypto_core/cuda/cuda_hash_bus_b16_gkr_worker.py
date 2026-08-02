@@ -64,16 +64,37 @@ FINISH = b"BLGKRFI5"
 FINISHED = b"BLGKRDN5"
 
 BOUNDARY_MAGIC = b"BLHBB101"
+STATE_BOUNDARY_MAGIC = b"BLHBB102"
 BOUNDARY_HEADER_BYTES = 215
 GROUP_COUNT = 8_192
 LIVE_WIRES = 1_600
 PADDED_WIRES = 2_048
 MAX_CLAIMS = 4
+RATE_BYTES = 136
+STATE_ROOT_ENTRY_WIDTH = 137
+STATE_ROOT_CAPACITY_BASE = 512
 BRIDGE_COEFFICIENTS = 46
 PERMUTATIONS_PER_SHARD = GROUP_COUNT * 16
 PROFILE_TOTAL_PERMUTATIONS = {
     1: 113_730,
     3: 411_406,
+}
+PROFILE_CLAIM_SLOTS = {
+    1: 128,
+    3: 512,
+}
+PROFILE_STATE_TOTAL_PERMUTATIONS = {
+    profile: PROFILE_TOTAL_PERMUTATIONS[profile]
+    + 2
+    * (
+        (
+            PROFILE_CLAIM_SLOTS[profile] * STATE_ROOT_ENTRY_WIDTH
+            + STATE_ROOT_CAPACITY_BASE
+        )
+        // RATE_BYTES
+        + 1
+    )
+    for profile in PROFILE_TOTAL_PERMUTATIONS
 }
 
 
@@ -747,15 +768,26 @@ def read_boundary(path, shard):
     file_bytes = path.stat().st_size
     with path.open("rb") as source:
         header = read_exact(source, BOUNDARY_HEADER_BYTES)
-        if header[:8] != BOUNDARY_MAGIC or header[8:10] != b"\x00\x01":
+        magic = header[:8]
+        version = header[8:10]
+        state_composed = magic == STATE_BOUNDARY_MAGIC and version == b"\x00\x02"
+        if not (
+            (magic == BOUNDARY_MAGIC and version == b"\x00\x01")
+            or state_composed
+        ):
             raise ValueError("boundary_header")
         profile = header[10]
         shards = int.from_bytes(header[203:205], "big")
         padded = int.from_bytes(header[205:213], "big")
         live_wires = int.from_bytes(header[213:215], "big")
+        profile_totals = (
+            PROFILE_STATE_TOTAL_PERMUTATIONS
+            if state_composed
+            else PROFILE_TOTAL_PERMUTATIONS
+        )
         expected = BOUNDARY_HEADER_BYTES + shards * 2 * LIVE_WIRES * GROUP_COUNT * 2
         if (
-            profile not in PROFILE_TOTAL_PERMUTATIONS
+            profile not in profile_totals
             or shard < 0
             or shard >= shards
             or padded != shards * GROUP_COUNT * 16
@@ -775,7 +807,7 @@ def read_boundary(path, shard):
     shard_start = shard * PERMUTATIONS_PER_SHARD
     shard_permutations = min(
         PERMUTATIONS_PER_SHARD,
-        max(0, PROFILE_TOTAL_PERMUTATIONS[profile] - shard_start),
+        max(0, profile_totals[profile] - shard_start),
     )
     if shard_permutations <= 0:
         raise ValueError("boundary_live_shard")

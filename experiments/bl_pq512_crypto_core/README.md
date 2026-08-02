@@ -16,9 +16,11 @@ It does not select persistent state, assign H5/H6 qualification, assign a suite 
 production activation, or provide Ethereum settlement. The native coordinator now has a bounded
 `--verify-state-binding` path and accepts `state-file:<path>` for a canonical private state envelope;
 it recomputes the state statement, pad commitment, proof identity, and receipt before the H4 parent
-uses that statement. The state relation is still independently replayed reference evidence, not a
-state AIR or a qualified proof backend. Direct SHA3 AIR and other retained narrow controls are
-differential or fail-closed regression machinery, not alternate proof backends.
+uses that statement. The versioned state-root bus seam now admits `BLHBSN02`/`BLHBB102` source
+formats and independently checks the two appended state-root calls before child spawn. The state
+relation is still independently replayed reference evidence, not a complete state AIR inside the
+custom H4 GKR/PCS proof or a qualified proof backend. Direct SHA3 AIR and other retained narrow
+controls are differential or fail-closed regression machinery, not alternate proof backends.
 
 ## Current accepted profiles
 
@@ -31,6 +33,12 @@ differential or fail-closed regression machinery, not alternate proof backends.
 | Live input wires/permutation | 1,600 | 1,600 |
 | `BLHBB101` bytes | 52,429,015 | 209,715,415 |
 | Complete H4 process | 29.974129 s | 120.460733 s |
+
+The state-composed formats are separate, nonactivating extensions: `BLHBSN02`/`BLHBB102` append
+two root calls at capacity 18,048 (K128) or 70,656 (K512), adding 266 or 1,040 live permutations.
+Their resulting descriptor totals are 113,996 and 412,446 live permutations. The original
+`BLHBSN01`/`BLHBB101` source remains byte-compatible. No new manifest-bound H4 proof was run after
+this source change.
 
 The proof uses 6,073 GKR rounds plus 13 PCS rounds, 6,086 combined. The standalone PCS protocol
 uses 14 rounds because its boundary authenticates the complete GKR claims before continuation.
@@ -83,7 +91,7 @@ The hard gates remain 5,000 MB maximum host RSS, scratch strictly below 5,000 MB
 | Responsibility | Source |
 | --- | --- |
 | Profile and semantic schedule | `src/wave1a_global_schedule.rs`, `src/wave1a_dimensions.rs` |
-| B16 source and codec | `src/hash_bus_b16_boundary.rs`, `src/hash_bus_b16_trace.rs`, `src/bin/hash_bus_snapshot_to_b16.rs` |
+| B16 source and codec | `src/hash_bus.rs`, `src/hash_bus_snapshot.rs`, `src/hash_bus_b16_boundary.rs`, `src/hash_bus_b16_trace.rs`, `src/bin/hash_bus_snapshot_to_b16.rs` |
 | Selected plan and worker seam | `src/hash_bus_b16_gkr_plan.rs`, `src/hash_bus_b16_gkr_worker.rs` |
 | GKR schedule/source/proof | `src/fp16_relay_free_gkr_schedule.rs`, `src/fp16_relay_free_gkr_source.rs`, `src/fp16_relay_free_gkr_uniform.rs` |
 | Native masks and GKR/PCS binding | `src/gkr_zk_mask.rs`, `src/fp16_zk_rs_gkr_binding.rs` |
@@ -145,9 +153,9 @@ throughput evidence.
 ## Current next dependency
 
 The terminal Gate 2E composition/simulator/leakage/state-proof receipt ledger reference is now
-implemented and tested, but it is deliberately unsealed. Gate 2E must still admit and atomically
-bind a reviewed state relation and PQ commitment into the H4 parent, transcript, proof grammar,
-independent verifier, and receipt. H5 then runs one warm-up plus ten
+implemented and tested, but it is deliberately unsealed. Gate 2E must still put the complete state
+relation inside the H4 proof, admit a reviewed state/PQ commitment plane, and atomically bind it
+into the H4 parent, transcript, proof grammar, independent verifier, and receipt. H5 then runs one warm-up plus ten
 unique K128 and ten unique K512 proofs; H6 closes the theorem, simulator, parser, attack,
 reproducibility, resource, and identity obligations.
 

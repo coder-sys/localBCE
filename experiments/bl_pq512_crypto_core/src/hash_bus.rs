@@ -17,6 +17,8 @@ pub const KECCAK_ROUNDS: u16 = 24;
 pub const PACKED_SHARDS: u16 = 16;
 pub const GROUP_COUNT: u64 = 8_192;
 pub const PERMUTATIONS_PER_COPROCESSOR_SHARD: u64 = GROUP_COUNT * PACKED_SHARDS as u64;
+pub const STATE_ROOT_ENTRY_WIDTH: u64 = 137;
+pub const STATE_ROOT_CAPACITY_BASE: u64 = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HashBusCapacityRun {
@@ -211,6 +213,100 @@ pub fn build_hash_bus_descriptor(profile: Profile) -> Result<HashBusDescriptor, 
         padded_permutations,
         capacity_schedule_commitment,
         descriptor_commitment,
+    })
+}
+
+/// Return the fixed message capacity for the two state-root calls in the
+/// versioned state-composed bus.  The capacity is public and profile-derived;
+/// it is deliberately larger than the canonical snapshot encoding so every
+/// state witness of that profile has identical SHA3 shape.
+pub fn state_root_capacity(profile: Profile) -> Result<u64, HashBusError> {
+    profile
+        .claim_slots()
+        .checked_mul(STATE_ROOT_ENTRY_WIDTH)
+        .and_then(|value| value.checked_add(STATE_ROOT_CAPACITY_BASE))
+        .ok_or(HashBusError::Overflow)
+}
+
+/// Build the exact descriptor for a state-composed H4 bus.
+///
+/// The accepted state-free descriptor is intentionally unchanged.  This
+/// version appends exactly two fixed-capacity calls, one for each state root,
+/// while reusing the existing padded shard geometry.  The descriptor
+/// commitment therefore binds both the extra call schedule and the original
+/// H4 profile without changing the state-free proof identity.
+pub fn build_hash_bus_descriptor_with_state(
+    profile: Profile,
+) -> Result<HashBusDescriptor, HashBusError> {
+    let base = build_hash_bus_descriptor(profile)?;
+    let capacity = state_root_capacity(profile)?;
+    let state_run = HashBusCapacityRun {
+        component: "state_plane",
+        label: "root",
+        capacity,
+        count: 2,
+    };
+    let state_permutations = state_run.permutations()?;
+    let total_calls = base
+        .total_calls
+        .checked_add(state_run.count)
+        .ok_or(HashBusError::Overflow)?;
+    let total_permutations = base
+        .total_permutations
+        .checked_add(state_permutations)
+        .ok_or(HashBusError::Overflow)?;
+    if total_permutations > base.padded_permutations {
+        return Err(HashBusError::Overflow);
+    }
+
+    let mut runs = base.runs.clone();
+    runs.push(state_run);
+    let mut capacity_hash = Sha3_512::new();
+    capacity_hash.update(CAPACITY_SCHEDULE_DOMAIN);
+    let profile_id = profile_id(profile).as_bytes();
+    capacity_hash.update([u8::try_from(profile_id.len()).map_err(|_| HashBusError::Encoding)?]);
+    capacity_hash.update(profile_id);
+    capacity_hash.update(
+        u16::try_from(runs.len())
+            .map_err(|_| HashBusError::Encoding)?
+            .to_be_bytes(),
+    );
+    for run in &runs {
+        for value in [run.component.as_bytes(), run.label.as_bytes()] {
+            capacity_hash.update([u8::try_from(value.len()).map_err(|_| HashBusError::Encoding)?]);
+            capacity_hash.update(value);
+        }
+        capacity_hash.update(run.capacity.to_be_bytes());
+        capacity_hash.update(run.count.to_be_bytes());
+    }
+    capacity_hash.update(total_calls.to_be_bytes());
+    capacity_hash.update(total_permutations.to_be_bytes());
+    let capacity_schedule_commitment = capacity_hash.finalize().into();
+
+    let mut descriptor_hash = Sha3_512::new();
+    descriptor_hash.update(HASH_BUS_DESCRIPTOR_DOMAIN);
+    descriptor_hash.update(HASH_BUS_DESCRIPTOR_VERSION.to_be_bytes());
+    descriptor_hash.update([profile as u8]);
+    descriptor_hash.update(total_calls.to_be_bytes());
+    descriptor_hash.update(total_permutations.to_be_bytes());
+    descriptor_hash.update(capacity_schedule_commitment);
+    descriptor_hash.update(KECCAK_STATE_BITS.to_be_bytes());
+    descriptor_hash.update(KECCAK_ROUNDS.to_be_bytes());
+    descriptor_hash.update(PACKED_SHARDS.to_be_bytes());
+    descriptor_hash.update(GROUP_COUNT.to_be_bytes());
+    descriptor_hash.update(PERMUTATIONS_PER_COPROCESSOR_SHARD.to_be_bytes());
+    descriptor_hash.update(base.coprocessor_shards.to_be_bytes());
+    descriptor_hash.update(base.padded_permutations.to_be_bytes());
+
+    Ok(HashBusDescriptor {
+        profile,
+        runs,
+        total_calls,
+        total_permutations,
+        coprocessor_shards: base.coprocessor_shards,
+        padded_permutations: base.padded_permutations,
+        capacity_schedule_commitment,
+        descriptor_commitment: descriptor_hash.finalize().into(),
     })
 }
 

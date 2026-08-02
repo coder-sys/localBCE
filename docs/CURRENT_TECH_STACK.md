@@ -34,9 +34,12 @@ remain unselected, and activation is forbidden.
 
 Gate 2E-3/S3 now has a common fixed-width masked commitment/opening reference, exact candidate
 parameter identities, dual-PQ authenticated public-coin evidence, and an independent opening
-verifier in `pq_commitment_screening.py`. All four descriptors are rejected because reviewed exact
-source/parameters, native-hiding theorem composition, or complete-proof evidence is missing. This
-is screening evidence only; no PCS, state plane, H4 binding, or activation decision is closed.
+verifier in `pq_commitment_screening.py`. Five descriptors are now screened: the three isolated
+lattice families, the retired 512-bit hash-pad control, and the clean-room
+`TRANSPARENT_SHAKE256_1024` reference candidate. All five remain rejected: the lattice families
+lack pinned construction evidence, the retired hash-pad control fails its public-coin/quantum
+composition review, and the new candidate is rejected only for `complete_composition_missing`.
+This is screening evidence only; no PCS, state plane, H4 binding, or activation decision is closed.
 
 Gate 2E-4/S4 now has a synthetic non-spliceable composition reference in
 `atomic_state_composition.py`. It keeps the scalar relation candidate distinct from the screened
@@ -58,9 +61,10 @@ selection, `proofSuiteId`, or activation is closed.
 Gate 2E-6/S6 and 2E-7/S7 now have a reference measurement/selection ledger in
 `gate_2e_selection.py`. It measures the identical synthetic S2/S3/S4 component twice for each
 screened backend and both K128/K512 profiles, recomputes the S3 rejection reasons, and refuses to
-grant timing credit when no backend is admitted. All four backends remain rejected; C0 is retained
+grant timing credit when no backend is admitted. All five backends remain rejected; C0 is retained
 as an unselected control, complete warm-up/complete-boundary runs are not authorized, and the
-selection handoff is explicitly unsealed. Focused positive/attack tests pass 6/6.
+selection handoff is explicitly unsealed. The five-by-two-by-two observation count is 20 derived
+reference observations. Focused positive/attack tests pass 6/6.
 
 The terminal Gate 2E evidence boundary is now implemented in
 `gate_2e_terminal_ledger.py`. It independently replays S4, derives S5 checkpoints, checks the
@@ -94,9 +98,36 @@ the exact state proof grammar, and the atomic receipt binds the same full contex
 old/new operation and slot, empty-slot zeroing, both canonical snapshot encodings, real SHA3-512
 root calls, and ordered public roots; `compose_state_plane_air` merges it into one executable AIR
 encoding. Native consumption is independently tested against a generated binding and mutation
-failures, but it is not a proof-native H4 PCS/ZK composition or backend admission. No reviewed PQ
-commitment backend is available, the hash-pad review rejects the current candidate for Gate 2E,
-`proofSuiteId` remains null, and activation remains closed.
+failures. A versioned state-root bus bridge now appends exactly two fixed-capacity SHA3 calls to the
+authenticated B16 source when a state binding is supplied: `BLHBSN02`/version 2 snapshots and
+`BLHBB102`/version 2 boundaries use capacity `claim_slots*137+512` (18,048 for K128 and 70,656
+for K512), adding 266 and 1,040 live permutations respectively. The base
+`BLHBSN01`/`BLHBB101` profile remains byte-compatible. The coordinator independently checks those
+two root-call input/output patterns before child spawn, but the state relation is still not inside
+the H4 custom GKR proof. No reviewed PQ commitment backend is available, `proofSuiteId` remains
+null, and activation remains closed.
+
+## Gate 2E state-composed bus and candidate boundary
+
+The smallest proof-native state seam currently implemented is the versioned hash-bus composition
+in `experiments/bl_pq512_crypto_core/src/hash_bus.rs`,
+`src/hash_bus_snapshot.rs`, `src/hash_bus_b16_boundary.rs`, and the snapshot-to-B16 converter.
+It clones the accepted base descriptor and appends two root messages whose canonical body is
+`STATE_ROOT_DOMAIN || len(snapshot.encoded).to_bytes(4,"big") || snapshot.encoded`. The resulting
+live permutation totals are 113,996 for K128 and 412,446 for K512; exact cross-language descriptor
+commitments are recorded in `STATE.md`. The B16 worker derives these totals from the descriptor
+capacity rather than a duplicated constant, and a durable sparse-boundary test covers wire-major
+packing and the Windows little-endian path. This is real authenticated source/child-boundary
+coverage, not a new H4 proof or production CUDA result.
+
+The clean-room PQ candidate is `TRANSPARENT_SHAKE256_1024`, parameter identity
+`BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`. It commits before the authenticated public coin with
+SHAKE256-1024, a 128-byte mask, and a 128-byte commitment; its conservative ledger is 341-bit
+quantum collision, 32-bit multi-target loss, 309-bit effective binding, and 480-bit effective
+hiding. Its review decision is `REVIEWED_CANDIDATE_H4_COMPOSITION_OPEN`: the candidate is
+reference-only and rejected solely because complete H4 composition, the full simulator, and the
+cross-module leakage/security closure are not complete. The old SHA3 hash-pad candidate remains
+rejected for its own public-coin and 512-bit-collision deficiencies. No candidate is selected.
 
 ## Wave 3 P01-P03 candidate boundary
 

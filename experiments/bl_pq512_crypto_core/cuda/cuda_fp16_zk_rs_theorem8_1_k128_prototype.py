@@ -2867,9 +2867,13 @@ def load_semantic_b16_shard(path, shard):
         header = source.read(HASH_BUS_B16_HEADER_BYTES)
         if len(header) != HASH_BUS_B16_HEADER_BYTES:
             raise SystemExit("semantic_b16_header_short")
-        if header[:8] != b"BLHBB101" or int.from_bytes(
+        state_composed = header[:8] == b"BLHBB102" and int.from_bytes(
             header[8:10], "big"
-        ) != 1:
+        ) == 2
+        if not (
+            (header[:8] == b"BLHBB101" and int.from_bytes(header[8:10], "big") == 1)
+            or state_composed
+        ):
             raise SystemExit("semantic_b16_header_magic")
         profile = header[10]
         commitments = (
@@ -2939,6 +2943,7 @@ def load_semantic_b16_shard(path, shard):
         "shard": shard,
         "profile": profile,
         "shards": shards,
+        "state_composed": state_composed,
         "commitments": commitments,
         "file_sha3_512": digest.digest(),
         "payload": payload,
@@ -3203,6 +3208,12 @@ def main():
             )
             prepared_public_coin = None
             raise
+        if (state_binding is not None) != semantic_source["state_composed"]:
+            NativePublicCoinBridge.abort_prepared(prepared_public_coin)
+            prepared_public_coin = None
+            raise SystemExit("semantic_b16_state_composition_mismatch")
+    elif state_binding is not None:
+        raise SystemExit("state_binding_requires_semantic_boundary")
     path_gate_seconds = time.perf_counter() - proof_process_started
 
     gkr_mask_cpu_root = None
@@ -4674,6 +4685,10 @@ def main():
         print(
             "semantic_hash_bus_statement_bound="
             f"{str(semantic_source is not None).lower()}"
+        )
+        print(
+            "state_hash_bus_calls_verified="
+            f"{str(state_binding is not None and semantic_source is not None).lower()}"
         )
         if semantic_source is not None:
             print(

@@ -6,15 +6,15 @@ use std::{
 };
 
 use bl_pq512_crypto_core::{
-    hash_bus::build_hash_bus_descriptor,
-    hash_bus_b16_boundary::HashBusB16BoundaryFile,
+    hash_bus::{build_hash_bus_descriptor, build_hash_bus_descriptor_with_state},
+    hash_bus_b16_boundary::{
+        HASH_BUS_B16_MAGIC, HASH_BUS_B16_STATE_MAGIC, HASH_BUS_B16_STATE_VERSION,
+        HASH_BUS_B16_VERSION, HashBusB16BoundaryFile,
+    },
     hash_bus_snapshot::HashBusSnapshot,
     hash_bus_source::{KECCAK_STATE_BITS, for_each_hash_bus_b16_group},
 };
 use sha3::{Digest, Sha3_512};
-
-const OUTPUT_MAGIC: &[u8; 8] = b"BLHBB101";
-const OUTPUT_VERSION: u16 = 1;
 
 fn main() {
     if let Err(error) = run() {
@@ -41,8 +41,12 @@ fn run() -> Result<(), String> {
     let encoded = read(&input).map_err(|error| format!("read_snapshot:{error}"))?;
     let snapshot =
         HashBusSnapshot::decode(&encoded).map_err(|error| format!("decode_snapshot:{error:?}"))?;
-    let descriptor = build_hash_bus_descriptor(snapshot.profile)
-        .map_err(|error| format!("descriptor:{error:?}"))?;
+    let descriptor = if snapshot.state_composed {
+        build_hash_bus_descriptor_with_state(snapshot.profile)
+    } else {
+        build_hash_bus_descriptor(snapshot.profile)
+    }
+    .map_err(|error| format!("descriptor:{error:?}"))?;
     if descriptor.descriptor_commitment != snapshot.descriptor_commitment {
         return Err("descriptor_commitment".to_string());
     }
@@ -62,8 +66,13 @@ fn run() -> Result<(), String> {
             .ok_or_else(|| "output_length".to_string())?;
         Ok(())
     };
-    write(OUTPUT_MAGIC)?;
-    write(&OUTPUT_VERSION.to_be_bytes())?;
+    let (output_magic, output_version) = if snapshot.state_composed {
+        (HASH_BUS_B16_STATE_MAGIC, HASH_BUS_B16_STATE_VERSION)
+    } else {
+        (HASH_BUS_B16_MAGIC, HASH_BUS_B16_VERSION)
+    };
+    write(output_magic)?;
+    write(&output_version.to_be_bytes())?;
     write(&[snapshot.profile as u8])?;
     write(&snapshot.semantic_program_commitment)?;
     write(&snapshot.descriptor_commitment)?;

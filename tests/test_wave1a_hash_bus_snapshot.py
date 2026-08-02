@@ -7,8 +7,13 @@ import pytest
 from experiments.fixed_shape_claim_air.application_sha3_executable_air import Sha3Call
 from experiments.fixed_shape_claim_air.hash_bus_snapshot import (
     encode_hash_bus_snapshot,
+    encode_state_composed_hash_bus_snapshot,
     hash_bus_semantic_port_commitment,
+    hash_bus_state_semantic_port_commitment,
+    state_composed_descriptor_commitment,
+    state_root_capacity,
 )
+from experiments.bl_pq512_crypto_foundation.state_plane import StateSnapshot
 from experiments.fixed_shape_claim_air.profile import get_profile
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 from experiments.fixed_shape_claim_air.wave1a_global_sha3_capacity_schedule import (
@@ -49,3 +54,32 @@ def test_snapshot_rejects_capacity_order_mutation() -> None:
     forged[0] = Sha3Call(forged[0].call_id, forged[0].message, forged[0].capacity + 1)
     with pytest.raises(StructuralError, match="hash_bus_snapshot_call_invalid:0"):
         encode_hash_bus_snapshot(profile, bytes(64), forged)
+
+
+def test_state_composed_snapshot_appends_two_canonical_root_calls() -> None:
+    profile, schedule, calls = _empty_calls()
+    program = bytes((19,)) * 64
+    before = StateSnapshot.empty("K128_CALIBRATION", capacity=128).encoded
+    after = StateSnapshot.empty("K128_CALIBRATION", capacity=128, sequence=1).encoded
+    root_capacity = state_root_capacity(profile)
+    state_calls = list(calls)
+    for label, encoded in (("before", before), ("after", after)):
+        state_calls.append(
+            Sha3Call(
+                f"state_root_{label}",
+                b"BL/PQ512/STATE-PLANE/ROOT/v1\x00"
+                + len(encoded).to_bytes(4, "big")
+                + encoded,
+                root_capacity,
+            )
+        )
+    encoded = encode_state_composed_hash_bus_snapshot(
+        profile, program, calls, before, after
+    )
+    assert encoded[:8] == b"BLHBSN02"
+    assert int.from_bytes(encoded[8:10], "big") == 2
+    assert int.from_bytes(encoded[203:211], "big") == schedule.total_calls + 2
+    assert encoded[75:139] == state_composed_descriptor_commitment(profile)
+    assert encoded[139:203] == hash_bus_state_semantic_port_commitment(
+        profile, program, state_calls
+    )

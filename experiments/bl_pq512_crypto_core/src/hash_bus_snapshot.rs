@@ -10,14 +10,21 @@ use core::fmt;
 use sha3::{Digest, Sha3_512};
 
 use crate::{
-    hash_bus::{HashBusError, build_hash_bus_descriptor},
+    hash_bus::{
+        HashBusDescriptor, HashBusError, build_hash_bus_descriptor,
+        build_hash_bus_descriptor_with_state,
+    },
     hash_bus_source::HashBusMessage,
     wave1a_global_schedule::Profile,
 };
 
 pub const HASH_BUS_SNAPSHOT_MAGIC: &[u8; 8] = b"BLHBSN01";
 pub const HASH_BUS_SNAPSHOT_VERSION: u16 = 1;
+pub const HASH_BUS_STATE_SNAPSHOT_MAGIC: &[u8; 8] = b"BLHBSN02";
+pub const HASH_BUS_STATE_SNAPSHOT_VERSION: u16 = 2;
 pub const HASH_BUS_SEMANTIC_PORT_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/HASH-BUS-SEMANTIC-PORT/v1\0";
+pub const HASH_BUS_STATE_SEMANTIC_PORT_DOMAIN: &[u8] =
+    b"BL/PQ512/WAVE2/HASH-BUS-SEMANTIC-PORT/STATE/v1\0";
 pub const MAX_HASH_BUS_MESSAGE_BYTES: usize = 1 << 20;
 pub const MAX_HASH_BUS_SNAPSHOT_BYTES: usize = 1 << 30;
 
@@ -41,6 +48,7 @@ impl OwnedHashBusMessage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HashBusSnapshot {
     pub profile: Profile,
+    pub state_composed: bool,
     pub semantic_program_commitment: [u8; 64],
     pub descriptor_commitment: [u8; 64],
     pub semantic_port_commitment: [u8; 64],
@@ -83,9 +91,10 @@ fn profile_from_byte(value: u8) -> Result<Profile, HashBusSnapshotError> {
 
 fn validate_messages(
     profile: Profile,
+    state_composed: bool,
     messages: &[OwnedHashBusMessage],
 ) -> Result<[u8; 64], HashBusSnapshotError> {
-    let descriptor = build_hash_bus_descriptor(profile)?;
+    let descriptor = descriptor_for(profile, state_composed)?;
     if messages.len()
         != usize::try_from(descriptor.total_calls).map_err(|_| HashBusSnapshotError::Overflow)?
     {
@@ -122,15 +131,72 @@ fn validate_messages(
     Ok(descriptor.descriptor_commitment)
 }
 
+fn descriptor_for(
+    profile: Profile,
+    state_composed: bool,
+) -> Result<HashBusDescriptor, HashBusSnapshotError> {
+    if state_composed {
+        build_hash_bus_descriptor_with_state(profile).map_err(Into::into)
+    } else {
+        build_hash_bus_descriptor(profile).map_err(Into::into)
+    }
+}
+
+fn snapshot_magic_and_version(state_composed: bool) -> (&'static [u8; 8], u16) {
+    if state_composed {
+        (
+            HASH_BUS_STATE_SNAPSHOT_MAGIC,
+            HASH_BUS_STATE_SNAPSHOT_VERSION,
+        )
+    } else {
+        (HASH_BUS_SNAPSHOT_MAGIC, HASH_BUS_SNAPSHOT_VERSION)
+    }
+}
+
 pub fn hash_bus_semantic_port_commitment(
     profile: Profile,
     semantic_program_commitment: [u8; 64],
     messages: &[OwnedHashBusMessage],
 ) -> Result<[u8; 64], HashBusSnapshotError> {
-    let descriptor_commitment = validate_messages(profile, messages)?;
+    hash_bus_semantic_port_commitment_with_mode(
+        profile,
+        semantic_program_commitment,
+        messages,
+        false,
+    )
+}
+
+pub fn hash_bus_state_semantic_port_commitment(
+    profile: Profile,
+    semantic_program_commitment: [u8; 64],
+    messages: &[OwnedHashBusMessage],
+) -> Result<[u8; 64], HashBusSnapshotError> {
+    hash_bus_semantic_port_commitment_with_mode(
+        profile,
+        semantic_program_commitment,
+        messages,
+        true,
+    )
+}
+
+fn hash_bus_semantic_port_commitment_with_mode(
+    profile: Profile,
+    semantic_program_commitment: [u8; 64],
+    messages: &[OwnedHashBusMessage],
+    state_composed: bool,
+) -> Result<[u8; 64], HashBusSnapshotError> {
+    let descriptor_commitment = validate_messages(profile, state_composed, messages)?;
     let mut hash = Sha3_512::new();
-    hash.update(HASH_BUS_SEMANTIC_PORT_DOMAIN);
-    hash.update(HASH_BUS_SNAPSHOT_VERSION.to_be_bytes());
+    let (domain, version) = if state_composed {
+        (
+            HASH_BUS_STATE_SEMANTIC_PORT_DOMAIN,
+            HASH_BUS_STATE_SNAPSHOT_VERSION,
+        )
+    } else {
+        (HASH_BUS_SEMANTIC_PORT_DOMAIN, HASH_BUS_SNAPSHOT_VERSION)
+    };
+    hash.update(domain);
+    hash.update(version.to_be_bytes());
     hash.update([profile as u8]);
     hash.update(semantic_program_commitment);
     hash.update(descriptor_commitment);
@@ -163,11 +229,33 @@ impl HashBusSnapshot {
         semantic_program_commitment: [u8; 64],
         messages: Vec<OwnedHashBusMessage>,
     ) -> Result<Self, HashBusSnapshotError> {
-        let descriptor_commitment = validate_messages(profile, &messages)?;
-        let semantic_port_commitment =
-            hash_bus_semantic_port_commitment(profile, semantic_program_commitment, &messages)?;
+        Self::new_with_mode(profile, semantic_program_commitment, messages, false)
+    }
+
+    pub fn new_state_composed(
+        profile: Profile,
+        semantic_program_commitment: [u8; 64],
+        messages: Vec<OwnedHashBusMessage>,
+    ) -> Result<Self, HashBusSnapshotError> {
+        Self::new_with_mode(profile, semantic_program_commitment, messages, true)
+    }
+
+    fn new_with_mode(
+        profile: Profile,
+        semantic_program_commitment: [u8; 64],
+        messages: Vec<OwnedHashBusMessage>,
+        state_composed: bool,
+    ) -> Result<Self, HashBusSnapshotError> {
+        let descriptor_commitment = validate_messages(profile, state_composed, &messages)?;
+        let semantic_port_commitment = hash_bus_semantic_port_commitment_with_mode(
+            profile,
+            semantic_program_commitment,
+            &messages,
+            state_composed,
+        )?;
         Ok(Self {
             profile,
+            state_composed,
             semantic_program_commitment,
             descriptor_commitment,
             semantic_port_commitment,
@@ -176,16 +264,18 @@ impl HashBusSnapshot {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, HashBusSnapshotError> {
-        let expected = Self::new(
+        let expected = Self::new_with_mode(
             self.profile,
             self.semantic_program_commitment,
             self.messages.clone(),
+            self.state_composed,
         )?;
         if expected.descriptor_commitment != self.descriptor_commitment
             || expected.semantic_port_commitment != self.semantic_port_commitment
         {
             return Err(HashBusSnapshotError::Commitment);
         }
+        let (magic, version) = snapshot_magic_and_version(self.state_composed);
         let mut length: usize = 8 + 2 + 1 + 64 * 3 + 8;
         for message in &self.messages {
             length = length
@@ -197,8 +287,8 @@ impl HashBusSnapshot {
             return Err(HashBusSnapshotError::Shape);
         }
         let mut encoded = Vec::with_capacity(length);
-        encoded.extend_from_slice(HASH_BUS_SNAPSHOT_MAGIC);
-        encoded.extend_from_slice(&HASH_BUS_SNAPSHOT_VERSION.to_be_bytes());
+        encoded.extend_from_slice(magic);
+        encoded.extend_from_slice(&version.to_be_bytes());
         encoded.push(self.profile as u8);
         encoded.extend_from_slice(&self.semantic_program_commitment);
         encoded.extend_from_slice(&self.descriptor_commitment);
@@ -226,18 +316,24 @@ impl HashBusSnapshot {
             return Err(HashBusSnapshotError::Shape);
         }
         let mut reader = Reader::new(encoded);
-        if reader.take(8)? != HASH_BUS_SNAPSHOT_MAGIC {
-            return Err(HashBusSnapshotError::Encoding);
-        }
-        if reader.u16()? != HASH_BUS_SNAPSHOT_VERSION {
-            return Err(HashBusSnapshotError::Encoding);
-        }
+        let magic = reader.array::<8>()?;
+        let version = reader.u16()?;
+        let state_composed =
+            if &magic == HASH_BUS_SNAPSHOT_MAGIC && version == HASH_BUS_SNAPSHOT_VERSION {
+                false
+            } else if &magic == HASH_BUS_STATE_SNAPSHOT_MAGIC
+                && version == HASH_BUS_STATE_SNAPSHOT_VERSION
+            {
+                true
+            } else {
+                return Err(HashBusSnapshotError::Encoding);
+            };
         let profile = profile_from_byte(reader.u8()?)?;
         let semantic_program_commitment = reader.array()?;
         let descriptor_commitment = reader.array()?;
         let semantic_port_commitment = reader.array()?;
         let count = usize::try_from(reader.u64()?).map_err(|_| HashBusSnapshotError::Overflow)?;
-        let descriptor = build_hash_bus_descriptor(profile)?;
+        let descriptor = descriptor_for(profile, state_composed)?;
         if count
             != usize::try_from(descriptor.total_calls)
                 .map_err(|_| HashBusSnapshotError::Overflow)?
@@ -263,7 +359,12 @@ impl HashBusSnapshot {
         if !reader.is_empty() {
             return Err(HashBusSnapshotError::Encoding);
         }
-        let snapshot = Self::new(profile, semantic_program_commitment, messages)?;
+        let snapshot = Self::new_with_mode(
+            profile,
+            semantic_program_commitment,
+            messages,
+            state_composed,
+        )?;
         if snapshot.descriptor_commitment != descriptor_commitment
             || snapshot.semantic_port_commitment != semantic_port_commitment
         {
@@ -341,6 +442,7 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash_bus::state_root_capacity;
 
     fn decode_hex_64(value: &str) -> [u8; 64] {
         fn nibble(value: u8) -> u8 {
@@ -407,5 +509,44 @@ mod tests {
             HashBusSnapshot::decode(&forged_commitment),
             Err(HashBusSnapshotError::Commitment)
         );
+    }
+
+    #[test]
+    fn state_composed_descriptor_adds_exactly_two_root_calls() {
+        for (profile, capacity, expected_descriptor) in [
+            (
+                Profile::K128Calibration,
+                18_048,
+                concat!(
+                    "d5aa3a35136e28134f63a120f7f73c1ed3fc35e482efa618c6ba054aef5838e0",
+                    "552aa907ca69ebc2ef1af2b9b499bda48539f51ee04e3c43e10cfc5221e03c89"
+                ),
+            ),
+            (
+                Profile::K512Calibration,
+                70_656,
+                concat!(
+                    "31e17d270d51334ec5e2dbaab0fd7433c8a406785de7f5f23210f53cf965694b",
+                    "95d51c661654fb3c04788c43b2abd3df82259d069be10ada046f8bbce7c84480"
+                ),
+            ),
+        ] {
+            let base = build_hash_bus_descriptor(profile).unwrap();
+            let state = build_hash_bus_descriptor_with_state(profile).unwrap();
+            assert_eq!(state_root_capacity(profile).unwrap(), capacity);
+            assert_eq!(state.runs.len(), base.runs.len() + 1);
+            assert_eq!(state.total_calls, base.total_calls + 2);
+            assert_eq!(
+                state.total_permutations,
+                base.total_permutations + state.runs.last().unwrap().permutations().unwrap()
+            );
+            assert_eq!(state.coprocessor_shards, base.coprocessor_shards);
+            assert_eq!(state.padded_permutations, base.padded_permutations);
+            assert_ne!(state.descriptor_commitment, base.descriptor_commitment);
+            assert_eq!(
+                state.descriptor_commitment,
+                decode_hex_64(expected_descriptor)
+            );
+        }
     }
 }
