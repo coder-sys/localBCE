@@ -1,6 +1,6 @@
 # Blind Ledger PQ-ZK claim-proof security architecture
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 
 Status: selected target architecture with complete one-run H4 K128/K512 prototypes through
 independent verification and active Wave 2 qualification work. Gate 2E state selection, the H5
@@ -95,6 +95,15 @@ raw proof-engine resource block, but it does not qualify the product: gate 2E mu
 the authoritative state plane before H5's repeated campaign, and the complete simulator/security
 composition plus H6 remain open. Hard limits remain 5,000,000,000 peak resident bytes, strictly
 below 5,000,000,000 scratch bytes, and no swap on the reference laptop.
+
+The 2026-08-01 Round 1 compact diagnostic corrected lookup-backed LogUp work-domain geometry and
+bounded independent DEEP-column transforms to at most eight workers with canonical result order.
+It completed the selected Rust FRI verifier and the Python authenticated-transcript replay for an
+intentionally incomplete six-table/three-lookup program in 537.419 seconds. This is a proof-path
+implementation measurement, not complete-proof throughput: full SHA3 round constraints, the
+high-cardinality state lookup, proof-native H4 equality, the complete hiding/composition theorem,
+and PQ backend admission are absent. No simulator, soundness, strict-PQ, H5, or H6 credit is taken
+from it, and the frozen K512 complete-proof target remains unmet.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,

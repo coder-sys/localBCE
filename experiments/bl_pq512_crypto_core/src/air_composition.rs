@@ -315,6 +315,22 @@ pub fn build_air_main_trace_oracle(
             .ok_or(AirCompositionError::Parameter)?
             .checked_add(log_blowup)
             .ok_or(AirCompositionError::Parameter)?;
+        let has_lookup_side = program.lookups.iter().any(|lookup| {
+            lookup
+                .sources
+                .iter()
+                .chain(&lookup.destinations)
+                .any(|side| side.table == table_index)
+        });
+        // LogUp inverse and accumulator columns are committed on the
+        // evaluation domain. A low-degree table with a lookup side therefore
+        // needs a work domain at least that large; ordinary AIR-only tables
+        // retain their smaller degree-derived work domain.
+        let composition_work_log_size = if has_lookup_side {
+            composition_work_log_size.max(evaluation_log_size)
+        } else {
+            composition_work_log_size
+        };
         if evaluation_log_size <= trace_log_size {
             return Err(AirCompositionError::Parameter);
         }

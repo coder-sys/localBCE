@@ -60,6 +60,7 @@ pub enum DiskDeepError {
     Parent,
     Shape,
     Overflow,
+    WorkerPanic,
     DegreeBound { log_size: u8, used: usize },
 }
 
@@ -187,50 +188,45 @@ fn build_plan_in_directory(
         for column in &columns {
             validate_source(column, rows)?;
         }
-        let mut values = Vec::with_capacity(columns.len());
-        let mut conjugate_values = Vec::with_capacity(columns.len());
-        let mut maximum_used = 0usize;
-        for (column_index, source) in columns.iter().enumerate() {
-            let coefficients =
-                directory.join(format!("coeff-l{log_size:02}-c{column_index:08x}.fp16"));
-            materialize_fp16(source, rows, &coefficients)?;
-            interpolate_extension_circle_file_in_place(&coefficients, log_size)?;
-            maximum_used = maximum_used.max(last_nonzero(&coefficients, rows)?);
-            let query_file =
-                directory.join(format!("query-l{log_size:02}-c{column_index:08x}.fp16"));
-            let conjugate_file =
-                directory.join(format!("conjugate-l{log_size:02}-c{column_index:08x}.fp16"));
-            fs::copy(&coefficients, &query_file)?;
-            fs::copy(&coefficients, &conjugate_file)?;
-            values.push(evaluate_extension_coefficient_file_at_point_in_place(
-                &query_file,
-                log_size,
-                query,
-            )?);
-            conjugate_values.push(evaluate_extension_coefficient_file_at_point_in_place(
-                &conjugate_file,
-                log_size,
-                conjugate,
-            )?);
-            fs::remove_file(coefficients)?;
-            fs::remove_file(query_file)?;
-            fs::remove_file(conjugate_file)?;
-        }
-        for (column_index, source) in columns.iter().enumerate() {
-            let quotient =
-                directory.join(format!("quotient-l{log_size:02}-c{column_index:08x}.fp16"));
-            write_quotient_evaluations(
+        let claims_by_column = map_deep_columns(columns.len(), |column_index| {
+            let source = columns[column_index].clone();
+            build_deep_column_claims(
                 source,
                 log_size,
+                rows,
+                query,
+                conjugate,
+                directory,
+                column_index,
+            )
+        })?;
+        let values = claims_by_column
+            .iter()
+            .map(|(value, _, _)| *value)
+            .collect::<Vec<_>>();
+        let conjugate_values = claims_by_column
+            .iter()
+            .map(|(_, value, _)| *value)
+            .collect::<Vec<_>>();
+        let coefficient_maximum = claims_by_column
+            .iter()
+            .map(|(_, _, maximum)| *maximum)
+            .max()
+            .unwrap_or(0);
+        let quotient_maxima = map_deep_columns(columns.len(), |column_index| {
+            let source = columns[column_index].clone();
+            build_deep_column_quotient(
+                source,
+                log_size,
+                rows,
                 query,
                 values[column_index],
                 conjugate_values[column_index],
-                &quotient,
-            )?;
-            interpolate_extension_circle_file_in_place(&quotient, log_size)?;
-            maximum_used = maximum_used.max(last_nonzero(&quotient, rows)?);
-            fs::remove_file(quotient)?;
-        }
+                directory,
+                column_index,
+            )
+        })?;
+        let maximum_used = coefficient_maximum.max(quotient_maxima.into_iter().max().unwrap_or(0));
         let degree_bound = maximum_used.max(2).next_power_of_two();
         if degree_bound >= rows {
             return Err(DiskDeepError::DegreeBound {
@@ -255,6 +251,107 @@ fn build_plan_in_directory(
         claims,
         domains: ascending_plans,
     })
+}
+
+/// Run independent deep-column transforms with bounded parallelism while
+/// restoring the canonical input order before returning.
+fn map_deep_columns<T, F>(count: usize, work: F) -> Result<Vec<T>, DiskDeepError>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T, DiskDeepError> + Sync,
+{
+    if count == 0 {
+        return Err(DiskDeepError::Shape);
+    }
+    #[cfg(feature = "parallel")]
+    {
+        let worker_count = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(8)
+            .min(count);
+        return std::thread::scope(|scope| {
+            let handles = (0..worker_count)
+                .map(|worker| {
+                    let work = &work;
+                    scope.spawn(move || {
+                        let mut results = Vec::new();
+                        let mut column_index = worker;
+                        while column_index < count {
+                            results.push((column_index, work(column_index)?));
+                            column_index += worker_count;
+                        }
+                        Ok::<_, DiskDeepError>(results)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut ordered = (0..count).map(|_| None).collect::<Vec<Option<T>>>();
+            for handle in handles {
+                let results = handle.join().map_err(|_| DiskDeepError::WorkerPanic)??;
+                for (column_index, value) in results {
+                    if ordered[column_index].replace(value).is_some() {
+                        return Err(DiskDeepError::Shape);
+                    }
+                }
+            }
+            ordered
+                .into_iter()
+                .map(|value| value.ok_or(DiskDeepError::Shape))
+                .collect()
+        });
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        (0..count).map(work).collect()
+    }
+}
+
+fn build_deep_column_claims(
+    source: DiskOriginalColumn,
+    log_size: u8,
+    rows: usize,
+    query: CirclePoint,
+    conjugate: CirclePoint,
+    directory: &Path,
+    column_index: usize,
+) -> Result<(Fp16, Fp16, usize), DiskDeepError> {
+    let coefficients = directory.join(format!("coeff-l{log_size:02}-c{column_index:08x}.fp16"));
+    materialize_fp16(&source, rows, &coefficients)?;
+    interpolate_extension_circle_file_in_place(&coefficients, log_size)?;
+    let maximum_used = last_nonzero(&coefficients, rows)?;
+    let query_file = directory.join(format!("query-l{log_size:02}-c{column_index:08x}.fp16"));
+    let conjugate_file =
+        directory.join(format!("conjugate-l{log_size:02}-c{column_index:08x}.fp16"));
+    fs::copy(&coefficients, &query_file)?;
+    fs::copy(&coefficients, &conjugate_file)?;
+    let value =
+        evaluate_extension_coefficient_file_at_point_in_place(&query_file, log_size, query)?;
+    let conjugate_value = evaluate_extension_coefficient_file_at_point_in_place(
+        &conjugate_file,
+        log_size,
+        conjugate,
+    )?;
+    fs::remove_file(coefficients)?;
+    fs::remove_file(query_file)?;
+    fs::remove_file(conjugate_file)?;
+    Ok((value, conjugate_value, maximum_used))
+}
+
+fn build_deep_column_quotient(
+    source: DiskOriginalColumn,
+    log_size: u8,
+    rows: usize,
+    query: CirclePoint,
+    value: Fp16,
+    conjugate_value: Fp16,
+    directory: &Path,
+    column_index: usize,
+) -> Result<usize, DiskDeepError> {
+    let quotient = directory.join(format!("quotient-l{log_size:02}-c{column_index:08x}.fp16"));
+    write_quotient_evaluations(&source, log_size, query, value, conjugate_value, &quotient)?;
+    interpolate_extension_circle_file_in_place(&quotient, log_size)?;
+    let maximum_used = last_nonzero(&quotient, rows)?;
+    fs::remove_file(quotient)?;
+    Ok(maximum_used)
 }
 
 fn write_quotient_evaluations(
@@ -402,4 +499,18 @@ fn temp_name(nonce: &[u8; 32]) -> String {
         name.push(DIGITS[usize::from(byte & 15)] as char);
     }
     name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deep_column_map_restores_canonical_order() {
+        let values = map_deep_columns(17, |index| Ok(index * 13 + 5)).unwrap();
+        assert_eq!(
+            values,
+            (0..17).map(|index| index * 13 + 5).collect::<Vec<_>>()
+        );
+    }
 }

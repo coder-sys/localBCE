@@ -4786,3 +4786,132 @@ commit-before-coin lifecycle; native AIR evaluation is not a proof-native H4 PCS
 the complete simulator/leakage ledger, H5 repeated campaign, H6 qualification, authoritative
 state selection, `proofSuiteId`, activation, production CUDA, real PHI, and real payments remain
 closed. H5 was not launched.
+
+## 2026-08-01 Wave 2 round 1 composition geometry and bounded DEEP parallelism - VERIFIED, NONADMITTING
+
+The exact pre-mutation checkout was `C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`, branch `main`,
+`HEAD=6ebe9d0db54388140a4fc65e96218414022cba3b`, tree
+`cd0791a3833bf99e204798ad43905736632d88ec`, with a clean worktree. The three edited Rust files
+were not protected paths; no protected path or tracked `ops/` authority file was changed.
+
+The first compact six-table diagnostic reached the native composition boundary and failed closed.
+The raw worker boundary was:
+
+```text
+MAIN f58c01c5ccc56397868147ce0f94d0f607537e91e850c27fc4ea7b78092db31d58569dc40ecefb82e043ce161db9958e28660d6b6f9ad383007dd9437ce12f58
+INTERACTION_ROOT f2dd9c376169090df4be7468882ef18435120c21f90d286a96b5c26a958a1fef6b64959e5cc46116f4318d2f87be598f00f26515f78b98691722f17bcdbd556b
+composition_line=b''
+final_returncode=2 stderr=b'ERR:composition_Shape\n'
+scratch_removed=True
+```
+
+Source and file-boundary inspection identified the cause: a low-degree table participating in
+LogUp had inverse/accumulator columns committed on the larger evaluation domain while its
+degree-derived composition work domain was smaller; the disk-backed DEEP materializer correctly
+rejected that shape. `air_composition.rs` and `oracle_commitment.rs` now raise only lookup-backed
+tables to at least their evaluation-domain log size. Tables with no lookup side retain their
+smaller degree-derived work domain. `disk_deep.rs` now maps independent column transforms through
+a bounded maximum of eight workers, restores the original column order, detects duplicate/missing
+results, and converts a worker panic to `WorkerPanic`; the non-parallel path remains sequential.
+
+The compact candidate's resource preflight was a derived model, not a resident-peak measurement:
+
+```text
+program_bytes=181198
+raw_witness_bytes=95688
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=170917888
+modeled_interaction_evaluation_bytes=50331648
+modeled_composition_evaluation_bytes=100663296
+modeled_deep_evaluation_bytes=5771362304
+modeled_fri_mask_bytes=4194304
+modeled_folded_layer_bytes=8388608
+modeled_monolithic_live_bytes_lower_bound=6105858048
+modeled_maximum_domain_rows=65536
+requires_streaming=true
+modeled_raw_witness_bytes=95688
+modeled_persistent_oracle_bytes=347174152
+modeled_peak_temporary_bytes=208404480
+modeled_filesystem_overhead_bytes=138894658
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=4989440586
+preflight_exit=0
+```
+
+The first serial complete compact attempt was stopped by the bounded wrapper timeout after the
+composition correction was applied: `Exit code: 124`, `command timed out after 904058 milliseconds`.
+The exact validated cleanup boundary was `scratch_file_count_before_cleanup=1399`,
+`scratch_bytes_before_cleanup=351368961`, followed by stopping only the validated worker/Python/
+launcher process IDs and removing only the exact owned scratch directory.
+
+The first full-Rust test launcher was initially pointed at the checkout root rather than the crate
+directory and failed before test execution with:
+
+```text
+cargo : error: could not find `Cargo.toml` in
+`C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26` or any parent directory
+```
+
+The launcher was confirmed gone and the exact locked/offline command was rerun from
+`experiments/bl_pq512_crypto_core`; no test result was taken from the failed setup command.
+
+With bounded DEEP parallelism, the same compact diagnostic completed and both verification layers
+passed. The Python orchestrator replayed the authenticated transcript and the Rust worker ran its
+selected FRI verifier:
+
+```text
+status=success
+program_bytes=201725
+proof_bytes=17352533
+grammar_version=2
+evidence_count=20
+query_count=945
+fri_layers=15
+worker_report=OK grammar_version=2 proof_bytes=17352533 attribution_total=17352533 query_count=945 trace_masks=4789 quotient_masks=946 folds=15 main_ms=18917 interaction_ms=23799 composition_ms=112846 deep_ms=243333 fri_start_ms=94844 fold_compute_ms=2421 openings_ms=19063 verify_ms=5725 worker_wall_ms=537419
+scratch_entries_inside_context=0
+scratch_context_removed=true
+```
+
+This is measured diagnostic evidence for the proof-path implementation, not a production proof or
+admitted backend. Its program retained `state_slots`, `state_operations`,
+`state_snapshot_encoding`, `state_roots`, `sha3_message_batch`, and `sha3_digest_batch`, with
+three lookup relations. It intentionally did not retain the high-cardinality
+`state_slots_to_snapshot_encoding` relation, full SHA3 round tables, or the proof-native H4 state
+transition/equality composition. Therefore it does not prove the complete state/hash relation,
+does not close Gate 2E, and its `worker_wall_ms=537419` is a measured failure against the frozen
+K512 complete-proof p95 target below 180 seconds. It is not H5 credit, and H5 was not launched.
+
+Containing verification for this slice was:
+
+```text
+cargo +1.96.0 fmt --all -- --check
+exit 0
+cargo +1.96.0 test --offline --locked --features parallel disk_deep::tests::deep_column_map_restores_canonical_order
+1 passed; 0 failed; 0 ignored; 0 measured; 264 filtered out
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_selected_prover_integration.py
+2 passed in 139.66s (0:02:19)
+```
+
+The complete Rust crate gate then passed, including the new unit test, all library
+tests, remaining binary groups, and doc-tests:
+
+```text
+cargo +1.96.0 test --offline --locked --features parallel
+test result: ok. 265 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1137.57s
+all remaining binary groups and doc-tests: test result: ok; 0 failed
+```
+
+The containing state/AIR/Gate-2E/H5/H6/security-freeze suite also passed after the documentation
+update:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py tests/test_bl_pq512_state_plane_executable_air.py tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py tests/test_bl_pq512_state_plane_native.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/test_bl_pq512_h6_qualification_preflight.py tests/test_security_freeze_spec.py
+40 passed in 325.19s (0:05:25)
+```
+
+No reviewed PQ backend was admitted, `proofSuiteId` remains null, activation remains false, and
+the complete simulator, leakage ledger, proof-native H4 composition, H5 campaign, and H6
+qualification remain open. No production CUDA, real PHI, or real payments are authorized.

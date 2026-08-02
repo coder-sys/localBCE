@@ -98,6 +98,20 @@ failures, but it is not a proof-native H4 PCS/ZK composition or backend admissio
 commitment backend is available, the hash-pad review rejects the current candidate for Gate 2E,
 `proofSuiteId` remains null, and activation remains closed.
 
+## Round 1 diagnostic implementation boundary
+
+The proof-core DEEP path now has a verified LogUp geometry correction: only tables that participate
+in a lookup are given a work domain at least as large as their committed evaluation domain. The
+disk-backed DEEP column transforms use deterministic canonical merge order with a bounded maximum of
+eight parallel workers and fail closed on worker panic or result-shape drift. A compact six-table,
+three-lookup diagnostic then completed the selected Rust FRI verifier and Python authenticated-
+transcript replay with `proof_bytes=17,352,533`, `query_count=945`, `fri_layers=15`, and measured
+`worker_wall_ms=537,419`. The program was intentionally incomplete: it omitted the full SHA3 round
+tables, the high-cardinality state-slot lookup, and proof-native H4 state equality. The result is
+therefore implementation evidence only; it does not select a PQ backend, close Gate 2E, qualify
+H4/H5/H6, set `proofSuiteId`, or permit activation. The derived resource model is not a resident
+peak measurement, and the 537.419-second wall time misses the frozen K512 complete-proof target.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from

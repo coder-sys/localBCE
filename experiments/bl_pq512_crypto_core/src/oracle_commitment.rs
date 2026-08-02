@@ -201,6 +201,21 @@ pub fn derive_oracle_commitment_layouts(
             .checked_add(log_blowup)
             .ok_or(OracleCommitmentError::CountOverflow)?;
         let composition_work_log_size = composition_bound.ilog2() as u8;
+        let has_lookup_side = program.lookups.iter().any(|lookup| {
+            lookup
+                .sources
+                .iter()
+                .chain(&lookup.destinations)
+                .any(|side| side.table == table_index)
+        });
+        // Keep LogUp's inverse/accumulator work files on a domain no smaller
+        // than the committed interaction/evaluation domain. Do not inflate
+        // tables that have no lookup side.
+        let composition_work_log_size = if has_lookup_side {
+            composition_work_log_size.max(evaluation_log_size)
+        } else {
+            composition_work_log_size
+        };
         let composition_component_count = 1_usize
             .checked_shl(u32::from(
                 composition_work_log_size - component_coefficient_log_size,
