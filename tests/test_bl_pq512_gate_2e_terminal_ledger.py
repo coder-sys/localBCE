@@ -60,6 +60,12 @@ from experiments.bl_pq512_crypto_foundation.scalar_state_relation_controls impor
 from experiments.bl_pq512_crypto_foundation.state_migration_recovery import (
     checkpoint_from_composition,
 )
+from experiments.bl_pq512_crypto_foundation.state_plane import (
+    StateEntry,
+    StateOperation,
+    StateSnapshot,
+    build_state_transition,
+)
 
 
 FLAGS = {
@@ -253,3 +259,32 @@ def test_terminal_ledger_carries_both_clean_readback_flags_without_claiming_sele
     dirty = replace(context, git_clean=False, protected_paths_clean=False)
     with pytest.raises(TerminalLedgerError, match="handoff_git_readback_mismatch"):
         build_terminal_ledger(dirty)
+
+
+def test_terminal_ledger_records_real_state_plane_without_admitting_h4(context) -> None:
+    before = StateSnapshot.empty(
+        context.batch.profile_id,
+        capacity=context.batch.claim_slots,
+        epoch=7,
+    )
+    operations = tuple(
+        StateOperation(index, StateEntry.empty(index), StateEntry.empty(index))
+        for index in range(before.capacity)
+    )
+    proof = build_state_transition(
+        before,
+        operations,
+        tuple(
+            sha3_512(b"BL/2E-terminal/state-projection/" + bytes((index,))).digest()[:32]
+            for index in range(12)
+        ),
+        sha3_512(b"BL/2E-terminal/state-coin").digest(),
+        sha3_512(b"BL/2E-terminal/state-mask").digest(),
+    )
+    ledger = build_terminal_ledger(replace(context, state_plane_proof=proof))
+    assert ledger.state_plane_status == "STATE_PLANE_IMPLEMENTED_H4_PENDING"
+    assert ledger.state_plane_digest_512
+    assert ledger.records[5].source_id.startswith("state_plane.py+")
+    assert ledger.h4_parent_bound is False
+    assert ledger.proof_suite_id is None
+    assert ledger.activation_allowed is False

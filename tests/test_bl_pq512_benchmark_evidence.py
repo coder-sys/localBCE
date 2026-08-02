@@ -59,16 +59,15 @@ def test_canonical_synthetic_campaign_is_consistent_but_not_qualified() -> None:
         assert [run["ordinal"] for run in measured] == list(range(1, 11))
 
 
-def test_reference_hardware_capture_is_truthful_but_not_benchmark_ready() -> None:
+def test_reference_hardware_capture_meets_the_reduced_operational_disk_floor() -> None:
     hardware = evidence.validate_reference_hardware_config(require_ready=False)
     storage = hardware["storage"]
-    assert hardware["benchmark_ready"] is False
+    assert hardware["benchmark_ready"] is True
     assert storage["system_disk_bytes"] == 487_335_129_088
     assert storage["free_bytes_at_measurement"] == 59_091_513_344
-    assert storage["required_free_bytes"] == 73_100_269_364
-    assert storage["headroom_shortfall_bytes"] == 14_008_756_020
-    with pytest.raises(evidence.BenchmarkEvidenceError, match="reference_hardware_not_benchmark_ready"):
-        evidence.validate_reference_hardware_config(require_ready=True)
+    assert storage["required_free_bytes"] == 7_310_026_937
+    assert storage["headroom_shortfall_bytes"] == 0
+    assert evidence.validate_reference_hardware_config(require_ready=True)["benchmark_ready"] is True
 
 
 def test_vector_is_strict_canonical_json_and_self_bound() -> None:

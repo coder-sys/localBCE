@@ -14,7 +14,27 @@ use sha3::{Digest, Sha3_512};
 
 const ATOMIC_PARENT_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/ATOMIC-SEMANTIC-PARENT/v2\0";
 const ATOMIC_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/ATOMIC-SEMANTIC-RECEIPT/v2\0";
+const STATE_ROOT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/ROOT/v1\0";
+const STATE_MANIFEST_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/MANIFEST/v1\0";
+const STATE_PROJECTION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/PROJECTION/v1\0";
+const STATE_TRANSITION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/TRANSITION/v1\0";
+const STATE_STATEMENT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/STATEMENT/v1\0";
+const HASH_PAD_TAG_DOMAIN: &[u8] = b"BL/PQ512/SHA3-HASH-PAD/TAG/v1\0";
+const HASH_PAD_COMMITMENT_DOMAIN: &[u8] = b"BL/PQ512/SHA3-HASH-PAD/COMMITMENT/v1\0";
+const STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/PROOF/v1\0";
+const STATE_ATTEMPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/ATTEMPT/v1\0";
+const STATE_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/RECEIPT/v1\0";
+const STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v1\0";
 const EXECUTION_MANIFEST_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/EXECUTION-MANIFEST/v1\0";
+const STATE_BINDING_MAGIC: &[u8] = b"BLSB01";
+const STATE_MAGIC: &[u8] = b"BLSP01";
+const COMMITMENT_MAGIC: &[u8] = b"BLHP01";
+const STATE_VERSION: u8 = 1;
+const COMMITMENT_VERSION: u8 = 1;
+const STATE_MAX_CAPACITY: u64 = 4_096;
+const STATE_BINDING_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const STATE_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-STATE-PLANE-V1";
+const HASH_PAD_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-SHA3-HASH-PAD-V1";
 const K128_SHARDS: u16 = 1;
 const K128_FILE_BYTES: u64 = 52_429_015;
 const K512_SHARDS: u16 = 4;
@@ -61,6 +81,11 @@ struct ShardEvidence {
     bundle_digest: [u8; 64],
 }
 
+struct StateBindingVerification {
+    statement: [u8; 64],
+    binding_digest: [u8; 64],
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("ERR:{error}");
@@ -70,6 +95,21 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    if let [flag, path] = arguments.as_slice()
+        && flag == "--verify-state-binding"
+    {
+        let verification = verify_state_binding(Path::new(path))?;
+        println!("state_plane_binding_verified=true");
+        println!(
+            "state_plane_statement_sha3_512={}",
+            hex(&verification.statement)
+        );
+        println!(
+            "state_plane_binding_digest_sha3_512={}",
+            hex(&verification.binding_digest)
+        );
+        return Ok(());
+    }
     if let [flag, python, prototype, worker, cuda_module] = arguments.as_slice()
         && flag == "--print-execution-manifest"
     {
@@ -98,6 +138,7 @@ fn run() -> Result<(), String> {
     let python = PathBuf::from(python);
     let prototype = PathBuf::from(prototype);
     let worker = PathBuf::from(worker);
+    let statement_path = PathBuf::from(statement.as_os_str());
     for (label, path) in [
         ("boundary", boundary.as_path()),
         ("python", python.as_path()),
@@ -108,7 +149,21 @@ fn run() -> Result<(), String> {
             return Err(format!("{label}_missing:{}", path.display()));
         }
     }
-    let statement = decode_hex_64(&statement.to_string_lossy(), "statement")?;
+    let statement_argument = statement_path.to_string_lossy();
+    let explicit_state_path = statement_argument
+        .strip_prefix("state-file:")
+        .map(Path::new);
+    let state_binding = if let Some(path) = explicit_state_path {
+        Some(verify_state_binding(path)?)
+    } else if statement_path.is_file() {
+        Some(verify_state_binding(&statement_path)?)
+    } else {
+        None
+    };
+    let statement = match state_binding.as_ref() {
+        Some(binding) => binding.statement,
+        None => decode_hex_64(&statement_argument, "statement")?,
+    };
     if !statement.iter().any(|byte| *byte != 0) {
         return Err("statement_zero".to_string());
     }
@@ -242,7 +297,16 @@ fn run() -> Result<(), String> {
         );
     }
 
-    let receipt = atomic_receipt(parent_binding, statement, &evidence);
+    let state_binding_digest = state_binding
+        .as_ref()
+        .map(|binding| binding.binding_digest)
+        .unwrap_or([0; 64]);
+    let receipt = match state_binding {
+        Some(_) => {
+            atomic_receipt_with_state(parent_binding, statement, state_binding_digest, &evidence)
+        }
+        None => atomic_receipt(parent_binding, statement, &evidence),
+    };
     let total_seconds = total_started.elapsed().as_secs_f64();
     let peak_host_mb = evidence
         .iter()
@@ -260,6 +324,11 @@ fn run() -> Result<(), String> {
     println!("evidence_class={profile_name}_atomic_semantic_prototype");
     println!("atomic_parent_binding_sha3_512={parent_hex}");
     println!("atomic_statement_sha3_512={}", hex(&statement));
+    println!("state_plane_binding_verified={}", state_binding.is_some());
+    println!(
+        "state_plane_binding_digest_sha3_512={}",
+        hex(&state_binding_digest)
+    );
     println!("execution_manifest_sha3_512={}", hex(&execution_manifest));
     println!("semantic_hash_bus_file_sha3_512={file_hex}");
     println!(
@@ -408,6 +477,445 @@ fn atomic_receipt(
         hash.update(item.scratch_mb.to_bits().to_be_bytes());
     }
     hash.finalize().into()
+}
+
+fn atomic_receipt_with_state(
+    parent_binding: [u8; 64],
+    statement: [u8; 64],
+    state_binding_digest: [u8; 64],
+    evidence: &[ShardEvidence],
+) -> [u8; 64] {
+    let mut hash = Sha3_512::new();
+    hash.update(ATOMIC_RECEIPT_DOMAIN);
+    hash.update(parent_binding);
+    hash.update(statement);
+    hash.update(state_binding_digest);
+    hash.update((evidence.len() as u16).to_be_bytes());
+    for (shard, item) in evidence.iter().enumerate() {
+        hash.update((shard as u16).to_be_bytes());
+        hash.update(item.stdout_digest);
+        hash.update(item.bundle_digest);
+        hash.update(item.wall_seconds.to_bits().to_be_bytes());
+        hash.update(item.host_peak_mb.to_bits().to_be_bytes());
+        hash.update(item.device_peak_mb.to_bits().to_be_bytes());
+        hash.update(item.scratch_mb.to_bits().to_be_bytes());
+    }
+    hash.finalize().into()
+}
+
+fn hash_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 64] {
+    let mut hash = Sha3_512::new();
+    hash.update(domain);
+    for part in parts {
+        hash.update(
+            u32::try_from(part.len())
+                .expect("state binding part length fits u32")
+                .to_be_bytes(),
+        );
+        hash.update(part);
+    }
+    hash.finalize().into()
+}
+
+struct StateCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> StateCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take(&mut self, length: usize, label: &str) -> Result<&'a [u8], String> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or_else(|| format!("state_binding_{label}_overflow"))?;
+        if end > self.bytes.len() {
+            return Err(format!("state_binding_{label}_truncated"));
+        }
+        let value = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn u8(&mut self, label: &str) -> Result<u8, String> {
+        Ok(self.take(1, label)?[0])
+    }
+
+    fn u32(&mut self, label: &str) -> Result<u32, String> {
+        Ok(u32::from_be_bytes(
+            self.take(4, label)?.try_into().expect("u32 length"),
+        ))
+    }
+
+    fn u64(&mut self, label: &str) -> Result<u64, String> {
+        Ok(u64::from_be_bytes(
+            self.take(8, label)?.try_into().expect("u64 length"),
+        ))
+    }
+
+    fn array64(&mut self, label: &str) -> Result<[u8; 64], String> {
+        Ok(self.take(64, label)?.try_into().expect("array64 length"))
+    }
+
+    fn text(&mut self, maximum: usize, label: &str) -> Result<Vec<u8>, String> {
+        let length = usize::from(self.u8(label)?);
+        if length == 0 || length > maximum {
+            return Err(format!("state_binding_{label}_length"));
+        }
+        let value = self.take(length, label)?.to_vec();
+        if !value.iter().all(u8::is_ascii) || value.contains(&0) {
+            return Err(format!("state_binding_{label}_encoding"));
+        }
+        Ok(value)
+    }
+
+    fn done(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct StateEntryWire {
+    index: u64,
+    present: bool,
+    key: [u8; 64],
+    value: [u8; 64],
+}
+
+struct StateSnapshotWire {
+    profile: Vec<u8>,
+    parameter: Vec<u8>,
+    capacity: u64,
+    epoch: u64,
+    sequence: u64,
+    entries: Vec<StateEntryWire>,
+    root: [u8; 64],
+}
+
+fn parse_state_snapshot(encoded: &[u8]) -> Result<StateSnapshotWire, String> {
+    let mut cursor = StateCursor::new(encoded);
+    if cursor.take(6, "snapshot_magic")? != STATE_MAGIC {
+        return Err("state_binding_snapshot_magic".to_string());
+    }
+    if cursor.u8("snapshot_version")? != STATE_VERSION {
+        return Err("state_binding_snapshot_version".to_string());
+    }
+    let profile = cursor.text(64, "snapshot_profile")?;
+    let parameter = cursor.text(64, "snapshot_parameter")?;
+    let capacity = cursor.u64("snapshot_capacity")?;
+    let epoch = cursor.u64("snapshot_epoch")?;
+    let sequence = cursor.u64("snapshot_sequence")?;
+    if capacity == 0 || capacity > STATE_MAX_CAPACITY {
+        return Err("state_binding_snapshot_capacity".to_string());
+    }
+    let mut entries = Vec::with_capacity(capacity as usize);
+    for expected_index in 0..capacity {
+        let present = match cursor.u8("snapshot_entry_present")? {
+            0 => false,
+            1 => true,
+            _ => return Err("state_binding_snapshot_entry_present".to_string()),
+        };
+        let index = cursor.u64("snapshot_entry_index")?;
+        if index != expected_index {
+            return Err("state_binding_snapshot_entry_index".to_string());
+        }
+        entries.push(StateEntryWire {
+            index,
+            present,
+            key: cursor.array64("snapshot_entry_key")?,
+            value: cursor.array64("snapshot_entry_value")?,
+        });
+        if !present
+            && (entries.last().unwrap().key != [0; 64] || entries.last().unwrap().value != [0; 64])
+        {
+            return Err("state_binding_snapshot_empty_private_bytes".to_string());
+        }
+    }
+    if !cursor.done() {
+        return Err("state_binding_snapshot_trailing_bytes".to_string());
+    }
+    let root = hash_parts(STATE_ROOT_DOMAIN, &[encoded]);
+    Ok(StateSnapshotWire {
+        profile,
+        parameter,
+        capacity,
+        epoch,
+        sequence,
+        entries,
+        root,
+    })
+}
+
+fn parse_state_operation(
+    cursor: &mut StateCursor<'_>,
+) -> Result<(u64, StateEntryWire, StateEntryWire, Vec<u8>), String> {
+    let start = cursor.offset;
+    let before_present = match cursor.u8("operation_before_present")? {
+        0 => false,
+        1 => true,
+        _ => return Err("state_binding_operation_before_present".to_string()),
+    };
+    let before_index = cursor.u64("operation_before_index")?;
+    let before = StateEntryWire {
+        index: before_index,
+        present: before_present,
+        key: cursor.array64("operation_before_key")?,
+        value: cursor.array64("operation_before_value")?,
+    };
+    let after_present = match cursor.u8("operation_after_present")? {
+        0 => false,
+        1 => true,
+        _ => return Err("state_binding_operation_after_present".to_string()),
+    };
+    let after_index = cursor.u64("operation_after_index")?;
+    let after = StateEntryWire {
+        index: after_index,
+        present: after_present,
+        key: cursor.array64("operation_after_key")?,
+        value: cursor.array64("operation_after_value")?,
+    };
+    if !before_present && (before.key != [0; 64] || before.value != [0; 64])
+        || !after_present && (after.key != [0; 64] || after.value != [0; 64])
+    {
+        return Err("state_binding_operation_empty_private_bytes".to_string());
+    }
+    let encoded = cursor.bytes[start..cursor.offset].to_vec();
+    if before_index != after_index {
+        return Err("state_binding_operation_index_mismatch".to_string());
+    }
+    Ok((before_index, before, after, encoded))
+}
+
+struct CommitmentWire {
+    parameter: Vec<u8>,
+    public_coin: [u8; 64],
+    ciphertext: [u8; 64],
+    tag: [u8; 64],
+    digest: [u8; 64],
+}
+
+fn parse_commitment(encoded: &[u8]) -> Result<CommitmentWire, String> {
+    let mut cursor = StateCursor::new(encoded);
+    if cursor.take(6, "commitment_magic")? != COMMITMENT_MAGIC {
+        return Err("state_binding_commitment_magic".to_string());
+    }
+    if cursor.u8("commitment_version")? != COMMITMENT_VERSION {
+        return Err("state_binding_commitment_version".to_string());
+    }
+    let parameter = cursor.text(64, "commitment_parameter")?;
+    let public_coin = cursor.array64("commitment_public_coin")?;
+    let ciphertext = cursor.array64("commitment_ciphertext")?;
+    let tag = cursor.array64("commitment_tag")?;
+    let digest = cursor.array64("commitment_digest")?;
+    if !cursor.done() {
+        return Err("state_binding_commitment_trailing_bytes".to_string());
+    }
+    if parameter != HASH_PAD_PARAMETER_IDENTITY || digest == [0; 64] || tag == [0; 64] {
+        return Err("state_binding_commitment_parameter".to_string());
+    }
+    Ok(CommitmentWire {
+        parameter,
+        public_coin,
+        ciphertext,
+        tag,
+        digest,
+    })
+}
+
+fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String> {
+    if path.is_symlink() {
+        return Err("state_binding_symlink_forbidden".to_string());
+    }
+    let metadata = fs::metadata(path).map_err(|error| format!("state_binding_metadata:{error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > STATE_BINDING_MAX_BYTES {
+        return Err("state_binding_file_shape".to_string());
+    }
+    let encoded = fs::read(path).map_err(|error| format!("state_binding_read:{error}"))?;
+    let mut cursor = StateCursor::new(&encoded);
+    if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC {
+        return Err("state_binding_magic".to_string());
+    }
+    if cursor.u8("binding_version")? != STATE_VERSION {
+        return Err("state_binding_version".to_string());
+    }
+    let before_length = usize::try_from(cursor.u32("before_length")?)
+        .map_err(|_| "state_binding_before_length".to_string())?;
+    let before = parse_state_snapshot(cursor.take(before_length, "before")?)?;
+    let after_length = usize::try_from(cursor.u32("after_length")?)
+        .map_err(|_| "state_binding_after_length".to_string())?;
+    let after = parse_state_snapshot(cursor.take(after_length, "after")?)?;
+    if before.profile != after.profile
+        || before.parameter != after.parameter
+        || before.capacity != after.capacity
+        || before.epoch != after.epoch
+        || after.sequence != before.sequence + 1
+        || before.parameter != STATE_PARAMETER_IDENTITY
+    {
+        return Err("state_binding_snapshot_layout".to_string());
+    }
+
+    let operation_count = cursor.u64("operation_count")?;
+    if operation_count != before.capacity {
+        return Err("state_binding_operation_count".to_string());
+    }
+    let mut operations_encoded = Vec::new();
+    let mut expected_after = before.entries.clone();
+    for expected_index in 0..operation_count {
+        let (index, operation_before, operation_after, operation_encoded) =
+            parse_state_operation(&mut cursor)?;
+        if index != expected_index || operation_before != before.entries[index as usize] {
+            return Err("state_binding_operation_before".to_string());
+        }
+        expected_after[index as usize] = operation_after;
+        operations_encoded.extend(operation_encoded);
+    }
+    if expected_after != after.entries {
+        return Err("state_binding_operation_after".to_string());
+    }
+
+    let mut projection = Vec::with_capacity(12);
+    for _ in 0..12 {
+        let field: [u8; 32] = cursor
+            .take(32, "projection")?
+            .try_into()
+            .expect("projection length");
+        if field == [0; 32] {
+            return Err("state_binding_projection_zero".to_string());
+        }
+        projection.push(field);
+    }
+    let public_coin = cursor.array64("public_coin")?;
+    if public_coin == [0; 64] {
+        return Err("state_binding_public_coin_zero".to_string());
+    }
+    let commitment_length = usize::try_from(cursor.u32("commitment_length")?)
+        .map_err(|_| "state_binding_commitment_length".to_string())?;
+    let commitment = parse_commitment(cursor.take(commitment_length, "commitment")?)?;
+    let opening_statement = cursor.array64("opening_statement")?;
+    let opening_mask = cursor.array64("opening_mask")?;
+    if !cursor.done() {
+        return Err("state_binding_trailing_bytes".to_string());
+    }
+    if commitment.public_coin != public_coin {
+        return Err("state_binding_commitment_public_coin".to_string());
+    }
+
+    let operation_count_bytes = operation_count.to_be_bytes();
+    let manifest = hash_parts(
+        STATE_MANIFEST_DOMAIN,
+        &[
+            &before.root,
+            &after.root,
+            &operation_count_bytes,
+            &operations_encoded,
+        ],
+    );
+    let projection_parts = projection
+        .iter()
+        .map(|field| field.as_slice())
+        .collect::<Vec<_>>();
+    let projection_digest = hash_parts(STATE_PROJECTION_DOMAIN, &projection_parts);
+    let mut transition_bytes = Vec::new();
+    transition_bytes.extend(&before.profile);
+    transition_bytes.extend(&before.parameter);
+    transition_bytes.extend(before.capacity.to_be_bytes());
+    transition_bytes.extend(before.epoch.to_be_bytes());
+    transition_bytes.extend(before.sequence.to_be_bytes());
+    transition_bytes.extend(after.sequence.to_be_bytes());
+    transition_bytes.extend(before.root);
+    transition_bytes.extend(after.root);
+    transition_bytes.extend(manifest);
+    transition_bytes.extend(projection_digest);
+    let transition = hash_parts(STATE_TRANSITION_DOMAIN, &[&transition_bytes]);
+    let statement = hash_parts(STATE_STATEMENT_DOMAIN, &[&transition_bytes, &transition]);
+    if opening_statement != statement {
+        return Err("state_binding_statement".to_string());
+    }
+
+    let mut expected_ciphertext = [0_u8; 64];
+    for index in 0..64 {
+        expected_ciphertext[index] = statement[index] ^ opening_mask[index];
+    }
+    if expected_ciphertext != commitment.ciphertext {
+        return Err("state_binding_ciphertext".to_string());
+    }
+    let tag = hash_parts(
+        HASH_PAD_TAG_DOMAIN,
+        &[
+            &commitment.parameter,
+            &public_coin,
+            &commitment.ciphertext,
+            &statement,
+            &opening_mask,
+        ],
+    );
+    if tag != commitment.tag {
+        return Err("state_binding_commitment_tag".to_string());
+    }
+    let commitment_digest = hash_parts(
+        HASH_PAD_COMMITMENT_DOMAIN,
+        &[
+            &commitment.parameter,
+            &public_coin,
+            &commitment.ciphertext,
+            &commitment.tag,
+        ],
+    );
+    if commitment_digest != commitment.digest {
+        return Err("state_binding_commitment_digest".to_string());
+    }
+
+    let verifier_identity: [u8; 64] =
+        Sha3_512::digest(b"BL/PQ512/STATE-PLANE/INDEPENDENT-VERIFIER/v1\0").into();
+    let proof = hash_parts(
+        STATE_PROOF_DOMAIN,
+        &[
+            &statement,
+            &transition,
+            &commitment.digest,
+            &verifier_identity,
+        ],
+    );
+    let attempt = hash_parts(
+        STATE_ATTEMPT_DOMAIN,
+        &[
+            &before.profile,
+            &before.parameter,
+            &before.epoch.to_be_bytes(),
+            &before.sequence.to_be_bytes(),
+            &before.root,
+            &statement,
+        ],
+    );
+    let receipt = hash_parts(
+        STATE_RECEIPT_DOMAIN,
+        &[
+            &attempt,
+            &transition,
+            &commitment.digest,
+            &proof,
+            &verifier_identity,
+        ],
+    );
+    let binding_digest = hash_parts(
+        STATE_BINDING_DOMAIN,
+        &[
+            &before.root,
+            &after.root,
+            &statement,
+            &transition,
+            &commitment.digest,
+            &proof,
+            &receipt,
+        ],
+    );
+    Ok(StateBindingVerification {
+        statement,
+        binding_digest,
+    })
 }
 
 fn parse_fields(stdout: &[u8]) -> Result<BTreeMap<String, String>, String> {

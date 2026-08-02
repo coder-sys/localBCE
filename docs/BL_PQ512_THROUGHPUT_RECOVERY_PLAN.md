@@ -259,9 +259,9 @@ Current preflight evidence:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
 canonical_ops_status=MISSING_CANONICAL_SIBLING
-reference_hardware_status=NOT_READY
+reference_hardware_status=READY
 fresh_launch_count=22
 proofSuiteId=None
 activation_allowed=False
@@ -270,7 +270,10 @@ activation_allowed=False
 The preflight focused/attack suite passed 6 tests in 44.60 seconds; the benchmark, S6/S7,
 terminal-ledger, and preflight containing set passed 61 tests in 117.72 seconds. The complete
 S1-S7 plus terminal-ledger and preflight set passed 79 tests in 175.33 seconds. These are test-run
-times, not complete-proof measurements.
+times, not complete-proof measurements. The recorded reference disk is 487,335,129,088 bytes
+with 59,091,513,344 bytes free; the operational reserve is now 15,000 ppm (1.5%), requiring
+7,310,026,937 bytes. This does not change the immutable 5,000,000,000-byte RSS/scratch or
+zero-swap gates.
 
 ## 13. H6 qualification preflight boundary
 

@@ -298,11 +298,14 @@ replays the S4 composition and S5 checkpoints, verifies both C0 profile shapes a
 negative classes, checks the fixed 12-field boundary and public/private encoding boundary, and
 recomputes the S6/S7 identities. It emits 11 ordered records and remains
 `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER` with
-`ledger_digest_sha3_512=2cbc9e48ea14e4e6dfeae9eebe46c34ad4ed551d63f946fcb696abc480c407d5893f7d29acd7349858e6ed9f496db121c1d00940504bc050f264502eae098964`.
+`ledger_digest_sha3_512=91e65c9c4dfb3e173e2b2792d96422e272516cb43e62a77520145e981edc2dcd58d6e148ceca74fab5c1bd662cf65cc1c804e9ae707f9b5a91207e4db98a40c9`.
 The exact blockers are `canonical_ops_missing`, `complete_leakage_scan_missing`,
 `complete_simulator_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
-`proof_suite_unselected`. The terminal ledger is reference evidence only; it cannot select a
-backend, assign `proofSuiteId`, bind H4, or authorize H5/H6.
+`proof_suite_unselected`. A real nonactivating state plane is now independently replayable and
+appears as `STATE_PLANE_IMPLEMENTED_H4_PENDING` when supplied to the ledger; the default recorded
+context remains `STATE_PLANE_NOT_PROVIDED` until it is connected to the candidate admission run.
+The terminal ledger is reference evidence only; it cannot select a backend, assign `proofSuiteId`,
+bind H4, or authorize H5/H6.
 
 ### 2E-7 - seal the selection handoff
 
@@ -328,7 +331,7 @@ the unsealed Gate 2E terminal ledger, validates the reference hardware record, c
 byte identity of the real canonical `../ops` sibling against the app mirror, and freezes the
 one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
 preflight is `BLOCKED_H5_PREFLIGHT` with digest
-`8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435`; canonical ops is missing, reference hardware is not ready, the external monitor is not configured, and no complete-proof campaign has started. No CUDA/prover launch receives H5 credit from this record.
+`f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24`; canonical ops is missing, the recorded reference hardware now meets the reduced 1.5% disk floor (7,310,026,937 bytes required), the external monitor is not configured, and no complete-proof campaign has started. The implemented state plane has not yet closed native-H4 state constraints or PQ commitment admission. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
 
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |

@@ -47,6 +47,10 @@ from experiments.bl_pq512_crypto_foundation.state_migration_recovery import (
     StateCheckpoint,
     checkpoint_from_composition,
 )
+from experiments.bl_pq512_crypto_foundation.state_plane import (
+    StateTransitionProof,
+    independently_verify_state_transition,
+)
 
 
 STATUS: Final[str] = (
@@ -116,6 +120,7 @@ _LEAKAGE_DOMAIN = b"BL/PQ512/GATE-2E/LEAKAGE-BOUNDARY/v1\x00"
 _RECEIPT_DOMAIN = b"BL/PQ512/GATE-2E/STATE-PROOF-RECEIPT/v1\x00"
 _MIGRATION_DOMAIN = b"BL/PQ512/GATE-2E/MIGRATION-BOUNDARY/v1\x00"
 _PQ_DOMAIN = b"BL/PQ512/GATE-2E/STRICT-PQ-LEDGER/v1\x00"
+_STATE_PLANE_DOMAIN = b"BL/PQ512/GATE-2E/STATE-PLANE-IMPLEMENTATION/v1\x00"
 
 
 class TerminalLedgerError(ValueError):
@@ -273,6 +278,7 @@ class TerminalLedgerContext:
     git_clean: bool
     protected_paths_clean: bool
     canonical_ops_available: bool
+    state_plane_proof: StateTransitionProof | None = None
 
     def __post_init__(self) -> None:
         _synthetic()
@@ -299,6 +305,17 @@ class TerminalLedgerContext:
         _bool(self.git_clean, "git_clean")
         _bool(self.protected_paths_clean, "protected_paths_clean")
         _bool(self.canonical_ops_available, "canonical_ops_available")
+        if self.state_plane_proof is not None:
+            if type(self.state_plane_proof) is not StateTransitionProof:
+                raise TerminalLedgerError("terminal_ledger_state_plane_proof_type_invalid")
+            if self.state_plane_proof.before.profile_id != self.batch.profile_id:
+                raise TerminalLedgerError("terminal_ledger_state_plane_profile_mismatch")
+            if self.state_plane_proof.before.capacity != self.batch.claim_slots:
+                raise TerminalLedgerError("terminal_ledger_state_plane_capacity_mismatch")
+            try:
+                independently_verify_state_transition(self.state_plane_proof)
+            except (ValueError, TypeError) as exc:
+                raise TerminalLedgerError("terminal_ledger_state_plane_replay_failed") from exc
 
 
 def _validate_c0(context: TerminalLedgerContext) -> tuple[str, ...]:
@@ -382,6 +399,31 @@ def _validate_reference_binding(context: TerminalLedgerContext) -> None:
         raise TerminalLedgerError("terminal_ledger_after_checkpoint_mismatch")
 
 
+def _state_plane_evidence(context: TerminalLedgerContext) -> tuple[str, bytes]:
+    proof = context.state_plane_proof
+    if proof is None:
+        return (
+            "STATE_PLANE_NOT_PROVIDED",
+            _hash(_STATE_PLANE_DOMAIN, b"state_plane_not_provided"),
+        )
+    try:
+        independently_verify_state_transition(proof)
+    except (ValueError, TypeError) as exc:
+        raise TerminalLedgerError("terminal_ledger_state_plane_replay_failed") from exc
+    return (
+        "STATE_PLANE_IMPLEMENTED_H4_PENDING",
+        _hash(
+            _STATE_PLANE_DOMAIN,
+            proof.before.root_512,
+            proof.after.root_512,
+            proof.statement_digest_512,
+            proof.transition_digest_512,
+            proof.commitment.canonical_bytes,
+            proof.receipt.canonical_bytes,
+        ),
+    )
+
+
 def _validate_selection(context: TerminalLedgerContext) -> None:
     if context.selection.selected_backend_id is not None:
         raise TerminalLedgerError("terminal_ledger_selection_backend_must_be_unset")
@@ -456,6 +498,8 @@ def _build_records(
     context: TerminalLedgerContext,
     c0_manifest_ids: tuple[str, ...],
     leakage_digest: bytes,
+    state_plane_status: str,
+    state_plane_digest: bytes,
 ) -> tuple[EvidenceRecord, ...]:
     composition = context.composition
     composition_digest = _hash(
@@ -474,6 +518,7 @@ def _build_records(
     )
     receipt_digest = _hash(
         _RECEIPT_DOMAIN,
+        state_plane_digest,
         composition.receipt.canonical_bytes,
         context.before_checkpoint.checkpoint_digest_512,
         context.after_checkpoint.checkpoint_digest_512,
@@ -538,7 +583,11 @@ def _build_records(
             "STATE_PROOF_RECEIPT",
             REFERENCE_ONLY,
             DERIVED,
-            "atomic_state_composition.py+state_migration_recovery.py",
+            (
+                "state_plane.py+atomic_state_composition.py+state_migration_recovery.py"
+                if state_plane_status != "STATE_PLANE_NOT_PROVIDED"
+                else "atomic_state_composition.py+state_migration_recovery.py"
+            ),
             receipt_digest,
             ("h4_atomic_binding_deferred",),
         ),
@@ -616,6 +665,8 @@ class TerminalLedger:
     activation_allowed: bool = False
     status: str = LEDGER_STATUS
     sealed: bool = False
+    state_plane_status: str = "STATE_PLANE_NOT_PROVIDED"
+    state_plane_digest_512: bytes = b""
     ledger_digest_512: bytes = b""
 
     def __post_init__(self) -> None:
@@ -656,6 +707,12 @@ class TerminalLedger:
         if ops_blocker not in self.blockers:
             raise TerminalLedgerError("terminal_ledger_ops_blocker_missing")
         _bool(self.canonical_ops_available, "canonical_ops_available")
+        if self.state_plane_status not in {
+            "STATE_PLANE_NOT_PROVIDED",
+            "STATE_PLANE_IMPLEMENTED_H4_PENDING",
+        }:
+            raise TerminalLedgerError("terminal_ledger_state_plane_status_invalid")
+        _bytes64(self.state_plane_digest_512, "state_plane_digest")
         _bool(self.h4_parent_bound, "h4_parent_bound")
         _bool(self.complete_proof_verified, "complete_proof_verified")
         if self.h4_parent_bound or self.complete_proof_verified:
@@ -673,6 +730,8 @@ class TerminalLedger:
             self.after_checkpoint_digest_512,
             self.selection_digest_512,
             self.handoff_digest_512,
+            _text(self.state_plane_status, "state_plane_status"),
+            self.state_plane_digest_512,
             b"".join(record.canonical_bytes for record in self.records),
             _encode_strings(self.blockers, "ledger_blocker"),
             bytes(
@@ -700,6 +759,8 @@ class TerminalLedger:
                 self.after_checkpoint_digest_512,
                 self.selection_digest_512,
                 self.handoff_digest_512,
+                _text(self.state_plane_status, "state_plane_status"),
+                self.state_plane_digest_512,
             )
         )
 
@@ -717,6 +778,8 @@ class TerminalLedger:
             "records": tuple(record.as_public_dict() for record in self.records),
             "blockers": self.blockers,
             "canonical_ops_available": self.canonical_ops_available,
+            "state_plane_status": self.state_plane_status,
+            "state_plane_digest_sha3_512_hex": self.state_plane_digest_512.hex(),
             "h4_parent_bound": self.h4_parent_bound,
             "complete_proof_verified": self.complete_proof_verified,
             "proofSuiteId": self.proof_suite_id,
@@ -735,7 +798,14 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
     _validate_reference_binding(context)
     _validate_selection(context)
     leakage_digest = _validate_private_boundary(context)
-    records = _build_records(context, c0_manifest_ids, leakage_digest)
+    state_plane_status, state_plane_digest = _state_plane_evidence(context)
+    records = _build_records(
+        context,
+        c0_manifest_ids,
+        leakage_digest,
+        state_plane_status,
+        state_plane_digest,
+    )
     blockers = set(MANDATORY_BLOCKERS)
     if context.canonical_ops_available:
         blockers.add("canonical_ops_recursive_identity_unverified")
@@ -758,6 +828,8 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
         records=records,
         blockers=tuple(sorted(blockers)),
         canonical_ops_available=context.canonical_ops_available,
+        state_plane_status=state_plane_status,
+        state_plane_digest_512=state_plane_digest,
     )
 
 

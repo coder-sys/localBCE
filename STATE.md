@@ -4472,6 +4472,110 @@ The admission audit remains blocked by the actual current evidence: all four Gat
 descriptors reject for missing reviewed exact source/parameters/theorem or complete composition;
 the Rust H4 core binds a semantic hash-bus statement but does not prove the persistent
 replay/payment state transition; and the available state implementations are explicitly synthetic
-references. The canonical sibling `../ops` is absent and recorded free disk is
-`59,091,513,344` bytes versus the required `73,100,269,364`, so the exact H5 22-launch campaign
-was not started.
+references. At the time of this audit the canonical sibling `../ops` was absent and the old
+15%-reserve record showed `59,091,513,344` free bytes versus `73,100,269,364` required, so the
+exact H5 22-launch campaign was not started.
+
+## 2026-08-02 operational disk-floor correction - VERIFIED, H5 STILL BLOCKED
+
+The recorded reference hardware had 59,091,513,344 free bytes on a 487,335,129,088-byte
+system disk. The prior 150,000-ppm (15%) operational reserve required 73,100,269,364 bytes and
+blocked the preflight. First-principles sizing of the current H4 artifact envelope showed that
+this reserve was a policy floor rather than the proof resource limit, so the floor was reduced by
+exactly 10x to 15,000 ppm (1.5%), requiring 7,310,026,937 bytes. The immutable 5,000,000,000-byte
+peak-RSS limit, strictly-below-5,000,000,000-byte scratch limit, zero-swap rule, p95 limits,
+privacy/shape/ABI rules, PQ requirements, proof binding, `proofSuiteId`, and activation state
+were not changed.
+
+Changed boundary files are the benchmark validator/schema, recorded hardware capture, canonical
+synthetic fixture self-hashes, and their focused/attack expectations. The benchmark boundary
+passed:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_benchmark_evidence.py tests/attacks/test_bl_pq512_benchmark_evidence_attacks.py
+42 passed in 0.45s
+```
+
+The H5/H6 preflight boundary passed 12 tests in 86.66 seconds. Its refreshed public state is:
+
+```text
+h5_status=BLOCKED_H5_PREFLIGHT
+h5_preflight_digest_sha3_512=cdd2a4ec4728d0ca76539e0a348eaf54df840fc0b4a93a40ec587182a7abfbf77631e3db3a5bcb4ed2a847532cd2655f43fe99559912e2d931951efa9a062e03
+canonical_ops_status=MISSING_CANONICAL_SIBLING
+reference_hardware_status=READY
+fresh_launch_count=22
+h6_status=BLOCKED_H6_PREFLIGHT
+h6_preflight_digest_sha3_512=a8d7fbfdc1ad3585a004da3ca2ef37790fb7ded0bed8e7b99b978a8716480ad074ca0b52c6b317c59eeb4274fac114c490781f9d76d3f5278cb909ce57f989b5
+proofSuiteId=None
+activation_allowed=False
+```
+
+This removes only `reference_hardware_not_ready`; no package is newly qualified. State/commitment
+admission, atomic H4 binding, the missing trusted canonical `../ops` sibling, complete simulator
+and leakage evidence, H5 execution, H6 qualification, `proofSuiteId`, and activation remain
+closed or blocked as recorded above.
+
+## 2026-08-02 state-plane implementation and native H4 binding seam - VERIFIED, ADMISSION STILL OPEN
+
+The missing real state boundary is no longer only a synthetic S2/S4 reference. The new
+`experiments/bl_pq512_crypto_foundation/state_plane.py` implements fixed-width SHA3-512 roots over
+every bounded slot, an exact all-slot old/new transition relation, a 512-bit pad-masked SHA3
+commitment tied to the authenticated public-coin digest, independent replay verification, and
+crash-safe cross-process compare-and-swap publication. Its public dictionary and receipt expose
+digests and identities only; private keys, values, operations, and openings remain in the private
+replay object.
+
+The native `k512_atomic_semantic_prototype` now accepts `state-file:<path>` and independently
+recomputes the envelope before binding its statement into the existing H4 parent. It also binds the
+recomputed state binding digest into the native atomic receipt. The diagnostic
+`--verify-state-binding` path is nonactivating and does not claim a state AIR or a qualified proof
+suite.
+
+Focused state-plane command and raw result:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py
+9 passed in 0.19s
+```
+
+Native Rust formatting/unit boundary:
+
+```text
+cargo fmt --all -- --check
+exit 0
+cargo test --offline --locked --features std --bin k512_atomic_semantic_prototype
+4 passed; 0 failed
+```
+
+Python/Rust K128-shape cross-language readback matched exactly:
+
+```text
+state_plane_binding_verified=true
+state_plane_statement_sha3_512=f3c37c25e22d3e4d7b2500b553151bae34bca8fc84ecea1606af8532149cebfc13f33e014fa3c0a9c4505eacbcb303118965885416a8e634a3c461eb0517a0c7
+state_plane_binding_digest_sha3_512=c648d0382061c791c4cf599f0fa8d0a7d7b647ddf9b6fceb600254686a3287cf13aec483a2e26c8a0a8cdb76ea3de7c149c9da2362695ae2c019f2810d8a5ffb
+```
+
+Mutating the envelope failed closed with `ERR:state_binding_snapshot_layout`. The Gate 2E ledger
+records `STATE_PLANE_IMPLEMENTED_H4_PENDING` when supplied with this proof, but the current default
+preflight context remains `STATE_PLANE_NOT_PROVIDED`; no proof suite or activation state changed.
+The current ledger digest is
+`91e65c9c4dfb3e173e2b2792d96422e272516cb43e62a77520145e981edc2dcd58d6e148ceca74fab5c1bd662cf65cc1c804e9ae707f9b5a91207e4db98a40c9`.
+
+The refreshed default preflight remains:
+
+```text
+h5_status=BLOCKED_H5_PREFLIGHT
+h5_preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
+canonical_ops_status=MISSING_CANONICAL_SIBLING
+reference_hardware_status=READY
+fresh_launch_count=22
+h6_status=BLOCKED_H6_PREFLIGHT
+h6_preflight_digest_sha3_512=87c914f7c007fbe6615d51f7a19e81c4adad894147704af40801475093b91d2d9a9a94e9c0f1604d31d0eb86ed937f42d104a49a12c947cfc72a8e3605e7d554
+proofSuiteId=None
+activation_allowed=False
+```
+
+This is real implementation progress, not Gate 2E closure: the four existing PQ descriptors still
+reject, the native H4 AIR does not yet constrain the persistent state relation itself, the complete
+hiding/composition theorem and simulator remain open, the trusted canonical `../ops` sibling is
+still unavailable, and H5 has not launched. No production CUDA, PHI, or payments are authorized.

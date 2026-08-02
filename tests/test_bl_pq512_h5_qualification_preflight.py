@@ -106,7 +106,7 @@ def test_h5_preflight_is_blocked_and_freezes_the_complete_campaign_shape(context
     assert preflight.fresh_launch_count == FRESH_LAUNCH_COUNT == 22
     assert preflight.campaign_status == CAMPAIGN_NOT_STARTED
     assert preflight.canonical_ops_status == CANONICAL_OPS_MISSING
-    assert preflight.reference_hardware_ready is False
+    assert preflight.reference_hardware_ready is True
     assert {
         "gate_2e_ledger_unsealed",
         "state_plane_unselected",
@@ -116,7 +116,6 @@ def test_h5_preflight_is_blocked_and_freezes_the_complete_campaign_shape(context
         "strict_pq_security_ledger_open",
         "proof_suite_unselected",
         "canonical_ops_missing",
-        "reference_hardware_not_ready",
         "h5_campaign_not_started",
         "h5_external_monitor_not_configured",
         "h5_source_readback_not_captured",

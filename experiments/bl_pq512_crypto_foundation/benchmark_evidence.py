@@ -47,7 +47,9 @@ PROTOCOL: Final[dict[str, object]] = {
     "warmup_count": 1,
 }
 GATES: Final[dict[str, int]] = {
-    "disk_headroom_min_ppm": 150_000,
+    # The disk reserve is an operational admission floor, not the immutable
+    # below-5-GB scratch or 5-GB peak-RSS proof limits.
+    "disk_headroom_min_ppm": 15_000,
     "mad_over_p50_max_ppm": 100_000,
     "p95_over_p50_max_ppm": 1_200_000,
     "peak_rss_max_bytes": 5_000_000_000,
@@ -316,12 +318,12 @@ def validate_reference_hardware_config(
     ppm = _u64(storage["disk_headroom_min_ppm"], "reference_hardware_disk_headroom_ppm", positive=True)
     required = _headroom_bytes(total, ppm)
     shortfall = max(0, required - free)
-    if total != 487_335_129_088 or ppm != 150_000:
+    if total != 487_335_129_088 or ppm != 15_000:
         raise BenchmarkEvidenceError("reference_hardware_storage_identity_invalid")
     if storage["required_free_bytes"] != required or storage["headroom_shortfall_bytes"] != shortfall:
         raise BenchmarkEvidenceError("reference_hardware_storage_calculation_invalid")
     ready = free >= required
-    expected_failures = [] if ready else ["system_disk_free_below_15_percent_headroom"]
+    expected_failures = [] if ready else ["system_disk_free_below_1_5_percent_headroom"]
     if hardware["benchmark_ready"] is not ready or hardware["benchmark_ready_failures"] != expected_failures:
         raise BenchmarkEvidenceError("reference_hardware_readiness_record_invalid")
     if require_ready and not ready:

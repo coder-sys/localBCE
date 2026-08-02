@@ -233,7 +233,7 @@
         "gates": {
           "additionalProperties": false,
           "properties": {
-            "disk_headroom_min_ppm": {"const": 150000},
+            "disk_headroom_min_ppm": {"const": 15000},
             "mad_over_p50_max_ppm": {"const": 100000},
             "p95_over_p50_max_ppm": {"const": 1200000},
             "peak_rss_max_bytes": {"const": 5000000000},

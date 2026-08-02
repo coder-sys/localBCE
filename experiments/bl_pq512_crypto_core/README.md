@@ -12,9 +12,13 @@ This crate implements the M31/Fp16/SHA3-512 proof substrate, shared-bus B16 Bool
 coprocessor, native GKR hiding, Construction 8.2 PCS, authenticated public coin, canonical proof
 grammar, atomic one/four-shard coordinator, and authoritative independent verifier.
 
-It does not provide persistent state selection, H5 repeated qualification, H6 suite identity,
-production activation, or Ethereum settlement. Direct SHA3 AIR and other retained narrow controls
-are differential or fail-closed regression machinery, not alternate proof backends.
+It does not select persistent state, assign H5/H6 qualification, assign a suite identity, authorize
+production activation, or provide Ethereum settlement. The native coordinator now has a bounded
+`--verify-state-binding` path and accepts `state-file:<path>` for a canonical private state envelope;
+it recomputes the state statement, pad commitment, proof identity, and receipt before the H4 parent
+uses that statement. The state relation is still independently replayed reference evidence, not a
+state AIR or a qualified proof backend. Direct SHA3 AIR and other retained narrow controls are
+differential or fail-closed regression machinery, not alternate proof backends.
 
 ## Current accepted profiles
 
@@ -149,9 +153,10 @@ reproducibility, resource, and identity obligations.
 
 The read-only H5 preflight now freezes that campaign boundary and returns
 `BLOCKED_H5_PREFLIGHT`: 22 fresh launches are required, but the current terminal ledger is
-unsealed, no state plane is selected, canonical `../ops` is missing, the reference hardware is
-not benchmark-ready, and no complete-proof campaign or external monitor has run. Its preflight
-digest is `8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435`. This does not assign
+unsealed, no state plane is selected, canonical `../ops` is missing, and no complete-proof
+campaign or external monitor has run. The recorded reference hardware now meets the reduced
+1.5% operational disk floor (7,310,026,937 bytes required); its refreshed preflight digest is
+`f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24`. This does not assign
 `proofSuiteId`, authorize CUDA, or grant qualification credit.
 
 `proofSuiteId=null`, activation is false, and real PHI/payments remain forbidden.

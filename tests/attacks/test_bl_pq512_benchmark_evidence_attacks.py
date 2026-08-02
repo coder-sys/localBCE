@@ -92,7 +92,7 @@ def test_reference_hardware_binding_cannot_be_substituted() -> None:
 
 def test_nonqualifying_disk_capture_is_rejected() -> None:
     def mutate(record: dict[str, object]) -> None:
-        record["payload"]["reference_hardware"]["system_disk_free_bytes_at_capture"] = 59_091_513_344  # type: ignore[index]
+        record["payload"]["reference_hardware"]["system_disk_free_bytes_at_capture"] = 7_310_026_936  # type: ignore[index]
 
     _rejects(mutate, "benchmark_reference_hardware_disk_headroom_failed")
 
@@ -183,7 +183,7 @@ def test_nearest_rank_p95_cannot_hide_a_slow_tenth_run_as_an_outlier() -> None:
         ("swap_in_bytes", 1, "swap_in_bytes_gate_failed"),
         ("swap_out_bytes", 1, "swap_out_bytes_gate_failed"),
         ("minimum_available_ram_bytes", 1_643_838_259, "ram_headroom_gate_failed"),
-        ("minimum_disk_free_bytes", 73_100_269_363, "disk_headroom_gate_failed"),
+        ("minimum_disk_free_bytes", 7_310_026_936, "disk_headroom_gate_failed"),
     ],
 )
 def test_resource_gates_fail_closed(field: str, value: int, match: str) -> None:

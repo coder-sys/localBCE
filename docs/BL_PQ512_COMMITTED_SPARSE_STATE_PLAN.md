@@ -178,6 +178,14 @@ fail closed.
    `../ops` blocker remains recorded. A production state plane is not selected until a reviewed
    backend and complete H4 binding exist.
 
+The smallest nonactivating state boundary is now implemented separately in
+`experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
+all-slot replay, a pad-masked commitment, independent verification, and crash-safe file CAS, and
+the native H4 coordinator can verify its canonical envelope and bind the resulting statement into
+the existing parent/receipt seam. This is implementation evidence only: it does not select a PQ
+backend, establish the state relation inside the H4 AIR, close native hiding, or authorize
+`proofSuiteId` or activation.
+
 ## 6. Acceptance gates
 
 ## 6.1 Current S2 evidence boundary
@@ -224,18 +232,20 @@ terminal evidence record for the current synthetic references. It replays S4, de
 checkpoints, verifies both C0 profile shapes and all seven C0 negative classes, checks the fixed
 12-field/public-private boundary, and recomputes S6/S7 selection and handoff identities. The
 11-record ledger remains reference-only and unsealed with
-`status=UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`; its focused/attack result is 7 passed in 29.70
-seconds and the containing S1-S7 plus ledger result is 73 passed in 91.58 seconds. It does not
-admit a relation or commitment, close the complete simulator or leakage scan, bind H4, qualify H5,
-assign `proofSuiteId`, or authorize activation. The missing canonical `../ops` sibling remains a
+`status=UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. When supplied, it records the new state-plane
+identity as `STATE_PLANE_IMPLEMENTED_H4_PENDING`; the default preflight remains
+`STATE_PLANE_NOT_PROVIDED`. The ledger does not admit a relation or PQ commitment, close the
+complete simulator or leakage scan, establish state constraints inside H4, qualify H5, assign
+`proofSuiteId`, or authorize activation. The missing canonical `../ops` sibling remains a
 fail-closed blocker.
 
 When a reviewed candidate is eventually admitted, the resulting decision has the following
 meaning: This selects the Gate 2E candidate; it is not H5 qualification. The admission handoff
 must:
 
-Bind the selected state plane into
-   the actual H4 parent, transcript, proof grammar, independent verifier, and atomic receipt.
+Close the remaining admission work by binding the reviewed state plane into the actual H4 parent,
+transcript, proof grammar, independent verifier, and atomic receipt, including state constraints
+inside the H4 AIR rather than only the current canonical-envelope seam.
 
 ## 6.3 H5 qualification preflight
 
@@ -250,18 +260,20 @@ The current record is:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
 canonical_ops_status=MISSING_CANONICAL_SIBLING
-reference_hardware_status=NOT_READY
+reference_hardware_status=READY
 fresh_launch_count=22
 proofSuiteId=None
 activation_allowed=False
 ```
 
 It remains blocked by the unsealed/unselected Gate 2E state, deferred H4 binding, incomplete
-simulator/leakage/strict-PQ evidence, missing canonical ops, unready reference hardware, absent
+simulator/leakage/strict-PQ evidence, missing canonical ops, absent
 external monitoring, absent source readback, and no complete-proof campaign. The preflight suite
-passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed.
+passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed. The recorded disk reserve
+is 15,000 ppm (1.5%), requiring 7,310,026,937 free bytes; the immutable 5,000,000,000-byte
+RSS/scratch and zero-swap gates remain unchanged.
 
 ## 6.4 H6 qualification preflight
 
@@ -276,10 +288,10 @@ Current raw record:
 
 ```text
 status=BLOCKED_H6_PREFLIGHT
-h5_preflight_digest_sha3_512=8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435
+h5_preflight_digest_sha3_512=f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24
 suite_registry_digest_sha3_512=307439093721aeaa9a70ef00d546f06af5f50b73781f9f19b8b02cca8c3d36ee1ef36e9981d49a59d10d8d7768fec079d40e05b6c008d7913c9caf4cc52cf974
 suite_registry_canonical_digest_sha3_512=d082aaec00392f6ae7c7c37a52b6b18ab0fccd5fb08654ec9e326d8c20dd355e13f02b240577823f18b06f50aa165d25f5479d2ba1067beb80dd20ab9d6724e0
-preflight_digest_sha3_512=680d73501851b316d969f811e23aa04985cacfce04df5bea8bd1b6e8553ddd07f12e08d89c79915a80c86f175eb9973cd3825e8ce7e09e2b4122cee44bcd24d7
+preflight_digest_sha3_512=87c914f7c007fbe6615d51f7a19e81c4adad894147704af40801475093b91d2d9a9a94e9c0f1604d31d0eb86ed937f42d104a49a12c947cfc72a8e3605e7d554
 proofSuiteId=None
 activation_allowed=False
 ```

@@ -72,6 +72,15 @@ ops, and independent verification. The ledger is reference-only and unsealed; it
 are `no_backend_admitted`, `complete_simulator_missing`, `complete_leakage_scan_missing`,
 `h4_atomic_binding_deferred`, `canonical_ops_missing`, and `proof_suite_unselected`.
 
+The smallest real state boundary is now implemented in
+`experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
+all-slot old/new replay, a 512-bit pad-masked SHA3 commitment, independent replay verification,
+and crash-safe compare-and-swap publication. The native H4 coordinator accepts an explicit
+`state-file:<path>` binding envelope and recomputes the same statement, commitment, proof identity,
+and receipt before using the statement in the parent; Python/Rust K128-shape KATs match byte for
+byte. This is implemented nonactivating evidence, not a selected PQ proof suite: native H4 AIR
+state constraints, complete hiding/composition review, and the terminal Gate 2E seal remain open.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from
@@ -359,10 +368,13 @@ warm-up plus ten unique measured launches for each K128/K512 profile (22 fresh l
 checks the actual canonical `../ops` tree and reference-hardware readiness, and keeps cached
 proofs, cached witnesses, automatic retry, activation, and `proofSuiteId` disabled. The current
 record is `BLOCKED_H5_PREFLIGHT` with preflight digest
-`8eb296bb3946df2881402e86e7b4f7ba86018f7ff7140ed513266e3b0c65939a04aebe96f638131c69d5326e614a1dd57961ad1b103f748009b60bb4cd1dc435`; it records
-`MISSING_CANONICAL_SIBLING`, `NOT_READY` reference hardware, no campaign, no external monitor,
-and the unresolved Gate 2E/H4/simulator/leakage/PQ blockers. This is a preflight ledger, not H5
-measurement or qualification evidence.
+`f3da98dae8c2cbcb9d80dec755247b64f53b97e258e480d1f89a3e6be9d7a1f2120331fc9b5111a25e133cf43d48b79cff58016fd595e0669262d87a64e2aa24`; it records
+`MISSING_CANONICAL_SIBLING`, `READY` reference hardware, no campaign, no external monitor, and
+the unresolved Gate 2E/H4/simulator/leakage/PQ blockers. The recorded 487,335,129,088-byte disk
+now uses a literal 10x lower operational reserve: 15,000 ppm (1.5%), requiring 7,310,026,937
+free bytes; the immutable 5,000,000,000-byte RSS/scratch, zero-swap, privacy, proof, and
+activation gates are unchanged. This is a preflight ledger, not H5 measurement or qualification
+evidence.
 
 `experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` now records the next
 qualification boundary without launching a prover. It independently replays the H5/2E context,
