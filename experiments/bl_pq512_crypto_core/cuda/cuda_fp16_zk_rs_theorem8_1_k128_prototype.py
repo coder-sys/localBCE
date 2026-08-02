@@ -2961,17 +2961,35 @@ def atomic_parent_binding():
 
 
 def atomic_state_binding():
-    statement_encoded = os.environ.get("BL_STATE_PLANE_STATEMENT_DIGEST")
-    binding_encoded = os.environ.get("BL_STATE_PLANE_BINDING_DIGEST")
-    if (statement_encoded is None) != (binding_encoded is None):
-        raise SystemExit("state_plane_binding_env_pair")
-    if statement_encoded is None:
+    digest_fields = (
+        ("statement", "BL_STATE_PLANE_STATEMENT_DIGEST"),
+        ("binding", "BL_STATE_PLANE_BINDING_DIGEST"),
+        ("projection_digest", "BL_STATE_PLANE_PROJECTION_DIGEST"),
+        ("public_coin", "BL_STATE_PLANE_PUBLIC_COIN"),
+        ("transition", "BL_STATE_PLANE_TRANSITION_DIGEST"),
+        ("commitment", "BL_STATE_PLANE_COMMITMENT_DIGEST"),
+        ("proof", "BL_STATE_PLANE_PROOF_IDENTITY"),
+        ("verifier", "BL_STATE_PLANE_VERIFIER_IDENTITY"),
+        ("attempt", "BL_STATE_PLANE_ATTEMPT_ID"),
+        ("receipt", "BL_STATE_PLANE_RECEIPT_DIGEST"),
+        ("composition", "BL_STATE_PLANE_COMPOSITION_DIGEST"),
+        ("state_air_program", "BL_STATE_AIR_PROGRAM_COMMITMENT"),
+        ("state_air_execution", "BL_STATE_AIR_EXECUTION_COMMITMENT"),
+        ("state_air_fragment", "BL_STATE_AIR_FRAGMENT_DIGEST"),
+    )
+    public_abi_environments = tuple(
+        f"BL_STATE_PLANE_PUBLIC_ABI_{index:02}" for index in range(12)
+    )
+    attached = any(
+        os.environ.get(environment) is not None
+        for _, environment in digest_fields
+    ) or any(os.environ.get(environment) is not None for environment in public_abi_environments)
+    if not attached:
         return None
-    values = []
-    for label, encoded in (
-        ("state_plane_statement", statement_encoded),
-        ("state_plane_binding", binding_encoded),
-    ):
+
+    def decode(label, encoded):
+        if encoded is None:
+            raise SystemExit(f"{label}_missing")
         if len(encoded) != 128:
             raise SystemExit(f"{label}_length")
         try:
@@ -2980,13 +2998,34 @@ def atomic_state_binding():
             raise SystemExit(f"{label}_encoding") from error
         if len(value) != 64 or not any(value):
             raise SystemExit(f"{label}_shape")
-        values.append(value)
+        return value
+
+    result = {
+        label: decode(label, os.environ.get(environment))
+        for label, environment in digest_fields
+    }
+    public_abi = []
+    for index in range(12):
+        label = f"state_plane_public_abi_{index:02}"
+        encoded = os.environ.get(f"BL_STATE_PLANE_PUBLIC_ABI_{index:02}")
+        if encoded is None:
+            raise SystemExit(f"{label}_missing")
+        if len(encoded) != 64:
+            raise SystemExit(f"{label}_length")
+        try:
+            value = bytes.fromhex(encoded)
+        except ValueError as error:
+            raise SystemExit(f"{label}_encoding") from error
+        if len(value) != 32 or not any(value):
+            raise SystemExit(f"{label}_shape")
+        public_abi.append(value)
+    result["public_abi"] = tuple(public_abi)
     if atomic_parent_binding() is None:
         raise SystemExit("state_plane_binding_without_parent")
-    return tuple(values)
+    return result
 
 
-def public_coin_identity(gkr_mask_root):
+def public_coin_identity(gkr_mask_root, state_binding):
     parent_binding = atomic_parent_binding()
     parent_suffix = (
         b""
@@ -2994,10 +3033,31 @@ def public_coin_identity(gkr_mask_root):
         else b"BL/PQ512/FP16-ZK-RS/ATOMIC-PARENT/v1\0"
         + parent_binding
     )
+    state_suffix = b""
+    if state_binding is not None:
+        state_suffix = (
+            b"BL/PQ512/STATE-PLANE/AUTHENTIC-TRANSCRIPT/v1\0"
+            + state_binding["statement"]
+            + state_binding["binding"]
+            + state_binding["projection_digest"]
+            + b"".join(state_binding["public_abi"])
+            + state_binding["public_coin"]
+            + state_binding["transition"]
+            + state_binding["commitment"]
+            + state_binding["proof"]
+            + state_binding["verifier"]
+            + state_binding["attempt"]
+            + state_binding["receipt"]
+            + state_binding["composition"]
+            + state_binding["state_air_program"]
+            + state_binding["state_air_execution"]
+            + state_binding["state_air_fragment"]
+        )
     session = hashlib.sha3_512(
         b"BL/PQ512/FP16-ZK-RS/COMPLETE-SESSION/v1"
         + gkr_mask_root
         + parent_suffix
+        + state_suffix
     ).digest()
     schedule = hashlib.sha3_512(
         b"BL/PQ512/FP16-ZK-RS/COMPLETE-SCHEDULE/v1"
@@ -3015,6 +3075,7 @@ def public_coin_identity(gkr_mask_root):
             PUBLIC_COIN_ROUNDS,
         )
         + parent_suffix
+        + state_suffix
     ).digest()
     return session, schedule
 
@@ -3164,7 +3225,8 @@ def main():
             gkr_mask_cpu_workers,
         ) = native_gkr_mask_commit(answer_code_path)
         public_coin_session, public_coin_schedule = public_coin_identity(
-            gkr_mask_cpu_root
+            gkr_mask_cpu_root,
+            state_binding,
         )
         if semantic_source is None:
             public_coin = NativePublicCoinBridge(
@@ -4473,12 +4535,40 @@ def main():
         )
         print(
             "state_plane_statement_sha3_512="
-            + ("00" * 64 if state_binding is None else state_binding[0].hex())
+            + ("00" * 64 if state_binding is None else state_binding["statement"].hex())
         )
         print(
             "state_plane_binding_digest_sha3_512="
-            + ("00" * 64 if state_binding is None else state_binding[1].hex())
+            + ("00" * 64 if state_binding is None else state_binding["binding"].hex())
         )
+        print("state_plane_public_abi_count=" + ("0" if state_binding is None else "12"))
+        print("state_air_fragment_verified=" + ("false" if state_binding is None else "true"))
+        state_zero = "00" * 64
+        state_field_zero = "00" * 32
+        for label, key in (
+            ("state_plane_projection_digest_sha3_512", "projection_digest"),
+            ("state_plane_public_coin_sha3_512", "public_coin"),
+            ("state_plane_transition_digest_sha3_512", "transition"),
+            ("state_plane_commitment_digest_sha3_512", "commitment"),
+            ("state_plane_proof_identity_sha3_512", "proof"),
+            ("state_plane_verifier_identity_sha3_512", "verifier"),
+            ("state_plane_attempt_id_sha3_512", "attempt"),
+            ("state_plane_receipt_digest_sha3_512", "receipt"),
+            ("state_plane_composition_digest_sha3_512", "composition"),
+            ("state_air_program_commitment_sha3_512", "state_air_program"),
+            ("state_air_execution_commitment_sha3_512", "state_air_execution"),
+            ("state_air_fragment_digest_sha3_512", "state_air_fragment"),
+        ):
+            print(label + "=" + (state_zero if state_binding is None else state_binding[key].hex()))
+        for index in range(12):
+            print(
+                f"state_plane_public_abi_{index:02}="
+                + (
+                    state_field_zero
+                    if state_binding is None
+                    else state_binding["public_abi"][index].hex()
+                )
+            )
         print(f"sumcheck_seconds={sumcheck_seconds:.6f}")
         print(
             "sumcheck_compute_seconds="

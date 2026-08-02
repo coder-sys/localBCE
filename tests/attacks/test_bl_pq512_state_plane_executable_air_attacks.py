@@ -28,3 +28,16 @@ def test_mutated_public_root_fails_the_ordered_public_binding() -> None:
             instance.traces,
             (instance.public_values[0] ^ 1, *instance.public_values[1:]),
         )
+
+
+def test_mutated_operation_row_fails_the_transition_lookup() -> None:
+    instance = build_state_plane_air(_proof())
+    columns = dict(instance.traces["state_operations"].columns)
+    columns["after_value_0"] = (
+        columns["after_value_0"][0] ^ 1,
+        *columns["after_value_0"][1:],
+    )
+    traces = dict(instance.traces)
+    traces["state_operations"] = TraceTable("state_operations", columns)
+    with pytest.raises(StructuralError, match="air_lookup_multiset_mismatch|air_identity_failed"):
+        evaluate_program(instance.program, traces, instance.public_values)

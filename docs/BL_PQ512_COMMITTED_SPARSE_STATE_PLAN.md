@@ -181,14 +181,17 @@ fail closed.
 The smallest nonactivating state boundary is implemented separately in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
 all-slot replay, a pad-masked commitment, independent verification, and crash-safe file CAS. The
-native H4 coordinator now binds the state digest into the v3 parent, each child shard's exact
-statement/digest echo, and the atomic receipt. The composable
+native H4 coordinator now consumes a version-2 binding envelope containing the executable
+state-transition AIR program/execution, independently evaluates it before parent construction,
+and binds the state transition, commitment, verifier, attempt, receipt, ordered 12-field
+projection, AIR identities, and composition identity into the v3 parent, authenticated interactive
+session/schedule, exact child grammar, and atomic receipt. The composable
 `experiments/fixed_shape_claim_air/state_plane_executable_air.py` constrains every bounded old/new
-slot and both SHA3-512 roots; `compose_state_plane_air` merges it into one executable AIR input.
-This is still implementation evidence only: the native H4 coordinator does not yet consume that
-AIR fragment, the full transition/commitment relation is not admitted, and the digest-bound
-hash-pad security review rejects the current candidate for Gate 2E. `proofSuiteId` and activation
-remain closed.
+operation and slot, both SHA3-512 roots, and the ordered root public inputs; `compose_state_plane_air`
+merges it into one executable AIR input. This is still implementation evidence only: the current
+hash-pad review rejects Gate 2E admission, no reviewed PQ backend or proof-native H4 PCS/ZK
+composition is available, and the simulator/leakage ledger remains open. `proofSuiteId` and
+activation remain closed.
 
 ## 6. Acceptance gates
 
@@ -251,9 +254,10 @@ When a reviewed candidate is eventually admitted, the resulting decision has the
 meaning: This selects the Gate 2E candidate; it is not H5 qualification. The admission handoff
 must:
 
-Close the remaining admission work by binding the reviewed state plane into the actual H4 parent,
-transcript, proof grammar, independent verifier, and atomic receipt, including state constraints
-inside the H4 AIR rather than only the current canonical-envelope seam.
+Close the remaining admission work by selecting a reviewed state/commitment backend and completing
+the proof-native H4 PCS/ZK composition, simulator/leakage ledger, and qualification evidence. The
+native executable-AIR consumption and canonical-envelope seam above are necessary prerequisite
+evidence, not admission or H5 credit.
 
 ## 6.3 H5 qualification preflight
 

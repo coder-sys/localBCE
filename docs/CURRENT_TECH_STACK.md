@@ -82,15 +82,21 @@ all-slot old/new replay, a 512-bit pad-masked SHA3 commitment, independent repla
 and crash-safe compare-and-swap publication. Its decoder rejects every presence byte except exact
 `0` or `1`, requires byte-for-byte canonical re-encoding, and therefore rejects corrupted
 persisted state before root comparison or publication. The native H4 coordinator accepts an explicit
-`state-file:<path>` binding envelope, includes the state-binding digest in the v3 parent, requires
-each child shard to echo the exact state statement and binding digest, and includes that digest in
-the atomic receipt. The composable
+`state-file:<path>` version-2 binding envelope. Before constructing the v3 parent, Rust independently
+replays the fixed-shape transition, validates the exact state AIR program identifier, evaluates the
+embedded AIR program/execution with the native `air_ir` verifier, checks the ordered 128-byte root
+public inputs, and recomputes the SHA3-512 state/AIR identities. The v3 parent binds the full state
+statement, transition, commitment, verifier, attempt, receipt, exact ordered 12-field projection,
+AIR program/execution commitments, and fragment/composition digests. The authenticated interactive
+child session and schedule bind the same state context before challenges; each child shard must echo
+the exact state proof grammar, and the atomic receipt binds the same full context. The composable
 `experiments/fixed_shape_claim_air/state_plane_executable_air.py` now constrains every bounded
-old/new slot, empty-slot zeroing, both canonical snapshot encodings, real SHA3-512 root calls,
-and ordered public roots; `compose_state_plane_air` merges it into one executable AIR encoding.
-This remains nonactivating evidence: the native H4 coordinator does not yet consume the AIR
-fragment, the full transition/commitment composition is not admitted, and the hash-pad security
-review rejects the current candidate for Gate 2E.
+old/new operation and slot, empty-slot zeroing, both canonical snapshot encodings, real SHA3-512
+root calls, and ordered public roots; `compose_state_plane_air` merges it into one executable AIR
+encoding. Native consumption is independently tested against a generated binding and mutation
+failures, but it is not a proof-native H4 PCS/ZK composition or backend admission. No reviewed PQ
+commitment backend is available, the hash-pad review rejects the current candidate for Gate 2E,
+`proofSuiteId` remains null, and activation remains closed.
 
 ## How a successor must interpret this repository
 
@@ -209,7 +215,9 @@ subset is forbidden.
    coordinator must compute the expected manifest.
 3. **Create the atomic parent binding.** Domain-separate and bind the profile, semantic program,
    descriptor, port map, source-file identity and geometry, selected B16 GKR plan, execution
-   manifest, and caller statement.
+   manifest, and caller statement. When `state-file:<path>` is supplied, append the independently
+   verified state transition, commitment, verifier, attempt, receipt, exact 12-field projection,
+   and executable-AIR identities as one state context.
 4. **Process shards in canonical order.** K512 runs four full shard proofs sequentially. It may
    reuse bounded worker infrastructure but must not reuse nonlinear challenge streams, masks, proof
    fragments, or partial receipts between shards.
@@ -228,8 +236,9 @@ subset is forbidden.
    terminals, native masks, PCS openings, answer code, semantic boundary, and mutation gates.
 10. **Create one outer receipt.** After every ordered shard independently verifies, hash the parent,
     caller statement, ordered shard evidence, stdout/bundle identities, timing/resource fields, and
-    verifier results into one atomic receipt. A missing, reordered, duplicated, stale, or partially
-    verified shard rejects the complete attempt.
+    verifier results into one atomic receipt. When state is attached, the full state context is
+    included as well. A missing, reordered, duplicated, stale, or partially verified shard rejects
+    the complete attempt.
 
 The Python/CUDA layer is an arithmetic oracle, not an authority. It may produce raw group cubics,
 wire quadratics, boundary evaluations, folds, and device telemetry. Rust owns challenges, native

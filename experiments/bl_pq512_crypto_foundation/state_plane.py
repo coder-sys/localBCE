@@ -10,15 +10,16 @@ It implements the smallest useful state boundary that those controls lacked:
 * crash-safe, compare-and-swap file publication.
 
 The relation is independently replayable reference evidence, not a zero-
-knowledge proof.  The commitment's hiding/binding composition and its native
-H4 proof integration remain H6/Gate 2E obligations.  This module therefore
+knowledge proof.  Its executable AIR fragment is consumed by the native H4
+coordinator, but the commitment's hiding/binding composition and proof-native
+H4 PCS/ZK integration remain H6/Gate 2E obligations.  This module therefore
 never selects a proof suite or enables activation.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha3_512
 import os
 from pathlib import Path
@@ -36,7 +37,9 @@ ACTIVATION_ALLOWED: Final[bool] = False
 STATE_MAGIC: Final[bytes] = b"BLSP01"
 STATE_VERSION: Final[int] = 1
 STATE_BINDING_MAGIC: Final[bytes] = b"BLSB01"
-STATE_BINDING_VERSION: Final[int] = 1
+STATE_BINDING_VERSION: Final[int] = 2
+STATE_AIR_FRAGMENT_MAGIC: Final[bytes] = b"BLSA01"
+STATE_AIR_FRAGMENT_VERSION: Final[int] = 1
 COMMITMENT_MAGIC: Final[bytes] = b"BLHP01"
 COMMITMENT_VERSION: Final[int] = 1
 SHA3_512_LENGTH: Final[int] = 64
@@ -65,6 +68,9 @@ _PROOF_DOMAIN = b"BL/PQ512/STATE-PLANE/PROOF/v1\x00"
 _ATTEMPT_DOMAIN = b"BL/PQ512/STATE-PLANE/ATTEMPT/v1\x00"
 _RECEIPT_DOMAIN = b"BL/PQ512/STATE-PLANE/RECEIPT/v1\x00"
 _H4_BINDING_DOMAIN = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v1\x00"
+_STATE_AIR_FRAGMENT_DOMAIN = b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v1\x00"
+_H4_COMPOSITION_DOMAIN = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v1\x00"
+_MAX_STATE_BINDING_BYTES = 256 * 1024 * 1024
 
 
 class StatePlaneError(ValueError):
@@ -529,6 +535,20 @@ class StateTransitionProof:
     proof_identity_512: bytes = b""
     attempt_id_512: bytes = b""
     receipt: AtomicStateReceipt | None = None
+    state_air_program_bytes: bytes = field(default=b"", init=False, repr=False, compare=False)
+    state_air_execution_bytes: bytes = field(default=b"", init=False, repr=False, compare=False)
+    state_air_program_commitment_512: bytes = field(
+        default=b"", init=False, repr=False, compare=False
+    )
+    state_air_execution_commitment_512: bytes = field(
+        default=b"", init=False, repr=False, compare=False
+    )
+    state_air_fragment_digest_512: bytes = field(
+        default=b"", init=False, repr=False, compare=False
+    )
+    h4_composition_digest_512: bytes = field(
+        default=b"", init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if type(self.before) is not StateSnapshot or type(self.after) is not StateSnapshot:
@@ -597,6 +617,16 @@ class StateTransitionProof:
         object.__setattr__(self, "proof_identity_512", proof_identity)
         object.__setattr__(self, "attempt_id_512", attempt_id)
         object.__setattr__(self, "receipt", expected_receipt)
+        for label, value in (
+            ("state_air_program", self.state_air_program_bytes),
+            ("state_air_execution", self.state_air_execution_bytes),
+            ("state_air_program_commitment", self.state_air_program_commitment_512),
+            ("state_air_execution_commitment", self.state_air_execution_commitment_512),
+            ("state_air_fragment", self.state_air_fragment_digest_512),
+            ("h4_composition", self.h4_composition_digest_512),
+        ):
+            if type(value) is not bytes or value:
+                raise StatePlaneError(f"state_plane_{label}_type_invalid")
 
     def as_public_dict(self) -> dict[str, object]:
         return {
@@ -618,13 +648,23 @@ class StateTransitionProof:
             "verifier_identity_sha3_512_hex": VERIFIER_IDENTITY_512.hex(),
             "attempt_id_sha3_512_hex": self.attempt_id_512.hex(),
             "receipt": self.receipt.as_public_dict(),
-            "h4_parent_binding_status": "PENDING_NATIVE_H4_CONSTRAINT",
+            "h4_parent_binding_status": (
+                "NATIVE_STATE_AIR_CONSUMED_NONACTIVATING_H4_PROOF_PENDING"
+            ),
         }
 
     @property
     def binding_bytes(self) -> bytes:
         """Canonical private envelope for the native H4 state verifier."""
 
+        (
+            state_air_program,
+            state_air_execution,
+            state_air_program_commitment,
+            state_air_execution_commitment,
+            state_air_fragment,
+            h4_composition,
+        ) = _state_air_artifacts(self)
         before = self.before.encoded
         after = self.after.encoded
         commitment = self.commitment.canonical_bytes
@@ -644,14 +684,21 @@ class StateTransitionProof:
                 commitment,
                 self.opening.statement_digest_512,
                 self.opening.mask_512,
+                STATE_AIR_FRAGMENT_MAGIC,
+                bytes((STATE_AIR_FRAGMENT_VERSION,)),
+                len(state_air_program).to_bytes(4, "big"),
+                state_air_program,
+                len(state_air_execution).to_bytes(4, "big"),
+                state_air_execution,
             )
         )
-        if len(encoded) > 16 * 1024 * 1024:
+        if len(encoded) > _MAX_STATE_BINDING_BYTES:
             raise StatePlaneError("state_plane_binding_envelope_too_large")
         return encoded
 
     @property
     def binding_digest_512(self) -> bytes:
+        _, _, _, _, state_air_fragment, h4_composition = _state_air_artifacts(self)
         return _hash(
             _H4_BINDING_DOMAIN,
             self.before.root_512,
@@ -661,7 +708,94 @@ class StateTransitionProof:
             self.commitment.commitment_digest_512,
             self.proof_identity_512,
             self.receipt.receipt_digest_512,
+            h4_composition,
+            state_air_fragment,
         )
+
+
+def _state_air_artifacts(
+    proof: StateTransitionProof,
+) -> tuple[bytes, bytes, bytes, bytes, bytes, bytes]:
+    """Build and cache the exact executable state fragment and its identities."""
+
+    if proof.state_air_program_bytes:
+        return (
+            proof.state_air_program_bytes,
+            proof.state_air_execution_bytes,
+            proof.state_air_program_commitment_512,
+            proof.state_air_execution_commitment_512,
+            proof.state_air_fragment_digest_512,
+            proof.h4_composition_digest_512,
+        )
+    # These imports remain local because the executable AIR builder imports the
+    # state proof type.  Keeping this edge lazy avoids a module-import cycle and
+    # leaves ordinary state replay independent of AIR construction cost.
+    from experiments.fixed_shape_claim_air.air_binary_ir import (
+        air_binary_commitment,
+        air_program_commitment,
+        encode_air_execution,
+        encode_air_program,
+    )
+    from experiments.fixed_shape_claim_air.state_plane_executable_air import (
+        PROGRAM_ID,
+        build_state_plane_air,
+    )
+
+    instance = build_state_plane_air(proof)
+    if instance.program.program_id != PROGRAM_ID:
+        raise StatePlaneError("state_plane_air_program_identity_invalid")
+    program_bytes = encode_air_program(instance.program)
+    execution_bytes = encode_air_execution(
+        instance.program,
+        instance.traces,
+        instance.public_values,
+    )
+    program_commitment = air_program_commitment(program_bytes)
+    execution_commitment = air_binary_commitment(execution_bytes)
+    fragment_digest = _hash(
+        _STATE_AIR_FRAGMENT_DOMAIN,
+        proof.before.root_512,
+        proof.after.root_512,
+        proof.projection_digest_512,
+        proof.statement_digest_512,
+        proof.transition_digest_512,
+        proof.commitment.commitment_digest_512,
+        proof.proof_identity_512,
+        VERIFIER_IDENTITY_512,
+        proof.attempt_id_512,
+        proof.receipt.receipt_digest_512,
+        program_commitment,
+        execution_commitment,
+    )
+    composition_digest = _hash(
+        _H4_COMPOSITION_DOMAIN,
+        proof.statement_digest_512,
+        proof.transition_digest_512,
+        proof.projection_digest_512,
+        proof.public_coin_digest_512,
+        proof.commitment.commitment_digest_512,
+        proof.proof_identity_512,
+        VERIFIER_IDENTITY_512,
+        proof.attempt_id_512,
+        proof.receipt.receipt_digest_512,
+        program_commitment,
+        execution_commitment,
+        fragment_digest,
+    )
+    object.__setattr__(proof, "state_air_program_bytes", program_bytes)
+    object.__setattr__(proof, "state_air_execution_bytes", execution_bytes)
+    object.__setattr__(proof, "state_air_program_commitment_512", program_commitment)
+    object.__setattr__(proof, "state_air_execution_commitment_512", execution_commitment)
+    object.__setattr__(proof, "state_air_fragment_digest_512", fragment_digest)
+    object.__setattr__(proof, "h4_composition_digest_512", composition_digest)
+    return (
+        program_bytes,
+        execution_bytes,
+        program_commitment,
+        execution_commitment,
+        fragment_digest,
+        composition_digest,
+    )
 
 
 def build_state_transition(
@@ -723,12 +857,13 @@ def derive_h4_binding_input_digest(
     transcript_digest_512: bytes,
     execution_manifest_digest_512: bytes,
 ) -> bytes:
-    """Produce the exact digest the native H4 seam must consume next."""
+    """Produce the exact state/AIR digest consumed by the native H4 seam."""
 
     if type(proof) is not StateTransitionProof:
         raise StatePlaneError("state_plane_h4_binding_proof_type_invalid")
     _bytes(transcript_digest_512, "h4_transcript", SHA3_512_LENGTH, nonzero=True)
     _bytes(execution_manifest_digest_512, "h4_execution_manifest", SHA3_512_LENGTH, nonzero=True)
+    _, _, _, _, state_air_fragment, h4_composition = _state_air_artifacts(proof)
     return _hash(
         _H4_BINDING_DOMAIN,
         proof.statement_digest_512,
@@ -736,6 +871,8 @@ def derive_h4_binding_input_digest(
         proof.commitment.commitment_digest_512,
         proof.proof_identity_512,
         proof.receipt.receipt_digest_512,
+        h4_composition,
+        state_air_fragment,
         transcript_digest_512,
         execution_manifest_digest_512,
     )
@@ -862,6 +999,8 @@ __all__: tuple[str, ...] = (
     "SHA3_512_LENGTH",
     "STATE_BINDING_MAGIC",
     "STATE_BINDING_VERSION",
+    "STATE_AIR_FRAGMENT_MAGIC",
+    "STATE_AIR_FRAGMENT_VERSION",
     "STATE_PARAMETER_IDENTITY",
     "STATUS",
     "StateEntry",

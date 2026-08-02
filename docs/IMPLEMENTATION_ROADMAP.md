@@ -52,8 +52,8 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
-| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds | State binding, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, and the 11-record terminal ledger are tested and documented | Admit a reviewed backend and atomically bind the state plane into H4; close simulator/leakage/PQ/ops blockers |
+| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; native state-AIR consumption/binding prerequisite is implemented and independently tested | Reviewed state/PQ admission, proof-native H4 composition, repeated p95, final suite identity |
+| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, and native state-AIR H4 prerequisite are tested and documented | Admit a reviewed backend and proof-native composition; close simulator/leakage/PQ/ops blockers |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -234,12 +234,15 @@ composition/reference-receipt boundary. It does not select a relation or commitm
 production PCS, close migration, or authorize state publication. Proceed to 2E-5/S5.
 
 The follow-on state work now has two bounded implementation boundaries: the native coordinator
-binds the state digest into its v3 parent, exact child-shard echoes, and atomic receipt, while
-`fixed_shape_claim_air/state_plane_executable_air.py` constrains every fixed-capacity old/new slot
-and links both canonical snapshot roots to executable SHA3-512 AIR. The fragment is composable but
-is not yet consumed by the native H4 coordinator. The separate hash-pad security review rejects
-the current candidate because its full 256-bit quantum binding/composition theorem and
-commit-before-coin lifecycle are not closed; no backend is admitted and H5 remains blocked.
+consumes a version-2 binding envelope before constructing its v3 parent. Rust independently
+replays the all-slot transition, validates/evaluates the embedded executable AIR program/execution,
+checks the ordered 128-value root public input, and recomputes the state/AIR fragment and
+composition identities. The v3 parent, authenticated interactive session/schedule, exact child
+proof grammar, and atomic receipt bind the full transition, commitment, verifier, attempt, receipt,
+ordered 12-field projection, and AIR identities. The separate hash-pad security review rejects the
+current candidate because its full 256-bit quantum binding/composition theorem and commit-before-
+coin lifecycle are not closed; no backend or proof-native H4 PCS/ZK composition is admitted and H5
+remains blocked.
 
 ### 2E-5 - close migration and failure semantics
 
@@ -338,7 +341,7 @@ the unsealed Gate 2E terminal ledger, validates the reference hardware record, v
 tracked `ops/` SHA3-512 authority inventory, and freezes the
 one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
 preflight is `BLOCKED_H5_PREFLIGHT` with digest
-`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass, the external monitor is not configured, and no complete-proof campaign has started. The implemented state plane has not yet closed native-H4 state constraints or PQ commitment admission. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
+`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass, the external monitor is not configured, and no complete-proof campaign has started. The native bounded AIR-consumption prerequisite is implemented and independently tested, but proof-native H4 state constraints, PQ commitment admission, and the complete simulator/leakage ledger remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
 
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |

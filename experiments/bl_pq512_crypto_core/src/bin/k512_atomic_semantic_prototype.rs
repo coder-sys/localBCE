@@ -7,7 +7,12 @@ use std::{
 };
 
 use bl_pq512_crypto_core::{
-    hash_bus_b16_boundary::HashBusB16BoundaryFile, hash_bus_b16_gkr_plan::HashBusB16GkrPlan,
+    air_ir::{
+        AIR_PROGRAM_MAGIC, evaluate_air_execution, validate_air_program,
+        validated_execution_public_inputs,
+    },
+    hash_bus_b16_boundary::HashBusB16BoundaryFile,
+    hash_bus_b16_gkr_plan::HashBusB16GkrPlan,
     wave1a_global_schedule::Profile,
 };
 use sha3::{Digest, Sha3_512};
@@ -25,14 +30,20 @@ const STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/PROOF/v1\0";
 const STATE_ATTEMPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/ATTEMPT/v1\0";
 const STATE_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/RECEIPT/v1\0";
 const STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v1\0";
+const STATE_AIR_FRAGMENT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v1\0";
+const H4_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v1\0";
 const EXECUTION_MANIFEST_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/EXECUTION-MANIFEST/v1\0";
 const STATE_BINDING_MAGIC: &[u8] = b"BLSB01";
+const STATE_AIR_FRAGMENT_MAGIC: &[u8] = b"BLSA01";
 const STATE_MAGIC: &[u8] = b"BLSP01";
 const COMMITMENT_MAGIC: &[u8] = b"BLHP01";
 const STATE_VERSION: u8 = 1;
+const STATE_BINDING_VERSION: u8 = 2;
+const STATE_AIR_FRAGMENT_VERSION: u8 = 1;
 const COMMITMENT_VERSION: u8 = 1;
 const STATE_MAX_CAPACITY: u64 = 4_096;
-const STATE_BINDING_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const STATE_BINDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-ROOT-AIR-v1";
 const STATE_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-STATE-PLANE-V1";
 const HASH_PAD_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-SHA3-HASH-PAD-V1";
 const K128_SHARDS: u16 = 1;
@@ -84,6 +95,19 @@ struct ShardEvidence {
 struct StateBindingVerification {
     statement: [u8; 64],
     binding_digest: [u8; 64],
+    projection: [[u8; 32]; 12],
+    projection_digest: [u8; 64],
+    public_coin: [u8; 64],
+    transition: [u8; 64],
+    commitment: [u8; 64],
+    proof: [u8; 64],
+    verifier: [u8; 64],
+    attempt: [u8; 64],
+    receipt: [u8; 64],
+    state_air_program: [u8; 64],
+    state_air_execution: [u8; 64],
+    state_air_fragment: [u8; 64],
+    composition: [u8; 64],
 }
 
 fn main() {
@@ -211,10 +235,6 @@ fn run() -> Result<(), String> {
             hex(&expected_manifest)
         ));
     }
-    let state_binding_digest = state_binding
-        .as_ref()
-        .map(|binding| binding.binding_digest)
-        .unwrap_or([0; 64]);
     let parent_binding = atomic_parent_binding(
         header.profile as u8,
         header.semantic_program_commitment,
@@ -228,7 +248,7 @@ fn run() -> Result<(), String> {
         plan_commitment,
         execution_manifest,
         statement,
-        state_binding_digest,
+        state_binding.as_ref(),
     );
     let parent_hex = hex(&parent_binding);
     let file_hex = hex(&header.file_sha3_512);
@@ -266,7 +286,37 @@ fn run() -> Result<(), String> {
                 .env(
                     "BL_STATE_PLANE_BINDING_DIGEST",
                     hex(&binding.binding_digest),
+                )
+                .env(
+                    "BL_STATE_PLANE_PROJECTION_DIGEST",
+                    hex(&binding.projection_digest),
+                )
+                .env("BL_STATE_PLANE_PUBLIC_COIN", hex(&binding.public_coin))
+                .env("BL_STATE_PLANE_TRANSITION_DIGEST", hex(&binding.transition))
+                .env("BL_STATE_PLANE_COMMITMENT_DIGEST", hex(&binding.commitment))
+                .env("BL_STATE_PLANE_PROOF_IDENTITY", hex(&binding.proof))
+                .env("BL_STATE_PLANE_VERIFIER_IDENTITY", hex(&binding.verifier))
+                .env("BL_STATE_PLANE_ATTEMPT_ID", hex(&binding.attempt))
+                .env("BL_STATE_PLANE_RECEIPT_DIGEST", hex(&binding.receipt))
+                .env(
+                    "BL_STATE_PLANE_COMPOSITION_DIGEST",
+                    hex(&binding.composition),
+                )
+                .env(
+                    "BL_STATE_AIR_PROGRAM_COMMITMENT",
+                    hex(&binding.state_air_program),
+                )
+                .env(
+                    "BL_STATE_AIR_EXECUTION_COMMITMENT",
+                    hex(&binding.state_air_execution),
+                )
+                .env(
+                    "BL_STATE_AIR_FRAGMENT_DIGEST",
+                    hex(&binding.state_air_fragment),
                 );
+            for (index, field) in binding.projection.iter().enumerate() {
+                child.env(format!("BL_STATE_PLANE_PUBLIC_ABI_{index:02}"), hex(field));
+            }
         }
         let output = child
             .output()
@@ -290,6 +340,7 @@ fn run() -> Result<(), String> {
             &parent_hex,
             expected_state_statement.as_deref(),
             expected_state_binding.as_deref(),
+            state_binding.as_ref(),
         )?;
         let wall_seconds = parse_f64(&fields, "complete_process_wall_seconds")?;
         let host_peak_mb = parse_f64(&fields, "proof_phase_host_peak_mb")?
@@ -326,10 +377,8 @@ fn run() -> Result<(), String> {
         );
     }
 
-    let receipt = match state_binding {
-        Some(_) => {
-            atomic_receipt_with_state(parent_binding, statement, state_binding_digest, &evidence)
-        }
+    let receipt = match state_binding.as_ref() {
+        Some(binding) => atomic_receipt_with_state(parent_binding, statement, binding, &evidence),
         None => atomic_receipt(parent_binding, statement, &evidence),
     };
     let total_seconds = total_started.elapsed().as_secs_f64();
@@ -352,7 +401,9 @@ fn run() -> Result<(), String> {
     println!("state_plane_binding_verified={}", state_binding.is_some());
     println!(
         "state_plane_binding_digest_sha3_512={}",
-        hex(&state_binding_digest)
+        state_binding
+            .as_ref()
+            .map_or_else(|| hex(&[0; 64]), |binding| hex(&binding.binding_digest))
     );
     println!("execution_manifest_sha3_512={}", hex(&execution_manifest));
     println!("semantic_hash_bus_file_sha3_512={file_hex}");
@@ -397,7 +448,7 @@ fn atomic_parent_binding(
     plan_commitment: [u8; 64],
     execution_manifest: [u8; 64],
     statement: [u8; 64],
-    state_binding_digest: [u8; 64],
+    state_binding: Option<&StateBindingVerification>,
 ) -> [u8; 64] {
     let mut hash = Sha3_512::new();
     hash.update(ATOMIC_PARENT_DOMAIN);
@@ -413,8 +464,34 @@ fn atomic_parent_binding(
     hash.update(plan_commitment);
     hash.update(execution_manifest);
     hash.update(statement);
-    hash.update(state_binding_digest);
+    update_state_context(&mut hash, state_binding);
     hash.finalize().into()
+}
+
+fn update_state_context(hash: &mut Sha3_512, state: Option<&StateBindingVerification>) {
+    if let Some(state) = state {
+        hash.update(state.statement);
+        hash.update(state.binding_digest);
+        hash.update(state.projection_digest);
+        hash.update(state.public_coin);
+        hash.update(state.transition);
+        hash.update(state.commitment);
+        hash.update(state.proof);
+        hash.update(state.verifier);
+        hash.update(state.attempt);
+        hash.update(state.receipt);
+        hash.update(state.composition);
+        hash.update(state.state_air_program);
+        hash.update(state.state_air_execution);
+        hash.update(state.state_air_fragment);
+        for field in state.projection {
+            hash.update(field);
+        }
+    } else {
+        // Preserve the accepted no-state H4 parent identity.  The extended
+        // state context is present only when a state binding is attached.
+        hash.update([0; 64]);
+    }
 }
 
 fn execution_manifest(
@@ -509,14 +586,14 @@ fn atomic_receipt(
 fn atomic_receipt_with_state(
     parent_binding: [u8; 64],
     statement: [u8; 64],
-    state_binding_digest: [u8; 64],
+    state_binding: &StateBindingVerification,
     evidence: &[ShardEvidence],
 ) -> [u8; 64] {
     let mut hash = Sha3_512::new();
     hash.update(ATOMIC_RECEIPT_DOMAIN);
     hash.update(parent_binding);
     hash.update(statement);
-    hash.update(state_binding_digest);
+    update_state_context(&mut hash, Some(state_binding));
     hash.update((evidence.len() as u16).to_be_bytes());
     for (shard, item) in evidence.iter().enumerate() {
         hash.update((shard as u16).to_be_bytes());
@@ -752,6 +829,29 @@ fn parse_commitment(encoded: &[u8]) -> Result<CommitmentWire, String> {
     })
 }
 
+fn validate_state_air_program_id(encoded: &[u8]) -> Result<(), String> {
+    let header_length = AIR_PROGRAM_MAGIC.len() + 2 + 64 + 2;
+    if encoded.len() < header_length
+        || encoded.get(..AIR_PROGRAM_MAGIC.len()) != Some(AIR_PROGRAM_MAGIC.as_slice())
+    {
+        return Err("state_binding_air_program_magic".to_string());
+    }
+    let length_offset = AIR_PROGRAM_MAGIC.len() + 2 + 64;
+    let identifier_length = usize::from(u16::from_be_bytes(
+        encoded[length_offset..length_offset + 2]
+            .try_into()
+            .expect("program identifier length"),
+    ));
+    let identifier_start = length_offset + 2;
+    let identifier_end = identifier_start
+        .checked_add(identifier_length)
+        .ok_or_else(|| "state_binding_air_program_identifier_overflow".to_string())?;
+    if encoded.get(identifier_start..identifier_end) != Some(STATE_AIR_PROGRAM_ID) {
+        return Err("state_binding_air_program_identifier".to_string());
+    }
+    Ok(())
+}
+
 fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String> {
     if path.is_symlink() {
         return Err("state_binding_symlink_forbidden".to_string());
@@ -765,7 +865,7 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
     if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC {
         return Err("state_binding_magic".to_string());
     }
-    if cursor.u8("binding_version")? != STATE_VERSION {
+    if cursor.u8("binding_version")? != STATE_BINDING_VERSION {
         return Err("state_binding_version".to_string());
     }
     let before_length = usize::try_from(cursor.u32("before_length")?)
@@ -823,11 +923,54 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
     let commitment = parse_commitment(cursor.take(commitment_length, "commitment")?)?;
     let opening_statement = cursor.array64("opening_statement")?;
     let opening_mask = cursor.array64("opening_mask")?;
+    if commitment.public_coin != public_coin {
+        return Err("state_binding_commitment_public_coin".to_string());
+    }
+    if cursor.take(6, "air_fragment_magic")? != STATE_AIR_FRAGMENT_MAGIC {
+        return Err("state_binding_air_fragment_magic".to_string());
+    }
+    if cursor.u8("air_fragment_version")? != STATE_AIR_FRAGMENT_VERSION {
+        return Err("state_binding_air_fragment_version".to_string());
+    }
+    let air_program_length = usize::try_from(cursor.u32("air_program_length")?)
+        .map_err(|_| "state_binding_air_program_length".to_string())?;
+    if air_program_length == 0 {
+        return Err("state_binding_air_program_empty".to_string());
+    }
+    let air_program = cursor.take(air_program_length, "air_program")?;
+    let air_execution_length = usize::try_from(cursor.u32("air_execution_length")?)
+        .map_err(|_| "state_binding_air_execution_length".to_string())?;
+    if air_execution_length == 0 {
+        return Err("state_binding_air_execution_empty".to_string());
+    }
+    let air_execution = cursor.take(air_execution_length, "air_execution")?;
     if !cursor.done() {
         return Err("state_binding_trailing_bytes".to_string());
     }
-    if commitment.public_coin != public_coin {
-        return Err("state_binding_commitment_public_coin".to_string());
+    validate_state_air_program_id(air_program)?;
+    let air_program_report = validate_air_program(air_program)
+        .map_err(|error| format!("state_binding_air_program:{error:?}"))?;
+    let air_execution_report = evaluate_air_execution(air_execution)
+        .map_err(|error| format!("state_binding_air_execution:{error:?}"))?;
+    if air_program_report.source_program_commitment
+        != air_execution_report.source_program_commitment
+        || air_program_report.public_input_count != 128
+    {
+        return Err("state_binding_air_program_execution_identity".to_string());
+    }
+    let public_inputs = validated_execution_public_inputs(air_execution)
+        .map_err(|error| format!("state_binding_air_public_inputs:{error:?}"))?;
+    if public_inputs.len() != 128
+        || public_inputs.iter().enumerate().any(|(index, value)| {
+            let expected = if index < 64 {
+                before.root[index]
+            } else {
+                after.root[index - 64]
+            };
+            value.as_u32() != u32::from(expected)
+        })
+    {
+        return Err("state_binding_air_public_roots".to_string());
     }
 
     let operation_count_bytes = operation_count.to_be_bytes();
@@ -927,6 +1070,42 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
             &verifier_identity,
         ],
     );
+    let state_air_program = air_program_report.program_binary_commitment;
+    let state_air_execution = air_execution_report.binary_commitment;
+    let state_air_fragment = hash_parts(
+        STATE_AIR_FRAGMENT_DOMAIN,
+        &[
+            &before.root,
+            &after.root,
+            &projection_digest,
+            &statement,
+            &transition,
+            &commitment.digest,
+            &proof,
+            &verifier_identity,
+            &attempt,
+            &receipt,
+            &state_air_program,
+            &state_air_execution,
+        ],
+    );
+    let composition = hash_parts(
+        H4_COMPOSITION_DOMAIN,
+        &[
+            &statement,
+            &transition,
+            &projection_digest,
+            &public_coin,
+            &commitment.digest,
+            &proof,
+            &verifier_identity,
+            &attempt,
+            &receipt,
+            &state_air_program,
+            &state_air_execution,
+            &state_air_fragment,
+        ],
+    );
     let binding_digest = hash_parts(
         STATE_BINDING_DOMAIN,
         &[
@@ -937,11 +1116,29 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
             &commitment.digest,
             &proof,
             &receipt,
+            &composition,
+            &state_air_fragment,
         ],
     );
+    let projection: [[u8; 32]; 12] = projection
+        .try_into()
+        .map_err(|_| "state_binding_projection_count".to_string())?;
     Ok(StateBindingVerification {
         statement,
         binding_digest,
+        projection,
+        projection_digest,
+        public_coin,
+        transition,
+        commitment: commitment.digest,
+        proof,
+        verifier: verifier_identity,
+        attempt,
+        receipt,
+        state_air_program,
+        state_air_execution,
+        state_air_fragment,
+        composition,
     })
 }
 
@@ -976,6 +1173,7 @@ fn validate_shard_fields(
     parent_binding: &str,
     state_statement_digest: Option<&str>,
     state_binding_digest: Option<&str>,
+    state_binding: Option<&StateBindingVerification>,
 ) -> Result<(), String> {
     for key in [
         "sumcheck_chain_verified",
@@ -1027,7 +1225,13 @@ fn validate_shard_fields(
     {
         return Err(format!("shard_binding:{shard}"));
     }
-    validate_state_binding_fields(fields, shard, state_statement_digest, state_binding_digest)?;
+    validate_state_binding_fields(
+        fields,
+        shard,
+        state_statement_digest,
+        state_binding_digest,
+        state_binding,
+    )?;
     Ok(())
 }
 
@@ -1036,23 +1240,77 @@ fn validate_state_binding_fields(
     shard: u16,
     expected_statement: Option<&str>,
     expected_binding: Option<&str>,
+    expected_state: Option<&StateBindingVerification>,
 ) -> Result<(), String> {
     let zero = hex(&[0; 64]);
-    match (expected_statement, expected_binding) {
-        (Some(statement), Some(binding)) => {
+    let zero_field = hex(&[0; 32]);
+    match (expected_statement, expected_binding, expected_state) {
+        (Some(statement), Some(binding), Some(state)) => {
             if required(fields, "state_plane_binding_attached")? != "true"
                 || required(fields, "state_plane_statement_sha3_512")? != statement
                 || required(fields, "state_plane_binding_digest_sha3_512")? != binding
+                || required(fields, "state_plane_public_abi_count")? != "12"
+                || required(fields, "state_air_fragment_verified")? != "true"
+                || required(fields, "state_plane_projection_digest_sha3_512")?
+                    != hex(&state.projection_digest)
+                || required(fields, "state_plane_public_coin_sha3_512")? != hex(&state.public_coin)
+                || required(fields, "state_plane_transition_digest_sha3_512")?
+                    != hex(&state.transition)
+                || required(fields, "state_plane_commitment_digest_sha3_512")?
+                    != hex(&state.commitment)
+                || required(fields, "state_plane_proof_identity_sha3_512")? != hex(&state.proof)
+                || required(fields, "state_plane_verifier_identity_sha3_512")?
+                    != hex(&state.verifier)
+                || required(fields, "state_plane_attempt_id_sha3_512")? != hex(&state.attempt)
+                || required(fields, "state_plane_receipt_digest_sha3_512")? != hex(&state.receipt)
+                || required(fields, "state_plane_composition_digest_sha3_512")?
+                    != hex(&state.composition)
+                || required(fields, "state_air_program_commitment_sha3_512")?
+                    != hex(&state.state_air_program)
+                || required(fields, "state_air_execution_commitment_sha3_512")?
+                    != hex(&state.state_air_execution)
+                || required(fields, "state_air_fragment_digest_sha3_512")?
+                    != hex(&state.state_air_fragment)
             {
                 return Err(format!("shard_state_binding:{shard}"));
             }
+            for (index, field) in state.projection.iter().enumerate() {
+                if required(fields, &format!("state_plane_public_abi_{index:02}"))? != hex(field) {
+                    return Err(format!("shard_state_binding:{shard}"));
+                }
+            }
         }
-        (None, None) => {
+        (None, None, None) => {
             if required(fields, "state_plane_binding_attached")? != "false"
                 || required(fields, "state_plane_statement_sha3_512")? != zero
                 || required(fields, "state_plane_binding_digest_sha3_512")? != zero
+                || required(fields, "state_plane_public_abi_count")? != "0"
+                || required(fields, "state_air_fragment_verified")? != "false"
             {
                 return Err(format!("shard_state_binding:{shard}"));
+            }
+            for key in [
+                "state_plane_projection_digest_sha3_512",
+                "state_plane_public_coin_sha3_512",
+                "state_plane_transition_digest_sha3_512",
+                "state_plane_commitment_digest_sha3_512",
+                "state_plane_proof_identity_sha3_512",
+                "state_plane_verifier_identity_sha3_512",
+                "state_plane_attempt_id_sha3_512",
+                "state_plane_receipt_digest_sha3_512",
+                "state_plane_composition_digest_sha3_512",
+                "state_air_program_commitment_sha3_512",
+                "state_air_execution_commitment_sha3_512",
+                "state_air_fragment_digest_sha3_512",
+            ] {
+                if required(fields, key)? != zero {
+                    return Err(format!("shard_state_binding:{shard}"));
+                }
+            }
+            for index in 0..12 {
+                if required(fields, &format!("state_plane_public_abi_{index:02}"))? != zero_field {
+                    return Err(format!("shard_state_binding:{shard}"));
+                }
             }
         }
         _ => return Err(format!("shard_state_binding_shape:{shard}")),
@@ -1266,8 +1524,30 @@ mod tests {
         assert_eq!(parse_fields(b"a\n").unwrap_err(), "stdout_line");
     }
 
+    fn test_state_binding(seed: u8) -> StateBindingVerification {
+        StateBindingVerification {
+            statement: [seed; 64],
+            binding_digest: [seed.wrapping_add(1); 64],
+            projection: [[seed.wrapping_add(2); 32]; 12],
+            projection_digest: [seed.wrapping_add(3); 64],
+            public_coin: [seed.wrapping_add(4); 64],
+            transition: [seed.wrapping_add(5); 64],
+            commitment: [seed.wrapping_add(6); 64],
+            proof: [seed.wrapping_add(7); 64],
+            verifier: [seed.wrapping_add(8); 64],
+            attempt: [seed.wrapping_add(9); 64],
+            receipt: [seed.wrapping_add(10); 64],
+            state_air_program: [seed.wrapping_add(11); 64],
+            state_air_execution: [seed.wrapping_add(12); 64],
+            state_air_fragment: [seed.wrapping_add(13); 64],
+            composition: [seed.wrapping_add(14); 64],
+        }
+    }
+
     #[test]
     fn parent_and_receipt_bind_every_input() {
+        let state = test_state_binding(11);
+        let changed_state = test_state_binding(12);
         let parent = atomic_parent_binding(
             3,
             [1; 64],
@@ -1281,7 +1561,7 @@ mod tests {
             [5; 64],
             [10; 64],
             [6; 64],
-            [11; 64],
+            Some(&state),
         );
         let changed = atomic_parent_binding(
             3,
@@ -1296,7 +1576,7 @@ mod tests {
             [5; 64],
             [10; 64],
             [7; 64],
-            [11; 64],
+            Some(&changed_state),
         );
         assert_ne!(parent, changed);
         let evidence = [ShardEvidence {
@@ -1308,15 +1588,16 @@ mod tests {
             bundle_digest: [9; 64],
         }];
         assert_ne!(
-            atomic_receipt(parent, [6; 64], &evidence),
-            atomic_receipt(changed, [6; 64], &evidence)
+            atomic_receipt_with_state(parent, [6; 64], &state, &evidence),
+            atomic_receipt_with_state(changed, [6; 64], &changed_state, &evidence)
         );
     }
 
     #[test]
     fn state_binding_fields_are_exactly_replayed() {
-        let statement = hex(&[11; 64]);
-        let binding = hex(&[12; 64]);
+        let state = test_state_binding(11);
+        let statement = hex(&state.statement);
+        let binding = hex(&state.binding_digest);
         let mut fields = BTreeMap::from([
             (
                 "state_plane_binding_attached".to_string(),
@@ -1330,17 +1611,86 @@ mod tests {
                 "state_plane_binding_digest_sha3_512".to_string(),
                 binding.clone(),
             ),
+            ("state_plane_public_abi_count".to_string(), "12".to_string()),
+            (
+                "state_air_fragment_verified".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "state_plane_projection_digest_sha3_512".to_string(),
+                hex(&state.projection_digest),
+            ),
+            (
+                "state_plane_public_coin_sha3_512".to_string(),
+                hex(&state.public_coin),
+            ),
+            (
+                "state_plane_transition_digest_sha3_512".to_string(),
+                hex(&state.transition),
+            ),
+            (
+                "state_plane_commitment_digest_sha3_512".to_string(),
+                hex(&state.commitment),
+            ),
+            (
+                "state_plane_proof_identity_sha3_512".to_string(),
+                hex(&state.proof),
+            ),
+            (
+                "state_plane_verifier_identity_sha3_512".to_string(),
+                hex(&state.verifier),
+            ),
+            (
+                "state_plane_attempt_id_sha3_512".to_string(),
+                hex(&state.attempt),
+            ),
+            (
+                "state_plane_receipt_digest_sha3_512".to_string(),
+                hex(&state.receipt),
+            ),
+            (
+                "state_plane_composition_digest_sha3_512".to_string(),
+                hex(&state.composition),
+            ),
+            (
+                "state_air_program_commitment_sha3_512".to_string(),
+                hex(&state.state_air_program),
+            ),
+            (
+                "state_air_execution_commitment_sha3_512".to_string(),
+                hex(&state.state_air_execution),
+            ),
+            (
+                "state_air_fragment_digest_sha3_512".to_string(),
+                hex(&state.state_air_fragment),
+            ),
         ]);
+        for (index, field) in state.projection.iter().enumerate() {
+            fields.insert(format!("state_plane_public_abi_{index:02}"), hex(field));
+        }
         assert!(
-            validate_state_binding_fields(&fields, 0, Some(&statement), Some(&binding),).is_ok()
+            validate_state_binding_fields(
+                &fields,
+                0,
+                Some(&statement),
+                Some(&binding),
+                Some(&state),
+            )
+            .is_ok()
         );
         fields.insert(
             "state_plane_binding_digest_sha3_512".to_string(),
             hex(&[13; 64]),
         );
         assert_eq!(
-            validate_state_binding_fields(&fields, 0, Some(&statement), Some(&binding))
-                .unwrap_err(),
+            validate_state_binding_fields(
+                &fields,
+                0,
+                Some(&statement),
+                Some(&binding),
+                Some(&state),
+            )
+            .unwrap_err(),
             "shard_state_binding:0"
         );
     }

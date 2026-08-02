@@ -1,9 +1,9 @@
-"""Executable AIR fragment for the fixed-shape state-root relation.
+"""Executable AIR fragment for the fixed-shape state-transition relation.
 
-The fragment constrains every old/new slot, links the canonical snapshot bytes
-to real SHA3-512 executable AIR, and exposes only the two wide state roots as
-ordered public bytes.  It is deliberately a composable H4 prerequisite, not a
-claim that the current native coordinator has already admitted the fragment.
+The fragment constrains every ordered old/new operation and slot, links the
+canonical snapshot bytes to real SHA3-512 executable AIR, and exposes only the
+two wide state roots as ordered public bytes.  It is deliberately a composable
+H4 prerequisite, not a claim that a reviewed proof suite has been admitted.
 """
 
 from __future__ import annotations
@@ -97,11 +97,9 @@ def _slot_column(phase: str, field: str, byte: int | None = None) -> str:
 
 
 def _slot_trace_columns(proof: StateTransitionProof) -> dict[str, tuple[int, ...]]:
-    columns: dict[str, list[int]] = {
-        _slot_column(phase, field): []
-        for phase in ("before", "after")
-        for field in ("present",)
-    }
+    columns: dict[str, list[int]] = {"index": list(range(proof.before.capacity))}
+    for phase in ("before", "after"):
+        columns[_slot_column(phase, "present")] = []
     for phase in ("before", "after"):
         for field in ("key", "value"):
             for byte in range(SHA3_512_LENGTH):
@@ -145,8 +143,107 @@ def _slot_table_and_trace(proof: StateTransitionProof) -> tuple[AirTable, TraceT
         tuple(trace.columns),
         proof.before.capacity,
         tuple(identities),
+        MappingProxyType({"index": tuple(range(proof.before.capacity))}),
     )
     return table, trace
+
+
+def _operation_trace_columns(proof: StateTransitionProof) -> dict[str, tuple[int, ...]]:
+    columns: dict[str, list[int]] = {"index": []}
+    for phase in ("before", "after"):
+        columns[_slot_column(phase, "present")] = []
+        for field in ("key", "value"):
+            for byte in range(SHA3_512_LENGTH):
+                columns[_slot_column(phase, field, byte)] = []
+    for operation in proof.operations:
+        columns["index"].append(operation.index)
+        for phase, entry in (
+            ("before", operation.before),
+            ("after", operation.after),
+        ):
+            columns[_slot_column(phase, "present")].append(int(entry.present))
+            for field, value in (("key", entry.key), ("value", entry.value)):
+                for byte, item in enumerate(value):
+                    columns[_slot_column(phase, field, byte)].append(item)
+    return {name: tuple(values) for name, values in columns.items()}
+
+
+def _operation_table_and_trace(
+    proof: StateTransitionProof,
+) -> tuple[AirTable, TraceTable]:
+    columns = _operation_trace_columns(proof)
+    identities: list[Identity] = []
+    for phase in ("before", "after"):
+        present = cell(_slot_column(phase, "present"))
+        identities.append(
+            Identity(
+                f"{phase}_present_boolean",
+                present * (present - 1),
+                0,
+                proof.before.capacity,
+            )
+        )
+        for field in ("key", "value"):
+            for byte in range(SHA3_512_LENGTH):
+                identities.append(
+                    Identity(
+                        f"{phase}_empty_{field}_{byte}_zero",
+                        (1 - present) * cell(_slot_column(phase, field, byte)),
+                        0,
+                        proof.before.capacity,
+                    )
+                )
+    trace = TraceTable("state_operations", freeze_columns(columns))
+    table = AirTable(
+        "state_operations",
+        tuple(trace.columns),
+        proof.before.capacity,
+        tuple(identities),
+        MappingProxyType({"index": tuple(range(proof.before.capacity))}),
+    )
+    return table, trace
+
+
+def _operation_slot_lookup(proof: StateTransitionProof, phase: str) -> LookupArgument:
+    values = (
+        cell("index"),
+        cell(_slot_column(phase, "present")),
+        *(
+            cell(_slot_column(phase, field, byte))
+            for field in ("key", "value")
+            for byte in range(SHA3_512_LENGTH)
+        ),
+    )
+    slot_values = (
+        cell("index"),
+        cell(_slot_column(phase, "present")),
+        *(
+            cell(_slot_column(phase, field, byte))
+            for field in ("key", "value")
+            for byte in range(SHA3_512_LENGTH)
+        ),
+    )
+    return LookupArgument(
+        f"state_operations_{phase}_to_slots",
+        (
+            LookupSide(
+                "state_operations",
+                const(1),
+                values,
+                0,
+                proof.before.capacity,
+            ),
+        ),
+        (
+            LookupSide(
+                "state_slots",
+                const(1),
+                slot_values,
+                0,
+                proof.before.capacity,
+            ),
+        ),
+    )
 
 
 def _snapshot_header_length(snapshot: StateSnapshot) -> int:
@@ -370,6 +467,7 @@ def build_state_plane_air(proof: StateTransitionProof) -> StatePlaneAirInstance:
     encoding_table, encoding_trace, dynamic_slots = _encoding_table_and_trace(
         proof, messages
     )
+    operation_table, operation_trace = _operation_table_and_trace(proof)
     root_table, root_trace = _root_table_and_trace(proof)
     public_inputs = tuple(
         PublicInputBinding(
@@ -383,9 +481,17 @@ def build_state_plane_air(proof: StateTransitionProof) -> StatePlaneAirInstance:
     )
     program = AirProgram(
         PROGRAM_ID,
-        (slot_table, encoding_table, root_table, *sha3.program.tables),
+        (
+            slot_table,
+            operation_table,
+            encoding_table,
+            root_table,
+            *sha3.program.tables,
+        ),
         (
             *sha3.program.lookups,
+            _operation_slot_lookup(proof, "before"),
+            _operation_slot_lookup(proof, "after"),
             _dynamic_slot_lookup(proof, dynamic_slots),
             _encoding_to_sha3_lookup(
                 messages, sha3.traces["sha3_message_batch"].rows
@@ -398,6 +504,7 @@ def build_state_plane_air(proof: StateTransitionProof) -> StatePlaneAirInstance:
     traces = MappingProxyType(
         {
             slot_trace.name: slot_trace,
+            operation_trace.name: operation_trace,
             encoding_trace.name: encoding_trace,
             root_trace.name: root_trace,
             **sha3.traces,

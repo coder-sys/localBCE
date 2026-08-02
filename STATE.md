@@ -4719,3 +4719,70 @@ host-side fail-closed precondition and receives no H4 proof credit. The full sta
 reviewed PQ commitment, complete simulator/leakage ledger, proof-native H4 composition, H5 campaign,
 and H6 qualification remain open. `proofSuiteId=None`, activation is false, H5 remains unlaunched,
 and no production CUDA, real PHI, or real payment is authorized.
+
+## 2026-08-02 Wave 2 continuation native state-AIR prerequisite - VERIFIED, NONACTIVATING
+
+Preflight before mutation was exact: checkout `C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`, branch `main`,
+`HEAD=d0f5ec239788a6e9b4151a54a3e69788c6161a6c`, tree
+`df04563e08eeb98dd21bb0a8ca706ef64c23d084`, clean worktree. The protected paths and canonical
+`ops/` authority were not edited.
+
+The smallest implementable H4 prerequisite now crosses the real producer-to-authority path.
+`state_plane_executable_air.py` adds an explicit ordered all-slot operation table and lookups to
+the before/after slot tables. `StateTransitionProof.binding_bytes` emits a version-2 `BLSB01`
+envelope containing the executable AIR program and execution under `BLSA01`/version 1. Native Rust
+`verify_state_binding` independently replays the transition, validates the exact
+`BL-PQ512-STATE-ROOT-AIR-v1` program identity, evaluates the complete AIR execution through
+`air_ir`, checks the ordered 128-value root public input, recomputes AIR program/execution,
+fragment, composition, transition, commitment, verifier, attempt, and receipt identities, and
+only then returns the state context to parent construction. The v3 parent, authenticated
+interactive session/schedule, exact child proof grammar, and atomic receipt bind the full state
+context, including all 12 ordered 32-byte projection fields and the AIR identities. The child is
+untrusted and its exact echoes are independently compared by Rust.
+
+Measured/generated KAT identities:
+
+```text
+K128-shaped state capacity=128 binding bytes: 103216467
+state AIR program commitment: 1f01d105c86846e28b2584303cefa9e0126de100bce1e5461b94a24a5060c4ed9a0e5b9a2875ee4e62dfefe4d1878f2e400110776a311a9fe2bc4781123f9b19
+state AIR execution commitment: 828eb5cd80d97bf00c8c5aa1845cbf71e797bfe78fbaa855427ae41421a1e3b2827f3a80df859bab4967536aebe19af67e9fb22e551966c87fb7c4662e4a7baf
+state AIR fragment digest: 0a90647bece8d53443b4b52cfa0c534bd921132a039d4025046ffe7e29b7866e6088be49c4a0fbaab5ccdadb5c0c817559974e10020d399bbcdf308bea735d7e
+H4 composition digest: 6a974615e750e0e1307902433581eabff6a547d2a4d263eae84816fd63f366b6adb2682dd4bf8abb38d76f03e5b7c2c560ea28ed28d0303ffbc33adfdc5f67a5
+state binding digest: 9470549cac80649a0ced45ff17efa0a3441b1052b7476655f1f29d6807155b87d285f99737f8a5fa2a910093592dba930fcc37d02ae24b9c6f86f2ceddb35a49
+```
+
+Focused verification:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane.py::test_native_state_binding_kat_is_stable_for_the_k128_shape
+1 passed in 115.94s (0:01:55)
+
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane_native.py
+3 passed in 52.61s
+
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane_executable_air.py tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py
+6 passed in 92.09s (0:01:32)
+
+cargo +1.96.0 test --offline --locked --features std --bin k512_atomic_semantic_prototype
+5 passed; 0 failed
+```
+
+Containing state/AIR/Gate-2E/H5/H6/security-freeze verification:
+
+```text
+py -3.14 -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py tests/test_bl_pq512_state_plane_executable_air.py tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py tests/test_bl_pq512_state_plane_native.py tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/test_bl_pq512_h6_qualification_preflight.py tests/test_security_freeze_spec.py
+40 passed in 342.99s (0:05:42)
+```
+
+The first capacity-128 attempt was correctly rejected by the initial 64 MiB envelope cap with
+`StatePlaneError: state_plane_binding_envelope_too_large`; the cap was raised to an explicit
+256 MiB bound, and the 103,216,467-byte KAT then passed. The first `cargo fmt --all -- --check`
+also correctly reported mechanical formatting differences; `cargo fmt --all` was run and the
+check subsequently passed. These are recorded failures, not skipped gates.
+
+This slice remains nonactivating. No reviewed PQ backend is admitted; the SHA3 hash-pad candidate
+remains rejected for the missing full 256-bit quantum binding/composition theorem and
+commit-before-coin lifecycle; native AIR evaluation is not a proof-native H4 PCS/ZK composition;
+the complete simulator/leakage ledger, H5 repeated campaign, H6 qualification, authoritative
+state selection, `proofSuiteId`, activation, production CUDA, real PHI, and real payments remain
+closed. H5 was not launched.

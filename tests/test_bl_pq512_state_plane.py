@@ -57,7 +57,9 @@ def test_state_plane_replays_fixed_shape_transition_and_keeps_activation_closed(
     assert proof.after.entries == (StateEntry(0, True, b"K" * 64, b"V" * 64),)
     assert proof.as_public_dict()["status"] == STATUS
     assert proof.as_public_dict()["commitment"]["status"] == COMMITMENT_STATUS
-    assert proof.as_public_dict()["h4_parent_binding_status"] == "PENDING_NATIVE_H4_CONSTRAINT"
+    assert proof.as_public_dict()["h4_parent_binding_status"] == (
+        "NATIVE_STATE_AIR_CONSUMED_NONACTIVATING_H4_PROOF_PENDING"
+    )
     assert PROOF_SUITE_ID is None
     assert ACTIVATION_ALLOWED is False
 
@@ -127,14 +129,14 @@ def test_native_state_binding_kat_is_stable_for_the_k128_shape() -> None:
         sha3_512(b"coin").digest(),
         sha3_512(b"mask").digest(),
     )
-    assert len(proof.binding_bytes) == 71_180
+    assert len(proof.binding_bytes) == 103_216_467
     assert proof.statement_digest_512.hex() == (
         "f3c37c25e22d3e4d7b2500b553151bae34bca8fc84ecea1606af8532149cebfc"
         "13f33e014fa3c0a9c4505eacbcb303118965885416a8e634a3c461eb0517a0c7"
     )
     assert proof.binding_digest_512.hex() == (
-        "c648d0382061c791c4cf599f0fa8d0a7d7b647ddf9b6fceb600254686a3287cf"
-        "13aec483a2e26c8a0a8cdb76ea3de7c149c9da2362695ae2c019f2810d8a5ffb"
+        "9470549cac80649a0ced45ff17efa0a3441b1052b7476655f1f29d6807155b8"
+        "7d285f99737f8a5fa2a910093592dba930fcc37d02ae24b9c6f86f2ceddb35a49"
     )
 
 
