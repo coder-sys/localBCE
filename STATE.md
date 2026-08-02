@@ -5185,3 +5185,12 @@ the custom H4 GKR/PCS proof; the complete semantic/state/GKR/PCS simulator, leak
 composition ledger, candidate admission, H5's exact one-warm-up-plus-ten-per-profile campaign
 (22 fresh launches), H6 qualification, and all later Wave 3+ work remain open. `proofSuiteId=null`,
 activation=false, no PHI/payments are authorized, and no production CUDA was run.
+
+Post-implementation readback before the documentation-only handoff commit:
+
+```text
+commit=6a2a7ec124fca97a4b6dfbeb1125e71e737944e6
+tree=30e9bdfc4901f30e8a9636a1c1796f3fac3958d1
+git status --short
+(empty)
+```
