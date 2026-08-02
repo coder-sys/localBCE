@@ -5502,8 +5502,10 @@ The implementation, tests, and active documentation were committed on `main` as
 `protected_path_changes=0`; the source checkout was clean after that commit. No remote push was
 performed.
 
-All three requested output ZIPs were rebuilt from that exact implementation commit in a separate
-stage. The privacy/allowlist gate selected 774 payload files from 791 tracked files and excluded
+The first complete output refresh was rebuilt from that exact implementation commit in a separate
+stage. After the documentation-only seal `deb2bf0d21e929c8ceb71b62489ae015d2425673`, the same
+stage/allowlist was rebuilt from that sealed tree; the final outputs below produced the identical
+receipt. The privacy/allowlist gate selected 774 payload files from 791 tracked files and excluded
 the same 17 deliberate privacy/opaque-fixture paths used by the existing release policy. The
 builder produced identical receipts for all three:
 
