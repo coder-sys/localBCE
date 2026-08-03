@@ -5974,3 +5974,12 @@ Independent final readback reports 11,016,479 bytes and SHA-256
 `8a13443c5ef78dbc82d0f2b8ca10ea1bcc93acf146616e8d2070a8b6a97abd3f` for all three. This receipt
 changes release evidence only; Gate 2E remains unsealed, H5/H6 remain unrun, `proofSuiteId` is
 null, and activation remains false.
+
+After the receipt commit, the semantics-preserving privacy-safe field rename received a fresh
+positive verifier readback:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py -k replays_c0
+. [100%]
+1 passed, 3 deselected in 334.66s (0:05:34)
+```
