@@ -5879,3 +5879,62 @@ the authoritative copy verification.
 
 This refresh changes release evidence only. `proofSuiteId` remains null, activation remains false,
 and Gate 2E, exact H5, and H6 are not closed by the archive.
+
+## 2026-08-02 Typed C0 state relation semantic boundary - VERIFIED, NONACTIVATING
+
+The working tree at `82b0b2131d349fe669f2463d4e832769f371a2ec` received the smallest trust-critical
+repair at the C0/H4 seam. `c0_control_fixture.py` now exposes `C0TypedStateWitness` and rejects
+replay snapshot/batch root or cursor mismatches and payment before-state/slot-count mismatches.
+`experiments/fixed_shape_claim_air/typed_state_relation_executable_air.py` composes the existing
+ordered-map replay and authenticated payment-map AIRs, binds replay plus payment roots/cursors and
+fixed slot order, enforces canonical money subtraction with no-underflow and debit/credit
+conservation, and carries replay/payment SHA3 ports through one canonical interface composer with
+contiguous call indices. No protected path was modified and no real PHI, payment, or production
+secret was used.
+
+The exact K128 structural readback was:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v1
+tables=60
+lookups=93
+public_inputs=524
+hash_calls=46208
+replay_hash_ports=True
+payment_hash_ports=True
+public_tail=(100,80,80,80)
+```
+
+Verified commands and raw decisive results:
+
+```text
+py -3.14 -B -m pytest -q tests/test_bl_pq512_typed_state_relation_executable_air.py
+. [100%]
+1 passed in 353.49s (0:05:53)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py -k binds_replay
+. [100%]
+1 passed, 3 deselected in 262.95s (0:04:22)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py -k rejects
+.. [100%]
+2 passed, 2 deselected in 314.16s (0:05:14)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_c0_control_fixture.py
+........ [100%]
+8 passed in 35.34s
+```
+
+The combined typed file after adding the mutation tests exceeded its 604030 ms bound with exit
+124 and no pytest summary; the combined C0/payment regression exceeded its 304042 ms bound with
+exit 124 and no pytest summary. Both exact child process sets were stopped, neither receives pass
+credit, and no repository files were changed by either timeout. The positive and split mutation
+commands above are the credited evidence.
+
+This is a verified typed component, not Gate 2E closure. It is not yet consumed by native
+`state_relation_gkr.rs` or the custom H4 GKR/PCS parent/PCS terminals. The terminal ledger remains
+`UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`; `complete_leakage_scan_missing`,
+`complete_simulator_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
+`proof_suite_unselected` remain open. H5 has not run, H6 has not run, `proofSuiteId` remains null,
+activation remains false, and the source-complete archive has not yet been refreshed for this
+working-tree change.

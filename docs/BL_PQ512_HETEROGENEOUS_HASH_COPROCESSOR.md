@@ -238,6 +238,15 @@ state-composed performance or qualification credit is claimed; the exact state s
 transcript are integration evidence only until those obligations and the Gate 2E
 simulator/leakage/backend gates close.
 
+The separate C0 typed-state executable AIR now supplies the missing ordered-map/payment semantic
+slice at a proof-native component boundary. It binds replay and payment roots/cursors, fixed slot
+order, canonical money subtraction and debit/credit conservation, and composes both lanes' SHA3
+ports through one contiguous interface-only bus. The verified K128 shape is 60 tables, 93 lookups,
+524 public inputs, and 46,208 exact calls, with positive, root, money, and hash-port mutation
+rejection evidence. It remains nonactivating because the native H4 GKR/PCS relation and its PCS
+terminals still consume the older generic state source; no Gate 2E, H5, H6, backend, or
+`proofSuiteId` credit is assigned from this component.
+
 ## 9. Required green evidence
 
 - 264 optimized Rust library tests, zero failures and zero ignored, plus every binary/doc-test group;

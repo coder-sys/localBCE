@@ -22,6 +22,8 @@ from experiments.bl_pq512_crypto_foundation.claim_batch_access_manifest import (
     build_c0_private_access_body,
 )
 from experiments.fixed_shape_claim_air.authenticated_payment_maps_reference import (
+    AuthenticatedPaymentMapBatchTransition,
+    AuthenticatedPaymentMapState,
     BENEFIT_MAP_DOMAIN,
     LEDGER_MAP_DOMAIN,
     OBLIGATION_MAP_DOMAIN,
@@ -252,6 +254,55 @@ class C0ControlFixture:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class C0TypedStateWitness:
+    """Full private C0 witness used by the proof-native typed state AIR.
+
+    ``C0ControlFixture`` intentionally exposes only bounded public summaries.
+    This separate object keeps the exact ordered-map/payment authorities
+    available to the verifier-facing AIR builder without widening that public
+    fixture or serializing private keys and values.
+    """
+
+    profile: CalibrationProfile
+    slots: tuple[ClaimSlot, ...]
+    economics: object
+    replay_before: OrderedMapSnapshot
+    replay_batch: OrderedMapBatchWitness
+    payment_before: AuthenticatedPaymentMapState
+    payment_transition: AuthenticatedPaymentMapBatchTransition
+
+    def __post_init__(self) -> None:
+        if type(self.profile) is not CalibrationProfile:
+            raise ValueError("c0_typed_state_profile_invalid")
+        if type(self.slots) is not tuple or len(self.slots) != self.profile.claim_slots:
+            raise ValueError("c0_typed_state_slots_invalid")
+        if type(self.replay_before) is not OrderedMapSnapshot:
+            raise ValueError("c0_typed_state_replay_snapshot_invalid")
+        if type(self.replay_batch) is not OrderedMapBatchWitness:
+            raise ValueError("c0_typed_state_replay_batch_invalid")
+        if (
+            self.replay_before.map_domain != self.replay_batch.map_domain
+            or self.replay_before.next_append_index != self.replay_batch.next_append_index_before
+            or self.replay_before.inner_root != self.replay_batch.inner_root_before
+            or self.replay_before.root != self.replay_batch.root_before
+        ):
+            raise ValueError("c0_typed_state_replay_authority_mismatch")
+        if type(self.payment_before) is not AuthenticatedPaymentMapState:
+            raise ValueError("c0_typed_state_payment_before_invalid")
+        if type(self.payment_transition) is not AuthenticatedPaymentMapBatchTransition:
+            raise ValueError("c0_typed_state_payment_transition_invalid")
+        if (
+            self.payment_transition.before != self.payment_before
+            or len(self.payment_transition.transitions) != len(self.slots)
+        ):
+            raise ValueError("c0_typed_state_payment_slot_count_invalid")
+
+    @property
+    def payment_after(self) -> AuthenticatedPaymentMapState:
+        return self.payment_transition.after
+
+
 def _h4_record(profile_id: str) -> H4ResourceRecord:
     if profile_id == "K128_CALIBRATION":
         values = ("29.974129", "288.412000", "681.607168", "969.999360", "not-promoted")
@@ -443,9 +494,11 @@ def _replay_fixture(profile: CalibrationProfile) -> tuple[OrderedMapSnapshot, Or
     )
 
 
-def _payment_fixture(
+def _build_payment_transition(
     profile: CalibrationProfile,
-) -> tuple[object, object, C0PaymentResult, tuple[C0MapResult, ...]]:
+) -> tuple[tuple[ClaimSlot, ...], object, AuthenticatedPaymentMapState, AuthenticatedPaymentMapBatchTransition]:
+    """Build the exact payment authority once for summaries and typed AIR."""
+
     slots = _slots(profile)
     duplicate_identity_slots = list(slots)
     duplicate_identity_slots[1] = replace(
@@ -472,6 +525,13 @@ def _payment_fixture(
     transition = build_authenticated_payment_map_transition(profile, slots, economics, before)
     if not verify_authenticated_payment_map_transition(profile, slots, economics, transition):
         raise AssertionError("c0_control_fixture_payment_replay_mismatch")
+    return slots, economics, before, transition
+
+
+def _payment_fixture(
+    profile: CalibrationProfile,
+) -> tuple[object, object, C0PaymentResult, tuple[C0MapResult, ...]]:
+    slots, economics, before, transition = _build_payment_transition(profile)
     first = transition.transitions[0]
     map_results = (
         _map_result(
@@ -649,12 +709,31 @@ def build_all_c0_control_fixtures() -> tuple[C0ControlFixture, C0ControlFixture]
     )
 
 
+def build_c0_typed_state_witness(profile: CalibrationProfile) -> C0TypedStateWitness:
+    """Return the full private C0 state witness for typed AIR composition."""
+
+    if type(profile) is not CalibrationProfile or PROFILES.get(profile.profile_id) != profile:
+        raise ValueError("c0_typed_state_profile_not_governed")
+    replay_before, replay_batch, _ = _replay_fixture(profile)
+    slots, economics, payment_before, payment_transition = _build_payment_transition(profile)
+    return C0TypedStateWitness(
+        profile,
+        slots,
+        economics,
+        replay_before,
+        replay_batch,
+        payment_before,
+        payment_transition,
+    )
+
+
 __all__ = (
     "ACTIVATION_ALLOWED",
     "C0Artifact",
     "C0ControlFixture",
     "C0MapResult",
     "C0PaymentResult",
+    "C0TypedStateWitness",
     "H4ResourceRecord",
     "H4_EXECUTION_MANIFEST_SHA3_512",
     "PROOF_SUITE_ID",
@@ -662,4 +741,5 @@ __all__ = (
     "STATUS",
     "build_all_c0_control_fixtures",
     "build_c0_control_fixture",
+    "build_c0_typed_state_witness",
 )

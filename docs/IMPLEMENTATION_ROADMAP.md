@@ -346,9 +346,12 @@ and the v3 compact state-AIR/FRI component are prerequisite/native-consumption e
 boundary, not its closure. The compact relation now algebraically links ordered operation rows to
 both fixed-capacity snapshots through the v2 46-wide lookup grammar, and the H4 seam carries
 authenticated slot indices with canonical row-order constraints. Native Rust and Python snapshot
-decoders reject duplicate present keys. The full state relation is not yet composed inside the
-custom H4 GKR/PCS proof, no reviewed backend is admitted, and no manifest-bound H4 K128/K512 proof
-was run after the source change.
+decoders reject duplicate present keys. A separate `BL-PQ512-C0-TYPED-STATE-AIR-v1` component now
+composes the ordered-map/payment authorities and verifies root/cursor, slot-order, money, and
+replay/payment hash-port mutations for the K128 C0 witness; it is not yet consumed by the native
+H4 GKR/PCS relation or its PCS terminals. The full state relation is therefore still not composed
+inside the custom H4 GKR/PCS proof, no reviewed backend is admitted, and no manifest-bound H4
+K128/K512 proof was run after the source change.
 
 ## H5: repeated complete-proof qualification campaign
 

@@ -207,6 +207,39 @@ commitment backend, complete simulator, leakage/security composition, repeated r
 and proof-suite admission remain open. `proofSuiteId=null`, activation remains false, H5 has not
 started, and no production CUDA or real PHI/payment data was used.
 
+## Typed C0 state relation executable component (nonactivating)
+
+The C0 typed-state boundary is now represented by
+`experiments/fixed_shape_claim_air/typed_state_relation_executable_air.py`. It composes the
+existing ordered-map replay AIR and authenticated payment-map AIR, binds the four lane roots,
+cursors, and fixed slot order, constrains canonical money bytes with fail-closed subtraction and
+debit/credit conservation, and carries replay plus payment SHA3 messages/digests through one
+canonical interface-only bus with contiguous call indices. The C0 witness builder checks that the
+ordered-map snapshot and batch roots/cursors and the payment transition's `before` state are the
+same authority before the AIR is built.
+
+Measured K128 construction and verifier readback:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v1
+tables=60
+lookups=93
+public_inputs=524
+hash_calls=46208
+replay_hash_ports=True
+payment_hash_ports=True
+public_tail=(100,80,80,80)
+```
+
+The positive verifier passed once (`1 passed in 353.49s`), and split mutation runs passed for
+replay roots/cursors (`1 passed, 3 deselected`), money plus replay hash ports (`2 passed, 2
+deselected`), and the shared C0 fixture regression (`8 passed in 35.34s`). A combined typed file
+run after adding the mutations and a combined C0/payment regression exceeded their bounded
+windows without a pytest summary; neither receives pass credit. This is proof-native typed
+component evidence only: it is not consumed by `state_relation_gkr.rs` or the H4 parent,
+transcript, proof, independent verifier, and receipt. Gate 2E remains unsealed; H5 and H6 remain
+unrun, `proofSuiteId=null`, and activation remains false.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from

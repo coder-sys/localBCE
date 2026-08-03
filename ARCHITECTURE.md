@@ -180,6 +180,15 @@ replay/payment state. Current maps remain authoritative while a versioned topolo
 privacy-padded access manifest, and deterministic conflict DAG are tested. Structural call-count
 projections are not proof-throughput results.
 
+The C0 typed-state executable component now closes the missing semantic slice at its own AIR
+boundary. It composes the ordered-map replay and payment-map authorities, binds lane roots and
+cursors, enforces fixed slot order, canonical money subtraction, and debit/credit conservation,
+and exposes replay/payment SHA3 ports through one canonical interface composer. Its K128 readback
+is `BL-PQ512-C0-TYPED-STATE-AIR-v1` with 60 tables, 93 lookups, 524 public inputs, and 46,208
+exact hash calls; positive and split mutation checks passed. This component is not yet wired into
+the native `state_relation_gkr.rs` relation or the custom H4 GKR/PCS parent, so it supplies
+typed-component evidence but does not close Gate 2E or authorize H5/H6.
+
 ## Operational artifact layout
 
 Tracked `ops/` is the sole repository authority. Its exact 14-file regular-file inventory, lengths,
