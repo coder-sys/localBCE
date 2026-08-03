@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from hashlib import sha3_512
+from hashlib import sha3_512, shake_256
 from pathlib import Path
 from typing import Final, Mapping
 
@@ -21,6 +21,14 @@ from experiments.bl_pq512_crypto_foundation.state_air_proof import (
     _attribution_digest,
     proof_package_commitment,
 )
+from experiments.bl_pq512_crypto_foundation.transparent_hash_code_candidate import (
+    MASK_BYTES as STATE_COMMITMENT_MASK_BYTES,
+    TransparentHashCodeCommitment,
+    TransparentHashCodeOpening,
+    bind_authenticated_public_coin,
+    commit as commit_state_statement,
+    verify_opening as verify_state_commitment_opening,
+)
 from experiments.fixed_shape_claim_air.air_binary_ir import (
     air_binary_commitment,
     air_program_commitment,
@@ -36,7 +44,7 @@ from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
 COMPONENT_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-V1"
-TYPED_BINDING_VERSION: Final[int] = 4
+TYPED_BINDING_VERSION: Final[int] = 5
 TYPED_FRAGMENT_MAGIC: Final[bytes] = b"BLSA03"
 PUBLIC_OUTPUT_BYTES: Final[int] = 384
 SIDECAR_BYTES: Final[int] = 744
@@ -46,16 +54,17 @@ _STATE_ROOT_CAPACITY_BASE: Final[int] = 512
 _PROOF_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-PROOF/v1\x00"
 _PROJECTION_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-PROJECTION/v1\x00"
 _PROJECTION_DIGEST_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-PROJECTION-DIGEST/v1\x00"
-_STATEMENT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-STATEMENT/v1\x00"
+_STATEMENT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-STATEMENT/v2\x00"
 _TRANSITION_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-TRANSITION/v1\x00"
-_PUBLIC_COIN_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-PUBLIC-COIN/v1\x00"
-_COMMITMENT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-COMMITMENT/v1\x00"
-_PROOF_IDENTITY_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-PROOF/v1\x00"
-_ATTEMPT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-ATTEMPT/v1\x00"
-_RECEIPT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-RECEIPT/v1\x00"
-_FRAGMENT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-FRAGMENT/v1\x00"
-_COMPOSITION_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-COMPOSITION/v1\x00"
-_BINDING_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-BINDING/v1\x00"
+_PROOF_IDENTITY_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-PROOF/v2\x00"
+_ATTEMPT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-ATTEMPT/v2\x00"
+_RECEIPT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-RECEIPT/v2\x00"
+_FRAGMENT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-FRAGMENT/v2\x00"
+_COMPOSITION_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-COMPOSITION/v2\x00"
+_BINDING_DOMAIN: Final[bytes] = b"BL/PQ512/C0/TYPED-STATE-BINDING/v2\x00"
+_MASK_DERIVATION_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/C0/TYPED-STATE/TRANSPARENT-SHAKE256-1024-MASK/v1\x00"
+)
 _VERIFIER_IDENTITY: Final[bytes] = (
     b"BL/PQ512/C0/TYPED-STATE/INDEPENDENT-VERIFIER/v1\x00"
 )
@@ -119,6 +128,8 @@ class TypedStateAirProofEvidence:
     attribution_digest_512: bytes
     proof_bytes: int
     worker_report_digest_512: bytes
+    state_commitment: TransparentHashCodeCommitment
+    state_commitment_mask: bytes = field(repr=False)
     proof_package_bytes: bytes = field(default=b"", repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -141,6 +152,12 @@ class TypedStateAirProofEvidence:
                 raise StructuralError("typed_state_air_evidence_digest_invalid")
         if type(self.proof_bytes) is not int or self.proof_bytes <= 0:
             raise StructuralError("typed_state_air_proof_size_invalid")
+        if (
+            type(self.state_commitment) is not TransparentHashCodeCommitment
+            or type(self.state_commitment_mask) is not bytes
+            or len(self.state_commitment_mask) != STATE_COMMITMENT_MASK_BYTES
+        ):
+            raise StructuralError("typed_state_air_state_commitment_invalid")
         if (
             type(self.proof_package_bytes) is not bytes
             or not 10 <= len(self.proof_package_bytes) <= MAX_PROOF_PACKAGE_BYTES
@@ -182,6 +199,8 @@ def _evidence(
     execution_commitment: bytes,
     package: bytes,
     projection: tuple[bytes, ...],
+    state_commitment: TransparentHashCodeCommitment,
+    state_commitment_mask: bytes,
 ) -> TypedStateAirProofEvidence:
     bundle = result.challenge_bundle
     package_commitment = proof_package_commitment(package)
@@ -216,7 +235,69 @@ def _evidence(
         _attribution_digest(result),
         result.proof_bytes,
         _hash(_PROOF_DOMAIN, b"worker-report", result.worker_report.encode("ascii")),
+        state_commitment,
+        state_commitment_mask,
         package,
+    )
+
+
+def _precommitment_fields(
+    state_witness: C0TypedStateWitness,
+    program_commitment: bytes,
+    execution_commitment: bytes,
+    projection: tuple[bytes, ...],
+) -> tuple[tuple[bytes, bytes, bytes, bytes], bytes, bytes, bytes, bytes]:
+    roots = _roots(state_witness)
+    projection_digest = _hash(_PROJECTION_DIGEST_DOMAIN, *projection)
+    profile = state_witness.profile.profile_id.encode("ascii")
+    capacity = state_witness.profile.claim_slots.to_bytes(8, "big")
+    statement = _hash(
+        _STATEMENT_DOMAIN,
+        profile,
+        capacity,
+        roots[0],
+        roots[1],
+        roots[2],
+        roots[3],
+        projection_digest,
+        program_commitment,
+        execution_commitment,
+    )
+    transition = _hash(
+        _TRANSITION_DOMAIN,
+        profile,
+        state_witness.payment_before.epoch.to_bytes(8, "big"),
+        state_witness.payment_before.sequence.to_bytes(8, "big"),
+        state_witness.payment_after.sequence.to_bytes(8, "big"),
+        roots[0],
+        roots[1],
+        roots[2],
+        roots[3],
+    )
+    attempt = _hash(
+        _ATTEMPT_DOMAIN,
+        profile,
+        capacity,
+        roots[0],
+        roots[1],
+        statement,
+        transition,
+    )
+    return roots, projection_digest, statement, transition, attempt
+
+
+def _state_commitment_mask(secret_mask_seed: bytes, session_id: bytes) -> bytes:
+    if (
+        type(secret_mask_seed) is not bytes
+        or len(secret_mask_seed) != 64
+        or not any(secret_mask_seed)
+        or type(session_id) is not bytes
+        or len(session_id) != 64
+        or not any(session_id)
+    ):
+        raise StructuralError("typed_state_air_commitment_entropy_invalid")
+    return shake_256(_MASK_DERIVATION_DOMAIN + secret_mask_seed + session_id).digest(
+        STATE_COMMITMENT_MASK_BYTES
     )
 
 
@@ -244,7 +325,16 @@ def prove_typed_state_air(
     projection = _projection(instance.public_values)
     if len(b"".join(projection)) != PUBLIC_OUTPUT_BYTES:
         raise StructuralError("typed_state_air_public_output_shape_invalid")
-    roots = _roots(state_witness)
+    program_commitment = air_program_commitment(program_bytes)
+    execution_commitment = air_binary_commitment(execution_bytes)
+    roots, projection_digest, statement, transition, attempt = _precommitment_fields(
+        state_witness,
+        program_commitment,
+        execution_commitment,
+        projection,
+    )
+    state_commitment_mask = _state_commitment_mask(secret_mask_seed, session_id)
+    state_commitment = commit_state_statement(statement, attempt, state_commitment_mask)
     package_path = scratch_parent / f"bl-typed-state-air-proof-{session_id.hex()}.bin"
     if package_path.exists():
         raise StructuralError("typed_state_air_package_path_exists")
@@ -260,17 +350,17 @@ def prove_typed_state_air(
             public_outputs=b"".join(projection),
             sidecar=_sidecar(
                 (
+                    roots[0],
+                    roots[1],
                     roots[2],
                     roots[3],
-                    _hash(_STATEMENT_DOMAIN, *roots),
-                    _hash(_TRANSITION_DOMAIN, state_witness.profile.profile_id.encode("ascii")),
-                    _hash(_COMMITMENT_DOMAIN, roots[0], roots[1]),
-                    _hash(_PROOF_IDENTITY_DOMAIN, program_bytes),
-                    _hash(_ATTEMPT_DOMAIN, execution_bytes),
-                    _hash(_RECEIPT_DOMAIN, package_path.name.encode("ascii")),
-                    _hash(_BINDING_DOMAIN, b"sidecar"),
-                    _hash(_PROJECTION_DIGEST_DOMAIN, *projection),
-                    _hash(_PUBLIC_COIN_DOMAIN, b"sidecar"),
+                    statement,
+                    transition,
+                    projection_digest,
+                    program_commitment,
+                    execution_commitment,
+                    attempt,
+                    state_commitment.identity_512,
                 )
             ),
             contributors=contributors,
@@ -285,10 +375,12 @@ def prove_typed_state_air(
     return _evidence(
         instance,
         result,
-        air_program_commitment(program_bytes),
-        air_binary_commitment(execution_bytes),
+        program_commitment,
+        execution_commitment,
         package,
         projection,
+        state_commitment,
+        state_commitment_mask,
     )
 
 
@@ -304,39 +396,27 @@ def _identity_fields(state_witness: C0TypedStateWitness, evidence: TypedStateAir
     ):
         raise StructuralError("typed_state_air_commitment_mismatch")
     projection = _projection(instance.public_values)
-    roots = _roots(state_witness)
-    projection_digest = _hash(_PROJECTION_DIGEST_DOMAIN, *projection)
-    profile = state_witness.profile.profile_id.encode("ascii")
-    capacity = state_witness.profile.claim_slots.to_bytes(8, "big")
-    statement = _hash(
-        _STATEMENT_DOMAIN,
-        profile,
-        capacity,
-        roots[0],
-        roots[1],
-        roots[2],
-        roots[3],
-        projection_digest,
+    roots, projection_digest, statement, transition, attempt = _precommitment_fields(
+        state_witness,
         program_commitment,
         execution_commitment,
-        evidence.proof_package_commitment_512,
+        projection,
     )
-    transition = _hash(
-        _TRANSITION_DOMAIN,
-        profile,
-        state_witness.payment_before.epoch.to_bytes(8, "big"),
-        state_witness.payment_before.sequence.to_bytes(8, "big"),
-        state_witness.payment_after.sequence.to_bytes(8, "big"),
-        roots[0],
-        roots[1],
-        roots[2],
-        roots[3],
+    if evidence.state_commitment.attempt_id != attempt:
+        raise StructuralError("typed_state_air_commitment_attempt_mismatch")
+    try:
+        verify_state_commitment_opening(
+            evidence.state_commitment,
+            TransparentHashCodeOpening(attempt, statement, evidence.state_commitment_mask),
+        )
+    except (TypeError, ValueError) as exc:
+        raise StructuralError("typed_state_air_commitment_opening_rejected") from exc
+    public_coin = bind_authenticated_public_coin(
+        evidence.state_commitment, evidence.transcript_root_512
     )
-    public_coin = _hash(_PUBLIC_COIN_DOMAIN, statement, transition, projection_digest)
-    commitment = _hash(_COMMITMENT_DOMAIN, statement, public_coin, evidence.proof_package_commitment_512)
+    commitment = evidence.state_commitment.identity_512
     proof = _hash(_PROOF_IDENTITY_DOMAIN, statement, evidence.proof_identity_512)
     verifier = sha3_512(_VERIFIER_IDENTITY).digest()
-    attempt = _hash(_ATTEMPT_DOMAIN, profile, statement, proof, evidence.attribution_digest_512)
     receipt = _hash(_RECEIPT_DOMAIN, statement, commitment, proof, attempt)
     canonical = evidence.canonical_bytes
     fragment = _hash(
@@ -420,6 +500,9 @@ def build_typed_state_air_binding_bytes(
             identities["public_coin"],
             identities["transition"],
             identities["commitment"],
+            len(evidence.state_commitment.canonical_bytes).to_bytes(4, "big"),
+            evidence.state_commitment.canonical_bytes,
+            evidence.state_commitment_mask,
             identities["proof"],
             identities["verifier"],
             identities["attempt"],

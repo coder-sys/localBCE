@@ -52,7 +52,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
-| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; the compact state-AIR/FRI component passes native v3 envelope verification, and the full typed C0 AIR now has a native v4 readback seam that consumes its authority/root tables and maps all 46,210 calls into the canonical H4 bus | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS, a resource-qualified typed proof, complete proof-native H4 composition, state-composed performance, repeated p95, final suite identity |
+| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; the compact state-AIR/FRI component passes native v3 envelope verification, and the full typed C0 AIR has a native v5 readback/composition path that consumes its authority/root tables, maps all 46,210 calls into the canonical H4 bus, and verifies the pre-coin `TRANSPARENT_SHAKE256_1024` opening before H4 transcript/parent/receipt binding | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS or a resource-qualified typed proof, end-to-end v5 proof evidence, complete simulator/leakage composition, state-composed performance, repeated p95, final suite identity |
 | Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, five-candidate dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, versioned state-root bus, native v2 compatibility and v3 proof-native state-component verification, compact AIR v2 fixed-snapshot lookup/mutation coverage, and the nonactivating two-state-claim H4 bridge are tested and documented | Admit a reviewed backend and complete the full state relation inside H4 GKR/PCS; close simulator/leakage/PQ blockers |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
@@ -203,6 +203,12 @@ coin-binding transcript identity, strict Rust parser, and Python/Rust KAT are no
 reference evidence; they do not close the missing H4 composition, simulator, or leakage ledger.
 All five descriptors fail closed. No candidate is admitted, selected, bound to H4, or assigned
 `proofSuiteId`.
+
+The typed envelope v5 now implements the candidate's correct pre-coin ordering and raw-opening
+verification path into the H4 transcript, parent, composition, and receipt. This is focused
+implementation/mutation evidence only. The candidate remains rejected for
+`complete_composition_missing` until a resource-qualified complete typed proof traverses that path;
+the screening flag is not changed from partial code-path evidence.
 
 Focused command and raw result:
 

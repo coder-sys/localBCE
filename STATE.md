@@ -6454,3 +6454,58 @@ bytes. Relative to v4, total interaction storage falls by 608,174,080 bytes and 
 availability falls by 760,217,600 bytes. This remains nonqualifying. Gate 2E, H5, H6, reviewed
 backend admission, simulator/leakage closure, `proofSuiteId`, and activation remain open; no H5
 launch is authorized or credited.
+
+## 2026-08-03 Typed envelope v5 pre-coin PQ commitment composition path - VERIFIED, NONACTIVATING
+
+The typed envelope previously derived its statement from the future proof-package commitment. That
+made a genuine commit-before-authenticated-coin lifecycle impossible. Envelope version 5 removes
+that circular dependency: it freezes the typed statement, transition, and retry-stable attempt from
+the profile, roots, projection, and exact AIR program/execution commitments; derives a fresh
+domain-separated 1,024-bit mask from the proof entropy and fresh session; and creates the
+`TRANSPARENT_SHAKE256_1024` commitment before constructing the 744-byte authenticated sidecar.
+The sidecar binds the exact commitment transport identity before the typed public coin. The private
+v5 envelope carries the canonical 1,024-bit commitment and mask. Rust verifies the raw opening,
+attempt, final authenticated transcript binding, and transport identity before the existing H4
+state context reaches the child transcript, parent, composition, and atomic receipt. Version 4
+remains a separate legacy parser branch and cannot be accepted as version 5 without the new fields.
+
+Focused evidence:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_transparent_hash_code_candidate.py
+....                                                                     [100%]
+4 passed in 3.92s
+
+cargo +1.96.0 test --features std --lib transparent_hash_code --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 263 filtered out; finished in 0.00s
+
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype typed_v5_precommitment_rejects_opening_coin_identity_and_attempt_mutations --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 100.77s
+
+cargo +1.96.0 check --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.52s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_transparent_hash_code_candidate.py tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py
+............                                                             [100%]
+12 passed in 9.09s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_deployment_ready_roadmap_contract.py
+...                                                                      [100%]
+3 passed in 0.12s
+```
+
+The first focused Python run failed only because the test omitted the explicit synthetic-reference
+environment flags (`synthetic_pq_tree_reference_forbidden`); adding the same three test-only flags
+used by the existing C0 suites produced the passing result above. A broad Rust name-filter command
+without `--lib` also exposed a pre-existing feature mismatch in the unrelated
+`gkr_sparse_layer_fixture` binary (`repeated_pack_sparse_layer_gpu_fixture` requires `parallel`);
+the exact library target then passed 2/2. Neither failure weakened a gate or changed production
+behavior.
+
+This is not complete composition or backend admission evidence because the full typed v5 proof has
+not traversed the path under the immutable resource limit. `complete_composition` remains false,
+the exact v5 generic-AIR preflight remains nonqualifying, and no H5 launch, `proofSuiteId`, or
+activation credit is taken. The next dependency is the prover storage/resource architecture.

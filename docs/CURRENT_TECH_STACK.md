@@ -252,6 +252,20 @@ returns `qualifies=false` with `modeled_required_available_bytes=22975297336`; t
 nonactivating until a complete proof construction, reviewed backend, simulator/leakage/security
 ledger, H5, and H6 gates close.
 
+The typed private H4 envelope is now version 5. It removes a circular ordering defect in the prior
+version-4 envelope: the typed statement no longer includes the not-yet-created proof-package
+commitment. The statement, transition, and retry-stable attempt are frozen first; a fresh
+domain-separated 1,024-bit mask then creates the `TRANSPARENT_SHAKE256_1024` commitment before the
+authenticated public-coin session. Its SHA3-512 transport identity occupies an already fixed
+64-byte pre-coin sidecar field, while the private envelope carries the canonical 1,024-bit
+commitment and opening mask. Rust parses and verifies the raw opening, binds the final authenticated
+typed transcript root, and passes the resulting identity through the existing H4 child transcript,
+parent, composition, and atomic receipt. Focused Python/Rust positive and four-way mutation tests
+pass. Legacy envelope version 4 remains independently parsed and cannot omit the new v5 fields.
+This implements the correct pre-coin composition path but does not admit the backend: the immutable
+typed resource preflight still rejects a full run, so end-to-end v5 proof/H4 evidence, complete
+simulator/leakage closure, Gate 2E admission, H5, and H6 remain open.
+
 ## How a successor must interpret this repository
 
 This file is deliberately model-independent. A successor must not infer the current design from

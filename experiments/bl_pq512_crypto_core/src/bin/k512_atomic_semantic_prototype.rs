@@ -28,6 +28,11 @@ use bl_pq512_crypto_core::{
         StateRelationEntry, StateRelationRow, build_state_relation_wire_source,
         state_relation_source_digest,
     },
+    transparent_hash_code::{
+        MASK_BYTES as TRANSPARENT_STATE_MASK_BYTES, TransparentHashCodeCommitment,
+        bind_authenticated_public_coin, parse_commitment as parse_transparent_state_commitment,
+        verify_opening as verify_transparent_state_opening,
+    },
     wave1a_global_schedule::Profile,
 };
 use sha3::{Digest, Sha3_512};
@@ -78,15 +83,22 @@ const TYPED_STATE_PROJECTION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROJECTIO
 const TYPED_STATE_PROJECTION_DIGEST_DOMAIN: &[u8] =
     b"BL/PQ512/C0/TYPED-STATE-PROJECTION-DIGEST/v1\0";
 const TYPED_STATE_STATEMENT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-STATEMENT/v1\0";
+const TYPED_STATE_STATEMENT_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-STATEMENT/v2\0";
 const TYPED_STATE_TRANSITION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-TRANSITION/v1\0";
 const TYPED_STATE_PUBLIC_COIN_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PUBLIC-COIN/v1\0";
 const TYPED_STATE_COMMITMENT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-COMMITMENT/v1\0";
 const TYPED_STATE_PROOF_IDENTITY_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROOF/v1\0";
+const TYPED_STATE_PROOF_IDENTITY_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROOF/v2\0";
 const TYPED_STATE_ATTEMPT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-ATTEMPT/v1\0";
+const TYPED_STATE_ATTEMPT_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-ATTEMPT/v2\0";
 const TYPED_STATE_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-RECEIPT/v1\0";
+const TYPED_STATE_RECEIPT_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-RECEIPT/v2\0";
 const TYPED_STATE_FRAGMENT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-FRAGMENT/v1\0";
+const TYPED_STATE_FRAGMENT_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-FRAGMENT/v2\0";
 const TYPED_STATE_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-COMPOSITION/v1\0";
+const TYPED_STATE_COMPOSITION_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-COMPOSITION/v2\0";
 const TYPED_STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-BINDING/v1\0";
+const TYPED_STATE_BINDING_V2_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-BINDING/v2\0";
 const TYPED_STATE_VERIFIER_IDENTITY: &[u8] = b"BL/PQ512/C0/TYPED-STATE/INDEPENDENT-VERIFIER/v1\0";
 const C0_STATE_ROOT_DOMAIN: &[u8] = b"BL/PQ512/C0/STATE-ROOT/v1\0";
 const PAYMENT_STATE_DOMAIN: &[u8] = b"BL/PQ512/PAYMENT-MAP/STATE/v4";
@@ -1151,7 +1163,7 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
     match prefix[6] {
         2 => verify_state_binding_v2(path),
         3 => verify_state_binding_v3(path),
-        4 => verify_typed_state_binding_v4(path),
+        4 | 5 => verify_typed_state_binding(path),
         _ => Err("state_binding_version".to_string()),
     }
 }
@@ -2367,13 +2379,42 @@ fn verify_typed_root_interface(
     Ok(())
 }
 
-fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification, String> {
+fn verify_typed_state_precommitment_v5(
+    candidate: &TransparentHashCodeCommitment,
+    mask: &[u8; TRANSPARENT_STATE_MASK_BYTES],
+    statement: &[u8; 64],
+    expected_attempt: &[u8; 64],
+    transcript_root: &[u8; 64],
+    public_coin: &[u8; 64],
+    commitment_identity: &[u8; 64],
+) -> Result<(), String> {
+    if &candidate.attempt_id != expected_attempt {
+        return Err("typed_attempt".to_string());
+    }
+    verify_transparent_state_opening(candidate, statement, mask)
+        .map_err(|error| format!("typed_state_commitment_opening:{error:?}"))?;
+    let expected_public_coin = bind_authenticated_public_coin(candidate, transcript_root)
+        .map_err(|error| format!("typed_state_commitment_coin:{error:?}"))?;
+    if public_coin != &expected_public_coin {
+        return Err("typed_public_coin".to_string());
+    }
+    if commitment_identity != &candidate.identity_512() {
+        return Err("typed_commitment".to_string());
+    }
+    Ok(())
+}
+
+fn verify_typed_state_binding(path: &Path) -> Result<StateBindingVerification, String> {
     let encoded = fs::read(path).map_err(|error| format!("state_binding_read:{error}"))?;
     let mut cursor = StateCursor::new(&encoded);
-    if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC || cursor.u8("binding_version")? != 4
-    {
+    if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC {
         return Err("state_binding_version".to_string());
     }
+    let binding_version = cursor.u8("binding_version")?;
+    if binding_version != 4 && binding_version != 5 {
+        return Err("state_binding_version".to_string());
+    }
+    let transparent_commitment = binding_version == 5;
     let state_profile = cursor.text(64, "typed_profile")?;
     let state_capacity = cursor.u64("typed_capacity")?;
     let typed_state_root_before = cursor.array64("typed_root_before")?;
@@ -2394,6 +2435,28 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
     let public_coin = cursor.array64("typed_public_coin")?;
     let transition = cursor.array64("typed_transition")?;
     let commitment = cursor.array64("typed_commitment")?;
+    let state_commitment_mask: Option<[u8; TRANSPARENT_STATE_MASK_BYTES]>;
+    let state_commitment = if transparent_commitment {
+        let commitment_length = usize::try_from(cursor.u32("typed_state_commitment_length")?)
+            .map_err(|_| "typed_state_commitment_length".to_string())?;
+        if commitment_length == 0 || commitment_length > 1 << 16 {
+            return Err("typed_state_commitment_shape".to_string());
+        }
+        let parsed = parse_transparent_state_commitment(
+            cursor.take(commitment_length, "typed_state_commitment")?,
+        )
+        .map_err(|error| format!("typed_state_commitment:{error:?}"))?;
+        state_commitment_mask = Some(
+            cursor
+                .take(TRANSPARENT_STATE_MASK_BYTES, "typed_state_commitment_mask")?
+                .try_into()
+                .expect("typed state commitment mask length"),
+        );
+        Some(parsed)
+    } else {
+        state_commitment_mask = None;
+        None
+    };
     let proof = cursor.array64("typed_proof")?;
     let verifier = cursor.array64("typed_verifier")?;
     let attempt = cursor.array64("typed_attempt")?;
@@ -2616,21 +2679,38 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
         return Err("typed_projection_digest".to_string());
     }
     let profile_capacity = state_capacity.to_be_bytes();
-    let expected_statement = typed_hash(
-        TYPED_STATE_STATEMENT_DOMAIN,
-        &[
-            &state_profile,
-            &profile_capacity,
-            &observed_state_roots[0],
-            &observed_state_roots[1],
-            &payment_roots[0],
-            &payment_roots[1],
-            &projection_digest,
-            &state_air_program,
-            &state_air_execution,
-            &package_commitment_field,
-        ],
-    );
+    let expected_statement = if transparent_commitment {
+        typed_hash(
+            TYPED_STATE_STATEMENT_V2_DOMAIN,
+            &[
+                &state_profile,
+                &profile_capacity,
+                &observed_state_roots[0],
+                &observed_state_roots[1],
+                &payment_roots[0],
+                &payment_roots[1],
+                &projection_digest,
+                &state_air_program,
+                &state_air_execution,
+            ],
+        )
+    } else {
+        typed_hash(
+            TYPED_STATE_STATEMENT_DOMAIN,
+            &[
+                &state_profile,
+                &profile_capacity,
+                &observed_state_roots[0],
+                &observed_state_roots[1],
+                &payment_roots[0],
+                &payment_roots[1],
+                &projection_digest,
+                &state_air_program,
+                &state_air_execution,
+                &package_commitment_field,
+            ],
+        )
+    };
     if statement != expected_statement {
         return Err("typed_statement".to_string());
     }
@@ -2659,17 +2739,50 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
     if transition != expected_transition {
         return Err("typed_transition".to_string());
     }
-    let expected_public_coin = typed_hash(
-        TYPED_STATE_PUBLIC_COIN_DOMAIN,
-        &[&statement, &transition, &projection_digest],
-    );
-    if public_coin != expected_public_coin {
-        return Err("typed_public_coin".to_string());
-    }
-    let expected_commitment = typed_hash(
-        TYPED_STATE_COMMITMENT_DOMAIN,
-        &[&statement, &public_coin, &package_commitment_field],
-    );
+    let expected_attempt = if transparent_commitment {
+        typed_hash(
+            TYPED_STATE_ATTEMPT_V2_DOMAIN,
+            &[
+                &state_profile,
+                &profile_capacity,
+                &observed_state_roots[0],
+                &observed_state_roots[1],
+                &statement,
+                &transition,
+            ],
+        )
+    } else {
+        [0_u8; 64]
+    };
+    let expected_commitment = if let (Some(candidate), Some(mask)) =
+        (state_commitment.as_ref(), state_commitment_mask.as_ref())
+    {
+        if attempt != expected_attempt {
+            return Err("typed_attempt".to_string());
+        }
+        verify_typed_state_precommitment_v5(
+            candidate,
+            mask,
+            &statement,
+            &expected_attempt,
+            &transcript_root,
+            &public_coin,
+            &commitment,
+        )?;
+        candidate.identity_512()
+    } else {
+        let expected_public_coin = typed_hash(
+            TYPED_STATE_PUBLIC_COIN_DOMAIN,
+            &[&statement, &transition, &projection_digest],
+        );
+        if public_coin != expected_public_coin {
+            return Err("typed_public_coin".to_string());
+        }
+        typed_hash(
+            TYPED_STATE_COMMITMENT_DOMAIN,
+            &[&statement, &public_coin, &package_commitment_field],
+        )
+    };
     if commitment != expected_commitment {
         return Err("typed_commitment".to_string());
     }
@@ -2737,28 +2850,44 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
         return Err("typed_public_input_digest".to_string());
     }
     let expected_proof = typed_hash(
-        TYPED_STATE_PROOF_IDENTITY_DOMAIN,
+        if transparent_commitment {
+            TYPED_STATE_PROOF_IDENTITY_V2_DOMAIN
+        } else {
+            TYPED_STATE_PROOF_IDENTITY_DOMAIN
+        },
         &[&statement, &component_proof_identity],
     );
     if proof != expected_proof {
         return Err("typed_proof_identity".to_string());
     }
-    let expected_attempt = typed_hash(
-        TYPED_STATE_ATTEMPT_DOMAIN,
-        &[&state_profile, &statement, &proof, &attribution_digest],
-    );
+    let expected_attempt = if transparent_commitment {
+        expected_attempt
+    } else {
+        typed_hash(
+            TYPED_STATE_ATTEMPT_DOMAIN,
+            &[&state_profile, &statement, &proof, &attribution_digest],
+        )
+    };
     if attempt != expected_attempt {
         return Err("typed_attempt".to_string());
     }
     let expected_receipt = typed_hash(
-        TYPED_STATE_RECEIPT_DOMAIN,
+        if transparent_commitment {
+            TYPED_STATE_RECEIPT_V2_DOMAIN
+        } else {
+            TYPED_STATE_RECEIPT_DOMAIN
+        },
         &[&statement, &commitment, &proof, &attempt],
     );
     if receipt != expected_receipt {
         return Err("typed_receipt".to_string());
     }
     let expected_fragment = typed_hash(
-        TYPED_STATE_FRAGMENT_DOMAIN,
+        if transparent_commitment {
+            TYPED_STATE_FRAGMENT_V2_DOMAIN
+        } else {
+            TYPED_STATE_FRAGMENT_DOMAIN
+        },
         &[
             &observed_state_roots[0],
             &observed_state_roots[1],
@@ -2779,7 +2908,11 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
         return Err("typed_fragment".to_string());
     }
     let expected_composition = typed_hash(
-        TYPED_STATE_COMPOSITION_DOMAIN,
+        if transparent_commitment {
+            TYPED_STATE_COMPOSITION_V2_DOMAIN
+        } else {
+            TYPED_STATE_COMPOSITION_DOMAIN
+        },
         &[
             &statement,
             &transition,
@@ -2800,7 +2933,11 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
         return Err("typed_composition".to_string());
     }
     let expected_binding = typed_hash(
-        TYPED_STATE_BINDING_DOMAIN,
+        if transparent_commitment {
+            TYPED_STATE_BINDING_V2_DOMAIN
+        } else {
+            TYPED_STATE_BINDING_DOMAIN
+        },
         &[
             &observed_state_roots[0],
             &observed_state_roots[1],
@@ -4051,6 +4188,85 @@ mod tests {
             )
             .unwrap_err(),
             "shard_state_binding:0"
+        );
+    }
+
+    #[test]
+    fn typed_v5_precommitment_rejects_opening_coin_identity_and_attempt_mutations() {
+        let statement = [0x31_u8; 64];
+        let attempt = [0x41_u8; 64];
+        let mask = [0x51_u8; TRANSPARENT_STATE_MASK_BYTES];
+        let transcript_root = [0x61_u8; 64];
+        let candidate =
+            bl_pq512_crypto_core::transparent_hash_code::commit(&statement, &attempt, &mask);
+        let public_coin = bind_authenticated_public_coin(&candidate, &transcript_root).unwrap();
+        let identity = candidate.identity_512();
+        assert!(
+            verify_typed_state_precommitment_v5(
+                &candidate,
+                &mask,
+                &statement,
+                &attempt,
+                &transcript_root,
+                &public_coin,
+                &identity,
+            )
+            .is_ok()
+        );
+
+        let mut changed_mask = mask;
+        changed_mask[0] ^= 1;
+        assert!(
+            verify_typed_state_precommitment_v5(
+                &candidate,
+                &changed_mask,
+                &statement,
+                &attempt,
+                &transcript_root,
+                &public_coin,
+                &identity,
+            )
+            .unwrap_err()
+            .starts_with("typed_state_commitment_opening:")
+        );
+        assert_eq!(
+            verify_typed_state_precommitment_v5(
+                &candidate,
+                &mask,
+                &statement,
+                &attempt,
+                &transcript_root,
+                &[0x71; 64],
+                &identity,
+            )
+            .unwrap_err(),
+            "typed_public_coin"
+        );
+        assert_eq!(
+            verify_typed_state_precommitment_v5(
+                &candidate,
+                &mask,
+                &statement,
+                &attempt,
+                &transcript_root,
+                &public_coin,
+                &[0x81; 64],
+            )
+            .unwrap_err(),
+            "typed_commitment"
+        );
+        assert_eq!(
+            verify_typed_state_precommitment_v5(
+                &candidate,
+                &mask,
+                &statement,
+                &[0x91; 64],
+                &transcript_root,
+                &public_coin,
+                &identity,
+            )
+            .unwrap_err(),
+            "typed_attempt"
         );
     }
 }
