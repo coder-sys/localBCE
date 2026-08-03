@@ -221,30 +221,32 @@ same authority before the AIR is built.
 Measured K128 construction and verifier readback:
 
 ```text
-program_id=BL-PQ512-C0-TYPED-STATE-AIR-v3
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v4
 tables=56
-lookups=81
+lookups=79
 public_inputs=1806
 hash_calls=46210
-program_bytes=22405576
-execution_bytes=145415716
-raw_witness_bytes=102655520
-program_commitment=4b483214418199cd829e04ffd242ba04411f70870b80144a53961c76919566d9e841b246d36c07860ff1023652d4d965cb8bb041d6d80d43b6aff1ca6fa821c8
-execution_commitment=59af5c927aa5efdc23d9b5dd044459a28078c8e7201380b1e1f72ec2b23c69b926d89200be02d690bc89bdc9c75d625a7a553d1802bb4ed912ca6e3279466423
+program_bytes=22460606
+execution_bytes=145792794
+raw_witness_bytes=102981664
+program_commitment=52fbd8553df1e83792cc00bb5a33ae47bbcb96d985a1fb8253b97f2fe7df83bf1be9a94c3ded4ef2a8842c46d1e09187ae50a20b255532bf1f6fca3e5e2ac201
+execution_commitment=d35fec28b5577b848ed562e92257b6cad73a8d56e710f4dab5c74e893ff0ffec81063159c8cfc8a7312f78975c4c85436750626bf6c853fad3c1f0c7ab529f29
 replay_hash_ports=True
 payment_hash_ports=True
 authority_root_ports=True
 ```
 
-The full post-fix typed verifier passed (`4 passed in 300.68s`). The v3 representation retains the
+The full post-fix typed verifier passed (`4 passed in 296.33s`). The v4 representation retains the
 8-lane source bundle and packs operation/log preimages into 64-lane vector lookup messages with
 fixed live bits, while preserving every call index, byte position, value, and byte obligation. The
 native reader validates the live/padding grammar, sorts live positions canonically,
-and reconstructs root messages directly from canonical authority root columns. This is
+and reconstructs root messages directly from canonical authority root columns. v4 additionally
+replaces duplicate replay/payment key-sentinel lookups with local byte/inverse identities tied to
+the already range-checked key bytes; direct aggregate-bypass attacks reject. This is
 semantic-AIR component evidence plus a native H4 readback seam:
 the native coordinator consumes the full typed execution, checks the authority/root bindings, and
 maps every typed call to the canonical H4 bus. The immutable generic-AIR resource preflight still
-returns `qualifies=false` with `modeled_required_available_bytes=24847253176`; the seam remains
+returns `qualifies=false` with `modeled_required_available_bytes=23735514936`; the seam remains
 nonactivating until a complete proof construction, reviewed backend, simulator/leakage/security
 ledger, H5, and H6 gates close.
 

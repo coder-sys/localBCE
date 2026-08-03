@@ -448,6 +448,18 @@ def _operation_table(
         ):
             _append(columns, f"key_nonzero_{byte}", nonzero)
             _append(columns, f"key_not_max_{byte}", not_max)
+            value = operation.key_512[byte]
+            _append(
+                columns,
+                f"key_nonzero_inverse_{byte}",
+                pow(value, -1, M31) if value else 0,
+            )
+            not_max_difference = 0xFF - value
+            _append(
+                columns,
+                f"key_not_max_inverse_{byte}",
+                pow(not_max_difference, -1, M31) if not_max_difference else 0,
+            )
         nonzero_sum = sum(key_nonzero)
         not_max_sum = sum(key_not_max)
         _append(columns, "key_nonzero_sum", nonzero_sum)
@@ -512,6 +524,39 @@ def _operation_table(
             cell("key_not_max_sum") * cell("key_not_max_sum_inverse") - 1,
             0,
             rows,
+        ),
+        *(
+            identity
+            for byte in range(64)
+            for identity in (
+                Identity(
+                    f"key_byte_zero_flag_{byte}",
+                    cell(f"key_{byte}") * (1 - cell(f"key_nonzero_{byte}")),
+                    0,
+                    rows,
+                ),
+                Identity(
+                    f"key_byte_nonzero_inverse_{byte}",
+                    cell(f"key_{byte}") * cell(f"key_nonzero_inverse_{byte}")
+                    - cell(f"key_nonzero_{byte}"),
+                    0,
+                    rows,
+                ),
+                Identity(
+                    f"key_byte_max_flag_{byte}",
+                    (255 - cell(f"key_{byte}")) * (1 - cell(f"key_not_max_{byte}")),
+                    0,
+                    rows,
+                ),
+                Identity(
+                    f"key_byte_not_max_inverse_{byte}",
+                    (255 - cell(f"key_{byte}"))
+                    * cell(f"key_not_max_inverse_{byte}")
+                    - cell(f"key_not_max_{byte}"),
+                    0,
+                    rows,
+                ),
+            )
         ),
         Identity(
             "cursor_transition",
@@ -1662,33 +1707,6 @@ def _lookups(
             ),
         ),
     )
-    key_not_sentinel = LookupArgument(
-        "ordered_map_key_not_sentinel",
-        tuple(
-            LookupSide(
-                "ordered_map_operation",
-                const(1),
-                (
-                    cell(f"key_{byte}"),
-                    cell(f"key_nonzero_{byte}"),
-                    cell(f"key_not_max_{byte}"),
-                ),
-                0,
-                operation_rows,
-            )
-            for byte in range(64)
-        ),
-        (
-            LookupSide(
-                "ordered_map_byte",
-                const(1),
-                (cell("value"), cell("nonzero"), cell("not_max")),
-                0,
-                256,
-                cell("key_multiplicity"),
-            ),
-        ),
-    )
     endpoint_before = LookupArgument(
         "ordered_map_endpoint_before",
         (
@@ -1961,7 +1979,6 @@ def _lookups(
     return (
         operation_memory,
         cursor_binding,
-        key_not_sentinel,
         endpoint_before,
         endpoint_after,
         node_topology,
@@ -2003,22 +2020,13 @@ def build_ordered_map_batch_executable_air(
         trace = traces[table_name]
         for name in names:
             byte_counts.update(trace.columns[name])
-    key_counts: Counter[int] = Counter()
-    operation_trace = operation_builder[1]
-    for byte in range(64):
-        key_counts.update(operation_trace.columns[f"key_{byte}"])
     byte_values = tuple(range(256))
-    byte_nonzero = tuple(int(value != 0) for value in byte_values)
-    byte_not_max = tuple(int(value != 0xFF) for value in byte_values)
     byte_trace = TraceTable(
         "ordered_map_byte",
         freeze_columns(
             {
                 "value": byte_values,
-                "nonzero": byte_nonzero,
-                "not_max": byte_not_max,
                 "multiplicity": tuple(byte_counts[value] for value in byte_values),
-                "key_multiplicity": tuple(key_counts[value] for value in byte_values),
             }
         ),
     )
@@ -2027,13 +2035,7 @@ def build_ordered_map_batch_executable_air(
         tuple(byte_trace.columns),
         256,
         (),
-        MappingProxyType(
-            {
-                "value": byte_values,
-                "nonzero": byte_nonzero,
-                "not_max": byte_not_max,
-            }
-        ),
+        MappingProxyType({"value": byte_values}),
     )
     tables.append(byte_table)
     traces[byte_trace.name] = byte_trace

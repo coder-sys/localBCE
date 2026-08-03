@@ -53,7 +53,6 @@ COMPOSED_PROGRAM_ID: Final[str] = (
 _LANES: Final[tuple[str, ...]] = ("benefit", "obligation", "ledger")
 _SHARED_BYTE_TABLE: Final[str] = "payment_maps_byte_shared"
 _RANGE_LOOKUP: Final[str] = "ordered_map_byte_range"
-_KEY_LOOKUP: Final[str] = "ordered_map_key_not_sentinel"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,20 +184,15 @@ def _shared_byte_table(
     lanes: Mapping[str, OrderedMapBatchAirInstance],
 ) -> tuple[AirTable, TraceTable]:
     multiplicity: Counter[int] = Counter()
-    key_multiplicity: Counter[int] = Counter()
     for lane in _LANES:
         columns = lanes[lane].traces["ordered_map_byte"].columns
         for value in range(256):
             multiplicity[value] += columns["multiplicity"][value]
-            key_multiplicity[value] += columns["key_multiplicity"][value]
     values = tuple(range(256))
     columns = freeze_columns(
         {
             "value": values,
-            "nonzero": tuple(int(value != 0) for value in values),
-            "not_max": tuple(int(value != 0xFF) for value in values),
             "multiplicity": tuple(multiplicity[value] for value in values),
-            "key_multiplicity": tuple(key_multiplicity[value] for value in values),
         }
     )
     trace = TraceTable(_SHARED_BYTE_TABLE, columns)
@@ -210,8 +204,6 @@ def _shared_byte_table(
         MappingProxyType(
             {
                 "value": values,
-                "nonzero": columns["nonzero"],
-                "not_max": columns["not_max"],
             }
         ),
     )
@@ -255,7 +247,6 @@ def build_authenticated_payment_maps_executable_air(
     traces: dict[str, TraceTable] = {}
     lookups: list[LookupArgument] = []
     range_sources: list[LookupSide] = []
-    key_sources: list[LookupSide] = []
     for lane in _LANES:
         namespaced = namespace_air_program(
             lanes[lane].program, lanes[lane].traces, lane
@@ -270,8 +261,6 @@ def build_authenticated_payment_maps_executable_air(
         for lookup in namespaced.program.lookups:
             if lookup.name == f"{lane}__{_RANGE_LOOKUP}":
                 range_sources.extend(lookup.sources)
-            elif lookup.name == f"{lane}__{_KEY_LOOKUP}":
-                key_sources.extend(lookup.sources)
             else:
                 lookups.append(lookup)
 
@@ -291,20 +280,6 @@ def build_authenticated_payment_maps_executable_air(
                         0,
                         256,
                         cell("multiplicity"),
-                    ),
-                ),
-            ),
-            LookupArgument(
-                "payment_maps_key_not_sentinel_shared",
-                tuple(key_sources),
-                (
-                    LookupSide(
-                        _SHARED_BYTE_TABLE,
-                        const(1),
-                        (cell("value"), cell("nonzero"), cell("not_max")),
-                        0,
-                        256,
-                        cell("key_multiplicity"),
                     ),
                 ),
             ),

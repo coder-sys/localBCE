@@ -67,15 +67,15 @@ def test_ordered_map_batch_air_evaluates_in_both_interpreters() -> None:
     assert direct.maximum_degree == 3
     assert len(instance.program.tables) == 8
     assert {table.name for table in instance.program.tables} == set(instance.traces)
-    assert direct.identities_evaluated == 278_787
-    assert direct.lookup_messages_evaluated == 396_700
+    assert direct.identities_evaluated == 279_555
+    assert direct.lookup_messages_evaluated == 396_316
     assert direct.program_commitment.hex() == (
-        "b79ce2d270c584b9839b7e24ce4d4d1b4432dd6fdd5ea120424f3d50480bdd5e"
-        "94f15a7d39982f875797048bc9dd1f94144fcc0db5774ae427cc966290353784"
+        "b30d6d337c3ac813c84047d76ba67b5a76bc8c4ed7fe3d88c5de00bf77ee8e58"
+        "58bd907f908306d1062b4c11d608df69d6e44ab541d09241d1b43688b0c93670"
     )
     assert direct.trace_commitment.hex() == (
-        "2471d84ea2f5a0f5fbd2e41caf623494481dfbfcc350c3d6526915238114484c6"
-        "efe97fa471c569465d1788e764f86cd3de8c21e22c82c22ff7ae90b307da68a"
+        "1acc92228ec3263c39bc42cbe205c9cebc02f1bfde92eeee2c74b6b8f6b99a188"
+        "30fc222ff2384d47f5a89a9ed1d4d3761932ac293a9b195c587b2789568f06d"
     )
     assert instance.hashes_constrained is False
     assert instance.traces["ordered_map_operation"].rows == 3

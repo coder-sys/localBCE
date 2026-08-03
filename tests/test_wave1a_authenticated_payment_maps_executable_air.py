@@ -96,14 +96,14 @@ def test_k128_payment_maps_air_has_one_shared_byte_table() -> None:
     instance = payment_maps_air_instance()
 
     assert len(instance.program.tables) == 23
-    assert len(instance.program.lookups) == 30
+    assert len(instance.program.lookups) == 29
     assert set(instance.traces) == {table.name for table in instance.program.tables}
     assert sum(name.endswith("__ordered_map_byte") for name in instance.traces) == 0
     assert "payment_maps_byte_shared" in instance.traces
     assert instance.program.maximum_degree == 3
     assert instance.program.commitment().hex() == (
-        "63643c76b2c38bc58886b57d9851710dad4eea0e27d09dffa84b6b7d55d230a4"
-        "e7279194d952d0877835273ade5b6b977c3a7bba042866f807284966fbec1ffa"
+        "6d7841a9028259c9fb645677f713bdee390c8b3ff389c2d1f0a15b64bc265f4a"
+        "00ba9c3a4b5312730fadf397e46012482019ea5b19e8c199eff6a0d3055c4932"
     )
     assert instance.hashes_constrained is False
     assert instance.payment_semantics_constrained is False
@@ -114,17 +114,17 @@ def test_k128_claim_payment_maps_air_evaluates() -> None:
     report = evaluate_program(instance.program, instance.traces)
 
     assert len(instance.program.tables) == 32
-    assert len(instance.program.lookups) == 45
-    assert report.identities_evaluated == 30_047_077
-    assert report.lookup_messages_evaluated == 41_373_908
+    assert len(instance.program.lookups) == 44
+    assert report.identities_evaluated == 30_178_149
+    assert report.lookup_messages_evaluated == 41_308_372
     assert report.maximum_degree == 3
     assert report.program_commitment.hex() == (
-        "eca09f6e8e529642c192add90de95c812bebc9a8e8f685d64e8e5c8a92c518f9c"
-        "ae2409be6102ce4f53b5158d7325705424ff01657a13a35b1b4b8cbbe27456d"
+        "aa8df56ab409259ba70636c83402cdc3566f6d9219f2050da18f0482c01ef86d"
+        "ea1901041f68807ccc95ed2c926d536c5100a6a97e12850678e9536125115d08"
     )
     assert report.trace_commitment.hex() == (
-        "8bff3d96ad53647401708976f0034c4fd6e0322b5a79850bd252c70b8d97f3b7c"
-        "4c4c5392f23a24ddf7ee158ed5b728593ce5c9388489fc6044669a6054cbe59"
+        "38aff0c74a1cd66cd7c48fd71b22b760cb02ed706229715a4a17112735e53d8fe"
+        "b3dae5c2dc97964c150d58760adfce4db57be27630aced86ae112ad87c2419f"
     )
     assert instance.authorization_uses_constrained is True
     assert instance.key_derivations_constrained is False
@@ -136,19 +136,19 @@ def test_k128_claim_payment_maps_one_sha3_engine_fully_evaluates() -> None:
     report = evaluate_program(instance.program, instance.traces)
 
     assert len(instance.program.tables) == 52
-    assert len(instance.program.lookups) == 81
+    assert len(instance.program.lookups) == 80
     assert instance.traces["sha3_digest_batch"].rows == 768
     assert instance.traces["sha3_message_batch"].rows == 248_832
-    assert report.identities_evaluated == 112_485_087
-    assert report.lookup_messages_evaluated == 220_993_014
+    assert report.identities_evaluated == 112_616_159
+    assert report.lookup_messages_evaluated == 220_927_478
     assert report.maximum_degree == 3
     assert report.program_commitment.hex() == (
-        "bba1132dd09ac950a1d000aeacd61b70ea0d225a5038e666e69d3e9235ceb234"
-        "fd88552e2b3d33de45881310d5210a712e4b9921f42f66fa9c268739ae3da50d"
+        "8b97aba8b5998d63f71f3dc596229168fe3bb9f5d4149fc3ec0a72bfd6848849"
+        "f8b9feac8288c8bd0c0544590f13b512e036d76ba76fbe2ead702ff9f4ec3b83"
     )
     assert report.trace_commitment.hex() == (
-        "ddc8880182be332d84f7e79bed0e05e2502c5c7840255d547aaa80b31b75207c6"
-        "647b6c95c285f4fa88b9b8f2d403812023495530da30ab4c3bee7695aca5a24"
+        "1422c09b2e9f9a106e4345d98966f7dc7d0ef57ab56cf1beb96feecab0c6f2ca"
+        "1c79b95b3f96eece223a13049320fe88ffd643f1cfc558352338fd0741190b95"
     )
     assert instance.key_derivations_constrained is True
     assert instance.authorization_uses_constrained is True

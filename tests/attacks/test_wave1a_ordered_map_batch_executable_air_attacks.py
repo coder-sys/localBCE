@@ -132,6 +132,58 @@ def test_max_sentinel_operation_key_cannot_be_admitted() -> None:
         )
 
 
+def test_nonzero_key_byte_flag_cannot_be_forged_after_lookup_removal() -> None:
+    instance = ordered_map_air_instance()
+    trace = instance.traces["ordered_map_operation"].columns
+    byte = next(index for index in range(64) if trace[f"key_{index}"][0] != 0)
+    forged_sum = trace["key_nonzero_sum"][0] - 1
+    assert forged_sum > 0
+
+    with pytest.raises(
+        StructuralError,
+        match="air_identity_failed:ordered_map_operation:key_byte_zero_flag_",
+    ):
+        evaluate_program(
+            instance.program,
+            _mutate(
+                "ordered_map_operation",
+                0,
+                {
+                    f"key_nonzero_{byte}": 0,
+                    f"key_nonzero_inverse_{byte}": 0,
+                    "key_nonzero_sum": forged_sum,
+                    "key_nonzero_sum_inverse": pow(forged_sum, -1, M31),
+                },
+            ),
+        )
+
+
+def test_not_max_key_byte_flag_cannot_be_forged_after_lookup_removal() -> None:
+    instance = ordered_map_air_instance()
+    trace = instance.traces["ordered_map_operation"].columns
+    byte = next(index for index in range(64) if trace[f"key_{index}"][0] != 0xFF)
+    forged_sum = trace["key_not_max_sum"][0] - 1
+    assert forged_sum > 0
+
+    with pytest.raises(
+        StructuralError,
+        match="air_identity_failed:ordered_map_operation:key_byte_max_flag_",
+    ):
+        evaluate_program(
+            instance.program,
+            _mutate(
+                "ordered_map_operation",
+                0,
+                {
+                    f"key_not_max_{byte}": 0,
+                    f"key_not_max_inverse_{byte}": 0,
+                    "key_not_max_sum": forged_sum,
+                    "key_not_max_sum_inverse": pow(forged_sum, -1, M31),
+                },
+            ),
+        )
+
+
 def test_height_64_cannot_be_smuggled_into_the_topology() -> None:
     instance = ordered_map_air_instance()
     trace = instance.traces["ordered_map_proof"].columns

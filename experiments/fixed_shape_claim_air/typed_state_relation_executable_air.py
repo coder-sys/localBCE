@@ -67,7 +67,7 @@ from experiments.fixed_shape_claim_air.ordered_map_batch_reference import (
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
-PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v3"
+PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v4"
 LANE_ORDER: Final[tuple[str, ...]] = ("replay", "benefit", "obligation", "ledger")
 MONEY_TABLE: Final[str] = "typed_state_money"
 SUMMARY_TABLE: Final[str] = "typed_state_lane_summary"

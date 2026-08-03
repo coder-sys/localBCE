@@ -6300,3 +6300,95 @@ This removes 6,048,186,368 bytes from the modeled interaction oracle and 7,623,8
 modeled required scratch availability relative to v2, but it does not qualify the route. Gate 2E,
 H5, H6, reviewed backend admission, simulator/leakage closure, `proofSuiteId`, and activation remain
 open. No H5 launch is authorized or credited by this component result.
+
+## 2026-08-03 Typed C0 v4 local sentinel proof - VERIFIED, NONACTIVATING
+
+The v4 correction removes the replay and shared three-payment-map key-sentinel LogUp arguments.
+Each range-checked key byte now locally constrains its `nonzero` and `not_max` flags with explicit
+inverse witnesses. Existing aggregate sum/inverse identities still prove that each 64-byte key is
+neither all-zero nor all-`0xff`. Two new attacks keep those aggregates valid while forging one byte
+flag; both reject at the new local identities. Protected paths remain untouched.
+
+Exact focused evidence:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/attacks/test_wave1a_ordered_map_batch_executable_air_attacks.py::test_zero_sentinel_operation_key_cannot_be_admitted tests/attacks/test_wave1a_ordered_map_batch_executable_air_attacks.py::test_max_sentinel_operation_key_cannot_be_admitted tests/attacks/test_wave1a_ordered_map_batch_executable_air_attacks.py::test_nonzero_key_byte_flag_cannot_be_forged_after_lookup_removal tests/attacks/test_wave1a_ordered_map_batch_executable_air_attacks.py::test_not_max_key_byte_flag_cannot_be_forged_after_lookup_removal
+....                                                                     [100%]
+4 passed in 0.73s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_wave1a_ordered_map_batch_executable_air.py::test_ordered_map_batch_air_evaluates_in_both_interpreters tests/test_wave1a_authenticated_payment_maps_executable_air.py::test_k128_payment_maps_air_has_one_shared_byte_table tests/test_wave1a_authenticated_payment_maps_executable_air.py::test_k128_claim_payment_maps_air_evaluates
+...                                                                      [100%]
+3 passed in 122.63s (0:02:02)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py
+....                                                                     [100%]
+4 passed in 296.33s (0:04:56)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_wave1a_authenticated_payment_maps_executable_air.py::test_k128_claim_payment_maps_one_sha3_engine_fully_evaluates
+.                                                                        [100%]
+1 passed in 1059.99s (0:17:39)
+
+cargo +1.96.0 fmt --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml -- --check
+exit=0
+
+cargo +1.96.0 check --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.97s
+exit=0
+
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 98.14s
+exit=0
+```
+
+An initial three-file aggregate command reached its 604-second command bound before emitting a
+pytest result (`exit=124`). Narrowed runs established that the direct attacks passed and the
+positive evaluators reached only stale exact-shape assertions. Those assertions were refreshed
+from explicit readback and the affected tests then passed as recorded above. The first full-SHA3
+pin run evaluated successfully but failed its stale first assertion (`expected 81`, `actual 80`;
+`1 failed`, command wall time `1079.9s`). A single diagnostic evaluation emitted all six new pins;
+the final exact test passed as recorded above. The full-SHA3 result is correctness evidence only;
+its 1,059.99-second duration is not H5 evidence.
+
+Exact K128 v4 readback:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v4
+program_bytes=22460606
+execution_bytes=145792794
+program_commitment=52fbd8553df1e83792cc00bb5a33ae47bbcb96d985a1fb8253b97f2fe7df83bf1be9a94c3ded4ef2a8842c46d1e09187ae50a20b255532bf1f6fca3e5e2ac201
+execution_commitment=d35fec28b5577b848ed562e92257b6cad73a8d56e710f4dab5c74e893ff0ffec81063159c8cfc8a7312f78975c4c85436750626bf6c853fad3c1f0c7ab529f29
+tables=56
+lookups=79
+public_inputs=1806
+hash_calls=46210
+raw_witness_bytes=102981664
+```
+
+The immutable resource preflight still rejects v4:
+
+```text
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=4775739392
+modeled_interaction_evaluation_bytes=7692353536
+modeled_composition_evaluation_bytes=1442840576
+modeled_deep_evaluation_bytes=171094048768
+modeled_fri_mask_bytes=130023424
+modeled_folded_layer_bytes=134217728
+modeled_monolithic_live_bytes_lower_bound=185269223424
+modeled_maximum_domain_rows=1048576
+requires_streaming=true
+modeled_raw_witness_bytes=102981664
+modeled_persistent_oracle_bytes=14416568160
+modeled_peak_temporary_bytes=1135869952
+modeled_filesystem_overhead_bytes=3888109528
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=23735514936
+```
+
+Relative to v3, v4 removes 1,107,296,256 interaction bytes while adding 133,693,440 main bytes;
+modeled required availability falls by 1,111,738,240 bytes. This remains far above the immutable
+limit. Gate 2E, H5, H6, reviewed backend admission, simulator/leakage closure, `proofSuiteId`, and
+activation remain open; no H5 launch is authorized or credited.
