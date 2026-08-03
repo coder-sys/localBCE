@@ -43,8 +43,11 @@ Their resulting descriptor totals are 113,996 and 412,446 live permutations. The
 independently verified at the native state-file boundary, but no new manifest-bound H4 K128/K512
 proof was run after this source change.
 
-The proof uses 6,073 GKR rounds plus 13 PCS rounds, 6,086 combined. The standalone PCS protocol
-uses 14 rounds because its boundary authenticates the complete GKR claims before continuation.
+The state-free proof uses 6,073 hash-GKR rounds plus 13 PCS rounds, 6,086 combined. The
+state-composed shape adds 25 authenticated state-relation rounds and two state claims, reaching
+seven total claims and 6,111 combined rounds. The standalone PCS protocol uses 14 rounds because
+its boundary authenticates the complete GKR claims before continuation. The state-composed shape
+has no new manifest-bound K128/K512 performance or qualification credit.
 
 ## Trust boundary
 
@@ -61,7 +64,8 @@ no partial proof or challenge tail is resumed.
 - M31 base field and reviewed degree-16 Fp16 tower.
 - SHA3-512 authoritative commitments, transcript domains, manifests, and receipts.
 - Seven explicit B=16 Keccak layers repeated over 24 rounds and 168 layers.
-- One output plus four relay-free input claims.
+- State-free hash bus: one output plus four relay-free input claims; state-composed H4 adds two
+  state claims to the same PCS row binding.
 - 508 native GKR mask constraints per shard.
 - 80 claim-component plus 64 mask states in the compact row relation.
 - Construction 8.2 random-padded interleaved Reed--Solomon PCS.
@@ -76,7 +80,7 @@ All values are decimal MB.
 
 | Allocation/measurement | Value |
 | --- | ---: |
-| Five-claim row state | 7.864320 |
+| Five-claim state-free row state | 7.864320 |
 | Simultaneous GKR-mask rows | 4.194304 |
 | Total joined row state | 12.058624 |
 | GKR-mask coefficients/codewords | 2.097152 / 33.554432 |
@@ -88,6 +92,16 @@ All values are decimal MB.
 | Scratch | 0.000000 |
 
 The hard gates remain 5,000 MB maximum host RSS, scratch strictly below 5,000 MB, and no swap.
+
+## State-GKR composition seam
+
+`src/state_relation_gkr.rs` proves a fixed compact relation over 4,096 groups and 64 source wires.
+The H4 bridge places it at wire offset 1,600, lifts two local terminals into the exact 24-coordinate
+H4 PCS geometry, and authenticates a canonical 16,777,216-byte private source. The implemented
+relation checks operation/snapshot field equality, Boolean presence, and empty-slot zeroing. It is
+not yet the complete state relation: operation order, uniqueness, membership/absence, and
+money/state conservation remain Gate 2E obligations. State-free and state-composed transcripts
+share one fixed public shape; the state-free branch carries zero state claims/source digest.
 
 ## Source ownership
 

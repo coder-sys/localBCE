@@ -1,6 +1,6 @@
 # Proof provenance
 
-Updated: 2026-07-22
+Updated: 2026-08-02
 
 This archive does not include generated Cairo build outputs, execution traces, or proof JSON files. Those outputs are intentionally excluded because they are large/generated artifacts and can become stale.
 
@@ -11,6 +11,13 @@ construction in `docs/CURRENT_TECH_STACK.md`. Complete one-run H4 K128 and K512 
 through independent verification in 29.974129 and 120.460733 seconds. H5 repeated p95 and H6 suite
 qualification have not run, so `proofSuiteId` remains null. Cairo, removed RISC Zero/Stwo backends,
 and the 28,643,096-byte regression kernel are historical or differential evidence only.
+
+The current source also contains a nonactivating seven-claim state-composed H4 transcript seam:
+6,073 hash-GKR rounds, 25 state-relation rounds, and 13 PCS rounds for 6,111 total. The state lane
+uses a fixed 64-wire source slice and two boundary-one PCS claims. Its current algebra covers only
+operation/snapshot equality, Boolean presence, and empty-slot zeroing; full state semantics, backend
+admission, simulator/leakage closure, H5, and H6 remain open. No state-composed proof artifact or
+qualification credit is recorded here.
 
 The CBAM, state-topology alternatives, conflict-DAG scheduler, WHIR/STIR bake-off, three-plane
 Shout-like/Twist-like/GKR memory-proof candidate, VEIL hiding wrapper, Neo/SuperNeo or Hachi

@@ -8,6 +8,10 @@ use crate::multilinear_pcs::{
     MLPCS_INPUT_LOG_SIZE, MultilinearOpeningClaim, PackedGkrInputClaims, PackedGkrOutputClaim,
 };
 use crate::packed_boolean_sumcheck::PACK_BITS;
+use crate::state_relation_gkr::{
+    STATE_RELATION_WIRE_VARIABLES, StateRelationGkrProof, state_relation_input_claims,
+    verify_state_relation_gkr,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GkrPcsBridgeError {
@@ -15,6 +19,7 @@ pub enum GkrPcsBridgeError {
     PointDimension,
     Coefficient,
     WireVariables,
+    StateRelation,
 }
 
 impl fmt::Display for GkrPcsBridgeError {
@@ -84,6 +89,32 @@ pub fn bind_repeated_pack_gkr_output(
         shard_query,
         wire_variables,
     })
+}
+
+/// Bind the proof-native compact state relation to the exact selected PCS
+/// input geometry. The relation has six wire variables and twelve fixed
+/// state-row variables; the remaining three packed variables belong to the
+/// shared PCS shard interpolation. The proof is verified before its
+/// terminals cross this boundary, so a caller cannot turn raw terminal values
+/// into a receipt field by host-side equality.
+pub fn bind_state_relation_gkr_terminals(
+    proof: &StateRelationGkrProof,
+    shard_query: Fp16,
+) -> Result<PackedGkrInputClaims, GkrPcsBridgeError> {
+    verify_state_relation_gkr(proof).map_err(|_| GkrPcsBridgeError::StateRelation)?;
+    let claims = state_relation_input_claims(proof, shard_query)
+        .map_err(|_| GkrPcsBridgeError::StateRelation)?;
+    let expected_base_variables =
+        usize::from(MLPCS_INPUT_LOG_SIZE) - PACK_BITS.trailing_zeros() as usize;
+    if claims.wire_variables != STATE_RELATION_WIRE_VARIABLES as u8
+        || claims.claims.iter().any(|claim| {
+            claim.point.len() != expected_base_variables
+                || claim.point.len() != STATE_RELATION_WIRE_VARIABLES + proof.group_challenges.len()
+        })
+    {
+        return Err(GkrPcsBridgeError::StateRelation);
+    }
+    Ok(claims)
 }
 
 #[cfg(test)]

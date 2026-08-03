@@ -2,7 +2,7 @@
 
 Original qualification decision: 2026-07-12
 
-Updated: 2026-07-31
+Updated: 2026-08-02
 
 Status: the removed RISC Zero qualification remains dated historical evidence only. Its active
 selection and source tree are superseded by `docs/CURRENT_TECH_STACK.md` and the rejection record
@@ -46,6 +46,11 @@ direct-SHA3-STARK layouts remain retired. These one-run results do not select th
 selection, the complete simulator/composition ledger, H5/H6, and the final identities remain open.
 No backend is selected merely because a toy, kernel, component, or single successful proof is fast
 or small.
+
+The current H4 state-composed bridge is a fixed-shape seven-claim, 6,111-round integration seam
+with two state PCS claims and a 25-round state-GKR prelude. It remains nonactivating: the relation
+currently covers operation/snapshot equality, Boolean presence, and empty-slot zeroing, while full
+state semantics, complete simulator/leakage closure, backend admission, H5, and H6 remain open.
 
 R24's exact pre-implementation continuation is
 `docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md`. It permanently rejects the current

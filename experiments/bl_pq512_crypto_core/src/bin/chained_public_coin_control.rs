@@ -9,7 +9,7 @@ use bl_pq512_crypto_core::fp16_relay_free_gkr_schedule::{
     COMBINED_ROUNDS as ARCHITECTURE_ROUNDS, GKR_CLAIM_MIX_ROUNDS, GKR_GROUP_ROUNDS_PER_LAYER,
     GKR_LAYERS, GKR_MASK_BATCH_ROUNDS, GKR_OUTPUT_QUERY_ROUNDS, GKR_ROUNDS,
     GKR_WIRE_ROUNDS_PER_KECCAK_ROUND, KECCAK_ROUNDS, PCS_DOWNSTREAM_ROUNDS as PCS_VECTOR_ROUNDS,
-    SelectedGkrRoundKind, WIRE_ROUNDS_BY_LAYER, selected_gkr_round_kind,
+    STATE_RELATION_ROUNDS, SelectedGkrRoundKind, WIRE_ROUNDS_BY_LAYER, selected_gkr_round_kind,
     selected_gkr_round_output_count,
 };
 use sha3::{Digest, Sha3_512};
@@ -42,7 +42,21 @@ fn descriptor(round: u32, round_count: u32) -> ChainedRoundDescriptor {
                     .expect("GKR output count is total"),
             };
         }
-        let pcs_round = round - GKR_ROUNDS;
+        if round < GKR_ROUNDS + STATE_RELATION_ROUNDS {
+            let state_round = round - GKR_ROUNDS;
+            return ChainedRoundDescriptor {
+                kind: if state_round == 0 {
+                    120
+                } else if state_round <= 12 {
+                    121
+                } else {
+                    122
+                },
+                ordinal: round,
+                output_count: if state_round == 0 { 18 } else { 1 },
+            };
+        }
+        let pcs_round = round - GKR_ROUNDS - STATE_RELATION_ROUNDS;
         return ChainedRoundDescriptor {
             kind: match pcs_round {
                 0 => 799,
@@ -74,9 +88,20 @@ fn message(round: u32, round_count: u32) -> Vec<u8> {
             SelectedGkrRoundKind::MaskBatch => 64,
             SelectedGkrRoundKind::OutputQuery => unreachable!("round zero handled separately"),
         }
-    } else if round_count == ARCHITECTURE_ROUNDS && round >= GKR_ROUNDS {
-        match round - GKR_ROUNDS {
-            // The last GKR challenge is reused as the five-claim batching
+    } else if round_count == ARCHITECTURE_ROUNDS
+        && round >= GKR_ROUNDS
+        && round < GKR_ROUNDS + STATE_RELATION_ROUNDS
+    {
+        if round == GKR_ROUNDS {
+            64 + 64 + 2
+        } else if round < GKR_ROUNDS + 13 {
+            64 + 2 + 4 * 64
+        } else {
+            64 + 2 + 3 * 64
+        }
+    } else if round_count == ARCHITECTURE_ROUNDS && round >= GKR_ROUNDS + STATE_RELATION_ROUNDS {
+        match round - GKR_ROUNDS - STATE_RELATION_ROUNDS {
+            // The last GKR challenge is reused as the seven-claim batching
             // challenge. The first downstream message fixes those claims and
             // that challenge before the independent coordinate batching
             // challenge is released.
@@ -214,13 +239,14 @@ mod tests {
         assert_eq!(GKR_LAYERS, 168);
         assert_eq!(GKR_ROUNDS, 6_073);
         assert_eq!(PCS_VECTOR_ROUNDS, 13);
-        assert_eq!(ARCHITECTURE_ROUNDS, 6_086);
+        assert_eq!(STATE_RELATION_ROUNDS, 25);
+        assert_eq!(ARCHITECTURE_ROUNDS, 6_111);
         assert_eq!(descriptor(0, ARCHITECTURE_ROUNDS).output_count, 27);
     }
 
     #[test]
     fn downstream_pcs_descriptors_are_complete_and_ordered() {
-        let kinds = (GKR_ROUNDS..ARCHITECTURE_ROUNDS)
+        let kinds = ((GKR_ROUNDS + STATE_RELATION_ROUNDS)..ARCHITECTURE_ROUNDS)
             .map(|round| descriptor(round, ARCHITECTURE_ROUNDS).kind)
             .collect::<Vec<_>>();
         assert_eq!(
@@ -245,10 +271,14 @@ mod tests {
                 );
             }
         }
-        assert_eq!(message(GKR_ROUNDS, ARCHITECTURE_ROUNDS).len(), 328);
-        assert_eq!(message(GKR_ROUNDS + 1, ARCHITECTURE_ROUNDS).len(), 328);
+        assert_eq!(message(GKR_ROUNDS, ARCHITECTURE_ROUNDS).len(), 130);
+        assert_eq!(message(GKR_ROUNDS + 1, ARCHITECTURE_ROUNDS).len(), 322);
         assert_eq!(
-            message(GKR_ROUNDS + 2, ARCHITECTURE_ROUNDS).len(),
+            message(GKR_ROUNDS + STATE_RELATION_ROUNDS, ARCHITECTURE_ROUNDS).len(),
+            328
+        );
+        assert_eq!(
+            message(GKR_ROUNDS + STATE_RELATION_ROUNDS + 2, ARCHITECTURE_ROUNDS).len(),
             16 + 2_048 * 64
         );
     }

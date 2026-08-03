@@ -27,7 +27,7 @@ pub const WORDS_PER_BOUNDARY: usize = 1 << WORD_VARIABLES;
 pub const BOUNDARY_COUNT: usize = 2;
 pub const INTERLEAVED_WORDS: usize = BOUNDARY_COUNT * WORDS_PER_BOUNDARY;
 pub const OUTPUT_CLAIM_COUNT: usize = 1;
-pub const INPUT_CLAIM_COUNT: usize = 4;
+pub const INPUT_CLAIM_COUNT: usize = 6;
 pub const GKR_CLAIM_COUNT: usize = OUTPUT_CLAIM_COUNT + INPUT_CLAIM_COUNT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

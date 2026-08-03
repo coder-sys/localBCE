@@ -13,15 +13,22 @@ use bl_pq512_crypto_core::{
     },
     chained_public_coin_client::ChainedPublicCoinCoordinator,
     field::Fp16,
-    fp16_relay_free_gkr_schedule::{GKR_TRANSCRIPT_ROUNDS, SelectedGkrRoundKind},
+    fp16_relay_free_gkr_schedule::{
+        GKR_TRANSCRIPT_ROUNDS, STATE_RELATION_ROUNDS, SelectedGkrRoundKind,
+    },
     fp16_relay_free_gkr_uniform::{
         UniformRelayFreeClaim, UniformRelayFreeGkrError, complete_uniform_gkr_mask_batch,
         prove_masked_nonuniform_trace, prove_masked_uniform_zero_trace,
         verify_masked_nonuniform_trace, verify_masked_uniform_zero_trace,
     },
+    fp16_zk_rs_gkr_binding::GKR_CLAIM_COUNT,
     hash_bus_b16_boundary::HashBusB16BoundaryFile,
     hash_bus_b16_gkr_plan::HashBusB16GkrPlan,
     hash_bus_b16_gkr_worker::HashBusB16GkrWorker,
+    state_relation_gkr::{
+        StateRelationGkrError, StateRelationRoundKind, prove_state_relation_gkr_interactive,
+        read_state_relation_wire_source, state_relation_h4_input_claims, verify_state_relation_gkr,
+    },
 };
 use sha3::{Digest, Sha3_512};
 
@@ -38,6 +45,11 @@ const PCS_ROW_CHALLENGES: usize = 9;
 const BASE_MASKS_PREFIX: &[u8] = b"BL/PQ512/FP16-ZK-RS/BASE-MASKS/v2";
 const MAX_ROUNDS: u32 = 65_535;
 const MAX_MESSAGE_LENGTH: usize = 1 << 20;
+const STATE_RELATION_OUTPUT_COUNT: u16 = 18;
+const STATE_RELATION_OUTPUT_KIND: u16 = 120;
+const STATE_RELATION_GROUP_KIND: u16 = 121;
+const STATE_RELATION_WIRE_KIND: u16 = 122;
+const STATE_RELATION_DIGEST_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/STATE-RELATION-TRANSCRIPT/v1\0";
 
 struct GkrPcsContext {
     commitment: [u8; 64],
@@ -56,6 +68,7 @@ enum GkrPrelude {
         python: PathBuf,
         worker: PathBuf,
         eager: bool,
+        state_source: Option<(PathBuf, [u8; 64])>,
     },
 }
 
@@ -83,6 +96,25 @@ fn run() -> Result<(), String> {
                 python: PathBuf::from(python),
                 worker: PathBuf::from(worker),
                 eager: flag == "--gkr-prelude-nonuniform-eager",
+                state_source: None,
+            }
+        }
+        [flag, boundary, shard, python, worker, source, digest]
+            if flag == "--gkr-prelude-nonuniform" || flag == "--gkr-prelude-nonuniform-eager" =>
+        {
+            GkrPrelude::Nonuniform {
+                boundary: PathBuf::from(boundary),
+                shard: shard
+                    .to_string_lossy()
+                    .parse()
+                    .map_err(|_| "gkr_shard".to_string())?,
+                python: PathBuf::from(python),
+                worker: PathBuf::from(worker),
+                eager: flag == "--gkr-prelude-nonuniform-eager",
+                state_source: Some((
+                    PathBuf::from(source),
+                    parse_digest(digest.to_string_lossy().as_ref())?,
+                )),
             }
         }
         _ => return Err("arguments".to_string()),
@@ -102,6 +134,7 @@ fn run() -> Result<(), String> {
             python,
             worker,
             eager: true,
+            ..
         } => Some(prepare_nonuniform(boundary, *shard, python, worker)?),
         _ => None,
     };
@@ -144,8 +177,15 @@ fn run() -> Result<(), String> {
     let mut first_external_ordinal = 0_u32;
     let mut gkr_pcs_context = None;
     let mut gkr_verification = None;
+    let mut state_relation_digest = [0_u8; 64];
+    let mut state_relation_claims = [dummy_state_claim(), dummy_state_claim()];
     if let Some((commitment, coefficients)) = gkr_input {
-        if round_count != GKR_TRANSCRIPT_ROUNDS + 14 {
+        let state_source = match &gkr_prelude {
+            GkrPrelude::Nonuniform { state_source, .. } => state_source.as_ref(),
+            _ => None,
+        };
+        let expected_round_count = GKR_TRANSCRIPT_ROUNDS + 1 + STATE_RELATION_ROUNDS + 13;
+        if round_count != expected_round_count {
             return Err("gkr_round_count".to_string());
         }
         let mut ordinal = 0_u32;
@@ -235,6 +275,84 @@ fn run() -> Result<(), String> {
         if ordinal != GKR_TRANSCRIPT_ROUNDS + 1 {
             return Err("gkr_ordinal".to_string());
         }
+        emitted.extend(proof.rounds.iter().map(|round| round.outputs.clone()));
+        let state_source_digest =
+            state_source.map_or([0_u8; 64], |(_, source_digest)| *source_digest);
+        let source = if let Some((source_path, source_digest)) = state_source {
+            read_state_relation_wire_source(source_path, *source_digest)
+                .map_err(|error| format!("state_relation_source:{error:?}"))?
+        } else {
+            vec![Fp16::ZERO; 1 << 18]
+        };
+        let output_message = state_relation_output_message(state_source_digest);
+        let output = coordinator
+            .challenge(
+                ChainedRoundDescriptor {
+                    kind: STATE_RELATION_OUTPUT_KIND,
+                    ordinal,
+                    output_count: STATE_RELATION_OUTPUT_COUNT,
+                },
+                &output_message,
+            )
+            .map_err(|error| format!("state_relation_output_coin:{error:?}"))?;
+        if output.len() != usize::from(STATE_RELATION_OUTPUT_COUNT) || output[0].is_zero() {
+            return Err("state_relation_output_shape".to_string());
+        }
+        emitted.push(output.clone());
+        let shard_query = output[0];
+        let output_point = output[1..].to_vec();
+        ordinal += 1;
+        let state_proof = prove_state_relation_gkr_interactive(
+            &source,
+            output_point,
+            |kind, round, published| {
+                let descriptor_kind = match kind {
+                    StateRelationRoundKind::Group => STATE_RELATION_GROUP_KIND,
+                    StateRelationRoundKind::Wire => STATE_RELATION_WIRE_KIND,
+                };
+                let message = state_relation_round_message(
+                    state_source_digest,
+                    descriptor_kind,
+                    round,
+                    published,
+                );
+                let outputs = coordinator
+                    .challenge(
+                        ChainedRoundDescriptor {
+                            kind: descriptor_kind,
+                            ordinal,
+                            output_count: 1,
+                        },
+                        &message,
+                    )
+                    .map_err(|_| StateRelationGkrError::Shape)?;
+                if outputs.len() != 1 {
+                    return Err(StateRelationGkrError::Shape);
+                }
+                emitted.push(outputs.clone());
+                ordinal += 1;
+                Ok(outputs[0])
+            },
+        )
+        .map_err(|error| format!("state_relation_prove:{error:?}"))?;
+        verify_state_relation_gkr(&state_proof)
+            .map_err(|error| format!("state_relation_verify:{error:?}"))?;
+        if state_source.is_some() {
+            let claims = state_relation_h4_input_claims(&state_proof, shard_query)
+                .map_err(|error| format!("state_relation_claims:{error:?}"))?;
+            state_relation_claims = claims.map(|claim| UniformRelayFreeClaim {
+                shard_query: claim.shard_query,
+                point: claim.point,
+                value: claim.value,
+                coefficient: Fp16::ONE,
+            });
+            state_relation_digest =
+                state_relation_transcript_digest(state_source_digest, &state_proof, shard_query);
+        }
+        let expected_external_ordinal = GKR_TRANSCRIPT_ROUNDS + 1 + STATE_RELATION_ROUNDS;
+        if ordinal != expected_external_ordinal {
+            return Err("state_relation_ordinal".to_string());
+        }
         let proof = Arc::new(proof);
         let batch = Arc::new(batch);
         let verification_proof = Arc::clone(&proof);
@@ -252,7 +370,6 @@ fn run() -> Result<(), String> {
             coefficient_weights: batch.coefficient_weights.clone(),
             row_challenges: Vec::with_capacity(PCS_ROW_CHALLENGES),
         });
-        emitted.extend(proof.rounds.iter().map(|round| round.outputs.clone()));
         first_external_ordinal = ordinal;
         writer
             .write_all(GKR_READY_MAGIC)
@@ -269,6 +386,12 @@ fn run() -> Result<(), String> {
         for claim in &proof.raw_input_claims {
             write_gkr_claim(&mut writer, 1, claim)?;
         }
+        for claim in &state_relation_claims {
+            write_gkr_claim(&mut writer, 1, claim)?;
+        }
+        writer
+            .write_all(&state_relation_digest)
+            .map_err(|error| format!("state_relation_digest:{error}"))?;
         writer
             .flush()
             .map_err(|error| format!("gkr_flush:{error}"))?;
@@ -477,7 +600,7 @@ fn gkr_terminal_digest(context: &GkrPcsContext) -> Result<[u8; 64], String> {
         return Err("gkr_terminal_shape".to_string());
     }
     let mut scale = Fp16::ONE;
-    for _ in 0..5 {
+    for _ in 0..GKR_CLAIM_COUNT {
         scale = scale * context.claim_challenge;
     }
     let mut hash = Sha3_512::new();
@@ -496,6 +619,105 @@ fn gkr_terminal_digest(context: &GkrPcsContext) -> Result<[u8; 64], String> {
         hash.update((layer[0] * scale).encode());
     }
     Ok(hash.finalize().into())
+}
+
+fn parse_digest(encoded: &str) -> Result<[u8; 64], String> {
+    if encoded.len() != 128 {
+        return Err("state_relation_digest_length".to_string());
+    }
+    let bytes = (0..64)
+        .map(|index| {
+            u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16)
+                .map_err(|_| "state_relation_digest_encoding".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let digest: [u8; 64] = bytes
+        .try_into()
+        .map_err(|_| "state_relation_digest_shape".to_string())?;
+    if !digest.iter().any(|byte| *byte != 0) {
+        return Err("state_relation_digest_zero".to_string());
+    }
+    Ok(digest)
+}
+
+fn dummy_state_claim() -> UniformRelayFreeClaim {
+    UniformRelayFreeClaim {
+        shard_query: Fp16::ONE,
+        point: vec![Fp16::ZERO; 24],
+        value: Fp16::ZERO,
+        coefficient: Fp16::ONE,
+    }
+}
+
+fn state_relation_output_message(source_digest: [u8; 64]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(STATE_RELATION_DIGEST_DOMAIN.len() + 64 + 8);
+    message.extend_from_slice(STATE_RELATION_DIGEST_DOMAIN);
+    message.extend_from_slice(b"OUTPUT\0");
+    message.extend_from_slice(&source_digest);
+    message.extend_from_slice(&STATE_RELATION_OUTPUT_COUNT.to_be_bytes());
+    message
+}
+
+fn state_relation_round_message(
+    source_digest: [u8; 64],
+    kind: u16,
+    round: usize,
+    published: &[Fp16],
+) -> Vec<u8> {
+    let mut message =
+        Vec::with_capacity(STATE_RELATION_DIGEST_DOMAIN.len() + 64 + 2 + 4 + published.len() * 64);
+    message.extend_from_slice(STATE_RELATION_DIGEST_DOMAIN);
+    message.extend_from_slice(&source_digest);
+    message.extend_from_slice(&kind.to_be_bytes());
+    message.extend_from_slice(
+        &u32::try_from(round)
+            .expect("state relation round fits u32")
+            .to_be_bytes(),
+    );
+    for value in published {
+        message.extend_from_slice(&value.encode());
+    }
+    message
+}
+
+fn state_relation_transcript_digest(
+    source_digest: [u8; 64],
+    proof: &bl_pq512_crypto_core::state_relation_gkr::StateRelationGkrProof,
+    shard_query: Fp16,
+) -> [u8; 64] {
+    let mut hash = Sha3_512::new();
+    hash.update(STATE_RELATION_DIGEST_DOMAIN);
+    hash.update(source_digest);
+    hash.update(shard_query.encode());
+    hash.update(
+        u32::try_from(proof.output_claim.point.len())
+            .expect("state relation output point fits u32")
+            .to_be_bytes(),
+    );
+    for value in &proof.output_claim.point {
+        hash.update(value.encode());
+    }
+    hash.update(proof.output_claim.value.encode());
+    hash.update(proof.output_claim.coefficient.encode());
+    for challenge in &proof.group_challenges {
+        hash.update(challenge.encode());
+    }
+    for challenge in &proof.wire_challenges {
+        hash.update(challenge.encode());
+    }
+    for round in &proof.layer.group_rounds {
+        for value in round {
+            hash.update(value.encode());
+        }
+    }
+    for value in &proof.layer.wire_proof.rounds {
+        for coordinate in value {
+            hash.update(coordinate.encode());
+        }
+    }
+    hash.update(proof.layer.wire_proof.terminal_left.encode());
+    hash.update(proof.layer.wire_proof.terminal_right.encode());
+    hash.finalize().into()
 }
 
 fn gkr_round_code(kind: SelectedGkrRoundKind) -> u16 {

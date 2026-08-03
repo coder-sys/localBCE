@@ -1,4 +1,4 @@
-"""Deterministic five-claim fixture shared by current host verifier KATs."""
+"""Deterministic seven-claim fixture shared by current host verifier KATs."""
 
 import cuda_fp16_zk_rs_interleaved_k128_prototype as core
 from cuda_fp16_tower_kat import add, mul16, sub
@@ -172,4 +172,16 @@ def fixture_claims_and_rows():
             )
         )
         all_rows.append(rows)
+    for _ in range(2):
+        claims.append(
+            (
+                1,
+                ONE,
+                ZERO,
+                ONE,
+                (ZERO,) * 24,
+                (ZERO,) * 16,
+            )
+        )
+        all_rows.append(tuple((ZERO,) * 16 for _ in range(INTERLEAVINGS)))
     return tuple(claims), tuple(all_rows)

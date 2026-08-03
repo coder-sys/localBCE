@@ -5653,3 +5653,39 @@ not Gate 2E admission. The full state relation remains outside the custom H4 GKR
 no reviewed PQ commitment backend is admitted, the complete simulator/leakage/security ledger is
 open, H5's exact 22 launches have not started, H6 is open, `proofSuiteId=null`, activation=false,
 no production CUDA proof was run, and no real PHI/payments are authorized.
+
+## 2026-08-02 H4 state-GKR transcript seam and active-document reconciliation - VERIFIED, NONACTIVATING
+
+This section records the current post-6fd4d source boundary. The protected paths were not edited.
+The work was intentionally limited to the H4 state-GKR integration seam and its documentation; it
+does not claim Wave 2 completion, Gate 2E admission, H5, H6, activation, or `proofSuiteId`.
+
+The hash-bus H4 shape remains five claims and 6,086 rounds state-free. When a state source is
+supplied, the native bridge runs a fixed 25-round state-GKR prelude, adds two boundary-one PCS
+claims, and uses seven claims/6,111 total rounds. The state relation uses 4,096 groups, 64 source
+wires, H4 wire offset 1,600, and a canonical 16,777,216-byte private source. Its current algebra
+proves operation/snapshot field equality, Boolean presence, and empty-slot zeroing. Full index/order,
+uniqueness, membership/absence, money/state conservation, backend admission, simulator/leakage
+closure, state-composed performance, H5, and H6 remain open.
+
+Focused executable evidence:
+
+```text
+cargo test --release --offline --locked --lib state_relation_gkr --features std,parallel
+6 passed; 0 failed
+cargo test --release --offline --locked --lib fp16_zk_rs_gkr_binding --features std,parallel
+4 passed; 0 failed
+cargo test --release --offline --locked --bin k512_atomic_semantic_prototype --features std,parallel
+6 passed; 0 failed
+cargo test --release --offline --locked --bin chained_public_coin_control --features std,parallel
+3 passed; 0 failed
+python cuda/fp16_zk_rs_same_chain_bridge_kat.py
+status=verified; gkr_rounds=6098; combined_rounds=6111; independent_bundle_replay=true
+python cuda/fp16_zk_rs_answer_target_verify_kat.py
+construction7_answer_target_verified=true; target_mutation_rejected=true; gkr_relation_terminal_mutation_rejected=true
+complete_proof_qualification=false
+```
+
+Active architecture, roadmap, current-stack, security, optimization, provenance, and crate-guide
+documents were reconciled to this boundary. Historical `STATE.md` sections and `docs/history/` were
+left intact as provenance rather than duplicated or relabeled as current evidence.

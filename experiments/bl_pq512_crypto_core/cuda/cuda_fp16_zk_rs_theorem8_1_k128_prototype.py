@@ -54,7 +54,7 @@ AUX_QUERY_COUNT = 1_218
 QUERY_DOMAIN = 524
 ZERO = (0,) * 16
 ONE = (1,) + (0,) * 15
-GKR_CLAIM_COUNT = 5
+GKR_CLAIM_COUNT = 7
 GKR_POINT_VARIABLES = 24
 GKR_LOW_VARIABLES = 16
 GKR_HIGH_VARIABLES = 8
@@ -68,7 +68,9 @@ AUXILIARY_LEAF_SIZE = AUXILIARY_WORDS * core.FP16_BYTES
 WORDS_PER_BOUNDARY = 256
 HASH_BUS_B16_HEADER_BYTES = 215
 HASH_BUS_B16_SHARD_BYTES = 2 * 1_600 * 8_192 * 2
-PUBLIC_COIN_ROUNDS = 6_086
+STATE_RELATION_TRANSCRIPT_ROUNDS = 25
+GKR_PRELUDE_ROUNDS = 6_073 + STATE_RELATION_TRANSCRIPT_ROUNDS
+PUBLIC_COIN_ROUNDS = GKR_PRELUDE_ROUNDS + 13
 
 
 IOPP_KERNEL = r"""
@@ -88,7 +90,8 @@ extern "C" __global__ void initialize_b16_semantic_rs_coefficients(
     u32 batch,
     u32 boundary,
     u32 segment,
-    const unsigned short *patterns
+    const unsigned short *patterns,
+    const u32 *state_values
 ) {
     u64 code_values = 1ULL << log_code;
     u64 count = (u64)batch * code_values;
@@ -113,6 +116,22 @@ extern "C" __global__ void initialize_b16_semantic_rs_coefficients(
             #pragma unroll
             for (u32 coordinate = 0U; coordinate < 16U; ++coordinate) {
                 output[coordinate] = (pattern >> coordinate) & 1U;
+            }
+        } else if (
+            state_values != NULL
+            && boundary == 1U
+            && wire < 1664U
+            && group_low < 32U
+        ) {
+            u32 global_word = segment * batch + word;
+            u32 group = (global_word << 5U) | group_low;
+            if (group < 4096U) {
+                u64 source =
+                    ((u64)(wire - 1600U) * 4096ULL + group) * 16ULL;
+                #pragma unroll
+                for (u32 coordinate = 0U; coordinate < 16U; ++coordinate) {
+                    output[coordinate] = state_values[source + coordinate];
+                }
             }
         }
     } else if (position < message_values + mask_coefficients) {
@@ -164,6 +183,7 @@ extern "C" __global__ void multilinear_coefficient_weights(
  */
 extern "C" __global__ void semantic_component_multilinear_evaluations(
     const unsigned short *patterns,
+    const u32 *state_values,
     const u32 *weights,
     u32 *output,
     u32 point_count
@@ -196,6 +216,27 @@ extern "C" __global__ void semantic_component_multilinear_evaluations(
                     l16(
                         weights
                         + 16ULL * ((u64)point * 65536ULL + position)
+                    )
+                );
+            }
+        } else if (
+            state_values != NULL
+            && boundary == 1U
+            && wire < 1664U
+            && group_low < 32U
+        ) {
+            u32 group = (word << 5U) | group_low;
+            if (group < 4096U) {
+                u64 source =
+                    ((u64)(wire - 1600U) * 4096ULL + group) * 16ULL;
+                accumulator = a16(
+                    accumulator,
+                    m16(
+                        l16(
+                            weights
+                            + 16ULL * ((u64)point * 65536ULL + position)
+                        ),
+                        l16(state_values + source + component)
                     )
                 );
             }
@@ -1341,6 +1382,7 @@ class NativePublicCoinBridge:
         semantic_shard,
         semantic_python,
         semantic_worker,
+        state_relation_source,
         gkr_prelude,
         eager,
     ):
@@ -1350,17 +1392,22 @@ class NativePublicCoinBridge:
         if semantic_boundary is not None:
             command.extend(
                 (
-                    (
-                        "--gkr-prelude-nonuniform-eager"
-                        if eager
-                        else "--gkr-prelude-nonuniform"
-                    ),
+                    "--gkr-prelude-nonuniform-eager"
+                    if eager
+                    else "--gkr-prelude-nonuniform",
                     str(semantic_boundary),
                     str(semantic_shard),
                     str(semantic_python),
                     str(semantic_worker),
                 )
             )
+            if state_relation_source is not None:
+                command.extend(
+                    (
+                        str(state_relation_source["path"]),
+                        state_relation_source["digest"].hex(),
+                    )
+                )
         else:
             command.append("--gkr-prelude")
         return command
@@ -1384,6 +1431,7 @@ class NativePublicCoinBridge:
         semantic_shard,
         semantic_python,
         semantic_worker,
+        state_relation_source,
     ):
         command = cls._command(
             executable,
@@ -1391,6 +1439,7 @@ class NativePublicCoinBridge:
             semantic_shard,
             semantic_python,
             semantic_worker,
+            state_relation_source,
             True,
             True,
         )
@@ -1419,6 +1468,7 @@ class NativePublicCoinBridge:
         semantic_shard=0,
         semantic_python=None,
         semantic_worker=None,
+        state_relation_source=None,
         prepared=None,
     ):
         gkr_prelude = gkr_mask_commitment is not None
@@ -1442,6 +1492,7 @@ class NativePublicCoinBridge:
             semantic_shard,
             semantic_python,
             semantic_worker,
+            state_relation_source,
             gkr_prelude,
             prepared is not None,
         )
@@ -1469,6 +1520,7 @@ class NativePublicCoinBridge:
         self.gkr_claim_challenge = None
         self.gkr_mask_weights = None
         self.gkr_raw_claims = None
+        self.gkr_state_relation_digest = b"\0" * 64
         self.process.stdin.write(
             b"BLPCCN01"
             + session_id
@@ -1552,7 +1604,16 @@ class NativePublicCoinBridge:
                     )
                 )
             self.gkr_raw_claims = tuple(claims)
-            self.round = 6_073
+            self.gkr_state_relation_digest = read_exact_pipe(
+                self.process.stdout,
+                64,
+                "public_coin_state_relation_digest",
+            )
+            if self.gkr_state_relation_digest == b"\0" * 64:
+                if os.environ.get("BL_STATE_RELATION_SOURCE_PATH") is not None:
+                    self.abort()
+                    raise SystemExit("public_coin_state_relation_digest_missing")
+            self.round = GKR_PRELUDE_ROUNDS
         self.prelude_complete = True
 
     def challenge(self, kind, message, output_count=1):
@@ -2950,6 +3011,53 @@ def load_semantic_b16_shard(path, shard):
     }
 
 
+def load_state_relation_source():
+    encoded_path = os.environ.get("BL_STATE_RELATION_SOURCE_PATH")
+    encoded_digest = os.environ.get("BL_STATE_RELATION_SOURCE_SHA3_512")
+    if encoded_path is None and encoded_digest is None:
+        return None
+    if encoded_path is None or encoded_digest is None:
+        raise SystemExit("state_relation_source_environment")
+    path = Path(encoded_path)
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit("state_relation_source_path")
+    if len(encoded_digest) != 128:
+        raise SystemExit("state_relation_source_digest_length")
+    try:
+        expected_digest = bytes.fromhex(encoded_digest)
+    except ValueError as error:
+        raise SystemExit("state_relation_source_digest_encoding") from error
+    if len(expected_digest) != 64 or not any(expected_digest):
+        raise SystemExit("state_relation_source_digest_shape")
+    expected_bytes = 4_096 * 64 * core.FP16_BYTES
+    if path.stat().st_size != expected_bytes:
+        raise SystemExit("state_relation_source_size")
+    digest = hashlib.sha3_512(
+        b"BL/PQ512/WAVE2/STATE-RELATION-SOURCE/v1\0"
+        + expected_bytes.to_bytes(8, "big")
+    )
+    payload = bytearray()
+    with path.open("rb") as source:
+        while True:
+            chunk = source.read(1 << 20)
+            if not chunk:
+                break
+            digest.update(chunk)
+            payload.extend(chunk)
+    actual_digest = digest.digest()
+    if actual_digest != expected_digest:
+        raise SystemExit("state_relation_source_digest_mismatch")
+    return {
+        "path": path,
+        "digest": expected_digest,
+        "words": canonical_fp16_word_array(
+            bytes(payload),
+            expected_bytes // core.FP16_BYTES,
+            "state_relation_source",
+        ),
+    }
+
+
 def atomic_parent_binding():
     encoded = os.environ.get("BL_ATOMIC_PARENT_BINDING")
     if encoded is None:
@@ -2981,6 +3089,7 @@ def atomic_state_binding():
         ("state_air_program", "BL_STATE_AIR_PROGRAM_COMMITMENT"),
         ("state_air_execution", "BL_STATE_AIR_EXECUTION_COMMITMENT"),
         ("state_air_fragment", "BL_STATE_AIR_FRAGMENT_DIGEST"),
+        ("state_relation_source", "BL_STATE_RELATION_SOURCE_SHA3_512"),
     )
     public_abi_environments = tuple(
         f"BL_STATE_PLANE_PUBLIC_ABI_{index:02}" for index in range(12)
@@ -3057,6 +3166,7 @@ def public_coin_identity(gkr_mask_root, state_binding):
             + state_binding["state_air_program"]
             + state_binding["state_air_execution"]
             + state_binding["state_air_fragment"]
+            + state_binding["state_relation_source"]
         )
     session = hashlib.sha3_512(
         b"BL/PQ512/FP16-ZK-RS/COMPLETE-SESSION/v1"
@@ -3101,6 +3211,15 @@ def main():
         raise SystemExit("usage: cuda_fp16_zk_rs_theorem8_1_k128_prototype.py")
     proof_process_started = time.perf_counter()
     state_binding = atomic_state_binding()
+    state_relation_source = load_state_relation_source()
+    if (state_binding is not None) != (state_relation_source is not None):
+        raise SystemExit("state_relation_source_binding_mismatch")
+    if (
+        state_binding is not None
+        and state_binding["state_relation_source"]
+        != state_relation_source["digest"]
+    ):
+        raise SystemExit("state_relation_source_binding_digest_mismatch")
     semantic_boundary_path = os.environ.get(
         "BL_HASH_BUS_B16_BOUNDARY"
     )
@@ -3196,6 +3315,7 @@ def main():
             semantic_shard,
             Path(sys.executable),
             semantic_worker_path,
+            state_relation_source,
         )
         try:
             semantic_source = load_semantic_b16_shard(
@@ -3262,6 +3382,7 @@ def main():
                 semantic_shard=semantic_source["shard"],
                 semantic_python=Path(sys.executable),
                 semantic_worker=semantic_worker_path,
+                state_relation_source=state_relation_source,
                 prepared=prepared_public_coin,
             )
             prepared_public_coin = None
@@ -3278,6 +3399,7 @@ def main():
     answer_code_verifier = None
     memory = None
     semantic_source_buffer = None
+    state_relation_source_buffer = None
     try:
         core.bind_driver(runtime)
         runtime.cuda.cuMemcpyDtoD_v2.argtypes = [
@@ -3391,6 +3513,14 @@ def main():
                 "upload_semantic_b16_shard",
             )
             del semantic_source["payload"]
+        if state_relation_source is not None:
+            state_relation_source_buffer = upload_fp16_word_array(
+                runtime,
+                allocator,
+                state_relation_source["words"],
+                "upload_state_relation_source",
+            )
+            del state_relation_source["words"]
         power_table_started = time.perf_counter()
         main_root_powers = core.power_table(
             runtime,
@@ -3586,6 +3716,11 @@ def main():
                         if semantic_source_buffer is not None
                         else None
                     ),
+                    initializer_auxiliary_context=(
+                        state_relation_source_buffer.pointer
+                        if state_relation_source_buffer is not None
+                        else (0 if semantic_source_buffer is not None else None)
+                    ),
                 )
                 segment = core.OracleSegment(
                     boundary,
@@ -3769,6 +3904,11 @@ def main():
                 16,
                 arguments(
                     ctypes.c_uint64(semantic_source_buffer.pointer),
+                    ctypes.c_uint64(
+                        state_relation_source_buffer.pointer
+                        if state_relation_source_buffer is not None
+                        else 0
+                    ),
                     ctypes.c_uint64(low_weights.pointer),
                     ctypes.c_uint64(component_rows_buffer.pointer),
                     ctypes.c_uint32(GKR_CLAIM_COUNT),
@@ -4221,6 +4361,7 @@ def main():
             AUX_QUERY_COUNT,
         )
         public_coin_summary = public_coin.finish()
+        gkr_state_relation_digest = public_coin.gkr_state_relation_digest
         public_coin = None
         memory.child_process_id = None
         query_coin_seconds = (
@@ -4288,6 +4429,11 @@ def main():
                     semantic_source_buffer.pointer
                     if semantic_source_buffer is not None
                     else None
+                ),
+                initializer_auxiliary_context=(
+                    state_relation_source_buffer.pointer
+                    if state_relation_source_buffer is not None
+                    else (0 if semantic_source_buffer is not None else None)
                 ),
             )
             result = core.open_retained_tree(
@@ -4458,7 +4604,7 @@ def main():
         print("paper_construction=8.2")
         print("sumcheck_rounds=9")
         print("standalone_public_coin_rounds=14")
-        print("gkr_claim_count=5")
+        print("gkr_claim_count=7")
         print("initial_interleaving=512")
         print(f"oracle_tree_count={THEOREM_SEGMENT_COUNT}")
         print("main_queries=1600")
@@ -4672,7 +4818,7 @@ def main():
         print("exact_candidate_soundness_parameter_ledger_closed=true")
         print("implementation_theorem_binding_closed=true")
         print("construction_8_2_hiding_simulator_gate_attached=true")
-        print("five_claim_row_binding_attached=true")
+        print("seven_claim_row_binding_attached=true")
         print("gkr_row_parameters_derived_in_rust=true")
         print(
             "component_rows_extracted_from_live_commitment_tile="
@@ -4689,6 +4835,30 @@ def main():
         print(
             "state_hash_bus_calls_verified="
             f"{str(state_binding is not None and semantic_source is not None).lower()}"
+        )
+        print(
+            "state_relation_gkr_attached="
+            f"{str(state_relation_source is not None).lower()}"
+        )
+        print(
+            "state_relation_source_sha3_512="
+            + (
+                state_zero
+                if state_relation_source is None
+                else state_relation_source["digest"].hex()
+            )
+        )
+        print(
+            "state_relation_gkr_digest_sha3_512="
+            + (
+                state_zero
+                if state_relation_source is None
+                else gkr_state_relation_digest.hex()
+            )
+        )
+        print(
+            "state_relation_interactive_verified="
+            f"{str(state_relation_source is not None).lower()}"
         )
         if semantic_source is not None:
             print(
@@ -4722,6 +4892,8 @@ def main():
     finally:
         if memory is not None:
             memory.stop()
+        if state_relation_source_buffer is not None:
+            allocator.free(state_relation_source_buffer)
         if verifier is not None:
             verifier.abort()
         if spotcheck_verifier is not None:

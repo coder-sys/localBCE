@@ -33,12 +33,13 @@ pub const GKR_TRANSCRIPT_ROUNDS: u32 = GKR_OUTPUT_QUERY_ROUNDS
 pub const GKR_MASK_BATCH_ROUNDS: u32 = 1;
 pub const GKR_ROUNDS: u32 = GKR_TRANSCRIPT_ROUNDS + GKR_MASK_BATCH_ROUNDS;
 
-/// The combined schedule reuses the last GKR challenge for five-claim
-/// batching. The downstream PCS still requires an independent coordinate
-/// challenge, source/mask batching, nine row-sumcheck challenges, base
-/// batching, and the query seed.
+/// The combined schedule reuses the last GKR challenge for the H4 claim
+/// batching. The state relation then consumes one output-query response and
+/// twenty-four authenticated public-coin sumcheck responses before the
+/// downstream PCS coordinate/source/mask, row, base, and query rounds.
+pub const STATE_RELATION_ROUNDS: u32 = 25;
 pub const PCS_DOWNSTREAM_ROUNDS: u32 = 13;
-pub const COMBINED_ROUNDS: u32 = GKR_ROUNDS + PCS_DOWNSTREAM_ROUNDS;
+pub const COMBINED_ROUNDS: u32 = GKR_ROUNDS + STATE_RELATION_ROUNDS + PCS_DOWNSTREAM_ROUNDS;
 
 pub const GKR_MASK_USED_COEFFICIENTS: usize = 23_544;
 pub const GKR_MASK_PADDED_COEFFICIENTS: usize = 32_768;
@@ -195,8 +196,9 @@ mod tests {
         assert_eq!(GKR_TRANSCRIPT_ROUNDS, 6_072);
         assert_eq!(GKR_MASK_BATCH_ROUNDS, 1);
         assert_eq!(GKR_ROUNDS, 6_073);
+        assert_eq!(STATE_RELATION_ROUNDS, 25);
         assert_eq!(PCS_DOWNSTREAM_ROUNDS, 13);
-        assert_eq!(COMBINED_ROUNDS, 6_086);
+        assert_eq!(COMBINED_ROUNDS, 6_111);
 
         let kinds = (0..GKR_ROUNDS)
             .map(|round| selected_gkr_round_kind(round).unwrap())

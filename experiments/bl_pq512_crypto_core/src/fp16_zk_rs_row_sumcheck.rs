@@ -5,7 +5,7 @@
 //! would exceed the engineering memory target.  Instead, the producer supplies
 //! the sixteen component-polynomial evaluations of each relevant row at each
 //! of the five fixed GKR low points.  This module converts them into eighty
-//! source/relation states: five claims times sixteen Frobenius conjugates.
+//! source/relation states: seven claims times sixteen Frobenius conjugates.
 //!
 //! Both sides of every state are folded independently.  Their product therefore
 //! produces the exact degree-two sumcheck message and preserves the cross terms

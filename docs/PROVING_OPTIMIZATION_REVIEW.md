@@ -10,17 +10,19 @@ superseded prototype sequence are preserved verbatim in
 ## Current selected baseline
 
 Blind Ledger currently uses the exact seven-layer B=16 Fp16 GKR hash coprocessor, one output plus
-four relay-free input claims, native GKR masks, Construction 8.2 random-padded interleaved-RS PCS,
-one 6,086-round dual-PQ authenticated interactive schedule, authoritative Rust verification, and
-one/four-shard atomic coordination.
+four relay-free hash input claims, native GKR masks, Construction 8.2 random-padded interleaved-RS
+PCS, the 6,086-round state-free dual-PQ authenticated schedule, authoritative Rust verification,
+and one/four-shard atomic coordination. The state-composed shape adds two state claims and 25
+authenticated rounds, reaching 6,111; its complete-boundary performance is not yet measured.
 
 Complete one-run H4 evidence is 29.974129 seconds for K128 and 120.460733 seconds for K512.
 Internal host peaks are 288.412/296.255 decimal MB; external process-tree peaks are
 681.607168/706.523136 MB; tracked device state is 969.999360 MB per proof; K512 sampled total GPU
 residency is 2,770.337792 MB; scratch and pagefile growth are zero.
 
-This baseline is prototype-accepted, not H5/H6-qualified. Gate 2E state selection and binding is the
-only current optimization dependency.
+These measurements are state-free H4 baseline evidence. The state-composed shape is an integration
+boundary only, not H5/H6-qualified. Gate 2E state selection, full state semantics, and binding are
+the current optimization dependencies.
 
 ## Decision rule
 

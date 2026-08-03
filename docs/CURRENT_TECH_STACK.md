@@ -255,6 +255,9 @@ Every implementation and optimization must preserve all of the following simulta
   on a Blind Ledger-controlled proof boundary;
 - at most 5,000,000,000 decimal bytes peak resident host memory, strictly below 5,000,000,000
   decimal bytes scratch, and no swap dependency;
+- one authenticated 6,086-round schedule for the accepted state-free H4 baseline; the
+  state-composed seven-claim shape is a separate 6,111-round nonactivating boundary until its
+  complete semantics and qualification evidence exist;
 - a stricter Wave 2 complete-proof p95 target below 30 seconds for K128/100-live and below 180
   seconds for K512/500-live. The older 60-second K128 product ceiling is not permission to weaken
   the selected 30-second engineering gate;
@@ -272,10 +275,10 @@ The H4 prototype is functionally attached for both profiles:
 | --- | --- |
 | Semantic source | Exact `BLHBB101` bounded hash-bus source |
 | Hash proof | 24 Keccak rounds, 168 layers, seven-layer/B=16 relay-free nonuniform GKR |
-| Claims | One output plus four relay-free input claims |
+| Claims | State-free hash bus: one output claim and four input claims (relay-free); state-composed H4: those five plus two state claims (seven total) |
 | Native hiding | 508 GKR mask constraints per shard |
 | PCS | Construction 8.2 random-padded interleaved Reed--Solomon, 73-word auxiliary plane |
-| Authenticated schedule | 6,073 GKR rounds plus 13 PCS rounds = 6,086 |
+| Authenticated schedule | State-free baseline: 6,073 hash-GKR rounds + 13 PCS rounds = 6,086; state-composed shape: +25 state-relation rounds = 6,111 |
 | Public coin | ML-DSA-87 plus SLH-DSA-SHAKE-256f authenticated chain |
 | Authority split | CUDA performs untrusted arithmetic; Rust parses, recomputes, replays, and verifies |
 | K128 | One shard; 29.974129 seconds complete process; 288.412 MB internal host; 969.999360 MB tracked device; 0 MB scratch |
@@ -284,6 +287,15 @@ The H4 prototype is functionally attached for both profiles:
 
 All memory values are decimal MB. These are accepted one-run H4 prototype measurements, not H5
 p95 qualification or H6 suite activation.
+
+The state-composed schedule is a fixed-shape integration boundary, not a qualification result. The
+state lane uses the same H4 source polynomial at the fixed 64-wire lane beginning at wire 1,600,
+two boundary-one PCS claims, and a private canonical source of exactly 16,777,216 bytes. The Rust
+bridge verifies the 18-coordinate local state claims after lifting them into H4's 24-coordinate
+source geometry. The state relation currently proves operation/snapshot field equality, Boolean
+presence, and empty-slot zeroing; index/order, uniqueness, membership/absence, and money/state
+conservation are still required in the complete Gate 2E composition. No state-composed K128/K512
+performance or qualification credit is claimed.
 
 ## Exact accepted H4 profiles
 
@@ -328,19 +340,23 @@ subset is forbidden.
    reuse bounded worker infrastructure but must not reuse nonlinear challenge streams, masks, proof
    fragments, or partial receipts between shards.
 5. **Run the real hash coprocessor.** For each shard, prove 24 Keccak rounds as 168 explicit
-   nonuniform layers under the seven-layer, B=16 relay-free plan. The GKR schedule contains exactly
-   6,073 authenticated challenge rounds.
-6. **Bind five relay-free claims.** The proof contains one output claim and four input claims. It
-   must not reconstruct or replay a duplicate full source merely to prove the join.
-7. **Apply native hiding.** Verify 508 native GKR mask constraints per shard and bind the GKR-mask
+   nonuniform layers under the seven-layer, B=16 relay-free plan. The hash GKR schedule contains
+   exactly 6,073 authenticated challenge rounds.
+6. **Run the state relation when state is supplied.** Authenticate the fixed state source, prove
+   its 25-round interactive relation, and expose two state input claims in the same H4 PCS boundary.
+   State-free runs execute the same 25-round shape with zero claims and zero source digest.
+7. **Bind the PCS claims.** The state-free proof contains one output claim and four hash input
+   claims; the state-composed shape adds two state claims for seven total. It must not reconstruct
+   or replay a duplicate full hash source merely to prove the join.
+8. **Apply native hiding.** Verify 508 native GKR mask constraints per shard and bind the GKR-mask
    row source/relation plus the selected auxiliary plane before dependent challenges.
-8. **Continue into Construction 8.2 PCS.** Use the random-padded interleaved Reed--Solomon
-   construction and the complete 73-word auxiliary plane. Exactly 13 PCS rounds follow GKR, making
-   one authenticated 6,086-round schedule.
-9. **Independently verify the shard.** Rust replays public coin, verifies signatures, parses every
+9. **Continue into Construction 8.2 PCS.** Use the random-padded interleaved Reed--Solomon
+   construction and the complete 73-word auxiliary plane. Exactly 13 PCS rounds follow the hash
+   and state prelude: 6,086 rounds state-free or 6,111 rounds state-composed.
+10. **Independently verify the shard.** Rust replays public coin, verifies signatures, parses every
    bounded section, recomputes authoritative SHA3-512 roots and targets, checks GKR recurrences and
    terminals, native masks, PCS openings, answer code, semantic boundary, and mutation gates.
-10. **Create one outer receipt.** After every ordered shard independently verifies, hash the parent,
+11. **Create one outer receipt.** After every ordered shard independently verifies, hash the parent,
     caller statement, ordered shard evidence, stdout/bundle identities, timing/resource fields, and
     verifier results into one atomic receipt. When state is attached, the full state context is
     included as well. A missing, reordered, duplicated, stale, or partially verified shard rejects
@@ -406,7 +422,8 @@ to this logical order:
 2. reject unsupported K256, zero statement, unexpected shard count/size, extra bytes, and unknown
    proof sections before large allocation;
 3. verify execution-manifest and parent-binding identities;
-4. verify the dual-PQ public-coin head and replay all 6,086 challenges in order;
+4. verify the dual-PQ public-coin head and replay all 6,086 state-free or 6,111 state-composed
+   challenges in order;
 5. verify semantic-source, selected-plan, claim, GKR recurrence/terminal, and native-mask bindings;
 6. verify the complete PCS tree geometry, multiproofs, openings, answer code, and target;
 7. verify every shard independently and in canonical order;

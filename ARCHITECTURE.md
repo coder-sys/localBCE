@@ -1,6 +1,6 @@
 # Blind Ledger architecture
 
-Updated: 2026-08-01
+Updated: 2026-08-02
 
 Canonical navigation: `docs/CURRENT_TECH_STACK.md` defines the current implementation inventory;
 `docs/REJECTED_ARCHITECTURES.md` is the only rejection ledger. Historical measurements in other
@@ -16,8 +16,10 @@ The current execution checkpoint is the newest dated section of `STATE.md`; the 
 boundary remains `WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 is an untrusted field-arithmetic
 accelerator, while Rust retains authoritative SHA3-512 commitment, transcript, canonical decoding,
 multiproof, answer-code, target, public-coin replay, and verification duties. The real 168-layer
-masked GKR producer, native masks, Construction 8.2 PCS, and exact 6,086-round same-chain
-coordinator now pass as one manifest-bound semantic prototype. Under the verified
+masked GKR producer, native masks, Construction 8.2 PCS, and exact 6,086-round state-free
+same-chain coordinator now pass as one manifest-bound semantic prototype. The state-composed
+coordinator has a fixed seven-claim, 6,111-round transcript shape, but has not received a new
+manifest-bound K128/K512 qualification run. Under the verified
 `2026-07-31T05:06:01.7747420-06:00` driver-reset boundary, fresh K128 and four-shard K512 proofs
 completed through independent verification in 29.974129 and 120.460733 seconds. Both accepted
 attempts had zero pagefile growth, zero scratch, empty stderr, and zero later
@@ -25,7 +27,7 @@ attempts had zero pagefile growth, zero scratch, empty stderr, and zero later
 boundary, not H5's warm-up-plus-ten p95 campaign, H6 suite qualification, or activation.
 `proofSuiteId=null` remains unchanged.
 
-The selected bounded join does not require multi-gigabyte host state. The five-claim component
+The selected state-free bounded join does not require multi-gigabyte host state. The five-claim component
 rows plus claim source/relation rows are 7.864320 MB decimal. The simultaneously live GKR-mask row
 source/relation state is 4.194304 MB, making 12.058624 MB total joined row state. The GKR mask uses
 2.097152 MB of coefficients and 33.554432 MB of auxiliary RS codewords; the complete 73-word
@@ -126,14 +128,16 @@ performance patches.
 
 The current nonactivating sub-30-second K128 implementation is section 8.3 of
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`: a bounded CPU/SIMD semantic-AIR lane runs
-concurrently with the exact seven-layer/B=16 Fp16 GPU hash lane. One output and four relay-free
-input claims bind its two committed source boundaries to the Construction 8.2 random-padded
-interleaved Reed--Solomon PCS through a compact five-claim/sixteen-coordinate quadratic row
-sumcheck, one authenticated public coin, and one atomic verifier join. The joined row state is
+concurrently with the exact seven-layer/B=16 Fp16 GPU hash lane. The state-free proof has one output
+and four relay-free hash input claims. The state-composed shape adds two state claims to the same
+Construction 8.2 random-padded interleaved Reed--Solomon PCS through the fixed seven-claim row
+binding, one authenticated public coin, and one atomic verifier join. The joined row state is
 7.864320 MB for the five-claim component/source/relation plane plus 4.194304 MB for the GKR-mask
 row plane, 12.058624 MB total, and is extracted from live commitment tiles without a second full
-source replay. The real producer, native mask, 73-word auxiliary plane, exact 6,086-round
-coordinator, PCS openings, and independent verifier now pass together. The final fresh proof
+source replay. The state-free real producer, native mask, 73-word auxiliary plane, exact 6,086-round
+coordinator, PCS openings, and independent verifier now pass together. The state-composed shape adds
+25 authenticated state-relation rounds and reaches 6,111 rounds, but its complete state semantics
+and performance remain open. The final fresh state-free proof
 measured 29.974129 seconds for K128 and 120.460733 seconds for four-shard K512 inside the atomic
 coordinator. `complete_proof_qualification=false` remains correct until the H5 campaign and H6
 qualification gates close.
@@ -162,6 +166,14 @@ component-verification evidence and is bound by the v3 state envelope before the
 transcript, child grammar, and receipt. It does not turn the unselected state plane into a selected
 backend, and it does not claim the full state relation is algebraically inside the custom H4 GKR/PCS
 proof; the simulator, leakage/security composition, H5, H6, and activation gates remain open.
+
+The current native H4 state-GKR seam is implemented in
+`experiments/bl_pq512_crypto_core/src/state_relation_gkr.rs` and its public-coin bridge. It binds a
+fixed 64-wire state lane at H4 wire offset 1,600, two boundary-one PCS claims, and a canonical
+16,777,216-byte private source. The relation currently covers operation/snapshot field equality,
+Boolean presence, and empty-slot zeroing only; full operation order, uniqueness, membership/absence,
+and money/state conservation remain Gate 2E obligations. This is an authenticated integration
+slice, not state admission, H5, H6, or activation evidence.
 
 The next measured boundary is authenticated state: 46,208 of 46,858 K128 SHA3 calls arise from
 replay/payment state. Current maps remain authoritative while a versioned topology bake-off,
@@ -196,7 +208,7 @@ full Fp16 source replay is allowed.
 ## Current H4 measurement
 
 The exact semantic B16 source, real 168-layer producer, native masking, Construction 8.2 PCS, and
-6,086-round coordinator now pass independent verification together under execution manifest
+6,086-round state-free coordinator now passes independent verification together under execution manifest
 `51c23310274ccf7c4d7f9abe4ae7eba43266b335bd377b21cbf92409729b91e2a40a39787a157baa080c9d0516c7815af404a4d58d9e76747f652f57cd017ed6`.
 The accepted fresh K128 proof measured 29.974129 seconds. Four ordered K512 shards reused the same
 bounded one-GPU design and completed atomically in 120.460733 seconds.

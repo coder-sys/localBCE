@@ -12,12 +12,12 @@ ZERO = (0,) * 16
 ONE = (1,) + (0,) * 15
 GKR_MASK_VALUES = 32_768
 GKR_MASK_WORD_VALUES = 512
-PUBLIC_COIN_ROUNDS = 6_086
+PUBLIC_COIN_ROUNDS = 6_111
 
 
 def relation_terminal_digest(weights, claim_challenge, challenges):
     scale = ONE
-    for _ in range(5):
+    for _ in range(7):
         scale = mul16(scale, claim_challenge)
     digest = hashlib.sha3_512()
     for word in range(64):
@@ -162,9 +162,9 @@ def main():
     run_session(executable, gkr_root, schedule, True)
     print("kat=fp16_zk_rs_same_chain_bridge_v1")
     print("status=verified")
-    print("gkr_rounds=6073")
+    print("gkr_rounds=6098")
     print("pcs_continuation_rounds=13")
-    print("combined_rounds=6086")
+    print("combined_rounds=6111")
     print(f"bundle_mb={summary['bundle_mb']:.6f}")
     print("gkr_pcs_descriptor_schedule_verified=true")
     print("gkr_mask_root_reused=true")

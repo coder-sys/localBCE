@@ -7,7 +7,7 @@ distance: base-code error at most block_length / |F|, with the paper's
 interleaving lemma contributing the interleaving factor.
 
 This script closes the numerical IOPP schedule and the exact algebraic errors
-introduced by the five-claim, sixteen-coordinate binding and nine-round
+introduced by the seven-claim, sixteen-coordinate binding and nine-round
 quadratic row sumcheck. It does not claim that the real GKR producer, atomic
 verifier, or complete Blind Ledger proof have been implemented.
 """
@@ -29,7 +29,7 @@ MAIN_DELTA = Fraction(5, 32)
 MAIN_QUERIES = 1_600
 MAIN_INTERLEAVING = 512
 SUMCHECK_ROUNDS = 9
-GKR_CLAIMS = 5
+GKR_CLAIMS = 7
 PACKED_COORDINATES = 16
 SUMCHECK_DEGREE = 2
 
@@ -218,7 +218,7 @@ def main():
     print("iopp_parameter_schedule_closed=true")
     print("each_iopp_error_term_at_least_392_bits=true")
     print("composed_iopp_error_at_least_392_bits=true")
-    print("five_claim_coordinate_binding_ledger_closed=true")
+    print("seven_claim_coordinate_binding_ledger_closed=true")
     print("quadratic_row_sumcheck_ledger_closed=true")
     print("candidate_iopp_source_implemented=true")
     print("iopp_implementation_complete=false")

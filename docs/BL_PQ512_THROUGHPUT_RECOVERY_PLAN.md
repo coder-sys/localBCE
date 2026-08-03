@@ -59,7 +59,7 @@ Current compact memory:
 
 | State | Decimal MB |
 | --- | ---: |
-| Five-claim row plane | 7.864320 |
+| Five-claim state-free row plane | 7.864320 |
 | GKR-mask row plane | 4.194304 |
 | Total joined row state | 12.058624 |
 | GKR-mask coefficients/codewords | 2.097152 / 33.554432 |
@@ -92,7 +92,9 @@ proof shape by witness class, or moves cost outside the measured boundary.
 ## 5. Current throughput architecture
 
 - Exact B=16 seven-layer nonuniform Keccak GKR.
-- One output plus four relay-free input claims.
+- State-free hash bus: one output plus four relay-free input claims.
+- State-composed H4 shape: the same five hash claims plus two fixed state claims, with 25 extra
+  authenticated state-relation rounds and no new performance credit yet.
 - Construction 8.2 random-padded interleaved-RS PCS.
 - One live semantic tile per boundary and public-message-only broadcast.
 - Same-source aliases instead of duplicate word transport.
@@ -104,6 +106,10 @@ proof shape by witness class, or moves cost outside the measured boundary.
 - Rust-owned masks, challenges, commitments, multiproofs, targets, replay, and acceptance.
 
 Any replacement must beat this complete architecture while satisfying every immutable gate.
+
+The state-composed source is a fixed 16,777,216-byte private canonical lane at H4 wire offset
+1,600. It is intentionally measured separately from the 6,086-round state-free baseline; the
+state-composed 6,111-round shape must receive its own complete-boundary resource and latency run.
 
 ## 6. Gate 2E performance work
 

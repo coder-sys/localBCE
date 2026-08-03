@@ -1316,6 +1316,7 @@ def encode_segment(
     initialized_callback=None,
     initializer=None,
     initializer_context=None,
+    initializer_auxiliary_context=None,
 ):
     code_values = 1 << log_code
     value_count = batch * code_values
@@ -1337,6 +1338,10 @@ def encode_segment(
     if initializer_context is not None:
         initializer_arguments.append(
             ctypes.c_uint64(initializer_context)
+        )
+    if initializer_auxiliary_context is not None:
+        initializer_arguments.append(
+            ctypes.c_uint64(initializer_auxiliary_context)
         )
     launch(
         runtime,

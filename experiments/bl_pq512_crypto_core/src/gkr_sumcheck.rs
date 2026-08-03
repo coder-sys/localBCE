@@ -1483,6 +1483,7 @@ enum GateFormula {
     And,
     NotLeftAndRight,
     NotXor,
+    Subtract,
     Left,
     Right,
     NotLeft,
@@ -1751,6 +1752,7 @@ fn gate_value(formula: GateFormula, left: Fp16, right: Fp16) -> Fp16 {
         GateFormula::And => left * right,
         GateFormula::NotLeftAndRight => right - left * right,
         GateFormula::NotXor => Fp16::ONE - left - right + left * right + left * right,
+        GateFormula::Subtract => left - right,
         GateFormula::Left => left,
         GateFormula::Right => right,
         GateFormula::NotLeft => Fp16::ONE - left,
@@ -1785,6 +1787,8 @@ fn gate_line(
                 delta * (twice_fixed - Fp16::ONE),
             )
         }
+        GateFormula::Subtract if varying_left => (zero - fixed, delta),
+        GateFormula::Subtract => (fixed - zero, -delta),
         GateFormula::Left if varying_left => (zero, delta),
         GateFormula::Left => (fixed, Fp16::ZERO),
         GateFormula::Right if varying_left => (fixed, Fp16::ZERO),
@@ -1824,6 +1828,7 @@ fn gate_quadratic_both(
             -left_delta - right_delta + cross_linear + cross_linear,
             cross_quadratic + cross_quadratic,
         ],
+        GateFormula::Subtract => [left_zero - right_zero, left_delta - right_delta, Fp16::ZERO],
         GateFormula::Left => [left_zero, left_delta, Fp16::ZERO],
         GateFormula::Right => [right_zero, right_delta, Fp16::ZERO],
         GateFormula::NotLeft => [Fp16::ONE - left_zero, -left_delta, Fp16::ZERO],
@@ -2511,6 +2516,7 @@ fn dag_gate_formula(kind: KeccakDagGateKind) -> GateFormula {
         KeccakDagGateKind::NotLeftAndRight => GateFormula::NotLeftAndRight,
         KeccakDagGateKind::XorConstant(false) => GateFormula::Xor,
         KeccakDagGateKind::XorConstant(true) => GateFormula::NotXor,
+        KeccakDagGateKind::Subtract => GateFormula::Subtract,
         KeccakDagGateKind::Zero => GateFormula::Zero,
     }
 }
@@ -2995,6 +3001,218 @@ pub fn prove_shared_group_dag_layer_reference(
         group_rounds,
         wire_proof,
     })
+}
+
+/// Interactive form of [`prove_shared_group_dag_layer_reference`] for a
+/// complete group-major source table.
+///
+/// The callback receives each raw sumcheck message before returning its
+/// authenticated public-coin challenge.  No Fiat--Shamir, grinding, or host
+/// supplied completed challenge vector is used here.  The returned challenge
+/// vectors are retained in the proof bundle so the independent reference
+/// verifier can replay the same algebraic relation.
+pub fn prove_shared_group_dag_layer_interactive(
+    layer: &KeccakDagLayer,
+    group_count: usize,
+    left_input: &[Fp16],
+    right_input: &[Fp16],
+    claims: &[LayerOutputClaim],
+    mut challenge_provider: impl FnMut(
+        SharedGroupDagRoundKind,
+        usize,
+        &[Fp16],
+    ) -> Result<Fp16, ProductSumcheckError>,
+) -> Result<(SharedGroupDagLayerProof, Vec<Fp16>, Vec<Fp16>), ProductSumcheckError> {
+    let left_variables = log2_exact(layer.left_width)?;
+    let right_variables = log2_exact(layer.right_width)?;
+    let output_variables = log2_exact(layer.padded_width)?;
+    let group_variables = log2_exact(group_count)?;
+    if claims.is_empty()
+        || claims.iter().all(|claim| claim.coefficient.is_zero())
+        || left_input.len()
+            != layer
+                .left_width
+                .checked_mul(group_count)
+                .ok_or(ProductSumcheckError::Shape)?
+        || right_input.len()
+            != layer
+                .right_width
+                .checked_mul(group_count)
+                .ok_or(ProductSumcheckError::Shape)?
+        || layer.gates.len() != layer.padded_width
+        || layer.raw_width > layer.padded_width
+        || claims
+            .iter()
+            .any(|claim| claim.point.len() != output_variables + group_variables)
+    {
+        return Err(ProductSumcheckError::Shape);
+    }
+
+    let output_weights = claims
+        .iter()
+        .map(|claim| equality_table(&claim.point[..output_variables]))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut output = Vec::with_capacity(
+        layer
+            .padded_width
+            .checked_mul(group_count)
+            .ok_or(ProductSumcheckError::Shape)?,
+    );
+    for group in 0..group_count {
+        output.extend(evaluate_dag_arithmetic_layer(
+            layer,
+            &left_input[group * layer.left_width..(group + 1) * layer.left_width],
+            &right_input[group * layer.right_width..(group + 1) * layer.right_width],
+        )?);
+    }
+    for claim in claims {
+        if multilinear_evaluate(&output, &claim.point)? != claim.value {
+            return Err(ProductSumcheckError::Claim);
+        }
+    }
+
+    let mut current_claim = combined_claim(claims);
+    let mut current_groups = group_count;
+    let mut left_folded = left_input.to_vec();
+    let mut right_folded = right_input.to_vec();
+    let mut claim_prefixes = vec![Fp16::ONE; claims.len()];
+    let mut group_rounds = Vec::with_capacity(group_variables);
+    let mut group_challenges = Vec::with_capacity(group_variables);
+
+    for round_index in 0..group_variables {
+        let coefficients = shared_group_round_polynomial(
+            layer,
+            &left_folded,
+            &right_folded,
+            claims,
+            &output_weights,
+            &claim_prefixes,
+            output_variables,
+            round_index,
+        )?;
+        if coefficients[0] + coefficients[0] + coefficients[1] + coefficients[2] + coefficients[3]
+            != current_claim
+        {
+            return Err(ProductSumcheckError::Claim);
+        }
+        let challenge =
+            challenge_provider(SharedGroupDagRoundKind::Group, round_index, &coefficients)?;
+        for (claim_index, claim) in claims.iter().enumerate() {
+            claim_prefixes[claim_index] = claim_prefixes[claim_index]
+                * equality_line_value(claim.point[output_variables + round_index], challenge);
+        }
+        current_claim = evaluate_cubic(coefficients, challenge);
+        group_rounds.push(coefficients);
+        group_challenges.push(challenge);
+        left_folded =
+            fold_shared_group_axis(&left_folded, layer.left_width, current_groups, challenge)?;
+        right_folded =
+            fold_shared_group_axis(&right_folded, layer.right_width, current_groups, challenge)?;
+        current_groups /= 2;
+    }
+    if current_groups != 1
+        || left_folded.len() != layer.left_width
+        || right_folded.len() != layer.right_width
+    {
+        return Err(ProductSumcheckError::Shape);
+    }
+
+    let effective_claims =
+        shared_group_effective_claims(claims, output_variables, &group_challenges)?;
+    let terms = dag_layer_terms(layer, &effective_claims)?;
+    let mut left_factors = vec![Fp16::ONE; terms.len()];
+    let mut right_factors = vec![Fp16::ONE; terms.len()];
+    let mut wire_rounds = Vec::with_capacity(left_variables + right_variables);
+    let mut wire_challenges = Vec::with_capacity(left_variables + right_variables);
+
+    for round_index in 0..left_variables {
+        let mut coefficients = [Fp16::ZERO; 3];
+        for (term_index, term) in terms.iter().enumerate() {
+            let suffix = term.left >> (round_index + 1);
+            let zero = left_folded[2 * suffix];
+            let delta = left_folded[2 * suffix + 1] - zero;
+            let (gate_zero, gate_delta) =
+                gate_line(term.formula, true, zero, delta, right_folded[term.right]);
+            let contribution = weighted_gate_quadratic(
+                term.output_weight * left_factors[term_index],
+                (term.left >> round_index) & 1,
+                gate_zero,
+                gate_delta,
+            );
+            for degree in 0..3 {
+                coefficients[degree] = coefficients[degree] + contribution[degree];
+            }
+        }
+        if coefficients[0] + coefficients[0] + coefficients[1] + coefficients[2] != current_claim {
+            return Err(ProductSumcheckError::Claim);
+        }
+        let challenge = challenge_provider(
+            SharedGroupDagRoundKind::LeftWire,
+            round_index,
+            &coefficients,
+        )?;
+        for (factor, term) in left_factors.iter_mut().zip(&terms) {
+            *factor = *factor * bit_basis(challenge, (term.left >> round_index) & 1);
+        }
+        fold_multilinear(&mut left_folded, challenge);
+        current_claim = evaluate_quadratic(coefficients, challenge);
+        wire_rounds.push(coefficients);
+        wire_challenges.push(challenge);
+    }
+    let terminal_left = left_folded[0];
+
+    for round_index in 0..right_variables {
+        let mut coefficients = [Fp16::ZERO; 3];
+        for (term_index, term) in terms.iter().enumerate() {
+            let suffix = term.right >> (round_index + 1);
+            let zero = right_folded[2 * suffix];
+            let delta = right_folded[2 * suffix + 1] - zero;
+            let (gate_zero, gate_delta) =
+                gate_line(term.formula, false, zero, delta, terminal_left);
+            let contribution = weighted_gate_quadratic(
+                term.output_weight * left_factors[term_index] * right_factors[term_index],
+                (term.right >> round_index) & 1,
+                gate_zero,
+                gate_delta,
+            );
+            for degree in 0..3 {
+                coefficients[degree] = coefficients[degree] + contribution[degree];
+            }
+        }
+        if coefficients[0] + coefficients[0] + coefficients[1] + coefficients[2] != current_claim {
+            return Err(ProductSumcheckError::Claim);
+        }
+        let challenge = challenge_provider(
+            SharedGroupDagRoundKind::RightWire,
+            round_index,
+            &coefficients,
+        )?;
+        for (factor, term) in right_factors.iter_mut().zip(&terms) {
+            *factor = *factor * bit_basis(challenge, (term.right >> round_index) & 1);
+        }
+        fold_multilinear(&mut right_folded, challenge);
+        current_claim = evaluate_quadratic(coefficients, challenge);
+        wire_rounds.push(coefficients);
+        wire_challenges.push(challenge);
+    }
+
+    let proof = SharedGroupDagLayerProof {
+        group_rounds,
+        wire_proof: SparseLayerSumcheckProof {
+            rounds: wire_rounds,
+            terminal_left,
+            terminal_right: right_folded[0],
+        },
+    };
+    verify_shared_group_dag_layer_reference(
+        layer,
+        group_count,
+        claims,
+        &group_challenges,
+        &wire_challenges,
+        &proof,
+    )?;
+    Ok((proof, group_challenges, wire_challenges))
 }
 
 /// Exact reference prover for a shared-group layer whose source wire tables

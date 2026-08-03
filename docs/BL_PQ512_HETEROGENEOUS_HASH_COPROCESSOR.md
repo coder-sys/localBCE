@@ -15,8 +15,9 @@ The sealed M31 semantic AIR and SHA3-512 hash calls form one heterogeneous proof
    semantics;
 2. every SHA3 call crosses one canonical fixed-shape committed `BLHBB101` bus;
 3. an Fp16 Boolean GKR coprocessor proves the exact FIPS 202 Keccak computations;
-4. one output plus four relay-free input claims bind the coprocessor to the bus without replaying a
-   duplicate full source;
+4. the state-free hash bus uses one output plus four relay-free input claims, while the current
+   state-composed H4 shape adds two state claims to the same PCS boundary without replaying a
+   duplicate full hash source;
 5. native GKR masks and the Construction 8.2 PCS provide the selected hiding/commitment mechanics;
 6. one dual-PQ authenticated interactive public-coin chain orders all challenges; and
 7. one authoritative Rust verifier and atomic receipt accept or reject the complete statement.
@@ -61,12 +62,12 @@ full source.
 The base field is M31 and verifier challenges live in the reviewed degree-16 Fp16 tower. The
 coprocessor uses the exact seven-layer Keccak schedule and keeps full Fp16 verifier entropy.
 
-Every shard exposes five relay-free claims:
+The state-free hash bus exposes five relay-free claims:
 
 - one output claim for the digest boundary; and
 - four input claims covering the source boundary.
 
-Each claim contains 24 coordinates, one packed value, one shard query, and sixteen committed
+Each hash claim contains 24 coordinates, one packed value, one shard query, and sixteen committed
 component evaluations. Low coordinates select the RS-message coefficient; high coordinates select
 the interleaving and source boundary. Rust derives claim powers, coordinate-map coefficients,
 initial target, compact quadratic chain, and final answer target.
@@ -75,11 +76,22 @@ The compact row relation contains 80 claim-component states and 64 committed GKR
 folds 144 source/relation states across 512 interleaved words in nine quadratic rounds. Python or
 CUDA cannot supply an authoritative row parameter, linear form, or target.
 
+The current nonactivating state-GKR seam adds two boundary-one claims to the same H4 PCS geometry.
+It uses a 64-wire lane at H4 wire offset 1,600, 4,096 fixed groups, and a canonical private
+16,777,216-byte source. Its implemented relation covers operation/snapshot field equality, Boolean
+presence, and empty-slot zeroing; operation order, uniqueness, membership/absence, and money/state
+conservation remain open Gate 2E obligations. State-composed rows therefore contain seven claims
+total, but no state-composed H4 performance or qualification credit is claimed.
+
 ## 5. Native hiding and PCS
 
 Every shard verifies 508 native GKR mask constraints. The GKR mask is committed as 64
 dimension-512 auxiliary codewords. The complete auxiliary answer plane contains 73 words: nine
 sumcheck-mask words and 64 GKR-mask words.
+
+The state-composed source lane is a separate fixed-shape addition and its canonical source is
+16,777,216 bytes. Its end-to-end allocation and latency impact remain unmeasured; H5 must not
+reuse the state-free resource record.
 
 The selected PCS is Construction 8.2 random-padded interleaved Reed--Solomon:
 
@@ -102,9 +114,11 @@ The complete shard schedule has exactly:
 
 | Segment | Rounds |
 | --- | ---: |
-| GKR | 6,073 |
+| Hash GKR (state-free) | 6,073 |
+| State relation | 25 |
 | PCS | 13 |
-| Combined | 6,086 |
+| Combined state-free | 6,086 |
+| Combined state-composed | 6,111 |
 
 The standalone PCS integration has 14 rounds because it must authenticate the complete GKR-claims
 boundary before its continuation. The standalone and combined counts describe different protocol
@@ -119,7 +133,7 @@ resumed.
 
 | Live allocation | Decimal MB |
 | --- | ---: |
-| Five-claim component/source/relation rows | 7.864320 |
+| Five-claim state-free component/source/relation rows | 7.864320 |
 | GKR-mask source/relation rows | 4.194304 |
 | Total joined row state | 12.058624 |
 | GKR-mask coefficients | 2.097152 |
@@ -149,7 +163,7 @@ Logical verifier order:
 1. enforce byte caps, profile, grammar, and canonical integers before large allocation;
 2. reject K256, zero statement, wrong shard geometry, extra bytes, and unknown sections;
 3. verify execution-manifest and parent identities;
-4. verify dual-PQ chain heads and replay all 6,086 challenges;
+4. verify dual-PQ chain heads and replay all 6,086 state-free or 6,111 state-composed challenges;
 5. verify semantic source, selected plan, claims, GKR recurrences/terminals, and native masks;
 6. verify PCS tree geometry, multiproofs, openings, answer code, and target;
 7. independently verify every shard in canonical order;
@@ -207,6 +221,20 @@ proof: the full state relation is not yet constrained inside the custom H4 GKR/P
 This component phase did not run a manifest-bound H4 qualification: the measured fixture was
 capacity 8 only, so the state-free manifest above remains historical evidence for the accepted
 prototype. Production CUDA, H5, `proofSuiteId`, and activation remain forbidden.
+
+## 8.5 Current H4 state-GKR bridge (nonactivating)
+
+The Rust state-GKR bridge now authenticates the compact relation in the same H4 PCS source
+geometry: it uses a fixed 64-wire lane at wire offset 1,600, two boundary-one input claims, and
+25 authenticated public-coin rounds. With state supplied, the H4 row batch therefore contains
+seven claims and 6,111 total rounds; state-free runs retain the 6,086-round baseline with the
+same public shape and zero state claims/source digest.
+
+The current relation proves operation/snapshot field equality, Boolean presence, and empty-slot
+zeroing. It does not yet prove the complete operation order, uniqueness, membership/absence, or
+money/state-conservation semantics inside custom H4 GKR/PCS. No state-composed performance or
+qualification credit is claimed; the exact state source and transcript are integration evidence
+only until those obligations and the Gate 2E simulator/leakage/backend gates close.
 
 ## 9. Required green evidence
 

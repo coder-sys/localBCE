@@ -119,6 +119,13 @@ v2 FRI package. A fresh capacity-8 streamed fixture completed with 11,616,597 pr
 This closes neither the full custom-H4 GKR/PCS composition nor the hiding/simulator/leakage
 security ledger, backend admission, H5, H6, or `proofSuiteId`.
 
+The current native H4 bridge now carries a fixed-shape state-GKR integration seam: two boundary-one
+PCS claims, a 64-wire lane at H4 wire offset 1,600, 25 authenticated state-relation rounds, and
+seven total H4 claims when state is supplied. This seam is nonactivating and unqualified. Its current
+relation checks operation/snapshot equality, Boolean presence, and empty-slot zeroing; complete
+ordering, uniqueness, membership/absence, money/state conservation, simulator/leakage closure,
+backend admission, H5, and H6 remain open.
+
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
 one shared commitment bus, a constrained byte/bit bridge, native hiding, a complete adaptive

@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
     time::Instant,
@@ -22,6 +22,10 @@ use bl_pq512_crypto_core::{
     hash_bus_source::KECCAK_STATE_BITS,
     selected_proof_package::verify_selected_proof_package,
     sha3_air::{RATE_BYTES, for_each_sha3_512_permutation_boundary},
+    state_relation_gkr::{
+        StateRelationEntry, StateRelationRow, build_state_relation_wire_source,
+        state_relation_source_digest,
+    },
     wave1a_global_schedule::Profile,
 };
 use sha3::{Digest, Sha3_512};
@@ -131,6 +135,19 @@ struct StateBindingVerification {
     state_air_execution: [u8; 64],
     state_air_fragment: [u8; 64],
     composition: [u8; 64],
+    state_relation_rows: Option<Vec<StateRelationRow>>,
+    state_relation_source_digest: [u8; 64],
+}
+
+struct PrivateStateRelationSource {
+    path: PathBuf,
+    digest: [u8; 64],
+}
+
+impl Drop for PrivateStateRelationSource {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn main() {
@@ -265,6 +282,10 @@ fn run() -> Result<(), String> {
             hex(&expected_manifest)
         ));
     }
+    let private_state_relation_source = state_binding
+        .as_ref()
+        .map(write_private_state_relation_source)
+        .transpose()?;
     let parent_binding = atomic_parent_binding(
         header.profile as u8,
         header.semantic_program_commitment,
@@ -343,6 +364,21 @@ fn run() -> Result<(), String> {
                 .env(
                     "BL_STATE_AIR_FRAGMENT_DIGEST",
                     hex(&binding.state_air_fragment),
+                )
+                .env(
+                    "BL_STATE_RELATION_SOURCE_PATH",
+                    private_state_relation_source
+                        .as_ref()
+                        .ok_or_else(|| "state_relation_source_missing".to_string())?
+                        .path
+                        .as_os_str(),
+                )
+                .env(
+                    "BL_STATE_RELATION_SOURCE_SHA3_512",
+                    hex(&private_state_relation_source
+                        .as_ref()
+                        .ok_or_else(|| "state_relation_source_missing".to_string())?
+                        .digest),
                 );
             for (index, field) in binding.projection.iter().enumerate() {
                 child.env(format!("BL_STATE_PLANE_PUBLIC_ABI_{index:02}"), hex(field));
@@ -515,6 +551,7 @@ fn update_state_context(hash: &mut Sha3_512, state: Option<&StateBindingVerifica
         hash.update(state.state_air_program);
         hash.update(state.state_air_execution);
         hash.update(state.state_air_fragment);
+        hash.update(state.state_relation_source_digest);
         for field in state.projection {
             hash.update(field);
         }
@@ -718,6 +755,54 @@ struct StateEntryWire {
     present: bool,
     key: [u8; 64],
     value: [u8; 64],
+}
+
+fn to_state_relation_entry(entry: &StateEntryWire) -> StateRelationEntry {
+    StateRelationEntry {
+        present: entry.present,
+        key: entry.key,
+        value: entry.value,
+    }
+}
+
+fn write_private_state_relation_source(
+    state: &StateBindingVerification,
+) -> Result<PrivateStateRelationSource, String> {
+    let rows = state
+        .state_relation_rows
+        .as_deref()
+        .ok_or_else(|| "state_relation_rows_missing".to_string())?;
+    let encoded = build_state_relation_wire_source(rows)
+        .map_err(|error| format!("state_relation_source_build:{error:?}"))?;
+    let digest = state_relation_source_digest(&encoded);
+    if digest != state.state_relation_source_digest {
+        return Err("state_relation_source_digest_mismatch".to_string());
+    }
+    for suffix in 0_u32..1024 {
+        let path = env::temp_dir().join(format!(
+            "bl-pq512-state-relation-{}-{suffix}.bin",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("state_relation_source_open:{error}")),
+        };
+        if let Err(error) = file.write_all(&encoded) {
+            let _ = fs::remove_file(&path);
+            return Err(format!("state_relation_source_write:{error}"));
+        }
+        if let Err(error) = file.sync_all() {
+            let _ = fs::remove_file(&path);
+            return Err(format!("state_relation_source_sync:{error}"));
+        }
+        return Ok(PrivateStateRelationSource { path, digest });
+    }
+    Err("state_relation_source_name_exhausted".to_string())
 }
 
 struct StateSnapshotWire {
@@ -1312,6 +1397,8 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
         state_air_execution,
         state_air_fragment,
         composition,
+        state_relation_rows: None,
+        state_relation_source_digest: [0; 64],
     })
 }
 
@@ -1708,6 +1795,21 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
     let projection: [[u8; 32]; 12] = projection
         .try_into()
         .map_err(|_| "state_binding_projection_count".to_string())?;
+    let state_relation_rows = operation_witness
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (operation_before, operation_after))| StateRelationRow {
+                operation_before: to_state_relation_entry(operation_before),
+                operation_after: to_state_relation_entry(operation_after),
+                snapshot_before: to_state_relation_entry(&before.entries[index]),
+                snapshot_after: to_state_relation_entry(&after.entries[index]),
+            },
+        )
+        .collect::<Vec<_>>();
+    let state_relation_source = build_state_relation_wire_source(&state_relation_rows)
+        .map_err(|error| format!("state_relation_source_build:{error:?}"))?;
+    let state_relation_source_digest = state_relation_source_digest(&state_relation_source);
     Ok(StateBindingVerification {
         state_profile: before.profile.clone(),
         state_capacity: before.capacity,
@@ -1728,6 +1830,8 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
         state_air_execution,
         state_air_fragment,
         composition,
+        state_relation_rows: Some(state_relation_rows),
+        state_relation_source_digest,
     })
 }
 
@@ -1923,7 +2027,7 @@ fn validate_shard_fields(
         "exact_candidate_soundness_parameter_ledger_closed",
         "implementation_theorem_binding_closed",
         "construction_8_2_hiding_simulator_gate_attached",
-        "five_claim_row_binding_attached",
+        "seven_claim_row_binding_attached",
         "gkr_mask_cpu_gpu_root_parity",
         "gkr_row_parameters_derived_in_rust",
         "component_rows_extracted_from_packed_semantic_source",
@@ -1945,7 +2049,7 @@ fn validate_shard_fields(
         ("activation", "false"),
         ("proof_suite_id", "null"),
         ("paper_construction", "8.2"),
-        ("gkr_claim_count", "5"),
+        ("gkr_claim_count", "7"),
         ("duplicate_full_source_replay", "false"),
         ("per_proof_merkle_mutation_replays", "false"),
         ("complete_pcs_qualification", "false"),
@@ -1983,6 +2087,13 @@ fn validate_state_binding_fields(
     let zero_field = hex(&[0; 32]);
     match (expected_statement, expected_binding, expected_state) {
         (Some(statement), Some(binding), Some(state)) => {
+            let state_relation_digest = decode_hex_64(
+                required(fields, "state_relation_gkr_digest_sha3_512")?,
+                "state_relation_gkr_digest",
+            )?;
+            if state_relation_digest == [0; 64] {
+                return Err(format!("shard_state_binding:{shard}"));
+            }
             if required(fields, "state_plane_binding_attached")? != "true"
                 || required(fields, "state_hash_bus_calls_verified")? != "true"
                 || required(fields, "state_plane_statement_sha3_512")? != statement
@@ -2009,6 +2120,10 @@ fn validate_state_binding_fields(
                     != hex(&state.state_air_execution)
                 || required(fields, "state_air_fragment_digest_sha3_512")?
                     != hex(&state.state_air_fragment)
+                || required(fields, "state_relation_gkr_attached")? != "true"
+                || required(fields, "state_relation_source_sha3_512")?
+                    != hex(&state.state_relation_source_digest)
+                || required(fields, "state_relation_interactive_verified")? != "true"
             {
                 return Err(format!("shard_state_binding:{shard}"));
             }
@@ -2025,6 +2140,10 @@ fn validate_state_binding_fields(
                 || required(fields, "state_plane_binding_digest_sha3_512")? != zero
                 || required(fields, "state_plane_public_abi_count")? != "0"
                 || required(fields, "state_air_fragment_verified")? != "false"
+                || required(fields, "state_relation_gkr_attached")? != "false"
+                || required(fields, "state_relation_source_sha3_512")? != zero
+                || required(fields, "state_relation_gkr_digest_sha3_512")? != zero
+                || required(fields, "state_relation_interactive_verified")? != "false"
             {
                 return Err(format!("shard_state_binding:{shard}"));
             }
@@ -2392,6 +2511,8 @@ mod tests {
             state_air_execution: [13; 64],
             state_air_fragment: [14; 64],
             composition: [15; 64],
+            state_relation_rows: None,
+            state_relation_source_digest: [0; 64],
         }
     }
 
@@ -2461,6 +2582,8 @@ mod tests {
             state_air_execution: [seed.wrapping_add(12); 64],
             state_air_fragment: [seed.wrapping_add(13); 64],
             composition: [seed.wrapping_add(14); 64],
+            state_relation_rows: None,
+            state_relation_source_digest: [seed.wrapping_add(15); 64],
         }
     }
 
@@ -2587,6 +2710,22 @@ mod tests {
             (
                 "state_air_fragment_digest_sha3_512".to_string(),
                 hex(&state.state_air_fragment),
+            ),
+            (
+                "state_relation_gkr_attached".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "state_relation_source_sha3_512".to_string(),
+                hex(&state.state_relation_source_digest),
+            ),
+            (
+                "state_relation_gkr_digest_sha3_512".to_string(),
+                hex(&[16; 64]),
+            ),
+            (
+                "state_relation_interactive_verified".to_string(),
+                "true".to_string(),
             ),
         ]);
         for (index, field) in state.projection.iter().enumerate() {

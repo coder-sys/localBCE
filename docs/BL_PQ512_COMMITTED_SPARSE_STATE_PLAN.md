@@ -1,6 +1,6 @@
 # BL-PQ512 committed sparse-state and PQ commitment plan
 
-Updated: 2026-08-01
+Updated: 2026-08-02
 
 Status: mandatory Wave 2 research, implementation, and selection gate. This document does not
 select or activate a proof suite or state layout. `proofSuiteId` remains null, production use is
@@ -222,6 +222,13 @@ v3 compact state-AIR/FRI component it provides native state-file composition evi
 algebraic ordered operation-to-snapshot equality boundary, but it does not yet put the complete
 state relation inside the custom H4 GKR/PCS proof, select a qualified backend, or produce a new
 manifest-bound H4 K128/K512 proof. H5 remains blocked.
+
+The current Rust H4 bridge now carries that state component into the same PCS shape: a fixed
+64-wire lane at wire offset 1,600, two boundary-one state claims, and a 25-round authenticated
+state prelude, producing seven claims and 6,111 rounds when state is supplied. The relation is
+still intentionally limited to operation/snapshot equality, Boolean presence, and empty-slot
+zeroing. Full order, uniqueness, membership/absence, and money/state conservation remain open and
+must be proven before Gate 2E can close.
 
 The new isolated candidate is `TRANSPARENT_SHAKE256_1024`,
 `BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`: SHAKE256-1024 with a 128-byte mask and 128-byte

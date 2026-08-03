@@ -26,6 +26,12 @@ pub enum KeccakDagGateKind {
     Xor,
     NotLeftAndRight,
     XorConstant(bool),
+    /// Field subtraction for non-Boolean statement relations.
+    ///
+    /// The selected Keccak plan never emits this gate.  It is kept in the
+    /// shared DAG algebra so a proof-native state relation can compare packed
+    /// canonical chunks without expanding every byte into Boolean wires.
+    Subtract,
     Zero,
 }
 
@@ -263,6 +269,9 @@ fn evaluate_gate(kind: KeccakDagGateKind, left: bool, right: bool) -> bool {
         KeccakDagGateKind::Xor => left ^ right,
         KeccakDagGateKind::NotLeftAndRight => !left & right,
         KeccakDagGateKind::XorConstant(constant) => left ^ right ^ constant,
+        KeccakDagGateKind::Subtract => {
+            unreachable!("field subtraction is not a Boolean Keccak gate")
+        }
         KeccakDagGateKind::Zero => false,
     }
 }
@@ -308,6 +317,9 @@ fn evaluate_packed_gate(kind: KeccakDagGateKind, left: u16, right: u16) -> u16 {
         KeccakDagGateKind::NotLeftAndRight => !left & right,
         KeccakDagGateKind::XorConstant(constant) => {
             left ^ right ^ if constant { u16::MAX } else { 0 }
+        }
+        KeccakDagGateKind::Subtract => {
+            unreachable!("field subtraction is not a bit-sliced Keccak gate")
         }
         KeccakDagGateKind::Zero => 0,
     }
