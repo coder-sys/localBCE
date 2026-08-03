@@ -275,8 +275,11 @@ linear-size dual-number product tree and four bounded Bezout tables. Exact relea
 
 Both controls independently verify and retain `activation_allowed=false`. These component times do
 not include auxiliary/input PCS composition, parent serialization, or the complete H4 boundary.
-Bind the four coefficient tables and twelve state-column reductions into the existing PCS before
-using this improvement in any complete-proof projection or Gate 2E decision.
+The exact PCS composition control now packs the four tables into one fixed auxiliary codeword and
+lifts the twelve state-column reductions into the existing H4 main geometry for both profiles.
+Production still must retain/open that auxiliary tree, extend the parent transcript/grammar, and
+independently verify the complete boundary before using the improvement in a complete-proof
+projection or Gate 2E decision.
 
 ## 12. H5 qualification preflight boundary
 

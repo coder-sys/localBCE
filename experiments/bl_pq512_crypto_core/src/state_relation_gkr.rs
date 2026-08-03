@@ -519,7 +519,7 @@ pub fn state_relation_input_claims(
     })
 }
 
-fn h4_state_point(local_point: &[Fp16]) -> Result<Vec<Fp16>, StateRelationGkrError> {
+pub(crate) fn h4_state_point(local_point: &[Fp16]) -> Result<Vec<Fp16>, StateRelationGkrError> {
     if local_point.len() != STATE_RELATION_WIRE_VARIABLES + STATE_RELATION_GROUP_VARIABLES {
         return Err(StateRelationGkrError::Shape);
     }

@@ -92,8 +92,12 @@ The implemented successor is a linear-size square-free/derivative product GKR. I
 control measured K512 witness/prove/verify at 0.698637/0.237447/0.072302 seconds with a
 131,072-byte witness, versus 426.679855 seconds for the rejected pairwise prover. It reduces four
 virtual leaves to twelve openings of the existing state lane and adds four Bezout coefficient-table
-claims. This candidate is not yet part of the fixed H4 claim grammar or auxiliary commitment; no
-state-composed timing or selection credit is taken until that composition verifies end to end.
+claims. `state_squarefree_pcs.rs` now verifies the exact fixed PCS composition: all four private
+tables occupy one 2,048-message/1,218-random-value auxiliary codeword, and all twelve state
+openings lift into the existing 24-coordinate H4 source geometry. K128 and K512 composition plus
+coefficient/state mutations pass. The retained tree, parent transcript, fixed H4 grammar, and
+independent production verifier are not yet wired, so no state-composed timing or selection credit
+is taken.
 
 ## 5. Native hiding and PCS
 

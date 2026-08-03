@@ -6714,3 +6714,36 @@ grammar/transcript binding, or complete H4 proof generation. Gate 2E, H4 state c
 H6, backend admission, `proofSuiteId`, and activation remain open. The next action is exact
 input/auxiliary PCS and parent-transcript composition, not further tuning of either uniqueness
 control.
+
+## 2026-08-03 Linear uniqueness PCS composition - VERIFIED COMPONENT
+
+`state_squarefree_pcs.rs` now fixes the selected custom-H4 composition geometry without adding a
+second proof stack. The four private before/after A/B tables occupy four fixed 512-value blocks in
+one existing-size auxiliary message (2,048 message values plus 1,218 fresh random-padding values).
+K128 uses the canonical prefix of each block and zeroes the unused suffix; K512 fills all four
+blocks. Four authenticated nonzero post-claim mixing coefficients produce one auxiliary linear
+functional and target. The four virtual square-free terminals separately reduce to twelve exact
+openings of the already committed 4,096-row state lane, lifted to the existing 24-coordinate H4
+input geometry. No raw coefficient table is public.
+
+Exact focused evidence:
+
+```text
+cargo +1.96.0 test --features std --lib state_squarefree_pcs --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 277 filtered out; finished in 13.04s
+
+cargo +1.96.0 test --features std --lib state_squarefree_gkr --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out; finished in 0.04s
+
+cargo +1.96.0 check --no-default-features --lib --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.60s
+```
+
+The K512 composition test initially exposed only a synthetic fixture overflow at
+`index as u8 + 7`; the fixture now uses a bounded byte value and the exact rerun passes. Strict
+Clippy still reaches only the unchanged `disk_deep.rs:339` `too_many_arguments` diagnostic. Format
+and diff checks pass, and no protected path changed. This component does not yet retain/open the
+new auxiliary codeword in the CUDA path or extend the public-coin bridge, parent grammar, receipt,
+and independent production verifier. No Gate 2E, H5, H6, backend-admission, `proofSuiteId`, or
+activation credit is taken. The next action is that production orchestration, not another
+uniqueness construction.
