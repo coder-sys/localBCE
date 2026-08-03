@@ -364,8 +364,10 @@ messages with fixed live bits, and root messages use the canonical authority roo
 directly. Duplicate key-sentinel lookup transport is replaced by local byte/inverse identities
 tied to the existing byte-range proof. Fixed scalar-copy positions are grouped into eight vector
 source messages and one masked bundle destination. The full state relation is implemented at the
-typed semantic-AIR/H4 readback seam, but the selected typed proof route is rejected by the
-immutable resource preflight (`qualifies=false`, `modeled_required_available_bytes=22975297336`).
+typed semantic-AIR/H4 readback seam, but the generic typed proof route is rejected by the
+immutable resource preflight (`qualifies=false`, `modeled_peak_scratch_bytes=14944264032`,
+`scratch_gate_pass=false`, `route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`,
+`modeled_required_available_bytes=22975297336`).
 It is still not a selected complete H4 GKR/PCS proof, no reviewed backend is admitted, and no
 manifest-bound H4 K128/K512 proof was run after the source change.
 

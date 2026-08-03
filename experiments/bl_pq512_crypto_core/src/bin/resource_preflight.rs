@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use bl_pq512_crypto_core::resource_preflight::{
     RESOURCE_PREFLIGHT_EVIDENCE_CLASS, RESOURCE_PREFLIGHT_MODEL_ID,
     estimate_selected_prover_resources, estimate_selected_streaming_scratch,
+    evaluate_streaming_scratch_gate,
 };
 
 fn run() -> Result<(), String> {
@@ -24,10 +25,26 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("memory_{error:?}"))?;
     let scratch = estimate_selected_streaming_scratch(&program, raw_witness_bytes)
         .map_err(|error| format!("scratch_{error:?}"))?;
+    let scratch_gate = evaluate_streaming_scratch_gate(&scratch)
+        .map_err(|error| format!("scratch_gate_{error:?}"))?;
     println!("evidence_class={RESOURCE_PREFLIGHT_EVIDENCE_CLASS}");
     println!("model_id={RESOURCE_PREFLIGHT_MODEL_ID}");
     println!("qualifies=false");
     println!("activation_allowed=false");
+    println!("scratch_gate_bytes={}", scratch_gate.cap_bytes);
+    println!(
+        "modeled_peak_scratch_bytes={}",
+        scratch_gate.modeled_peak_scratch_bytes
+    );
+    println!("scratch_gate_pass={}", scratch_gate.passes);
+    println!(
+        "route_status={}",
+        if scratch_gate.passes {
+            "UNQUALIFIED_REQUIRES_COMPLETE_EVIDENCE"
+        } else {
+            "REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME"
+        }
+    );
     println!(
         "modeled_main_evaluation_bytes={}",
         memory.main_evaluation_bytes

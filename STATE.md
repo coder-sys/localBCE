@@ -6509,3 +6509,65 @@ This is not complete composition or backend admission evidence because the full 
 not traversed the path under the immutable resource limit. `complete_composition` remains false,
 the exact v5 generic-AIR preflight remains nonqualifying, and no H5 launch, `proofSuiteId`, or
 activation credit is taken. The next dependency is the prover storage/resource architecture.
+
+## 2026-08-03 Generic typed-AIR lifetime rejection gate - VERIFIED, NONACTIVATING
+
+The resource preflight now applies the immutable strictly-below-5,000,000,000-byte scratch gate to
+proof-owned concurrent bytes instead of leaving that comparison implicit. The modeled peak scratch
+is `persistent_oracle_bytes + peak_temporary_bytes`. The separate 25% filesystem headroom and
+4,294,967,296-byte free-volume reserve remain reported as host admission inputs and are not
+misclassified as proof scratch. The boundary is strict: exactly 5,000,000,000 rejects.
+
+Fresh K128 v5 program materialization outside the source tree reproduced the sealed shape:
+
+```text
+program_bytes=23906457
+tables=56
+lookups=79
+public_inputs=1806
+```
+
+Exact native preflight output:
+
+```text
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+scratch_gate_bytes=5000000000
+modeled_peak_scratch_bytes=14944264032
+scratch_gate_pass=false
+route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME
+modeled_main_evaluation_bytes=4775739392
+modeled_interaction_evaluation_bytes=7084179456
+modeled_composition_evaluation_bytes=1442840576
+modeled_deep_evaluation_bytes=169877700608
+modeled_fri_mask_bytes=130023424
+modeled_folded_layer_bytes=134217728
+modeled_monolithic_live_bytes_lower_bound=183444701184
+modeled_maximum_domain_rows=1048576
+requires_streaming=true
+modeled_raw_witness_bytes=102981664
+modeled_persistent_oracle_bytes=13808394080
+modeled_peak_temporary_bytes=1135869952
+modeled_filesystem_overhead_bytes=3736066008
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=22975297336
+```
+
+Focused native evidence:
+
+```text
+cargo +1.96.0 test --features std --lib resource_preflight --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 265 filtered out; finished in 0.00s
+
+cargo +1.96.0 check --features std --bin resource_preflight --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.31s
+```
+
+The first formatting command was incorrectly aimed at the repository root, which has no root
+`Cargo.toml`; no source changed from that failed command. The exact crate-manifest format check was
+then used. This decision rejects only the current aggregate generic-oracle lifetime as the complete
+H4 route. The typed C0 AIR remains the executable semantic/differential oracle and native readback
+seam. Gate 2E remains open; implementation returns to the selected custom H4 semantic/state
+composition. No H5 launch, backend admission, `proofSuiteId`, or activation credit is taken.

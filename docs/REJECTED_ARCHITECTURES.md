@@ -88,6 +88,27 @@ requires 950,757,738,236 bytes of scratch, and simple de-duplication still proje
 byte scratch gates by orders of magnitude. The selected shared-bus semantic lane plus Boolean GKR
 eliminates duplicate full-source replay.
 
+## Generic typed-AIR oracle lifetime as the complete H4 route
+
+Decision: rejected as the complete-proof storage architecture. The typed C0 AIR remains the
+authoritative executable semantic/differential oracle and its native readback seam remains useful;
+this rejection is limited to proving it as a second full generic main/interaction/composition
+oracle owner beside H4.
+
+The exact K128 v5 program has 56 tables, 79 lookups, 1,806 public inputs, and a 23,906,457-byte
+binary. The native `GENERIC_AIR_ORACLE_LAYOUT_V1` model derives 13,808,394,080 persistent oracle
+bytes plus 1,135,869,952 peak temporary bytes, for 14,944,264,032 proof-owned peak scratch bytes.
+That is 2.99 times the immutable strictly-below-5,000,000,000-byte scratch cap. The separate
+22,975,297,336-byte required-free-space value includes filesystem headroom and a volume reserve;
+it is not substituted for the proof-owned scratch comparison.
+
+Source-level lookup shaving cannot repair a route whose 4,775,739,392-byte main oracle already
+nearly consumes the entire scratch cap and whose persistent lifetime retains main, interaction,
+composition, trees, and witness concurrently. Reconsideration requires an implemented and
+independently verified lifetime architecture that never owns the aggregate oracles concurrently,
+preserves openings/composition/DEEP verification exactly, beats the complete H4 boundary, and
+passes the unchanged scratch gate. A model or plan alone cannot restore eligibility.
+
 ## BaseFold, zkDeepFold, and older PCS lanes
 
 Decision: off the active path.

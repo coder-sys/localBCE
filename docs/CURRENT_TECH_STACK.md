@@ -248,7 +248,9 @@ bundle destination; a direct live scalar-bundle mutation rejects. This is
 semantic-AIR component evidence plus a native H4 readback seam:
 the native coordinator consumes the full typed execution, checks the authority/root bindings, and
 maps every typed call to the canonical H4 bus. The immutable generic-AIR resource preflight still
-returns `qualifies=false` with `modeled_required_available_bytes=22975297336`; the seam remains
+returns `qualifies=false` with `modeled_peak_scratch_bytes=14944264032`,
+`scratch_gate_pass=false`, `route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`, and
+`modeled_required_available_bytes=22975297336`; the seam remains
 nonactivating until a complete proof construction, reviewed backend, simulator/leakage/security
 ledger, H5, and H6 gates close.
 

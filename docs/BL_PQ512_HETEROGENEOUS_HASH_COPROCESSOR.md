@@ -253,8 +253,10 @@ bundle destination. Positive, root, money, compact-log, scalar-bundle, sentinel 
 and fixed asset-registry mutation
 rejection evidence passed. The native H4 coordinator consumes the full typed AIR execution,
 independently verifies its authority/root tables, and maps every typed call to the canonical H4
-boundary. The selected generic proof route remains rejected by the immutable resource preflight
-(`modeled_required_available_bytes=22975297336`, `qualifies=false`); this remains a nonactivating
+boundary. The generic typed proof route remains rejected by the immutable resource preflight
+(`modeled_peak_scratch_bytes=14944264032`, `scratch_gate_pass=false`,
+`route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`,
+`modeled_required_available_bytes=22975297336`, `qualifies=false`); this remains a nonactivating
 seam with no Gate 2E, H5, H6, backend, or `proofSuiteId` credit.
 
 ## 9. Required green evidence

@@ -11,6 +11,7 @@ use crate::proof_parameters::{LOG_BLOWUP, QUERY_COUNT, TRACE_MASK_COEFFICIENT_CO
 
 pub const MONOLITHIC_PROVER_MEMORY_CAP_BYTES: u128 = 1_u128 << 30;
 pub const STREAMING_SCRATCH_RESERVE_BYTES: u128 = 4_u128 << 30;
+pub const COMPLETE_PROOF_SCRATCH_CAP_BYTES: u128 = 5_000_000_000;
 /// These estimates are derived layout models, never measured telemetry.
 pub const RESOURCE_PREFLIGHT_EVIDENCE_CLASS: &str = "DERIVED_MODEL";
 /// The model describes the generic AIR/oracle layout, not the generated backend.
@@ -38,6 +39,31 @@ pub struct StreamingScratchEstimate {
     pub filesystem_overhead_bytes: u128,
     pub reserve_bytes: u128,
     pub required_available_bytes: u128,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamingScratchGate {
+    pub modeled_peak_scratch_bytes: u128,
+    pub cap_bytes: u128,
+    pub passes: bool,
+}
+
+/// Apply the immutable complete-proof scratch gate to the bytes the current
+/// disk prover keeps concurrently. Free-space reserve and filesystem headroom
+/// are admission checks for the host volume, not scratch owned by the proof.
+/// They therefore stay out of this comparison and remain separately reported.
+pub fn evaluate_streaming_scratch_gate(
+    estimate: &StreamingScratchEstimate,
+) -> Result<StreamingScratchGate, ResourcePreflightError> {
+    let modeled_peak_scratch_bytes = add(
+        estimate.persistent_oracle_bytes,
+        estimate.peak_temporary_bytes,
+    )?;
+    Ok(StreamingScratchGate {
+        modeled_peak_scratch_bytes,
+        cap_bytes: COMPLETE_PROOF_SCRATCH_CAP_BYTES,
+        passes: modeled_peak_scratch_bytes < COMPLETE_PROOF_SCRATCH_CAP_BYTES,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -337,4 +363,42 @@ pub fn estimate_selected_prover_resources(
         maximum_domain_rows,
         requires_streaming: monolithic_live_bytes_lower_bound > MONOLITHIC_PROVER_MEMORY_CAP_BYTES,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn estimate(persistent: u128, temporary: u128) -> StreamingScratchEstimate {
+        StreamingScratchEstimate {
+            raw_witness_bytes: 1,
+            persistent_oracle_bytes: persistent,
+            peak_temporary_bytes: temporary,
+            filesystem_overhead_bytes: 0,
+            reserve_bytes: STREAMING_SCRATCH_RESERVE_BYTES,
+            required_available_bytes: persistent + temporary + STREAMING_SCRATCH_RESERVE_BYTES,
+        }
+    }
+
+    #[test]
+    fn scratch_gate_is_strictly_below_five_billion_decimal_bytes() {
+        let passing = evaluate_streaming_scratch_gate(&estimate(4_000_000_000, 999_999_999))
+            .expect("bounded estimate");
+        assert_eq!(passing.modeled_peak_scratch_bytes, 4_999_999_999);
+        assert_eq!(passing.cap_bytes, 5_000_000_000);
+        assert!(passing.passes);
+
+        let boundary = evaluate_streaming_scratch_gate(&estimate(4_000_000_000, 1_000_000_000))
+            .expect("bounded estimate");
+        assert_eq!(boundary.modeled_peak_scratch_bytes, 5_000_000_000);
+        assert!(!boundary.passes);
+    }
+
+    #[test]
+    fn volume_reserve_does_not_masquerade_as_proof_scratch() {
+        let gate = evaluate_streaming_scratch_gate(&estimate(2_000_000_000, 1_000_000_000))
+            .expect("bounded estimate");
+        assert_eq!(gate.modeled_peak_scratch_bytes, 3_000_000_000);
+        assert!(gate.passes);
+    }
 }

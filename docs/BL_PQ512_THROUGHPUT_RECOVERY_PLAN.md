@@ -250,9 +250,13 @@ focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger re
 91.58 seconds, and status `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. Its blockers remain no
 backend admission, missing complete simulator/leakage evidence, deferred H4 binding, and unset
 `proofSuiteId`. The tracked `ops/` authority is verified and the former sibling-layout blocker is closed.
-This is reference evidence only; do not start H5 or
-another complete-proof backend bake-off until a reviewed state plane is selected and atomically
-bound.
+The v5 typed C0 AIR remains the executable semantic/differential oracle and native H4 readback
+seam, but its generic main/interaction/composition oracle lifetime is rejected as the complete
+proof route. The exact K128 model retains 13,808,394,080 persistent bytes and 1,135,869,952 peak
+temporary bytes, so `modeled_peak_scratch_bytes=14944264032`, `scratch_gate_pass=false`, and
+`route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`. This is reference evidence only;
+continue the selected custom H4 state-composition lane. Do not start H5 or another complete-proof
+backend bake-off until a reviewed state plane is selected and atomically bound.
 
 ## 12. H5 qualification preflight boundary
 
