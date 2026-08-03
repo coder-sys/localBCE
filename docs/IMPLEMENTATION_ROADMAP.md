@@ -349,15 +349,17 @@ authenticated slot indices with canonical row-order constraints. Native Rust and
 decoders reject duplicate present keys. The C0 typed-state component now
 composes the ordered-map/payment authorities and verifies root/cursor, slot-order, money, fixed
 asset-registry, and replay/payment hash-port mutations for the K128 C0 witness. The native
-coordinator consumes its v4 AIR program/execution, verifies the authority/root bindings, and maps
+coordinator consumes the version-4 state-binding AIR program/execution, verifies the
+authority/root bindings, and maps
 its 46,210 calls to the canonical H4 bus; the base replay/payment bus remains 46,208 calls. The
-current typed component is `BL-PQ512-C0-TYPED-STATE-AIR-v4` with 56 tables and 79 lookups; its
+current typed component is `BL-PQ512-C0-TYPED-STATE-AIR-v5` with 56 tables and 79 lookups; its
 source bundle remains packed into 8-lane rows, operation/log preimages use 64-lane vector lookup
 messages with fixed live bits, and root messages use the canonical authority root columns
 directly. Duplicate key-sentinel lookup transport is replaced by local byte/inverse identities
-tied to the existing byte-range proof. The full state relation is implemented at the
+tied to the existing byte-range proof. Fixed scalar-copy positions are grouped into eight vector
+source messages and one masked bundle destination. The full state relation is implemented at the
 typed semantic-AIR/H4 readback seam, but the selected typed proof route is rejected by the
-immutable resource preflight (`qualifies=false`, `modeled_required_available_bytes=23735514936`).
+immutable resource preflight (`qualifies=false`, `modeled_required_available_bytes=22975297336`).
 It is still not a selected complete H4 GKR/PCS proof, no reviewed backend is admitted, and no
 manifest-bound H4 K128/K512 proof was run after the source change.
 

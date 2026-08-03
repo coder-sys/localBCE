@@ -221,32 +221,34 @@ same authority before the AIR is built.
 Measured K128 construction and verifier readback:
 
 ```text
-program_id=BL-PQ512-C0-TYPED-STATE-AIR-v4
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v5
 tables=56
 lookups=79
 public_inputs=1806
 hash_calls=46210
-program_bytes=22460606
-execution_bytes=145792794
+program_bytes=23906457
+execution_bytes=148684533
 raw_witness_bytes=102981664
-program_commitment=52fbd8553df1e83792cc00bb5a33ae47bbcb96d985a1fb8253b97f2fe7df83bf1be9a94c3ded4ef2a8842c46d1e09187ae50a20b255532bf1f6fca3e5e2ac201
-execution_commitment=d35fec28b5577b848ed562e92257b6cad73a8d56e710f4dab5c74e893ff0ffec81063159c8cfc8a7312f78975c4c85436750626bf6c853fad3c1f0c7ab529f29
+program_commitment=260106c1018c1e6348be016fdcc22fb4d554341c40e87d7a7236109fe4ba076f58ce477a0cf4e7ff20ec06854dbeeedaa7058a498619ede1c7de4c7d2c67c3d3
+execution_commitment=94994cd5876eb04d82ef31b45bae6cac9029ce88575497bf9c9c4580911ca6983887dac45f24d4df7593a1a736fe99efa58069cee150cffa575155f54a5cb39c
 replay_hash_ports=True
 payment_hash_ports=True
 authority_root_ports=True
 ```
 
-The full post-fix typed verifier passed (`4 passed in 296.33s`). The v4 representation retains the
+The full post-fix typed verifier passed (`5 passed in 370.03s`). The v5 representation retains the
 8-lane source bundle and packs operation/log preimages into 64-lane vector lookup messages with
 fixed live bits, while preserving every call index, byte position, value, and byte obligation. The
 native reader validates the live/padding grammar, sorts live positions canonically,
 and reconstructs root messages directly from canonical authority root columns. v4 additionally
 replaces duplicate replay/payment key-sentinel lookups with local byte/inverse identities tied to
-the already range-checked key bytes; direct aggregate-bypass attacks reject. This is
+the already range-checked key bytes; direct aggregate-bypass attacks reject. v5 also groups the 41
+fixed scalar-copy positions into eight 8-byte vector messages and one masked
+bundle destination; a direct live scalar-bundle mutation rejects. This is
 semantic-AIR component evidence plus a native H4 readback seam:
 the native coordinator consumes the full typed execution, checks the authority/root bindings, and
 maps every typed call to the canonical H4 bus. The immutable generic-AIR resource preflight still
-returns `qualifies=false` with `modeled_required_available_bytes=23735514936`; the seam remains
+returns `qualifies=false` with `modeled_required_available_bytes=22975297336`; the seam remains
 nonactivating until a complete proof construction, reviewed backend, simulator/leakage/security
 ledger, H5, and H6 gates close.
 

@@ -67,7 +67,7 @@ from experiments.fixed_shape_claim_air.ordered_map_batch_reference import (
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
-PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v4"
+PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v5"
 LANE_ORDER: Final[tuple[str, ...]] = ("replay", "benefit", "obligation", "ledger")
 MONEY_TABLE: Final[str] = "typed_state_money"
 SUMMARY_TABLE: Final[str] = "typed_state_lane_summary"
@@ -1072,6 +1072,15 @@ def _pack_source_bundle_table(
         ),
     }
     for mask in _SOURCE_BUNDLE_MASKS:
+        packed_columns[f"has_{mask}"] = tuple(
+            int(
+                any(
+                    source_columns[mask][row * _SOURCE_BUNDLE_LANES + lane]
+                    for lane in range(_SOURCE_BUNDLE_LANES)
+                )
+            )
+            for row in range(packed_rows)
+        )
         for lane in range(_SOURCE_BUNDLE_LANES):
             packed_columns[f"{mask}_{lane}"] = tuple(
                 source_columns[mask][row * _SOURCE_BUNDLE_LANES + lane]
@@ -1116,9 +1125,86 @@ def _pack_source_bundle_table(
     )
 
     def replace_lookup(lookup: LookupArgument) -> LookupArgument:
+        if lookup.name == "claim_source_scalar_bytes_match_bundle":
+            if (
+                len(lookup.destinations) != 1
+                or lookup.destinations[0].table != _SOURCE_BUNDLE_TABLE
+            ):
+                raise StructuralError("typed_state_bundle_lookup_shape_invalid")
+            old = lookup.destinations[0]
+            by_word: dict[int, dict[int, LookupSide]] = {}
+            for side in lookup.sources:
+                if (
+                    side.table != "claim_source_scalar"
+                    or side.selector != const(1)
+                    or len(side.values) != 3
+                    or side.values[1].kind != "const"
+                    or type(side.values[1].value) is not int
+                    or side.values[1].value < 0
+                ):
+                    raise StructuralError("typed_state_scalar_bundle_source_invalid")
+                position = side.values[1].value
+                word = position // _SOURCE_BUNDLE_LANES
+                lane = position % _SOURCE_BUNDLE_LANES
+                if lane in by_word.setdefault(word, {}):
+                    raise StructuralError("typed_state_scalar_bundle_position_duplicate")
+                by_word[word][lane] = side
+            vector_sources: list[LookupSide] = []
+            for word in sorted(by_word):
+                lanes = by_word[word]
+                first = next(iter(lanes.values()))
+                if any(
+                    side.row_start != first.row_start
+                    or side.row_stop != first.row_stop
+                    or side.weight != first.weight
+                    for side in lanes.values()
+                ):
+                    raise StructuralError("typed_state_scalar_bundle_range_invalid")
+                values = []
+                for lane in range(_SOURCE_BUNDLE_LANES):
+                    side = lanes.get(lane)
+                    values.extend(
+                        (const(1), *side.values)
+                        if side is not None
+                        else (const(0), const(0), const(0), const(0))
+                    )
+                vector_sources.append(
+                    LookupSide(
+                        first.table,
+                        const(1),
+                        tuple(values),
+                        first.row_start,
+                        first.row_stop,
+                        first.weight,
+                    )
+                )
+            destination_values = []
+            for lane in range(_SOURCE_BUNDLE_LANES):
+                mask = cell(f"is_scalar_byte_{lane}")
+                destination_values.extend(
+                    (
+                        mask,
+                        mask * cell("slot_index"),
+                        mask * (cell("byte_index_base") + lane),
+                        mask * cell(f"value_{lane}"),
+                    )
+                )
+            return LookupArgument(
+                lookup.name,
+                tuple(vector_sources),
+                (
+                    LookupSide(
+                        _PACKED_SOURCE_BUNDLE_TABLE,
+                        cell("has_is_scalar_byte"),
+                        tuple(destination_values),
+                        0,
+                        packed_rows,
+                        old.weight,
+                    ),
+                ),
+            )
         if lookup.name in {
             "claim_source_token_bytes_match_bundle",
-            "claim_source_scalar_bytes_match_bundle",
             "claim_source_diagnosis_bytes_match_bundle",
             "claim_source_service_bytes_match_bundle",
         }:
@@ -1127,7 +1213,6 @@ def _pack_source_bundle_table(
             old = lookup.destinations[0]
             mask = {
                 "claim_source_token_bytes_match_bundle": "is_token_byte",
-                "claim_source_scalar_bytes_match_bundle": "is_scalar_byte",
                 "claim_source_diagnosis_bytes_match_bundle": "is_diagnosis_byte",
                 "claim_source_service_bytes_match_bundle": "is_service_non_token_byte",
             }[lookup.name]

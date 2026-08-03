@@ -241,18 +241,20 @@ simulator/leakage/backend gates close.
 The separate C0 typed-state executable AIR now supplies the missing ordered-map/payment semantic
 slice at its semantic-AIR boundary. It binds replay and payment roots/cursors, fixed slot
 order, canonical money subtraction and debit/credit conservation, and composes both lanes' SHA3
-ports through one contiguous interface-only bus. The verified K128 v4 shape is 56 tables, 79
+ports through one contiguous interface-only bus. The verified K128 v5 shape is 56 tables, 79
 lookups, 1,806 public inputs, and 46,210 exact calls: 46,208 replay/payment calls plus two C0
-state-root calls. Its encoded program is 22,460,606 bytes, its execution is 145,792,794 bytes,
-and its raw witness is 102,981,664 bytes. The v4 interface retains the 8-lane source bundle and
+state-root calls. Its encoded program is 23,906,457 bytes, its execution is 148,684,533 bytes,
+and its raw witness is 102,981,664 bytes. The v5 interface retains the 8-lane source bundle and
 packs operation/log preimages into 64-lane vector lookup messages with fixed live bits, preserving
 every call index, position, value, and byte obligation. It replaces the duplicate replay/payment
-key-sentinel lookups with local byte/inverse identities tied to range-checked key bytes. Positive,
-root, money, compact-log, sentinel aggregate-bypass, and fixed asset-registry mutation
+key-sentinel lookups with local byte/inverse identities tied to range-checked key bytes. It also
+groups 41 fixed scalar-copy positions into eight vector source messages and one masked
+bundle destination. Positive, root, money, compact-log, scalar-bundle, sentinel aggregate-bypass,
+and fixed asset-registry mutation
 rejection evidence passed. The native H4 coordinator consumes the full typed AIR execution,
 independently verifies its authority/root tables, and maps every typed call to the canonical H4
 boundary. The selected generic proof route remains rejected by the immutable resource preflight
-(`modeled_required_available_bytes=23735514936`, `qualifies=false`); this remains a nonactivating
+(`modeled_required_available_bytes=22975297336`, `qualifies=false`); this remains a nonactivating
 seam with no Gate 2E, H5, H6, backend, or `proofSuiteId` credit.
 
 ## 9. Required green evidence

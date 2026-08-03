@@ -6392,3 +6392,65 @@ Relative to v3, v4 removes 1,107,296,256 interaction bytes while adding 133,693,
 modeled required availability falls by 1,111,738,240 bytes. This remains far above the immutable
 limit. Gate 2E, H5, H6, reviewed backend admission, simulator/leakage closure, `proofSuiteId`, and
 activation remain open; no H5 launch is authorized or credited.
+
+## 2026-08-03 Typed C0 v5 scalar vector copy - VERIFIED, NONACTIVATING
+
+The scalar-to-canonical-bundle relation has 41 fixed absolute byte positions but previously used
+41 scalar source sides and eight packed-bundle lane sides. v5 groups those positions by their eight
+actual 8-byte bundle words. Each vector lane retains a live bit, slot index, absolute byte index,
+and value; the bundle destination uses fixed per-lane scalar masks and a fixed per-word selector.
+No live witness column was added. A mutation of one live scalar byte on the bundle side rejects.
+Protected paths remain untouched.
+
+Exact K128 v5 readback and verification:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v5
+program_bytes=23906457
+execution_bytes=148684533
+program_commitment=260106c1018c1e6348be016fdcc22fb4d554341c40e87d7a7236109fe4ba076f58ce477a0cf4e7ff20ec06854dbeeedaa7058a498619ede1c7de4c7d2c67c3d3
+execution_commitment=94994cd5876eb04d82ef31b45bae6cac9029ce88575497bf9c9c4580911ca6983887dac45f24d4df7593a1a736fe99efa58069cee150cffa575155f54a5cb39c
+tables=56
+lookups=79
+public_inputs=1806
+hash_calls=46210
+raw_witness_bytes=102981664
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py
+.....                                                                    [100%]
+5 passed in 370.03s (0:06:10)
+
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 101.43s
+exit=0
+```
+
+The exact immutable resource preflight remains a hard rejection:
+
+```text
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=4775739392
+modeled_interaction_evaluation_bytes=7084179456
+modeled_composition_evaluation_bytes=1442840576
+modeled_deep_evaluation_bytes=169877700608
+modeled_fri_mask_bytes=130023424
+modeled_folded_layer_bytes=134217728
+modeled_monolithic_live_bytes_lower_bound=183444701184
+modeled_maximum_domain_rows=1048576
+requires_streaming=true
+modeled_raw_witness_bytes=102981664
+modeled_persistent_oracle_bytes=13808394080
+modeled_peak_temporary_bytes=1135869952
+modeled_filesystem_overhead_bytes=3736066008
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=22975297336
+```
+
+The scalar argument's modeled interaction contribution falls from 780,140,544 to 171,966,464
+bytes. Relative to v4, total interaction storage falls by 608,174,080 bytes and modeled required
+availability falls by 760,217,600 bytes. This remains nonqualifying. Gate 2E, H5, H6, reviewed
+backend admission, simulator/leakage closure, `proofSuiteId`, and activation remain open; no H5
+launch is authorized or credited.

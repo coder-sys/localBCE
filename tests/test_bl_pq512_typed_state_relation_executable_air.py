@@ -93,3 +93,23 @@ def test_typed_state_air_rejects_compact_log_message_mutation() -> None:
         verify_typed_state_relation_air(
             _mutated_trace(_k128_instance(), LOG_MESSAGE_TABLE, "value_0", 0)
         )
+
+
+def test_typed_state_air_rejects_vector_scalar_bundle_mutation() -> None:
+    instance = _k128_instance()
+    table = instance.traces["claim_source_bundle_word"].columns
+    row, lane = next(
+        (row, lane)
+        for row in range(len(table["slot_index"]))
+        for lane in range(8)
+        if table[f"is_scalar_byte_{lane}"][row] == 1
+    )
+    with pytest.raises(StructuralError, match="lookup|multiset"):
+        verify_typed_state_relation_air(
+            _mutated_trace(
+                instance,
+                "claim_source_bundle_word",
+                f"value_{lane}",
+                row,
+            )
+        )
