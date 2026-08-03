@@ -1016,3 +1016,59 @@ pub fn validated_execution_traces(encoded: &[u8]) -> Result<Vec<Vec<Vec<M31>>>, 
     }
     Ok(parsed.traces)
 }
+
+/// One named table extracted only after the execution public-input bindings
+/// have been checked.  The complete AIR evaluator remains the authority for
+/// identities, fixed columns, and lookup multisets; this view only prevents
+/// boundary verifiers from relying on positional table indexes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamedExecutionTable {
+    pub name: String,
+    pub columns: Vec<(String, Vec<M31>)>,
+}
+
+/// Return selected execution tables with their canonical column names.
+pub fn validated_execution_named_tables(
+    encoded: &[u8],
+    names: &[&str],
+) -> Result<Vec<NamedExecutionTable>, AirIrError> {
+    let parsed = parse_execution(encoded)?;
+    for (binding, supplied) in parsed
+        .public_inputs
+        .iter()
+        .zip(&parsed.supplied_public_inputs)
+    {
+        let observed = parsed
+            .traces
+            .get(binding.table)
+            .and_then(|columns| columns.get(binding.column))
+            .and_then(|values| values.get(binding.row))
+            .ok_or(AirIrError::PublicInput)?;
+        if observed != supplied {
+            return Err(AirIrError::PublicInputMismatch);
+        }
+    }
+    let mut output = Vec::with_capacity(names.len());
+    for name in names {
+        let index = parsed
+            .tables
+            .iter()
+            .position(|table| table._name == *name)
+            .ok_or(AirIrError::TraceSchema)?;
+        let table = &parsed.tables[index];
+        let trace = parsed.traces.get(index).ok_or(AirIrError::TraceSchema)?;
+        if trace.len() != table.columns.len() {
+            return Err(AirIrError::TraceSchema);
+        }
+        output.push(NamedExecutionTable {
+            name: table._name.clone(),
+            columns: table
+                .columns
+                .iter()
+                .cloned()
+                .zip(trace.iter().cloned())
+                .collect(),
+        });
+    }
+    Ok(output)
+}

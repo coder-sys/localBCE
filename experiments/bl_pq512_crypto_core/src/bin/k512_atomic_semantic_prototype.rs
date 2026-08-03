@@ -9,8 +9,9 @@ use std::{
 
 use bl_pq512_crypto_core::{
     air_ir::{
-        AIR_PROGRAM_MAGIC, evaluate_air_execution, validate_air_program,
-        validated_execution_public_inputs, validated_execution_traces,
+        AIR_PROGRAM_MAGIC, NamedExecutionTable, evaluate_air_execution, validate_air_program,
+        validated_execution_named_tables, validated_execution_public_inputs,
+        validated_execution_traces,
     },
     field::M31,
     hash_bus::{
@@ -67,6 +68,26 @@ const STATE_BINDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-ROOT-AIR-v1";
 const STATE_RELATION_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-RELATION-AIR-v2";
 const STATE_AIR_COMPONENT_ID: &[u8] = b"BL-PQ512-STATE-AIR-PROOF-V1";
+const TYPED_STATE_COMPONENT_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-V1";
+const TYPED_STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-v1";
+const TYPED_STATE_FRAGMENT_MAGIC: &[u8] = b"BLSA03";
+const TYPED_STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF/v1\0";
+const TYPED_STATE_PROJECTION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROJECTION/v1\0";
+const TYPED_STATE_PROJECTION_DIGEST_DOMAIN: &[u8] =
+    b"BL/PQ512/C0/TYPED-STATE-PROJECTION-DIGEST/v1\0";
+const TYPED_STATE_STATEMENT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-STATEMENT/v1\0";
+const TYPED_STATE_TRANSITION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-TRANSITION/v1\0";
+const TYPED_STATE_PUBLIC_COIN_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PUBLIC-COIN/v1\0";
+const TYPED_STATE_COMMITMENT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-COMMITMENT/v1\0";
+const TYPED_STATE_PROOF_IDENTITY_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROOF/v1\0";
+const TYPED_STATE_ATTEMPT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-ATTEMPT/v1\0";
+const TYPED_STATE_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-RECEIPT/v1\0";
+const TYPED_STATE_FRAGMENT_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-FRAGMENT/v1\0";
+const TYPED_STATE_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-COMPOSITION/v1\0";
+const TYPED_STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-BINDING/v1\0";
+const TYPED_STATE_VERIFIER_IDENTITY: &[u8] = b"BL/PQ512/C0/TYPED-STATE/INDEPENDENT-VERIFIER/v1\0";
+const C0_STATE_ROOT_DOMAIN: &[u8] = b"BL/PQ512/C0/STATE-ROOT/v1\0";
+const PAYMENT_STATE_DOMAIN: &[u8] = b"BL/PQ512/PAYMENT-MAP/STATE/v4";
 const STATE_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-STATE-PLANE-V1";
 const HASH_PAD_PARAMETER_IDENTITY: &[u8] = b"BL-PQ512-SHA3-HASH-PAD-V1";
 const K128_SHARDS: u16 = 1;
@@ -116,6 +137,7 @@ struct ShardEvidence {
 }
 
 struct StateBindingVerification {
+    typed_state: bool,
     state_profile: Vec<u8>,
     state_capacity: u64,
     before_snapshot: Vec<u8>,
@@ -135,6 +157,9 @@ struct StateBindingVerification {
     state_air_execution: [u8; 64],
     state_air_fragment: [u8; 64],
     composition: [u8; 64],
+    typed_state_root_before: [u8; 64],
+    typed_state_root_after: [u8; 64],
+    typed_air_execution: Option<Vec<u8>>,
     state_relation_rows: Option<Vec<StateRelationRow>>,
     state_relation_source_digest: [u8; 64],
 }
@@ -284,6 +309,7 @@ fn run() -> Result<(), String> {
     }
     let private_state_relation_source = state_binding
         .as_ref()
+        .filter(|binding| !binding.typed_state)
         .map(write_private_state_relation_source)
         .transpose()?;
     let parent_binding = atomic_parent_binding(
@@ -364,22 +390,26 @@ fn run() -> Result<(), String> {
                 .env(
                     "BL_STATE_AIR_FRAGMENT_DIGEST",
                     hex(&binding.state_air_fragment),
-                )
-                .env(
-                    "BL_STATE_RELATION_SOURCE_PATH",
-                    private_state_relation_source
-                        .as_ref()
-                        .ok_or_else(|| "state_relation_source_missing".to_string())?
-                        .path
-                        .as_os_str(),
-                )
-                .env(
-                    "BL_STATE_RELATION_SOURCE_SHA3_512",
-                    hex(&private_state_relation_source
-                        .as_ref()
-                        .ok_or_else(|| "state_relation_source_missing".to_string())?
-                        .digest),
                 );
+            if binding.typed_state {
+                child
+                    .env("BL_TYPED_STATE_BINDING", "1")
+                    .env(
+                        "BL_TYPED_STATE_ROOT_BEFORE",
+                        hex(&binding.typed_state_root_before),
+                    )
+                    .env(
+                        "BL_TYPED_STATE_ROOT_AFTER",
+                        hex(&binding.typed_state_root_after),
+                    );
+            } else {
+                let source = private_state_relation_source
+                    .as_ref()
+                    .ok_or_else(|| "state_relation_source_missing".to_string())?;
+                child
+                    .env("BL_STATE_RELATION_SOURCE_PATH", source.path.as_os_str())
+                    .env("BL_STATE_RELATION_SOURCE_SHA3_512", hex(&source.digest));
+            }
             for (index, field) in binding.projection.iter().enumerate() {
                 child.env(format!("BL_STATE_PLANE_PUBLIC_ABI_{index:02}"), hex(field));
             }
@@ -554,6 +584,11 @@ fn update_state_context(hash: &mut Sha3_512, state: Option<&StateBindingVerifica
         hash.update(state.state_relation_source_digest);
         for field in state.projection {
             hash.update(field);
+        }
+        if state.typed_state {
+            hash.update([1_u8]);
+            hash.update(state.typed_state_root_before);
+            hash.update(state.typed_state_root_after);
         }
     } else {
         // Preserve the accepted no-state H4 parent identity.  The extended
@@ -1114,6 +1149,7 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
     match prefix[6] {
         2 => verify_state_binding_v2(path),
         3 => verify_state_binding_v3(path),
+        4 => verify_typed_state_binding_v4(path),
         _ => Err("state_binding_version".to_string()),
     }
 }
@@ -1390,6 +1426,7 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
         .try_into()
         .map_err(|_| "state_binding_projection_count".to_string())?;
     Ok(StateBindingVerification {
+        typed_state: false,
         state_profile: before.profile.clone(),
         state_capacity: before.capacity,
         before_snapshot: before.encoded,
@@ -1409,6 +1446,9 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
         state_air_execution,
         state_air_fragment,
         composition,
+        typed_state_root_before: [0; 64],
+        typed_state_root_after: [0; 64],
+        typed_air_execution: None,
         state_relation_rows: None,
         state_relation_source_digest: [0; 64],
     })
@@ -1823,6 +1863,7 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
         .map_err(|error| format!("state_relation_source_build:{error:?}"))?;
     let state_relation_source_digest = state_relation_source_digest(&state_relation_source);
     Ok(StateBindingVerification {
+        typed_state: false,
         state_profile: before.profile.clone(),
         state_capacity: before.capacity,
         before_snapshot: before.encoded,
@@ -1842,8 +1883,627 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
         state_air_execution,
         state_air_fragment,
         composition,
+        typed_state_root_before: [0; 64],
+        typed_state_root_after: [0; 64],
+        typed_air_execution: None,
         state_relation_rows: Some(state_relation_rows),
         state_relation_source_digest,
+    })
+}
+
+fn typed_column<'a>(
+    tables: &'a [NamedExecutionTable],
+    table_name: &str,
+    column_name: &str,
+) -> Result<&'a Vec<M31>, String> {
+    let table = tables
+        .iter()
+        .find(|table| table.name == table_name)
+        .ok_or_else(|| format!("typed_state_table_missing:{table_name}"))?;
+    table
+        .columns
+        .iter()
+        .find(|(name, _)| name == column_name)
+        .map(|(_, values)| values)
+        .ok_or_else(|| format!("typed_state_column_missing:{table_name}:{column_name}"))
+}
+
+fn typed_byte(value: M31, label: &str) -> Result<u8, String> {
+    let value = value.as_u32();
+    u8::try_from(value).map_err(|_| format!("typed_state_byte:{label}"))
+}
+
+fn typed_u64(value: M31, _label: &str) -> Result<u64, String> {
+    Ok(u64::from(value.as_u32()))
+}
+
+fn typed_bytes64(
+    tables: &[NamedExecutionTable],
+    table: &str,
+    prefix: &str,
+    row: usize,
+) -> Result<[u8; 64], String> {
+    let mut output = [0_u8; 64];
+    for (index, destination) in output.iter_mut().enumerate() {
+        let values = typed_column(tables, table, &format!("{prefix}_{index}"))?;
+        *destination = typed_byte(
+            *values
+                .get(row)
+                .ok_or_else(|| format!("typed_state_row:{table}:{prefix}:{row}"))?,
+            prefix,
+        )?;
+    }
+    Ok(output)
+}
+
+fn typed_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 64] {
+    hash_parts(domain, parts)
+}
+
+fn verify_typed_root_interface(
+    tables: &[NamedExecutionTable],
+    root_call_offset: u32,
+    roots: &[[u8; 64]; 2],
+    payment_roots: &[[u8; 64]; 2],
+    replay_roots: &[[u8; 64]; 2],
+) -> Result<(), String> {
+    let message_call = root_call_offset;
+    let message_call_values = typed_column(tables, "sha3_message_batch", "call_index")?;
+    let message_position = typed_column(tables, "sha3_message_batch", "position")?;
+    let message_live = typed_column(tables, "sha3_message_batch", "live")?;
+    let message_value = typed_column(tables, "sha3_message_batch", "value")?;
+    let digest_call = typed_column(tables, "sha3_digest_batch", "call_index")?;
+    let mut seen_digest = [false; 2];
+    for phase in 0..2 {
+        let expected = [
+            C0_STATE_ROOT_DOMAIN,
+            &payment_roots[phase],
+            &replay_roots[phase],
+        ]
+        .concat();
+        let call = message_call + phase as u32;
+        let mut message = Vec::new();
+        let mut saw_row = false;
+        for row in 0..message_call_values.len() {
+            if message_call_values[row].as_u32() != call {
+                continue;
+            }
+            saw_row = true;
+            let position = message_position[row].as_u32() as usize;
+            let live = message_live[row].as_u32();
+            if live > 1
+                || position
+                    != row.saturating_sub(
+                        message_call_values
+                            .iter()
+                            .position(|value| value.as_u32() == call)
+                            .unwrap_or(row),
+                    )
+            {
+                return Err(format!("typed_state_root_message_shape:{phase}"));
+            }
+            let value = typed_byte(message_value[row], "root_message")?;
+            if live == 1 {
+                if position != message.len() {
+                    return Err(format!("typed_state_root_message_position:{phase}"));
+                }
+                message.push(value);
+            } else if value != 0 {
+                return Err(format!("typed_state_root_message_padding:{phase}"));
+            }
+        }
+        if !saw_row || message != expected {
+            return Err(format!("typed_state_root_message:{phase}"));
+        }
+        let mut digest = [0_u8; 64];
+        let mut found = false;
+        for row in 0..digest_call.len() {
+            if digest_call[row].as_u32() != call {
+                continue;
+            }
+            if found {
+                return Err(format!("typed_state_root_digest_duplicate:{phase}"));
+            }
+            found = true;
+            for (index, destination) in digest.iter_mut().enumerate() {
+                let values = typed_column(tables, "sha3_digest_batch", &format!("value_{index}"))?;
+                *destination = typed_byte(values[row], "root_digest")?;
+            }
+        }
+        if !found || digest != roots[phase] {
+            return Err(format!("typed_state_root_digest:{phase}"));
+        }
+        seen_digest[phase] = true;
+    }
+    if seen_digest != [true, true] {
+        return Err("typed_state_root_digest_missing".to_string());
+    }
+    Ok(())
+}
+
+fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification, String> {
+    let encoded = fs::read(path).map_err(|error| format!("state_binding_read:{error}"))?;
+    let mut cursor = StateCursor::new(&encoded);
+    if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC || cursor.u8("binding_version")? != 4
+    {
+        return Err("state_binding_version".to_string());
+    }
+    let state_profile = cursor.text(64, "typed_profile")?;
+    let state_capacity = cursor.u64("typed_capacity")?;
+    let typed_state_root_before = cursor.array64("typed_root_before")?;
+    let typed_state_root_after = cursor.array64("typed_root_after")?;
+    let statement = cursor.array64("typed_statement")?;
+    let binding_digest = cursor.array64("typed_binding")?;
+    let mut projection = [[0_u8; 32]; 12];
+    for field in &mut projection {
+        *field = cursor
+            .take(32, "typed_projection")?
+            .try_into()
+            .expect("typed projection length");
+        if *field == [0; 32] {
+            return Err("typed_state_projection_zero".to_string());
+        }
+    }
+    let projection_digest = cursor.array64("typed_projection_digest")?;
+    let public_coin = cursor.array64("typed_public_coin")?;
+    let transition = cursor.array64("typed_transition")?;
+    let commitment = cursor.array64("typed_commitment")?;
+    let proof = cursor.array64("typed_proof")?;
+    let verifier = cursor.array64("typed_verifier")?;
+    let attempt = cursor.array64("typed_attempt")?;
+    let receipt = cursor.array64("typed_receipt")?;
+    let state_air_program = cursor.array64("typed_air_program")?;
+    let state_air_execution = cursor.array64("typed_air_execution")?;
+    let state_air_fragment = cursor.array64("typed_air_fragment")?;
+    let composition = cursor.array64("typed_composition")?;
+    if cursor.take(6, "typed_fragment_magic")? != TYPED_STATE_FRAGMENT_MAGIC
+        || cursor.u8("typed_fragment_version")? != 1
+    {
+        return Err("typed_state_fragment_version".to_string());
+    }
+    let program_length = usize::try_from(cursor.u32("typed_program_length")?)
+        .map_err(|_| "typed_program_length".to_string())?;
+    if program_length == 0 || program_length > STATE_BINDING_MAX_BYTES as usize {
+        return Err("typed_program_shape".to_string());
+    }
+    let air_program = cursor.take(program_length, "typed_air_program_bytes")?;
+    let execution_length = usize::try_from(cursor.u32("typed_execution_length")?)
+        .map_err(|_| "typed_execution_length".to_string())?;
+    if execution_length == 0 || execution_length > STATE_BINDING_MAX_BYTES as usize {
+        return Err("typed_execution_shape".to_string());
+    }
+    let air_execution = cursor.take(execution_length, "typed_air_execution_bytes")?;
+    let package_length = usize::try_from(cursor.u64("typed_package_length")?)
+        .map_err(|_| "typed_package_length".to_string())?;
+    if package_length == 0 || package_length > STATE_BINDING_MAX_BYTES as usize {
+        return Err("typed_package_shape".to_string());
+    }
+    let proof_package = cursor.take(package_length, "typed_proof_package")?;
+    let component_id = cursor.text(128, "typed_component_id")?;
+    let component_program_id = cursor.text(128, "typed_component_program_id")?;
+    let proof_suite_id = cursor.array64("typed_proof_suite_id")?;
+    let schedule_commitment = cursor.array64("typed_schedule_commitment")?;
+    let transcript_root = cursor.array64("typed_transcript_root")?;
+    let evidence_commitment = cursor.array64("typed_evidence_commitment")?;
+    let package_commitment_field = cursor.array64("typed_package_commitment")?;
+    let component_proof_identity = cursor.array64("typed_component_proof_identity")?;
+    let public_input_digest = cursor.array64("typed_public_input_digest")?;
+    let attribution_digest = cursor.array64("typed_attribution_digest")?;
+    let component_proof_bytes = cursor.u64("typed_component_proof_bytes")?;
+    let worker_report_digest = cursor.array64("typed_worker_report_digest")?;
+    let canonical_length = usize::try_from(cursor.u32("typed_canonical_length")?)
+        .map_err(|_| "typed_canonical_length".to_string())?;
+    let canonical_evidence = cursor.take(canonical_length, "typed_canonical")?;
+    if !cursor.done() {
+        return Err("state_binding_trailing_bytes".to_string());
+    }
+    if state_capacity == 0
+        || state_capacity > STATE_MAX_CAPACITY
+        || state_capacity != 128 && state_capacity != 512
+        || !state_profile.iter().all(u8::is_ascii)
+        || component_id != TYPED_STATE_COMPONENT_ID
+        || component_program_id != TYPED_STATE_AIR_PROGRAM_ID
+    {
+        return Err("typed_state_identity".to_string());
+    }
+    validate_state_air_program_id(air_program, TYPED_STATE_AIR_PROGRAM_ID)?;
+    let air_program_report = validate_air_program(air_program)
+        .map_err(|error| format!("typed_air_program:{error:?}"))?;
+    let air_execution_report = evaluate_air_execution(air_execution)
+        .map_err(|error| format!("typed_air_execution:{error:?}"))?;
+    if air_program_report.source_program_commitment
+        != air_execution_report.source_program_commitment
+        || air_program_report.public_input_count != 1_806
+        || air_program_report.program_binary_commitment != state_air_program
+        || air_execution_report.binary_commitment != state_air_execution
+    {
+        return Err("typed_state_air_identity".to_string());
+    }
+    let public_inputs = validated_execution_public_inputs(air_execution)
+        .map_err(|error| format!("typed_public_inputs:{error:?}"))?;
+    if public_inputs.len() != 1_806 {
+        return Err("typed_public_input_count".to_string());
+    }
+    let named = validated_execution_named_tables(
+        air_execution,
+        &[
+            "typed_state_authority",
+            "sha3_message_batch",
+            "sha3_digest_batch",
+        ],
+    )
+    .map_err(|error| format!("typed_named_tables:{error:?}"))?;
+    let typed_call_count = typed_column(&named, "sha3_digest_batch", "call_index")?
+        .len()
+        .checked_sub(2)
+        .ok_or_else(|| "typed_state_hash_bus_call_count".to_string())?;
+    if typed_call_count == 0 {
+        return Err("typed_state_hash_bus_call_count".to_string());
+    }
+    let authority = typed_column(&named, "typed_state_authority", "phase")?;
+    if authority.len() != 2 {
+        return Err("typed_authority_rows".to_string());
+    }
+    let mut payment_roots = [[0_u8; 64]; 2];
+    let mut replay_roots = [[0_u8; 64]; 2];
+    let mut observed_state_roots = [[0_u8; 64]; 2];
+    for phase in 0..2 {
+        if authority[phase].as_u32() != phase as u32 {
+            return Err("typed_authority_phase".to_string());
+        }
+        payment_roots[phase] =
+            typed_bytes64(&named, "typed_state_authority", "payment_root", phase)?;
+        replay_roots[phase] = typed_bytes64(&named, "typed_state_authority", "replay_root", phase)?;
+        observed_state_roots[phase] =
+            typed_bytes64(&named, "typed_state_authority", "state_root", phase)?;
+        let epoch = typed_u64(
+            *typed_column(&named, "typed_state_authority", "epoch")?
+                .get(phase)
+                .ok_or_else(|| "typed_authority_epoch".to_string())?,
+            "epoch",
+        )?;
+        let sequence = typed_u64(
+            *typed_column(&named, "typed_state_authority", "sequence")?
+                .get(phase)
+                .ok_or_else(|| "typed_authority_sequence".to_string())?,
+            "sequence",
+        )?;
+        let next_slot = typed_u64(
+            *typed_column(&named, "typed_state_authority", "next_slot_index")?
+                .get(phase)
+                .ok_or_else(|| "typed_authority_cursor".to_string())?,
+            "next_slot_index",
+        )?;
+        let settlement = typed_bytes64(&named, "typed_state_authority", "settlement", phase)?;
+        let asset_registry =
+            typed_bytes64(&named, "typed_state_authority", "asset_registry", phase)?;
+        let scope = typed_bytes64(&named, "typed_state_authority", "scope", phase)?;
+        let benefit = typed_bytes64(&named, "typed_state_authority", "benefit_root", phase)?;
+        let obligation = typed_bytes64(&named, "typed_state_authority", "obligation_root", phase)?;
+        let ledger = typed_bytes64(&named, "typed_state_authority", "ledger_root", phase)?;
+        let operation_log =
+            typed_bytes64(&named, "typed_state_authority", "operation_log_root", phase)?;
+        let mut payment_message = Vec::new();
+        payment_message.extend_from_slice(PAYMENT_STATE_DOMAIN);
+        payment_message.extend_from_slice(&epoch.to_be_bytes());
+        payment_message.extend_from_slice(&sequence.to_be_bytes());
+        payment_message.extend_from_slice(
+            &u16::try_from(next_slot)
+                .map_err(|_| "typed_authority_cursor_width".to_string())?
+                .to_be_bytes(),
+        );
+        for value in [
+            settlement,
+            asset_registry,
+            scope,
+            benefit,
+            obligation,
+            ledger,
+            operation_log,
+        ] {
+            payment_message.extend_from_slice(&value);
+        }
+        let expected_payment: [u8; 64] = Sha3_512::digest(&payment_message).into();
+        if expected_payment != payment_roots[phase] {
+            return Err(format!("typed_payment_root:{phase}"));
+        }
+        let expected_state: [u8; 64] = Sha3_512::digest(
+            [
+                C0_STATE_ROOT_DOMAIN,
+                &payment_roots[phase],
+                &replay_roots[phase],
+            ]
+            .concat(),
+        )
+        .into();
+        if expected_state != observed_state_roots[phase] {
+            return Err(format!("typed_state_root:{phase}"));
+        }
+    }
+    if observed_state_roots != [typed_state_root_before, typed_state_root_after]
+        || typed_state_root_before == [0; 64]
+        || typed_state_root_after == [0; 64]
+    {
+        return Err("typed_state_root_binding".to_string());
+    }
+    verify_typed_root_interface(
+        &named,
+        u32::try_from(typed_call_count).map_err(|_| "typed_state_root_call_offset".to_string())?,
+        &observed_state_roots,
+        &payment_roots,
+        &replay_roots,
+    )?;
+    let public_bytes = public_inputs
+        .iter()
+        .flat_map(|value| value.as_u32().to_be_bytes())
+        .collect::<Vec<_>>();
+    for (index, field) in projection.iter().enumerate() {
+        let expected = typed_hash(
+            TYPED_STATE_PROJECTION_DOMAIN,
+            &[&[index as u8], &public_bytes],
+        );
+        if field[..] != expected[..32] {
+            return Err(format!("typed_projection:{index}"));
+        }
+    }
+    let expected_projection_digest = typed_hash(
+        TYPED_STATE_PROJECTION_DIGEST_DOMAIN,
+        &projection
+            .iter()
+            .map(|field| field.as_slice())
+            .collect::<Vec<_>>(),
+    );
+    if projection_digest != expected_projection_digest {
+        return Err("typed_projection_digest".to_string());
+    }
+    let profile_capacity = state_capacity.to_be_bytes();
+    let expected_statement = typed_hash(
+        TYPED_STATE_STATEMENT_DOMAIN,
+        &[
+            &state_profile,
+            &profile_capacity,
+            &observed_state_roots[0],
+            &observed_state_roots[1],
+            &payment_roots[0],
+            &payment_roots[1],
+            &projection_digest,
+            &state_air_program,
+            &state_air_execution,
+            &package_commitment_field,
+        ],
+    );
+    if statement != expected_statement {
+        return Err("typed_statement".to_string());
+    }
+    let epoch = typed_column(&named, "typed_state_authority", "epoch")?[0]
+        .as_u32()
+        .to_be_bytes();
+    let sequence_before = typed_column(&named, "typed_state_authority", "sequence")?[0]
+        .as_u32()
+        .to_be_bytes();
+    let sequence_after = typed_column(&named, "typed_state_authority", "sequence")?[1]
+        .as_u32()
+        .to_be_bytes();
+    let expected_transition = typed_hash(
+        TYPED_STATE_TRANSITION_DOMAIN,
+        &[
+            &state_profile,
+            &epoch,
+            &sequence_before,
+            &sequence_after,
+            &observed_state_roots[0],
+            &observed_state_roots[1],
+            &payment_roots[0],
+            &payment_roots[1],
+        ],
+    );
+    if transition != expected_transition {
+        return Err("typed_transition".to_string());
+    }
+    let expected_public_coin = typed_hash(
+        TYPED_STATE_PUBLIC_COIN_DOMAIN,
+        &[&statement, &transition, &projection_digest],
+    );
+    if public_coin != expected_public_coin {
+        return Err("typed_public_coin".to_string());
+    }
+    let expected_commitment = typed_hash(
+        TYPED_STATE_COMMITMENT_DOMAIN,
+        &[&statement, &public_coin, &package_commitment_field],
+    );
+    if commitment != expected_commitment {
+        return Err("typed_commitment".to_string());
+    }
+    let expected_verifier: [u8; 64] = Sha3_512::digest(TYPED_STATE_VERIFIER_IDENTITY).into();
+    if verifier != expected_verifier {
+        return Err("typed_verifier".to_string());
+    }
+    if proof_package.len() < 10 {
+        return Err("typed_proof_package_empty".to_string());
+    }
+    let (package_commitment, package) =
+        verify_selected_proof_package(proof_package, air_program, &public_inputs)
+            .map_err(|error| format!("typed_proof_package:{error:?}"))?;
+    let package_proof_bytes =
+        u64::try_from(package.proof.len()).map_err(|_| "typed_proof_package_size".to_string())?;
+    if package_commitment != package_commitment_field
+        || proof_suite_id != package.bundle.proof_suite_id
+        || schedule_commitment != package.bundle.schedule_commitment
+        || transcript_root != package.bundle.final_transcript_root
+        || evidence_commitment != package.bundle.evidence_commitment
+        || component_proof_bytes != package_proof_bytes
+        || component_proof_identity == [0; 64]
+        || public_input_digest == [0; 64]
+        || attribution_digest == [0; 64]
+        || worker_report_digest == [0; 64]
+    {
+        return Err("typed_proof_package_metadata".to_string());
+    }
+    let expected_component_proof_identity = hash_parts(
+        TYPED_STATE_PROOF_DOMAIN,
+        &[
+            b"proof-identity",
+            &package_commitment,
+            &package.bundle.proof_suite_id,
+            &package.bundle.schedule_commitment,
+            &package.bundle.final_transcript_root,
+            &package.bundle.evidence_commitment,
+            &package.bundle.main_trace_root,
+            &package.bundle.interaction_trace_root,
+            &package.bundle.composition_root,
+            &package.bundle.oods_claims_commitment,
+            &package.bundle.fri_mask_root,
+            &package.bundle.fri_batch_derivation_commitment,
+            &package
+                .bundle
+                .fri_layer_roots
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>(),
+        ],
+    );
+    if component_proof_identity != expected_component_proof_identity {
+        return Err("typed_component_proof_identity".to_string());
+    }
+    let expected_public_input_digest = hash_parts(
+        TYPED_STATE_PROOF_DOMAIN,
+        &[
+            b"public-inputs",
+            &public_bytes,
+            &projection.iter().flatten().copied().collect::<Vec<_>>(),
+        ],
+    );
+    if public_input_digest != expected_public_input_digest {
+        return Err("typed_public_input_digest".to_string());
+    }
+    let expected_proof = typed_hash(
+        TYPED_STATE_PROOF_IDENTITY_DOMAIN,
+        &[&statement, &component_proof_identity],
+    );
+    if proof != expected_proof {
+        return Err("typed_proof_identity".to_string());
+    }
+    let expected_attempt = typed_hash(
+        TYPED_STATE_ATTEMPT_DOMAIN,
+        &[&state_profile, &statement, &proof, &attribution_digest],
+    );
+    if attempt != expected_attempt {
+        return Err("typed_attempt".to_string());
+    }
+    let expected_receipt = typed_hash(
+        TYPED_STATE_RECEIPT_DOMAIN,
+        &[&statement, &commitment, &proof, &attempt],
+    );
+    if receipt != expected_receipt {
+        return Err("typed_receipt".to_string());
+    }
+    let expected_fragment = typed_hash(
+        TYPED_STATE_FRAGMENT_DOMAIN,
+        &[
+            &observed_state_roots[0],
+            &observed_state_roots[1],
+            &projection_digest,
+            &statement,
+            &transition,
+            &commitment,
+            &proof,
+            &receipt,
+            &state_air_program,
+            &state_air_execution,
+            &package_commitment,
+            &component_proof_identity,
+            canonical_evidence,
+        ],
+    );
+    if state_air_fragment != expected_fragment {
+        return Err("typed_fragment".to_string());
+    }
+    let expected_composition = typed_hash(
+        TYPED_STATE_COMPOSITION_DOMAIN,
+        &[
+            &statement,
+            &transition,
+            &projection_digest,
+            &public_coin,
+            &commitment,
+            &proof,
+            &receipt,
+            &state_air_program,
+            &state_air_execution,
+            &package_commitment,
+            &component_proof_identity,
+            canonical_evidence,
+            &state_air_fragment,
+        ],
+    );
+    if composition != expected_composition {
+        return Err("typed_composition".to_string());
+    }
+    let expected_binding = typed_hash(
+        TYPED_STATE_BINDING_DOMAIN,
+        &[
+            &observed_state_roots[0],
+            &observed_state_roots[1],
+            &statement,
+            &commitment,
+            &proof,
+            &receipt,
+            &composition,
+            &state_air_fragment,
+        ],
+    );
+    if binding_digest != expected_binding {
+        return Err("typed_binding".to_string());
+    }
+    let expected_canonical = [
+        TYPED_STATE_COMPONENT_ID,
+        &[0_u8],
+        TYPED_STATE_AIR_PROGRAM_ID,
+        &[0_u8],
+        &state_air_program,
+        &state_air_execution,
+        &package_commitment,
+        &proof_suite_id,
+        &schedule_commitment,
+        &transcript_root,
+        &evidence_commitment,
+        &component_proof_identity,
+        &public_input_digest,
+        &attribution_digest,
+        &component_proof_bytes.to_be_bytes(),
+        &worker_report_digest,
+    ]
+    .concat();
+    if canonical_evidence != expected_canonical {
+        return Err("typed_canonical".to_string());
+    }
+    Ok(StateBindingVerification {
+        typed_state: true,
+        state_profile,
+        state_capacity,
+        before_snapshot: Vec::new(),
+        after_snapshot: Vec::new(),
+        statement,
+        binding_digest,
+        projection,
+        projection_digest,
+        public_coin,
+        transition,
+        commitment,
+        proof,
+        verifier,
+        attempt,
+        receipt,
+        state_air_program,
+        state_air_execution,
+        state_air_fragment,
+        composition,
+        typed_state_root_before,
+        typed_state_root_after,
+        typed_air_execution: Some(air_execution.to_vec()),
+        state_relation_rows: None,
+        state_relation_source_digest: [0; 64],
     })
 }
 
@@ -1878,6 +2538,9 @@ fn verify_state_hash_bus_calls(
         || state_descriptor.total_calls != base_descriptor.total_calls + 2
     {
         return Err("state_hash_bus_descriptor_mismatch".to_string());
+    }
+    if state.typed_state {
+        return verify_typed_state_hash_bus_calls(boundary, header, &base_descriptor, state);
     }
     let capacity = state_root_capacity(header.profile)
         .map_err(|error| format!("state_hash_bus_capacity:{error:?}"))?;
@@ -1959,6 +2622,223 @@ fn verify_state_hash_bus_calls(
         .map_err(|error| format!("state_hash_bus_trace:{root_index}:{error:?}"))?;
         if digest != expected_roots[root_index] {
             return Err(format!("state_hash_bus_digest:{root_index}"));
+        }
+        if let Some(error) = mismatch {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn typed_call_message(
+    tables: &[NamedExecutionTable],
+    call_index: u32,
+) -> Result<(Vec<u8>, [u8; 64]), String> {
+    let call_values = typed_column(tables, "sha3_message_batch", "call_index")?;
+    let position_values = typed_column(tables, "sha3_message_batch", "position")?;
+    let live_values = typed_column(tables, "sha3_message_batch", "live")?;
+    let value_values = typed_column(tables, "sha3_message_batch", "value")?;
+    let mut first_row = None;
+    let mut message = Vec::new();
+    for row in 0..call_values.len() {
+        if call_values[row].as_u32() != call_index {
+            continue;
+        }
+        let first = *first_row.get_or_insert(row);
+        let position = position_values[row].as_u32() as usize;
+        if position != row - first || live_values[row].as_u32() > 1 {
+            return Err(format!("typed_sha3_message_shape:{call_index}"));
+        }
+        let value = typed_byte(value_values[row], "sha3_message")?;
+        if live_values[row].as_u32() == 1 {
+            if position != message.len() {
+                return Err(format!("typed_sha3_message_prefix:{call_index}"));
+            }
+            message.push(value);
+        } else if value != 0 {
+            return Err(format!("typed_sha3_message_padding:{call_index}"));
+        }
+    }
+    if first_row.is_none() {
+        return Err(format!("typed_sha3_message_missing:{call_index}"));
+    }
+    let digest_call = typed_column(tables, "sha3_digest_batch", "call_index")?;
+    let mut digest = [0_u8; 64];
+    let mut found = false;
+    for row in 0..digest_call.len() {
+        if digest_call[row].as_u32() != call_index {
+            continue;
+        }
+        if found {
+            return Err(format!("typed_sha3_digest_duplicate:{call_index}"));
+        }
+        found = true;
+        for (index, destination) in digest.iter_mut().enumerate() {
+            let values = typed_column(tables, "sha3_digest_batch", &format!("value_{index}"))?;
+            *destination = typed_byte(values[row], "sha3_digest")?;
+        }
+    }
+    if !found {
+        return Err(format!("typed_sha3_digest_missing:{call_index}"));
+    }
+    Ok((message, digest))
+}
+
+fn verify_typed_state_hash_bus_calls(
+    boundary: &mut HashBusB16BoundaryFile,
+    header: &bl_pq512_crypto_core::hash_bus_b16_boundary::HashBusB16BoundaryHeader,
+    base_descriptor: &bl_pq512_crypto_core::hash_bus::HashBusDescriptor,
+    state: &StateBindingVerification,
+) -> Result<(), String> {
+    let state_descriptor = build_hash_bus_descriptor_with_state(header.profile)
+        .map_err(|error| format!("typed_state_hash_bus_descriptor:{error:?}"))?;
+    if state_descriptor.descriptor_commitment != header.descriptor_commitment
+        || state_descriptor.total_calls != base_descriptor.total_calls + 2
+    {
+        return Err("typed_state_hash_bus_descriptor_mismatch".to_string());
+    }
+    let execution = state
+        .typed_air_execution
+        .as_deref()
+        .ok_or_else(|| "typed_state_hash_bus_execution_missing".to_string())?;
+    let named =
+        validated_execution_named_tables(execution, &["sha3_message_batch", "sha3_digest_batch"])
+            .map_err(|error| format!("typed_state_hash_bus_named_tables:{error:?}"))?;
+    let typed_call_count = typed_column(&named, "sha3_digest_batch", "call_index")?
+        .len()
+        .checked_sub(2)
+        .ok_or_else(|| "typed_state_hash_bus_call_count".to_string())?;
+    if typed_call_count == 0 {
+        return Err("typed_state_hash_bus_call_count".to_string());
+    }
+    let mut call_starts = Vec::<(u64, u64, u64)>::new();
+    let mut call_index = 0_u64;
+    let mut permutation = 0_u64;
+    for run in &state_descriptor.runs {
+        let blocks = run
+            .capacity
+            .checked_div(u64::from(RATE_BYTES))
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| "typed_state_hash_bus_blocks".to_string())?;
+        for _ in 0..run.count {
+            call_starts.push((call_index, permutation, run.capacity));
+            call_index = call_index
+                .checked_add(1)
+                .ok_or_else(|| "typed_state_hash_bus_call_index".to_string())?;
+            permutation = permutation
+                .checked_add(blocks)
+                .ok_or_else(|| "typed_state_hash_bus_permutation".to_string())?;
+        }
+    }
+    let mut typed_global_indices = Vec::with_capacity(typed_call_count);
+    let mut global = 0_u64;
+    for run in &base_descriptor.runs {
+        if run.component == "replay_map" || run.component == "payment" {
+            for _ in 0..run.count {
+                typed_global_indices.push(global);
+                global = global
+                    .checked_add(1)
+                    .ok_or_else(|| "typed_state_hash_bus_call_index".to_string())?;
+            }
+        } else {
+            global = global
+                .checked_add(run.count)
+                .ok_or_else(|| "typed_state_hash_bus_call_index".to_string())?;
+        }
+    }
+    if typed_global_indices.len() != typed_call_count
+        || call_starts.len() != state_descriptor.total_calls as usize
+    {
+        return Err("typed_state_hash_bus_mapping_shape".to_string());
+    }
+    let mut local_calls = typed_global_indices;
+    local_calls.push(base_descriptor.total_calls);
+    local_calls.push(base_descriptor.total_calls + 1);
+    let mut cached_shard: Option<(u16, HashBusB16Shard)> = None;
+    for (local_index, global_index) in local_calls.into_iter().enumerate() {
+        let (message, digest) = typed_call_message(
+            &named,
+            u32::try_from(local_index)
+                .map_err(|_| "typed_state_hash_bus_call_index".to_string())?,
+        )?;
+        let (_, call_start, capacity) = call_starts
+            .get(global_index as usize)
+            .copied()
+            .ok_or_else(|| "typed_state_hash_bus_call_start".to_string())?;
+        if message.len()
+            > usize::try_from(capacity).map_err(|_| "typed_state_hash_bus_capacity".to_string())?
+        {
+            return Err(format!(
+                "typed_state_hash_bus_message_overflow:{local_index}"
+            ));
+        }
+        let blocks = capacity
+            .checked_div(u64::from(RATE_BYTES))
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| "typed_state_hash_bus_blocks".to_string())?;
+        let call_end = call_start
+            .checked_add(blocks.saturating_sub(1))
+            .ok_or_else(|| "typed_state_hash_bus_call_end".to_string())?;
+        let shard_id = u16::try_from(call_start / PERMUTATIONS_PER_COPROCESSOR_SHARD)
+            .map_err(|_| "typed_state_hash_bus_shard".to_string())?;
+        if call_end / PERMUTATIONS_PER_COPROCESSOR_SHARD != u64::from(shard_id) {
+            return Err(format!(
+                "typed_state_hash_bus_call_crosses_shard:{local_index}"
+            ));
+        }
+        if cached_shard
+            .as_ref()
+            .map_or(true, |(cached_id, _)| *cached_id != shard_id)
+        {
+            let shard = boundary
+                .read_shard(shard_id)
+                .map_err(|error| format!("typed_state_hash_bus_read_shard:{error:?}"))?;
+            cached_shard = Some((shard_id, shard));
+        }
+        let mut mismatch = None;
+        let expected_root = match local_index {
+            index if index == typed_call_count => Some(state.typed_state_root_before),
+            index if index == typed_call_count + 1 => Some(state.typed_state_root_after),
+            _ => None,
+        };
+        let actual_digest = for_each_sha3_512_permutation_boundary(
+            &message,
+            usize::try_from(capacity).map_err(|_| "typed_state_hash_bus_capacity".to_string())?,
+            |block_index, _, _, input, output| {
+                if mismatch.is_some() {
+                    return;
+                }
+                let global_permutation =
+                    call_start + u64::try_from(block_index).unwrap_or(u64::MAX);
+                let (cached_id, shard) = cached_shard.as_ref().expect("typed shard cache");
+                if *cached_id
+                    != u16::try_from(global_permutation / PERMUTATIONS_PER_COPROCESSOR_SHARD)
+                        .unwrap_or(u16::MAX)
+                {
+                    mismatch = Some(format!("typed_state_hash_bus_shard:{local_index}"));
+                    return;
+                }
+                mismatch = compare_state_bus_plane(
+                    &shard.input,
+                    input,
+                    global_permutation,
+                    local_index,
+                    "input",
+                )
+                .or_else(|| {
+                    compare_state_bus_plane(
+                        &shard.output,
+                        output,
+                        global_permutation,
+                        local_index,
+                        "output",
+                    )
+                });
+            },
+        )
+        .map_err(|error| format!("typed_state_hash_bus_trace:{local_index}:{error:?}"))?;
+        if actual_digest != digest || expected_root.is_some_and(|root| root != digest) {
+            return Err(format!("typed_state_hash_bus_digest:{local_index}"));
         }
         if let Some(error) = mismatch {
             return Err(error);
@@ -2099,6 +2979,52 @@ fn validate_state_binding_fields(
     let zero_field = hex(&[0; 32]);
     match (expected_statement, expected_binding, expected_state) {
         (Some(statement), Some(binding), Some(state)) => {
+            if state.typed_state {
+                if required(fields, "typed_state_component_verified")? != "true"
+                    || required(fields, "state_plane_binding_attached")? != "true"
+                    || required(fields, "state_hash_bus_calls_verified")? != "true"
+                    || required(fields, "state_plane_statement_sha3_512")? != statement
+                    || required(fields, "state_plane_binding_digest_sha3_512")? != binding
+                    || required(fields, "state_plane_public_abi_count")? != "12"
+                    || required(fields, "state_air_fragment_verified")? != "true"
+                    || required(fields, "state_relation_gkr_attached")? != "false"
+                    || required(fields, "state_relation_source_sha3_512")? != zero
+                    || required(fields, "state_relation_gkr_digest_sha3_512")? != zero
+                    || required(fields, "state_relation_interactive_verified")? != "false"
+                    || required(fields, "state_plane_projection_digest_sha3_512")?
+                        != hex(&state.projection_digest)
+                    || required(fields, "state_plane_public_coin_sha3_512")?
+                        != hex(&state.public_coin)
+                    || required(fields, "state_plane_transition_digest_sha3_512")?
+                        != hex(&state.transition)
+                    || required(fields, "state_plane_commitment_digest_sha3_512")?
+                        != hex(&state.commitment)
+                    || required(fields, "state_plane_proof_identity_sha3_512")? != hex(&state.proof)
+                    || required(fields, "state_plane_verifier_identity_sha3_512")?
+                        != hex(&state.verifier)
+                    || required(fields, "state_plane_attempt_id_sha3_512")? != hex(&state.attempt)
+                    || required(fields, "state_plane_receipt_digest_sha3_512")?
+                        != hex(&state.receipt)
+                    || required(fields, "state_plane_composition_digest_sha3_512")?
+                        != hex(&state.composition)
+                    || required(fields, "state_air_program_commitment_sha3_512")?
+                        != hex(&state.state_air_program)
+                    || required(fields, "state_air_execution_commitment_sha3_512")?
+                        != hex(&state.state_air_execution)
+                    || required(fields, "state_air_fragment_digest_sha3_512")?
+                        != hex(&state.state_air_fragment)
+                {
+                    return Err(format!("shard_state_binding:{shard}"));
+                }
+                for (index, field) in state.projection.iter().enumerate() {
+                    if required(fields, &format!("state_plane_public_abi_{index:02}"))?
+                        != hex(field)
+                    {
+                        return Err(format!("shard_state_binding:{shard}"));
+                    }
+                }
+                return Ok(());
+            }
             let state_relation_digest = decode_hex_64(
                 required(fields, "state_relation_gkr_digest_sha3_512")?,
                 "state_relation_gkr_digest",
@@ -2523,6 +3449,7 @@ mod tests {
 
     fn minimal_state_binding(before: Vec<u8>, after: Vec<u8>) -> StateBindingVerification {
         StateBindingVerification {
+            typed_state: false,
             state_profile: b"K128_CALIBRATION".to_vec(),
             state_capacity: 128,
             before_snapshot: before,
@@ -2542,6 +3469,9 @@ mod tests {
             state_air_execution: [13; 64],
             state_air_fragment: [14; 64],
             composition: [15; 64],
+            typed_state_root_before: [0; 64],
+            typed_state_root_after: [0; 64],
+            typed_air_execution: None,
             state_relation_rows: None,
             state_relation_source_digest: [0; 64],
         }
@@ -2594,6 +3524,7 @@ mod tests {
 
     fn test_state_binding(seed: u8) -> StateBindingVerification {
         StateBindingVerification {
+            typed_state: false,
             state_profile: b"K512_CALIBRATION".to_vec(),
             state_capacity: 512,
             before_snapshot: vec![seed; 8],
@@ -2613,6 +3544,9 @@ mod tests {
             state_air_execution: [seed.wrapping_add(12); 64],
             state_air_fragment: [seed.wrapping_add(13); 64],
             composition: [seed.wrapping_add(14); 64],
+            typed_state_root_before: [0; 64],
+            typed_state_root_after: [0; 64],
+            typed_air_execution: None,
             state_relation_rows: None,
             state_relation_source_digest: [seed.wrapping_add(15); 64],
         }

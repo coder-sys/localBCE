@@ -239,13 +239,15 @@ transcript are integration evidence only until those obligations and the Gate 2E
 simulator/leakage/backend gates close.
 
 The separate C0 typed-state executable AIR now supplies the missing ordered-map/payment semantic
-slice at a proof-native component boundary. It binds replay and payment roots/cursors, fixed slot
+slice at its semantic-AIR boundary. It binds replay and payment roots/cursors, fixed slot
 order, canonical money subtraction and debit/credit conservation, and composes both lanes' SHA3
 ports through one contiguous interface-only bus. The verified K128 shape is 60 tables, 93 lookups,
-524 public inputs, and 46,208 exact calls, with positive, root, money, and hash-port mutation
-rejection evidence. It remains nonactivating because the native H4 GKR/PCS relation and its PCS
-terminals still consume the older generic state source; no Gate 2E, H5, H6, backend, or
-`proofSuiteId` credit is assigned from this component.
+1,806 public inputs, and 46,210 exact calls: 46,208 replay/payment calls plus two C0 state-root
+calls. Positive, root, money, hash-port, and fixed asset-registry mutation rejection evidence
+passed. The native H4 coordinator now consumes the full typed AIR execution, independently verifies its
+authority/root tables, and maps every typed call to the canonical H4 boundary. The selected proof
+route is rejected by the immutable resource preflight; this remains a nonactivating seam with no
+Gate 2E, H5, H6, backend, or `proofSuiteId` credit.
 
 ## 9. Required green evidence
 

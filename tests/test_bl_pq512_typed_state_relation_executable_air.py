@@ -11,6 +11,7 @@ from experiments.fixed_shape_claim_air.profile import get_profile
 from experiments.fixed_shape_claim_air.executable_air import TraceTable
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 from experiments.fixed_shape_claim_air.typed_state_relation_executable_air import (
+    AUTHORITY_TABLE,
     MONEY_TABLE,
     PROGRAM_ID,
     SUMMARY_TABLE,
@@ -48,6 +49,7 @@ def test_typed_state_air_replays_c0_maps_money_and_h4_hash_ports() -> None:
 
     assert instance.program.program_id == PROGRAM_ID
     assert SUMMARY_TABLE in instance.traces
+    assert AUTHORITY_TABLE in instance.traces
     assert MONEY_TABLE in instance.traces
     assert "typed_state_lane_root_cursor_links" in {
         lookup.name for lookup in instance.program.lookups
@@ -58,8 +60,11 @@ def test_typed_state_air_replays_c0_maps_money_and_h4_hash_ports() -> None:
     assert instance.payment.key_derivation_ports_constrained is True
     assert instance.payment.operation_log_ports_constrained is True
     assert instance.payment.payment_map_hash_ports_constrained is True
-    assert instance.public_values[-4:] == (100, 80, 80, 80)
-    assert len(instance.hash_calls) == 46_208
+    assert len(instance.public_values) == 1_806
+    assert "typed_state_root_sha3_messages" in {
+        lookup.name for lookup in instance.program.lookups
+    }
+    assert len(instance.hash_calls) == 46_210
 
 
 def test_typed_state_air_binds_replay_roots_and_cursors() -> None:

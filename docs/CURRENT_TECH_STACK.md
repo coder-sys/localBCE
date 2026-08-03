@@ -224,21 +224,20 @@ Measured K128 construction and verifier readback:
 program_id=BL-PQ512-C0-TYPED-STATE-AIR-v1
 tables=60
 lookups=93
-public_inputs=524
-hash_calls=46208
+public_inputs=1806
+hash_calls=46210
 replay_hash_ports=True
 payment_hash_ports=True
-public_tail=(100,80,80,80)
+authority_root_ports=True
 ```
 
-The positive verifier passed once (`1 passed in 353.49s`), and split mutation runs passed for
-replay roots/cursors (`1 passed, 3 deselected`), money plus replay hash ports (`2 passed, 2
-deselected`), and the shared C0 fixture regression (`8 passed in 35.34s`). A combined typed file
-run after adding the mutations and a combined C0/payment regression exceeded their bounded
-windows without a pytest summary; neither receives pass credit. This is proof-native typed
-component evidence only: it is not consumed by `state_relation_gkr.rs` or the H4 parent,
-transcript, proof, independent verifier, and receipt. Gate 2E remains unsealed; H5 and H6 remain
-unrun, `proofSuiteId=null`, and activation remains false.
+The full post-fix typed verifier passed (`4 passed in 613.32s`). Split mutation runs passed for
+replay roots/cursors, money, replay hash ports, and fixed asset-registry bytes. This is semantic-AIR
+component evidence plus an implemented native H4 readback seam: the native coordinator consumes
+the full typed execution, checks the authority/root bindings, and maps every typed call to the
+canonical H4 bus. The selected typed proof route is rejected by the immutable resource preflight;
+the seam remains nonactivating until a complete proof construction, reviewed backend,
+simulator/leakage/security ledger, H5, and H6 gates close.
 
 ## How a successor must interpret this repository
 

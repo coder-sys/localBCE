@@ -5983,3 +5983,116 @@ py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_rel
 . [100%]
 1 passed, 3 deselected in 334.66s (0:05:34)
 ```
+
+## 2026-08-02 Typed C0 full-AIR canonicalization and resource-gate reconciliation - VERIFIED, NONACTIVATING
+
+The authoritative checkout for this phase was
+`C:\\Users\\neers\\Documents\\Codex\\2026-07-27\\he\\work\\Blind-Ledger-Wave2-Workspace-2026-07-26`,
+branch `main`, with pre-phase HEAD `22df74e Record typed verifier readback`. Protected paths were
+not modified. The canonical typed proof builder now uses the full
+`typed_state_relation_executable_air.py`; the compact diagnostic route was removed from the
+canonical path because it retained call descriptors but omitted the full claim-source, key, and
+operation-log constraints. Its measured rejection remains evidence below and is not a proof claim.
+
+The full typed K128 semantic readback remained:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v1
+tables=60
+lookups=93
+public_inputs=1806
+hash_calls=46210
+base_replay_payment_hash_calls=46208
+state_root_hash_calls=2
+```
+
+Current containing regressions passed:
+
+```text
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+running 7 tests
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 96.00s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py
+....                                                                     [100%]
+4 passed in 620.06s (0:10:20)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+..................                                                       [100%]
+18 passed in 106.11s (0:01:46)
+```
+
+The full selected generic-FRI typed route was attempted with the historical immutable caps
+restored. Its exact execution encoding is `566640085` bytes against the `536870912`-byte
+`MAX_AIR_BINARY_BYTES` cap and fails closed with `StructuralError: air_binary_size_cap_exceeded`.
+During diagnosis only, the cap was temporarily widened and then reverted; the exact native
+resource preflight still rejected the full route:
+
+```text
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=6331301888
+modeled_interaction_evaluation_bytes=152664276992
+modeled_composition_evaluation_bytes=29259464704
+modeled_deep_evaluation_bytes=566449143808
+modeled_fri_mask_bytes=7042236416
+modeled_folded_layer_bytes=8589934592
+modeled_monolithic_live_bytes_lower_bound=770336358400
+modeled_maximum_domain_rows=67108864
+requires_streaming=true
+modeled_raw_witness_bytes=248465072
+modeled_persistent_oracle_bytes=189308815024
+modeled_peak_temporary_bytes=39854276608
+modeled_filesystem_overhead_bytes=57290772908
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=290748831836
+```
+
+The compact diagnostic measurement was also rejected and is not canonical proof evidence:
+
+```text
+program_bytes=80886809
+execution_bytes=430547521
+raw_witness_bytes=270493468
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=6539444224
+modeled_interaction_evaluation_bytes=95785320448
+modeled_composition_evaluation_bytes=1157627904
+modeled_deep_evaluation_bytes=403148111872
+modeled_fri_mask_bytes=62914560
+modeled_folded_layer_bytes=67108864
+modeled_monolithic_live_bytes_lower_bound=506760527872
+modeled_maximum_domain_rows=524288
+requires_streaming=true
+modeled_persistent_oracle_bytes=103954212444
+modeled_peak_temporary_bytes=5595201536
+modeled_filesystem_overhead_bytes=27387353495
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=141231734771
+```
+
+The compact route omitted full claim-source/key/operation-log constraints and therefore was
+removed rather than promoted to solve the resource failure. The selected typed proof route has no
+successful proof package, no H4 state-composed qualification run, and no Gate 2E credit. The raw
+status fields are:
+
+```text
+gate_2e_selection_status=C0_CONTROL_RETAINED_NO_ELIGIBLE_PQ_FINALIST
+gate_2e_complete_boundary_status=NOT_RUN_NO_ELIGIBLE_FINALIST
+gate_2e_handoff_status=UNSEALED_BLOCKED_SELECTION_HANDOFF
+proof_suite_id=None
+activation_allowed=false
+h5_preflight_status=BLOCKED_H5_PREFLIGHT
+h6_preflight_status=BLOCKED_H6_PREFLIGHT
+h6_suite_registry_status=CANDIDATE_UNQUALIFIED
+```
+
+No H5 launch was attempted or skipped silently. The source-complete archive refresh is the final
+external-artifact step for this clean phase commit; its independent three-copy hashes are reported
+in the phase handoff. Gate 2E, H5, and H6 remain unclosed, `proofSuiteId=null`, and activation is
+false.

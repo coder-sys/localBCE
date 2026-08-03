@@ -52,7 +52,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
-| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; the compact state-AIR/FRI component passes native v3 envelope verification, and the current H4 bridge carries a seven-claim, 6,111-round state-composed transcript shape | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS, complete proof-native H4 composition, state-composed performance, repeated p95, final suite identity |
+| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; the compact state-AIR/FRI component passes native v3 envelope verification, and the full typed C0 AIR now has a native v4 readback seam that consumes its authority/root tables and maps all 46,210 calls into the canonical H4 bus | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS, a resource-qualified typed proof, complete proof-native H4 composition, state-composed performance, repeated p95, final suite identity |
 | Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, five-candidate dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, versioned state-root bus, native v2 compatibility and v3 proof-native state-component verification, compact AIR v2 fixed-snapshot lookup/mutation coverage, and the nonactivating two-state-claim H4 bridge are tested and documented | Admit a reviewed backend and complete the full state relation inside H4 GKR/PCS; close simulator/leakage/PQ blockers |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
@@ -347,11 +347,14 @@ boundary, not its closure. The compact relation now algebraically links ordered 
 both fixed-capacity snapshots through the v2 46-wide lookup grammar, and the H4 seam carries
 authenticated slot indices with canonical row-order constraints. Native Rust and Python snapshot
 decoders reject duplicate present keys. A separate `BL-PQ512-C0-TYPED-STATE-AIR-v1` component now
-composes the ordered-map/payment authorities and verifies root/cursor, slot-order, money, and
-replay/payment hash-port mutations for the K128 C0 witness; it is not yet consumed by the native
-H4 GKR/PCS relation or its PCS terminals. The full state relation is therefore still not composed
-inside the custom H4 GKR/PCS proof, no reviewed backend is admitted, and no manifest-bound H4
-K128/K512 proof was run after the source change.
+composes the ordered-map/payment authorities and verifies root/cursor, slot-order, money, fixed
+asset-registry, and replay/payment hash-port mutations for the K128 C0 witness. The native
+coordinator consumes its v4 AIR program/execution, verifies the authority/root bindings, and maps
+its 46,210 calls to the canonical H4 bus; the base replay/payment bus remains 46,208 calls. The
+full state relation is implemented at the typed semantic-AIR/H4 readback seam, but the selected
+typed proof route is rejected by the immutable resource preflight. It is still not a selected
+complete H4 GKR/PCS proof, no reviewed backend is admitted, and no manifest-bound H4 K128/K512
+proof was run after the source change.
 
 ## H5: repeated complete-proof qualification campaign
 

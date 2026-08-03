@@ -3,9 +3,10 @@
 The generic state relation is useful for the fixed-capacity H4 lane, but it is
 not the semantic authority for ordered state.  This component composes the
 existing ordered-map AIR and claim/payment AIR instead of duplicating either
-relation.  It adds only the cross-component links that were missing at the
-Wave 2 seam: replay/payment roots and cursors, fixed slot order, and checked
-money totals.
+    relation.  It adds only the cross-component links that were missing at the
+    Wave 2 seam: replay/payment roots and cursors, fixed slot order, and checked
+    money totals.  Exact totals remain private witness columns; only canonical
+    state identities and roots cross the public boundary.
 
 Hash preimages and SHA3 digests remain on the existing shared H4 hash bus.  No
 host-computed root or amount is accepted as a substitute for the component
@@ -53,6 +54,9 @@ from experiments.fixed_shape_claim_air.claim_payment_maps_executable_air import 
     ClaimPaymentMapsAirInstance,
     build_claim_payment_maps_executable_air,
 )
+from experiments.fixed_shape_claim_air.authenticated_payment_maps_reference import (
+    _ASSET_REGISTRY_ROOT,
+)
 from experiments.fixed_shape_claim_air.ordered_map_batch_executable_air import (
     OrderedMapBatchAirInstance,
     build_ordered_map_batch_sha3_executable_air,
@@ -67,7 +71,11 @@ PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v1"
 LANE_ORDER: Final[tuple[str, ...]] = ("replay", "benefit", "obligation", "ledger")
 MONEY_TABLE: Final[str] = "typed_state_money"
 SUMMARY_TABLE: Final[str] = "typed_state_lane_summary"
+AUTHORITY_TABLE: Final[str] = "typed_state_authority"
 _DOMAIN: Final[bytes] = b"BL/PQ512/WAVE2/TYPED-STATE-AIR/v1\x00"
+_C0_STATE_ROOT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/STATE-ROOT/v1\x00"
+_STATE_ROOT_ENTRY_WIDTH: Final[int] = 137
+_STATE_ROOT_CAPACITY_BASE: Final[int] = 512
 
 
 def _append(columns: dict[str, list[int]], name: str, value: int) -> None:
@@ -413,12 +421,466 @@ def _money_table(
             ),
         ),
     )
-    bindings = tuple(
-        PublicInputBinding(f"typed_state_money_{name}", MONEY_TABLE, name, rows - 1)
-        for name in ("running_allowed", "running_payment", "running_debit", "running_credit")
+    # The arithmetic remains proof-native, but exact amounts are private
+    # witness values and must not become authenticated public inputs.
+    return table, trace, byte_table, byte_trace, link, byte_link, (), ()
+
+
+def _authority_columns(
+    state_witness: C0TypedStateWitness,
+    replay: OrderedMapBatchAirInstance,
+    payment: ClaimPaymentMapsAirInstance,
+) -> tuple[
+    AirTable,
+    TraceTable,
+    tuple[LookupArgument, ...],
+    tuple[PublicInputBinding, ...],
+    tuple[int, ...],
+    tuple[Sha3Call, ...],
+]:
+    """Expose only state identities and bind them to the typed traces.
+
+    The payment root itself is consumed as a native SHA3 interface call.  Its
+    inputs are still carried as typed columns so the native H4 verifier can
+    recompute the exact state root from this execution, rather than trusting a
+    host-side root supplied beside the proof.
+    """
+
+    payment_states = (state_witness.payment_before, state_witness.payment_after)
+    replay_roots = (
+        state_witness.replay_batch.root_before,
+        state_witness.replay_batch.root_after,
     )
-    values = tuple(frozen[name][rows - 1] for name in ("running_allowed", "running_payment", "running_debit", "running_credit"))
-    return table, trace, byte_table, byte_trace, link, byte_link, bindings, values
+    state_roots = tuple(
+        sha3_512(_C0_STATE_ROOT_DOMAIN + state.root() + replay_root).digest()
+        for state, replay_root in zip(payment_states, replay_roots, strict=True)
+    )
+    message_length = len(_C0_STATE_ROOT_DOMAIN) + 64 + 64
+    columns: dict[str, list[int]] = {
+        "phase": [0, 1],
+        "epoch": [],
+        "sequence": [],
+        "next_slot_index": [],
+        **{f"epoch_byte_{index}": [] for index in range(8)},
+        **{f"sequence_byte_{index}": [] for index in range(8)},
+        **{f"settlement_{index}": [] for index in range(64)},
+        **{f"asset_registry_{index}": [] for index in range(64)},
+        **{f"scope_{index}": [] for index in range(64)},
+        **{f"benefit_root_{index}": [] for index in range(64)},
+        **{f"obligation_root_{index}": [] for index in range(64)},
+        **{f"ledger_root_{index}": [] for index in range(64)},
+        **{f"operation_log_root_{index}": [] for index in range(64)},
+        **{f"payment_root_{index}": [] for index in range(64)},
+        **{f"replay_root_{index}": [] for index in range(64)},
+        **{f"state_root_{index}": [] for index in range(64)},
+        **{f"root_message_{index}": [] for index in range(message_length)},
+    }
+
+    def append_bytes(prefix: str, value: bytes) -> None:
+        if type(value) is not bytes or len(value) != 64:
+            raise StructuralError(f"typed_state_authority_{prefix}_width_invalid")
+        for index, byte in enumerate(value):
+            _append(columns, f"{prefix}_{index}", byte)
+
+    for phase, (state, replay_root, state_root) in enumerate(
+        zip(payment_states, replay_roots, state_roots, strict=True)
+    ):
+        if phase == 0:
+            operation_log_root = state.operation_log_root_512
+        else:
+            operation_log_root = state.operation_log_root_512
+        epoch_bytes = state.epoch.to_bytes(8, "big")
+        sequence_bytes = state.sequence.to_bytes(8, "big")
+        _append(columns, "epoch", state.epoch)
+        _append(columns, "sequence", state.sequence)
+        _append(columns, "next_slot_index", state.next_slot_index)
+        for index, byte in enumerate(epoch_bytes):
+            _append(columns, f"epoch_byte_{index}", byte)
+        for index, byte in enumerate(sequence_bytes):
+            _append(columns, f"sequence_byte_{index}", byte)
+        append_bytes("settlement", state.strong_settlement_domain_id_512)
+        append_bytes("asset_registry", state.asset_registry_root_512)
+        append_bytes("scope", state.benefit_scope.commitment_512())
+        append_bytes("benefit_root", state.benefit_root_512)
+        append_bytes("obligation_root", state.obligation_root_512)
+        append_bytes("ledger_root", state.private_asset_ledger_root_512)
+        append_bytes("operation_log_root", operation_log_root)
+        payment_root = state.root()
+        append_bytes("payment_root", payment_root)
+        append_bytes("replay_root", replay_root)
+        append_bytes("state_root", state_root)
+        root_message = _C0_STATE_ROOT_DOMAIN + payment_root + replay_root
+        if len(root_message) != message_length:
+            raise StructuralError("typed_state_authority_root_message_length_invalid")
+        for index, byte in enumerate(root_message):
+            _append(columns, f"root_message_{index}", byte)
+
+    frozen = freeze_columns(columns)
+    identities: list[Identity] = []
+    identities.extend(
+        (
+            Identity(
+                "epoch_byte_encoding",
+                cell("epoch")
+                - sum(
+                    (256 ** (7 - index)) * cell(f"epoch_byte_{index}")
+                    for index in range(8)
+                ),
+                0,
+                2,
+            ),
+            Identity(
+                "sequence_byte_encoding",
+                cell("sequence")
+                - sum(
+                    (256 ** (7 - index)) * cell(f"sequence_byte_{index}")
+                    for index in range(8)
+                ),
+                0,
+                2,
+            ),
+        )
+    )
+    identities.extend(
+        (
+            Identity("authority_epoch_stable", cell("epoch", 1) - cell("epoch"), 0, 1, "transition"),
+            Identity(
+                "authority_sequence_increment",
+                cell("sequence", 1) - cell("sequence") - 1,
+                0,
+                1,
+                "transition",
+            ),
+            Identity(
+                "authority_next_slot_stable",
+                cell("next_slot_index", 1) - cell("next_slot_index"),
+                0,
+                1,
+                "transition",
+            ),
+        )
+    )
+    for prefix in ("settlement", "asset_registry", "scope"):
+        for index in range(64):
+            identities.append(
+                Identity(
+                    f"authority_{prefix}_stable_{index}",
+                    cell(f"{prefix}_{index}", 1) - cell(f"{prefix}_{index}"),
+                    0,
+                    1,
+                    "transition",
+                )
+            )
+    for index, expected in enumerate(_C0_STATE_ROOT_DOMAIN):
+        identities.extend(
+            (
+                Identity(
+                    f"root_message_domain_{index}",
+                    cell(f"root_message_{index}") - expected,
+                    0,
+                    2,
+                ),
+            )
+        )
+    payment_offset = len(_C0_STATE_ROOT_DOMAIN)
+    replay_offset = payment_offset + 64
+    for index in range(64):
+        identities.extend(
+            (
+                Identity(
+                    f"root_message_payment_{index}",
+                    cell(f"root_message_{payment_offset + index}")
+                    - cell(f"payment_root_{index}"),
+                    0,
+                    2,
+                ),
+                Identity(
+                    f"root_message_replay_{index}",
+                    cell(f"root_message_{replay_offset + index}")
+                    - cell(f"replay_root_{index}"),
+                    0,
+                    2,
+                ),
+            )
+        )
+
+    table = AirTable(
+        AUTHORITY_TABLE,
+        tuple(frozen),
+        2,
+        tuple(identities),
+        MappingProxyType(
+            {
+                "phase": (0, 1),
+                "next_slot_index": (0, 0),
+                **{
+                    f"asset_registry_{index}": (_ASSET_REGISTRY_ROOT[index],) * 2
+                    for index in range(64)
+                },
+            }
+        ),
+    )
+    trace = TraceTable(AUTHORITY_TABLE, frozen)
+    public_bindings: list[PublicInputBinding] = []
+    public_values: list[int] = []
+    for phase in range(2):
+        for name in ("epoch", "sequence", "next_slot_index"):
+            public_bindings.append(
+                PublicInputBinding(
+                    f"typed_state_authority_{phase}_{name}",
+                    AUTHORITY_TABLE,
+                    name,
+                    phase,
+                )
+            )
+            public_values.append(frozen[name][phase])
+        for prefix in (
+            "settlement",
+            "asset_registry",
+            "scope",
+            "benefit_root",
+            "obligation_root",
+            "ledger_root",
+            "operation_log_root",
+            "payment_root",
+            "replay_root",
+            "state_root",
+        ):
+            for index in range(64):
+                column = f"{prefix}_{index}"
+                public_bindings.append(
+                    PublicInputBinding(
+                        f"typed_state_authority_{phase}_{prefix}_{index}",
+                        AUTHORITY_TABLE,
+                        column,
+                        phase,
+                    )
+                )
+                public_values.append(frozen[column][phase])
+
+    lookup_values = lambda prefix: tuple(cell(f"{prefix}_{index}") for index in range(64))
+    summary_links: list[LookupArgument] = []
+    summary_rows = {"replay": 0, "benefit": 1, "obligation": 2, "ledger": 3}
+    authority_prefixes = {
+        "replay": "replay_root",
+        "benefit": "benefit_root",
+        "obligation": "obligation_root",
+        "ledger": "ledger_root",
+    }
+    for lane, summary_row in summary_rows.items():
+        prefix = authority_prefixes[lane]
+        summary_links.append(
+            LookupArgument(
+                f"typed_state_authority_{lane}_roots",
+                tuple(
+                    LookupSide(AUTHORITY_TABLE, const(1), lookup_values(prefix), phase, phase + 1)
+                    for phase in range(2)
+                ),
+                tuple(
+                    LookupSide(
+                        SUMMARY_TABLE,
+                        const(1),
+                        tuple(
+                            cell(f"root_{'before' if phase == 0 else 'after'}_{index}")
+                            for index in range(64)
+                        ),
+                        summary_row,
+                        summary_row + 1,
+                    )
+                    for phase in range(2)
+                ),
+            )
+        )
+    metadata_lookup = LookupArgument(
+        "typed_state_authority_payment_metadata",
+        tuple(
+            LookupSide(
+                AUTHORITY_TABLE,
+                const(1),
+                (
+                    *(cell(f"settlement_{index}") for index in range(64)),
+                    *(cell(f"scope_{index}") for index in range(64)),
+                    *(cell(f"epoch_byte_{index}") for index in range(8)),
+                ),
+                phase,
+                phase + 1,
+            )
+            for phase in range(2)
+        ),
+        (
+            LookupSide(
+                "claim_payment_key_material",
+                const(1),
+                (
+                    *(cell(f"settlement_byte_{index}") for index in range(64)),
+                    *(cell(f"scope_byte_{index}") for index in range(64)),
+                    *(cell(f"epoch_byte_{index}") for index in range(8)),
+                ),
+                0,
+                2,
+            ),
+        ),
+    )
+    sequence_lookup = LookupArgument(
+        "typed_state_authority_sequence",
+        (
+            LookupSide(
+                AUTHORITY_TABLE,
+                const(1),
+                tuple(cell(f"sequence_byte_{index}") for index in range(8)),
+                0,
+                1,
+            ),
+        ),
+        (
+            LookupSide(
+                "claim_payment_map_slot",
+                const(1),
+                tuple(cell(f"sequence_byte_{index}") for index in range(8)),
+                0,
+                1,
+            ),
+        ),
+    )
+    rows = len(payment.traces["claim_payment_map_slot"].columns["slot_index"])
+    operation_log_lookup = LookupArgument(
+        "typed_state_authority_operation_log",
+        (
+            LookupSide(
+                AUTHORITY_TABLE,
+                const(1),
+                tuple(cell(f"operation_log_root_{index}") for index in range(64)),
+                0,
+                1,
+            ),
+            LookupSide(
+                AUTHORITY_TABLE,
+                const(1),
+                tuple(cell(f"operation_log_root_{index}") for index in range(64)),
+                1,
+                2,
+            ),
+        ),
+        (
+            LookupSide(
+                "claim_payment_map_slot",
+                const(1),
+                tuple(cell(f"operation_log_before_{index}") for index in range(64)),
+                0,
+                1,
+            ),
+            LookupSide(
+                "claim_payment_map_slot",
+                const(1),
+                tuple(cell(f"operation_log_after_{index}") for index in range(64)),
+                rows - 1,
+                rows,
+            ),
+        ),
+    )
+    root_calls = tuple(
+        Sha3Call(
+            f"c0_state_root_{'before' if phase == 0 else 'after'}",
+            _C0_STATE_ROOT_DOMAIN + payment_states[phase].root() + replay_roots[phase],
+            _STATE_ROOT_CAPACITY_BASE + state_witness.profile.claim_slots * _STATE_ROOT_ENTRY_WIDTH,
+        )
+        for phase in range(2)
+    )
+    return (
+        table,
+        trace,
+        (*summary_links, metadata_lookup, sequence_lookup, operation_log_lookup),
+        tuple(public_bindings),
+        tuple(public_values),
+        root_calls,
+    )
+
+
+def _root_component(
+    authority_table: AirTable,
+    authority_trace: TraceTable,
+    authority_public: tuple[PublicInputBinding, ...],
+    root_calls: tuple[Sha3Call, ...],
+    call_index_offset: int,
+) -> Sha3ComposedComponent:
+    interface = build_application_sha3_interface_air(root_calls)
+    message_rows = interface.traces["sha3_message_batch"].rows
+    message_length = len(root_calls[0].message)
+    message_sources: list[LookupSide] = []
+    for phase in range(2):
+        for position in range(message_length):
+            message_sources.append(
+                LookupSide(
+                    AUTHORITY_TABLE,
+                    const(1),
+                    (
+                        const(call_index_offset + phase),
+                        const(position),
+                        cell(f"root_message_{position}"),
+                    ),
+                    phase,
+                    phase + 1,
+                )
+            )
+    message_binding = LookupArgument(
+        "typed_state_root_sha3_messages",
+        tuple(message_sources),
+        (
+            LookupSide(
+                "sha3_message_batch",
+                cell("live"),
+                (cell("call_index"), cell("position"), cell("value")),
+                0,
+                message_rows,
+            ),
+        ),
+    )
+    digest_binding = LookupArgument(
+        "typed_state_root_sha3_digests",
+        tuple(
+            LookupSide(
+                "sha3_digest_batch",
+                const(1),
+                (
+                    const(call_index_offset + phase),
+                    *(cell(f"value_{index}") for index in range(64)),
+                ),
+                phase,
+                phase + 1,
+            )
+            for phase in range(2)
+        ),
+        tuple(
+            LookupSide(
+                AUTHORITY_TABLE,
+                const(1),
+                (
+                    *(const(call_index_offset + phase) for _ in (0,)),
+                    *(cell(f"state_root_{index}") for index in range(64)),
+                ),
+                phase,
+                phase + 1,
+            )
+            for phase in range(2)
+        ),
+    )
+    program = AirProgram(
+        PROGRAM_ID,
+        (authority_table, *interface.program.tables),
+        (
+            *interface.program.lookups,
+            message_binding,
+            digest_binding,
+        ),
+        authority_public,
+    )
+    traces = MappingProxyType(
+        {
+            authority_trace.name: authority_trace,
+            **dict(interface.traces),
+        }
+    )
+    return Sha3ComposedComponent(program, traces, interface, call_index_offset)
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,6 +957,14 @@ def build_typed_state_relation_air(
         money_public,
         money_values,
     ) = _money_table(payment)
+    (
+        authority_table,
+        authority_trace,
+        authority_lookups,
+        authority_public,
+        authority_values,
+        root_calls,
+    ) = _authority_columns(state_witness, replay, payment)
     replay_component = Sha3ComposedComponent(
         replay.program,
         replay.traces,
@@ -507,19 +977,31 @@ def build_typed_state_relation_air(
         payment.application_sha3,
         len(replay_calls),
     )
+    root_component = _root_component(
+        authority_table,
+        authority_trace,
+        authority_public,
+        root_calls,
+        len(replay_calls) + len(payment.application_sha3.calls),
+    )
     merged = compose_sha3_interface_components(
         PROGRAM_ID,
-        (replay_component, payment_component),
+        (replay_component, payment_component, root_component),
         extra_tables=(summary_table, money_table, money_byte_table),
         extra_traces={
             summary_trace.name: summary_trace,
             money_trace.name: money_trace,
             money_byte_trace.name: money_byte_trace,
         },
-        extra_lookups=(summary_link, money_link, money_byte_link),
+        extra_lookups=(
+            summary_link,
+            money_link,
+            money_byte_link,
+            *authority_lookups,
+        ),
         extra_public_inputs=(*summary_public, *money_public),
     )
-    public_values = (*summary_values, *money_values)
+    public_values = (*authority_values, *summary_values, *money_values)
     instance = TypedStateRelationAirInstance(
         merged.program,
         merged.traces,
@@ -527,7 +1009,7 @@ def build_typed_state_relation_air(
         replay,
         payment,
         public_values,
-        replay_calls + tuple(payment.application_sha3.calls)
+        replay_calls + tuple(payment.application_sha3.calls) + root_calls
         if payment.application_sha3 is not None
         else replay_calls,
     )
@@ -549,6 +1031,7 @@ __all__ = (
     "MONEY_TABLE",
     "PROGRAM_ID",
     "SUMMARY_TABLE",
+    "AUTHORITY_TABLE",
     "TypedStateRelationAirInstance",
     "build_c0_typed_state_relation_air",
     "build_typed_state_relation_air",

@@ -3012,6 +3012,8 @@ def load_semantic_b16_shard(path, shard):
 
 
 def load_state_relation_source():
+    if os.environ.get("BL_TYPED_STATE_BINDING") == "1":
+        return None
     encoded_path = os.environ.get("BL_STATE_RELATION_SOURCE_PATH")
     encoded_digest = os.environ.get("BL_STATE_RELATION_SOURCE_SHA3_512")
     if encoded_path is None and encoded_digest is None:
@@ -3074,7 +3076,8 @@ def atomic_parent_binding():
 
 
 def atomic_state_binding():
-    digest_fields = (
+    typed_state = os.environ.get("BL_TYPED_STATE_BINDING") == "1"
+    digest_fields = [
         ("statement", "BL_STATE_PLANE_STATEMENT_DIGEST"),
         ("binding", "BL_STATE_PLANE_BINDING_DIGEST"),
         ("projection_digest", "BL_STATE_PLANE_PROJECTION_DIGEST"),
@@ -3089,15 +3092,23 @@ def atomic_state_binding():
         ("state_air_program", "BL_STATE_AIR_PROGRAM_COMMITMENT"),
         ("state_air_execution", "BL_STATE_AIR_EXECUTION_COMMITMENT"),
         ("state_air_fragment", "BL_STATE_AIR_FRAGMENT_DIGEST"),
-        ("state_relation_source", "BL_STATE_RELATION_SOURCE_SHA3_512"),
-    )
+    ]
+    if typed_state:
+        digest_fields.extend(
+            (
+                ("typed_state_root_before", "BL_TYPED_STATE_ROOT_BEFORE"),
+                ("typed_state_root_after", "BL_TYPED_STATE_ROOT_AFTER"),
+            )
+        )
+    else:
+        digest_fields.append(("state_relation_source", "BL_STATE_RELATION_SOURCE_SHA3_512"))
     public_abi_environments = tuple(
         f"BL_STATE_PLANE_PUBLIC_ABI_{index:02}" for index in range(12)
     )
     attached = any(
         os.environ.get(environment) is not None
         for _, environment in digest_fields
-    ) or any(os.environ.get(environment) is not None for environment in public_abi_environments)
+    ) or typed_state or any(os.environ.get(environment) is not None for environment in public_abi_environments)
     if not attached:
         return None
 
@@ -3134,6 +3145,7 @@ def atomic_state_binding():
             raise SystemExit(f"{label}_shape")
         public_abi.append(value)
     result["public_abi"] = tuple(public_abi)
+    result["typed_state"] = typed_state
     if atomic_parent_binding() is None:
         raise SystemExit("state_plane_binding_without_parent")
     return result
@@ -3166,7 +3178,12 @@ def public_coin_identity(gkr_mask_root, state_binding):
             + state_binding["state_air_program"]
             + state_binding["state_air_execution"]
             + state_binding["state_air_fragment"]
-            + state_binding["state_relation_source"]
+            + (
+                state_binding["typed_state_root_before"]
+                + state_binding["typed_state_root_after"]
+                if state_binding.get("typed_state")
+                else state_binding["state_relation_source"]
+            )
         )
     session = hashlib.sha3_512(
         b"BL/PQ512/FP16-ZK-RS/COMPLETE-SESSION/v1"
@@ -3212,12 +3229,13 @@ def main():
     proof_process_started = time.perf_counter()
     state_binding = atomic_state_binding()
     state_relation_source = load_state_relation_source()
-    if (state_binding is not None) != (state_relation_source is not None):
-        raise SystemExit("state_relation_source_binding_mismatch")
     if (
         state_binding is not None
-        and state_binding["state_relation_source"]
-        != state_relation_source["digest"]
+        and not state_binding.get("typed_state", False)
+    ) != (state_relation_source is not None):
+        raise SystemExit("state_relation_source_binding_mismatch")
+    if state_binding is not None and state_relation_source is not None and (
+        state_binding["state_relation_source"] != state_relation_source["digest"]
     ):
         raise SystemExit("state_relation_source_binding_digest_mismatch")
     semantic_boundary_path = os.environ.get(
@@ -4839,6 +4857,10 @@ def main():
         print(
             "state_relation_gkr_attached="
             f"{str(state_relation_source is not None).lower()}"
+        )
+        print(
+            "typed_state_component_verified="
+            f"{str(state_binding is not None and state_binding.get('typed_state', False)).lower()}"
         )
         print(
             "state_relation_source_sha3_512="

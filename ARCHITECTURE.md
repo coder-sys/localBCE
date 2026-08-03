@@ -184,10 +184,14 @@ The C0 typed-state executable component now closes the missing semantic slice at
 boundary. It composes the ordered-map replay and payment-map authorities, binds lane roots and
 cursors, enforces fixed slot order, canonical money subtraction, and debit/credit conservation,
 and exposes replay/payment SHA3 ports through one canonical interface composer. Its K128 readback
-is `BL-PQ512-C0-TYPED-STATE-AIR-v1` with 60 tables, 93 lookups, 524 public inputs, and 46,208
-exact hash calls; positive and split mutation checks passed. This component is not yet wired into
-the native `state_relation_gkr.rs` relation or the custom H4 GKR/PCS parent, so it supplies
-typed-component evidence but does not close Gate 2E or authorize H5/H6.
+is `BL-PQ512-C0-TYPED-STATE-AIR-v1` with 60 tables, 93 lookups, 1,806 public inputs, and 46,210
+exact hash calls. The two added calls are the C0 state-root calls; the base H4 replay/payment bus
+remains 46,208 calls. Positive and split mutation checks passed, including fixed binding of every
+asset-registry byte. The native H4 coordinator consumes the full typed AIR program/execution,
+replays its authority/root interfaces, and maps all 46,210 typed calls to the canonical H4 bus,
+including the two appended state-root calls. The selected typed AIR proof route then failed the
+immutable resource preflight, so this is an implemented nonactivating H4 readback seam; it does
+not close Gate 2E or authorize H5/H6.
 
 ## Operational artifact layout
 
