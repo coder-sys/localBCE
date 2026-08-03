@@ -110,6 +110,7 @@ pub mod sha3_air;
 pub mod sha3_boolean_air;
 pub mod sha3_coprocessor;
 pub mod state_relation_gkr;
+pub mod state_uniqueness_gkr;
 pub mod streaming_ir;
 pub mod streaming_mlpcs;
 #[cfg(feature = "std")]

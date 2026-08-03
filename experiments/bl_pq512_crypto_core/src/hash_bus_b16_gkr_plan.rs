@@ -52,7 +52,9 @@ fn kind_tag(kind: KeccakDagGateKind) -> u8 {
         KeccakDagGateKind::XorConstant(false) => 2,
         KeccakDagGateKind::XorConstant(true) => 3,
         KeccakDagGateKind::Zero => 4,
-        KeccakDagGateKind::Subtract => 0xff,
+        KeccakDagGateKind::Subtract
+        | KeccakDagGateKind::Multiply
+        | KeccakDagGateKind::RelayLeft => 0xff,
     }
 }
 

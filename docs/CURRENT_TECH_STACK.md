@@ -363,6 +363,14 @@ reject duplicate present keys. High-cardinality membership/absence, money/state 
 and the complete state relation inside the custom H4 GKR/PCS composition are still required in
 Gate 2E. No state-composed K128/K512 performance or qualification credit is claimed.
 
+The pairwise uniqueness GKR is proof-native control evidence, not the selected relation. It checks
+both phases, rejects forged duplicate witnesses, obtains every sumcheck challenge and claim-
+combination coefficient after a published message, and returns two PCS openings. Release controls
+verified in 21.902903 seconds at 128 slots and 426.679855 seconds at 512 slots. Because the K512
+uniqueness control alone exceeds the 180-second complete-proof gate, the quadratic route is
+rejected; Gate 2E now requires a subquadratic uniqueness construction on the same custom H4/PCS
+path.
+
 ## Exact accepted H4 profiles
 
 Only two coordinator profiles are currently accepted. K256 remains a design/calibration point and

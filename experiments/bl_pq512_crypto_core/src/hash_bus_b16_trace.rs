@@ -28,7 +28,9 @@ fn gate_value(kind: KeccakDagGateKind, left: u16, right: u16) -> u16 {
         KeccakDagGateKind::Xor | KeccakDagGateKind::XorConstant(false) => left ^ right,
         KeccakDagGateKind::NotLeftAndRight => !left & right,
         KeccakDagGateKind::XorConstant(true) => !(left ^ right),
-        KeccakDagGateKind::Subtract => {
+        KeccakDagGateKind::Subtract
+        | KeccakDagGateKind::Multiply
+        | KeccakDagGateKind::RelayLeft => {
             unreachable!("field subtraction is not a bit-sliced Keccak gate")
         }
         KeccakDagGateKind::Zero => 0,
@@ -153,7 +155,9 @@ mod tests {
                             }
                             KeccakDagGateKind::NotLeftAndRight => (1 - left) & right,
                             KeccakDagGateKind::XorConstant(true) => 1 ^ left ^ right,
-                            KeccakDagGateKind::Subtract => {
+                            KeccakDagGateKind::Subtract
+                            | KeccakDagGateKind::Multiply
+                            | KeccakDagGateKind::RelayLeft => {
                                 unreachable!("field subtraction is not a bit-sliced Keccak gate")
                             }
                             KeccakDagGateKind::Zero => 0,

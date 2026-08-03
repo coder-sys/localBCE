@@ -67,6 +67,10 @@ the Rust source builder and native Rust/Python snapshot decoders reject duplicat
 source commitment. Proof-native high-cardinality uniqueness, membership/absence, and money/state-
 conservation semantics remain outside the custom GKR/PCS relation, and no state-composed performance
 or qualification credit is recorded.
+The all-pairs uniqueness GKR control is implemented and independently verifies both phases, but its
+measured 512-slot prover time is 426.679855 seconds, so it is rejected by the unchanged 180-second
+complete-proof ceiling. It remains a differential/attack oracle; the selected H4 relation must use
+a subquadratic uniqueness construction.
 
 ## Sole dependency chain
 

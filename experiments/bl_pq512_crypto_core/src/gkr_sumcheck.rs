@@ -2516,6 +2516,8 @@ fn dag_gate_formula(kind: KeccakDagGateKind) -> GateFormula {
         KeccakDagGateKind::NotLeftAndRight => GateFormula::NotLeftAndRight,
         KeccakDagGateKind::XorConstant(false) => GateFormula::Xor,
         KeccakDagGateKind::XorConstant(true) => GateFormula::NotXor,
+        KeccakDagGateKind::Multiply => GateFormula::And,
+        KeccakDagGateKind::RelayLeft => GateFormula::Left,
         KeccakDagGateKind::Subtract => GateFormula::Subtract,
         KeccakDagGateKind::Zero => GateFormula::Zero,
     }
@@ -2705,6 +2707,109 @@ pub fn prove_two_source_sparse_gkr_layer_reference(
     }
     let terms = dag_layer_terms(layer, claims)?;
     prove_two_source_sparse_terms_reference(left_input, right_input, &terms, challenges)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TwoSourceSparseRoundKind {
+    Left,
+    Right,
+}
+
+/// Interactive two-source sparse-layer prover. Every quadratic message is
+/// passed to `challenge_provider` before the corresponding challenge is
+/// accepted. The caller owns authentication and public-coin freshness.
+pub fn prove_two_source_sparse_gkr_layer_interactive(
+    layer: &KeccakDagLayer,
+    left_input: &[Fp16],
+    right_input: &[Fp16],
+    claims: &[LayerOutputClaim],
+    mut challenge_provider: impl FnMut(
+        TwoSourceSparseRoundKind,
+        usize,
+        &[Fp16],
+    ) -> Result<Fp16, ProductSumcheckError>,
+) -> Result<(SparseLayerSumcheckProof, Vec<Fp16>), ProductSumcheckError> {
+    let left_variables = log2_exact(layer.left_width)?;
+    let right_variables = log2_exact(layer.right_width)?;
+    if left_input.len() != layer.left_width || right_input.len() != layer.right_width {
+        return Err(ProductSumcheckError::Shape);
+    }
+    let output = evaluate_dag_arithmetic_layer(layer, left_input, right_input)?;
+    for claim in claims {
+        if multilinear_evaluate(&output, &claim.point)? != claim.value {
+            return Err(ProductSumcheckError::Claim);
+        }
+    }
+    let terms = dag_layer_terms(layer, claims)?;
+    let mut left_factors = vec![Fp16::ONE; terms.len()];
+    let mut right_factors = vec![Fp16::ONE; terms.len()];
+    let mut left_folded = left_input.to_vec();
+    let mut right_folded = right_input.to_vec();
+    let mut rounds = Vec::with_capacity(left_variables + right_variables);
+    let mut challenges = Vec::with_capacity(left_variables + right_variables);
+
+    for round in 0..left_variables {
+        let mut coefficients = [Fp16::ZERO; 3];
+        for (term_index, term) in terms.iter().enumerate() {
+            let suffix = term.left >> (round + 1);
+            let zero = left_folded[2 * suffix];
+            let delta = left_folded[2 * suffix + 1] - zero;
+            let (gate_zero, gate_delta) =
+                gate_line(term.formula, true, zero, delta, right_input[term.right]);
+            let value = weighted_gate_quadratic(
+                term.output_weight * left_factors[term_index],
+                (term.left >> round) & 1,
+                gate_zero,
+                gate_delta,
+            );
+            for coordinate in 0..3 {
+                coefficients[coordinate] = coefficients[coordinate] + value[coordinate];
+            }
+        }
+        let challenge = challenge_provider(TwoSourceSparseRoundKind::Left, round, &coefficients)?;
+        rounds.push(coefficients);
+        challenges.push(challenge);
+        for (factor, term) in left_factors.iter_mut().zip(&terms) {
+            *factor = *factor * bit_basis(challenge, (term.left >> round) & 1);
+        }
+        fold_multilinear(&mut left_folded, challenge);
+    }
+    let terminal_left = left_folded[0];
+
+    for round in 0..right_variables {
+        let mut coefficients = [Fp16::ZERO; 3];
+        for (term_index, term) in terms.iter().enumerate() {
+            let suffix = term.right >> (round + 1);
+            let zero = right_folded[2 * suffix];
+            let delta = right_folded[2 * suffix + 1] - zero;
+            let (gate_zero, gate_delta) =
+                gate_line(term.formula, false, zero, delta, terminal_left);
+            let value = weighted_gate_quadratic(
+                term.output_weight * left_factors[term_index] * right_factors[term_index],
+                (term.right >> round) & 1,
+                gate_zero,
+                gate_delta,
+            );
+            for coordinate in 0..3 {
+                coefficients[coordinate] = coefficients[coordinate] + value[coordinate];
+            }
+        }
+        let challenge = challenge_provider(TwoSourceSparseRoundKind::Right, round, &coefficients)?;
+        rounds.push(coefficients);
+        challenges.push(challenge);
+        for (factor, term) in right_factors.iter_mut().zip(&terms) {
+            *factor = *factor * bit_basis(challenge, (term.right >> round) & 1);
+        }
+        fold_multilinear(&mut right_folded, challenge);
+    }
+    Ok((
+        SparseLayerSumcheckProof {
+            rounds,
+            terminal_left,
+            terminal_right: right_folded[0],
+        },
+        challenges,
+    ))
 }
 
 pub fn verify_two_source_sparse_gkr_layer_reference(

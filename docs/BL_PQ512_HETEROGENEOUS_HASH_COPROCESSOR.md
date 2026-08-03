@@ -83,6 +83,11 @@ presence, and empty-slot zeroing; operation order, uniqueness, membership/absenc
 conservation remain open Gate 2E obligations. State-composed rows therefore contain seven claims
 total, but no state-composed H4 performance or qualification credit is claimed.
 
+The bounded all-pairs uniqueness GKR control is theorem-valid and emits two PCS terminals under
+message-before-challenge interactive public coin, but it is not selected: measured release proving
+took 21.902903 seconds for 128 slots and 426.679855 seconds for 512 slots. The K512 control alone
+misses the 180-second complete-proof gate, so Gate 2E must use a subquadratic uniqueness relation.
+
 ## 5. Native hiding and PCS
 
 Every shard verifies 508 native GKR mask constraints. The GKR mask is committed as 64

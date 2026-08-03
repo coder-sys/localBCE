@@ -330,7 +330,9 @@ fn gate_value(kind: KeccakDagGateKind, left: Fp16, right: Fp16) -> Fp16 {
         KeccakDagGateKind::XorConstant(true) => {
             Fp16::ONE - left - right + left * right + left * right
         }
-        KeccakDagGateKind::Subtract => {
+        KeccakDagGateKind::Subtract
+        | KeccakDagGateKind::Multiply
+        | KeccakDagGateKind::RelayLeft => {
             unreachable!("state-only field gate in Boolean Keccak evaluator")
         }
         KeccakDagGateKind::Zero => Fp16::ZERO,
@@ -344,7 +346,9 @@ fn packed_gate(kind: KeccakDagGateKind) -> Option<PackedBinaryGate> {
         }
         KeccakDagGateKind::NotLeftAndRight => Some(PackedBinaryGate::NotLeftAndRight),
         KeccakDagGateKind::XorConstant(true) => Some(PackedBinaryGate::NotXor),
-        KeccakDagGateKind::Subtract => {
+        KeccakDagGateKind::Subtract
+        | KeccakDagGateKind::Multiply
+        | KeccakDagGateKind::RelayLeft => {
             unreachable!("state-only field gate in packed Boolean evaluator")
         }
         KeccakDagGateKind::Zero => None,

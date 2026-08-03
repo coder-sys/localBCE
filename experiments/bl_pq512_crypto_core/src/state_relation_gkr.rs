@@ -47,7 +47,7 @@ pub const STATE_RELATION_ENTRY_WIDTH: usize = 1 + 1 + 2 * 2;
 pub const STATE_RELATION_ROW_WIDTH: usize = 4 * STATE_RELATION_ENTRY_WIDTH;
 pub const STATE_RELATION_ROW_INDEX_WIRE: usize = STATE_RELATION_ROW_WIDTH;
 pub const STATE_RELATION_OUTPUT_RAW_WIDTH: usize =
-    2 * STATE_RELATION_ENTRY_WIDTH + 2 + 2 * (STATE_RELATION_ENTRY_WIDTH - 1) + 4;
+    2 * STATE_RELATION_ENTRY_WIDTH + 2 + 2 * (STATE_RELATION_ENTRY_WIDTH - 2) + 4;
 pub const STATE_RELATION_H4_WIRE_OFFSET: usize = 1_600;
 pub const STATE_RELATION_H4_WIRE_VARIABLES: usize = 11;
 pub const STATE_RELATION_H4_GROUP_VARIABLES: usize = 13;
@@ -146,11 +146,11 @@ pub struct StateRelationH4InputClaim {
     pub shard_query: Fp16,
 }
 
-fn pack_chunks(bytes: &[u8; ENTRY_BYTES]) -> Result<[Fp16; 2], StateRelationGkrError> {
+pub(crate) fn pack_chunks(bytes: &[u8; ENTRY_BYTES]) -> Result<[Fp16; 2], StateRelationGkrError> {
     let mut packed = [Fp16::ZERO; 2];
     for (pack_index, destination) in packed.iter_mut().enumerate() {
         let mut coefficients = [0_u32; FP16_COEFFICIENTS];
-        for coefficient in 0..FP16_COEFFICIENTS {
+        for (coefficient, destination) in coefficients.iter_mut().enumerate() {
             let chunk = pack_index * FP16_COEFFICIENTS + coefficient;
             let offset = chunk * STATE_RELATION_CHUNK_BYTES;
             if offset >= bytes.len() {
@@ -160,7 +160,7 @@ fn pack_chunks(bytes: &[u8; ENTRY_BYTES]) -> Result<[Fp16; 2], StateRelationGkrE
             for byte in &bytes[offset..bytes.len().min(offset + STATE_RELATION_CHUNK_BYTES)] {
                 value = (value << 8) | u32::from(*byte);
             }
-            coefficients[coefficient] = value;
+            *destination = value;
         }
         *destination =
             Fp16::from_coefficients(coefficients).map_err(|_| StateRelationGkrError::Encoding)?;
@@ -382,6 +382,8 @@ fn evaluate_gate(kind: KeccakDagGateKind, left: Fp16, right: Fp16) -> Fp16 {
     match kind {
         KeccakDagGateKind::Subtract => left - right,
         KeccakDagGateKind::NotLeftAndRight => right - left * right,
+        KeccakDagGateKind::Multiply => left * right,
+        KeccakDagGateKind::RelayLeft => left,
         KeccakDagGateKind::Zero => Fp16::ZERO,
         _ => unreachable!("non-state gate in the compact state relation"),
     }
@@ -687,7 +689,7 @@ mod tests {
             STATE_RELATION_GROUP_COUNT * STATE_RELATION_SOURCE_WIDTH
         );
         assert_eq!(relation_layer().gates.len(), STATE_RELATION_OUTPUT_WIDTH);
-        assert_eq!(STATE_RELATION_OUTPUT_RAW_WIDTH, 28);
+        assert_eq!(STATE_RELATION_OUTPUT_RAW_WIDTH, 26);
     }
 
     #[test]

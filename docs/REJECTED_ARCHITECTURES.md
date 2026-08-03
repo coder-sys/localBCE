@@ -109,6 +109,30 @@ independently verified lifetime architecture that never owns the aggregate oracl
 preserves openings/composition/DEEP verification exactly, beats the complete H4 boundary, and
 passes the unchanged scratch gate. A model or plan alone cannot restore eligibility.
 
+## Quadratic all-pairs state-key uniqueness as the H4 relation
+
+Decision: rejected as the selected H4 uniqueness architecture; retained as an executable
+differential and attack control.
+
+The control checks all unordered slot pairs in both before/after phases using the injective
+two-Fp16 key packing, Boolean selector witnesses, inverse nonzero checks, four sparse GKR layers,
+message-before-challenge public coin, and two final PCS input claims. Duplicate source keys cannot
+be repaired by selector or inverse forgery. The compact relation also exposed and corrected a
+pre-existing raw-output declaration mismatch: the implemented relation has 26 constraints, not 28.
+
+Exact release controls independently verified:
+
+| Capacity | Pairs/phase | Source bytes | Authenticated rounds | Prove seconds | Verify seconds |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 8,128 | 4,194,304 | 142 | 21.902903 | 2.878161 |
+| 512 | 130,816 | 67,108,864 | 174 | 426.679855 | 38.789283 |
+
+The K512 uniqueness proof alone is 2.37 times the 180-second complete-proof ceiling before the
+hash proof, state commitment, simulator, or receipt work. CPU/GPU overlap cannot rescue a stage
+that exceeds the entire complete boundary. Reconsideration requires a complete-boundary measured
+sub-180-second result without weakening fixed capacity, both-phase uniqueness, authenticated coin,
+PCS binding, hiding, or the 512-slot workload. Gate 2E proceeds with a subquadratic construction.
+
 ## BaseFold, zkDeepFold, and older PCS lanes
 
 Decision: off the active path.

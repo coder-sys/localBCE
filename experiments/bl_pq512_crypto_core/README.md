@@ -103,6 +103,13 @@ not yet the complete state relation: operation order, uniqueness, membership/abs
 money/state conservation remain Gate 2E obligations. State-free and state-composed transcripts
 share one fixed public shape; the state-free branch carries zero state claims/source digest.
 
+`src/state_uniqueness_gkr.rs` is an executable proof-native differential control for duplicate-key
+rejection. It checks every unordered pair in both state phases, uses message-before-challenge
+interactive sumchecks, and exposes two PCS input claims. It verified at 21.902903 seconds for 128
+slots and 426.679855 seconds for 512 slots; the latter exceeds the complete 180-second ceiling by
+itself. The quadratic construction is therefore rejected as the selected H4 route and is retained
+only as a correctness/attack oracle for a subquadratic successor.
+
 ## Source ownership
 
 | Responsibility | Source |

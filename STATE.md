@@ -6571,3 +6571,82 @@ then used. This decision rejects only the current aggregate generic-oracle lifet
 H4 route. The typed C0 AIR remains the executable semantic/differential oracle and native readback
 seam. Gate 2E remains open; implementation returns to the selected custom H4 semantic/state
 composition. No H5 launch, backend admission, `proofSuiteId`, or activation credit is taken.
+
+## 2026-08-03 Proof-native all-pairs uniqueness control - VERIFIED, REJECTED FOR H4
+
+The custom state lane now has an executable proof-native duplicate-key control over both before and
+after phases. Each active unordered pair uses the injective two-Fp16 key packing, a Boolean selector,
+and an inverse witness; duplicate packed keys make both differences zero and cannot satisfy the
+final claim. Four sparse GKR layers release every quadratic message before its authenticated
+challenge, release two fresh claim-combination coefficients per layer, independently verify, and
+expose exactly two source claims for PCS binding. Positive, duplicate, forged-witness, inactive-
+selector, and interactive-order tests pass.
+
+The containing regression also exposed a pre-existing declaration mismatch in
+`state_relation_gkr.rs`: the layer constructs 26 raw constraints while the constant declared 28.
+The declaration and geometry test now state 26; no constraint was removed and the old 10-test
+state-relation suite passes.
+
+Exact release control output:
+
+```text
+capacity=128
+pair_count=8128
+phase_pair_instances=16256
+source_fp16_elements=65536
+source_bytes=4194304
+authenticated_rounds=142
+pcs_input_claims=2
+source_build_seconds=0.013770
+prove_seconds=21.902903
+verify_seconds=2.878161
+verified=true
+activation_allowed=false
+
+capacity=512
+pair_count=130816
+phase_pair_instances=261632
+source_fp16_elements=1048576
+source_bytes=67108864
+authenticated_rounds=174
+pcs_input_claims=2
+source_build_seconds=0.203529
+prove_seconds=426.679855
+verify_seconds=38.789283
+verified=true
+activation_allowed=false
+```
+
+The K512 uniqueness control alone exceeds the immutable 180-second complete-proof ceiling, so the
+quadratic route is rejected as the selected H4 architecture. It remains an executable differential
+oracle for a subquadratic successor. Gate 2E, H4 state composition, H5, H6, backend admission,
+`proofSuiteId`, and activation all remain open.
+
+Focused and containing verification:
+
+```text
+cargo +1.96.0 test --features std --lib state_relation_gkr --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 262 filtered out; finished in 11.63s
+
+cargo +1.96.0 test --features std --lib state_uniqueness_gkr --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 267 filtered out; finished in 0.19s
+
+cargo +1.96.0 test --features std --lib hash_bus_b16 --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 267 filtered out; finished in 39.87s
+
+cargo +1.96.0 check --no-default-features --lib --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.77s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_deployment_ready_roadmap_contract.py
+3 passed in 0.13s
+```
+
+One attempted Cargo command supplied two positional test filters; Cargo rejected the second filter
+before running tests. A later repository-root `cargo fmt --all -- --check` also stopped before
+formatting because this repository has no root `Cargo.toml`; the corrected crate-manifest format
+check passed. The corrected filters above passed separately. A full 272-test debug library
+run emitted no failure but exceeded the 604-second command timeout and produced no terminal result,
+so it is not claimed as passed; its orphaned exact repository Cargo/test process tree was identified
+by command line and terminated. Strict Clippy now reaches only the pre-existing unrelated
+`disk_deep.rs:339` `too_many_arguments` diagnostic; the two diagnostics introduced/exposed in the
+changed state files were corrected. No lint allowance or gate weakening was added.

@@ -258,6 +258,13 @@ temporary bytes, so `modeled_peak_scratch_bytes=14944264032`, `scratch_gate_pass
 continue the selected custom H4 state-composition lane. Do not start H5 or another complete-proof
 backend bake-off until a reviewed state plane is selected and atomically bound.
 
+The first custom-lane uniqueness control checks every unordered pair in both phases and verified
+with two PCS input claims. K128/128-slot proving measured 21.902903 seconds; K512/512-slot proving
+measured 426.679855 seconds plus 38.789283 seconds verification, with a 67,108,864-byte source and
+174 authenticated rounds. The quadratic route is rejected because uniqueness alone exceeds the
+180-second complete-proof gate. Retain it as a differential oracle and implement a subquadratic
+successor; do not tune the rejected route or grant H4/Gate 2E credit.
+
 ## 12. H5 qualification preflight boundary
 
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now provides a read-only,
