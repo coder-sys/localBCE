@@ -5689,3 +5689,30 @@ complete_proof_qualification=false
 Active architecture, roadmap, current-stack, security, optimization, provenance, and crate-guide
 documents were reconciled to this boundary. Historical `STATE.md` sections and `docs/history/` were
 left intact as provenance rather than duplicated or relabeled as current evidence.
+
+## 2026-08-02 Source-complete release archive refresh - VERIFIED
+
+The Source-Complete release archive was rebuilt from committed source `6dcb5205b0e62f9d5b547f203953b2f7cbdc051d`.
+`STATE.md` is deliberately excluded from the privacy-reviewed release allowlist, so this receipt-only
+follow-up commit does not change the archive payload. The deterministic release builder and independent
+readback reported:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=775
+payload_bytes=10655238
+entry_count=776
+archive_bytes=10939594
+archive_sha256=9e4c9db9c738ff6c7d0c25bcd544a432573044713c024128b0ecd9aca5dd663e
+archive_sha3_512=c8ceebd9c4225399d27f73befc3f38f3462e6b83532801daf1a6e9ca5c02acc461066d815c56ee842672e8c53e7200a1cc16766e99970eba6622444ccdf9325f
+manifest_sha256=464efd01a6d369632cefb929f256fe8e713c2e74c530aecd8ac9a2f0759d3371
+zip_crc_readback=passed
+embedded_manifest_match=true
+source_complete_three_way_byte_identical=true
+```
+
+The three updated paths are the Desktop root copy, the nested Desktop copy, and the Downloads copy
+of `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. The privacy/allowlist stage excluded 17
+synthetic or private-artifact paths, including the five portal font binaries; no real PHI, payment
+data, or production proof bytes were used. The separate three-copy Architecture-Research archive set
+was checked and left untouched; it was already byte-identical.
