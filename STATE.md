@@ -5843,3 +5843,39 @@ builder change:
 cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --bin k512_atomic_semantic_prototype --features std,parallel
 test result: ok; 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.69s
 ```
+
+## 2026-08-02 Source-complete archive refresh after state boundary commit - VERIFIED
+
+The archive was rebuilt from committed source `98df7a52be756c1f486759f0c809c1a238c78864` using
+the prior reviewed 775-file allowlist, with only the committed source hash updates and the new
+`experiments/bl_pq512_crypto_core/src/transparent_hash_code.rs` entry added. `STATE.md` remains
+excluded from the payload. The strict builder and an independent ZIP readback reported:
+
+```text
+py -3.14 -B -m tools.build_release_archive --source-root <work>/refresh-source-98df7a5 --manifest <work>/refresh-source-98df7a5/APP_RELEASE_FILE_MANIFEST.json --output <work>/Blind-Ledger-Wave2-Source-Complete-2026-08-02-refresh.zip
+{"archive_bytes":10958393,"archive_sha256":"09c66b194cc06bee20f3e7ccde5172c2641e6666494dff9d9400cfc0cf441138","builder_version":"blind-ledger-release-archive-v1","entry_count":777,"manifest_sha256":"1ba00a9783eca57b3936b4d4d028e98d61739a018c90c19eb674a4025121a579","payload_bytes":10673636,"payload_file_count":776,"receipt_version":1}
+
+archive_bytes=10958393
+archive_sha256=09c66b194cc06bee20f3e7ccde5172c2641e6666494dff9d9400cfc0cf441138
+archive_sha3_512=b5e7aad4d1f5ba15db9afc5f80cab6dd606d92e2fede774d1bfaba2dec421c6d0905b42955c34237f926e3b9f412b001e554afd19d50b081ffeac81382c12d25
+entry_count=777
+manifest_bytes=116285
+manifest_sha256=1ba00a9783eca57b3936b4d4d028e98d61739a018c90c19eb674a4025121a579
+manifest_file_count=776
+contains_state=false
+contains_new_candidate=true
+zip_crc_readback=true
+source_complete_three_way_byte_identical=true
+```
+
+The Desktop root, nested Desktop, and Downloads copies were first checked against the recorded
+old size/hash and then replaced at their exact named paths. Final readback matched the new size and
+SHA3-512 for all three copies; no temporary replacement files remained. The direct script-style
+builder invocation was attempted first and failed before validation with
+`ModuleNotFoundError: No module named 'tools'`; the module invocation above is the successful run.
+The replacement helper also emitted a non-terminating PowerShell `Split-Path -LiteralPath ...
+-Parent` parameter-set warning, which receives no success credit; the final independent readback is
+the authoritative copy verification.
+
+This refresh changes release evidence only. `proofSuiteId` remains null, activation remains false,
+and Gate 2E, exact H5, and H6 are not closed by the archive.
