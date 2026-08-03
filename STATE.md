@@ -6209,3 +6209,94 @@ custom H4 relation still proves only its existing compact equality/index/presenc
 boundary; full typed state semantics inside custom H4 GKR/PCS, reviewed PQ admission, complete
 simulator/leakage closure, H5, H6, `proofSuiteId`, and activation remain open. Therefore no H5
 launch was authorized or credited, and no gate was weakened to force progress.
+
+## 2026-08-03 Typed C0 v3 vector LogUp correction - VERIFIED, NONACTIVATING
+
+The authoritative `main` checkout remains
+`C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`.
+Protected paths remain untouched. The v2 payment-log compaction packed bytes into rows but retained
+one LogUp side per lane. The v3 correction groups each contiguous 64-byte source block into one
+vector lookup message and uses fixed live bits on the compact destination. It preserves every call
+index, byte position, value, weight, source range, and byte obligation. The authoritative
+Rust reader validates live and padding values, sorts live positions, and rejects duplicates or
+gaps before reconstructing each message.
+
+The first focused run exposed one incorrect v3 construction assumption and failed closed:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py
+E experiments.fixed_shape_claim_air.semantics.StructuralError: typed_state_log_message_port_length_invalid
+4 failed in 555.90s (0:09:15)
+```
+
+The SHA3 message-table span includes fixed-shape padding, so it is not the unpadded call length.
+The correction derives the live length from the canonical call preimage and independently checks
+the complete padded source span's live/value grammar. The uninterrupted post-correction verifier
+and mutation run was:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py
+....                                                                     [100%]
+4 passed in 300.68s (0:05:00)
+```
+
+Exact K128 v3 readback:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v3
+program_bytes=22405576
+execution_bytes=145415716
+program_commitment=4b483214418199cd829e04ffd242ba04411f70870b80144a53961c76919566d9e841b246d36c07860ff1023652d4d965cb8bb041d6d80d43b6aff1ca6fa821c8
+execution_commitment=59af5c927aa5efdc23d9b5dd044459a28078c8e7201380b1e1f72ec2b23c69b926d89200be02d690bc89bdc9c75d625a7a553d1802bb4ed912ca6e3279466423
+tables=56
+lookups=81
+public_inputs=1806
+hash_calls=46210
+raw_witness_bytes=102655520
+typed_state_log_message_batch rows=2048 columns=130 live_columns=64 raw_bytes=524288
+claim_source_bundle_word rows=90368 columns=59 live_columns=8 raw_bytes=2891776
+```
+
+The authoritative Rust boundary passed:
+
+```text
+cargo +1.96.0 fmt --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml -- --check
+exit=0
+
+cargo +1.96.0 check --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.54s
+exit=0
+
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 97.81s
+exit=0
+```
+
+The exact immutable resource preflight remains a hard rejection:
+
+```text
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=4642045952
+modeled_interaction_evaluation_bytes=8799649792
+modeled_composition_evaluation_bytes=1459617792
+modeled_deep_evaluation_bytes=169064005632
+modeled_fri_mask_bytes=130023424
+modeled_folded_layer_bytes=134217728
+modeled_monolithic_live_bytes_lower_bound=184229560320
+modeled_maximum_domain_rows=1048576
+requires_streaming=true
+modeled_raw_witness_bytes=102655520
+modeled_persistent_oracle_bytes=15406622048
+modeled_peak_temporary_bytes=1035206656
+modeled_filesystem_overhead_bytes=4110457176
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=24847253176
+```
+
+This removes 6,048,186,368 bytes from the modeled interaction oracle and 7,623,874,560 bytes from
+modeled required scratch availability relative to v2, but it does not qualify the route. Gate 2E,
+H5, H6, reviewed backend admission, simulator/leakage closure, `proofSuiteId`, and activation remain
+open. No H5 launch is authorized or credited by this component result.

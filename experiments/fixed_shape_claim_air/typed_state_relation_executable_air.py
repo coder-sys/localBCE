@@ -67,7 +67,7 @@ from experiments.fixed_shape_claim_air.ordered_map_batch_reference import (
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
-PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v2"
+PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v3"
 LANE_ORDER: Final[tuple[str, ...]] = ("replay", "benefit", "obligation", "ledger")
 MONEY_TABLE: Final[str] = "typed_state_money"
 SUMMARY_TABLE: Final[str] = "typed_state_lane_summary"
@@ -76,7 +76,7 @@ LOG_MESSAGE_TABLE: Final[str] = "typed_state_log_message_batch"
 _SOURCE_BUNDLE_TABLE: Final[str] = "claim_source_bundle_byte"
 _PACKED_SOURCE_BUNDLE_TABLE: Final[str] = "claim_source_bundle_word"
 _SOURCE_BUNDLE_LANES: Final[int] = 8
-_LOG_MESSAGE_LANES: Final[int] = 8
+_LOG_MESSAGE_LANES: Final[int] = 64
 _SOURCE_BUNDLE_MASKS: Final[tuple[str, ...]] = (
     "is_token_byte",
     "is_scalar_byte",
@@ -916,26 +916,54 @@ def _compact_log_message_port(
         **{f"live_{lane}": [] for lane in range(_LOG_MESSAGE_LANES)},
         **{f"value_{lane}": [] for lane in range(_LOG_MESSAGE_LANES)},
     }
-    for log_call in log_calls:
+    for call_ordinal, log_call in enumerate(log_calls):
         call_rows = payment.application_sha3.call_rows[log_call.call_id]
-        message_rows = call_rows.message_stop - call_rows.message_start
-        if call_rows.message_start % _LOG_MESSAGE_LANES or message_rows % _LOG_MESSAGE_LANES:
-            raise StructuralError("typed_state_log_message_port_alignment_invalid")
+        padded_rows = call_rows.message_stop - call_rows.message_start
+        message_rows = len(log_call.message)
+        if message_rows <= 0 or message_rows > padded_rows:
+            raise StructuralError("typed_state_log_message_port_length_invalid")
+        for position in range(padded_rows):
+            source_row = call_rows.message_start + position
+            expected_live = int(position < message_rows)
+            if (
+                source_trace.columns["live"][source_row] != expected_live
+                or source_trace.columns["value"][source_row]
+                != (log_call.message[position] if expected_live else 0)
+            ):
+                raise StructuralError("typed_state_log_message_port_source_invalid")
         local_call_index = source_trace.columns["call_index"][call_rows.message_start]
-        for position_base in range(0, message_rows, _LOG_MESSAGE_LANES):
-            row_start = call_rows.message_start + position_base
-            _append(packed_columns, "call_index", local_call_index + call_index_offset)
-            _append(packed_columns, "position_base", position_base)
-            for lane in range(_LOG_MESSAGE_LANES):
-                source_row = row_start + lane
-                _append(packed_columns, f"live_{lane}", source_trace.columns["live"][source_row])
-                _append(packed_columns, f"value_{lane}", source_trace.columns["value"][source_row])
+        segments = (
+            ((0, message_rows),)
+            if call_ordinal < slot_count
+            else ((0, message_rows - 64), (message_rows - 64, message_rows))
+        )
+        if any(start < 0 or start >= stop or stop > message_rows for start, stop in segments):
+            raise StructuralError("typed_state_log_message_port_segment_invalid")
+        for segment_start, segment_stop in segments:
+            for position_base in range(segment_start, segment_stop, _LOG_MESSAGE_LANES):
+                _append(packed_columns, "call_index", local_call_index + call_index_offset)
+                _append(packed_columns, "position_base", position_base)
+                for lane in range(_LOG_MESSAGE_LANES):
+                    position = position_base + lane
+                    live = int(position < segment_stop)
+                    _append(packed_columns, f"live_{lane}", live)
+                    _append(
+                        packed_columns,
+                        f"value_{lane}",
+                        source_trace.columns["value"][call_rows.message_start + position]
+                        if live
+                        else 0,
+                    )
     row_count = len(packed_columns["call_index"])
     if row_count == 0:
         raise StructuralError("typed_state_log_message_port_empty")
     fixed = {
         "call_index": tuple(packed_columns["call_index"]),
         "position_base": tuple(packed_columns["position_base"]),
+        **{
+            f"live_{lane}": tuple(packed_columns[f"live_{lane}"])
+            for lane in range(_LOG_MESSAGE_LANES)
+        },
     }
     return (
         AirTable(
@@ -1208,23 +1236,84 @@ def _retarget_log_message_lookup(
     destination = lookup.destinations[0]
     if destination.table != "sha3_message_batch":
         raise StructuralError("typed_state_log_message_lookup_table_invalid")
+    grouped_sources: list[LookupSide] = []
+    run: list[LookupSide] = []
+    previous_position: int | None = None
+
+    def flush_run() -> None:
+        nonlocal run
+        for start in range(0, len(run), _LOG_MESSAGE_LANES):
+            block = run[start : start + _LOG_MESSAGE_LANES]
+            values = []
+            for lane in range(_LOG_MESSAGE_LANES):
+                if lane < len(block):
+                    values.extend((const(1), *block[lane].values))
+                else:
+                    values.extend((const(0), const(0), const(0), const(0)))
+            first = block[0]
+            grouped_sources.append(
+                LookupSide(
+                    first.table,
+                    const(1),
+                    tuple(values),
+                    first.row_start,
+                    first.row_stop,
+                    first.weight,
+                )
+            )
+        run = []
+
+    for side in lookup.sources:
+        if (
+            side.selector != const(1)
+            or len(side.values) != 3
+            or side.values[1].kind != "const"
+        ):
+            raise StructuralError("typed_state_log_message_lookup_source_invalid")
+        position = side.values[1].value
+        if type(position) is not int or position < 0:
+            raise StructuralError("typed_state_log_message_lookup_position_invalid")
+        if run:
+            first = run[0]
+            contiguous = (
+                side.table == first.table
+                and side.selector == first.selector
+                and side.weight == first.weight
+                and side.row_start == first.row_start
+                and side.row_stop == first.row_stop
+                and previous_position is not None
+                and position == previous_position + 1
+            )
+            if not contiguous:
+                flush_run()
+        run.append(side)
+        previous_position = position
+    if run:
+        flush_run()
+
+    destination_values = []
+    for lane in range(_LOG_MESSAGE_LANES):
+        live = cell(f"live_{lane}")
+        destination_values.extend(
+            (
+                live,
+                live * cell("call_index"),
+                live * (cell("position_base") + lane),
+                cell(f"value_{lane}"),
+            )
+        )
     return LookupArgument(
         lookup.name,
-        lookup.sources,
-        tuple(
+        tuple(grouped_sources),
+        (
             LookupSide(
                 LOG_MESSAGE_TABLE,
-                cell(f"live_{lane}"),
-                (
-                    cell("call_index"),
-                    cell("position_base") + lane,
-                    cell(f"value_{lane}"),
-                ),
+                const(1),
+                tuple(destination_values),
                 0,
                 message_rows,
                 destination.weight,
-            )
-            for lane in range(_LOG_MESSAGE_LANES)
+            ),
         ),
     )
 

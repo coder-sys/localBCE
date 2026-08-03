@@ -351,11 +351,12 @@ composes the ordered-map/payment authorities and verifies root/cursor, slot-orde
 asset-registry, and replay/payment hash-port mutations for the K128 C0 witness. The native
 coordinator consumes its v4 AIR program/execution, verifies the authority/root bindings, and maps
 its 46,210 calls to the canonical H4 bus; the base replay/payment bus remains 46,208 calls. The
-current typed component is `BL-PQ512-C0-TYPED-STATE-AIR-v2` with 56 tables and 81 lookups; its
-source-bundle and payment-log byte transports are packed into 8-lane rows and its root messages
-use the canonical authority root columns directly. The full state relation is implemented at the
+current typed component is `BL-PQ512-C0-TYPED-STATE-AIR-v3` with 56 tables and 81 lookups; its
+source bundle remains packed into 8-lane rows, operation/log preimages use 64-lane vector lookup
+messages with fixed live bits, and root messages use the canonical authority root columns
+directly. The full state relation is implemented at the
 typed semantic-AIR/H4 readback seam, but the selected typed proof route is rejected by the
-immutable resource preflight (`qualifies=false`, `modeled_required_available_bytes=32471127736`).
+immutable resource preflight (`qualifies=false`, `modeled_required_available_bytes=24847253176`).
 It is still not a selected complete H4 GKR/PCS proof, no reviewed backend is admitted, and no
 manifest-bound H4 K128/K512 proof was run after the source change.
 

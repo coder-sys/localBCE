@@ -70,7 +70,8 @@ const STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-ROOT-AIR-v1";
 const STATE_RELATION_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-RELATION-AIR-v2";
 const STATE_AIR_COMPONENT_ID: &[u8] = b"BL-PQ512-STATE-AIR-PROOF-V1";
 const TYPED_STATE_COMPONENT_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-V1";
-const TYPED_STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-v2";
+const TYPED_STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-v3";
+const TYPED_STATE_LOG_MESSAGE_LANES: usize = 64;
 const TYPED_STATE_FRAGMENT_MAGIC: &[u8] = b"BLSA03";
 const TYPED_STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF/v1\0";
 const TYPED_STATE_PROJECTION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROJECTION/v1\0";
@@ -2236,7 +2237,7 @@ fn typed_state_hash_messages(
 
     let log_call_values = typed_column(tables, "typed_state_log_message_batch", "call_index")?;
     let log_positions = typed_column(tables, "typed_state_log_message_batch", "position_base")?;
-    let log_live = (0..8)
+    let log_live = (0..TYPED_STATE_LOG_MESSAGE_LANES)
         .map(|lane| {
             typed_column(
                 tables,
@@ -2245,7 +2246,7 @@ fn typed_state_hash_messages(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let log_values = (0..8)
+    let log_values = (0..TYPED_STATE_LOG_MESSAGE_LANES)
         .map(|lane| {
             typed_column(
                 tables,
@@ -2264,43 +2265,37 @@ fn typed_state_hash_messages(
     {
         return Err("typed_state_log_message_shape".to_string());
     }
-    let mut grouped: BTreeMap<u32, Vec<(u32, u32, u8)>> = BTreeMap::new();
+    let mut grouped: BTreeMap<u32, Vec<(u32, u8)>> = BTreeMap::new();
     for row in 0..log_call_values.len() {
         let call = log_call_values[row].as_u32();
         let position_base = log_positions[row].as_u32();
-        for lane in 0_usize..8 {
+        for lane in 0..TYPED_STATE_LOG_MESSAGE_LANES {
             let lane_position =
                 u32::try_from(lane).map_err(|_| "typed_state_log_message_lane".to_string())?;
-            grouped.entry(call).or_default().push((
-                position_base
-                    .checked_add(lane_position)
-                    .ok_or_else(|| "typed_state_log_message_position".to_string())?,
-                log_live[lane][row].as_u32(),
-                typed_byte(log_values[lane][row], "log_message")?,
-            ));
+            let position = position_base
+                .checked_add(lane_position)
+                .ok_or_else(|| "typed_state_log_message_position".to_string())?;
+            let live = log_live[lane][row].as_u32();
+            let value = typed_byte(log_values[lane][row], "log_message")?;
+            match (live, value) {
+                (0, 0) => {}
+                (0, _) => return Err("typed_state_log_message_padding".to_string()),
+                (1, value) => grouped.entry(call).or_default().push((position, value)),
+                _ => return Err("typed_state_log_message_live".to_string()),
+            }
         }
     }
     if grouped.len() != (slots * 2) as usize {
         return Err("typed_state_log_call_count".to_string());
     }
-    for (call, rows) in grouped {
+    for (call, mut rows) in grouped {
+        rows.sort_unstable_by_key(|(position, _)| *position);
         let mut message = Vec::new();
-        let mut padding = false;
-        for (index, (position, live, value)) in rows.iter().enumerate() {
-            if usize::try_from(*position).ok() != Some(index) || *live > 1 {
+        for (index, (position, value)) in rows.iter().enumerate() {
+            if usize::try_from(*position).ok() != Some(index) {
                 return Err("typed_state_log_message_position".to_string());
             }
-            if *live == 1 {
-                if padding {
-                    return Err("typed_state_log_message_prefix".to_string());
-                }
-                message.push(*value);
-            } else {
-                padding = true;
-                if *value != 0 {
-                    return Err("typed_state_log_message_padding".to_string());
-                }
-            }
+            message.push(*value);
         }
         if message.is_empty() {
             return Err("typed_state_log_message_empty".to_string());
