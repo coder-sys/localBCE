@@ -73,6 +73,27 @@ The live STARK settlement validator also opts into `versioned_g1_g10`, so
 approved and denied proof/settlement tests cover the rules engine and proof
 backend together.
 
+## Phase R1 Corpus Audit
+
+The production rules track starts with a JSON/source-only inventory. It does
+not read the legacy SQLite graph and does not activate any candidate corpus:
+
+```bash
+cd gov-rules-kg-prototype
+python -m gov_rules_kg.main rules-corpus-audit
+```
+
+Outputs:
+
+- `reports/rules_corpus_inventory.json`
+- `reports/rules_corpus_inventory.md`
+
+The report distinguishes active runtime rules, deterministic candidates,
+promotion-ready candidates, shadow-only exports, references, and stale or
+missing corpora. Counts for derivative reports are lineage counts, not
+additive totals. In particular, machine validation or promotion readiness is
+not legal verification and cannot confer runtime eligibility.
+
 ## Deliberate Limits
 
 `rust-engine/rules.json` and `rules_v9.json` remain target/reference ASTs. They

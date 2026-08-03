@@ -24,6 +24,7 @@ from .env import load_env_file
 from .evaluation import evaluate_gold_set
 from .hierarchy_plan import write_ai_hierarchy_plan
 from .reports import build_programmatic_proof_report, build_rule_inventory_from_rules, load_atomic_rules, load_documents, write_json, write_markdown_programmatic_proof, write_verified_rules_by_hierarchy
+from .rules_corpus_audit import write_rules_corpus_audit
 from .scale import write_ecfr_manifest, write_scale_playbook
 from .store import Store
 
@@ -83,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claude-web-map-deterministic", help="Map Claude web executable candidates into deterministic rule-shape candidates")
     subparsers.add_parser("claude-web-mapping-qa", help="Report deterministic mapping weaknesses and next fix buckets")
     subparsers.add_parser("claude-web-export-rust-shadow", help="Export QA-passed Claude mappings into a deterministic non-runtime Rust shadow bundle")
+    subparsers.add_parser("rules-corpus-audit", help="Write the Phase R1 JSON-only rules corpus inventory and runtime-boundary report")
     claude_scale_parser = subparsers.add_parser("claude-web-scale-plan", help="Plan structured Claude web expansion batches across programs, jurisdictions, and source types")
     claude_scale_parser.add_argument("--target-candidates-per-branch", type=int, default=10)
     claude_scale_parser.add_argument("--batch-size", type=int, default=5)
@@ -317,6 +319,15 @@ def main() -> None:
     if args.command == "claude-web-export-rust-shadow":
         try:
             payload = write_claude_web_rust_shadow_bundle(workdir)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "rules-corpus-audit":
+        try:
+            payload = write_rules_corpus_audit(workdir)
         except (FileNotFoundError, ValueError) as exc:
             print(str(exc))
             raise SystemExit(2) from exc

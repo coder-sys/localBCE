@@ -16,7 +16,13 @@ export PATH="${HOME}/.cargo/bin:${PATH}"
 echo "==> Government rules mapping tests"
 (
   cd "${ROOT_DIR}/gov-rules-kg-prototype"
-  "${PYTHON}" -m unittest tests/test_legal_grade_foundation.py
+  "${PYTHON}" -m unittest discover -s tests -p 'test_*.py'
+)
+
+echo "==> Phase R1 rules corpus inventory"
+(
+  cd "${ROOT_DIR}/gov-rules-kg-prototype"
+  "${PYTHON}" -m gov_rules_kg.main rules-corpus-audit
 )
 
 echo "==> Export Claude web Rust shadow bundle"
