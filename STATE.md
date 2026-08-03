@@ -5938,3 +5938,39 @@ This is a verified typed component, not Gate 2E closure. It is not yet consumed 
 `proof_suite_unselected` remain open. H5 has not run, H6 has not run, `proofSuiteId` remains null,
 activation remains false, and the source-complete archive has not yet been refreshed for this
 working-tree change.
+
+## 2026-08-02 Typed C0 source-complete archive refresh - VERIFIED
+
+The typed C0 implementation and documentation were committed on `main` as
+`3d49e06058dd22158ce0ca8fed8c6ee9926e4996`, tree
+`d548d24ca55543d4f1e1b5122d137e832c4beb7e`; the checkout was clean before this receipt-only
+update. The deterministic builder used the reviewed 17-path privacy exclusion set and selected
+778 payload files from 795 tracked files. The first staging helper failed closed before archive
+validation on a PowerShell `Split-Path` parameter-set error, created no ZIP, and its exact staging
+directory was verified and removed. The corrected staging and module invocation passed:
+
+```text
+py -3.14 -B -m tools.build_release_archive --source-root <work>/refresh-source-3d49e06 --manifest <work>/refresh-source-3d49e06/APP_RELEASE_FILE_MANIFEST.json --output <work>/Blind-Ledger-Wave2-Source-Complete-2026-08-02-3d49e06.zip
+{"archive_bytes":11016479,"archive_sha256":"8a13443c5ef78dbc82d0f2b8ca10ea1bcc93acf146616e8d2070a8b6a97abd3f","builder_version":"blind-ledger-release-archive-v1","entry_count":779,"manifest_sha256":"a2a11688bf86d742c2174d7c3189bb7fbd085d6d623cf012bf6066f9c04b285f","payload_bytes":10704426,"payload_file_count":778,"receipt_version":1}
+
+archive_bytes=11016479
+archive_sha256=8a13443c5ef78dbc82d0f2b8ca10ea1bcc93acf146616e8d2070a8b6a97abd3f
+archive_sha3_512=8e222a703991aaaaf27e175ab66eeb2e6f051d62724f26e93ba898c68c659949d75c427960ba69fec51b9d0e5e95a22a6877028d8bc11e8c2dc5775185d41834
+entry_count=779
+manifest_file_count=778
+manifest_sha256=a2a11688bf86d742c2174d7c3189bb7fbd085d6d623cf012bf6066f9c04b285f
+manifest_matches_stage=true
+zip_crc_readback=passed
+contains_typed_module=true
+contains_typed_test=true
+contains_state=false
+forbidden_generated_entries=0
+```
+
+The exact reviewed copies at the Desktop root, the nested `Blind-Ledger-Wave2-Full-Workspace-2026-08-02`
+directory, and Downloads were checked against the prior 10,958,393-byte/
+`09c66b194cc06bee20f3e7ccde5172c2641e6666494dff9d9400cfc0cf441138` identity before replacement.
+Independent final readback reports 11,016,479 bytes and SHA-256
+`8a13443c5ef78dbc82d0f2b8ca10ea1bcc93acf146616e8d2070a8b6a97abd3f` for all three. This receipt
+changes release evidence only; Gate 2E remains unsealed, H5/H6 remain unrun, `proofSuiteId` is
+null, and activation remains false.
