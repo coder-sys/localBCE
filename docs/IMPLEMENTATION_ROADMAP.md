@@ -72,6 +72,16 @@ measured 512-slot prover time is 426.679855 seconds, so it is rejected by the un
 complete-proof ceiling. It remains a differential/attack oracle; the selected H4 relation must use
 a subquadratic uniqueness construction.
 
+The linear-size square-free successor now independently verifies both phases and rejects duplicate,
+tree-terminal, coefficient-terminal, and challenge-order attacks. Its K128 control measured
+0.042439/0.046355/0.023395 seconds and its K512 control measured
+0.698637/0.237447/0.072302 seconds for witness/prove/verify, respectively. It uses 370/546
+authenticated scalar challenges and 32,768/131,072 witness bytes. Its four virtual leaf terminals
+reduce to twelve openings of existing H4 state columns, plus four committed Bezout-table claims.
+Next compose those four tables and all sixteen openings into the existing input/auxiliary PCS and
+parent transcript. Until that passes independent verification, this is candidate control evidence,
+not H4, Gate 2E, H5, backend-selection, or activation credit.
+
 ## Sole dependency chain
 
 ```text

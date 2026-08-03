@@ -6650,3 +6650,67 @@ so it is not claimed as passed; its orphaned exact repository Cargo/test process
 by command line and terminated. Strict Clippy now reaches only the pre-existing unrelated
 `disk_deep.rs:339` `too_many_arguments` diagnostic; the two diagnostics introduced/exposed in the
 changed state files were corrected. No lint allowance or gate weakening was added.
+
+## 2026-08-03 Linear-size square-free uniqueness successor - VERIFIED COMPONENT
+
+The rejected quadratic uniqueness route now has a linear-size successor candidate in
+`state_squarefree_gkr.rs`. After a committed state source receives authenticated `beta`, each
+injective two-Fp16 key becomes `k0+beta*k1`. The prover constructs four bounded A/B coefficient
+tables, which must be committed before authenticated `r`. A dual-number product tree proves
+`P(r),P'(r)` and product sumchecks prove the two Bezout evaluations. The verifier requires
+`A(r)P(r)+B(r)P'(r)=1` for both before/after phases. A repeated active key makes P non-square-free
+and cannot satisfy the polynomial identity. The false-identity degree is below 1,024; using only
+the conservative `|Fp16|>2^480` bound, it and the under-2^18 compression-collision union remain
+well above the frozen 256-bit floor.
+
+The interactive control publishes every root, quadratic sumcheck, terminal, and first Bezout value
+before its corresponding authenticated challenge. Four virtual leaf terminals reduce algebraically
+to twelve presence/key openings in the existing H4 state source; four more claims open the A/B
+coefficient tables. Positive, duplicate, tree mutation, coefficient mutation, PCS-reduction, and
+interactive-order checks pass.
+
+Exact release output:
+
+```text
+evidence_class=MEASURED_CONTROL_NONACTIVATING
+construction=FP16_SQUAREFREE_DUAL_PRODUCT_GKR_V1
+capacity=128
+phase_count=2
+tree_layers_per_phase=14
+authenticated_rounds=370
+virtual_leaf_claims=4
+coefficient_pcs_claims=4
+witness_fp16_elements=512
+witness_bytes=32768
+witness_build_seconds=0.042439
+prove_seconds=0.046355
+verify_seconds=0.023395
+verified=true
+activation_allowed=false
+
+evidence_class=MEASURED_CONTROL_NONACTIVATING
+construction=FP16_SQUAREFREE_DUAL_PRODUCT_GKR_V1
+capacity=512
+phase_count=2
+tree_layers_per_phase=18
+authenticated_rounds=546
+virtual_leaf_claims=4
+coefficient_pcs_claims=4
+witness_fp16_elements=2048
+witness_bytes=131072
+witness_build_seconds=0.698637
+prove_seconds=0.237447
+verify_seconds=0.072302
+verified=true
+activation_allowed=false
+```
+
+Focused verification is 5 passed for `state_squarefree_gkr`; the containing state relation,
+quadratic attack oracle, and hash-bus sets pass 10, 5, and 5 tests. No-default library check passes.
+Strict Clippy reaches only the unchanged pre-existing `disk_deep.rs:339` `too_many_arguments`
+diagnostic. The candidate has no lint allowance. These measurements do not include committing the
+four coefficient tables in the auxiliary PCS, opening the twelve state-column reductions, parent
+grammar/transcript binding, or complete H4 proof generation. Gate 2E, H4 state composition, H5,
+H6, backend admission, `proofSuiteId`, and activation remain open. The next action is exact
+input/auxiliary PCS and parent-transcript composition, not further tuning of either uniqueness
+control.

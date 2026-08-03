@@ -110,6 +110,17 @@ slots and 426.679855 seconds for 512 slots; the latter exceeds the complete 180-
 itself. The quadratic construction is therefore rejected as the selected H4 route and is retained
 only as a correctness/attack oracle for a subquadratic successor.
 
+`src/state_squarefree_gkr.rs` is the linear-size successor candidate. After the state commitment,
+an authenticated Fp16 `beta` compresses each injective two-Fp16 key; four bounded Bezout coefficient
+tables are then committed before a fresh evaluation point. A dual-number product GKR proves
+`P(r),P'(r)` and coefficient sumchecks prove `A(r)P(r)+B(r)P'(r)=1` for both state phases.
+Every challenge is message-first. The verifier reduces four virtual leaves to twelve openings of the
+existing presence/key columns and emits four coefficient-table PCS claims. Release controls measured
+0.042439/0.046355/0.023395 seconds for K128 and 0.698637/0.237447/0.072302 seconds for K512
+(witness/prove/verify), with 32,768/131,072 witness bytes. This is verified component evidence, not
+H4 credit: the four coefficient tables and sixteen resulting PCS openings are not yet composed into
+the selected auxiliary/input commitment and parent transcript.
+
 ## Source ownership
 
 | Responsibility | Source |

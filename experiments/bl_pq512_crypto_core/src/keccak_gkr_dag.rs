@@ -28,6 +28,8 @@ pub enum KeccakDagGateKind {
     XorConstant(bool),
     /// Field multiplication for non-Boolean statement relations.
     Multiply,
+    /// Field addition for non-Boolean statement relations.
+    Add,
     /// Relay the left source value without copying it outside the proof.
     RelayLeft,
     /// Field subtraction for non-Boolean statement relations.
@@ -273,7 +275,7 @@ fn evaluate_gate(kind: KeccakDagGateKind, left: bool, right: bool) -> bool {
         KeccakDagGateKind::Xor => left ^ right,
         KeccakDagGateKind::NotLeftAndRight => !left & right,
         KeccakDagGateKind::XorConstant(constant) => left ^ right ^ constant,
-        KeccakDagGateKind::Multiply | KeccakDagGateKind::RelayLeft => {
+        KeccakDagGateKind::Multiply | KeccakDagGateKind::Add | KeccakDagGateKind::RelayLeft => {
             unreachable!("field statement gate in the Boolean Keccak evaluator")
         }
         KeccakDagGateKind::Subtract => {
@@ -325,7 +327,7 @@ fn evaluate_packed_gate(kind: KeccakDagGateKind, left: u16, right: u16) -> u16 {
         KeccakDagGateKind::XorConstant(constant) => {
             left ^ right ^ if constant { u16::MAX } else { 0 }
         }
-        KeccakDagGateKind::Multiply | KeccakDagGateKind::RelayLeft => {
+        KeccakDagGateKind::Multiply | KeccakDagGateKind::Add | KeccakDagGateKind::RelayLeft => {
             unreachable!("field statement gate in the bit-sliced Keccak evaluator")
         }
         KeccakDagGateKind::Subtract => {

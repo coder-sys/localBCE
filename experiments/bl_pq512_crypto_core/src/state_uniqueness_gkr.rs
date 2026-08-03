@@ -315,6 +315,7 @@ fn uniqueness_layers(
 fn evaluate_gate(kind: KeccakDagGateKind, left: Fp16, right: Fp16) -> Fp16 {
     match kind {
         KeccakDagGateKind::Multiply => left * right,
+        KeccakDagGateKind::Add => left + right,
         KeccakDagGateKind::RelayLeft => left,
         KeccakDagGateKind::NotLeftAndRight => right - left * right,
         KeccakDagGateKind::Subtract => left - right,

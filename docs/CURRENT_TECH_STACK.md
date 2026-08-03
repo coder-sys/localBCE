@@ -371,6 +371,18 @@ uniqueness control alone exceeds the 180-second complete-proof gate, the quadrat
 rejected; Gate 2E now requires a subquadratic uniqueness construction on the same custom H4/PCS
 path.
 
+That successor is now implemented as the nonactivating `FP16_SQUAREFREE_DUAL_PRODUCT_GKR_V1`
+control. For each phase it proves the derivative product tree for the active compressed keys and a
+bounded Bezout identity. The state commitment precedes `beta`; four A/B coefficient tables must
+precede `r`; all 370 K128 or 546 K512 scalar challenges follow published messages. At K128 the
+measured witness/prove/verify times are 0.042439/0.046355/0.023395 seconds with 32,768 witness bytes.
+At K512 they are 0.698637/0.237447/0.072302 seconds with 131,072 witness bytes. Conservatively,
+Fp16 has more than 2^480 elements, at most 261,632 pairwise compression collisions cost under 18
+bits, and the false Bezout identity has degree below 1,024, preserving the 256-bit floor. The
+verifier reduces four virtual leaves to twelve existing state-column openings and four A/B PCS
+claims. Those sixteen claims and the post-beta coefficient-table commitment are not yet in the H4
+parent/PCS grammar, so uniqueness and Gate 2E receive no composition or qualification credit yet.
+
 ## Exact accepted H4 profiles
 
 Only two coordinator profiles are currently accepted. K256 remains a design/calibration point and

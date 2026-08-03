@@ -37,7 +37,10 @@ fn gate_value(kind: KeccakDagGateKind, left: Fp16, right: Fp16) -> Fp16 {
         KeccakDagGateKind::NotLeftAndRight => right - left * right,
         KeccakDagGateKind::XorConstant(false) => xor,
         KeccakDagGateKind::XorConstant(true) => Fp16::ONE - xor,
-        KeccakDagGateKind::Subtract => {
+        KeccakDagGateKind::Subtract
+        | KeccakDagGateKind::Multiply
+        | KeccakDagGateKind::Add
+        | KeccakDagGateKind::RelayLeft => {
             unreachable!("field subtraction is not a Boolean Keccak gate")
         }
         KeccakDagGateKind::Zero => Fp16::ZERO,

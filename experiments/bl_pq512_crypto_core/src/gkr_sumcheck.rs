@@ -1484,6 +1484,7 @@ enum GateFormula {
     NotLeftAndRight,
     NotXor,
     Subtract,
+    Add,
     Left,
     Right,
     NotLeft,
@@ -1753,6 +1754,7 @@ fn gate_value(formula: GateFormula, left: Fp16, right: Fp16) -> Fp16 {
         GateFormula::NotLeftAndRight => right - left * right,
         GateFormula::NotXor => Fp16::ONE - left - right + left * right + left * right,
         GateFormula::Subtract => left - right,
+        GateFormula::Add => left + right,
         GateFormula::Left => left,
         GateFormula::Right => right,
         GateFormula::NotLeft => Fp16::ONE - left,
@@ -1789,6 +1791,7 @@ fn gate_line(
         }
         GateFormula::Subtract if varying_left => (zero - fixed, delta),
         GateFormula::Subtract => (fixed - zero, -delta),
+        GateFormula::Add => (zero + fixed, delta),
         GateFormula::Left if varying_left => (zero, delta),
         GateFormula::Left => (fixed, Fp16::ZERO),
         GateFormula::Right if varying_left => (fixed, Fp16::ZERO),
@@ -1829,6 +1832,7 @@ fn gate_quadratic_both(
             cross_quadratic + cross_quadratic,
         ],
         GateFormula::Subtract => [left_zero - right_zero, left_delta - right_delta, Fp16::ZERO],
+        GateFormula::Add => [left_zero + right_zero, left_delta + right_delta, Fp16::ZERO],
         GateFormula::Left => [left_zero, left_delta, Fp16::ZERO],
         GateFormula::Right => [right_zero, right_delta, Fp16::ZERO],
         GateFormula::NotLeft => [Fp16::ONE - left_zero, -left_delta, Fp16::ZERO],
@@ -2517,6 +2521,7 @@ fn dag_gate_formula(kind: KeccakDagGateKind) -> GateFormula {
         KeccakDagGateKind::XorConstant(false) => GateFormula::Xor,
         KeccakDagGateKind::XorConstant(true) => GateFormula::NotXor,
         KeccakDagGateKind::Multiply => GateFormula::And,
+        KeccakDagGateKind::Add => GateFormula::Add,
         KeccakDagGateKind::RelayLeft => GateFormula::Left,
         KeccakDagGateKind::Subtract => GateFormula::Subtract,
         KeccakDagGateKind::Zero => GateFormula::Zero,
@@ -5921,6 +5926,54 @@ pub fn prove_product_sumcheck(
     };
     verify_product_sumcheck(initial_claim, challenges, &proof)?;
     Ok((initial_claim, proof))
+}
+
+/// Interactive degree-two product sumcheck.  Each quadratic message is
+/// published to the callback before its challenge is accepted.
+pub fn prove_product_sumcheck_interactive(
+    left: &[Fp16],
+    right: &[Fp16],
+    mut challenge_provider: impl FnMut(usize, &[Fp16; 3]) -> Result<Fp16, ProductSumcheckError>,
+) -> Result<(Fp16, Vec<Fp16>, ProductSumcheckProof), ProductSumcheckError> {
+    let round_count = log2_exact(left.len())?;
+    if left.len() != right.len() {
+        return Err(ProductSumcheckError::Shape);
+    }
+    let initial_claim = product_sum(left, right)?;
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    let mut rounds = Vec::with_capacity(round_count);
+    let mut challenges = Vec::with_capacity(round_count);
+    for round in 0..round_count {
+        let mut coefficients = [Fp16::ZERO; 3];
+        for index in 0..left.len() / 2 {
+            let left_zero = left[2 * index];
+            let left_delta = left[2 * index + 1] - left_zero;
+            let right_zero = right[2 * index];
+            let right_delta = right[2 * index + 1] - right_zero;
+            coefficients[0] = coefficients[0] + left_zero * right_zero;
+            coefficients[1] = coefficients[1] + left_zero * right_delta + right_zero * left_delta;
+            coefficients[2] = coefficients[2] + left_delta * right_delta;
+        }
+        let challenge = challenge_provider(round, &coefficients)?;
+        for index in 0..left.len() / 2 {
+            let left_zero = left[2 * index];
+            let right_zero = right[2 * index];
+            left[index] = left_zero + challenge * (left[2 * index + 1] - left_zero);
+            right[index] = right_zero + challenge * (right[2 * index + 1] - right_zero);
+        }
+        left.truncate(left.len() / 2);
+        right.truncate(right.len() / 2);
+        rounds.push(coefficients);
+        challenges.push(challenge);
+    }
+    let proof = ProductSumcheckProof {
+        rounds,
+        terminal_left: left[0],
+        terminal_right: right[0],
+    };
+    verify_product_sumcheck(initial_claim, &challenges, &proof)?;
+    Ok((initial_claim, challenges, proof))
 }
 
 pub fn verify_product_sumcheck(

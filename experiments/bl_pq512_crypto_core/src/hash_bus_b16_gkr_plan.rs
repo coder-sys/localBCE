@@ -54,6 +54,7 @@ fn kind_tag(kind: KeccakDagGateKind) -> u8 {
         KeccakDagGateKind::Zero => 4,
         KeccakDagGateKind::Subtract
         | KeccakDagGateKind::Multiply
+        | KeccakDagGateKind::Add
         | KeccakDagGateKind::RelayLeft => 0xff,
     }
 }
@@ -96,7 +97,13 @@ impl HashBusB16GkrPlan {
                     || layer.gates.iter().any(|gate| {
                         gate.left >= layer.left_width
                             || gate.right >= layer.right_width
-                            || matches!(gate.kind, KeccakDagGateKind::Subtract)
+                            || matches!(
+                                gate.kind,
+                                KeccakDagGateKind::Subtract
+                                    | KeccakDagGateKind::Multiply
+                                    | KeccakDagGateKind::Add
+                                    | KeccakDagGateKind::RelayLeft
+                            )
                     })
                 {
                     return Err(HashBusB16GkrPlanError::Shape);

@@ -265,6 +265,19 @@ measured 426.679855 seconds plus 38.789283 seconds verification, with a 67,108,8
 180-second complete-proof gate. Retain it as a differential oracle and implement a subquadratic
 successor; do not tune the rejected route or grant H4/Gate 2E credit.
 
+The first subquadratic successor control is `FP16_SQUAREFREE_DUAL_PRODUCT_GKR_V1`. It uses a
+linear-size dual-number product tree and four bounded Bezout tables. Exact release measurements are:
+
+| Capacity | Witness bytes | Authenticated scalar rounds | Witness build | Prove | Verify |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 32,768 | 370 | 0.042439 s | 0.046355 s | 0.023395 s |
+| 512 | 131,072 | 546 | 0.698637 s | 0.237447 s | 0.072302 s |
+
+Both controls independently verify and retain `activation_allowed=false`. These component times do
+not include auxiliary/input PCS composition, parent serialization, or the complete H4 boundary.
+Bind the four coefficient tables and twelve state-column reductions into the existing PCS before
+using this improvement in any complete-proof projection or Gate 2E decision.
+
 ## 12. H5 qualification preflight boundary
 
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now provides a read-only,

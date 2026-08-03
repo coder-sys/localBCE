@@ -383,6 +383,7 @@ fn evaluate_gate(kind: KeccakDagGateKind, left: Fp16, right: Fp16) -> Fp16 {
         KeccakDagGateKind::Subtract => left - right,
         KeccakDagGateKind::NotLeftAndRight => right - left * right,
         KeccakDagGateKind::Multiply => left * right,
+        KeccakDagGateKind::Add => left + right,
         KeccakDagGateKind::RelayLeft => left,
         KeccakDagGateKind::Zero => Fp16::ZERO,
         _ => unreachable!("non-state gate in the compact state relation"),

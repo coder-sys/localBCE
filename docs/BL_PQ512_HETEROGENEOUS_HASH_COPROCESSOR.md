@@ -88,6 +88,13 @@ message-before-challenge interactive public coin, but it is not selected: measur
 took 21.902903 seconds for 128 slots and 426.679855 seconds for 512 slots. The K512 control alone
 misses the 180-second complete-proof gate, so Gate 2E must use a subquadratic uniqueness relation.
 
+The implemented successor is a linear-size square-free/derivative product GKR. Its message-first
+control measured K512 witness/prove/verify at 0.698637/0.237447/0.072302 seconds with a
+131,072-byte witness, versus 426.679855 seconds for the rejected pairwise prover. It reduces four
+virtual leaves to twelve openings of the existing state lane and adds four Bezout coefficient-table
+claims. This candidate is not yet part of the fixed H4 claim grammar or auxiliary commitment; no
+state-composed timing or selection credit is taken until that composition verifies end to end.
+
 ## 5. Native hiding and PCS
 
 Every shard verifies 508 native GKR mask constraints. The GKR mask is committed as 64

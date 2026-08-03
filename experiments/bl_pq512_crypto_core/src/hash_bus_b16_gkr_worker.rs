@@ -102,6 +102,7 @@ fn encode_layer_plan(layer: &KeccakDagLayer) -> Result<Vec<u8>, UniformRelayFree
             KeccakDagGateKind::Zero => return Err(UniformRelayFreeGkrError::Shape),
             KeccakDagGateKind::Subtract
             | KeccakDagGateKind::Multiply
+            | KeccakDagGateKind::Add
             | KeccakDagGateKind::RelayLeft => return Err(UniformRelayFreeGkrError::Shape),
         };
         encoded.extend_from_slice(
@@ -844,6 +845,7 @@ mod tests {
                     KeccakDagGateKind::Zero => panic!("selected plan contains a zero gate"),
                     KeccakDagGateKind::Subtract
                     | KeccakDagGateKind::Multiply
+                    | KeccakDagGateKind::Add
                     | KeccakDagGateKind::RelayLeft => {
                         panic!("selected plan contains a state-only field gate")
                     }
