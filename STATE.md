@@ -6096,3 +6096,36 @@ No H5 launch was attempted or skipped silently. The source-complete archive refr
 external-artifact step for this clean phase commit; its independent three-copy hashes are reported
 in the phase handoff. Gate 2E, H5, and H6 remain unclosed, `proofSuiteId=null`, and activation is
 false.
+
+## 2026-08-02 Full-AIR source-complete archive refresh - VERIFIED, NONACTIVATING
+
+The full-AIR implementation and gate-reconciliation source was committed cleanly as
+`a905b456f9cd475383f46f6516df26f6702446ce`. The deterministic source-complete builder used the
+reviewed 17-path privacy exclusion set from the prior receipts; `STATE.md` is excluded from the
+payload. The first generated-manifest attempt failed closed with
+`release file entries must be strictly path-sorted`; no ZIP was published. The manifest was
+regenerated with deterministic code-point path ordering and the module builder then passed:
+
+```text
+{"archive_bytes":11098485,"archive_sha256":"e05c73dd156083b46b962f9aff084b372c48028c29f2dded1259e417f9c71ca2","builder_version":"blind-ledger-release-archive-v1","entry_count":780,"manifest_sha256":"c01cbb817d698ebd5bd2ea057bfc7cb54c67910f4f9b1f4ae498300881b2f73c","payload_bytes":10782089,"payload_file_count":779,"receipt_version":1}
+
+archive_bytes=11098485
+archive_sha256=e05c73dd156083b46b962f9aff084b372c48028c29f2dded1259e417f9c71ca2
+archive_sha3_512=cd561bccdfe1fb846e844b2637887b6e297581acd943f7c898edff1d5164b66c51fbc7abf5185d235b519007920d64fe8bc83a8ff46b2dc84b62067611c35075
+entry_count=780
+manifest_bytes=147184
+manifest_sha256=c01cbb817d698ebd5bd2ea057bfc7cb54c67910f4f9b1f4ae498300881b2f73c
+manifest_file_count=779
+contains_state=false
+contains_typed_module=true
+zip_crc_readback=true
+source_complete_three_way_byte_identical=true
+```
+
+Independent readback verified byte identity and the same SHA-256/SHA3-512 at the exact Desktop
+root, nested Desktop, and Downloads paths. The target preflight/copy helper emitted a
+non-terminating PowerShell `Split-Path` parameter-set warning; it receives no verification credit.
+The independent ZIP readback passed, and the final archive test passed `18 passed, 54 subtests
+passed in 1.01s`. A receipt-only follow-up commit changes only this excluded `STATE.md` record;
+the three archive payloads remain bound to the clean implementation commit above. Gate 2E, H5, and
+H6 remain unclosed, `proofSuiteId=null`, and activation is false.
