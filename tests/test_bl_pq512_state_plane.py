@@ -99,6 +99,28 @@ def test_state_snapshot_rejects_noncanonical_presence_byte() -> None:
         StateSnapshot.decode(bytes(malformed))
 
 
+def test_state_snapshot_rejects_duplicate_present_keys() -> None:
+    snapshot = StateSnapshot(
+        "K128_CALIBRATION",
+        "BL-PQ512-STATE-PLANE-V1",
+        2,
+        7,
+        0,
+        (
+            StateEntry(0, True, b"K" * 64, b"V" * 64),
+            StateEntry(1, True, b"L" * 64, b"W" * 64),
+        ),
+    )
+    entry_width = len(StateEntry.empty(0).encoded)
+    first_entry = len(snapshot.encoded) - snapshot.capacity * entry_width
+    malformed = bytearray(snapshot.encoded)
+    malformed[
+        first_entry + entry_width + 9 : first_entry + entry_width + 73
+    ] = malformed[first_entry + 9 : first_entry + 73]
+    with pytest.raises(StatePlaneError, match="snapshot_duplicate_key"):
+        StateSnapshot.decode(bytes(malformed))
+
+
 def test_file_store_rejects_noncanonical_persisted_state_before_cas(tmp_path) -> None:
     proof = _proof()
     store = FileStateStore(tmp_path / "state.bin")

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -759,6 +759,7 @@ struct StateEntryWire {
 
 fn to_state_relation_entry(entry: &StateEntryWire) -> StateRelationEntry {
     StateRelationEntry {
+        index: u32::try_from(entry.index).expect("state capacity is bounded to u32"),
         present: entry.present,
         key: entry.key,
         value: entry.value,
@@ -816,6 +817,16 @@ struct StateSnapshotWire {
     root: [u8; 64],
 }
 
+fn validate_snapshot_unique_keys(entries: &[StateEntryWire]) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for entry in entries.iter().filter(|entry| entry.present) {
+        if !seen.insert(entry.key) {
+            return Err("state_binding_snapshot_duplicate_key".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn parse_state_snapshot(encoded: &[u8]) -> Result<StateSnapshotWire, String> {
     let mut cursor = StateCursor::new(encoded);
     if cursor.take(6, "snapshot_magic")? != STATE_MAGIC {
@@ -855,6 +866,7 @@ fn parse_state_snapshot(encoded: &[u8]) -> Result<StateSnapshotWire, String> {
             return Err("state_binding_snapshot_empty_private_bytes".to_string());
         }
     }
+    validate_snapshot_unique_keys(&entries)?;
     if !cursor.done() {
         return Err("state_binding_snapshot_trailing_bytes".to_string());
     }
@@ -2386,6 +2398,25 @@ mod tests {
         );
         assert_eq!(parse_fields(b"A=true\n").unwrap_err(), "stdout_field");
         assert_eq!(parse_fields(b"a\n").unwrap_err(), "stdout_line");
+    }
+
+    #[test]
+    fn state_snapshot_rejects_duplicate_present_keys() {
+        let mut encoded = empty_state_snapshot(b"K128_CALIBRATION", 2, 0);
+        let header =
+            6 + 1 + 1 + b"K128_CALIBRATION".len() + 1 + b"BL-PQ512-STATE-PLANE-V1".len() + 24;
+        let entry_width = 137;
+        for index in 0..2 {
+            let offset = header + index * entry_width;
+            encoded[offset] = 1;
+            encoded[offset + 1..offset + 9].copy_from_slice(&(index as u64).to_be_bytes());
+            encoded[offset + 9..offset + 73].fill(0x41);
+            encoded[offset + 73..offset + 137].fill(index as u8 + 1);
+        }
+        assert!(matches!(
+            parse_state_snapshot(&encoded),
+            Err(error) if error == "state_binding_snapshot_duplicate_key"
+        ));
     }
 
     fn empty_state_snapshot(profile: &[u8], capacity: u64, sequence: u64) -> Vec<u8> {

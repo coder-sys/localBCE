@@ -225,10 +225,12 @@ manifest-bound H4 K128/K512 proof. H5 remains blocked.
 
 The current Rust H4 bridge now carries that state component into the same PCS shape: a fixed
 64-wire lane at wire offset 1,600, two boundary-one state claims, and a 25-round authenticated
-state prelude, producing seven claims and 6,111 rounds when state is supplied. The relation is
-still intentionally limited to operation/snapshot equality, Boolean presence, and empty-slot
-zeroing. Full order, uniqueness, membership/absence, and money/state conservation remain open and
-must be proven before Gate 2E can close.
+state prelude, producing seven claims and 6,111 rounds when state is supplied. The relation now
+checks operation/snapshot equality, authenticated slot index/order, Boolean presence, and
+empty-slot zeroing; the Rust source builder and native Rust/Python snapshot decoders reject
+duplicate present keys before source commitment. Proof-native high-cardinality uniqueness,
+membership/absence, and money/state conservation remain open and must be proven before Gate 2E
+can close.
 
 The new isolated candidate is `TRANSPARENT_SHAKE256_1024`,
 `BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`: SHAKE256-1024 with a 128-byte mask and 128-byte

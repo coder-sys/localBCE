@@ -62,9 +62,11 @@ Current progress is 6 of 93 engineering packages complete. `proofSuiteId=null`, 
 false, real PHI and payments are forbidden, and the final independent audit has not begun.
 
 The state-composed H4 bridge is an integration shape only: the state lane currently checks operation/
-snapshot field equality, Boolean presence, and empty-slot zeroing. It does not yet prove the complete
-index/order, uniqueness, membership/absence, or money/state-conservation semantics inside the custom
-GKR/PCS relation, and no state-composed performance or qualification credit is recorded.
+snapshot field equality, authenticated slot index/order, Boolean presence, and empty-slot zeroing;
+the Rust source builder and native Rust/Python snapshot decoders reject duplicate present keys before
+source commitment. Proof-native high-cardinality uniqueness, membership/absence, and money/state-
+conservation semantics remain outside the custom GKR/PCS relation, and no state-composed performance
+or qualification credit is recorded.
 
 ## Sole dependency chain
 
@@ -196,8 +198,11 @@ families, a dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated public-coin round, a
 opening verifier. The reference envelope is synthetic and nonproduction. The three lattice
 families lack pinned source/parameters/theorem evidence; the retired hash-pad control fails its
 specific public-coin/quantum review; and `TRANSPARENT_SHAKE256_1024` has a reviewed candidate
-ledger but still lacks complete H4 composition. All five descriptors fail closed. No candidate is
-admitted, selected, bound to H4, or assigned `proofSuiteId`.
+ledger but still lacks complete H4 composition. Its exact `BLTHC02` grammar, SHAKE commitment,
+coin-binding transcript identity, strict Rust parser, and Python/Rust KAT are now implemented as
+reference evidence; they do not close the missing H4 composition, simulator, or leakage ledger.
+All five descriptors fail closed. No candidate is admitted, selected, bound to H4, or assigned
+`proofSuiteId`.
 
 Focused command and raw result:
 
@@ -339,9 +344,11 @@ input generator, and STOP conditions.
 independent verifier, and atomic receipt. The current versioned `BLHBSN02`/`BLHBB102` root-bus seam
 and the v3 compact state-AIR/FRI component are prerequisite/native-consumption evidence for that
 boundary, not its closure. The compact relation now algebraically links ordered operation rows to
-both fixed-capacity snapshots through the v2 46-wide lookup grammar, but the full state relation is
-not yet composed inside the custom H4 GKR/PCS proof, no reviewed backend is admitted, and no
-manifest-bound H4 K128/K512 proof was run after the source change.
+both fixed-capacity snapshots through the v2 46-wide lookup grammar, and the H4 seam carries
+authenticated slot indices with canonical row-order constraints. Native Rust and Python snapshot
+decoders reject duplicate present keys. The full state relation is not yet composed inside the
+custom H4 GKR/PCS proof, no reviewed backend is admitted, and no manifest-bound H4 K128/K512 proof
+was run after the source change.
 
 ## H5: repeated complete-proof qualification campaign
 

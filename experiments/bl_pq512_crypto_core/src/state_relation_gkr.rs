@@ -8,13 +8,14 @@
 //! the complete state file into a second Boolean Keccak circuit.
 //!
 //! The single shared-group layer proves, for every row, that operation and
-//! snapshot entries agree, that presence is Boolean, and that empty entries
+//! snapshot entries agree, that the authenticated slot index matches the
+//! canonical group position, that presence is Boolean, and that empty entries
 //! contain no private bytes.  The two source boundaries are the same
 //! canonical table at different wire points; the returned terminals are the
 //! exact claims that a PCS boundary must bind.  This module is a proof-native
 //! GKR control, not an activation or qualification decision.
 
-use alloc::{vec, vec::Vec};
+use alloc::{collections::BTreeSet, vec, vec::Vec};
 use core::fmt;
 
 #[cfg(feature = "std")]
@@ -42,23 +43,28 @@ pub const STATE_RELATION_OUTPUT_WIDTH: usize = 1 << 5;
 pub const STATE_RELATION_OUTPUT_VARIABLES: usize = 5;
 pub const STATE_RELATION_CHUNK_BYTES: usize = 3;
 pub const STATE_RELATION_CHUNK_COUNT: usize = 22;
-pub const STATE_RELATION_ENTRY_WIDTH: usize = 1 + 2 * 2;
+pub const STATE_RELATION_ENTRY_WIDTH: usize = 1 + 1 + 2 * 2;
 pub const STATE_RELATION_ROW_WIDTH: usize = 4 * STATE_RELATION_ENTRY_WIDTH;
+pub const STATE_RELATION_ROW_INDEX_WIRE: usize = STATE_RELATION_ROW_WIDTH;
 pub const STATE_RELATION_OUTPUT_RAW_WIDTH: usize =
-    2 * STATE_RELATION_ENTRY_WIDTH + 2 + 2 * (STATE_RELATION_ENTRY_WIDTH - 1);
+    2 * STATE_RELATION_ENTRY_WIDTH + 2 + 2 * (STATE_RELATION_ENTRY_WIDTH - 1) + 4;
 pub const STATE_RELATION_H4_WIRE_OFFSET: usize = 1_600;
 pub const STATE_RELATION_H4_WIRE_VARIABLES: usize = 11;
 pub const STATE_RELATION_H4_GROUP_VARIABLES: usize = 13;
 pub const STATE_RELATION_H4_POINT_VARIABLES: usize = 24;
 pub const STATE_RELATION_SOURCE_BYTES: usize =
     STATE_RELATION_GROUP_COUNT * STATE_RELATION_SOURCE_WIDTH * 64;
-pub const STATE_RELATION_SOURCE_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/STATE-RELATION-SOURCE/v1\0";
+pub const STATE_RELATION_SOURCE_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/STATE-RELATION-SOURCE/v2\0";
 
 const ENTRY_BYTES: usize = 64;
 const FP16_COEFFICIENTS: usize = 16;
+const ZERO_ENTRY: [u8; ENTRY_BYTES] = [0; ENTRY_BYTES];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StateRelationEntry {
+    /// The authenticated fixed-capacity slot index.  It is retained in the
+    /// proof source instead of being dropped by the envelope adapter.
+    pub index: u32,
     pub present: bool,
     pub key: [u8; ENTRY_BYTES],
     pub value: [u8; ENTRY_BYTES],
@@ -67,6 +73,7 @@ pub struct StateRelationEntry {
 impl StateRelationEntry {
     pub const fn empty() -> Self {
         Self {
+            index: 0,
             present: false,
             key: [0; ENTRY_BYTES],
             value: [0; ENTRY_BYTES],
@@ -96,6 +103,7 @@ impl StateRelationRow {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StateRelationGkrError {
     Capacity,
+    DuplicateKey,
     Encoding,
     Shape,
     Evaluation,
@@ -163,13 +171,19 @@ fn pack_chunks(bytes: &[u8; ENTRY_BYTES]) -> Result<[Fp16; 2], StateRelationGkrE
 fn pack_entry(
     entry: StateRelationEntry,
 ) -> Result<[Fp16; STATE_RELATION_ENTRY_WIDTH], StateRelationGkrError> {
+    if !entry.present && (entry.key != ZERO_ENTRY || entry.value != ZERO_ENTRY) {
+        return Err(StateRelationGkrError::Encoding);
+    }
+    let index = Fp16::from_m31(
+        M31::from_canonical(entry.index).map_err(|_| StateRelationGkrError::Encoding)?,
+    );
     let present = Fp16::from_m31(
         M31::from_canonical(u32::from(entry.present))
             .map_err(|_| StateRelationGkrError::Encoding)?,
     );
     let key = pack_chunks(&entry.key)?;
     let value = pack_chunks(&entry.value)?;
-    Ok([present, key[0], key[1], value[0], value[1]])
+    Ok([index, present, key[0], key[1], value[0], value[1]])
 }
 
 fn append_entry(
@@ -197,7 +211,30 @@ pub fn build_state_relation_source(
         return Err(StateRelationGkrError::Capacity);
     }
     let mut source = vec![Fp16::ZERO; STATE_RELATION_GROUP_COUNT * STATE_RELATION_SOURCE_WIDTH];
+    let mut seen = [
+        BTreeSet::<[u8; ENTRY_BYTES]>::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+    ];
     for (group, row) in rows.iter().copied().enumerate() {
+        let expected_index = u32::try_from(group).map_err(|_| StateRelationGkrError::Shape)?;
+        for (phase, entry) in [
+            row.operation_before,
+            row.operation_after,
+            row.snapshot_before,
+            row.snapshot_after,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if entry.index != expected_index {
+                return Err(StateRelationGkrError::Shape);
+            }
+            if entry.present && !seen[phase].insert(entry.key) {
+                return Err(StateRelationGkrError::DuplicateKey);
+            }
+        }
         let start = group * STATE_RELATION_SOURCE_WIDTH;
         let end = start + STATE_RELATION_SOURCE_WIDTH;
         let destination = &mut source[start..end];
@@ -206,7 +243,15 @@ pub fn build_state_relation_source(
         append_entry(destination, &mut cursor, row.operation_after)?;
         append_entry(destination, &mut cursor, row.snapshot_before)?;
         append_entry(destination, &mut cursor, row.snapshot_after)?;
-        if cursor != STATE_RELATION_ROW_WIDTH {
+        let row_index = Fp16::from_m31(
+            M31::from_canonical(expected_index).map_err(|_| StateRelationGkrError::Encoding)?,
+        );
+        if cursor >= destination.len() {
+            return Err(StateRelationGkrError::Shape);
+        }
+        destination[cursor] = row_index;
+        cursor += 1;
+        if cursor != STATE_RELATION_ROW_INDEX_WIRE + 1 {
             return Err(StateRelationGkrError::Shape);
         }
     }
@@ -287,19 +332,30 @@ fn relation_layer() -> KeccakDagLayer {
     // field*(1-p) rejects private bytes in an empty slot.
     for phase in 0..2 {
         let operation = phase * STATE_RELATION_ENTRY_WIDTH;
-        let present = operation;
+        let present = operation + 1;
         gates.push(KeccakDagGate {
             left: present,
             right: present,
             kind: KeccakDagGateKind::NotLeftAndRight,
         });
-        for field in 1..STATE_RELATION_ENTRY_WIDTH {
+        for field in 2..STATE_RELATION_ENTRY_WIDTH {
             gates.push(KeccakDagGate {
                 left: present,
                 right: operation + field,
                 kind: KeccakDagGateKind::NotLeftAndRight,
             });
         }
+    }
+
+    // The row-index wire is canonical group-major position.  Every four
+    // decoded entries must carry that same position, so an otherwise valid
+    // permutation of state slots cannot pass the proof-native relation.
+    for entry in 0..4 {
+        gates.push(KeccakDagGate {
+            left: entry * STATE_RELATION_ENTRY_WIDTH,
+            right: STATE_RELATION_ROW_INDEX_WIRE,
+            kind: KeccakDagGateKind::Subtract,
+        });
     }
 
     debug_assert_eq!(gates.len(), STATE_RELATION_OUTPUT_RAW_WIDTH);
@@ -587,6 +643,7 @@ mod tests {
             *byte = seed.wrapping_mul(3).wrapping_add(index as u8);
         }
         StateRelationEntry {
+            index: 0,
             present,
             key,
             value,
@@ -630,7 +687,7 @@ mod tests {
             STATE_RELATION_GROUP_COUNT * STATE_RELATION_SOURCE_WIDTH
         );
         assert_eq!(relation_layer().gates.len(), STATE_RELATION_OUTPUT_WIDTH);
-        assert_eq!(STATE_RELATION_OUTPUT_RAW_WIDTH, 20);
+        assert_eq!(STATE_RELATION_OUTPUT_RAW_WIDTH, 28);
     }
 
     #[test]
@@ -675,11 +732,9 @@ mod tests {
     fn changed_operation_presence_is_rejected_by_the_state_gkr_claim() {
         let mut changed = row();
         changed.operation_before.present = false;
-        let source = build_state_relation_source(&[changed]).unwrap();
-        let (claim, groups, wires) = challenges();
         assert_eq!(
-            prove_state_relation_gkr(&source, claim, groups, wires),
-            Err(StateRelationGkrError::Gkr(ProductSumcheckError::Claim))
+            build_state_relation_source(&[changed]),
+            Err(StateRelationGkrError::Encoding)
         );
     }
 
@@ -692,6 +747,79 @@ mod tests {
         assert_eq!(
             prove_state_relation_gkr(&source, claim, groups, wires),
             Err(StateRelationGkrError::Gkr(ProductSumcheckError::Claim))
+        );
+    }
+
+    #[test]
+    fn changed_authenticated_index_is_rejected_by_the_state_gkr_claim() {
+        let mut changed = row();
+        changed.operation_before.index = 1;
+        assert_eq!(
+            build_state_relation_source(&[changed]),
+            Err(StateRelationGkrError::Shape)
+        );
+    }
+
+    #[test]
+    fn row_permutation_is_rejected_by_the_canonical_index_wire() {
+        let mut first = row();
+        let mut second = row();
+        for entry in [
+            &mut second.operation_before,
+            &mut second.operation_after,
+            &mut second.snapshot_before,
+            &mut second.snapshot_after,
+        ] {
+            entry.index = 1;
+        }
+        for entry in [
+            &mut first.operation_before,
+            &mut first.operation_after,
+            &mut first.snapshot_before,
+            &mut first.snapshot_after,
+        ] {
+            entry.index = 0;
+        }
+        assert_eq!(
+            build_state_relation_source(&[second, first]),
+            Err(StateRelationGkrError::Shape)
+        );
+    }
+
+    #[test]
+    fn duplicate_present_keys_are_rejected_before_source_commitment() {
+        let mut first = row();
+        let mut second = row();
+        for entry in [
+            &mut first.operation_before,
+            &mut first.operation_after,
+            &mut first.snapshot_before,
+            &mut first.snapshot_after,
+        ] {
+            entry.index = 0;
+        }
+        for entry in [
+            &mut second.operation_before,
+            &mut second.operation_after,
+            &mut second.snapshot_before,
+            &mut second.snapshot_after,
+        ] {
+            entry.index = 1;
+        }
+        assert_eq!(
+            build_state_relation_source(&[first, second]),
+            Err(StateRelationGkrError::DuplicateKey)
+        );
+    }
+
+    #[test]
+    fn nonzero_empty_private_bytes_are_rejected_before_source_commitment() {
+        let mut changed = row();
+        changed.operation_before.present = false;
+        changed.operation_before.key[0] = 1;
+        assert_eq!(
+            build_state_relation_source(&[changed]),
+            Err(StateRelationGkrError::Encoding)
         );
     }
 

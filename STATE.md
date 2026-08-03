@@ -5716,3 +5716,130 @@ of `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. The privacy/allowlist st
 synthetic or private-artifact paths, including the five portal font binaries; no real PHI, payment
 data, or production proof bytes were used. The separate three-copy Architecture-Research archive set
 was checked and left untouched; it was already byte-identical.
+
+## 2026-08-02 State seam index/uniqueness parity - VERIFIED, NONACTIVATING
+
+This bounded correction closes a concrete cross-language proof-boundary mismatch without changing
+the selected H4 profile or activating any suite. `state_relation_gkr.rs` now retains each
+authenticated fixed-capacity slot index in the proof source, writes a canonical group-index wire,
+and rejects both an index mutation and a populated-row permutation in the compact GKR relation.
+`k512_atomic_semantic_prototype.rs` carries parsed indices into that source and rejects duplicate
+present keys in both version-2 and version-3 native state snapshots. The Python
+`state_plane.py` canonical snapshot constructor/decoder now rejects the same duplicate-key class.
+
+The protected-path check remained zero; only the proof-core state relation, native state verifier,
+Python state plane, and its direct test changed. Raw focused evidence after the correction:
+
+```text
+cargo +1.96.0 test --release --offline --locked --lib state_relation_gkr --features std,parallel
+test result: ok. 8 passed; 0 failed
+
+cargo +1.96.0 test --release --offline --locked --bin k512_atomic_semantic_prototype --features std,parallel
+test result: ok. 7 passed; 0 failed
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_state_plane.py tests/attacks/test_bl_pq512_state_plane_attacks.py
+............                                                             [100%]
+12 passed in 104.90s (0:01:44)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/attacks/test_bl_pq512_state_plane_executable_air_attacks.py
+...                                                                      [100%]
+3 passed in 76.31s (0:01:16)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/attacks/test_bl_pq512_state_plane_attacks.py
+...                                                                      [100%]
+3 passed in 0.15s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_pq_integrated_state_reference.py
+.......                                                                  [100%]
+7 passed in 1.21s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_wave1a_authenticated_replay_state_reference.py
+....                                                                     [100%]
+4 passed in 0.22s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+tests/test_bl_pq512_state_interface.py tests/attacks/test_bl_pq512_state_interface_attacks.py \
+tests/test_bl_pq512_scalar_state_relation_controls.py tests/attacks/test_bl_pq512_scalar_state_relation_controls_attacks.py \
+tests/test_bl_pq512_pq_commitment_screening.py tests/attacks/test_bl_pq512_pq_commitment_screening_attacks.py \
+tests/test_bl_pq512_atomic_state_composition.py tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py \
+tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py \
+tests/test_bl_pq512_gate_2e_selection.py tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py \
+tests/test_bl_pq512_gate_2e_terminal_ledger.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py \
+tests/test_bl_pq512_h5_qualification_preflight.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py \
+tests/test_bl_pq512_h6_qualification_preflight.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+........................................................................ [ 81%]
+................                                                         [100%]
+88 passed in 197.20s (0:03:17)
+```
+
+The executable-AIR containing command was attempted with the exact two-file state-AIR core and
+attack set, but its 304.084-second bound expired with exit 124 and no pytest summary; its exact
+process tree was then stopped after command-line verification. It receives no pass credit. The
+gate suite remains a component/regression gate only: the full state relation is still outside the
+custom H4 GKR/PCS composition, no reviewed PQ backend is admitted, the complete simulator and
+leakage/security ledger remain open, H5/H6 remain blocked, `proofSuiteId=null`, and activation is
+false. A source-complete archive refresh is required after the final substantive source changes.
+
+## 2026-08-02 State-source producer and transparent-candidate parity - VERIFIED, NONACTIVATING
+
+The compact Rust state-relation producer now rejects an authenticated-entry index that does not
+equal its canonical group position and rejects nonzero key/value bytes in an empty entry before it
+can create a source digest. The source geometry change is identified as
+`BL/PQ512/WAVE2/STATE-RELATION-SOURCE/v2`; the CUDA loader uses the same domain. The direct
+state-relation target passes 9/9 tests.
+
+The existing clean-room `TRANSPARENT_SHAKE256_1024` candidate now has a Rust implementation in
+`experiments/bl_pq512_crypto_core/src/transparent_hash_code.rs` matching the Python `BLTHC02`
+grammar: SHAKE256-1024 commitment before coin, 128-byte mask, 128-byte commitment, SHA3-512
+canonical identity, authenticated coin-binding transcript, strict parser, and malformed-opening
+rejection. Its cross-language KAT passes 2/2 Rust tests. This only closes implementation parity;
+the candidate remains rejected for missing complete H4 composition, full simulator, and leakage/
+security closure. No backend was admitted, `proofSuiteId` remains null, activation remains false,
+and the full typed state relation, exact H5, and H6 remain open.
+
+Raw evidence:
+
+```text
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --lib state_relation_gkr --features std,parallel
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 266 filtered out
+
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --lib transparent_hash_code --features std,parallel
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 275 filtered out
+```
+
+## 2026-08-02 State-source producer duplicate-key gate - VERIFIED, NONACTIVATING
+
+The compact Rust state-relation source builder now rejects a duplicate present key separately in
+each of the four relation phases before source commitment. This is producer-side input validation;
+it does not claim proof-native high-cardinality uniqueness, membership/absence, typed payment
+semantics, money/state conservation, or complete H4 composition.
+
+Raw focused evidence after the correction:
+
+```text
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --lib state_relation_gkr --features std,parallel
+
+running 10 tests
+test state_relation_gkr::tests::changed_authenticated_index_is_rejected_by_the_state_gkr_claim ... ok
+test state_relation_gkr::tests::nonzero_empty_private_bytes_are_rejected_before_source_commitment ... ok
+test state_relation_gkr::tests::duplicate_present_keys_are_rejected_before_source_commitment ... ok
+test state_relation_gkr::tests::row_permutation_is_rejected_by_the_canonical_index_wire ... ok
+test state_relation_gkr::tests::changed_operation_presence_is_rejected_by_the_state_gkr_claim ... ok
+test state_relation_gkr::tests::packed_state_relation_has_fixed_source_and_output_geometry ... ok
+test state_relation_gkr::tests::changed_snapshot_chunk_is_rejected_by_the_state_gkr_claim ... ok
+test state_relation_gkr::tests::verifier_rejects_nonzero_terminal_relation_claim ... ok
+test state_relation_gkr::tests::interactive_state_relation_releases_every_public_coin_after_a_message ... ok
+test state_relation_gkr::tests::valid_state_relation_proves_verifies_and_exposes_pcs_claims ... ok
+
+test result: ok; 10 passed; 0 failed; 0 ignored; 0 measured; 268 filtered out; finished in 0.78s
+```
+
+`proofSuiteId` remains null, activation remains false, and the exact H5/H6 gates remain unrun.
+
+The affected native verifier target also passed unchanged boundary coverage after this source
+builder change:
+
+```text
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --bin k512_atomic_semantic_prototype --features std,parallel
+test result: ok; 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.69s
+```

@@ -115,6 +115,7 @@ pub mod streaming_mlpcs;
 #[cfg(feature = "std")]
 pub mod streaming_store;
 pub mod trace_mask;
+pub mod transparent_hash_code;
 pub mod wave1a_dimensions;
 pub mod wave1a_global_schedule;
 pub mod wave1b_schedule;

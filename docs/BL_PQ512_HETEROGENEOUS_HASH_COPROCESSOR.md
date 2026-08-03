@@ -230,11 +230,13 @@ geometry: it uses a fixed 64-wire lane at wire offset 1,600, two boundary-one in
 seven claims and 6,111 total rounds; state-free runs retain the 6,086-round baseline with the
 same public shape and zero state claims/source digest.
 
-The current relation proves operation/snapshot field equality, Boolean presence, and empty-slot
-zeroing. It does not yet prove the complete operation order, uniqueness, membership/absence, or
-money/state-conservation semantics inside custom H4 GKR/PCS. No state-composed performance or
-qualification credit is claimed; the exact state source and transcript are integration evidence
-only until those obligations and the Gate 2E simulator/leakage/backend gates close.
+The current relation proves operation/snapshot field equality, authenticated slot index/order,
+Boolean presence, and empty-slot zeroing. The native Rust binding parser and Python canonical
+snapshot decoder reject duplicate present keys. High-cardinality membership/absence and
+money/state-conservation semantics are not yet in the custom H4 GKR/PCS relation. No
+state-composed performance or qualification credit is claimed; the exact state source and
+transcript are integration evidence only until those obligations and the Gate 2E
+simulator/leakage/backend gates close.
 
 ## 9. Required green evidence
 

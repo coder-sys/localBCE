@@ -128,7 +128,10 @@ SHAKE256-1024, a 128-byte mask, and a 128-byte commitment; its conservative ledg
 quantum collision, 32-bit multi-target loss, 309-bit effective binding, and 480-bit effective
 hiding. Its review decision is `REVIEWED_CANDIDATE_H4_COMPOSITION_OPEN`: the candidate is
 reference-only and rejected solely because complete H4 composition, the full simulator, and the
-cross-module leakage/security closure are not complete. The old SHA3 hash-pad candidate remains
+cross-module leakage/security closure are not complete. The exact candidate grammar, SHAKE
+commitment, coin-binding transcript identity, strict parser, and Python/Rust KAT now exist in
+`transparent_hash_code_candidate.py` and `src/transparent_hash_code.rs`; this is implementation
+parity evidence only and does not admit the backend. The old SHA3 hash-pad candidate remains
 rejected for its own public-coin and 512-bit-collision deficiencies. No candidate is selected.
 
 ## Wave 3 P01-P03 candidate boundary
@@ -292,10 +295,12 @@ The state-composed schedule is a fixed-shape integration boundary, not a qualifi
 state lane uses the same H4 source polynomial at the fixed 64-wire lane beginning at wire 1,600,
 two boundary-one PCS claims, and a private canonical source of exactly 16,777,216 bytes. The Rust
 bridge verifies the 18-coordinate local state claims after lifting them into H4's 24-coordinate
-source geometry. The state relation currently proves operation/snapshot field equality, Boolean
-presence, and empty-slot zeroing; index/order, uniqueness, membership/absence, and money/state
-conservation are still required in the complete Gate 2E composition. No state-composed K128/K512
-performance or qualification credit is claimed.
+source geometry. The compact proof-native seam now carries each authenticated slot index and
+constrains it to the canonical group-major row position, so populated-row index/order mutations
+fail closed. The native Rust state-binding parser and Python canonical snapshot decoder also
+reject duplicate present keys. High-cardinality membership/absence, money/state conservation,
+and the complete state relation inside the custom H4 GKR/PCS composition are still required in
+Gate 2E. No state-composed K128/K512 performance or qualification credit is claimed.
 
 ## Exact accepted H4 profiles
 

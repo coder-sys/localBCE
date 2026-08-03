@@ -177,11 +177,15 @@ class StateSnapshot:
         if type(self.entries) is not tuple:
             raise StatePlaneError("state_plane_entries_tuple_required")
         previous = -1
+        seen_keys: set[bytes] = set()
         for entry in self.entries:
             if type(entry) is not StateEntry or not entry.present:
                 raise StatePlaneError("state_plane_snapshot_entry_invalid")
             if not previous < entry.index < self.capacity:
                 raise StatePlaneError("state_plane_snapshot_entries_not_strictly_ordered")
+            if entry.key in seen_keys:
+                raise StatePlaneError("state_plane_snapshot_duplicate_key")
+            seen_keys.add(entry.key)
             previous = entry.index
 
     @classmethod

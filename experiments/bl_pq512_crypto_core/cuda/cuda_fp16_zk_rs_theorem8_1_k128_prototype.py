@@ -3033,7 +3033,7 @@ def load_state_relation_source():
     if path.stat().st_size != expected_bytes:
         raise SystemExit("state_relation_source_size")
     digest = hashlib.sha3_512(
-        b"BL/PQ512/WAVE2/STATE-RELATION-SOURCE/v1\0"
+        b"BL/PQ512/WAVE2/STATE-RELATION-SOURCE/v2\0"
         + expected_bytes.to_bytes(8, "big")
     )
     payload = bytearray()
