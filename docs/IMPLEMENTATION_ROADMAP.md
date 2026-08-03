@@ -346,15 +346,18 @@ and the v3 compact state-AIR/FRI component are prerequisite/native-consumption e
 boundary, not its closure. The compact relation now algebraically links ordered operation rows to
 both fixed-capacity snapshots through the v2 46-wide lookup grammar, and the H4 seam carries
 authenticated slot indices with canonical row-order constraints. Native Rust and Python snapshot
-decoders reject duplicate present keys. A separate `BL-PQ512-C0-TYPED-STATE-AIR-v1` component now
+decoders reject duplicate present keys. The C0 typed-state component now
 composes the ordered-map/payment authorities and verifies root/cursor, slot-order, money, fixed
 asset-registry, and replay/payment hash-port mutations for the K128 C0 witness. The native
 coordinator consumes its v4 AIR program/execution, verifies the authority/root bindings, and maps
 its 46,210 calls to the canonical H4 bus; the base replay/payment bus remains 46,208 calls. The
-full state relation is implemented at the typed semantic-AIR/H4 readback seam, but the selected
-typed proof route is rejected by the immutable resource preflight. It is still not a selected
-complete H4 GKR/PCS proof, no reviewed backend is admitted, and no manifest-bound H4 K128/K512
-proof was run after the source change.
+current typed component is `BL-PQ512-C0-TYPED-STATE-AIR-v2` with 56 tables and 81 lookups; its
+source-bundle and payment-log byte transports are packed into 8-lane rows and its root messages
+use the canonical authority root columns directly. The full state relation is implemented at the
+typed semantic-AIR/H4 readback seam, but the selected typed proof route is rejected by the
+immutable resource preflight (`qualifies=false`, `modeled_required_available_bytes=32471127736`).
+It is still not a selected complete H4 GKR/PCS proof, no reviewed backend is admitted, and no
+manifest-bound H4 K128/K512 proof was run after the source change.
 
 ## H5: repeated complete-proof qualification campaign
 

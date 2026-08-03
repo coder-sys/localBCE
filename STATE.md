@@ -6129,3 +6129,83 @@ The independent ZIP readback passed, and the final archive test passed `18 passe
 passed in 1.01s`. A receipt-only follow-up commit changes only this excluded `STATE.md` record;
 the three archive payloads remain bound to the clean implementation commit above. Gate 2E, H5, and
 H6 remain unclosed, `proofSuiteId=null`, and activation is false.
+
+## 2026-08-03 Typed C0 v2 interface compaction and native boundary readback - VERIFIED, NONACTIVATING
+
+The authoritative checkout for this phase is the `main` worktree
+`C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`.
+Protected paths remain untouched. The smallest representation-preserving v2 correction packs the
+claim source bundle and payment log-message transport into eight byte lanes, removes duplicate
+root-message witness columns, and retargets the exact lookup multisets. The native reader now
+consumes the packed log lanes and reconstructs root messages from the canonical authority roots.
+
+The exact K128 v2 shape readback was:
+
+```text
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v2
+program_bytes=22018481
+execution_bytes=145207821
+program_commitment=f6321d7483c65469ecf9d408a5d4de59321a8e3556b6da93b4e4c0b506f01ca649b8653cf60d0e499df99022f84ff1b9bd304ff11fcc203b3013112154cac99f
+execution_commitment=21aee4736e5ee43b09c31470ca2b9ab95e0d3276b82d4f5ed5b319ec78860260a75376ced48225a26eae1084221fabeb6ad0836204ed04646fbacf995893baf0
+tables=56
+lookups=81
+public_inputs=1806
+hash_calls=46210
+raw_witness_bytes=103237152
+typed_state_log_message_batch rows=17280 columns=18 live_columns=16 raw_bytes=1105920
+claim_source_bundle_word rows=90368 columns=59 live_columns=8 raw_bytes=2891776
+```
+
+The focused semantic command completed with no stderr and this raw result:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_typed_state_relation_executable_air.py
+....                                                                     [100%]
+4 passed in 307.53s (0:05:07)
+```
+
+The native boundary checks were:
+
+```text
+cargo +1.96.0 fmt --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml -- --check
+exit=0
+
+cargo +1.96.0 check --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.67s
+exit=0
+
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 97.45s
+exit=0
+```
+
+The immutable generic-AIR resource preflight still rejects this route. Its complete raw output is:
+
+```text
+evidence_class=DERIVED_MODEL
+model_id=GENERIC_AIR_ORACLE_LAYOUT_V1
+qualifies=false
+activation_allowed=false
+modeled_main_evaluation_bytes=4642045952
+modeled_interaction_evaluation_bytes=14847836160
+modeled_composition_evaluation_bytes=1509949440
+modeled_deep_evaluation_bytes=181261041664
+modeled_fri_mask_bytes=130023424
+modeled_folded_layer_bytes=134217728
+modeled_monolithic_live_bytes_lower_bound=202525114368
+modeled_maximum_domain_rows=1048576
+requires_streaming=true
+modeled_raw_witness_bytes=103237152
+modeled_persistent_oracle_bytes=21505721696
+modeled_peak_temporary_bytes=1035206656
+modeled_filesystem_overhead_bytes=5635232088
+modeled_reserve_bytes=4294967296
+modeled_required_available_bytes=32471127736
+```
+
+The C: free-space snapshot was `45357948928` bytes, so the rejection is not a current disk-space
+shortage. The generic route remains non-qualifying even after the v2 reduction. The proof-native
+custom H4 relation still proves only its existing compact equality/index/presence/empty-slot
+boundary; full typed state semantics inside custom H4 GKR/PCS, reviewed PQ admission, complete
+simulator/leakage closure, H5, H6, `proofSuiteId`, and activation remain open. Therefore no H5
+launch was authorized or credited, and no gate was weakened to force progress.

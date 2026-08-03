@@ -21,6 +21,7 @@ use bl_pq512_crypto_core::{
     hash_bus_b16_boundary::{HashBusB16BoundaryFile, HashBusB16Shard},
     hash_bus_b16_gkr_plan::HashBusB16GkrPlan,
     hash_bus_source::KECCAK_STATE_BITS,
+    ordered_map_schedule::build_ordered_map_batch_schedule,
     selected_proof_package::verify_selected_proof_package,
     sha3_air::{RATE_BYTES, for_each_sha3_512_permutation_boundary},
     state_relation_gkr::{
@@ -69,7 +70,7 @@ const STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-ROOT-AIR-v1";
 const STATE_RELATION_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-STATE-RELATION-AIR-v2";
 const STATE_AIR_COMPONENT_ID: &[u8] = b"BL-PQ512-STATE-AIR-PROOF-V1";
 const TYPED_STATE_COMPONENT_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-V1";
-const TYPED_STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-v1";
+const TYPED_STATE_AIR_PROGRAM_ID: &[u8] = b"BL-PQ512-C0-TYPED-STATE-AIR-v2";
 const TYPED_STATE_FRAGMENT_MAGIC: &[u8] = b"BLSA03";
 const TYPED_STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF/v1\0";
 const TYPED_STATE_PROJECTION_DOMAIN: &[u8] = b"BL/PQ512/C0/TYPED-STATE-PROJECTION/v1\0";
@@ -1936,6 +1937,393 @@ fn typed_bytes64(
     Ok(output)
 }
 
+fn typed_u32_at(
+    tables: &[NamedExecutionTable],
+    table: &str,
+    column: &str,
+    row: usize,
+) -> Result<u32, String> {
+    typed_column(tables, table, column)?
+        .get(row)
+        .copied()
+        .map(|value| value.as_u32())
+        .ok_or_else(|| format!("typed_state_row:{table}:{column}:{row}"))
+}
+
+fn typed_map_table_name(prefix: &str, suffix: &str) -> String {
+    if prefix.is_empty() {
+        suffix.to_string()
+    } else {
+        format!("{prefix}__{suffix}")
+    }
+}
+
+fn typed_map_leaf_message(
+    tables: &[NamedExecutionTable],
+    endpoint_table: &str,
+    phase: &str,
+    row: usize,
+    map_domain: u8,
+) -> Result<Vec<u8>, String> {
+    let mut message = Vec::with_capacity(212);
+    message.extend_from_slice(b"BL/PQ/MAP4\0");
+    message.push(map_domain);
+    for prefix in ["key", "value", "next_key"] {
+        let field = format!("{phase}_{prefix}");
+        message.extend_from_slice(&typed_bytes64(tables, endpoint_table, &field, row)?);
+    }
+    for index in 0..8 {
+        message.push(typed_byte(
+            *typed_column(
+                tables,
+                endpoint_table,
+                &format!("{phase}_next_index_u64_{index}"),
+            )?
+            .get(row)
+            .ok_or_else(|| {
+                format!("typed_state_row:{endpoint_table}:{phase}_next_index_u64_{index}:{row}")
+            })?,
+            "map_next_index",
+        )?);
+    }
+    if message.len() != 212 {
+        return Err("typed_state_map_leaf_message_shape".to_string());
+    }
+    Ok(message)
+}
+
+fn typed_map_messages(
+    tables: &[NamedExecutionTable],
+    prefix: &str,
+    operation_rows: u64,
+) -> Result<Vec<Vec<u8>>, String> {
+    let schedule = build_ordered_map_batch_schedule(operation_rows, 24)
+        .map_err(|error| format!("typed_state_map_schedule:{error:?}"))?;
+    let state_table = typed_map_table_name(prefix, "ordered_map_state");
+    let endpoint_table = typed_map_table_name(prefix, "ordered_map_endpoint");
+    let node_table = typed_map_table_name(prefix, "ordered_map_node");
+    let map_domain = u8::try_from(typed_u32_at(tables, &state_table, "map_domain", 0)?)
+        .map_err(|_| "typed_state_map_domain".to_string())?;
+    let endpoint_rows = usize::try_from(schedule.position_rows)
+        .map_err(|_| "typed_state_map_endpoint_rows".to_string())?;
+    if typed_column(tables, &endpoint_table, "live")?.len() != endpoint_rows {
+        return Err("typed_state_map_endpoint_shape".to_string());
+    }
+
+    let mut messages = Vec::with_capacity(usize::try_from(schedule.sha3_call_rows).unwrap_or(0));
+    for phase in ["before", "after"] {
+        let present = typed_column(tables, &endpoint_table, &format!("{phase}_present"))?;
+        for row in 0..endpoint_rows {
+            match present[row].as_u32() {
+                0 => {}
+                1 => messages.push(typed_map_leaf_message(
+                    tables,
+                    &endpoint_table,
+                    phase,
+                    row,
+                    map_domain,
+                )?),
+                _ => return Err("typed_state_map_leaf_presence".to_string()),
+            }
+        }
+    }
+    let leaf_rows = usize::try_from(schedule.leaf_hash_rows)
+        .map_err(|_| "typed_state_map_leaf_rows".to_string())?;
+    if messages.len() > leaf_rows {
+        return Err("typed_state_map_leaf_schedule_overflow".to_string());
+    }
+    let mut dummy_leaf = Vec::with_capacity(212);
+    dummy_leaf.extend_from_slice(b"BL/PQ/MAP4\0");
+    dummy_leaf.push(map_domain);
+    dummy_leaf.extend_from_slice(&[0_u8; 64]);
+    dummy_leaf.extend_from_slice(&[0_u8; 64]);
+    dummy_leaf.extend_from_slice(&[0xff_u8; 64]);
+    dummy_leaf.extend_from_slice(&1_u64.to_be_bytes());
+    while messages.len() < leaf_rows {
+        messages.push(dummy_leaf.clone());
+    }
+
+    let node_rows = usize::try_from(schedule.node_hash_rows)
+        .map_err(|_| "typed_state_map_node_rows".to_string())?;
+    let node_live = typed_column(tables, &node_table, "live")?;
+    let node_height = typed_column(tables, &node_table, "height")?;
+    if node_live.len() != node_rows || node_height.len() != node_rows {
+        return Err("typed_state_map_node_shape".to_string());
+    }
+    let node_live_count = node_live.iter().filter(|value| value.as_u32() == 1).count();
+    let mut node_messages = Vec::with_capacity(node_rows);
+    for row in 0..node_rows {
+        match node_live[row].as_u32() {
+            0 => {}
+            1 => {
+                let height = u8::try_from(node_height[row].as_u32())
+                    .map_err(|_| "typed_state_map_node_height".to_string())?;
+                if height >= 64 {
+                    return Err("typed_state_map_node_height".to_string());
+                }
+                let mut message = Vec::with_capacity(141);
+                message.extend_from_slice(b"BL/PQ/MAP4\x01");
+                message.push(map_domain);
+                message.push(height);
+                message.extend_from_slice(&typed_bytes64(tables, &node_table, "left", row)?);
+                message.extend_from_slice(&typed_bytes64(tables, &node_table, "right", row)?);
+                if message.len() != 141 {
+                    return Err("typed_state_map_node_message_shape".to_string());
+                }
+                node_messages.push(message);
+            }
+            _ => return Err("typed_state_map_node_live".to_string()),
+        }
+    }
+    if node_messages.len() != node_live_count {
+        return Err("typed_state_map_node_live_prefix".to_string());
+    }
+    let mut dummy_node = Vec::with_capacity(141);
+    dummy_node.extend_from_slice(b"BL/PQ/MAP4\x01");
+    dummy_node.push(map_domain);
+    dummy_node.push(0);
+    dummy_node.extend_from_slice(&[0_u8; 128]);
+    while node_messages.len() < node_rows {
+        node_messages.push(dummy_node.clone());
+    }
+    messages.extend(node_messages);
+
+    for (cursor_column, root_prefix) in [
+        ("cursor_before", "inner_root_before"),
+        ("cursor_after", "inner_root_after"),
+    ] {
+        let cursor = u64::from(typed_u32_at(tables, &state_table, cursor_column, 0)?);
+        let inner_root = typed_bytes64(tables, &state_table, root_prefix, 0)?;
+        let mut message = Vec::with_capacity(84);
+        message.extend_from_slice(b"BL/PQ/MAP4\x02");
+        message.push(map_domain);
+        message.extend_from_slice(&cursor.to_be_bytes());
+        message.extend_from_slice(&inner_root);
+        if message.len() != 84 {
+            return Err("typed_state_map_header_message_shape".to_string());
+        }
+        messages.push(message);
+    }
+    if messages.len() != usize::try_from(schedule.sha3_call_rows).unwrap_or(usize::MAX) {
+        return Err("typed_state_map_call_count".to_string());
+    }
+    Ok(messages)
+}
+
+fn typed_place_message(
+    messages: &mut [Option<Vec<u8>>],
+    call_index: u32,
+    message: Vec<u8>,
+    label: &str,
+) -> Result<(), String> {
+    let slot = messages
+        .get_mut(usize::try_from(call_index).map_err(|_| format!("{label}_call_index"))?)
+        .ok_or_else(|| format!("{label}_call_index"))?;
+    if slot.replace(message).is_some() {
+        return Err(format!("{label}_call_duplicate"));
+    }
+    Ok(())
+}
+
+fn typed_digest_vector(
+    tables: &[NamedExecutionTable],
+    total_calls: usize,
+) -> Result<Vec<[u8; 64]>, String> {
+    let call_values = typed_column(tables, "sha3_digest_batch", "call_index")?;
+    if call_values.len() != total_calls {
+        return Err("typed_state_digest_call_count".to_string());
+    }
+    let mut digests = vec![[0_u8; 64]; total_calls];
+    let mut seen = vec![false; total_calls];
+    for row in 0..total_calls {
+        let call = usize::try_from(call_values[row].as_u32())
+            .map_err(|_| "typed_state_digest_call_index".to_string())?;
+        if call >= total_calls || seen[call] {
+            return Err("typed_state_digest_call_index".to_string());
+        }
+        digests[call] = typed_bytes64(tables, "sha3_digest_batch", "value", row)?;
+        seen[call] = true;
+    }
+    if seen.iter().any(|value| !value) {
+        return Err("typed_state_digest_call_missing".to_string());
+    }
+    Ok(digests)
+}
+
+fn typed_state_root_message(
+    tables: &[NamedExecutionTable],
+    phase: usize,
+) -> Result<Vec<u8>, String> {
+    if phase >= 2 {
+        return Err("typed_state_root_phase".to_string());
+    }
+    let mut message = Vec::with_capacity(C0_STATE_ROOT_DOMAIN.len() + 128);
+    message.extend_from_slice(C0_STATE_ROOT_DOMAIN);
+    message.extend_from_slice(&typed_bytes64(
+        tables,
+        "typed_state_authority",
+        "payment_root",
+        phase,
+    )?);
+    message.extend_from_slice(&typed_bytes64(
+        tables,
+        "typed_state_authority",
+        "replay_root",
+        phase,
+    )?);
+    if message.len() != C0_STATE_ROOT_DOMAIN.len() + 128 {
+        return Err("typed_state_root_message_shape".to_string());
+    }
+    Ok(message)
+}
+
+fn typed_state_hash_messages(
+    tables: &[NamedExecutionTable],
+    profile: Profile,
+    typed_call_count: usize,
+) -> Result<Vec<Vec<u8>>, String> {
+    let slots = profile.claim_slots();
+    let mut messages = vec![None; typed_call_count + 2];
+    let map_specs = [
+        ("", slots + 1),
+        ("benefit", slots),
+        ("obligation", slots),
+        ("ledger", slots * 2),
+    ];
+    let mut cursor = 0_u32;
+    for (prefix, operations) in map_specs {
+        for message in typed_map_messages(tables, prefix, operations)? {
+            typed_place_message(&mut messages, cursor, message, "typed_state_map")?;
+            cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| "typed_state_map_call_index".to_string())?;
+        }
+    }
+    let map_call_count =
+        usize::try_from(cursor).map_err(|_| "typed_state_map_call_count".to_string())?;
+    let key_call_values = typed_column(tables, "claim_payment_key_material", "call_index")?;
+    let key_lengths = typed_column(tables, "claim_payment_key_material", "message_length")?;
+    if key_call_values.len() != key_lengths.len() || key_call_values.len() != (slots * 4) as usize {
+        return Err("typed_state_key_call_count".to_string());
+    }
+    for row in 0..key_call_values.len() {
+        let call = key_call_values[row].as_u32();
+        let length = usize::try_from(key_lengths[row].as_u32())
+            .map_err(|_| "typed_state_key_message_length".to_string())?;
+        if length == 0 || length > 169 || call < cursor {
+            return Err("typed_state_key_message_shape".to_string());
+        }
+        let mut message = Vec::with_capacity(length);
+        for index in 0..169 {
+            let value = typed_byte(
+                *typed_column(
+                    tables,
+                    "claim_payment_key_material",
+                    &format!("message_byte_{index}"),
+                )?
+                .get(row)
+                .ok_or_else(|| format!("typed_state_key_message_row:{row}"))?,
+                "key_message",
+            )?;
+            if index < length {
+                message.push(value);
+            } else if value != 0 {
+                return Err("typed_state_key_message_padding".to_string());
+            }
+        }
+        typed_place_message(&mut messages, call, message, "typed_state_key")?;
+    }
+
+    let log_call_values = typed_column(tables, "typed_state_log_message_batch", "call_index")?;
+    let log_positions = typed_column(tables, "typed_state_log_message_batch", "position_base")?;
+    let log_live = (0..8)
+        .map(|lane| {
+            typed_column(
+                tables,
+                "typed_state_log_message_batch",
+                &format!("live_{lane}"),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let log_values = (0..8)
+        .map(|lane| {
+            typed_column(
+                tables,
+                "typed_state_log_message_batch",
+                &format!("value_{lane}"),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if log_call_values.len() != log_positions.len()
+        || log_live
+            .iter()
+            .any(|column| column.len() != log_call_values.len())
+        || log_values
+            .iter()
+            .any(|column| column.len() != log_call_values.len())
+    {
+        return Err("typed_state_log_message_shape".to_string());
+    }
+    let mut grouped: BTreeMap<u32, Vec<(u32, u32, u8)>> = BTreeMap::new();
+    for row in 0..log_call_values.len() {
+        let call = log_call_values[row].as_u32();
+        let position_base = log_positions[row].as_u32();
+        for lane in 0_usize..8 {
+            let lane_position =
+                u32::try_from(lane).map_err(|_| "typed_state_log_message_lane".to_string())?;
+            grouped.entry(call).or_default().push((
+                position_base
+                    .checked_add(lane_position)
+                    .ok_or_else(|| "typed_state_log_message_position".to_string())?,
+                log_live[lane][row].as_u32(),
+                typed_byte(log_values[lane][row], "log_message")?,
+            ));
+        }
+    }
+    if grouped.len() != (slots * 2) as usize {
+        return Err("typed_state_log_call_count".to_string());
+    }
+    for (call, rows) in grouped {
+        let mut message = Vec::new();
+        let mut padding = false;
+        for (index, (position, live, value)) in rows.iter().enumerate() {
+            if usize::try_from(*position).ok() != Some(index) || *live > 1 {
+                return Err("typed_state_log_message_position".to_string());
+            }
+            if *live == 1 {
+                if padding {
+                    return Err("typed_state_log_message_prefix".to_string());
+                }
+                message.push(*value);
+            } else {
+                padding = true;
+                if *value != 0 {
+                    return Err("typed_state_log_message_padding".to_string());
+                }
+            }
+        }
+        if message.is_empty() {
+            return Err("typed_state_log_message_empty".to_string());
+        }
+        typed_place_message(&mut messages, call, message, "typed_state_log")?;
+    }
+
+    for phase in 0..2 {
+        let message = typed_state_root_message(tables, phase)?;
+        typed_place_message(
+            &mut messages,
+            u32::try_from(typed_call_count + phase)
+                .map_err(|_| "typed_state_root_call_index".to_string())?,
+            message,
+            "typed_state_root",
+        )?;
+    }
+    if messages.iter().any(Option::is_none) {
+        return Err(format!("typed_state_hash_message_missing:{map_call_count}"));
+    }
+    Ok(messages.into_iter().map(Option::unwrap).collect())
+}
+
 fn typed_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 64] {
     hash_parts(domain, parts)
 }
@@ -1947,11 +2335,6 @@ fn verify_typed_root_interface(
     payment_roots: &[[u8; 64]; 2],
     replay_roots: &[[u8; 64]; 2],
 ) -> Result<(), String> {
-    let message_call = root_call_offset;
-    let message_call_values = typed_column(tables, "sha3_message_batch", "call_index")?;
-    let message_position = typed_column(tables, "sha3_message_batch", "position")?;
-    let message_live = typed_column(tables, "sha3_message_batch", "live")?;
-    let message_value = typed_column(tables, "sha3_message_batch", "value")?;
     let digest_call = typed_column(tables, "sha3_digest_batch", "call_index")?;
     let mut seen_digest = [false; 2];
     for phase in 0..2 {
@@ -1961,56 +2344,24 @@ fn verify_typed_root_interface(
             &replay_roots[phase],
         ]
         .concat();
-        let call = message_call + phase as u32;
-        let mut message = Vec::new();
-        let mut saw_row = false;
-        for row in 0..message_call_values.len() {
-            if message_call_values[row].as_u32() != call {
-                continue;
-            }
-            saw_row = true;
-            let position = message_position[row].as_u32() as usize;
-            let live = message_live[row].as_u32();
-            if live > 1
-                || position
-                    != row.saturating_sub(
-                        message_call_values
-                            .iter()
-                            .position(|value| value.as_u32() == call)
-                            .unwrap_or(row),
-                    )
-            {
-                return Err(format!("typed_state_root_message_shape:{phase}"));
-            }
-            let value = typed_byte(message_value[row], "root_message")?;
-            if live == 1 {
-                if position != message.len() {
-                    return Err(format!("typed_state_root_message_position:{phase}"));
-                }
-                message.push(value);
-            } else if value != 0 {
-                return Err(format!("typed_state_root_message_padding:{phase}"));
-            }
-        }
-        if !saw_row || message != expected {
+        let message = typed_state_root_message(tables, phase)?;
+        if message != expected {
             return Err(format!("typed_state_root_message:{phase}"));
         }
-        let mut digest = [0_u8; 64];
-        let mut found = false;
+        let call = root_call_offset
+            .checked_add(phase as u32)
+            .ok_or_else(|| "typed_state_root_call_index".to_string())?;
+        let mut digest_row = None;
         for row in 0..digest_call.len() {
             if digest_call[row].as_u32() != call {
                 continue;
             }
-            if found {
+            if digest_row.replace(row).is_some() {
                 return Err(format!("typed_state_root_digest_duplicate:{phase}"));
             }
-            found = true;
-            for (index, destination) in digest.iter_mut().enumerate() {
-                let values = typed_column(tables, "sha3_digest_batch", &format!("value_{index}"))?;
-                *destination = typed_byte(values[row], "root_digest")?;
-            }
         }
-        if !found || digest != roots[phase] {
+        let row = digest_row.ok_or_else(|| format!("typed_state_root_digest_missing:{phase}"))?;
+        if typed_bytes64(tables, "sha3_digest_batch", "value", row)? != roots[phase] {
             return Err(format!("typed_state_root_digest:{phase}"));
         }
         seen_digest[phase] = true;
@@ -2128,8 +2479,21 @@ fn verify_typed_state_binding_v4(path: &Path) -> Result<StateBindingVerification
         air_execution,
         &[
             "typed_state_authority",
-            "sha3_message_batch",
             "sha3_digest_batch",
+            "typed_state_log_message_batch",
+            "claim_payment_key_material",
+            "ordered_map_state",
+            "ordered_map_endpoint",
+            "ordered_map_node",
+            "benefit__ordered_map_state",
+            "benefit__ordered_map_endpoint",
+            "benefit__ordered_map_node",
+            "obligation__ordered_map_state",
+            "obligation__ordered_map_endpoint",
+            "obligation__ordered_map_node",
+            "ledger__ordered_map_state",
+            "ledger__ordered_map_endpoint",
+            "ledger__ordered_map_node",
         ],
     )
     .map_err(|error| format!("typed_named_tables:{error:?}"))?;
@@ -2630,60 +2994,6 @@ fn verify_state_hash_bus_calls(
     Ok(())
 }
 
-fn typed_call_message(
-    tables: &[NamedExecutionTable],
-    call_index: u32,
-) -> Result<(Vec<u8>, [u8; 64]), String> {
-    let call_values = typed_column(tables, "sha3_message_batch", "call_index")?;
-    let position_values = typed_column(tables, "sha3_message_batch", "position")?;
-    let live_values = typed_column(tables, "sha3_message_batch", "live")?;
-    let value_values = typed_column(tables, "sha3_message_batch", "value")?;
-    let mut first_row = None;
-    let mut message = Vec::new();
-    for row in 0..call_values.len() {
-        if call_values[row].as_u32() != call_index {
-            continue;
-        }
-        let first = *first_row.get_or_insert(row);
-        let position = position_values[row].as_u32() as usize;
-        if position != row - first || live_values[row].as_u32() > 1 {
-            return Err(format!("typed_sha3_message_shape:{call_index}"));
-        }
-        let value = typed_byte(value_values[row], "sha3_message")?;
-        if live_values[row].as_u32() == 1 {
-            if position != message.len() {
-                return Err(format!("typed_sha3_message_prefix:{call_index}"));
-            }
-            message.push(value);
-        } else if value != 0 {
-            return Err(format!("typed_sha3_message_padding:{call_index}"));
-        }
-    }
-    if first_row.is_none() {
-        return Err(format!("typed_sha3_message_missing:{call_index}"));
-    }
-    let digest_call = typed_column(tables, "sha3_digest_batch", "call_index")?;
-    let mut digest = [0_u8; 64];
-    let mut found = false;
-    for row in 0..digest_call.len() {
-        if digest_call[row].as_u32() != call_index {
-            continue;
-        }
-        if found {
-            return Err(format!("typed_sha3_digest_duplicate:{call_index}"));
-        }
-        found = true;
-        for (index, destination) in digest.iter_mut().enumerate() {
-            let values = typed_column(tables, "sha3_digest_batch", &format!("value_{index}"))?;
-            *destination = typed_byte(values[row], "sha3_digest")?;
-        }
-    }
-    if !found {
-        return Err(format!("typed_sha3_digest_missing:{call_index}"));
-    }
-    Ok((message, digest))
-}
-
 fn verify_typed_state_hash_bus_calls(
     boundary: &mut HashBusB16BoundaryFile,
     header: &bl_pq512_crypto_core::hash_bus_b16_boundary::HashBusB16BoundaryHeader,
@@ -2701,9 +3011,28 @@ fn verify_typed_state_hash_bus_calls(
         .typed_air_execution
         .as_deref()
         .ok_or_else(|| "typed_state_hash_bus_execution_missing".to_string())?;
-    let named =
-        validated_execution_named_tables(execution, &["sha3_message_batch", "sha3_digest_batch"])
-            .map_err(|error| format!("typed_state_hash_bus_named_tables:{error:?}"))?;
+    let named = validated_execution_named_tables(
+        execution,
+        &[
+            "typed_state_authority",
+            "sha3_digest_batch",
+            "typed_state_log_message_batch",
+            "claim_payment_key_material",
+            "ordered_map_state",
+            "ordered_map_endpoint",
+            "ordered_map_node",
+            "benefit__ordered_map_state",
+            "benefit__ordered_map_endpoint",
+            "benefit__ordered_map_node",
+            "obligation__ordered_map_state",
+            "obligation__ordered_map_endpoint",
+            "obligation__ordered_map_node",
+            "ledger__ordered_map_state",
+            "ledger__ordered_map_endpoint",
+            "ledger__ordered_map_node",
+        ],
+    )
+    .map_err(|error| format!("typed_state_hash_bus_named_tables:{error:?}"))?;
     let typed_call_count = typed_column(&named, "sha3_digest_batch", "call_index")?
         .len()
         .checked_sub(2)
@@ -2711,6 +3040,12 @@ fn verify_typed_state_hash_bus_calls(
     if typed_call_count == 0 {
         return Err("typed_state_hash_bus_call_count".to_string());
     }
+    let typed_messages = typed_state_hash_messages(&named, header.profile, typed_call_count)?;
+    let typed_digests = typed_digest_vector(
+        &named,
+        usize::try_from(state_descriptor.total_calls)
+            .map_err(|_| "typed_state_hash_bus_digest_count".to_string())?,
+    )?;
     let mut call_starts = Vec::<(u64, u64, u64)>::new();
     let mut call_index = 0_u64;
     let mut permutation = 0_u64;
@@ -2756,11 +3091,12 @@ fn verify_typed_state_hash_bus_calls(
     local_calls.push(base_descriptor.total_calls + 1);
     let mut cached_shard: Option<(u16, HashBusB16Shard)> = None;
     for (local_index, global_index) in local_calls.into_iter().enumerate() {
-        let (message, digest) = typed_call_message(
-            &named,
-            u32::try_from(local_index)
-                .map_err(|_| "typed_state_hash_bus_call_index".to_string())?,
-        )?;
+        let message = typed_messages
+            .get(local_index)
+            .ok_or_else(|| "typed_state_hash_bus_call_index".to_string())?;
+        let digest = typed_digests
+            .get(local_index)
+            .ok_or_else(|| "typed_state_hash_bus_digest_index".to_string())?;
         let (_, call_start, capacity) = call_starts
             .get(global_index as usize)
             .copied()
@@ -2802,7 +3138,7 @@ fn verify_typed_state_hash_bus_calls(
             _ => None,
         };
         let actual_digest = for_each_sha3_512_permutation_boundary(
-            &message,
+            message,
             usize::try_from(capacity).map_err(|_| "typed_state_hash_bus_capacity".to_string())?,
             |block_index, _, _, input, output| {
                 if mismatch.is_some() {
@@ -2837,7 +3173,7 @@ fn verify_typed_state_hash_bus_calls(
             },
         )
         .map_err(|error| format!("typed_state_hash_bus_trace:{local_index}:{error:?}"))?;
-        if actual_digest != digest || expected_root.is_some_and(|root| root != digest) {
+        if actual_digest != *digest || expected_root.is_some_and(|root| root != *digest) {
             return Err(format!("typed_state_hash_bus_digest:{local_index}"));
         }
         if let Some(error) = mismatch {

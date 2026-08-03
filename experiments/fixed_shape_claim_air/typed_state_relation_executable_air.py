@@ -67,11 +67,33 @@ from experiments.fixed_shape_claim_air.ordered_map_batch_reference import (
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
-PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v1"
+PROGRAM_ID: Final[str] = "BL-PQ512-C0-TYPED-STATE-AIR-v2"
 LANE_ORDER: Final[tuple[str, ...]] = ("replay", "benefit", "obligation", "ledger")
 MONEY_TABLE: Final[str] = "typed_state_money"
 SUMMARY_TABLE: Final[str] = "typed_state_lane_summary"
 AUTHORITY_TABLE: Final[str] = "typed_state_authority"
+LOG_MESSAGE_TABLE: Final[str] = "typed_state_log_message_batch"
+_SOURCE_BUNDLE_TABLE: Final[str] = "claim_source_bundle_byte"
+_PACKED_SOURCE_BUNDLE_TABLE: Final[str] = "claim_source_bundle_word"
+_SOURCE_BUNDLE_LANES: Final[int] = 8
+_LOG_MESSAGE_LANES: Final[int] = 8
+_SOURCE_BUNDLE_MASKS: Final[tuple[str, ...]] = (
+    "is_token_byte",
+    "is_scalar_byte",
+    "is_diagnosis_byte",
+    "is_service_non_token_byte",
+)
+_REMOVED_SHA3_TABLES: Final[frozenset[str]] = frozenset(
+    {"sha3_message_batch", "sha3_digest_byte_batch"}
+)
+_REMOVED_MAP_PORT_TABLES: Final[frozenset[str]] = frozenset(
+    {
+        "ordered_map_hash_port",
+        "benefit__ordered_map_hash_port",
+        "obligation__ordered_map_hash_port",
+        "ledger__ordered_map_hash_port",
+    }
+)
 _DOMAIN: Final[bytes] = b"BL/PQ512/WAVE2/TYPED-STATE-AIR/v1\x00"
 _C0_STATE_ROOT_DOMAIN: Final[bytes] = b"BL/PQ512/C0/STATE-ROOT/v1\x00"
 _STATE_ROOT_ENTRY_WIDTH: Final[int] = 137
@@ -455,7 +477,6 @@ def _authority_columns(
         sha3_512(_C0_STATE_ROOT_DOMAIN + state.root() + replay_root).digest()
         for state, replay_root in zip(payment_states, replay_roots, strict=True)
     )
-    message_length = len(_C0_STATE_ROOT_DOMAIN) + 64 + 64
     columns: dict[str, list[int]] = {
         "phase": [0, 1],
         "epoch": [],
@@ -473,7 +494,6 @@ def _authority_columns(
         **{f"payment_root_{index}": [] for index in range(64)},
         **{f"replay_root_{index}": [] for index in range(64)},
         **{f"state_root_{index}": [] for index in range(64)},
-        **{f"root_message_{index}": [] for index in range(message_length)},
     }
 
     def append_bytes(prefix: str, value: bytes) -> None:
@@ -509,11 +529,6 @@ def _authority_columns(
         append_bytes("payment_root", payment_root)
         append_bytes("replay_root", replay_root)
         append_bytes("state_root", state_root)
-        root_message = _C0_STATE_ROOT_DOMAIN + payment_root + replay_root
-        if len(root_message) != message_length:
-            raise StructuralError("typed_state_authority_root_message_length_invalid")
-        for index, byte in enumerate(root_message):
-            _append(columns, f"root_message_{index}", byte)
 
     frozen = freeze_columns(columns)
     identities: list[Identity] = []
@@ -571,39 +586,6 @@ def _authority_columns(
                     "transition",
                 )
             )
-    for index, expected in enumerate(_C0_STATE_ROOT_DOMAIN):
-        identities.extend(
-            (
-                Identity(
-                    f"root_message_domain_{index}",
-                    cell(f"root_message_{index}") - expected,
-                    0,
-                    2,
-                ),
-            )
-        )
-    payment_offset = len(_C0_STATE_ROOT_DOMAIN)
-    replay_offset = payment_offset + 64
-    for index in range(64):
-        identities.extend(
-            (
-                Identity(
-                    f"root_message_payment_{index}",
-                    cell(f"root_message_{payment_offset + index}")
-                    - cell(f"payment_root_{index}"),
-                    0,
-                    2,
-                ),
-                Identity(
-                    f"root_message_replay_{index}",
-                    cell(f"root_message_{replay_offset + index}")
-                    - cell(f"replay_root_{index}"),
-                    0,
-                    2,
-                ),
-            )
-        )
-
     table = AirTable(
         AUTHORITY_TABLE,
         tuple(frozen),
@@ -806,6 +788,17 @@ def _root_component(
     interface = build_application_sha3_interface_air(root_calls)
     message_rows = interface.traces["sha3_message_batch"].rows
     message_length = len(root_calls[0].message)
+
+    def root_message_value(phase: int, position: int) -> Expr:
+        domain_length = len(_C0_STATE_ROOT_DOMAIN)
+        if position < domain_length:
+            return const(_C0_STATE_ROOT_DOMAIN[position])
+        if position < domain_length + 64:
+            return cell(f"payment_root_{position - domain_length}")
+        if position < domain_length + 128:
+            return cell(f"replay_root_{position - domain_length - 64}")
+        raise StructuralError("typed_state_root_message_position_invalid")
+
     message_sources: list[LookupSide] = []
     for phase in range(2):
         for position in range(message_length):
@@ -816,7 +809,7 @@ def _root_component(
                     (
                         const(call_index_offset + phase),
                         const(position),
-                        cell(f"root_message_{position}"),
+                        root_message_value(phase, position),
                     ),
                     phase,
                     phase + 1,
@@ -881,6 +874,390 @@ def _root_component(
         }
     )
     return Sha3ComposedComponent(program, traces, interface, call_index_offset)
+
+
+def _compact_log_message_port(
+    payment: ClaimPaymentMapsAirInstance,
+    call_index_offset: int,
+    slot_count: int,
+) -> tuple[AirTable, TraceTable]:
+    """Keep only the log-call message rows needed by the native H4 seam.
+
+    Map and key messages already live in proof-native semantic port tables.
+    Payment operation/log messages are the only calls whose complete
+    preimages are assembled across the claim-payment tables and the prior
+    operation digest.  Retaining this small interface preserves that exact
+    AIR lookup while removing the global per-byte SHA3 message table.
+    """
+
+    if (
+        not isinstance(payment, ClaimPaymentMapsAirInstance)
+        or payment.application_sha3 is None
+        or type(call_index_offset) is not int
+        or call_index_offset < 0
+        or type(slot_count) is not int
+        or slot_count <= 0
+    ):
+        raise StructuralError("typed_state_log_message_port_input_invalid")
+    calls = payment.application_sha3.calls
+    log_call_count = 2 * slot_count
+    if len(calls) < log_call_count:
+        raise StructuralError("typed_state_log_message_port_call_count_invalid")
+    log_calls = calls[-log_call_count:]
+    source_table = next(
+        table
+        for table in payment.application_sha3.program.tables
+        if table.name == "sha3_message_batch"
+    )
+    source_trace = payment.application_sha3.traces[source_table.name]
+    packed_columns: dict[str, list[int]] = {
+        "call_index": [],
+        "position_base": [],
+        **{f"live_{lane}": [] for lane in range(_LOG_MESSAGE_LANES)},
+        **{f"value_{lane}": [] for lane in range(_LOG_MESSAGE_LANES)},
+    }
+    for log_call in log_calls:
+        call_rows = payment.application_sha3.call_rows[log_call.call_id]
+        message_rows = call_rows.message_stop - call_rows.message_start
+        if call_rows.message_start % _LOG_MESSAGE_LANES or message_rows % _LOG_MESSAGE_LANES:
+            raise StructuralError("typed_state_log_message_port_alignment_invalid")
+        local_call_index = source_trace.columns["call_index"][call_rows.message_start]
+        for position_base in range(0, message_rows, _LOG_MESSAGE_LANES):
+            row_start = call_rows.message_start + position_base
+            _append(packed_columns, "call_index", local_call_index + call_index_offset)
+            _append(packed_columns, "position_base", position_base)
+            for lane in range(_LOG_MESSAGE_LANES):
+                source_row = row_start + lane
+                _append(packed_columns, f"live_{lane}", source_trace.columns["live"][source_row])
+                _append(packed_columns, f"value_{lane}", source_trace.columns["value"][source_row])
+    row_count = len(packed_columns["call_index"])
+    if row_count == 0:
+        raise StructuralError("typed_state_log_message_port_empty")
+    fixed = {
+        "call_index": tuple(packed_columns["call_index"]),
+        "position_base": tuple(packed_columns["position_base"]),
+    }
+    return (
+        AirTable(
+            LOG_MESSAGE_TABLE,
+            tuple(packed_columns),
+            row_count,
+            (),
+            fixed,
+        ),
+        TraceTable(LOG_MESSAGE_TABLE, freeze_columns(packed_columns)),
+    )
+
+
+def _packed_bundle_value_side(
+    mask: str | None,
+    lane: int,
+    row_count: int,
+    weight,
+) -> LookupSide:
+    if type(lane) is not int or not 0 <= lane < _SOURCE_BUNDLE_LANES:
+        raise StructuralError("typed_state_bundle_lane_invalid")
+    selector = const(1) if mask is None else cell(f"{mask}_{lane}")
+    return LookupSide(
+        _PACKED_SOURCE_BUNDLE_TABLE,
+        selector,
+        (
+            cell("slot_index"),
+            cell("byte_index_base") + lane,
+            cell(f"value_{lane}"),
+        ),
+        0,
+        row_count,
+        weight,
+    )
+
+
+def _packed_bundle_byte_value_sides(
+    lane_mask: str | None,
+    row_count: int,
+    weight,
+) -> tuple[LookupSide, ...]:
+    return tuple(
+        LookupSide(
+            _PACKED_SOURCE_BUNDLE_TABLE,
+            const(1) if lane_mask is None else cell(f"{lane_mask}_{lane}"),
+            (cell(f"value_{lane}"),),
+            0,
+            row_count,
+            weight,
+        )
+        for lane in range(_SOURCE_BUNDLE_LANES)
+    )
+
+
+def _pack_source_bundle_table(
+    program: AirProgram,
+    traces: Mapping[str, TraceTable],
+) -> tuple[AirProgram, Mapping[str, TraceTable]]:
+    """Pack the duplicate claim bundle byte transport without changing lookups.
+
+    Every packed lookup retains the original absolute byte index and value,
+    with the lane carried as a separate key.  This is a representation change
+    only: the fixed header, selector masks, byte range, and all source-field
+    multiset obligations remain exact.
+    """
+
+    if _SOURCE_BUNDLE_TABLE not in traces:
+        return program, traces
+    source_table = next(
+        table for table in program.tables if table.name == _SOURCE_BUNDLE_TABLE
+    )
+    source_trace = traces[_SOURCE_BUNDLE_TABLE]
+    if source_table.rows % _SOURCE_BUNDLE_LANES:
+        raise StructuralError("typed_state_bundle_row_alignment_invalid")
+    source_columns = source_trace.columns
+    bundle_rows = source_table.rows
+    packed_rows = bundle_rows // _SOURCE_BUNDLE_LANES
+    slot_values = tuple(source_columns["slot_index"])
+    slot_count = len(set(slot_values))
+    if slot_count == 0 or bundle_rows % slot_count:
+        raise StructuralError("typed_state_bundle_slot_geometry_invalid")
+    bytes_per_slot = bundle_rows // slot_count
+    if source_columns["byte_index"] != tuple(
+        index
+        for _ in range(slot_count)
+        for index in range(bytes_per_slot)
+    ):
+        raise StructuralError("typed_state_bundle_byte_index_invalid")
+    if any(
+        len(source_columns[name]) != bundle_rows for name in source_table.columns
+    ):
+        raise StructuralError("typed_state_bundle_trace_shape_invalid")
+
+    packed_columns: dict[str, tuple[int, ...]] = {
+        "slot_index": tuple(
+            source_columns["slot_index"][row * _SOURCE_BUNDLE_LANES]
+            for row in range(packed_rows)
+        ),
+        "word_index": tuple(
+            row % bytes_per_slot
+            for row in range(packed_rows)
+        ),
+        "byte_index_base": tuple(
+            source_columns["byte_index"][row * _SOURCE_BUNDLE_LANES]
+            for row in range(packed_rows)
+        ),
+    }
+    for mask in _SOURCE_BUNDLE_MASKS:
+        for lane in range(_SOURCE_BUNDLE_LANES):
+            packed_columns[f"{mask}_{lane}"] = tuple(
+                source_columns[mask][row * _SOURCE_BUNDLE_LANES + lane]
+                for row in range(packed_rows)
+            )
+    for prefix in ("fixed_value_active", "fixed_value"):
+        for lane in range(_SOURCE_BUNDLE_LANES):
+            packed_columns[f"{prefix}_{lane}"] = tuple(
+                source_columns[prefix][row * _SOURCE_BUNDLE_LANES + lane]
+                for row in range(packed_rows)
+            )
+    for lane in range(_SOURCE_BUNDLE_LANES):
+        packed_columns[f"value_{lane}"] = tuple(
+            source_columns["value"][row * _SOURCE_BUNDLE_LANES + lane]
+            for row in range(packed_rows)
+        )
+    packed_column_names = tuple(packed_columns)
+    packed_fixed = {
+        name: values
+        for name, values in packed_columns.items()
+        if not name.startswith("value_")
+    }
+    packed_table = AirTable(
+        _PACKED_SOURCE_BUNDLE_TABLE,
+        packed_column_names,
+        packed_rows,
+        tuple(
+            Identity(
+                f"fixed_header_value_{lane}",
+                cell(f"fixed_value_active_{lane}")
+                * (cell(f"value_{lane}") - cell(f"fixed_value_{lane}")),
+                0,
+                packed_rows,
+            )
+            for lane in range(_SOURCE_BUNDLE_LANES)
+        ),
+        MappingProxyType(packed_fixed),
+    )
+    packed_trace = TraceTable(
+        _PACKED_SOURCE_BUNDLE_TABLE,
+        freeze_columns(packed_columns),
+    )
+
+    def replace_lookup(lookup: LookupArgument) -> LookupArgument:
+        if lookup.name in {
+            "claim_source_token_bytes_match_bundle",
+            "claim_source_scalar_bytes_match_bundle",
+            "claim_source_diagnosis_bytes_match_bundle",
+            "claim_source_service_bytes_match_bundle",
+        }:
+            if len(lookup.destinations) != 1 or lookup.destinations[0].table != _SOURCE_BUNDLE_TABLE:
+                raise StructuralError("typed_state_bundle_lookup_shape_invalid")
+            old = lookup.destinations[0]
+            mask = {
+                "claim_source_token_bytes_match_bundle": "is_token_byte",
+                "claim_source_scalar_bytes_match_bundle": "is_scalar_byte",
+                "claim_source_diagnosis_bytes_match_bundle": "is_diagnosis_byte",
+                "claim_source_service_bytes_match_bundle": "is_service_non_token_byte",
+            }[lookup.name]
+            return LookupArgument(
+                lookup.name,
+                lookup.sources,
+                tuple(
+                    _packed_bundle_value_side(
+                        mask, lane, packed_rows, old.weight
+                    )
+                    for lane in range(_SOURCE_BUNDLE_LANES)
+                ),
+            )
+        if lookup.name == "claim_source_values_are_bytes":
+            old_sources = tuple(
+                side for side in lookup.sources if side.table == _SOURCE_BUNDLE_TABLE
+            )
+            if len(old_sources) != 1:
+                raise StructuralError("typed_state_bundle_lookup_shape_invalid")
+            old = old_sources[0]
+            sources = tuple(
+                side for side in lookup.sources if side.table != _SOURCE_BUNDLE_TABLE
+            )
+            return LookupArgument(
+                lookup.name,
+                (*sources, *_packed_bundle_byte_value_sides(None, packed_rows, old.weight)),
+                lookup.destinations,
+            )
+        if lookup.name == "claim_source_hash_leaf_messages":
+            old_sources = tuple(
+                side for side in lookup.sources if side.table == _SOURCE_BUNDLE_TABLE
+            )
+            if len(old_sources) != 1:
+                raise StructuralError("typed_state_bundle_lookup_shape_invalid")
+            old = old_sources[0]
+            source_values = (
+                cell("slot_index") + old.values[0].right.value
+                if old.values[0].kind == "add"
+                and old.values[0].right is not None
+                and old.values[0].right.kind == "const"
+                and type(old.values[0].right.value) is int
+                else None
+            )
+            if source_values is None:
+                raise StructuralError("typed_state_bundle_leaf_offset_invalid")
+            packed_sources = tuple(
+                LookupSide(
+                    _PACKED_SOURCE_BUNDLE_TABLE,
+                    const(1),
+                    (
+                        source_values,
+                        cell("byte_index_base") + lane,
+                        cell(f"value_{lane}"),
+                    ),
+                    0,
+                    packed_rows,
+                    old.weight,
+                )
+                for lane in range(_SOURCE_BUNDLE_LANES)
+            )
+            return LookupArgument(
+                lookup.name,
+                packed_sources,
+                tuple(side for side in lookup.destinations if side.table != _SOURCE_BUNDLE_TABLE),
+            )
+        if any(
+            side.table == _SOURCE_BUNDLE_TABLE
+            for side in (*lookup.sources, *lookup.destinations)
+        ):
+            raise StructuralError(f"typed_state_bundle_lookup_unhandled:{lookup.name}")
+        return lookup
+
+    tables = tuple(
+        packed_table if table.name == _SOURCE_BUNDLE_TABLE else table
+        for table in program.tables
+    )
+    compact_lookups = tuple(replace_lookup(lookup) for lookup in program.lookups)
+    if any(
+        binding.table == _SOURCE_BUNDLE_TABLE for binding in program.public_inputs
+    ):
+        raise StructuralError("typed_state_bundle_public_input_invalid")
+    compact_traces = MappingProxyType(
+        {
+            _PACKED_SOURCE_BUNDLE_TABLE: packed_trace,
+            **{
+                name: trace
+                for name, trace in traces.items()
+                if name != _SOURCE_BUNDLE_TABLE
+            },
+        }
+    )
+    return (
+        AirProgram(program.program_id, tables, compact_lookups, program.public_inputs),
+        compact_traces,
+    )
+
+
+def _retarget_log_message_lookup(
+    lookup: LookupArgument,
+    message_rows: int,
+) -> LookupArgument:
+    if lookup.name != "claim_payment_log_sha3_messages":
+        return lookup
+    if len(lookup.destinations) != 1:
+        raise StructuralError("typed_state_log_message_lookup_shape_invalid")
+    destination = lookup.destinations[0]
+    if destination.table != "sha3_message_batch":
+        raise StructuralError("typed_state_log_message_lookup_table_invalid")
+    return LookupArgument(
+        lookup.name,
+        lookup.sources,
+        tuple(
+            LookupSide(
+                LOG_MESSAGE_TABLE,
+                cell(f"live_{lane}"),
+                (
+                    cell("call_index"),
+                    cell("position_base") + lane,
+                    cell(f"value_{lane}"),
+                ),
+                0,
+                message_rows,
+                destination.weight,
+            )
+            for lane in range(_LOG_MESSAGE_LANES)
+        ),
+    )
+
+
+def _compact_sha3_interface(
+    program: AirProgram,
+    traces: Mapping[str, TraceTable],
+    log_message_rows: int,
+) -> tuple[AirProgram, Mapping[str, TraceTable]]:
+    removed_tables = _REMOVED_SHA3_TABLES | _REMOVED_MAP_PORT_TABLES
+    tables = tuple(table for table in program.tables if table.name not in removed_tables)
+    table_names = {table.name for table in tables}
+    compact_lookups: list[LookupArgument] = []
+    for lookup in program.lookups:
+        lookup = _retarget_log_message_lookup(lookup, log_message_rows)
+        sides = (*lookup.sources, *lookup.destinations)
+        if any(side.table not in table_names for side in sides):
+            continue
+        compact_lookups.append(lookup)
+    compact_traces = MappingProxyType(
+        {name: trace for name, trace in traces.items() if name in table_names}
+    )
+    if set(compact_traces) != table_names:
+        raise StructuralError("typed_state_compact_trace_set_invalid")
+    return (
+        AirProgram(
+            program.program_id,
+            tables,
+            tuple(compact_lookups),
+            program.public_inputs,
+        ),
+        compact_traces,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -984,14 +1361,20 @@ def build_typed_state_relation_air(
         root_calls,
         len(replay_calls) + len(payment.application_sha3.calls),
     )
+    log_message_table, log_message_trace = _compact_log_message_port(
+        payment,
+        len(replay_calls),
+        len(state_witness.slots),
+    )
     merged = compose_sha3_interface_components(
         PROGRAM_ID,
         (replay_component, payment_component, root_component),
-        extra_tables=(summary_table, money_table, money_byte_table),
+        extra_tables=(summary_table, money_table, money_byte_table, log_message_table),
         extra_traces={
             summary_trace.name: summary_trace,
             money_trace.name: money_trace,
             money_byte_trace.name: money_byte_trace,
+            log_message_trace.name: log_message_trace,
         },
         extra_lookups=(
             summary_link,
@@ -1001,10 +1384,19 @@ def build_typed_state_relation_air(
         ),
         extra_public_inputs=(*summary_public, *money_public),
     )
-    public_values = (*authority_values, *summary_values, *money_values)
-    instance = TypedStateRelationAirInstance(
+    packed_program, packed_traces = _pack_source_bundle_table(
         merged.program,
         merged.traces,
+    )
+    compact_program, compact_traces = _compact_sha3_interface(
+        packed_program,
+        packed_traces,
+        log_message_table.rows,
+    )
+    public_values = (*authority_values, *summary_values, *money_values)
+    instance = TypedStateRelationAirInstance(
+        compact_program,
+        compact_traces,
         state_witness,
         replay,
         payment,

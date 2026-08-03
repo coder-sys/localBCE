@@ -241,13 +241,17 @@ simulator/leakage/backend gates close.
 The separate C0 typed-state executable AIR now supplies the missing ordered-map/payment semantic
 slice at its semantic-AIR boundary. It binds replay and payment roots/cursors, fixed slot
 order, canonical money subtraction and debit/credit conservation, and composes both lanes' SHA3
-ports through one contiguous interface-only bus. The verified K128 shape is 60 tables, 93 lookups,
-1,806 public inputs, and 46,210 exact calls: 46,208 replay/payment calls plus two C0 state-root
-calls. Positive, root, money, hash-port, and fixed asset-registry mutation rejection evidence
-passed. The native H4 coordinator now consumes the full typed AIR execution, independently verifies its
-authority/root tables, and maps every typed call to the canonical H4 boundary. The selected proof
-route is rejected by the immutable resource preflight; this remains a nonactivating seam with no
-Gate 2E, H5, H6, backend, or `proofSuiteId` credit.
+ports through one contiguous interface-only bus. The verified K128 v2 shape is 56 tables, 81
+lookups, 1,806 public inputs, and 46,210 exact calls: 46,208 replay/payment calls plus two C0
+state-root calls. Its encoded program is 22,018,481 bytes, its execution is 145,207,821 bytes,
+and its raw witness is 103,237,152 bytes. The v2 interface packs source-bundle and payment-log
+message bytes into 8-lane rows and removes duplicate root-message witness columns while preserving
+the exact lookup multisets. Positive, root, money, compact-log, and fixed asset-registry mutation
+rejection evidence passed. The native H4 coordinator consumes the full typed AIR execution,
+independently verifies its authority/root tables, and maps every typed call to the canonical H4
+boundary. The selected generic proof route remains rejected by the immutable resource preflight
+(`modeled_required_available_bytes=32471127736`, `qualifies=false`); this remains a nonactivating
+seam with no Gate 2E, H5, H6, backend, or `proofSuiteId` credit.
 
 ## 9. Required green evidence
 

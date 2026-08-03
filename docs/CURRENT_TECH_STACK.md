@@ -221,23 +221,31 @@ same authority before the AIR is built.
 Measured K128 construction and verifier readback:
 
 ```text
-program_id=BL-PQ512-C0-TYPED-STATE-AIR-v1
-tables=60
-lookups=93
+program_id=BL-PQ512-C0-TYPED-STATE-AIR-v2
+tables=56
+lookups=81
 public_inputs=1806
 hash_calls=46210
+program_bytes=22018481
+execution_bytes=145207821
+raw_witness_bytes=103237152
+program_commitment=f6321d7483c65469ecf9d408a5d4de59321a8e3556b6da93b4e4c0b506f01ca649b8653cf60d0e499df99022f84ff1b9bd304ff11fcc203b3013112154cac99f
+execution_commitment=21aee4736e5ee43b09c31470ca2b9ab95e0d3276b82d4f5ed5b319ec78860260a75376ced48225a26eae1084221fabeb6ad0836204ed04646fbacf995893baf0
 replay_hash_ports=True
 payment_hash_ports=True
 authority_root_ports=True
 ```
 
-The full post-fix typed verifier passed (`4 passed in 613.32s`). Split mutation runs passed for
-replay roots/cursors, money, replay hash ports, and fixed asset-registry bytes. This is semantic-AIR
-component evidence plus an implemented native H4 readback seam: the native coordinator consumes
-the full typed execution, checks the authority/root bindings, and maps every typed call to the
-canonical H4 bus. The selected typed proof route is rejected by the immutable resource preflight;
-the seam remains nonactivating until a complete proof construction, reviewed backend,
-simulator/leakage/security ledger, H5, and H6 gates close.
+The full post-fix typed verifier passed (`4 passed in 307.53s`). The v2 representation packs the
+source bundle into 8 byte lanes, packs the 46,208 payment log-message rows into 8 lanes, removes
+the duplicate root-message witness columns, and retargets the exact lookup multisets. The native
+reader consumes the packed log lanes and reconstructs root messages directly from canonical
+authority root columns. This is semantic-AIR component evidence plus a native H4 readback seam:
+the native coordinator consumes the full typed execution, checks the authority/root bindings, and
+maps every typed call to the canonical H4 bus. The immutable generic-AIR resource preflight still
+returns `qualifies=false` with `modeled_required_available_bytes=32471127736`; the seam remains
+nonactivating until a complete proof construction, reviewed backend, simulator/leakage/security
+ledger, H5, and H6 gates close.
 
 ## How a successor must interpret this repository
 

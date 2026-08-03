@@ -12,6 +12,7 @@ from experiments.fixed_shape_claim_air.executable_air import TraceTable
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 from experiments.fixed_shape_claim_air.typed_state_relation_executable_air import (
     AUTHORITY_TABLE,
+    LOG_MESSAGE_TABLE,
     MONEY_TABLE,
     PROGRAM_ID,
     SUMMARY_TABLE,
@@ -61,9 +62,15 @@ def test_typed_state_air_replays_c0_maps_money_and_h4_hash_ports() -> None:
     assert instance.payment.operation_log_ports_constrained is True
     assert instance.payment.payment_map_hash_ports_constrained is True
     assert len(instance.public_values) == 1_806
-    assert "typed_state_root_sha3_messages" in {
+    assert "typed_state_root_sha3_digests" in {
         lookup.name for lookup in instance.program.lookups
     }
+    assert LOG_MESSAGE_TABLE in instance.traces
+    assert "position_base" in instance.traces[LOG_MESSAGE_TABLE].columns
+    assert "value_0" in instance.traces[LOG_MESSAGE_TABLE].columns
+    assert "sha3_message_batch" not in instance.traces
+    assert "sha3_digest_byte_batch" not in instance.traces
+    assert "ordered_map_hash_port" not in instance.traces
     assert len(instance.hash_calls) == 46_210
 
 
@@ -81,8 +88,8 @@ def test_typed_state_air_rejects_money_mutation() -> None:
         )
 
 
-def test_typed_state_air_rejects_replay_hash_port_mutation() -> None:
+def test_typed_state_air_rejects_compact_log_message_mutation() -> None:
     with pytest.raises(StructuralError, match="lookup|multiset"):
         verify_typed_state_relation_air(
-            _mutated_trace(_k128_instance(), "ordered_map_hash_port", "message_0", 0)
+            _mutated_trace(_k128_instance(), LOG_MESSAGE_TABLE, "value_0", 0)
         )
