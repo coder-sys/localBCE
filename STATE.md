@@ -7102,3 +7102,34 @@ RSS/scratch limits, no pagefile growth, empty stderr, cleanup, provenance, or ze
 driver-event checks. The earlier K128/K512 single runs remain non-campaign evidence because they
 were not the exact warm-up-plus-ten-per-profile campaign; they are not rejected solely because
 Brave was open. The next action is to run the exact H5 campaign under the revised boundary.
+
+## 2026-08-04 Brave-open boundary correction and archive refresh - VERIFIED
+
+The owner explicitly removed the exclusive-host disqualification. Active mandate, roadmap,
+architecture, throughput, and current-stack documentation now permit Brave to remain open during
+H5 GPU work; all other fresh-input, correctness, provenance, resource, pagefile, stderr, cleanup,
+and driver-event gates remain mandatory. The affected contract/preflight test set passed:
+
+```text
+21 passed in 33.68s
+```
+
+The deterministic release builder was rerun from committed source
+`ae27b687deec2ab8eaf833b62a53fbd36df6b898` using the reviewed 779-file allowlist:
+
+```text
+archive_bytes=11300476
+archive_sha256=77f34794ba44dc86662330acdae2c5c3804b0d3755bf5e50cb9021b9e62babb9
+entry_count=780
+manifest_sha256=1c5bbdc112311df282c3ea9710d81771d37e8936695bb183f02668ebc7947297
+payload_bytes=11014479
+payload_file_count=779
+receipt_version=1
+```
+
+Independent readback of the Desktop, Desktop full-workspace, and Downloads copies returned for
+each: `size=11300476`,
+`sha3_512=26f44022f7e14e017025f33fc6385178258da5e9281e7f804292752e6575acba661da8e9fb8f9ee0d1151c0d00ab0ec9a0aa9ff7b61f7ee2d4e51fbae6f4fc85`,
+`entries=780`, `duplicates=0`, `crc=PASS`, `payload_mismatches=0`, and
+`independent_identity=PASS`. Earlier copies were preserved under
+`work/archive-v2-stage/previous-targets-20260804-brave-exception/`.
