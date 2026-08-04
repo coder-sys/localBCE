@@ -175,8 +175,10 @@ def _bool(value: object, label: str) -> bool:
     return value
 
 
-def _string_tuple(values: object, label: str) -> tuple[str, ...]:
-    if type(values) is not tuple or not values:
+def _string_tuple(
+    values: object, label: str, *, allow_empty: bool = False
+) -> tuple[str, ...]:
+    if type(values) is not tuple or (not values and not allow_empty):
         raise TerminalLedgerError(f"terminal_ledger_{label}_required")
     result = tuple(_text(value, label).decode("ascii") for value in values)
     if len(result) != len(set(result)):
@@ -792,8 +794,8 @@ class TerminalLedger:
             raise TerminalLedgerError("terminal_ledger_record_type_invalid")
         if tuple(record.obligation_id for record in self.records) != OBLIGATION_IDS:
             raise TerminalLedgerError("terminal_ledger_record_order_invalid")
-        _string_tuple(self.blockers, "ledger_blockers")
         qualified = self.status == SEALED_LEDGER_STATUS and self.sealed is True
+        _string_tuple(self.blockers, "ledger_blockers", allow_empty=qualified)
         if qualified:
             if set(MANDATORY_BLOCKERS) & set(self.blockers):
                 raise TerminalLedgerError("terminal_ledger_qualified_mandatory_blocker_present")
