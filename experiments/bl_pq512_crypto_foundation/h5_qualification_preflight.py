@@ -34,6 +34,11 @@ from experiments.bl_pq512_crypto_foundation.gate_2e_terminal_ledger import (
     TerminalLedgerError,
     independently_verify_terminal_ledger,
 )
+from experiments.bl_pq512_crypto_foundation.h5_campaign_evidence import (
+    H5CampaignEvidence,
+    H5CampaignEvidenceError,
+    validate_h5_campaign_manifest,
+)
 from experiments.bl_pq512_crypto_foundation.ops_authority import (
     CANONICAL_OPS_ROOT,
     OPS_AUTHORITY_STATUS,
@@ -46,8 +51,11 @@ DEFAULT_CANONICAL_OPS_ROOT: Final[Path] = CANONICAL_OPS_ROOT
 
 STATUS: Final[str] = "H5_QUALIFICATION_PREFLIGHT_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
 PREFLIGHT_BLOCKED: Final[str] = "BLOCKED_H5_PREFLIGHT"
+PREFLIGHT_QUALIFIED: Final[str] = "QUALIFIED_H5_CAMPAIGN_NONACTIVATING"
 CAMPAIGN_NOT_STARTED: Final[str] = "NOT_STARTED_NO_COMPLETE_PROOF_CAMPAIGN"
+CAMPAIGN_QUALIFIED: Final[str] = "QUALIFIED_EXACT_22_LAUNCH_CAMPAIGN"
 EXTERNAL_MONITOR_NOT_CONFIGURED: Final[str] = "NOT_CONFIGURED_EXTERNAL_PROCESS_RESOURCE_MONITOR"
+EXTERNAL_MONITOR_CONFIGURED: Final[str] = "CONFIGURED_EXTERNAL_PROCESS_RESOURCE_MONITOR"
 CANONICAL_OPS_VERIFIED: Final[str] = OPS_AUTHORITY_STATUS
 CANONICAL_OPS_MISSING: Final[str] = "MISSING_TRACKED_OPS_AUTHORITY"
 CANONICAL_OPS_MISMATCH: Final[str] = "TRACKED_OPS_AUTHORITY_MISMATCH"
@@ -136,6 +144,7 @@ class H5PreflightContext:
     terminal_context: TerminalLedgerContext
     hardware_config: Mapping[str, Any] | None = None
     canonical_ops_root: Path = DEFAULT_CANONICAL_OPS_ROOT
+    campaign_manifest_path: Path | None = None
 
     def __post_init__(self) -> None:
         _synthetic()
@@ -147,6 +156,8 @@ class H5PreflightContext:
             raise H5PreflightError("h5_preflight_hardware_config_mapping_required")
         if not isinstance(self.canonical_ops_root, Path):
             raise H5PreflightError("h5_preflight_ops_path_must_be_path")
+        if self.campaign_manifest_path is not None and not isinstance(self.campaign_manifest_path, Path):
+            raise H5PreflightError("h5_preflight_campaign_manifest_path_required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,11 +182,12 @@ class H5Preflight:
     proof_suite_id: None = None
     activation_allowed: bool = False
     preflight_digest_512: bytes = b""
+    campaign_digest_512: bytes = b""
 
     def __post_init__(self) -> None:
         _synthetic()
         _digest(self.ledger_digest_512, "ledger")
-        if self.status != PREFLIGHT_BLOCKED:
+        if self.status not in {PREFLIGHT_BLOCKED, PREFLIGHT_QUALIFIED}:
             raise H5PreflightError("h5_preflight_status_must_remain_blocked")
         if self.profile_ids != PROFILE_IDS:
             raise H5PreflightError("h5_preflight_profile_shape_invalid")
@@ -190,9 +202,12 @@ class H5Preflight:
             or self.fresh_launch_count != FRESH_LAUNCH_COUNT
         ):
             raise H5PreflightError("h5_preflight_campaign_shape_invalid")
-        if self.campaign_status != CAMPAIGN_NOT_STARTED:
+        if self.campaign_status not in {CAMPAIGN_NOT_STARTED, CAMPAIGN_QUALIFIED}:
             raise H5PreflightError("h5_preflight_campaign_status_invalid")
-        if self.external_monitor_status != EXTERNAL_MONITOR_NOT_CONFIGURED:
+        if self.external_monitor_status not in {
+            EXTERNAL_MONITOR_NOT_CONFIGURED,
+            EXTERNAL_MONITOR_CONFIGURED,
+        }:
             raise H5PreflightError("h5_preflight_external_monitor_status_invalid")
         if self.canonical_ops_status not in {
             CANONICAL_OPS_VERIFIED,
@@ -211,7 +226,7 @@ class H5Preflight:
             raise H5PreflightError("h5_preflight_hardware_status_mismatch")
         if type(self.source_git_clean) is not bool or type(self.protected_paths_clean) is not bool:
             raise H5PreflightError("h5_preflight_source_flags_boolean_required")
-        if type(self.blockers) is not tuple or not self.blockers:
+        if type(self.blockers) is not tuple:
             raise H5PreflightError("h5_preflight_blockers_required")
         if len(self.blockers) != len(set(self.blockers)):
             raise H5PreflightError("h5_preflight_blockers_duplicate")
@@ -219,6 +234,19 @@ class H5Preflight:
             _text(blocker, "blocker", 96)
         if self.proof_suite_id is not None or self.activation_allowed is not False:
             raise H5PreflightError("h5_preflight_activation_boundary_invalid")
+        if self.status == PREFLIGHT_BLOCKED:
+            if not self.blockers:
+                raise H5PreflightError("h5_preflight_blockers_required")
+            if self.campaign_status != CAMPAIGN_NOT_STARTED or self.external_monitor_status != EXTERNAL_MONITOR_NOT_CONFIGURED:
+                raise H5PreflightError("h5_preflight_status_must_remain_blocked")
+            if self.campaign_digest_512 != b"":
+                raise H5PreflightError("h5_preflight_campaign_digest_unexpected")
+        else:
+            if self.blockers or not self.source_git_clean or not self.protected_paths_clean:
+                raise H5PreflightError("h5_preflight_qualified_blockers_present")
+            if self.campaign_status != CAMPAIGN_QUALIFIED or self.external_monitor_status != EXTERNAL_MONITOR_CONFIGURED:
+                raise H5PreflightError("h5_preflight_qualified_campaign_status_invalid")
+            _digest(self.campaign_digest_512, "campaign")
         expected = _hash(
             _PREFLIGHT_DOMAIN,
             _digest(self.ledger_digest_512, "ledger"),
@@ -234,6 +262,7 @@ class H5Preflight:
             self.fresh_launch_count.to_bytes(4, "big"),
             _text(self.campaign_status, "campaign_status"),
             _text(self.external_monitor_status, "external_monitor_status"),
+            self.campaign_digest_512,
             bytes((int(self.activation_allowed),)),
             canonical_json_bytes({"failure_policy": FAILURE_POLICY, "protocol": PROTOCOL}),
         )
@@ -260,6 +289,7 @@ class H5Preflight:
             "fresh_launch_count": self.fresh_launch_count,
             "campaign_status": self.campaign_status,
             "external_monitor_status": self.external_monitor_status,
+            "campaign_digest_sha3_512_hex": self.campaign_digest_512.hex(),
             "protocol_id_sha3_512": PROTOCOL_ID_SHA3_512,
             "cached_proofs_allowed": PROTOCOL["cached_proofs_allowed"],
             "cached_witnesses_allowed": PROTOCOL["cached_witnesses_allowed"],
@@ -338,12 +368,47 @@ def build_h5_preflight(context: H5PreflightContext) -> H5Preflight:
     if context.terminal_context.protected_paths_clean is not True:
         _append_unique(blockers, "protected_path_changed")
 
-    # These are always open in a preflight: no process was launched and no
-    # run-owned external telemetry/proof artifact exists to validate.
-    _append_unique(blockers, "h5_campaign_not_started")
-    _append_unique(blockers, "h5_external_monitor_not_configured")
-    _append_unique(blockers, "h5_source_readback_not_captured")
-    _append_unique(blockers, "h5_no_qualified_evidence")
+    campaign: H5CampaignEvidence | None = None
+    if context.campaign_manifest_path is not None:
+        try:
+            campaign = validate_h5_campaign_manifest(context.campaign_manifest_path)
+        except (H5CampaignEvidenceError, OSError, ValueError) as exc:
+            raise H5PreflightError("h5_preflight_campaign_evidence_invalid") from exc
+        selected_suite = context.terminal_context.selection.proof_suite_id
+        if (
+            ledger.sealed is True
+            and ledger.status == "SEALED_GATE_2E_TERMINAL_LEDGER"
+            and ledger.blockers == ()
+            and ledger.h4_parent_bound is True
+            and ledger.complete_proof_verified is True
+            and selected_suite is not None
+            and campaign.proof_suite_id == selected_suite.hex()
+            and not blockers
+            and context.terminal_context.git_clean is True
+            and context.terminal_context.protected_paths_clean is True
+        ):
+            return H5Preflight(
+                ledger_digest_512=ledger.ledger_digest_512,
+                canonical_ops_status=canonical_status,
+                reference_hardware_status=(REFERENCE_HARDWARE_READY if hardware_ready else REFERENCE_HARDWARE_NOT_READY),
+                reference_hardware_ready=hardware_ready,
+                source_git_clean=context.terminal_context.git_clean,
+                protected_paths_clean=context.terminal_context.protected_paths_clean,
+                blockers=(),
+                status=PREFLIGHT_QUALIFIED,
+                campaign_status=CAMPAIGN_QUALIFIED,
+                external_monitor_status=EXTERNAL_MONITOR_CONFIGURED,
+                campaign_digest_512=bytes.fromhex(campaign.campaign_digest_sha3_512),
+            )
+        _append_unique(blockers, "h5_campaign_gate_2e_prerequisite_open")
+
+    # No campaign manifest means no process was launched and no run-owned
+    # external telemetry/proof artifact exists to validate.
+    if campaign is None:
+        _append_unique(blockers, "h5_campaign_not_started")
+        _append_unique(blockers, "h5_external_monitor_not_configured")
+        _append_unique(blockers, "h5_source_readback_not_captured")
+        _append_unique(blockers, "h5_no_qualified_evidence")
 
     return H5Preflight(
         ledger_digest_512=ledger.ledger_digest_512,
@@ -372,10 +437,12 @@ def independently_verify_h5_preflight(
 
 __all__: tuple[str, ...] = (
     "CAMPAIGN_NOT_STARTED",
+    "CAMPAIGN_QUALIFIED",
     "CANONICAL_OPS_MISMATCH",
     "CANONICAL_OPS_MISSING",
     "CANONICAL_OPS_VERIFIED",
     "EXTERNAL_MONITOR_NOT_CONFIGURED",
+    "EXTERNAL_MONITOR_CONFIGURED",
     "FRESH_LAUNCH_COUNT",
     "H5Preflight",
     "H5PreflightContext",
@@ -383,6 +450,7 @@ __all__: tuple[str, ...] = (
     "LAUNCHES_PER_PROFILE",
     "MEASURED_REPETITIONS",
     "PREFLIGHT_BLOCKED",
+    "PREFLIGHT_QUALIFIED",
     "PROFILE_IDS",
     "PROTOCOL_ID_SHA3_512",
     "STATUS",
