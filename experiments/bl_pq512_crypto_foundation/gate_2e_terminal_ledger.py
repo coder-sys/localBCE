@@ -6,11 +6,13 @@ selected state plane or a proof suite.  The builder independently replays the
 S4 composition, derives the S5 checkpoints, checks the frozen C0 shape and
 private-data boundary, and recomputes the S6/S7 decision and handoff digests.
 
-The unresolved simulator, leakage, strict-PQ, and H4 binding
-obligations are represented as blockers instead of being omitted.  The
-reference ledger cannot be sealed, cannot carry a ``proofSuiteId``, and
-cannot authorize activation.  It is therefore useful evidence for the next
-qualification gate without becoming an acceptance path.
+The unresolved simulator, leakage, strict-PQ, and H4 binding obligations are
+represented as blockers instead of being omitted.  A reference ledger cannot
+be sealed; a qualified evidence ledger may seal the Gate 2E boundary only
+after the supplied H4/leakage evidence is independently replayed.  Neither
+form carries a public ``proofSuiteId`` or authorizes activation.  The sealed
+form is therefore useful evidence for the next qualification gate without
+becoming an acceptance path.
 """
 
 from __future__ import annotations
@@ -821,8 +823,8 @@ class TerminalLedger:
         if qualified:
             if not self.h4_parent_bound or not self.complete_proof_verified:
                 raise TerminalLedgerError("terminal_ledger_qualified_binding_missing")
-            if type(self.proof_suite_id) is not bytes or len(self.proof_suite_id) != 64 or not any(self.proof_suite_id):
-                raise TerminalLedgerError("terminal_ledger_qualified_suite_missing")
+            if self.proof_suite_id is not None:
+                raise TerminalLedgerError("terminal_ledger_activation_boundary_invalid")
         elif self.h4_parent_bound or self.complete_proof_verified:
             raise TerminalLedgerError("terminal_ledger_complete_binding_must_remain_open")
         elif self.proof_suite_id is not None:
@@ -950,7 +952,7 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
         canonical_ops_available=context.canonical_ops_available,
         h4_parent_bound=qualified,
         complete_proof_verified=qualified,
-        proof_suite_id=context.selection.proof_suite_id if qualified else None,
+        proof_suite_id=None,
         status=SEALED_LEDGER_STATUS if qualified else LEDGER_STATUS,
         sealed=qualified,
         state_plane_status=state_plane_status,

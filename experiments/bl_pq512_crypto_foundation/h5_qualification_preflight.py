@@ -322,7 +322,10 @@ def build_h5_preflight(context: H5PreflightContext) -> H5Preflight:
         _append_unique(blockers, "complete_leakage_scan_missing")
     if {"no_backend_admitted", "proof_suite_unselected"} & set(ledger.blockers):
         _append_unique(blockers, "strict_pq_security_ledger_open")
-    if "proof_suite_unselected" in ledger.blockers or ledger.proof_suite_id is None:
+    if (
+        "proof_suite_unselected" in ledger.blockers
+        or context.terminal_context.selection.proof_suite_id is None
+    ):
         _append_unique(blockers, "proof_suite_unselected")
     if canonical_status == CANONICAL_OPS_MISSING:
         _append_unique(blockers, "canonical_ops_missing")
