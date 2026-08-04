@@ -7036,9 +7036,11 @@ K512 attempt r1: external_wall_seconds=159.287932; complete_process_wall_seconds
   complete_proof_latency_gate=true; stdout_sha256=bf941f27f009dcfc5ac2497fb49e5d13d39ca63a98d5bd237da48e57ac75014a
 ```
 
-The K128 r2 failure and the Brave-open boundary prevent these runs from qualifying as H5. No
-H5 launch is substituted, retried, or silently counted; the exact 22-launch campaign remains
-unstarted. `proofSuiteId` remains null and activation remains false. Focused source verification
+The K128 r2 failure and the single-run, non-campaign shape prevent these runs from qualifying as
+H5. The owner-authorized Brave-open exception is no longer a disqualifier; future H5 launches may
+run with Brave open while retaining every other fail-closed gate. No H5 launch is substituted,
+retried, or silently counted; the exact 22-launch campaign remains unstarted. `proofSuiteId` remains
+null and activation remains false. Focused source verification
 after the correction is:
 
 ```text
@@ -7060,8 +7062,9 @@ tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py
 Tracked changes for this boundary are `experiments/bl_pq512_crypto_core/src/disk_fft.rs`,
 `experiments/bl_pq512_crypto_core/src/bin/selected_streaming_prover_worker.rs`, and
 `experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`. Protected paths remain
-untouched. The next dependency is a genuinely compliant, exclusive-host H5 campaign; keeping
-Brave open is compatible with continued exploratory work but cannot close Wave 2.
+untouched. The next dependency is the exact 22-launch H5 campaign with the owner-authorized
+Brave-open exception applied; keeping Brave open no longer blocks H5, but all other resource,
+telemetry, provenance, correctness, and evidence gates remain mandatory.
 
 ## 2026-08-04 Source-complete archive refresh - VERIFIED
 
@@ -7088,3 +7091,14 @@ continuation prompt. Prior copies were preserved under the scratch backup direct
 `work/archive-v2-stage/previous-targets-20260804/`. The release allowlist was not expanded;
 `STATE.md` and newer tracked evidence files outside that reviewed allowlist remain excluded by
 design. This archive refresh does not change the H5/H6 qualification status.
+
+## 2026-08-04 Owner clarification: Brave-open H5 boundary removed
+
+The owner explicitly revoked the prior exclusive-host disqualification and authorized Brave to
+remain open during H5 GPU work. Active documentation now treats Brave presence as permitted rather
+than as an automatic non-qualifying condition. This changes only that operational acceptance
+boundary; it does not waive fresh unique launches, independent verification, exact timing limits,
+RSS/scratch limits, no pagefile growth, empty stderr, cleanup, provenance, or zero post-launch
+driver-event checks. The earlier K128/K512 single runs remain non-campaign evidence because they
+were not the exact warm-up-plus-ten-per-profile campaign; they are not rejected solely because
+Brave was open. The next action is to run the exact H5 campaign under the revised boundary.

@@ -342,7 +342,7 @@ The H4 prototype is functionally attached for both profiles:
 | Claims | Nineteen fixed claims: five hash-bus claims, two state-relation claims, and twelve square-free state reductions |
 | Native hiding | One 32,768-coefficient committed mask: 221 K128 or 233 K512 layers, with positive post-PCS free dimension |
 | PCS | Construction 8.2 random-padded interleaved Reed--Solomon, 73-word auxiliary plane |
-| Authenticated schedule | 6,113-round fixed prelude; 6,727 K128 and 6,995 K512 complete state-composed schedules |
+| Authenticated schedule | one authenticated 6,086-round schedule (state-free); 6,113-round fixed state-composed prelude; 6,727 K128 and 6,995 K512 complete state-composed schedules |
 | Public coin | ML-DSA-87 plus SLH-DSA-SHAKE-256f authenticated chain |
 | Authority split | CUDA performs untrusted arithmetic; Rust parses, recomputes, replays, and verifies |
 | K128 | Fresh monitored one-shard state-composed run; 33.077384 s complete process; 782.934016 MB external-tree peak; 2,478 MiB device peak; atomic verification passed, revised strict 35 s single-run gate passed |
@@ -436,8 +436,8 @@ subset is forbidden.
 6. **Run the state relation when state is supplied.** Authenticate the fixed state source, prove
    its 25-round interactive relation, and expose two state input claims in the same H4 PCS boundary.
    State-free runs execute the same 25-round shape with zero claims and zero source digest.
-7. **Bind the PCS claims.** The state-free proof contains one output claim and four hash input
-   claims; the state-composed shape adds two state claims for seven total. It must not reconstruct
+7. **Bind the PCS claims.** The state-free proof contains one output claim and four input claims
+   (four hash input claims); the state-composed shape adds two state claims for seven total. It must not reconstruct
    or replay a duplicate full hash source merely to prove the join.
 8. **Apply native hiding.** Verify 508 native GKR mask constraints per shard and bind the GKR-mask
    row source/relation plus the selected auxiliary plane before dependent challenges.

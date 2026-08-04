@@ -137,7 +137,7 @@ row plane, 12.058624 MB total, and is extracted from live commitment tiles witho
 source replay. The real producer, native mask, 73-word auxiliary plane, 6,113-round fixed prelude,
 PCS openings, and independent verifier pass together. State composition adds 614/882 square-free
 rounds and reaches 6,727/6,995 for K128/K512. CPU integration and conditioned simulator mechanics
-pass, but exclusive-host proof and leakage performance remain open. The final fresh state-free proof
+pass, but repeated proof qualification and leakage performance remain open. The final fresh state-free proof
 measured 29.974129 seconds for K128 and 120.460733 seconds for four-shard K512 inside the atomic
 coordinator. `complete_proof_qualification=false` remains correct until the H5 campaign and H6
 qualification gates close.

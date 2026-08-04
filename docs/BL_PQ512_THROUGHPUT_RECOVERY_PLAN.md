@@ -140,7 +140,8 @@ Preflight:
 - sealed clean Gate 2E commit and locked/offline build;
 - tracked `ops/` exact file-set, length, SHA3-512, and symlink authority readback;
 - execution manifest recomputed by coordinator and external monitor;
-- exclusive host with no competing build/proof/cache scan;
+- owner-authorized Brave-open operation is permitted; no unexpected competing build/proof/cache
+  scan may corrupt the captured telemetry;
 - clean Windows driver-reset boundary and no later Event 153 or Display Event 4101;
 - sufficient measured host/device headroom;
 - strict synthetic input allowlist and unique manifest;

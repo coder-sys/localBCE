@@ -230,11 +230,12 @@ complete-proof p95/resource campaign; H6 closes proof-candidate qualification. R
 and `docs/CURRENT_TECH_STACK.md` for current truth because these boundaries may advance while this
 ideology and persistence mandate remain in force.
 
-### Owner-approved exploratory GPU exception (2026-08-04)
+### Owner-authorized Brave-open H5 exception (2026-08-04, clarified 2026-08-04)
 
-Brave may remain open during exploratory or diagnostic GPU work at the owner's direction. Such runs
-must be labeled non-qualifying and may not receive H5 timing, resource, or driver-integrity credit.
-The H5 campaign still requires the exclusive-host boundary, no pagefile growth, bounded RSS/scratch,
-and zero post-launch NVIDIA/Display driver events for every credited launch. This exception prevents
-Brave from blocking safe development; it does not waive any fail-closed correctness, privacy,
-security, resource, or evidence gate.
+Brave may remain open during exploratory, diagnostic, and H5 GPU work at the owner's direction.
+The exclusive-host disqualification is removed: Brave being open is not itself a reason to reject
+or withhold H5 credit. A one-run exploratory result is still not the exact 22-launch campaign, but
+it is not non-qualifying merely because Brave is open. Every credited H5 launch must still satisfy
+the strict fresh-input, correctness, provenance, bounded RSS/scratch, no-pagefile-growth, empty
+stderr, cleanup, and zero post-launch NVIDIA/Display driver-event gates. This exception does not
+waive any fail-closed correctness, privacy, security, resource, or evidence requirement.

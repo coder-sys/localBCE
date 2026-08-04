@@ -52,8 +52,8 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
 | H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification, and complete conditioned simulator mechanics | H6 acceptance and final evidence identity |
-| H4 | CPU-integrated, GPU feasibility observed, qualification pending | The nineteen-claim typed state relation and linear square-free uniqueness proof are composed into the custom GKR/PCS/public-coin/parent/receipt boundary; fresh monitored native K128/K512 state-composed runs independently verified their atomic boundaries, with K512 below its 180-second latency limit | Complete K128 p95, complete K512 repeated p95, artifact leakage scan, reviewed PQ admission, sealed H4 parent binding, final suite identity |
-| Gate 2E | 2E-0/S0 through 2E-7/S7 plus state-composed terminal boundary implemented; no admission | Reference controls, state plane, full typed state relation, square-free uniqueness, masked GKR/PCS composition, three closed simulator records, canonical ops, and independent CPU replay | Run exclusive-host proof qualification, close leakage scan, admit reviewed backend, seal H4 binding and suite identity |
+| H4 | CPU-integrated, GPU feasibility observed, qualification pending | The nineteen-claim typed state relation and linear square-free uniqueness proof are composed into the custom GKR/PCS/public-coin/parent/receipt boundary; fresh monitored native K128/K512 state-composed runs independently verified their atomic boundaries, with one-run measurements of 29.974129 s for K128 and 120.460733 s for K512 | Complete K128 p95, complete K512 repeated p95, artifact leakage scan, reviewed PQ admission, sealed H4 parent binding, final suite identity |
+| Gate 2E | 2E-0/S0 through 2E-7/S7 plus state-composed terminal boundary implemented; no admission | Reference controls, state plane, full typed state relation, square-free uniqueness, masked GKR/PCS composition, three closed simulator records, canonical ops, and independent CPU replay | Run exact proof qualification, close leakage scan, admit reviewed backend, seal H4 binding and suite identity |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -397,14 +397,16 @@ and the remaining Gate 2E controls are still required.
 ## H5: repeated complete-proof qualification campaign
 
 Prerequisites: sealed clean 2E commit; canonical ops identity; locked/offline builds; execution
-manifest readback; clean driver-reset boundary; exclusive host; synthetic unique inputs; external
+manifest readback; clean driver-reset boundary; owner-authorized Brave-open operation; synthetic
+unique inputs; external
 process-tree, pagefile, device, scratch, stdout/stderr, and driver monitoring; all focused,
 mutation, parser, state, migration, attack, and independent-verifier gates green.
 
-Owner-approved operational exception: Brave may remain open for exploratory/diagnostic GPU runs,
-but those runs are explicitly non-qualifying and cannot satisfy any H5 timing, resource, or driver
-integrity record. Credited H5 launches retain the exclusive-host, no-pagefile-growth, bounded RSS/
-scratch, and zero post-launch driver-event requirements.
+Owner-authorized exception: Brave may remain open for exploratory, diagnostic, and H5 GPU runs.
+The exclusive-host disqualification is removed; Brave being open is not itself a failure and does
+not withhold H5 timing, resource, or driver-integrity credit. Credited H5 launches retain the
+no-pagefile-growth, bounded RSS/scratch, and zero post-launch driver-event requirements, along with
+fresh-input, correctness, provenance, cleanup, and empty-stderr checks.
 
 The fail-closed preflight is implemented in
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py`. It independently replays
@@ -412,7 +414,7 @@ the unsealed Gate 2E terminal ledger, validates the reference hardware record, v
 tracked `ops/` SHA3-512 authority inventory, and freezes the
 one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
 preflight is `BLOCKED_H5_PREFLIGHT` with digest
-`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693` is historical and must be refreshed before launch. Tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass. Full custom-H4 state composition and simulator mechanics are now CPU-verified; PQ admission, exclusive-host proof evidence, the artifact leakage scan, external monitor record, and the complete campaign remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
+`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693` is historical and must be refreshed before launch. Tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass. Full custom-H4 state composition and simulator mechanics are now CPU-verified; PQ admission, proof evidence, the artifact leakage scan, external monitor record, and the complete campaign remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
 
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |
