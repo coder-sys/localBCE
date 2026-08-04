@@ -64,6 +64,13 @@ FAILURE_POLICY: Final[dict[str, bool]] = {
     "substitution_allowed": False,
 }
 PROFILE_SPECS: Final[tuple[tuple[str, int, int, int, int], ...]] = (
+    ("K128_CALIBRATION", 128, 100, 28, 35_000_000_000),
+    ("K512_CALIBRATION", 512, 500, 12, 180_000_000_000),
+)
+# The checked-in synthetic vector predates the owner-approved K128 bound and
+# remains a historical consistency fixture.  It is never an admissible
+# campaign record; externally captured evidence uses PROFILE_SPECS above.
+_HISTORICAL_SYNTHETIC_PROFILE_SPECS: Final[tuple[tuple[str, int, int, int, int], ...]] = (
     ("K128_CALIBRATION", 128, 100, 28, 60_000_000_000),
     ("K512_CALIBRATION", 512, 500, 12, 180_000_000_000),
 )
@@ -749,7 +756,7 @@ def validate_synthetic_benchmark_fixture(
     profiles = _sequence(payload["profiles"], 2, "benchmark_profiles")
     batch_digests: list[str] = []
     p95_values: list[int] = []
-    for profile, spec in zip(profiles, PROFILE_SPECS, strict=True):
+    for profile, spec in zip(profiles, _HISTORICAL_SYNTHETIC_PROFILE_SPECS, strict=True):
         _, profile_batches, p95 = _validate_profile(profile, spec=spec, source=source, hardware=hardware)
         batch_digests.extend(profile_batches)
         p95_values.append(p95)
