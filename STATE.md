@@ -7062,3 +7062,29 @@ Tracked changes for this boundary are `experiments/bl_pq512_crypto_core/src/disk
 `experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`. Protected paths remain
 untouched. The next dependency is a genuinely compliant, exclusive-host H5 campaign; keeping
 Brave open is compatible with continued exploratory work but cannot close Wave 2.
+
+## 2026-08-04 Source-complete archive refresh - VERIFIED
+
+After the substantive Wave 2 resource and H6 corrections, the deterministic release builder was
+run from committed source `7b801b9a797c2292e338e3d7e2ebd3fd0d0f31eb` using the reviewed 779-file
+allowlist. The builder reported:
+
+```text
+archive_bytes=11300000
+archive_sha256=d8c0452fe1ef52cc189988bc6e1f49c5a10847d68fe5d0467b8afc8d7c6af409
+entry_count=780
+manifest_sha256=55821bfcfed96d7f56ca13f1920b7711ce0a76c3f260906468211efb0d4db5a1
+payload_bytes=11014003
+payload_file_count=779
+receipt_version=1
+```
+
+Independent ZIP readback of all three published copies returned `CRC=PASS`, `duplicates=0`,
+`payload_mismatches=0`, and `independent_identity=PASS` for each. The identical published identity
+is `size=11300000` and
+`sha3_512=45b1d0eb270ce2283a9b8b4e15fd7ecf1d420b73875a1d9bb555c09c6dd181f5a8b3fe326818e7d7da6e54265929e55e521857a1d943b34ca866801e3b6e788f`.
+The three targets were the Desktop, Desktop full-workspace, and Downloads paths named by the
+continuation prompt. Prior copies were preserved under the scratch backup directory
+`work/archive-v2-stage/previous-targets-20260804/`. The release allowlist was not expanded;
+`STATE.md` and newer tracked evidence files outside that reviewed allowlist remain excluded by
+design. This archive refresh does not change the H5/H6 qualification status.
