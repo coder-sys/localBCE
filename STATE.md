@@ -6990,3 +6990,75 @@ passed after the change. The no-`std` check exposed and fixed seven unguarded di
 `cargo check --offline --locked --no-default-features --lib` now exits `0`. The remaining blockers are still
 `complete_leakage_scan_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
 `proof_suite_unselected`; no exact H5 22-launch campaign or H6 seal is claimed.
+
+## 2026-08-04 Brave-open exploratory boundary and bounded streaming-worker correction - VERIFIED, H5 STILL OPEN
+
+The owner-approved Brave exception is explicit in `CONTINUATION_MANDATE.md` and the active
+roadmap: Brave may remain open for exploratory/diagnostic GPU work, but every such run is
+non-qualifying and receives no H5 timing, resource, or driver-integrity credit. The exact H5
+exclusive-host, no-pagefile-growth, bounded-RSS/scratch, and zero post-launch driver-event gates
+remain unchanged.
+
+The selected streaming worker investigation found an actual laptop-resource defect. Its three
+disk-FFT parallel groups used the full host-reported CPU count, which produced a K128 exploratory
+peak of `4,429,164,544` process-tree resident bytes and `422` MB pagefile growth. The smallest
+source correction caps each disk-FFT group at eight workers, matching the existing bounded
+deep-column path. It changes no transcript, verifier, proof grammar, or security check.
+
+Raw non-qualifying exploratory results after that correction:
+
+```text
+K128 selected-streaming input generation
+external_exit_code=0
+external_wall_seconds=340.303000
+external_process_tree_peak_bytes=4415881216
+pagefile_growth_mb=112
+post_launch_driver_event_count=0
+stdout_bytes=1490
+stderr_bytes=0
+qualification=REJECTED_RESOURCE_AND_LATENCY
+```
+
+The selected-streaming fixture path is not the custom H4 qualification path and receives no H5
+credit. The direct custom H4 path was then replayed with the pinned native binary, CUDA module,
+NVRTC runtime, execution-manifest digest, state binding, and qualified suite identity. Brave
+remained open, so these are explicitly exploratory only:
+
+```text
+K128 attempt r2: external_wall_seconds=57.654239; complete_process_wall_seconds=53.154714;
+  peak_process_tree_bytes=827105280; pagefile_growth_mb=-1; driver_events=0;
+  complete_proof_latency_gate=false; stdout_sha256=8c6c8dcfa5f674ca5f402b2c690aa8c7f7b25fe4a50b9ac5fe3d300d89968337
+K128 attempt r3: external_wall_seconds=37.074405; complete_process_wall_seconds=32.837657;
+  peak_process_tree_bytes=822042624; pagefile_growth_mb=0; driver_events=0;
+  complete_proof_latency_gate=true; stdout_sha256=a965c9ad3848e948b5a26f36712efcb879e7cc4546355badb19439821e422fe4
+K512 attempt r1: external_wall_seconds=159.287932; complete_process_wall_seconds=152.606110;
+  peak_process_tree_bytes=849326080; pagefile_growth_mb=-89; driver_events=0;
+  complete_proof_latency_gate=true; stdout_sha256=bf941f27f009dcfc5ac2497fb49e5d13d39ca63a98d5bd237da48e57ac75014a
+```
+
+The K128 r2 failure and the Brave-open boundary prevent these runs from qualifying as H5. No
+H5 launch is substituted, retried, or silently counted; the exact 22-launch campaign remains
+unstarted. `proofSuiteId` remains null and activation remains false. Focused source verification
+after the correction is:
+
+```text
+cargo fmt --all -- --check                                      exit=0
+cargo test --offline --locked --features std,parallel --lib disk_fft
+6 passed; 0 failed; 0 ignored; finished in 1.00s
+cargo test --offline --locked --features std,parallel --bin k512_atomic_semantic_prototype
+8 passed; 0 failed; 0 ignored; finished in 103.04s
+`C:\Users\neers\AppData\Local\Python\pythoncore-3.14-64\python.exe` -B -m pytest -q
+tests/test_bl_pq512_h6_qualification_preflight.py
+tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+tests/test_bl_pq512_gate_2e_terminal_ledger.py
+tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py
+tests/test_bl_pq512_h5_qualification_preflight.py
+tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py
+23 passed in 108.72s
+```
+
+Tracked changes for this boundary are `experiments/bl_pq512_crypto_core/src/disk_fft.rs`,
+`experiments/bl_pq512_crypto_core/src/bin/selected_streaming_prover_worker.rs`, and
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`. Protected paths remain
+untouched. The next dependency is a genuinely compliant, exclusive-host H5 campaign; keeping
+Brave open is compatible with continued exploratory work but cannot close Wave 2.

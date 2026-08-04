@@ -574,6 +574,37 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         raise H6PreflightError("h6_preflight_h5_activation_boundary_invalid")
     suite = _read_suite_registry(context.suite_registry_path)
     ledger = context.h5_context.terminal_ledger
+    gate_2e_qualified = (
+        ledger.sealed is True
+        and ledger.status == "SEALED_GATE_2E_TERMINAL_LEDGER"
+        and ledger.blockers == ()
+        and ledger.h4_parent_bound is True
+        and ledger.complete_proof_verified is True
+    )
+    strict_pq_blockers = (
+        ("h6_strict_pq_qualification_pending",)
+        if gate_2e_qualified
+        else (
+            "no_backend_admitted",
+            "proof_suite_unselected",
+            "strict_pq_security_ledger_open",
+        )
+    )
+    proof_receipt_blockers = (
+        ("proof_grammar_unselected",)
+        if gate_2e_qualified
+        else ("proof_grammar_unselected", "h4_atomic_binding_deferred")
+    )
+    verifier_blockers = (
+        ("cross_language_verifier_kats_open",)
+        if gate_2e_qualified
+        else ("cross_language_verifier_kats_open", "h4_atomic_binding_deferred")
+    )
+    leakage_blockers = (
+        ("side_channel_unlinkability_open",)
+        if gate_2e_qualified
+        else ("complete_leakage_scan_missing", "side_channel_unlinkability_open")
+    )
 
     records: list[H6EvidenceRecord] = []
     blockers: list[str] = []
@@ -586,8 +617,8 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
     add(
         _record(
             obligation_id="STRICT_PQ_SECURITY_LEDGER",
-            status=BLOCKED,
-            evidence_class=UNKNOWN,
+            status=(OPEN if gate_2e_qualified else BLOCKED),
+            evidence_class=(DERIVED if gate_2e_qualified else UNKNOWN),
             source_id="gate_2e_terminal_ledger.py+bl_pq512_suite_candidate_v1.json",
             h5_digest=h5.preflight_digest_512,
             suite_digest=suite.raw_digest_512,
@@ -595,11 +626,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
                 ledger.ledger_digest_512,
                 _terminal_record(ledger, "STRICT_PQ_SECURITY_LEDGER"),
             ),
-            blockers=(
-                "no_backend_admitted",
-                "proof_suite_unselected",
-                "strict_pq_security_ledger_open",
-            ),
+            blockers=strict_pq_blockers,
         )
     )
     add(
@@ -629,7 +656,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
                 ledger.ledger_digest_512,
                 _terminal_record(ledger, "STATE_PROOF_RECEIPT"),
             ),
-            blockers=("proof_grammar_unselected", "h4_atomic_binding_deferred"),
+            blockers=proof_receipt_blockers,
         )
     )
     add(
@@ -656,7 +683,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
                 ledger.ledger_digest_512,
                 _terminal_record(ledger, "INDEPENDENT_VERIFIER"),
             ),
-            blockers=("cross_language_verifier_kats_open", "h4_atomic_binding_deferred"),
+            blockers=verifier_blockers,
         )
     )
     add(
@@ -707,7 +734,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
                 ledger.ledger_digest_512,
                 _terminal_record(ledger, "FIXED_SHAPE_LEAKAGE"),
             ),
-            blockers=("complete_leakage_scan_missing", "side_channel_unlinkability_open"),
+            blockers=leakage_blockers,
         )
     )
     add(

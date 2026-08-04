@@ -493,6 +493,7 @@ fn apply_base_layer_common(
     {
         let thread_count = std::thread::available_parallelism()
             .map_or(1, core::num::NonZeroUsize::get)
+            .min(8)
             .min(block_count);
         if thread_count > 1 {
             let blocks_per_thread = block_count.div_ceil(thread_count);
@@ -682,6 +683,7 @@ fn apply_extension_layer(
     {
         let thread_count = std::thread::available_parallelism()
             .map_or(1, core::num::NonZeroUsize::get)
+            .min(8)
             .min(block_count);
         if thread_count > 1 {
             let blocks_per_thread = block_count.div_ceil(thread_count);
@@ -734,6 +736,7 @@ fn apply_extension_inverse_layer(
     {
         let thread_count = std::thread::available_parallelism()
             .map_or(1, core::num::NonZeroUsize::get)
+            .min(8)
             .min(block_count);
         if thread_count > 1 {
             let blocks_per_thread = block_count.div_ceil(thread_count);

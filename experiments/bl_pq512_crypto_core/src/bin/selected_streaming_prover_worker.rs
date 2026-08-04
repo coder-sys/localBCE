@@ -511,6 +511,13 @@ fn run() -> Result<(), String> {
     let encoded_proof = encode_fri_pipeline_proof_v2_with_attribution(&proof)
         .map_err(|error| format!("proof_encoding_{error:?}"))?;
     drop(proof);
+    let claims = fri.plan.claims.clone();
+    let final_constant = fri.final_constant;
+    drop(fri);
+    drop(composition);
+    drop(logup);
+    drop(main);
+    drop(execution);
     let proof_bytes = encoded_proof.bytes.len();
     let attribution = encoded_proof.attribution;
     let attribution_total = attribution
@@ -566,21 +573,22 @@ fn run() -> Result<(), String> {
         &bundle,
         &program,
         &public_inputs,
-        &fri.plan.claims,
-        fri.final_constant,
+        &claims,
+        final_constant,
     )
     .map_err(|error| format!("verify_{error:?}"))?
     {
         return Err("proof_rejected".into());
     }
+    drop(decoded_proof);
     let verify_ms = verify_started.elapsed().as_millis();
     if let Some(path) = proof_export_path.as_ref() {
         let package = encode_private_proof_package(
             &program,
             &public_inputs,
             &bundle_encoded,
-            &fri.plan.claims,
-            fri.final_constant,
+            &claims,
+            final_constant,
             &encoded_proof.bytes,
         )?;
         write_private_proof_package(path, &package)?;
