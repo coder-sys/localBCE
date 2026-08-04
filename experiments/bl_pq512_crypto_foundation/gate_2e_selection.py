@@ -43,6 +43,15 @@ from experiments.bl_pq512_crypto_foundation.scalar_state_relation_controls impor
 from experiments.bl_pq512_crypto_foundation.pq_signature_adapters import (
     is_exact_supported_adapter,
 )
+from experiments.bl_pq512_crypto_foundation.qualified_evidence import (
+    H4AtomicBindingEvidence,
+    LeakageScanEvidence,
+    PROFILE_IDS as QUALIFIED_PROFILE_IDS,
+    QUALIFIED_BACKEND_ID,
+    QualifiedEvidenceError,
+    qualified_admission_digest,
+    qualified_suite_id,
+)
 
 
 STATUS: Final[str] = "S6_S7_GATE_SELECTION_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
@@ -55,6 +64,9 @@ MEASUREMENT_LABEL: Final[str] = "MEASURED_REFERENCE_COMPONENT_NOT_COMPLETE_PROOF
 COMPLETE_BOUNDARY_STATUS: Final[str] = "NOT_RUN_NO_ELIGIBLE_FINALIST"
 SELECTION_STATUS: Final[str] = "C0_CONTROL_RETAINED_NO_ELIGIBLE_PQ_FINALIST"
 HANDOFF_STATUS: Final[str] = "UNSEALED_BLOCKED_SELECTION_HANDOFF"
+QUALIFIED_SELECTION_STATUS: Final[str] = "QUALIFIED_CANDIDATE_ADMITTED_NONACTIVATING"
+QUALIFIED_HANDOFF_STATUS: Final[str] = "SEALED_QUALIFIED_SELECTION_HANDOFF_NONACTIVATING"
+QUALIFIED_BOUNDARY_STATUS: Final[str] = "VERIFIED_COMPLETE_H4_BOUNDARY"
 PROFILE_IDS: Final[tuple[str, ...]] = tuple(PROFILE_CLAIM_SLOTS)
 MIN_REPETITIONS: Final[int] = 2
 MAX_REPETITIONS: Final[int] = 8
@@ -442,19 +454,46 @@ def _decision_digest(
     )
 
 
+def _qualified_decision_digest(
+    measurements: tuple[CandidateMeasurement, ...],
+    rejections: tuple[CandidateRejection, ...],
+    backend_id: str,
+    relation_id: str,
+    proof_suite_id: bytes,
+    h4_digest: bytes,
+    leakage_digest: bytes,
+    admission_digest: bytes,
+) -> bytes:
+    return _hash(
+        _DECISION_DOMAIN,
+        b"QUALIFIED_NONACTIVATING",
+        _text(backend_id, "backend_id"),
+        _text(relation_id, "relation_id"),
+        _bytes(proof_suite_id, "proof_suite_id", nonzero=True),
+        _bytes(h4_digest, "h4_digest", nonzero=True),
+        _bytes(leakage_digest, "leakage_digest", nonzero=True),
+        _bytes(admission_digest, "admission_digest", nonzero=True),
+        b"".join(item.measurement_digest_512 for item in measurements),
+        b"".join(item.rejection_digest_512 for item in rejections),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionDecision:
     measurements: tuple[CandidateMeasurement, ...]
     rejections: tuple[CandidateRejection, ...]
-    selected_backend_id: None = None
-    selected_relation_candidate_id: None = None
+    selected_backend_id: str | None = None
+    selected_relation_candidate_id: str | None = None
     fallback_control_id: str = C0_CONTROL_ID
     selection_status: str = SELECTION_STATUS
     warmup_status: str = COMPLETE_BOUNDARY_STATUS
     complete_boundary_status: str = COMPLETE_BOUNDARY_STATUS
-    proof_suite_id: None = None
+    proof_suite_id: bytes | None = None
     activation_allowed: bool = False
     decision_digest_512: bytes = b""
+    qualified_h4_evidence_digest_512: bytes | None = None
+    qualified_leakage_evidence_digest_512: bytes | None = None
+    qualified_admission_digest_512: bytes | None = None
 
     def __post_init__(self) -> None:
         _synthetic()
@@ -468,19 +507,61 @@ class SelectionDecision:
             raise SelectionEvidenceError("s7_rejection_order_invalid")
         if any(type(item) is not CandidateRejection for item in self.rejections):
             raise SelectionEvidenceError("s7_rejection_type_invalid")
-        if self.selected_backend_id is not None or self.selected_relation_candidate_id is not None:
-            raise SelectionEvidenceError("s7_selection_must_remain_unset")
+        qualified = self.selected_backend_id is not None or self.selected_relation_candidate_id is not None
+        if qualified:
+            if (
+                self.selected_backend_id != QUALIFIED_BACKEND_ID
+                or self.selected_relation_candidate_id != RELATION_CANDIDATE_ID
+                or self.selection_status != QUALIFIED_SELECTION_STATUS
+                or self.warmup_status != QUALIFIED_BOUNDARY_STATUS
+                or self.complete_boundary_status != QUALIFIED_BOUNDARY_STATUS
+                or type(self.proof_suite_id) is not bytes
+                or len(self.proof_suite_id) != 64
+                or not any(self.proof_suite_id)
+                or type(self.qualified_h4_evidence_digest_512) is not bytes
+                or len(self.qualified_h4_evidence_digest_512) != 64
+                or not any(self.qualified_h4_evidence_digest_512)
+                or type(self.qualified_leakage_evidence_digest_512) is not bytes
+                or len(self.qualified_leakage_evidence_digest_512) != 64
+                or not any(self.qualified_leakage_evidence_digest_512)
+                or type(self.qualified_admission_digest_512) is not bytes
+                or len(self.qualified_admission_digest_512) != 64
+                or not any(self.qualified_admission_digest_512)
+            ):
+                raise SelectionEvidenceError("s7_qualified_selection_evidence_invalid")
+            expected = _qualified_decision_digest(
+                self.measurements,
+                self.rejections,
+                self.selected_backend_id,
+                self.selected_relation_candidate_id,
+                self.proof_suite_id,
+                self.qualified_h4_evidence_digest_512,
+                self.qualified_leakage_evidence_digest_512,
+                self.qualified_admission_digest_512,
+            )
+        else:
+            if self.selected_backend_id is not None or self.selected_relation_candidate_id is not None:
+                raise SelectionEvidenceError("s7_selection_must_remain_unset")
+            if any(
+                value is not None
+                for value in (
+                    self.qualified_h4_evidence_digest_512,
+                    self.qualified_leakage_evidence_digest_512,
+                    self.qualified_admission_digest_512,
+                )
+            ):
+                raise SelectionEvidenceError("s7_qualified_evidence_without_selection")
+            expected = _decision_digest(self.measurements, self.rejections, self.selection_status)
         if self.fallback_control_id != C0_CONTROL_ID:
             raise SelectionEvidenceError("s7_fallback_control_invalid")
-        if self.selection_status != SELECTION_STATUS:
+        if not qualified and self.selection_status != SELECTION_STATUS:
             raise SelectionEvidenceError("s7_selection_status_invalid")
-        if self.warmup_status != COMPLETE_BOUNDARY_STATUS:
+        if not qualified and self.warmup_status != COMPLETE_BOUNDARY_STATUS:
             raise SelectionEvidenceError("s7_warmup_status_invalid")
-        if self.complete_boundary_status != COMPLETE_BOUNDARY_STATUS:
+        if not qualified and self.complete_boundary_status != COMPLETE_BOUNDARY_STATUS:
             raise SelectionEvidenceError("s7_complete_status_invalid")
-        if self.proof_suite_id is not None or self.activation_allowed is not False:
+        if self.activation_allowed is not False:
             raise SelectionEvidenceError("s7_activation_fields_must_remain_closed")
-        expected = _decision_digest(self.measurements, self.rejections, self.selection_status)
         if self.decision_digest_512 not in (b"", expected):
             raise SelectionEvidenceError("s7_decision_digest_mismatch")
         object.__setattr__(self, "decision_digest_512", expected)
@@ -498,6 +579,15 @@ class SelectionDecision:
             "complete_boundary_status": self.complete_boundary_status,
             "proofSuiteId": self.proof_suite_id,
             "activation_allowed": self.activation_allowed,
+            "qualified_h4_evidence_digest_sha3_512_hex": (
+                None if self.qualified_h4_evidence_digest_512 is None else self.qualified_h4_evidence_digest_512.hex()
+            ),
+            "qualified_leakage_evidence_digest_sha3_512_hex": (
+                None if self.qualified_leakage_evidence_digest_512 is None else self.qualified_leakage_evidence_digest_512.hex()
+            ),
+            "qualified_admission_digest_sha3_512_hex": (
+                None if self.qualified_admission_digest_512 is None else self.qualified_admission_digest_512.hex()
+            ),
             "decision_digest_sha3_512_hex": self.decision_digest_512.hex(),
         }
 
@@ -552,6 +642,60 @@ def select_reference_candidates(
     return SelectionDecision(ordered_measurements, rejections)
 
 
+def admit_qualified_candidate(
+    decision: SelectionDecision,
+    h4_evidence: H4AtomicBindingEvidence,
+    leakage_evidence: LeakageScanEvidence,
+) -> SelectionDecision:
+    """Admit only the SHAKE candidate after actual H4/leakage evidence."""
+
+    _synthetic()
+    if type(decision) is not SelectionDecision:
+        raise SelectionEvidenceError("s7_decision_type_invalid")
+    if decision.selected_backend_id is not None:
+        raise SelectionEvidenceError("s7_candidate_already_selected")
+    if type(h4_evidence) is not H4AtomicBindingEvidence or type(leakage_evidence) is not LeakageScanEvidence:
+        raise SelectionEvidenceError("s7_qualified_evidence_type_invalid")
+    if h4_evidence.backend_id != QUALIFIED_BACKEND_ID:
+        raise SelectionEvidenceError("s7_qualified_backend_invalid")
+    runs_by_profile: dict[str, H4AtomicBindingEvidence] = {}
+    component_ids: dict[str, bytes] = {}
+    for run in h4_evidence.runs:
+        if run.profile_id not in runs_by_profile:
+            runs_by_profile[run.profile_id] = h4_evidence
+            component_ids[run.profile_id] = run.component_proof_suite_id_512
+    if tuple(sorted(component_ids)) != QUALIFIED_PROFILE_IDS:
+        raise SelectionEvidenceError("s7_qualified_profile_evidence_incomplete")
+    try:
+        expected_suite = qualified_suite_id(component_ids)
+        admission_digest = qualified_admission_digest(
+            h4=h4_evidence,
+            leakage=leakage_evidence,
+        )
+    except QualifiedEvidenceError as exc:
+        raise SelectionEvidenceError("s7_qualified_evidence_replay_failed") from exc
+    if expected_suite != h4_evidence.qualified_proof_suite_id_512:
+        raise SelectionEvidenceError("s7_qualified_suite_identity_mismatch")
+    screen = screen_backend(QUALIFIED_BACKEND_ID)
+    if screen.rejection_reasons != ("complete_composition_missing",):
+        raise SelectionEvidenceError("s7_qualified_backend_screen_changed")
+    return SelectionDecision(
+        decision.measurements,
+        decision.rejections,
+        selected_backend_id=QUALIFIED_BACKEND_ID,
+        selected_relation_candidate_id=RELATION_CANDIDATE_ID,
+        fallback_control_id=decision.fallback_control_id,
+        selection_status=QUALIFIED_SELECTION_STATUS,
+        warmup_status=QUALIFIED_BOUNDARY_STATUS,
+        complete_boundary_status=QUALIFIED_BOUNDARY_STATUS,
+        proof_suite_id=h4_evidence.qualified_proof_suite_id_512,
+        activation_allowed=False,
+        qualified_h4_evidence_digest_512=h4_evidence.evidence_digest_512,
+        qualified_leakage_evidence_digest_512=leakage_evidence.scan_digest_512,
+        qualified_admission_digest_512=admission_digest,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionHandoff:
     decision_digest_512: bytes
@@ -572,9 +716,15 @@ class SelectionHandoff:
             encoded = _text(value, label, 64)
             if len(encoded) not in {40, 64} or any(char not in b"0123456789abcdefABCDEF" for char in encoded):
                 raise SelectionEvidenceError(f"s7_{label}_hex_invalid")
-        if type(self.blockers) is not tuple or not self.blockers:
+        if type(self.blockers) is not tuple:
+            raise SelectionEvidenceError("s7_handoff_blockers_type_invalid")
+        qualified = self.status == QUALIFIED_HANDOFF_STATUS and self.sealed is True
+        if qualified:
+            if self.blockers:
+                raise SelectionEvidenceError("s7_qualified_handoff_blockers_present")
+        elif type(self.blockers) is not tuple or not self.blockers:
             raise SelectionEvidenceError("s7_handoff_blockers_required")
-        if self.status != HANDOFF_STATUS or self.sealed is not False:
+        if not qualified and (self.status != HANDOFF_STATUS or self.sealed is not False):
             raise SelectionEvidenceError("s7_handoff_must_remain_unsealed")
         expected = _hash(
             _HANDOFF_DOMAIN,
@@ -616,6 +766,22 @@ def build_selection_handoff(
     _synthetic()
     if type(decision) is not SelectionDecision:
         raise SelectionEvidenceError("s7_decision_type_invalid")
+    if decision.selected_backend_id is not None:
+        if decision.selection_status != QUALIFIED_SELECTION_STATUS or decision.proof_suite_id is None:
+            raise SelectionEvidenceError("s7_qualified_decision_not_sealed")
+        if not git_clean or not protected_paths_clean or not canonical_ops_available:
+            raise SelectionEvidenceError("s7_qualified_handoff_prerequisites_open")
+        return SelectionHandoff(
+            decision.decision_digest_512,
+            commit_id,
+            tree_id,
+            git_clean,
+            protected_paths_clean,
+            canonical_ops_available,
+            (),
+            QUALIFIED_HANDOFF_STATUS,
+            True,
+        )
     blockers = [
         "no_backend_admitted",
         "complete_boundary_not_authorized",
@@ -643,6 +809,9 @@ __all__ = (
     "C0_CONTROL_ID",
     "COMPLETE_BOUNDARY_STATUS",
     "HANDOFF_STATUS",
+    "QUALIFIED_BOUNDARY_STATUS",
+    "QUALIFIED_HANDOFF_STATUS",
+    "QUALIFIED_SELECTION_STATUS",
     "MEASUREMENT_LABEL",
     "PROOF_SUITE_ID",
     "REFERENCE_BOUNDARY",
@@ -653,6 +822,7 @@ __all__ = (
     "SelectionDecision",
     "SelectionEvidenceError",
     "SelectionHandoff",
+    "admit_qualified_candidate",
     "build_selection_handoff",
     "measure_all_reference_components",
     "measure_reference_candidate",

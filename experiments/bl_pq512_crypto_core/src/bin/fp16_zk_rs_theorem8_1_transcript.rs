@@ -104,7 +104,10 @@ fn gkr_claims_digest(claims: &[PackedComponentClaim]) -> [u8; 64] {
     }
     hash_parts(
         GKR_BINDING_DOMAIN,
-        &[b"BL/PQ512/FP16-ZK-RS/GKR-COMPONENT-CLAIMS/v2\0", &payload],
+        &[
+            b"BL/PQ512/FP16-ZK-RS/GKR-MIXED-CLAIMS/HASH-PACKED-STATE-DIRECT/v3\0",
+            &payload,
+        ],
     )
 }
 
@@ -117,7 +120,7 @@ fn gkr_binding_digest(
     hash_parts(
         GKR_BINDING_DOMAIN + 1,
         &[
-            b"BL/PQ512/FP16-ZK-RS/ROW-BATCHED-BINDING/v2\0",
+            b"BL/PQ512/FP16-ZK-RS/ROW-BATCHED-BINDING/MIXED-v3\0",
             claims_digest,
             &claim_challenge.encode(),
             &coordinate_challenge.encode(),

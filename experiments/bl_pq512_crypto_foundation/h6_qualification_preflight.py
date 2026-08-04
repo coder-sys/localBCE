@@ -605,16 +605,16 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
     add(
         _record(
             obligation_id="COMPLETE_SIMULATOR",
-            status=BLOCKED,
-            evidence_class=UNKNOWN,
-            source_id="gate_2e_terminal_ledger.py+circle_hiding_simulator.py",
+            status=REFERENCE_ONLY,
+            evidence_class=DERIVED,
+            source_id="gate_2e_terminal_ledger.py+fp16_zk_rs_hiding_simulator_kat.py",
             h5_digest=h5.preflight_digest_512,
             suite_digest=suite.raw_digest_512,
             evidence_parts=(
                 ledger.ledger_digest_512,
                 _terminal_record(ledger, "SEMANTIC_STATE_SIMULATOR"),
             ),
-            blockers=("complete_simulator_missing",),
+            blockers=("h6_simulator_qualification_pending",),
         )
     )
     add(

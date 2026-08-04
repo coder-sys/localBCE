@@ -92,6 +92,21 @@ class TransparentHashCodeCommitment:
 
         return sha3_512(self.canonical_bytes).digest()
 
+    @property
+    def commitment_digest_512(self) -> bytes:
+        """Common state-plane identity used by the atomic receipt."""
+
+        return self.identity_512
+
+    def as_public_dict(self) -> dict[str, object]:
+        return {
+            "status": STATUS,
+            "parameter_identity": PARAMETER_IDENTITY,
+            "attempt_id_sha3_512_hex": self.attempt_id.hex(),
+            "commitment_sha3_1024_hex": self.commitment.hex(),
+            "commitment_identity_sha3_512_hex": self.identity_512.hex(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class TransparentHashCodeOpening:
@@ -107,6 +122,14 @@ class TransparentHashCodeOpening:
     @property
     def canonical_bytes(self) -> bytes:
         return b"".join((_part(self.attempt_id), _part(self.statement), _part(self.mask)))
+
+    @property
+    def statement_digest_512(self) -> bytes:
+        return self.statement
+
+    @property
+    def mask_512(self) -> bytes:
+        return self.mask
 
 
 def commit(

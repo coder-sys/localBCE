@@ -24,7 +24,7 @@ MAIN_LOG = 17
 MAIN_DIMENSION = 67_584
 AUXILIARY_LOG = 13
 AUXILIARY_DIMENSION = 3_266
-AUXILIARY_WORDS = 73
+AUXILIARY_WORDS = 74
 SUMCHECK_WORDS = 9
 GKR_MASK_WORDS = 64
 MAIN_QUERIES = tuple(range(1_600))
@@ -38,6 +38,38 @@ COORDINATE_CHALLENGE = binding_kat.fp16_value(29_003, 7)
 ZERO = binding_kat.ZERO
 ONE = binding_kat.ONE
 MAIN_SCALE = binding_kat.fp16_value(7, 2)
+SQUAREFREE_CAPACITY = 128
+SQUAREFREE_VALUES = tuple(
+    binding_kat.fp16_value(value)
+    for value in (2, 5)
+)
+SQUAREFREE_MIXING = tuple(
+    binding_kat.fp16_value(value)
+    for value in (11, 17)
+)
+
+
+def squarefree_binding_payload():
+    encoded = bytearray(b"BLSQAB01")
+    encoded.extend(struct.pack(">HHI", SQUAREFREE_CAPACITY, 2, 0))
+    for phase, value in enumerate(SQUAREFREE_VALUES):
+        encoded.extend(struct.pack(">H", 11))
+        encoded.extend(b"\0" * 6)
+        encoded.extend(binding_kat.encode_fp16(ZERO) * 10)
+        encoded.extend(
+            binding_kat.encode_fp16(ONE if phase else ZERO)
+        )
+        encoded.extend(binding_kat.encode_fp16(value))
+    for value in SQUAREFREE_MIXING:
+        encoded.extend(binding_kat.encode_fp16(value))
+    return bytes(encoded)
+
+
+def squarefree_target():
+    result = ZERO
+    for value, mixing in zip(SQUAREFREE_VALUES, SQUAREFREE_MIXING):
+        result = add(result, mul16(value, mixing))
+    return result
 
 
 def equality_weight(index, point):
@@ -138,6 +170,7 @@ def payload(
     for terminal in gkr_relation_terminals:
         encoded.extend(binding_kat.encode_fp16(terminal))
     encoded.extend(binding_kat.encode_fp16(main_scale))
+    encoded.extend(squarefree_binding_payload())
     encoded.extend(binding_kat.encode_fp16(expected_target))
     encoded.extend(
         coefficient_payload(answer_value, gkr_mask_answer_value)
@@ -157,6 +190,14 @@ def coefficient_payload(answer_value, gkr_mask_answer_value):
     auxiliary[
         gkr_offset : gkr_offset + core.FP16_BYTES
     ] = binding_kat.encode_fp16(gkr_mask_answer_value)
+    squarefree_offset = (
+        SUMCHECK_WORDS + GKR_MASK_WORDS
+    ) * AUXILIARY_DIMENSION * core.FP16_BYTES
+    for table, value in zip((0, 2), SQUAREFREE_VALUES):
+        offset = squarefree_offset + table * 512 * core.FP16_BYTES
+        auxiliary[offset : offset + core.FP16_BYTES] = (
+            binding_kat.encode_fp16(value)
+        )
     encoded.extend(auxiliary)
     return bytes(encoded)
 
@@ -178,6 +219,7 @@ def target_payload(
     for terminal in gkr_relation_terminals:
         encoded.extend(binding_kat.encode_fp16(terminal))
     encoded.extend(binding_kat.encode_fp16(main_scale))
+    encoded.extend(squarefree_binding_payload())
     encoded.extend(
         coefficient_payload(answer_value, gkr_mask_answer_value)
     )
@@ -214,7 +256,15 @@ def parse_output(encoded):
         expected_auxiliary[
             offset : offset + core.FP16_BYTES
         ] = binding_kat.encode_fp16(ONE)
-    if encoded[main_end:] != expected_auxiliary:
+    actual_auxiliary = bytearray(encoded[main_end:])
+    for query in range(len(AUXILIARY_QUERIES)):
+        offset = (
+            query * AUXILIARY_WORDS
+            + SUMCHECK_WORDS
+            + GKR_MASK_WORDS
+        ) * core.FP16_BYTES
+        actual_auxiliary[offset : offset + core.FP16_BYTES] = b"\0" * core.FP16_BYTES
+    if actual_auxiliary != expected_auxiliary:
         raise SystemExit("auxiliary_opening_mismatch")
     return (
         struct.unpack(">d", encoded[8:16])[0],
@@ -307,9 +357,12 @@ def main():
         GKR_MASK_WORDS - 1
     )
     gkr_mask_target = equality_weight(0, WORD_CHALLENGES)
-    target = mul16(
-        add(unscaled_target, gkr_mask_target),
-        MAIN_SCALE,
+    target = add(
+        mul16(
+            add(unscaled_target, gkr_mask_target),
+            MAIN_SCALE,
+        ),
+        squarefree_target(),
     )
     correct = payload(
         claims,
@@ -432,7 +485,7 @@ def main():
         False,
     )
 
-    print("kat=fp16_zk_rs_answer_target_verify_v4")
+    print("kat=fp16_zk_rs_answer_target_verify_v5")
     print("evidence_class=production_geometry_independent_target")
     print(f"input_payload_mb={len(correct) / 1_000_000:.6f}")
     print(f"wall_seconds={wall_seconds:.6f}")
@@ -452,6 +505,8 @@ def main():
     print("gkr_point_mutation_rejected=true")
     print("gkr_relation_terminal_mutation_rejected=true")
     print("gkr_mask_answer_mutation_rejected=true")
+    print("state_squarefree_answer_binding_verified=true")
+    print("state_squarefree_auxiliary_word_nonzero=true")
     print("complete_pcs_qualification=false")
 
 

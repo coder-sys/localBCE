@@ -64,7 +64,7 @@ def main():
         reject(
             interleaved,
             b"BLZKRSV1" + struct.pack(">I", segment_count),
-            b"ERR:segment_count:expected=20|36",
+            b"ERR:segment_count:expected=21|37",
             f"interleaved_segments_{segment_count}",
         )
 

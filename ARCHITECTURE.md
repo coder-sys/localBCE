@@ -16,9 +16,9 @@ The current execution checkpoint is the newest dated section of `STATE.md`; the 
 boundary remains `WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 is an untrusted field-arithmetic
 accelerator, while Rust retains authoritative SHA3-512 commitment, transcript, canonical decoding,
 multiproof, answer-code, target, public-coin replay, and verification duties. The real 168-layer
-masked GKR producer, native masks, Construction 8.2 PCS, and exact 6,086-round state-free
-same-chain coordinator now pass as one manifest-bound semantic prototype. The state-composed
-coordinator has a fixed seven-claim, 6,111-round transcript shape, but has not received a new
+masked GKR producer, native masks, Construction 8.2 PCS, and authenticated same-chain coordinator
+now pass as one manifest-bound semantic prototype. The state-composed coordinator has a fixed
+nineteen-claim shape with exact 6,727/6,995 K128/K512 schedules, but has not received a new
 manifest-bound K128/K512 qualification run. Under the verified
 `2026-07-31T05:06:01.7747420-06:00` driver-reset boundary, fresh K128 and four-shard K512 proofs
 completed through independent verification in 29.974129 and 120.460733 seconds. Both accepted
@@ -126,18 +126,18 @@ implementation priority, not an activated suite. Hash replacement, field changes
 decomposition, or batched-nullifier semantic changes remain new trust roots rather than routine
 performance patches.
 
-The current nonactivating sub-30-second K128 implementation is section 8.3 of
+The current nonactivating sub-35-second K128 implementation is section 8.3 of
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`: a bounded CPU/SIMD semantic-AIR lane runs
-concurrently with the exact seven-layer/B=16 Fp16 GPU hash lane. The state-free proof has one output
-and four relay-free hash input claims. The state-composed shape adds two state claims to the same
-Construction 8.2 random-padded interleaved Reed--Solomon PCS through the fixed seven-claim row
+concurrently with the exact seven-layer/B=16 Fp16 GPU hash lane. The hash proof has one output
+and four relay-free input claims. The state-composed shape adds two relation and twelve square-free
+state claims to the same Construction 8.2 random-padded interleaved Reed--Solomon PCS through the fixed nineteen-claim row
 binding, one authenticated public coin, and one atomic verifier join. The joined row state is
 7.864320 MB for the five-claim component/source/relation plane plus 4.194304 MB for the GKR-mask
 row plane, 12.058624 MB total, and is extracted from live commitment tiles without a second full
-source replay. The state-free real producer, native mask, 73-word auxiliary plane, exact 6,086-round
-coordinator, PCS openings, and independent verifier now pass together. The state-composed shape adds
-25 authenticated state-relation rounds and reaches 6,111 rounds, but its complete state semantics
-and performance remain open. The final fresh state-free proof
+source replay. The real producer, native mask, 73-word auxiliary plane, 6,113-round fixed prelude,
+PCS openings, and independent verifier pass together. State composition adds 614/882 square-free
+rounds and reaches 6,727/6,995 for K128/K512. CPU integration and conditioned simulator mechanics
+pass, but exclusive-host proof and leakage performance remain open. The final fresh state-free proof
 measured 29.974129 seconds for K128 and 120.460733 seconds for four-shard K512 inside the atomic
 coordinator. `complete_proof_qualification=false` remains correct until the H5 campaign and H6
 qualification gates close.

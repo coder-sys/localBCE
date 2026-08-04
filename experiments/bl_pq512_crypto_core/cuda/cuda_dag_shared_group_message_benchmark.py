@@ -428,8 +428,8 @@ extern "C" __global__ void packed_b8_two_group_fold(
 }
 
 extern "C" __global__ void packed_b16_group_message(
-    const unsigned long long *left_packed,
-    const unsigned long long *right_packed,
+    const unsigned short *left_packed,
+    const unsigned short *right_packed,
     const unsigned int *lookup,
     const unsigned int *base_left,
     const unsigned int *base_right,
@@ -455,23 +455,18 @@ extern "C" __global__ void packed_b16_group_message(
         unsigned int suffix = (unsigned int)(index / raw_width);
         unsigned int output =
             (unsigned int)(index - (unsigned long long)suffix * raw_width);
-        unsigned int first_instance = 32U * suffix;
-        unsigned int shift = first_instance & 63U;
-        unsigned int word = first_instance >> 6;
-        unsigned long long left_bits = left_packed[
-            (unsigned long long)base_left[output] * words_per_plane + word
-        ];
-        unsigned long long right_bits = right_packed[
-            (unsigned long long)base_right[output] * words_per_plane + word
-        ];
+        unsigned int packed_groups = words_per_plane * 4U;
+        unsigned int first_group = 2U * suffix;
+        unsigned int left_base = base_left[output] * packed_groups;
+        unsigned int right_base = base_right[output] * packed_groups;
         unsigned int left_zero_pattern =
-            (unsigned int)((left_bits >> shift) & 65535ULL);
+            left_packed[left_base + first_group];
         unsigned int left_one_pattern =
-            (unsigned int)((left_bits >> (shift + 16U)) & 65535ULL);
+            left_packed[left_base + first_group + 1U];
         unsigned int right_zero_pattern =
-            (unsigned int)((right_bits >> shift) & 65535ULL);
+            right_packed[right_base + first_group];
         unsigned int right_one_pattern =
-            (unsigned int)((right_bits >> (shift + 16U)) & 65535ULL);
+            right_packed[right_base + first_group + 1U];
         Cubic term = term_cubic(
             l16(lookup + 16ULL * left_zero_pattern),
             l16(lookup + 16ULL * left_one_pattern),
@@ -496,8 +491,8 @@ extern "C" __global__ void packed_b16_group_message(
 }
 
 extern "C" __global__ void packed_b16_group_message_factored_one_claim(
-    const unsigned long long *left_packed,
-    const unsigned long long *right_packed,
+    const unsigned short *left_packed,
+    const unsigned short *right_packed,
     const unsigned int *lookup,
     const unsigned int *base_left,
     const unsigned int *base_right,
@@ -507,36 +502,33 @@ extern "C" __global__ void packed_b16_group_message_factored_one_claim(
     const unsigned int *group_delta_weights,
     unsigned int *partial,
     unsigned int raw_width,
-    unsigned int suffix_groups,
+    unsigned int tile_suffix_groups,
+    unsigned int suffix_offset,
     unsigned int words_per_plane,
     unsigned int max_suffix
 ) {
-    unsigned int suffix = blockIdx.x;
-    if (suffix >= suffix_groups) return;
+    unsigned int local_suffix = blockIdx.x;
+    if (local_suffix >= tile_suffix_groups) return;
+    unsigned int suffix = suffix_offset + local_suffix;
     F16 aggregate0 = z16();
     F16 aggregate1 = z16();
     F16 aggregate2 = z16();
-    unsigned int first_instance = 32U * suffix;
-    unsigned int shift = first_instance & 63U;
-    unsigned int word = first_instance >> 6;
+    unsigned int packed_groups = words_per_plane * 4U;
+    unsigned int first_group = 2U * suffix;
     for (unsigned int output = threadIdx.x; output < raw_width; output += blockDim.x) {
-        unsigned long long left_bits = left_packed[
-            (unsigned long long)base_left[output] * words_per_plane + word
-        ];
-        unsigned long long right_bits = right_packed[
-            (unsigned long long)base_right[output] * words_per_plane + word
-        ];
+        unsigned int left_base = base_left[output] * packed_groups;
+        unsigned int right_base = base_right[output] * packed_groups;
         F16 left_zero = l16(
-            lookup + 16ULL * ((left_bits >> shift) & 65535ULL)
+            lookup + 16ULL * left_packed[left_base + first_group]
         );
         F16 left_one = l16(
-            lookup + 16ULL * ((left_bits >> (shift + 16U)) & 65535ULL)
+            lookup + 16ULL * left_packed[left_base + first_group + 1U]
         );
         F16 right_zero = l16(
-            lookup + 16ULL * ((right_bits >> shift) & 65535ULL)
+            lookup + 16ULL * right_packed[right_base + first_group]
         );
         F16 right_one = l16(
-            lookup + 16ULL * ((right_bits >> (shift + 16U)) & 65535ULL)
+            lookup + 16ULL * right_packed[right_base + first_group + 1U]
         );
         F16 left_delta = s16(left_one, left_zero);
         F16 right_delta = s16(right_one, right_zero);
@@ -919,7 +911,6 @@ def launch_packed_message(
 def launch_b16_packed_message(
     runtime,
     message_function,
-    factored_one_claim_function,
     reduce_function,
     left_packed,
     right_packed,
@@ -936,9 +927,9 @@ def launch_b16_packed_message(
     suffix_groups,
     words_per_plane,
     claim_count,
+    factored_one_claim_function=None,
 ):
-    terms = raw_width * suffix_groups
-    if claim_count == 1:
+    if claim_count == 1 and factored_one_claim_function is not None:
         arguments = kernel_arguments(
             ctypes.c_uint64(left_packed),
             ctypes.c_uint64(right_packed),
@@ -952,6 +943,7 @@ def launch_b16_packed_message(
             ctypes.c_uint64(partial),
             ctypes.c_uint32(raw_width),
             ctypes.c_uint32(suffix_groups),
+            ctypes.c_uint32(0),
             ctypes.c_uint32(words_per_plane),
             ctypes.c_uint32(MAX_SUFFIX),
         )
@@ -971,9 +963,11 @@ def launch_b16_packed_message(
             ),
             "packed_b16_group_message_factored_one_claim",
         )
-        return reduce_partials(
+        result = reduce_partials(
             runtime, reduce_function, partial, scratch, suffix_groups
         )
+        return result
+    terms = raw_width * suffix_groups
     blocks = (terms + THREADS * TERMS_PER_THREAD - 1) // (
         THREADS * TERMS_PER_THREAD
     )
@@ -1011,7 +1005,8 @@ def launch_b16_packed_message(
         ),
         "packed_b16_group_message",
     )
-    return reduce_partials(runtime, reduce_function, partial, scratch, blocks)
+    result = reduce_partials(runtime, reduce_function, partial, scratch, blocks)
+    return result
 
 
 def launch_b8_second_packed_message(
@@ -1393,9 +1388,6 @@ def main():
         )
         b16_fold_function = function(runtime, "packed_b16_first_group_fold")
         b16_message_function = function(runtime, "packed_b16_group_message")
-        b16_factored_one_claim_function = function(
-            runtime, "packed_b16_group_message_factored_one_claim"
-        )
         fp16_message_function = function(runtime, "fp16_group_message")
         factored_one_claim_function = function(
             runtime, "fp16_group_message_factored_one_claim"
@@ -1685,7 +1677,6 @@ def main():
             kat_message_d = launch_b16_packed_message(
                 runtime,
                 b16_message_function,
-                b16_factored_one_claim_function,
                 reduce_function,
                 left_packed_d,
                 right_packed_d,
@@ -1913,7 +1904,6 @@ def main():
                     final_message = launch_b16_packed_message(
                         runtime,
                         b16_message_function,
-                        b16_factored_one_claim_function,
                         reduce_function,
                         left_packed_d,
                         layer_right_packed_d,

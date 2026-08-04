@@ -101,20 +101,21 @@ def context(authority_material):
     )
 
 
-def test_h6_preflight_records_all_obligations_without_closing_any(context) -> None:
+def test_h6_preflight_records_all_obligations_with_simulator_reference(context) -> None:
     preflight = build_h6_preflight(context)
     assert isinstance(preflight, H6Preflight)
     assert preflight.status == PREFLIGHT_BLOCKED
     assert tuple(record.obligation_id for record in preflight.records) == H6_OBLIGATION_IDS
     assert all(record.status != "CLOSED" for record in preflight.records)
+    assert preflight.records[1].status == "REFERENCE_ONLY"
     assert sum(record.status == BLOCKED for record in preflight.records) >= 4
     assert preflight.h5_fresh_launch_count == 22
     assert preflight.suite_registry_module_count == 8
     assert {
         "no_backend_admitted",
         "proof_suite_unselected",
-        "complete_simulator_missing",
         "complete_leakage_scan_missing",
+        "h6_simulator_qualification_pending",
         "h5_campaign_not_started",
         "h6_no_qualified_evidence",
     } <= set(preflight.blockers)

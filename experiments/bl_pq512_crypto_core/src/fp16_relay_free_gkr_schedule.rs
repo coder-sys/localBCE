@@ -33,16 +33,32 @@ pub const GKR_TRANSCRIPT_ROUNDS: u32 = GKR_OUTPUT_QUERY_ROUNDS
 pub const GKR_MASK_BATCH_ROUNDS: u32 = 1;
 pub const GKR_ROUNDS: u32 = GKR_TRANSCRIPT_ROUNDS + GKR_MASK_BATCH_ROUNDS;
 
-/// The combined schedule reuses the last GKR challenge for the H4 claim
-/// batching. The state relation then consumes one output-query response and
-/// twenty-four authenticated public-coin sumcheck responses before the
-/// downstream PCS coordinate/source/mask, row, base, and query rounds.
-pub const STATE_RELATION_ROUNDS: u32 = 25;
+/// The state-relation bridge consumes one output-query response and
+/// twenty-four authenticated public-coin sumcheck responses. The production
+/// state-composed schedule then proves square-freeness of both fixed-capacity
+/// snapshots before the downstream PCS coordinate/source/mask, row, base, and
+/// query rounds.
+pub const STATE_RELATION_ROUNDS: u32 = 26;
+pub const STATE_SQUAREFREE_K128_ROUNDS: u32 = 614;
+pub const STATE_SQUAREFREE_K512_ROUNDS: u32 = 882;
 pub const PCS_DOWNSTREAM_ROUNDS: u32 = 13;
-pub const COMBINED_ROUNDS: u32 = GKR_ROUNDS + STATE_RELATION_ROUNDS + PCS_DOWNSTREAM_ROUNDS;
+pub const STATE_MASK_BATCH_ROUNDS: u32 = 1;
+/// Historical partial state-relation bridge. This is not the complete
+/// state-composed production schedule.
+pub const STATE_RELATION_COMBINED_ROUNDS: u32 =
+    GKR_ROUNDS + STATE_RELATION_ROUNDS + STATE_MASK_BATCH_ROUNDS + PCS_DOWNSTREAM_ROUNDS;
+pub const STATE_COMPOSED_K128_ROUNDS: u32 =
+    STATE_RELATION_COMBINED_ROUNDS + STATE_SQUAREFREE_K128_ROUNDS;
+pub const STATE_COMPOSED_K512_ROUNDS: u32 =
+    STATE_RELATION_COMBINED_ROUNDS + STATE_SQUAREFREE_K512_ROUNDS;
+/// Kept as the partial bridge identity for the standalone schedule-control
+/// binary. New production callers must use the profile-specific constants.
+pub const COMBINED_ROUNDS: u32 = STATE_RELATION_COMBINED_ROUNDS;
 
 pub const GKR_MASK_USED_COEFFICIENTS: usize = 23_544;
 pub const GKR_MASK_PADDED_COEFFICIENTS: usize = 32_768;
+pub const STATE_COMPOSED_K128_MASK_USED_COEFFICIENTS: usize = 27_744;
+pub const STATE_COMPOSED_K512_MASK_USED_COEFFICIENTS: usize = 28_932;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SelectedGkrRoundKind {
@@ -176,6 +192,86 @@ pub fn selected_gkr_mask_layout() -> Result<CompleteGkrZkMaskCommitmentLayout, G
     )
 }
 
+/// Append the state-relation, dual-product-tree, and coefficient-evaluation
+/// masks to the selected Keccak layout. The existing 168 layer ordinals stay
+/// unchanged, so all masks remain in the one H4-committed auxiliary
+/// polynomial. State layers do not publish packed-binary bridges; retaining
+/// the fixed bridge-width slots keeps one simple, auditable layout and still
+/// fits the already committed 2^15 coefficient capacity.
+pub fn selected_state_composed_mask_variable_degrees(
+    capacity: usize,
+) -> Result<Vec<Vec<usize>>, GkrZkMaskError> {
+    let state_variables = match capacity {
+        128 => 7,
+        512 => 9,
+        _ => return Err(GkrZkMaskError::Shape),
+    };
+    let mut layers = selected_sumcheck_mask_variable_degrees();
+
+    // One 2^12-group relation layer over two 64-wire source axes, followed by
+    // the Construction-2 terminal-extension variable.
+    let mut relation = vec![3; 12];
+    for _ in 0..2 {
+        relation.extend(core::iter::repeat_n(2, 5));
+        relation.push(3);
+    }
+    relation.push(2);
+    layers.push(relation);
+
+    // Each phase starts at public zero and reduces through a three-layer
+    // A*P+B*P'-1 tail. All three layers have two-element source axes.
+    for _phase in 0..2 {
+        for _ in 0..3 {
+            // With no preceding group/wire coordinate, Construction 2's
+            // first-coordinate layer mask makes each source round quintic.
+            layers.push(vec![5, 5, 2]);
+        }
+
+        // The dual product tree has two layers at every height. Both source
+        // axes have `source_variables` variables and each final source round
+        // is cubic because it carries the terminal masking correction.
+        for source_variables in 2..=state_variables + 1 {
+            for _layer in 0..2 {
+                let mut degrees = vec![2; 2 * source_variables];
+                degrees[source_variables - 1] = 3;
+                degrees[2 * source_variables - 1] = 3;
+                degrees.push(2);
+                layers.push(degrees);
+            }
+        }
+
+        // One proof-native adapter maps grouped `[A,0,B,0]` to the
+        // two-element `[A,B]` identity input without a host-trusted reshape.
+        layers.push(vec![2, 3, 2, 3, 2]);
+
+        // A and B share a one-variable group axis. One multiplication layer
+        // and the complete binary sum tree reduce their coefficient tables to
+        // the two values consumed by the identity tail without publishing
+        // either value.
+        let coefficient_source_variables =
+            (1..=state_variables).chain(core::iter::once(state_variables));
+        for source_variables in coefficient_source_variables {
+            let mut degrees = vec![3];
+            degrees.extend(core::iter::repeat_n(2, 2 * source_variables));
+            let terminal_degree = if source_variables == 1 { 5 } else { 3 };
+            degrees[source_variables] = terminal_degree;
+            degrees[2 * source_variables] = terminal_degree;
+            degrees.push(2);
+            layers.push(degrees);
+        }
+    }
+    Ok(layers)
+}
+
+pub fn selected_state_composed_mask_layout(
+    capacity: usize,
+) -> Result<CompleteGkrZkMaskCommitmentLayout, GkrZkMaskError> {
+    CompleteGkrZkMaskCommitmentLayout::new(
+        &selected_state_composed_mask_variable_degrees(capacity)?,
+        PACKED_BINARY_MESSAGE_COEFFICIENTS,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,9 +292,14 @@ mod tests {
         assert_eq!(GKR_TRANSCRIPT_ROUNDS, 6_072);
         assert_eq!(GKR_MASK_BATCH_ROUNDS, 1);
         assert_eq!(GKR_ROUNDS, 6_073);
-        assert_eq!(STATE_RELATION_ROUNDS, 25);
+        assert_eq!(STATE_RELATION_ROUNDS, 26);
+        assert_eq!(STATE_SQUAREFREE_K128_ROUNDS, 614);
+        assert_eq!(STATE_SQUAREFREE_K512_ROUNDS, 882);
         assert_eq!(PCS_DOWNSTREAM_ROUNDS, 13);
-        assert_eq!(COMBINED_ROUNDS, 6_111);
+        assert_eq!(STATE_MASK_BATCH_ROUNDS, 1);
+        assert_eq!(STATE_RELATION_COMBINED_ROUNDS, 6_113);
+        assert_eq!(STATE_COMPOSED_K128_ROUNDS, 6_727);
+        assert_eq!(STATE_COMPOSED_K512_ROUNDS, 6_995);
 
         let kinds = (0..GKR_ROUNDS)
             .map(|round| selected_gkr_round_kind(round).unwrap())
@@ -278,5 +379,23 @@ mod tests {
         assert_eq!(budget.aggregate_opening_rank, 1);
         assert_eq!(budget.total_rank, 22_705);
         assert!(budget.total_rank < layout.padded_coefficients);
+    }
+
+    #[test]
+    fn state_composed_masks_fit_the_existing_auxiliary_polynomial() {
+        for (capacity, layer_count, used, total_rank) in [
+            (128, 221, STATE_COMPOSED_K128_MASK_USED_COEFFICIENTS, 26_640),
+            (512, 233, STATE_COMPOSED_K512_MASK_USED_COEFFICIENTS, 27_768),
+        ] {
+            let degrees = selected_state_composed_mask_variable_degrees(capacity).unwrap();
+            let layout = selected_state_composed_mask_layout(capacity).unwrap();
+            let budget = layout.leakage_budget().unwrap();
+            assert_eq!(degrees.len(), layer_count);
+            assert_eq!(layout.layers.len(), layer_count);
+            assert_eq!(layout.used_coefficients, used);
+            assert_eq!(layout.padded_coefficients, GKR_MASK_PADDED_COEFFICIENTS);
+            assert_eq!(budget.total_rank, total_rank);
+            assert!(budget.total_rank < layout.padded_coefficients);
+        }
     }
 }

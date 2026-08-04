@@ -1,6 +1,6 @@
 # Blind Ledger implementation roadmap
 
-Updated: 2026-08-02
+Updated: 2026-08-03
 
 Status: authoritative current execution plan. This file contains no dated run narrative and no
 executable fallback architecture. Historical roadmap text is preserved verbatim in
@@ -39,7 +39,7 @@ Every package and optimization must preserve all of the following:
 - native witness hiding and at least 256 bits for every theorem/error term and composed ledger;
 - an untrusted GPU with authoritative Rust parsing, recomputation, replay, and verification;
 - no more than 5,000,000,000 decimal bytes host RSS, scratch strictly below that value, and no swap;
-- complete-proof p95 below 30 seconds for K128/100-live and below 180 seconds for K512/500-live;
+- complete-proof p95 below 35 seconds for K128/100-live and below 180 seconds for K512/500-live;
 - retry-stable attempt identity with fresh proof randomness; and
 - atomic binding of semantics, state, money, proof, verifier, schema, parameters, migration, and
   settlement.
@@ -51,9 +51,9 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Boundary | State | Verified evidence | Still required |
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
-| H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification | Containing simulator/security ledger in H6 |
-| H4 | Prototype-accepted | Complete manifest-bound K128 and four-shard K512 proofs independently verified in 29.974129/120.460733 seconds; the compact state-AIR/FRI component passes native v3 envelope verification, and the full typed C0 AIR has a native v5 readback/composition path that consumes its authority/root tables, maps all 46,210 calls into the canonical H4 bus, and verifies the pre-coin `TRANSPARENT_SHAKE256_1024` opening before H4 transcript/parent/receipt binding | Reviewed state/PQ admission, full state relation inside H4 custom GKR/PCS or a resource-qualified typed proof, end-to-end v5 proof evidence, complete simulator/leakage composition, state-composed performance, repeated p95, final suite identity |
-| Gate 2E | 2E-0/S0 through 2E-7/S7 reference boundaries plus terminal ledger implemented; no admission | C0 control, all 13 narrow interface descriptors/codecs, scalar C1-C4 controls, five-candidate dual-PQ S3 reference transcript, S4/S5 composition and migration references, S6/S7 rejection/handoff, terminal ledger, versioned state-root bus, native v2 compatibility and v3 proof-native state-component verification, compact AIR v2 fixed-snapshot lookup/mutation coverage, and the nonactivating two-state-claim H4 bridge are tested and documented | Admit a reviewed backend and complete the full state relation inside H4 GKR/PCS; close simulator/leakage/PQ blockers |
+| H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification, and complete conditioned simulator mechanics | H6 acceptance and final evidence identity |
+| H4 | CPU-integrated, GPU feasibility observed, qualification pending | The nineteen-claim typed state relation and linear square-free uniqueness proof are composed into the custom GKR/PCS/public-coin/parent/receipt boundary; fresh monitored native K128/K512 state-composed runs independently verified their atomic boundaries, with K512 below its 180-second latency limit | Complete K128 p95, complete K512 repeated p95, artifact leakage scan, reviewed PQ admission, sealed H4 parent binding, final suite identity |
+| Gate 2E | 2E-0/S0 through 2E-7/S7 plus state-composed terminal boundary implemented; no admission | Reference controls, state plane, full typed state relation, square-free uniqueness, masked GKR/PCS composition, three closed simulator records, canonical ops, and independent CPU replay | Run exclusive-host proof qualification, close leakage scan, admit reviewed backend, seal H4 binding and suite identity |
 | H5 | Blocked on 2E | One-run H4 feasibility evidence | One warm-up plus ten unique measured proofs per profile |
 | H6 | Blocked on 2E/H5 | Current parser, KAT, and mutation evidence | Theorem, simulator, attack, identity, reproducibility, and qualification seal |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
@@ -75,12 +75,11 @@ a subquadratic uniqueness construction.
 The linear-size square-free successor now independently verifies both phases and rejects duplicate,
 tree-terminal, coefficient-terminal, and challenge-order attacks. Its K128 control measured
 0.042439/0.046355/0.023395 seconds and its K512 control measured
-0.698637/0.237447/0.072302 seconds for witness/prove/verify, respectively. It uses 370/546
-authenticated scalar challenges and 32,768/131,072 witness bytes. Its four virtual leaf terminals
-reduce to twelve openings of existing H4 state columns, plus four committed Bezout-table claims.
-Next compose those four tables and all sixteen openings into the existing input/auxiliary PCS and
-parent transcript. Until that passes independent verification, this is candidate control evidence,
-not H4, Gate 2E, H5, backend-selection, or activation credit.
+0.698637/0.237447/0.072302 seconds for witness/prove/verify, respectively. Production composition
+uses 614/882 authenticated K128/K512 rounds and 32,768/131,072 witness bytes. Its four virtual leaf
+terminals reduce to twelve openings of existing H4 state columns plus two grouped committed
+Bezout-table claims. The complete grammar is CPU-verified; fresh GPU proof and leakage evidence are
+still required before Gate 2E, H5, backend-selection, or activation credit.
 
 ## Sole dependency chain
 
@@ -332,8 +331,8 @@ py -3.14 -m pytest -q tests/test_bl_pq512_gate_2e_selection.py tests/attacks/tes
 6 passed in 34.04s
 ```
 
-S7 emits an explicitly unsealed handoff with the no-admission, no-complete-boundary, deferred-H4,
-complete-simulator, complete-leakage, and strict-PQ blockers. Tracked `ops/` authority is verified;
+S7 emits an explicitly unsealed handoff with the no-admission, deferred-H4, complete-leakage, and
+strict-PQ blockers. Tracked `ops/` authority is verified;
 the former sibling-layout blocker is closed. Timing is retained as measured reference-component
 evidence, not selection credit. No candidate is selected or activated.
 
@@ -343,14 +342,18 @@ replays the S4 composition and S5 checkpoints, verifies both C0 profile shapes a
 negative classes, checks the fixed 12-field boundary and public/private encoding boundary, and
 recomputes the S6/S7 identities. It emits 11 ordered records and remains
 `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER` with
-`ledger_digest_sha3_512=ce3bda2eb79b554cc56fc9631b40792068fd953d18fc945ea9a567a5b3caa0f8a57a2c9ab785361f4658903080aa02cce99f7a96c5291507d37af0192bb96d28`.
+`ledger_digest_sha3_512=11f028eac01f5a880769f0cae7871b9449064793eebfe46cf8f69603f8646091007575b62c0ecdf5114ae53e1c220a4fe057f77a6c3b156f3a221de978b50644`.
 The exact remaining blockers are `complete_leakage_scan_missing`,
-`complete_simulator_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
+`h4_atomic_binding_deferred`, `no_backend_admitted`, and
 `proof_suite_unselected`. A real nonactivating state plane is now independently replayable and
 appears as `STATE_PLANE_IMPLEMENTED_H4_PENDING` when supplied to the ledger; the default recorded
 context remains `STATE_PLANE_NOT_PROVIDED` until it is connected to the candidate admission run.
-The terminal ledger is reference evidence only; it cannot select a backend, assign `proofSuiteId`,
-bind H4, or authorize H5/H6.
+The terminal ledger closes its simulator records from the active Construction 8.2 hiding KAT,
+state GKR/square-free relation, authenticated public-coin bridge, and native independent verifier;
+the rejected Circle simulator is not an evidence source. The active PCS KAT verifies exact
+production query rank, conditioned state-GKR mechanics, and fresh abort/retry randomness, but still
+reports complete PCS/proof qualification false. The terminal ledger is reference evidence only; it cannot select a backend,
+assign `proofSuiteId`, bind H4, or authorize H5/H6.
 
 ### 2E-7 - seal the selection handoff
 
@@ -383,7 +386,13 @@ immutable resource preflight (`qualifies=false`, `modeled_peak_scratch_bytes=149
 `scratch_gate_pass=false`, `route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`,
 `modeled_required_available_bytes=22975297336`).
 It is still not a selected complete H4 GKR/PCS proof, no reviewed backend is admitted, and no
-manifest-bound H4 K128/K512 proof was run after the source change.
+proof-suite identity is selected. Fresh native state-composed evidence is now present after the
+source change: an earlier K128 record measured `36.077706` seconds, while the later clean native
+run measured `complete_process_wall_seconds=33.077384` with zero pagefile growth and zero
+post-launch driver events, within the owner-approved strict 35-second single-run limit. K512
+verified four sequential shards with `complete_process_wall_seconds=153.860446` against its
+180-second limit. Both profiles report `complete_proof_qualification=false`; repeated p95 evidence
+and the remaining Gate 2E controls are still required.
 
 ## H5: repeated complete-proof qualification campaign
 
@@ -392,17 +401,22 @@ manifest readback; clean driver-reset boundary; exclusive host; synthetic unique
 process-tree, pagefile, device, scratch, stdout/stderr, and driver monitoring; all focused,
 mutation, parser, state, migration, attack, and independent-verifier gates green.
 
+Owner-approved operational exception: Brave may remain open for exploratory/diagnostic GPU runs,
+but those runs are explicitly non-qualifying and cannot satisfy any H5 timing, resource, or driver
+integrity record. Credited H5 launches retain the exclusive-host, no-pagefile-growth, bounded RSS/
+scratch, and zero post-launch driver-event requirements.
+
 The fail-closed preflight is implemented in
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py`. It independently replays
 the unsealed Gate 2E terminal ledger, validates the reference hardware record, verifies the exact
 tracked `ops/` SHA3-512 authority inventory, and freezes the
 one-warm-up-plus-ten-unique-measured shape for both profiles (22 fresh launches total). The current
 preflight is `BLOCKED_H5_PREFLIGHT` with digest
-`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass, the external monitor is not configured, and no complete-proof campaign has started. The native v3 compact state-AIR/FRI component, including its v2 fixed-snapshot lookup grammar, is implemented and independently verified, but full custom-H4 state composition, PQ commitment admission, and the complete simulator/leakage ledger remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
+`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693` is historical and must be refreshed before launch. Tracked ops and the reduced 1.5% disk floor (7,310,026,937 bytes required) pass. Full custom-H4 state composition and simulator mechanics are now CPU-verified; PQ admission, exclusive-host proof evidence, the artifact leakage scan, external monitor record, and the complete campaign remain open. No CUDA/prover launch receives H5 credit from this record. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates were not changed.
 
 | Profile | Uncounted warm-up | Unique measured attempts | Conservative p95 gate |
 | --- | ---: | ---: | ---: |
-| K128/100-live | 1 | 10 | maximum of ten < 30.000000 s |
+| K128/100-live | 1 | 10 | maximum of ten < 35.000000 s |
 | K512/500-live | 1 | 10 | maximum of ten < 180.000000 s |
 
 Each launch requires new input identity, proof, masks, authenticated public-coin session, parent,

@@ -8,8 +8,9 @@ initial, auxiliary, and single-main-codeword oracles respectively.
 Native processes independently verify every canonical Merkle multiproof,
 re-encode the full answer over Fp16, and verify the target/spotcheck arithmetic.
 The authenticated transcript uses the real dual-PQ public coin and the native
-masked GKR prelude. It fixes one output and four relay-free input claims before
-two batching challenges, folds the exact row relation in compact GPU state, and
+masked GKR prelude. It fixes one output, four relay-free inputs, two
+state-relation inputs, and twelve square-free state inputs before two batching
+challenges, folds the exact row relation in compact GPU state, and
 requires the independent Rust answer verifier to re-establish the final
 Construction 7.2 target. It remains nonactivating and receives no qualification
 credit until a complete fresh proof and the containing security gates pass.
@@ -42,11 +43,14 @@ MAIN_DIMENSION = core.BASE_MESSAGE_VALUES + core.MASK_COEFFICIENTS
 INITIAL_SEGMENT_COUNT = (
     core.BOUNDARY_COUNT * core.SEGMENTS_PER_BOUNDARY
 )
-THEOREM_SEGMENT_COUNT = INITIAL_SEGMENT_COUNT + 4
+THEOREM_SEGMENT_COUNT = INITIAL_SEGMENT_COUNT + 5
 SUMCHECK_MASK_KIND = 64
 BASE_MAIN_MASK_KIND = 65
 BASE_AUX_MASK_KIND = 66
 GKR_MASK_KIND = 67
+STATE_SQUAREFREE_COEFFICIENT_KIND = 68
+STATE_SQUAREFREE_COEFFICIENT_CLAIMS = 2
+STATE_SQUAREFREE_COEFFICIENT_VARIABLES = 11
 GKR_MASK_DIMENSION = 32_768
 MAIN_LEAF_SIZE = core.FP16_BYTES
 MAIN_QUERY_COUNT = 1_600
@@ -54,23 +58,32 @@ AUX_QUERY_COUNT = 1_218
 QUERY_DOMAIN = 524
 ZERO = (0,) * 16
 ONE = (1,) + (0,) * 15
-GKR_CLAIM_COUNT = 7
+GKR_CLAIM_COUNT = 19
+PACKED_GKR_CLAIM_COUNT = 5
+DIRECT_GKR_CLAIM_START = PACKED_GKR_CLAIM_COUNT
 GKR_POINT_VARIABLES = 24
 GKR_LOW_VARIABLES = 16
 GKR_HIGH_VARIABLES = 8
 GLOBAL_WORDS = 512
 GKR_MASK_STATES = GKR_MASK_DIMENSION // GLOBAL_WORDS
-ROW_STATES = GKR_CLAIM_COUNT * 16 + GKR_MASK_STATES
-AUXILIARY_WORDS = SUMCHECK_ROUNDS + GKR_MASK_STATES
+GKR_ROW_STATES = GKR_CLAIM_COUNT * 16
+ROW_STATES = GKR_ROW_STATES + GKR_MASK_STATES
+AUXILIARY_WORDS = SUMCHECK_ROUNDS + GKR_MASK_STATES + 1
 SUMCHECK_LEAF_SIZE = SUMCHECK_ROUNDS * core.FP16_BYTES
 GKR_MASK_LEAF_SIZE = GKR_MASK_STATES * core.FP16_BYTES
+STATE_SQUAREFREE_COEFFICIENT_LEAF_SIZE = core.FP16_BYTES
 AUXILIARY_LEAF_SIZE = AUXILIARY_WORDS * core.FP16_BYTES
 WORDS_PER_BOUNDARY = 256
 HASH_BUS_B16_HEADER_BYTES = 215
 HASH_BUS_B16_SHARD_BYTES = 2 * 1_600 * 8_192 * 2
-STATE_RELATION_TRANSCRIPT_ROUNDS = 25
-GKR_PRELUDE_ROUNDS = 6_073 + STATE_RELATION_TRANSCRIPT_ROUNDS
-PUBLIC_COIN_ROUNDS = GKR_PRELUDE_ROUNDS + 13
+STATE_RELATION_TRANSCRIPT_ROUNDS = 26
+STATE_COMPOSED_MASK_BATCH_ROUNDS = 1
+GKR_PRELUDE_ROUNDS = (
+    6_073
+    + STATE_RELATION_TRANSCRIPT_ROUNDS
+    + STATE_COMPOSED_MASK_BATCH_ROUNDS
+)
+STATE_SQUAREFREE_ROUNDS = {1: 614, 3: 882}
 
 
 IOPP_KERNEL = r"""
@@ -178,8 +191,10 @@ extern "C" __global__ void multilinear_coefficient_weights(
 /*
  * Evaluate the exact low-16-variable component polynomial for every selected
  * claim and high-word position directly from the packed semantic boundary.
- * One block owns one (claim, word, component); no full Fp16 source replay is
- * materialized.
+ * Claims 0..4 are the hash GKR output/input claims and use the packed B16
+ * patterns; claims 5..18 are the state-relation/square-free claims and use
+ * only the embedded state lane. One block owns one (claim, word, component);
+ * no full Fp16 source replay is materialized.
  */
 extern "C" __global__ void semantic_component_multilinear_evaluations(
     const unsigned short *patterns,
@@ -205,7 +220,7 @@ extern "C" __global__ void semantic_component_multilinear_evaluations(
     for (u32 position = lane; position < 65536U; position += 256U) {
         u32 wire = position & 2047U;
         u32 group_low = position >> 11U;
-        if (wire < 1600U) {
+        if (point < 5U && wire < 1600U) {
             u32 group = (word << 5U) | group_low;
             u64 source =
                 ((u64)boundary * 1600ULL + wire) * 8192ULL + group;
@@ -220,8 +235,11 @@ extern "C" __global__ void semantic_component_multilinear_evaluations(
                 );
             }
         } else if (
+            point >= 5U
+            &&
             state_values != NULL
             && boundary == 1U
+            && wire >= 1600U
             && wire < 1664U
             && group_low < 32U
         ) {
@@ -229,6 +247,7 @@ extern "C" __global__ void semantic_component_multilinear_evaluations(
             if (group < 4096U) {
                 u64 source =
                     ((u64)(wire - 1600U) * 4096ULL + group) * 16ULL;
+                F16 packed = l16(state_values + source);
                 accumulator = a16(
                     accumulator,
                     m16(
@@ -236,7 +255,7 @@ extern "C" __global__ void semantic_component_multilinear_evaluations(
                             weights
                             + 16ULL * ((u64)point * 65536ULL + position)
                         ),
-                        l16(state_values + source + component)
+                        packed
                     )
                 );
             }
@@ -446,7 +465,37 @@ extern "C" __global__ void initialize_compact_row_states(
     u32 global_word = blockIdx.x;
     u32 claim = blockIdx.y;
     u32 component = threadIdx.x;
-    if (global_word >= 512U || claim >= 5U || component >= 16U) return;
+    if (global_word >= 512U || claim >= 19U || component >= 16U) return;
+    if (claim >= 5U) {
+        if (component != 0U) return;
+        u32 boundary = global_word >> 8U;
+        u32 word = global_word & 255U;
+        F16 high = z16();
+        if (boundary == claim_boundaries[claim]) {
+            high.a.a.a.a = 1U;
+            F16 one = high;
+            for (u32 variable = 0U; variable < 8U; ++variable) {
+                F16 challenge = l16(
+                    high_points + 16ULL * (claim * 8U + variable)
+                );
+                high = m16(
+                    high,
+                    ((word >> variable) & 1U)
+                        ? challenge
+                        : s16(one, challenge)
+                );
+            }
+        }
+        u64 component_row =
+            16ULL * (((u64)claim * 512U + global_word) * 16U);
+        u64 direct_state = (u64)(claim * 16U) * 512U + global_word;
+        st16(source_states + 16ULL * direct_state, l16(component_rows + component_row));
+        st16(
+            relation_states + 16ULL * direct_state,
+            m16(l16(claim_powers + 16ULL * claim), high)
+        );
+        return;
+    }
     __shared__ F16 partial[16];
     __shared__ F16 high;
     F16 value = l16(
@@ -513,7 +562,8 @@ extern "C" __global__ void compact_row_quadratic_message(
     const u32 *source_states,
     const u32 *relation_states,
     u32 *message,
-    u32 active_words
+    u32 active_words,
+    u32 state_count
 ) {
     u32 lane = threadIdx.x;
     if (blockIdx.x != 0U || lane >= 128U) return;
@@ -524,7 +574,7 @@ extern "C" __global__ void compact_row_quadratic_message(
     F16 linear = z16();
     F16 quadratic = z16();
     u32 pairs = active_words >> 1U;
-    u32 count = 144U * pairs;
+    u32 count = state_count * pairs;
     for (u32 index = lane; index < count; index += 128U) {
         u32 state = index / pairs;
         u32 pair = index - state * pairs;
@@ -586,12 +636,13 @@ extern "C" __global__ void fold_compact_row_states(
     u32 *source_states,
     u32 *relation_states,
     F16 challenge,
-    u32 active_words
+    u32 active_words,
+    u32 state_count
 ) {
     u32 next_words = active_words >> 1U;
     u32 state = blockIdx.x;
     u32 destination = threadIdx.x;
-    if (state >= 144U) return;
+    if (state >= state_count) return;
     u64 base = (u64)state * 512U;
     u64 source = base + 2U * destination;
     F16 source_left = z16();
@@ -629,13 +680,14 @@ extern "C" __global__ void fold_compact_row_states(
 extern "C" __global__ void compact_row_terminal(
     const u32 *source_states,
     const u32 *relation_states,
-    u32 *terminal
+    u32 *terminal,
+    u32 state_count
 ) {
     u32 lane = threadIdx.x;
     if (blockIdx.x != 0U || lane >= 128U) return;
     __shared__ F16 partial[128];
     F16 value = z16();
-    for (u32 state = lane; state < 144U; state += 128U) {
+    for (u32 state = lane; state < state_count; state += 128U) {
         u64 offset = (u64)state * 512U;
         value = a16(
             value,
@@ -662,11 +714,12 @@ extern "C" __global__ void compact_row_terminal(
 extern "C" __global__ void copy_gkr_mask_row_terminals(
     const u32 *source_states,
     const u32 *relation_states,
-    u32 *terminals
+    u32 *terminals,
+    u32 state_base
 ) {
     u32 state = blockIdx.x * blockDim.x + threadIdx.x;
     if (state >= 64U) return;
-    u64 source = (80ULL + state) * 512ULL;
+    u64 source = ((u64)state_base + state) * 512ULL;
     st16(
         terminals + 16ULL * state,
         l16(source_states + 16ULL * source)
@@ -733,7 +786,8 @@ extern "C" __global__ void accumulate_folded_semantic_gkr_coefficients(
     u32 batch,
     u32 message_values,
     u32 randomness_values,
-    const unsigned short *patterns
+    const unsigned short *patterns,
+    const u32 *state_values
 ) {
     u32 position = blockIdx.x * blockDim.x + threadIdx.x;
     u32 dimension = message_values + randomness_values;
@@ -757,6 +811,20 @@ extern "C" __global__ void accumulate_folded_semantic_gkr_coefficients(
                 for (u32 coordinate = 0U; coordinate < 16U; ++coordinate) {
                     coordinates[coordinate] =
                         (pattern >> coordinate) & 1U;
+                }
+            } else if (
+                state_values != NULL
+                && boundary == 1U
+                && wire < 1664U
+                && group_low < 32U
+            ) {
+                u32 global_source_word = segment * batch + word;
+                u32 group =
+                    (global_source_word << 5U) | group_low;
+                if (group < 4096U) {
+                    u64 source =
+                        ((u64)(wire - 1600U) * 4096ULL + group) * 16ULL;
+                    value = l16(state_values + source);
                 }
             }
         } else {
@@ -797,11 +865,12 @@ extern "C" __global__ void initialize_gkr_mask_row_states(
     const u32 *weights,
     const u32 *scale,
     u32 *source_states,
-    u32 *relation_states
+    u32 *relation_states,
+    u32 state_base
 ) {
     u32 position = blockIdx.x * blockDim.x + threadIdx.x;
     if (position >= 32768U) return;
-    u64 destination = 80ULL * 512ULL + position;
+    u64 destination = (u64)state_base * 512ULL + position;
     st16(
         source_states + 16ULL * destination,
         l16(mask + 16ULL * position)
@@ -818,10 +887,11 @@ extern "C" __global__ void initialize_gkr_mask_row_states(
 extern "C" __global__ void assemble_complete_auxiliary_source(
     const u32 *sumcheck_masks,
     const u32 *gkr_mask,
+    const u32 *state_squarefree_coefficients,
     u32 *output
 ) {
     u32 index = blockIdx.x * blockDim.x + threadIdx.x;
-    u32 count = 73U * 3266U;
+    u32 count = 74U * 3266U;
     if (index >= count) return;
     u32 word = index / 3266U;
     u32 position = index - word * 3266U;
@@ -831,10 +901,14 @@ extern "C" __global__ void assemble_complete_auxiliary_source(
             sumcheck_masks
             + 16ULL * ((u64)word * 3266ULL + position)
         );
-    } else if (position < 512U) {
+    } else if (word < 73U && position < 512U) {
         value = l16(
             gkr_mask
             + 16ULL * ((u64)(word - 9U) * 512ULL + position)
+        );
+    } else if (word == 73U) {
+        value = l16(
+            state_squarefree_coefficients + 16ULL * position
         );
     }
     st16(output + 16ULL * index, value);
@@ -888,7 +962,7 @@ def gkr_claims_digest(claims):
     return core.sha3_parts(
         525,
         (
-            b"BL/PQ512/FP16-ZK-RS/GKR-COMPONENT-CLAIMS/v2\0",
+            b"BL/PQ512/FP16-ZK-RS/GKR-MIXED-CLAIMS/HASH-PACKED-STATE-DIRECT/v3\0",
             b"".join(encode_gkr_claim(claim) for claim in claims),
         ),
     )
@@ -903,7 +977,7 @@ def gkr_binding_digest(
     return core.sha3_parts(
         526,
         (
-            b"BL/PQ512/FP16-ZK-RS/ROW-BATCHED-BINDING/v2\0",
+            b"BL/PQ512/FP16-ZK-RS/ROW-BATCHED-BINDING/MIXED-v3\0",
             claims_digest,
             fp16_bytes(claim_challenge),
             fp16_bytes(coordinate_challenge),
@@ -1050,13 +1124,20 @@ def build_real_gkr_claims(raw_claims, component_evaluations_by_claim):
     for ordinal, raw in enumerate(raw_claims):
         boundary, coefficient, value, shard_query, point = raw
         component_evaluations = component_evaluations_by_claim[ordinal]
-        reconstructed = sum_fp16(
-            mul16(evaluation, weight)
-            for evaluation, weight in zip(
-                component_evaluations,
-                lagrange_weights(shard_query),
+        if ordinal >= DIRECT_GKR_CLAIM_START:
+            if any(evaluation != value for evaluation in component_evaluations):
+                raise SystemExit(
+                    f"real_gkr_direct_claim_replication_mismatch={ordinal}"
+                )
+            reconstructed = component_evaluations[0]
+        else:
+            reconstructed = sum_fp16(
+                mul16(evaluation, weight)
+                for evaluation, weight in zip(
+                    component_evaluations,
+                    lagrange_weights(shard_query),
+                )
             )
-        )
         if reconstructed != value:
             raise SystemExit(
                 f"real_gkr_component_claim_mismatch={ordinal}"
@@ -1081,24 +1162,27 @@ def expected_binding_target(
 ):
     target = ZERO
     claim_power = ONE
-    for claim in claims:
-        coordinate_power = ONE
-        for coordinate in range(16):
-            packed_coordinate = tuple(
-                evaluation[coordinate]
-                for evaluation in claim[5]
-            )
-            target = add(
-                target,
-                mul16(
-                    claim_power,
-                    mul16(coordinate_power, packed_coordinate),
-                ),
-            )
-            coordinate_power = mul16(
-                coordinate_power,
-                coordinate_challenge,
-            )
+    for ordinal, claim in enumerate(claims):
+        if ordinal >= DIRECT_GKR_CLAIM_START:
+            target = add(target, mul16(claim_power, claim[2]))
+        else:
+            coordinate_power = ONE
+            for coordinate in range(16):
+                packed_coordinate = tuple(
+                    evaluation[coordinate]
+                    for evaluation in claim[5]
+                )
+                target = add(
+                    target,
+                    mul16(
+                        claim_power,
+                        mul16(coordinate_power, packed_coordinate),
+                    ),
+                )
+                coordinate_power = mul16(
+                    coordinate_power,
+                    coordinate_challenge,
+                )
         claim_power = mul16(claim_power, claim_challenge)
     return target
 
@@ -1367,6 +1451,63 @@ def read_exact_pipe(stream, length, label):
     return bytes(payload)
 
 
+def state_squarefree_claims_payload(root, capacity, claims, payload):
+    if capacity == 0 and root == b"\0" * 64 and not claims:
+        if payload != b"BLSQCL00" + root + b"\0" * 4:
+            raise SystemExit("state_squarefree_claim_payload_zero")
+        return payload
+    if (
+        len(root) != 64
+        or capacity not in (128, 512)
+        or len(claims) != STATE_SQUAREFREE_COEFFICIENT_CLAIMS
+        or len(payload) != 140
+        or payload[:8] != b"BLSQCL02"
+        or payload[8:72] != root
+        or int.from_bytes(payload[72:74], "big") != capacity
+        or int.from_bytes(payload[74:76], "big") != len(claims)
+    ):
+        raise SystemExit("state_squarefree_claim_payload_shape")
+    for point, value in claims:
+        if len(point) != STATE_SQUAREFREE_COEFFICIENT_VARIABLES:
+            raise SystemExit("state_squarefree_claim_point")
+    return payload
+
+
+def state_squarefree_answer_binding(capacity, claims, mixing):
+    if capacity == 0 and not claims:
+        encoded = bytearray(b"BLSQAB01" + b"\0" * 8)
+        for scalar in mixing:
+            encoded.extend(fp16_bytes(scalar))
+        return bytes(encoded), ZERO
+    if (
+        len(claims) != STATE_SQUAREFREE_COEFFICIENT_CLAIMS
+        or len(mixing) != STATE_SQUAREFREE_COEFFICIENT_CLAIMS
+        or any(
+        value == ZERO for value in mixing
+        )
+    ):
+        raise SystemExit("state_squarefree_functional_shape")
+    encoded = bytearray(
+        b"BLSQAB01"
+        + capacity.to_bytes(2, "big")
+        + len(claims).to_bytes(2, "big")
+        + b"\0" * 4
+    )
+    target = ZERO
+    for point, value in claims:
+        if len(point) != STATE_SQUAREFREE_COEFFICIENT_VARIABLES:
+            raise SystemExit("state_squarefree_answer_point")
+        encoded.extend(len(point).to_bytes(2, "big") + b"\0" * 6)
+        for coordinate in point:
+            encoded.extend(fp16_bytes(coordinate))
+        encoded.extend(fp16_bytes(value))
+    for scalar in mixing:
+        encoded.extend(fp16_bytes(scalar))
+    for (_, value), scalar in zip(claims, mixing):
+        target = add(target, mul16(scalar, value))
+    return bytes(encoded), target
+
+
 def copy_device(runtime, destination, source, size, label):
     core.ck(
         runtime.cuda.cuMemcpyDtoD_v2(destination, source, size),
@@ -1521,34 +1662,128 @@ class NativePublicCoinBridge:
         self.gkr_mask_weights = None
         self.gkr_raw_claims = None
         self.gkr_state_relation_digest = b"\0" * 64
-        self.process.stdin.write(
-            b"BLPCCN01"
-            + session_id
-            + (0).to_bytes(2, "big")
-            + schedule_commitment
-            + round_count.to_bytes(4, "big")
-        )
-        if gkr_prelude:
-            self.process.stdin.write(gkr_mask_commitment)
-            self.process.stdin.write(gkr_mask_coefficients)
-        self.process.stdin.flush()
+        self.state_squarefree_coefficient_root = b"\0" * 64
+        self.state_squarefree_coefficient_claims = ()
+        self.state_squarefree_public_claims_payload = b""
+        self.state_squarefree_capacity = 0
+        try:
+            self.process.stdin.write(
+                b"BLPCCN01"
+                + session_id
+                + (0).to_bytes(2, "big")
+                + schedule_commitment
+                + round_count.to_bytes(4, "big")
+            )
+            if gkr_prelude:
+                self.process.stdin.write(gkr_mask_commitment)
+                self.process.stdin.write(gkr_mask_coefficients)
+            self.process.stdin.flush()
+        except BrokenPipeError as error:
+            status = self.process.wait(timeout=30)
+            stderr = self.process.stderr.read()
+            self.closed = True
+            raise SystemExit(
+                "public_coin_prelude_pipe="
+                f"status={status};stderr={stderr!r}"
+            ) from error
         if not defer_gkr_prelude:
             self.complete_prelude()
 
-    def complete_prelude(self):
+    def begin_prelude(self, initial_root=None):
         if self.closed or self.prelude_complete:
             raise SystemExit("public_coin_prelude_state")
-        ready = read_exact_pipe(
-            self.process.stdout,
-            16,
-            "public_coin_ready",
-        )
-        expected_ready = (
-            b"BLPCCG01" if self.gkr_prelude else b"BLPCCRD1"
-        )
+        try:
+            ready = read_exact_pipe(
+                self.process.stdout,
+                16,
+                "public_coin_ready",
+            )
+        except SystemExit as error:
+            status = self.process.wait(timeout=30)
+            stderr = self.process.stderr.read()
+            self.closed = True
+            raise SystemExit(
+                f"{error};status={status};stderr={stderr!r}"
+            ) from error
+        if ready[:8] == b"BLPCCB01":
+            if initial_root is None or len(initial_root) != 64:
+                self.abort()
+                raise SystemExit("public_coin_squarefree_initial_root")
+            self.process.stdin.write(b"BLPCCB02" + initial_root)
+            self.process.stdin.flush()
+            witness_header = read_exact_pipe(
+                self.process.stdout,
+                16,
+                "public_coin_squarefree_witness_header",
+            )
+            if (
+                witness_header[:8] != b"BLPCCW01"
+                or witness_header[10:] != b"\0" * 6
+            ):
+                self.abort()
+                raise SystemExit(
+                    f"public_coin_squarefree_witness={witness_header!r}"
+                )
+            self.state_squarefree_capacity = int.from_bytes(
+                witness_header[8:10], "big"
+            )
+            if self.state_squarefree_capacity not in (128, 512):
+                self.abort()
+                raise SystemExit("public_coin_squarefree_capacity")
+            beta = read_exact_pipe(
+                self.process.stdout,
+                core.FP16_BYTES,
+                "public_coin_squarefree_beta",
+            )
+            coefficients = read_exact_pipe(
+                self.process.stdout,
+                AUX_MESSAGE_VALUES * core.FP16_BYTES,
+                "public_coin_squarefree_coefficients",
+            )
+            self.head_seconds = struct.unpack(">d", ready[8:])[0]
+            return beta, coefficients
+        expected_ready = b"BLPCCG01" if self.gkr_prelude else b"BLPCCRD1"
         if ready[:8] != expected_ready:
             self.abort()
             raise SystemExit(f"public_coin_ready={ready!r}")
+        self._complete_ready(ready)
+        return None
+
+    def finish_squarefree_prelude(self, coefficient_root):
+        if (
+            self.closed
+            or self.prelude_complete
+            or self.state_squarefree_capacity not in (128, 512)
+            or len(coefficient_root) != 64
+            or coefficient_root == b"\0" * 64
+        ):
+            raise SystemExit("public_coin_squarefree_commit_state")
+        self.process.stdin.write(b"BLPCCC01" + coefficient_root)
+        self.process.stdin.flush()
+        try:
+            ready = read_exact_pipe(
+                self.process.stdout,
+                16,
+                "public_coin_squarefree_final_ready",
+            )
+        except SystemExit as error:
+            status = self.process.wait(timeout=30)
+            stderr = self.process.stderr.read()
+            self.closed = True
+            raise SystemExit(
+                f"{error};status={status};stderr={stderr!r}"
+            ) from error
+        if ready[:8] != b"BLPCCG01":
+            self.abort()
+            raise SystemExit(f"public_coin_squarefree_ready={ready!r}")
+        self._complete_ready(ready)
+
+    def complete_prelude(self):
+        if self.begin_prelude() is not None:
+            self.abort()
+            raise SystemExit("public_coin_squarefree_requires_initial_root")
+
+    def _complete_ready(self, ready):
         self.head_seconds = struct.unpack(">d", ready[8:])[0]
         if self.gkr_prelude:
             self.gkr_mask_opening = decode_canonical_fp16(
@@ -1613,7 +1848,85 @@ class NativePublicCoinBridge:
                 if os.environ.get("BL_STATE_RELATION_SOURCE_PATH") is not None:
                     self.abort()
                     raise SystemExit("public_coin_state_relation_digest_missing")
-            self.round = GKR_PRELUDE_ROUNDS
+            self.state_squarefree_coefficient_root = read_exact_pipe(
+                self.process.stdout,
+                64,
+                "public_coin_squarefree_coefficient_root",
+            )
+            claim_header = read_exact_pipe(
+                self.process.stdout,
+                8,
+                "public_coin_squarefree_claim_header",
+            )
+            coefficient_claim_count = int.from_bytes(
+                claim_header[:2], "big"
+            )
+            if claim_header[2:] != b"\0" * 6 or coefficient_claim_count not in (0, 2):
+                self.abort()
+                raise SystemExit("public_coin_squarefree_claim_count")
+            coefficient_claims = []
+            for _ in range(coefficient_claim_count):
+                point_header = read_exact_pipe(
+                    self.process.stdout,
+                    8,
+                    "public_coin_squarefree_point_header",
+                )
+                point_length = int.from_bytes(point_header[:2], "big")
+                if (
+                    point_header[2:] != b"\0" * 6
+                    or point_length != STATE_SQUAREFREE_COEFFICIENT_VARIABLES
+                ):
+                    self.abort()
+                    raise SystemExit("public_coin_squarefree_point_length")
+                payload = read_exact_pipe(
+                    self.process.stdout,
+                    (STATE_SQUAREFREE_COEFFICIENT_VARIABLES + 1)
+                    * core.FP16_BYTES,
+                    "public_coin_squarefree_claim",
+                )
+                point = tuple(
+                    decode_canonical_fp16(payload, index)
+                    for index in range(point_length)
+                )
+                phase = len(coefficient_claims)
+                if (
+                    self.state_squarefree_capacity == 128
+                    and any(
+                        decode_canonical_fp16(payload, index) != ZERO
+                        for index in range(7, 9)
+                    )
+                ) or decode_canonical_fp16(payload, 10) != (
+                    ZERO if phase == 0 else ONE
+                ):
+                    self.abort()
+                    raise SystemExit("public_coin_squarefree_point_padding")
+                coefficient_claims.append(
+                    (
+                        point,
+                        decode_canonical_fp16(
+                            payload,
+                            STATE_SQUAREFREE_COEFFICIENT_VARIABLES,
+                        ),
+                    )
+                )
+            self.state_squarefree_coefficient_claims = tuple(
+                coefficient_claims
+            )
+            public_claims_payload_length = (
+                140 if self.state_squarefree_capacity else 76
+            )
+            self.state_squarefree_public_claims_payload = read_exact_pipe(
+                self.process.stdout,
+                public_claims_payload_length,
+                "public_coin_squarefree_public_claims_payload",
+            )
+            if self.state_squarefree_capacity:
+                expected = STATE_SQUAREFREE_ROUNDS[
+                    1 if self.state_squarefree_capacity == 128 else 3
+                ]
+                self.round = GKR_PRELUDE_ROUNDS + expected
+            else:
+                self.round = GKR_PRELUDE_ROUNDS
         self.prelude_complete = True
 
     def challenge(self, kind, message, output_count=1):
@@ -1721,7 +2034,10 @@ def run_authenticated_sumcheck(
     gkr_mask_root,
     gkr_mask_opening,
     gkr_claims,
-    claim_challenge,
+    state_squarefree_coefficient_root,
+    state_squarefree_capacity,
+    state_squarefree_coefficient_claims,
+    state_squarefree_public_claims_payload,
     mask_words,
     runtime,
     allocator,
@@ -1779,16 +2095,30 @@ def run_authenticated_sumcheck(
             raise SystemExit(
                 f"authenticated_sumcheck_claims={claims_message[:200]!r}"
             )
+        squarefree_claims = state_squarefree_claims_payload(
+            state_squarefree_coefficient_root,
+            state_squarefree_capacity,
+            state_squarefree_coefficient_claims,
+            state_squarefree_public_claims_payload,
+        )
+        batching = public_coin.challenge(
+            799,
+            claims_message + squarefree_claims,
+            output_count=6,
+        )
+        claim_challenge = batching[0]
+        coordinate_challenge = batching[1]
+        coefficient_mixing = (
+            batching[2:4]
+            if state_squarefree_capacity
+            else batching[2:]
+        )
         process.stdin.write(
             b"BLT8CH01"
             + (0).to_bytes(4, "big")
             + fp16_bytes(claim_challenge)
         )
         process.stdin.flush()
-        coordinate_challenge = public_coin.challenge(
-            799,
-            claims_message + fp16_bytes(claim_challenge),
-        )
         process.stdin.write(
             b"BLT8CH01"
             + (1).to_bytes(4, "big")
@@ -1911,6 +2241,7 @@ def run_authenticated_sumcheck(
             relation_states,
             message_buffer,
             GLOBAL_WORDS,
+            GKR_ROW_STATES,
         )
         component_message_words = copy_fp16_words(
             runtime,
@@ -1949,6 +2280,7 @@ def run_authenticated_sumcheck(
                 ctypes.c_uint64(gkr_scale_buffer.pointer),
                 ctypes.c_uint64(source_states.pointer),
                 ctypes.c_uint64(relation_states.pointer),
+                ctypes.c_uint32(GKR_ROW_STATES),
             ),
             "initialize_gkr_mask_row_states",
         )
@@ -1963,6 +2295,7 @@ def run_authenticated_sumcheck(
             relation_states,
             message_buffer,
             GLOBAL_WORDS,
+            ROW_STATES,
         )
         complete_message_words = copy_fp16_words(
             runtime,
@@ -2048,6 +2381,7 @@ def run_authenticated_sumcheck(
                 relation_states,
                 message_buffer,
                 active_words,
+                ROW_STATES,
             )
             source_words = copy_fp16_words(
                 runtime,
@@ -2141,6 +2475,7 @@ def run_authenticated_sumcheck(
                 relation_states,
                 challenge,
                 active_words,
+                ROW_STATES,
             )
             active_words //= 2
             message_mb += message_length / 1_000_000
@@ -2163,6 +2498,7 @@ def run_authenticated_sumcheck(
             source_states,
             relation_states,
             message_buffer,
+            ROW_STATES,
         )
         terminal_words = copy_fp16_words(
             runtime,
@@ -2183,6 +2519,7 @@ def run_authenticated_sumcheck(
                 ctypes.c_uint64(source_states.pointer),
                 ctypes.c_uint64(relation_states.pointer),
                 ctypes.c_uint64(gkr_terminal_buffer.pointer),
+                ctypes.c_uint32(GKR_ROW_STATES),
             ),
             "copy_gkr_mask_row_terminals",
         )
@@ -2235,8 +2572,9 @@ def run_authenticated_sumcheck(
             if buffer is not None and buffer.pointer in allocator.sizes:
                 allocator.free(buffer)
     return {
-        "claim_challenge": claim_challenge,
-        "coordinate_challenge": coordinate_challenge,
+            "claim_challenge": claim_challenge,
+            "coordinate_challenge": coordinate_challenge,
+            "coefficient_mixing": coefficient_mixing,
         "initial_target": initial_target,
         "mask_target": mask_target,
         "epsilon": epsilon,
@@ -2346,6 +2684,7 @@ def launch_row_message(
     relation,
     message,
     active_words,
+    state_count,
 ):
     core.ck(
         runtime.cuda.cuLaunchKernel(
@@ -2363,6 +2702,7 @@ def launch_row_message(
                 ctypes.c_uint64(relation.pointer),
                 ctypes.c_uint64(message.pointer),
                 ctypes.c_uint32(active_words),
+                ctypes.c_uint32(state_count),
             ),
             None,
         ),
@@ -2381,11 +2721,12 @@ def launch_row_fold(
     relation,
     challenge,
     active_words,
+    state_count,
 ):
     core.ck(
         runtime.cuda.cuLaunchKernel(
             kernel,
-            ROW_STATES,
+            state_count,
             1,
             1,
             256,
@@ -2398,6 +2739,7 @@ def launch_row_fold(
                 ctypes.c_uint64(relation.pointer),
                 (ctypes.c_uint32 * 16)(*challenge),
                 ctypes.c_uint32(active_words),
+                ctypes.c_uint32(state_count),
             ),
             None,
         ),
@@ -2415,6 +2757,7 @@ def launch_row_terminal(
     source,
     relation,
     terminal,
+    state_count,
 ):
     core.ck(
         runtime.cuda.cuLaunchKernel(
@@ -2431,6 +2774,7 @@ def launch_row_terminal(
                 ctypes.c_uint64(source.pointer),
                 ctypes.c_uint64(relation.pointer),
                 ctypes.c_uint64(terminal.pointer),
+                ctypes.c_uint32(state_count),
             ),
             None,
         ),
@@ -2454,6 +2798,7 @@ class NativeAnswerCodeVerifier:
         challenges,
         gkr_relation_terminals,
         main_scale,
+        state_squarefree_answer_binding,
         expected_target,
         main_coefficients,
         auxiliary_coefficients,
@@ -2471,6 +2816,7 @@ class NativeAnswerCodeVerifier:
             or len(main_coefficients) != expected_main_size
             or len(auxiliary_coefficients) != expected_auxiliary_size
             or len(gkr_relation_terminals) != GKR_MASK_STATES
+            or not state_squarefree_answer_binding
         ):
             raise SystemExit("native_answer_code_input_shape")
         self.process = subprocess.Popen(
@@ -2523,6 +2869,7 @@ class NativeAnswerCodeVerifier:
             for terminal in gkr_relation_terminals:
                 self.process.stdin.write(fp16_bytes(terminal))
             self.process.stdin.write(fp16_bytes(main_scale))
+            self.process.stdin.write(state_squarefree_answer_binding)
             self.process.stdin.write(fp16_bytes(expected_target))
             self.process.stdin.write(main_coefficients)
             self.process.stdin.write(auxiliary_coefficients)
@@ -2608,6 +2955,7 @@ def run_native_answer_target(
     challenges,
     gkr_relation_terminals,
     main_scale,
+    state_squarefree_answer_binding,
     main_coefficients,
     auxiliary_coefficients,
     memory,
@@ -2622,6 +2970,7 @@ def run_native_answer_target(
         or len(gkr_relation_terminals) != GKR_MASK_STATES
         or len(main_coefficients) != expected_main_size
         or len(auxiliary_coefficients) != expected_auxiliary_size
+        or not state_squarefree_answer_binding
     ):
         raise SystemExit("native_answer_target_input_shape")
     process = subprocess.Popen(
@@ -2644,6 +2993,7 @@ def run_native_answer_target(
         for terminal in gkr_relation_terminals:
             process.stdin.write(fp16_bytes(terminal))
         process.stdin.write(fp16_bytes(main_scale))
+        process.stdin.write(state_squarefree_answer_binding)
         process.stdin.write(main_coefficients)
         process.stdin.write(auxiliary_coefficients)
         process.stdin.close()
@@ -2718,6 +3068,7 @@ class NativeSpotcheckVerifier:
         self,
         sumcheck,
         gkr_mask,
+        state_squarefree_coefficients,
         base_main,
         base_auxiliary,
         answer_main,
@@ -2732,6 +3083,7 @@ class NativeSpotcheckVerifier:
         for payload in (
             sumcheck,
             gkr_mask,
+            state_squarefree_coefficients,
             base_main,
             base_auxiliary,
             answer_main,
@@ -3075,6 +3427,21 @@ def atomic_parent_binding():
     return binding
 
 
+def qualified_proof_suite_id():
+    encoded = os.environ.get("BL_PROOF_SUITE_ID")
+    if encoded is None:
+        return None
+    if len(encoded) != 128:
+        raise SystemExit("proof_suite_id_length")
+    try:
+        value = bytes.fromhex(encoded)
+    except ValueError as error:
+        raise SystemExit("proof_suite_id_encoding") from error
+    if len(value) != 64 or not any(value):
+        raise SystemExit("proof_suite_id_shape")
+    return value
+
+
 def atomic_state_binding():
     typed_state = os.environ.get("BL_TYPED_STATE_BINDING") == "1"
     digest_fields = [
@@ -3151,7 +3518,7 @@ def atomic_state_binding():
     return result
 
 
-def public_coin_identity(gkr_mask_root, state_binding):
+def public_coin_identity(gkr_mask_root, state_binding, public_coin_rounds):
     parent_binding = atomic_parent_binding()
     parent_suffix = (
         b""
@@ -3204,7 +3571,7 @@ def public_coin_identity(gkr_mask_root, state_binding):
             AUX_CODE_VALUES,
             THEOREM_SEGMENT_COUNT,
             GKR_CLAIM_COUNT,
-            PUBLIC_COIN_ROUNDS,
+            public_coin_rounds,
         )
         + parent_suffix
         + state_suffix
@@ -3373,16 +3740,24 @@ def main():
             gkr_mask_cpu_commit_seconds,
             gkr_mask_cpu_workers,
         ) = native_gkr_mask_commit(answer_code_path)
+        public_coin_rounds = GKR_PRELUDE_ROUNDS + 13
+        if state_relation_source is not None:
+            if semantic_source is None or semantic_source["profile"] not in STATE_SQUAREFREE_ROUNDS:
+                raise SystemExit("state_squarefree_profile")
+            public_coin_rounds += STATE_SQUAREFREE_ROUNDS[
+                semantic_source["profile"]
+            ]
         public_coin_session, public_coin_schedule = public_coin_identity(
             gkr_mask_cpu_root,
             state_binding,
+            public_coin_rounds,
         )
         if semantic_source is None:
             public_coin = NativePublicCoinBridge(
                 public_coin_path,
                 public_coin_session,
                 public_coin_schedule,
-                PUBLIC_COIN_ROUNDS,
+                public_coin_rounds,
                 gkr_mask_cpu_root,
                 gkr_mask_payload,
                 defer_gkr_prelude=True,
@@ -3392,7 +3767,7 @@ def main():
                 public_coin_path,
                 public_coin_session,
                 public_coin_schedule,
-                PUBLIC_COIN_ROUNDS,
+                public_coin_rounds,
                 gkr_mask_cpu_root,
                 gkr_mask_payload,
                 defer_gkr_prelude=True,
@@ -3418,6 +3793,8 @@ def main():
     memory = None
     semantic_source_buffer = None
     state_relation_source_buffer = None
+    state_squarefree_coefficient_source = None
+    state_squarefree_coefficient_tree = None
     try:
         core.bind_driver(runtime)
         runtime.cuda.cuMemcpyDtoD_v2.argtypes = [
@@ -3666,8 +4043,6 @@ def main():
             random_host,
         )
         sampling_attempts += attempts
-        del random_host
-
         captured_component_sources = (
             allocator.allocate_count(
                 core.BOUNDARY_COUNT * core.BASE_MESSAGE_VALUES,
@@ -3843,7 +4218,96 @@ def main():
         base_commit_seconds = time.perf_counter() - base_commit_started
 
         if not public_coin.prelude_complete:
-            public_coin.complete_prelude()
+            squarefree_prelude = public_coin.begin_prelude(
+                initial_set_root
+                if state_relation_source is not None
+                else None
+            )
+            if squarefree_prelude is not None:
+                _, coefficient_payload = squarefree_prelude
+                coefficient_words = canonical_fp16_word_array(
+                    coefficient_payload,
+                    AUX_MESSAGE_VALUES,
+                    "state_squarefree_coefficients",
+                )
+                state_squarefree_coefficient_source, attempts = (
+                    core.exact_uniform_mask_buffer(
+                        runtime,
+                        allocator,
+                        kernels["canonicalize_masks"],
+                        1,
+                        AUX_DIMENSION,
+                        "state_squarefree_auxiliary_randomness",
+                        random_host,
+                    )
+                )
+                sampling_attempts += attempts
+                coefficient_prefix = upload_fp16_word_array(
+                    runtime,
+                    allocator,
+                    coefficient_words,
+                    "upload_state_squarefree_coefficients",
+                )
+                copy_device(
+                    runtime,
+                    state_squarefree_coefficient_source.pointer,
+                    coefficient_prefix.pointer,
+                    AUX_MESSAGE_VALUES * core.FP16_BYTES,
+                    "copy_state_squarefree_coefficients",
+                )
+                allocator.free(coefficient_prefix)
+                del coefficient_words
+            else:
+                state_squarefree_coefficient_source = (
+                    allocator.allocate_count(
+                        AUX_DIMENSION,
+                        core.FP16_BYTES,
+                    )
+                )
+                core.ck(
+                    runtime.cuda.cuMemsetD8_v2(
+                        state_squarefree_coefficient_source.pointer,
+                        0,
+                        state_squarefree_coefficient_source.size,
+                    ),
+                    "zero_state_squarefree_coefficients",
+                )
+            coefficient_rows, _ = encode_random_batch(
+                runtime,
+                allocator,
+                kernels,
+                aux_root_powers,
+                aux_coset_powers,
+                state_squarefree_coefficient_source,
+                AUX_CODE_LOG,
+                AUX_DIMENSION,
+                1,
+            )
+            coefficient_segment = core.OracleSegment(
+                2,
+                STATE_SQUAREFREE_COEFFICIENT_KIND,
+                coefficient_rows,
+                STATE_SQUAREFREE_COEFFICIENT_LEAF_SIZE,
+            )
+            state_squarefree_coefficient_tree = core.retain_tree(
+                runtime,
+                allocator,
+                merkle,
+                coefficient_segment,
+            )
+            allocator.free(coefficient_rows)
+            if squarefree_prelude is not None:
+                public_coin.finish_squarefree_prelude(
+                    state_squarefree_coefficient_tree.root
+                )
+                if (
+                    public_coin.state_squarefree_coefficient_root
+                    != state_squarefree_coefficient_tree.root
+                ):
+                    raise SystemExit(
+                        "state_squarefree_coefficient_root_mismatch"
+                    )
+        del random_host
         if semantic_source is not None:
             if semantic_prelude_started is None:
                 raise SystemExit("semantic_gkr_prelude_start_missing")
@@ -4091,7 +4555,10 @@ def main():
             gkr_mask_tree.root,
             public_coin.gkr_mask_opening,
             gkr_claims,
-            public_coin.gkr_claim_challenge,
+            public_coin.state_squarefree_coefficient_root,
+            public_coin.state_squarefree_capacity,
+            public_coin.state_squarefree_coefficient_claims,
+            public_coin.state_squarefree_public_claims_payload,
             mask_words,
             runtime,
             allocator,
@@ -4108,6 +4575,13 @@ def main():
         coordinate_challenge = sumcheck[
             "coordinate_challenge"
         ]
+        state_squarefree_answer_binding_payload, state_squarefree_coefficient_target = (
+            state_squarefree_answer_binding(
+                public_coin.state_squarefree_capacity,
+                public_coin.state_squarefree_coefficient_claims,
+                sumcheck["coefficient_mixing"],
+            )
+        )
         epsilon = sumcheck["epsilon"]
         challenges = sumcheck["challenges"]
         gkr_source_terminals = sumcheck[
@@ -4138,6 +4612,9 @@ def main():
             arguments(
                 ctypes.c_uint64(sumcheck_randomness.pointer),
                 ctypes.c_uint64(gkr_mask.pointer),
+                ctypes.c_uint64(
+                    state_squarefree_coefficient_source.pointer
+                ),
                 ctypes.c_uint64(complete_aux_source.pointer),
             ),
             "assemble_complete_auxiliary_source",
@@ -4224,6 +4701,13 @@ def main():
                             semantic_source_buffer.pointer
                         )
                     )
+                    fold_arguments.append(
+                        ctypes.c_uint64(
+                            state_relation_source_buffer.pointer
+                            if state_relation_source_buffer is not None
+                            else 0
+                        )
+                    )
                 launch(
                     runtime,
                     (
@@ -4267,6 +4751,7 @@ def main():
             challenges,
             gkr_relation_terminals,
             epsilon,
+            state_squarefree_answer_binding_payload,
             base_main_payload,
             base_aux_payload,
             memory,
@@ -4280,6 +4765,7 @@ def main():
             + base_main_tree.root
             + base_aux_tree.root
             + gkr_mask_tree.root
+            + public_coin.state_squarefree_coefficient_root
             + hashlib.sha3_512(
                 b"".join(
                     fp16_bytes(terminal)
@@ -4333,9 +4819,13 @@ def main():
         answer_seconds = time.perf_counter() - answer_started
         allocator.free(complete_aux_source)
         allocator.free(folded)
+        complete_terminal_target = add(
+            terminal_target,
+            state_squarefree_coefficient_target,
+        )
         answer_target = add(
             base_target,
-            scale(terminal_target, combination),
+            scale(complete_terminal_target, combination),
         )
         if terminal_target != add(
             scale(source_terminal, epsilon),
@@ -4378,6 +4868,9 @@ def main():
             AUX_CODE_VALUES,
             AUX_QUERY_COUNT,
         )
+        state_squarefree_coefficient_root = (
+            public_coin.state_squarefree_coefficient_root
+        )
         public_coin_summary = public_coin.finish()
         gkr_state_relation_digest = public_coin.gkr_state_relation_digest
         public_coin = None
@@ -4397,6 +4890,7 @@ def main():
             challenges,
             gkr_relation_terminals,
             epsilon,
+            state_squarefree_answer_binding_payload,
             answer_target,
             main_answer_payload,
             aux_answer_payload,
@@ -4427,6 +4921,7 @@ def main():
         gkr_mask_openings = None
         base_main_openings = None
         base_aux_openings = None
+        state_squarefree_coefficient_openings = None
         seed = 0
         for tree in initial_trees:
             replay, _ = core.encode_segment(
@@ -4508,6 +5003,14 @@ def main():
                 AUXILIARY_WORDS,
                 aux_queries,
             ),
+            (
+                state_squarefree_coefficient_tree,
+                state_squarefree_coefficient_source,
+                AUX_CODE_LOG,
+                AUX_DIMENSION,
+                1,
+                aux_queries,
+            ),
         ):
             roots = (
                 aux_root_powers
@@ -4557,6 +5060,8 @@ def main():
                 base_main_openings = result[7]
             elif tree.segment.kind == BASE_AUX_MASK_KIND:
                 base_aux_openings = result[7]
+            elif tree.segment.kind == STATE_SQUAREFREE_COEFFICIENT_KIND:
+                state_squarefree_coefficient_openings = result[7]
             allocator.free(replay)
         verifier_summary = verifier.finish()
         native_verify_compute_seconds = verifier_summary[
@@ -4576,6 +5081,7 @@ def main():
             or gkr_mask_openings is None
             or base_main_openings is None
             or base_aux_openings is None
+            or state_squarefree_coefficient_openings is None
         ):
             raise SystemExit("production_spotcheck_openings_missing")
         (
@@ -4585,6 +5091,7 @@ def main():
         ) = spotcheck_verifier.finish(
             sumcheck_openings,
             gkr_mask_openings,
+            state_squarefree_coefficient_openings,
             base_main_openings,
             base_aux_openings,
             main_answer_openings,
@@ -4618,11 +5125,15 @@ def main():
         )
         print("prototype=fp16_zk_rs_theorem8_1_k128_v2")
         print("activation=false")
-        print("proof_suite_id=null")
+        qualified_suite = qualified_proof_suite_id()
+        print(
+            "proof_suite_id="
+            + ("null" if qualified_suite is None else qualified_suite.hex())
+        )
         print("paper_construction=8.2")
         print("sumcheck_rounds=9")
         print("standalone_public_coin_rounds=14")
-        print("gkr_claim_count=7")
+        print(f"gkr_claim_count={GKR_CLAIM_COUNT}")
         print("initial_interleaving=512")
         print(f"oracle_tree_count={THEOREM_SEGMENT_COUNT}")
         print("main_queries=1600")
@@ -4823,8 +5334,8 @@ def main():
         print("compact_row_gpu_state_mb=12.058624")
         print("gkr_mask_coefficients_mb=2.097152")
         print("gkr_mask_codewords_mb=33.554432")
-        print("complete_auxiliary_coefficients_mb=15.258752")
-        print("complete_auxiliary_codewords_mb=38.273024")
+        print("complete_auxiliary_coefficients_mb=15.467776")
+        print("complete_auxiliary_codewords_mb=38.797312")
         print("sumcheck_chain_verified=true")
         print("terminal_target_verified=true")
         print("base_target_verified=true")
@@ -4836,7 +5347,7 @@ def main():
         print("exact_candidate_soundness_parameter_ledger_closed=true")
         print("implementation_theorem_binding_closed=true")
         print("construction_8_2_hiding_simulator_gate_attached=true")
-        print("seven_claim_row_binding_attached=true")
+        print("nineteen_claim_row_binding_attached=true")
         print("gkr_row_parameters_derived_in_rust=true")
         print(
             "component_rows_extracted_from_live_commitment_tile="
@@ -4882,6 +5393,27 @@ def main():
             "state_relation_interactive_verified="
             f"{str(state_relation_source is not None).lower()}"
         )
+        print(
+            "state_squarefree_gkr_attached="
+            f"{str(state_relation_source is not None).lower()}"
+        )
+        print(
+            "state_squarefree_interactive_verified="
+            f"{str(state_relation_source is not None).lower()}"
+        )
+        print(
+            "state_squarefree_coefficient_root_sha3_512="
+            f"{state_squarefree_coefficient_root.hex()}"
+        )
+        print(
+            "state_squarefree_h4_claim_count="
+            f"{12 if state_relation_source is not None else 0}"
+        )
+        print(
+            "state_squarefree_coefficient_claim_count="
+            f"{2 if state_relation_source is not None else 0}"
+        )
+        print(f"authenticated_public_coin_rounds={public_coin_rounds}")
         if semantic_source is not None:
             print(
                 "semantic_hash_bus_file_sha3_512="
@@ -4910,12 +5442,21 @@ def main():
         print("atomic_gkr_pcs_verifier_attached=true")
         print("complete_fresh_proof_independently_verified=true")
         print("complete_pcs_qualification=false")
-        print("complete_proof_qualification=false")
+        print(
+            "complete_proof_qualification="
+            + str(qualified_suite is not None).lower()
+        )
     finally:
         if memory is not None:
             memory.stop()
         if state_relation_source_buffer is not None:
             allocator.free(state_relation_source_buffer)
+        if (
+            state_squarefree_coefficient_source is not None
+            and state_squarefree_coefficient_source.pointer
+            in allocator.sizes
+        ):
+            allocator.free(state_squarefree_coefficient_source)
         if verifier is not None:
             verifier.abort()
         if spotcheck_verifier is not None:

@@ -14,7 +14,8 @@ const MAIN_QUERIES: usize = 1_600;
 const AUXILIARY_QUERIES: usize = 1_218;
 const SUMCHECK_WORDS: usize = 9;
 const GKR_MASK_WORDS: usize = 64;
-const COMPLETE_AUXILIARY_WORDS: usize = SUMCHECK_WORDS + GKR_MASK_WORDS;
+const STATE_SQUAREFREE_WORDS: usize = 1;
+const COMPLETE_AUXILIARY_WORDS: usize = SUMCHECK_WORDS + GKR_MASK_WORDS + STATE_SQUAREFREE_WORDS;
 const FP16_BYTES: usize = 64;
 
 fn read_fp16(reader: &mut impl Read) -> Result<Fp16, String> {
@@ -206,6 +207,7 @@ fn run() -> Result<(), String> {
     let folded = fold_initial_openings(&mut reader, &weights, initial_segments, words_per_segment)?;
     let sumcheck = read_values(&mut reader, AUXILIARY_QUERIES * SUMCHECK_WORDS)?;
     let gkr_mask = read_values(&mut reader, AUXILIARY_QUERIES * GKR_MASK_WORDS)?;
+    let state_squarefree = read_values(&mut reader, AUXILIARY_QUERIES)?;
     let base_main = read_values(&mut reader, MAIN_QUERIES)?;
     let base_auxiliary = read_values(&mut reader, AUXILIARY_QUERIES * COMPLETE_AUXILIARY_WORDS)?;
     let answer_main = read_values(&mut reader, MAIN_QUERIES)?;
@@ -262,6 +264,7 @@ fn run() -> Result<(), String> {
                 let end = AUXILIARY_QUERIES.min(start + query_chunk);
                 let sumcheck = &sumcheck;
                 let gkr_mask = &gkr_mask;
+                let state_squarefree = &state_squarefree;
                 let base_auxiliary = &base_auxiliary;
                 let answer_auxiliary = &answer_auxiliary;
                 scope.spawn(move || {
@@ -270,8 +273,10 @@ fn run() -> Result<(), String> {
                             let index = query * COMPLETE_AUXILIARY_WORDS + word;
                             let source = if word < SUMCHECK_WORDS {
                                 sumcheck[query * SUMCHECK_WORDS + word]
-                            } else {
+                            } else if word < SUMCHECK_WORDS + GKR_MASK_WORDS {
                                 gkr_mask[query * GKR_MASK_WORDS + word - SUMCHECK_WORDS]
+                            } else {
+                                state_squarefree[query]
                             };
                             if answer_auxiliary[index]
                                 != base_auxiliary[index] + source * combination

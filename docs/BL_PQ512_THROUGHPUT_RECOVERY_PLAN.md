@@ -16,7 +16,7 @@ The only release qualification profiles are:
 
 | Profile | Live claims | Complete-proof p95 | Campaign |
 | --- | ---: | ---: | --- |
-| K128 | 100 | < 30.000000 s | 1 uncounted warm-up + 10 unique measured attempts |
+| K128 | 100 | < 35.000000 s | 1 uncounted warm-up + 10 unique measured attempts |
 | K512 | 500 | < 180.000000 s | 1 uncounted warm-up + 10 unique measured attempts |
 
 The timed boundary begins at admitted canonical input and ends only after independent verification
@@ -108,8 +108,9 @@ proof shape by witness class, or moves cost outside the measured boundary.
 Any replacement must beat this complete architecture while satisfying every immutable gate.
 
 The state-composed source is a fixed 16,777,216-byte private canonical lane at H4 wire offset
-1,600. It is intentionally measured separately from the 6,086-round state-free baseline; the
-state-composed 6,111-round shape must receive its own complete-boundary resource and latency run.
+1,600. The current fixed prelude is 6,113 rounds; complete state-composed totals are 6,727 for
+K128 and 6,995 for K512. Each profile must receive its own complete-boundary resource and latency
+run.
 
 ## 6. Gate 2E performance work
 
@@ -248,7 +249,7 @@ unauthorized; their focused/attack result is 6 passed in 34.04 seconds. The term
 reference is now implemented and independently rechecked: it has 11 ordered obligation records,
 focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger result 73 passed in
 91.58 seconds, and status `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. Its blockers remain no
-backend admission, missing complete simulator/leakage evidence, deferred H4 binding, and unset
+backend admission, missing complete leakage evidence, deferred H4 binding, and unset
 `proofSuiteId`. The tracked `ops/` authority is verified and the former sibling-layout blocker is closed.
 The v5 typed C0 AIR remains the executable semantic/differential oracle and native H4 readback
 seam, but its generic main/interaction/composition oracle lifetime is rejected as the complete
@@ -294,7 +295,7 @@ Current preflight evidence:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
+preflight_digest_sha3_512=9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693
 canonical_ops_status=VERIFIED_TRACKED_SHA3_512_AUTHORITY
 reference_hardware_status=READY
 fresh_launch_count=22

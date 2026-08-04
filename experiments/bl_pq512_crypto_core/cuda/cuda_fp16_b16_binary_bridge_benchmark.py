@@ -436,10 +436,12 @@ extern "C" __global__ void product_left_transform(
     const unsigned long long *product_sum,
     const unsigned int *basis,
     unsigned int *temporary,
-    unsigned int claim_count
+    unsigned int claim_count,
+    unsigned int block_offset
 ) {
-    unsigned int right_byte = blockIdx.x & 255U;
-    unsigned int packed = blockIdx.x >> 8;
+    unsigned int global_block = block_offset + blockIdx.x;
+    unsigned int right_byte = global_block & 255U;
+    unsigned int packed = global_block >> 8;
     unsigned int left_coefficient = packed % 17U;
     packed /= 17U;
     unsigned int table = packed & 3U;
@@ -494,10 +496,12 @@ extern "C" __global__ void product_right_transform(
     const unsigned int *temporary,
     const unsigned int *basis,
     unsigned int *matrix,
-    unsigned int claim_count
+    unsigned int claim_count,
+    unsigned int block_offset
 ) {
-    unsigned int right_coefficient = blockIdx.x % 17U;
-    unsigned int packed = blockIdx.x / 17U;
+    unsigned int global_block = block_offset + blockIdx.x;
+    unsigned int right_coefficient = global_block % 17U;
+    unsigned int packed = global_block / 17U;
     unsigned int left_coefficient = packed % 17U;
     packed /= 17U;
     unsigned int table = packed & 3U;
@@ -770,9 +774,11 @@ def function(runtime, name):
 
 
 def arguments(*values):
-    return (ctypes.c_void_p * len(values))(
+    result = (ctypes.c_void_p * len(values))(
         *(ctypes.cast(ctypes.byref(value), ctypes.c_void_p) for value in values)
     )
+    result._keepalive = values
+    return result
 
 
 def launch(runtime, fn, blocks, threads, params, label):
@@ -782,6 +788,10 @@ def launch(runtime, fn, blocks, threads, params, label):
         ),
         label,
     )
+
+
+PRODUCT_LEFT_TILE_BLOCKS = 512
+PRODUCT_RIGHT_TILE_BLOCKS = 256
 
 
 def m31_basis():
@@ -1121,32 +1131,50 @@ def main():
                 ck(runtime.cuda.cuMemsetD8_v2(pointer, 0, size), label)
 
         def finalize(claim_count, formula_family):
-            launch(
-                runtime,
-                left_transform_fn,
-                claim_count * 4 * 17 * 256,
-                THREADS,
-                arguments(
-                    ctypes.c_uint64(product_sum_d),
-                    ctypes.c_uint64(basis_d),
-                    ctypes.c_uint64(temporary_d),
-                    ctypes.c_uint32(claim_count),
-                ),
-                "product_left_transform",
-            )
-            launch(
-                runtime,
-                right_transform_fn,
-                claim_count * 4 * 17 * 17,
-                THREADS,
-                arguments(
-                    ctypes.c_uint64(temporary_d),
-                    ctypes.c_uint64(basis_d),
-                    ctypes.c_uint64(matrix_d),
-                    ctypes.c_uint32(claim_count),
-                ),
-                "product_right_transform",
-            )
+            left_blocks = claim_count * 4 * 17 * 256
+            for block_offset in range(
+                0, left_blocks, PRODUCT_LEFT_TILE_BLOCKS
+            ):
+                tile_blocks = min(
+                    PRODUCT_LEFT_TILE_BLOCKS,
+                    left_blocks - block_offset,
+                )
+                launch(
+                    runtime,
+                    left_transform_fn,
+                    tile_blocks,
+                    THREADS,
+                    arguments(
+                        ctypes.c_uint64(product_sum_d),
+                        ctypes.c_uint64(basis_d),
+                        ctypes.c_uint64(temporary_d),
+                        ctypes.c_uint32(claim_count),
+                        ctypes.c_uint32(block_offset),
+                    ),
+                    "product_left_transform",
+                )
+            right_blocks = claim_count * 4 * 17 * 17
+            for block_offset in range(
+                0, right_blocks, PRODUCT_RIGHT_TILE_BLOCKS
+            ):
+                tile_blocks = min(
+                    PRODUCT_RIGHT_TILE_BLOCKS,
+                    right_blocks - block_offset,
+                )
+                launch(
+                    runtime,
+                    right_transform_fn,
+                    tile_blocks,
+                    THREADS,
+                    arguments(
+                        ctypes.c_uint64(temporary_d),
+                        ctypes.c_uint64(basis_d),
+                        ctypes.c_uint64(matrix_d),
+                        ctypes.c_uint32(claim_count),
+                        ctypes.c_uint32(block_offset),
+                    ),
+                    "product_right_transform",
+                )
             launch(
                 runtime,
                 assemble_fn,

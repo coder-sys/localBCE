@@ -101,7 +101,7 @@ fn message(round: u32, round_count: u32) -> Vec<u8> {
         }
     } else if round_count == ARCHITECTURE_ROUNDS && round >= GKR_ROUNDS + STATE_RELATION_ROUNDS {
         match round - GKR_ROUNDS - STATE_RELATION_ROUNDS {
-            // The last GKR challenge is reused as the seven-claim batching
+            // The last GKR challenge is reused as the partial bridge's claim batching
             // challenge. The first downstream message fixes those claims and
             // that challenge before the independent coordinate batching
             // challenge is released.
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(GKR_ROUNDS, 6_073);
         assert_eq!(PCS_VECTOR_ROUNDS, 13);
         assert_eq!(STATE_RELATION_ROUNDS, 25);
-        assert_eq!(ARCHITECTURE_ROUNDS, 6_111);
+        assert_eq!(ARCHITECTURE_ROUNDS, 6_113);
         assert_eq!(descriptor(0, ARCHITECTURE_ROUNDS).output_count, 27);
     }
 

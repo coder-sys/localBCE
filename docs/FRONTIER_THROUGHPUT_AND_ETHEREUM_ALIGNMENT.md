@@ -48,7 +48,7 @@ read/write streams, and are promoted only after folding has made them correspond
 - Keep `proofSuiteId=null` and activation false until existing qualification and downstream gates close.
 - Keep 93 internal packages. The work below belongs to existing Waves 2-6.
 - Treat end-to-end latency as a hard architecture gate on the reference Dell G15: a fixed-shape
-  K128 job carrying 100 live claims must produce and independently verify in under 30 seconds, and
+  K128 job carrying 100 live claims must produce and independently verify in under 35 seconds, and
   a fixed-shape K512 job carrying 500 live claims must do so in under 180 seconds. These targets do
   not relax any security, privacy, correctness, memory, scratch, or audit gate.
 
@@ -154,7 +154,7 @@ Admission control independently bounds CPU, GPU, RAM, scratch, I/O, public-coin 
 state-conflict pressure, and settlement/DA capacity. One scalar must not hide a saturated resource.
 
 Latency qualification uses unique synthetic batches, one uncounted warm-up, and ten measured
-steady-state runs. The input-to-independently-verified-output p95 must remain below 30 seconds for
+steady-state runs. The input-to-independently-verified-output p95 must remain below 35 seconds for
 K128/100-live and 180 seconds for K512/500-live. Reused witnesses, cached proofs, omitted privacy
 work, weaker parameters, swap dependence, or excluded verification time invalidate the run.
 

@@ -11,6 +11,7 @@
 //! this module and must be present before complete-proof qualification.
 
 use alloc::{vec, vec::Vec};
+use sha3::{Digest, Sha3_512};
 
 use crate::{
     field::{Fp16, M31},
@@ -1658,12 +1659,12 @@ fn reconstruct_mask_constraints(
     Ok(constraints)
 }
 
-fn mask_batch_message(constraints: &[UniformGkrMaskConstraint]) -> Vec<u8> {
-    let mut message = b"BL/PQ512/WAVE2/GKR-MASK-BATCH/v1\0".to_vec();
-    message.extend_from_slice(&(constraints.len() as u32).to_be_bytes());
+pub fn gkr_mask_batch_message(constraints: &[UniformGkrMaskConstraint]) -> Vec<u8> {
+    let mut preimage = b"BL/PQ512/WAVE2/GKR-MASK-BATCH-PREIMAGE/v2\0".to_vec();
+    preimage.extend_from_slice(&(constraints.len() as u32).to_be_bytes());
     for constraint in constraints {
-        append_field(&mut message, constraint.residual);
-        message.extend_from_slice(&(constraint.functionals.len() as u16).to_be_bytes());
+        append_field(&mut preimage, constraint.residual);
+        preimage.extend_from_slice(&(constraint.functionals.len() as u16).to_be_bytes());
         for functional in &constraint.functionals {
             match functional {
                 UniformGkrMaskFunctional::BridgeEvaluation {
@@ -1671,28 +1672,28 @@ fn mask_batch_message(constraints: &[UniformGkrMaskConstraint]) -> Vec<u8> {
                     point,
                     scale,
                 } => {
-                    message.push(0);
-                    message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                    append_field(&mut message, *point);
-                    append_field(&mut message, *scale);
+                    preimage.push(0);
+                    preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                    append_field(&mut preimage, *point);
+                    append_field(&mut preimage, *scale);
                 }
                 UniformGkrMaskFunctional::SumcheckBooleanSum { layer, scale } => {
-                    message.push(1);
-                    message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                    append_field(&mut message, *scale);
+                    preimage.push(1);
+                    preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                    append_field(&mut preimage, *scale);
                 }
                 UniformGkrMaskFunctional::SumcheckEvaluation {
                     layer,
                     point,
                     scale,
                 } => {
-                    message.push(2);
-                    message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                    message.extend_from_slice(&(point.len() as u16).to_be_bytes());
+                    preimage.push(2);
+                    preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                    preimage.extend_from_slice(&(point.len() as u16).to_be_bytes());
                     for coordinate in point {
-                        append_field(&mut message, *coordinate);
+                        append_field(&mut preimage, *coordinate);
                     }
-                    append_field(&mut message, *scale);
+                    append_field(&mut preimage, *scale);
                 }
                 UniformGkrMaskFunctional::LayerEvaluation {
                     layer,
@@ -1700,25 +1701,29 @@ fn mask_batch_message(constraints: &[UniformGkrMaskConstraint]) -> Vec<u8> {
                     w,
                     scale,
                 } => {
-                    message.push(3);
-                    message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                    append_field(&mut message, *z_first);
-                    append_field(&mut message, *w);
-                    append_field(&mut message, *scale);
+                    preimage.push(3);
+                    preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                    append_field(&mut preimage, *z_first);
+                    append_field(&mut preimage, *w);
+                    append_field(&mut preimage, *scale);
                 }
                 UniformGkrMaskFunctional::LayerBooleanSum {
                     layer,
                     z_first,
                     scale,
                 } => {
-                    message.push(4);
-                    message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                    append_field(&mut message, *z_first);
-                    append_field(&mut message, *scale);
+                    preimage.push(4);
+                    preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                    append_field(&mut preimage, *z_first);
+                    append_field(&mut preimage, *scale);
                 }
             }
         }
     }
+    let digest: [u8; 64] = Sha3_512::digest(&preimage).into();
+    let mut message = b"BL/PQ512/WAVE2/GKR-MASK-BATCH/v2\0".to_vec();
+    message.extend_from_slice(&(constraints.len() as u32).to_be_bytes());
+    message.extend_from_slice(&digest);
     message
 }
 
@@ -1744,14 +1749,14 @@ pub fn complete_uniform_gkr_mask_batch(
         &mut proof.rounds,
         &mut coin,
         SelectedGkrRoundKind::MaskBatch,
-        mask_batch_message(&constraints),
+        gkr_mask_batch_message(&constraints),
     )?;
     let challenge = outputs[0];
     if challenge.is_zero() {
         return Err(UniformRelayFreeGkrError::Coin);
     }
     let (coefficient_weights, opening) =
-        aggregate_mask_constraints(&layout, &constraints, challenge)?;
+        aggregate_gkr_mask_constraints(&layout, &constraints, challenge)?;
     let actual = inner_product(mask_coefficients, &coefficient_weights)
         .map_err(|_| UniformRelayFreeGkrError::Shape)?;
     if actual != opening {
@@ -1765,7 +1770,7 @@ pub fn complete_uniform_gkr_mask_batch(
     })
 }
 
-fn aggregate_mask_constraints(
+pub fn aggregate_gkr_mask_constraints(
     layout: &crate::gkr_zk_mask::CompleteGkrZkMaskCommitmentLayout,
     constraints: &[UniformGkrMaskConstraint],
     challenge: Fp16,
@@ -1861,12 +1866,13 @@ pub fn verify_uniform_gkr_mask_batch(
     }
     let constraints = reconstruct_mask_constraints(proof)?;
     if constraints != batch.constraints
-        || proof.rounds.last().unwrap().message != mask_batch_message(&constraints)
+        || proof.rounds.last().unwrap().message != gkr_mask_batch_message(&constraints)
     {
         return Err(UniformRelayFreeGkrError::Algebra);
     }
     let layout = selected_gkr_mask_layout().map_err(|_| UniformRelayFreeGkrError::Shape)?;
-    let (weights, opening) = aggregate_mask_constraints(&layout, &constraints, batch.challenge)?;
+    let (weights, opening) =
+        aggregate_gkr_mask_constraints(&layout, &constraints, batch.challenge)?;
     if weights != batch.coefficient_weights || opening != batch.opening {
         return Err(UniformRelayFreeGkrError::Algebra);
     }
@@ -2680,6 +2686,30 @@ mod tests {
     #[test]
     fn encoded_field_width_is_frozen() {
         assert_eq!(Fp16::ZERO.encode().len(), FP16_BYTES);
+    }
+
+    #[test]
+    fn mask_batch_message_commits_without_publishing_residuals() {
+        let residual = Fp16::from_m31(M31::from_canonical(37).unwrap());
+        let constraints = [UniformGkrMaskConstraint {
+            functionals: Vec::new(),
+            residual,
+        }];
+        let message = gkr_mask_batch_message(&constraints);
+        let domain = b"BL/PQ512/WAVE2/GKR-MASK-BATCH/v2\0";
+        assert_eq!(message.len(), domain.len() + 4 + 64);
+        assert_eq!(&message[..domain.len()], domain);
+        assert_eq!(
+            &message[domain.len()..domain.len() + 4],
+            &1_u32.to_be_bytes()
+        );
+        assert_ne!(&message[domain.len() + 4..], &residual.encode());
+
+        let changed = [UniformGkrMaskConstraint {
+            functionals: Vec::new(),
+            residual: residual + Fp16::ONE,
+        }];
+        assert_ne!(message, gkr_mask_batch_message(&changed));
     }
 
     #[test]

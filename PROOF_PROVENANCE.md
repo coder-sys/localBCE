@@ -1,23 +1,31 @@
 # Proof provenance
 
-Updated: 2026-08-02
+Updated: 2026-08-03
 
 This archive does not include generated Cairo build outputs, execution traces, or proof JSON files. Those outputs are intentionally excluded because they are large/generated artifacts and can become stale.
 
 ## Current Wave 2 proof topology
 
 The active target is the heterogeneous semantic-STARK/shared-bus/Boolean-GKR/Construction-8.2
-construction in `docs/CURRENT_TECH_STACK.md`. Complete one-run H4 K128 and K512 prototypes now pass
-through independent verification in 29.974129 and 120.460733 seconds. H5 repeated p95 and H6 suite
-qualification have not run, so `proofSuiteId` remains null. Cairo, removed RISC Zero/Stwo backends,
-and the 28,643,096-byte regression kernel are historical or differential evidence only.
+construction in `docs/CURRENT_TECH_STACK.md`. Fresh monitored native state-composed K128 and K512
+Earlier state-composed K128 evidence measured 36.077706 seconds for its single shard and failed
+the former strict 30-second complete-proof gate. A later clean native `std,parallel,target-cpu=native`
+run measured `complete_process_wall_seconds=33.077384`, with zero pagefile growth and zero
+post-launch driver events; it is within the owner-approved strict `<35`-second single-run bound.
+K512 verified four ordered sequential shards in 153.860446 seconds and passed its 180-second
+latency gate, but both profiles remain `complete_proof_qualification=false` because Gate 2E has
+not admitted a backend and H5's repeated p95 campaign has not run.
+H5's repeated p95 and H6 suite qualification have not run, so `proofSuiteId` remains null. Cairo,
+removed RISC Zero/Stwo backends, and the older 28,643,096-byte regression kernel are historical or
+differential evidence only.
 
-The current source also contains a nonactivating seven-claim state-composed H4 transcript seam:
-6,073 hash-GKR rounds, 25 state-relation rounds, and 13 PCS rounds for 6,111 total. The state lane
-uses a fixed 64-wire source slice and two boundary-one PCS claims. Its current algebra covers only
-operation/snapshot equality, Boolean presence, and empty-slot zeroing; full state semantics, backend
-admission, simulator/leakage closure, H5, and H6 remain open. No state-composed proof artifact or
-qualification credit is recorded here.
+The current source also contains a nonactivating nineteen-claim state-composed H4 transcript seam:
+6,113 fixed prelude rounds followed by 614 K128 or 882 K512 square-free rounds, for exact totals of
+6,727 and 6,995. The state lane uses a fixed 64-wire source slice and two boundary-one PCS claims.
+Its current algebra covers the typed state relation and square-free uniqueness component, while
+full custom-H4 admission, leakage closure, H5, and H6 remain open. The raw native monitor records
+are retained in the local evidence workspace and summarized in the newest `STATE.md` section; no
+state-composed proof suite or qualification credit is recorded here.
 
 The CBAM, state-topology alternatives, conflict-DAG scheduler, WHIR/STIR bake-off, three-plane
 Shout-like/Twist-like/GKR memory-proof candidate, VEIL hiding wrapper, Neo/SuperNeo or Hachi

@@ -11,9 +11,9 @@ superseded prototype sequence are preserved verbatim in
 
 Blind Ledger currently uses the exact seven-layer B=16 Fp16 GKR hash coprocessor, one output plus
 four relay-free hash input claims, native GKR masks, Construction 8.2 random-padded interleaved-RS
-PCS, the 6,086-round state-free dual-PQ authenticated schedule, authoritative Rust verification,
-and one/four-shard atomic coordination. The state-composed shape adds two state claims and 25
-authenticated rounds, reaching 6,111; its complete-boundary performance is not yet measured.
+PCS, the 6,113-round fixed dual-PQ authenticated prelude, authoritative Rust verification, and
+one/four-shard atomic coordination. The state-composed shape has nineteen fixed claims and reaches
+6,727/6,995 K128/K512 rounds; its complete-boundary performance is not yet measured.
 
 Complete one-run H4 evidence is 29.974129 seconds for K128 and 120.460733 seconds for K512.
 Internal host peaks are 288.412/296.255 decimal MB; external process-tree peaks are

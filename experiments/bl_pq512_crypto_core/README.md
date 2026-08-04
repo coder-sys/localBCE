@@ -37,15 +37,16 @@ machinery, not alternate proof backends.
 | Complete H4 process | 29.974129 s | 120.460733 s |
 
 The state-composed formats are separate, nonactivating extensions: `BLHBSN02`/`BLHBB102` append
-two root calls at capacity 18,048 (K128) or 70,656 (K512), adding 266 or 1,040 live permutations.
-Their resulting descriptor totals are 113,996 and 412,446 live permutations. The original
+two root calls at capacity 18,048 (K128) or 70,656 (K512), adding 502 or 1,964 live permutations.
+Their resulting descriptor totals are 114,232 and 413,370 live permutations. The original
 `BLHBSN01`/`BLHBB101` source remains byte-compatible. The v3 compact state-AIR fixture was
 independently verified at the native state-file boundary, but no new manifest-bound H4 K128/K512
 proof was run after this source change.
 
-The state-free proof uses 6,073 hash-GKR rounds plus 13 PCS rounds, 6,086 combined. The
-state-composed shape adds 25 authenticated state-relation rounds and two state claims, reaching
-seven total claims and 6,111 combined rounds. The standalone PCS protocol uses 14 rounds because
+The current fixed prelude uses 6,073 hash-GKR rounds, 26 state-relation rounds, one final mask
+batch, and 13 PCS rounds: 6,113 combined. Square-free state composition adds 614 K128 or 882 K512
+rounds. Both profiles retain nineteen fixed claims, reaching 6,727/6,995 total rounds. The
+standalone PCS protocol uses 14 rounds because
 its boundary authenticates the complete GKR claims before continuation. The state-composed shape
 has no new manifest-bound K128/K512 performance or qualification credit.
 
@@ -115,11 +116,11 @@ an authenticated Fp16 `beta` compresses each injective two-Fp16 key; four bounde
 tables are then committed before a fresh evaluation point. A dual-number product GKR proves
 `P(r),P'(r)` and coefficient sumchecks prove `A(r)P(r)+B(r)P'(r)=1` for both state phases.
 Every challenge is message-first. The verifier reduces four virtual leaves to twelve openings of the
-existing presence/key columns and emits four coefficient-table PCS claims. Release controls measured
+existing presence/key columns and emits two grouped coefficient-table PCS claims. Release controls measured
 0.042439/0.046355/0.023395 seconds for K128 and 0.698637/0.237447/0.072302 seconds for K512
 (witness/prove/verify), with 32,768/131,072 witness bytes. This is verified component evidence, not
-H4 credit: the four coefficient tables and sixteen resulting PCS openings are not yet composed into
-the selected auxiliary/input commitment and parent transcript.
+H4 credit by themselves: the production boundary now composes those tables and state openings, but
+still requires exclusive-host proof and leakage qualification.
 
 ## Source ownership
 
@@ -188,8 +189,8 @@ throughput evidence.
 ## Current next dependency
 
 The terminal Gate 2E composition/simulator/leakage/state-proof receipt ledger reference is now
-implemented and tested, but it is deliberately unsealed. Gate 2E must still put the complete state
-relation inside the H4 proof, admit a reviewed state/PQ commitment plane, and atomically bind it
+implemented and tested, but it is deliberately unsealed. The complete state relation is now inside
+the H4 proof boundary; Gate 2E must still admit a reviewed state/PQ commitment plane and seal it
 into the H4 parent, transcript, proof grammar, independent verifier, and receipt. H5 then runs one warm-up plus ten
 unique K128 and ten unique K512 proofs; H6 closes the theorem, simulator, parser, attack,
 reproducibility, resource, and identity obligations.
@@ -199,7 +200,7 @@ The read-only H5 preflight now freezes that campaign boundary and returns
 unsealed, no state plane is selected, and no complete-proof
 campaign or external monitor has run. The recorded reference hardware now meets the reduced
 1.5% operational disk floor (7,310,026,937 bytes required); its refreshed preflight digest is
-`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`. This does not assign
+`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693`. This does not assign
 `proofSuiteId`, authorize CUDA, or grant qualification credit.
 
 `proofSuiteId=null`, activation is false, and real PHI/payments remain forbidden.

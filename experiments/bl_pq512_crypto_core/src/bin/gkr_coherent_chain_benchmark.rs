@@ -1900,12 +1900,11 @@ fn run() -> Result<(), String> {
             return Err("strict_independent_constraint_reconstruction_mismatch".into());
         }
         gkr_mask_constraints = reconstructed_constraints;
-        let mut batch_message = Vec::new();
-        batch_message.extend_from_slice(b"BL/PQ512/WAVE2/GKR-MASK-BATCH/v1\0");
-        batch_message.extend_from_slice(&(gkr_mask_constraints.len() as u32).to_be_bytes());
+        let mut batch_preimage = b"BL/PQ512/WAVE2/GKR-MASK-BATCH-PREIMAGE/v2\0".to_vec();
+        batch_preimage.extend_from_slice(&(gkr_mask_constraints.len() as u32).to_be_bytes());
         for constraint in &gkr_mask_constraints {
-            batch_message.extend_from_slice(&constraint.residual.encode());
-            batch_message.extend_from_slice(&(constraint.functionals.len() as u16).to_be_bytes());
+            batch_preimage.extend_from_slice(&constraint.residual.encode());
+            batch_preimage.extend_from_slice(&(constraint.functionals.len() as u16).to_be_bytes());
             for functional in &constraint.functionals {
                 match functional {
                     GkrMaskFunctional::BridgeEvaluation {
@@ -1913,28 +1912,28 @@ fn run() -> Result<(), String> {
                         point,
                         scale,
                     } => {
-                        batch_message.push(0);
-                        batch_message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                        batch_message.extend_from_slice(&point.encode());
-                        batch_message.extend_from_slice(&scale.encode());
+                        batch_preimage.push(0);
+                        batch_preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                        batch_preimage.extend_from_slice(&point.encode());
+                        batch_preimage.extend_from_slice(&scale.encode());
                     }
                     GkrMaskFunctional::SumcheckBooleanSum { layer, scale } => {
-                        batch_message.push(1);
-                        batch_message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                        batch_message.extend_from_slice(&scale.encode());
+                        batch_preimage.push(1);
+                        batch_preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                        batch_preimage.extend_from_slice(&scale.encode());
                     }
                     GkrMaskFunctional::SumcheckEvaluation {
                         layer,
                         point,
                         scale,
                     } => {
-                        batch_message.push(2);
-                        batch_message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                        batch_message.extend_from_slice(&(point.len() as u16).to_be_bytes());
+                        batch_preimage.push(2);
+                        batch_preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                        batch_preimage.extend_from_slice(&(point.len() as u16).to_be_bytes());
                         for coordinate in point {
-                            batch_message.extend_from_slice(&coordinate.encode());
+                            batch_preimage.extend_from_slice(&coordinate.encode());
                         }
-                        batch_message.extend_from_slice(&scale.encode());
+                        batch_preimage.extend_from_slice(&scale.encode());
                     }
                     GkrMaskFunctional::LayerEvaluation {
                         layer,
@@ -1942,25 +1941,28 @@ fn run() -> Result<(), String> {
                         w,
                         scale,
                     } => {
-                        batch_message.push(3);
-                        batch_message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                        batch_message.extend_from_slice(&z_first.encode());
-                        batch_message.extend_from_slice(&w.encode());
-                        batch_message.extend_from_slice(&scale.encode());
+                        batch_preimage.push(3);
+                        batch_preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                        batch_preimage.extend_from_slice(&z_first.encode());
+                        batch_preimage.extend_from_slice(&w.encode());
+                        batch_preimage.extend_from_slice(&scale.encode());
                     }
                     GkrMaskFunctional::LayerBooleanSum {
                         layer,
                         z_first,
                         scale,
                     } => {
-                        batch_message.push(4);
-                        batch_message.extend_from_slice(&(*layer as u32).to_be_bytes());
-                        batch_message.extend_from_slice(&z_first.encode());
-                        batch_message.extend_from_slice(&scale.encode());
+                        batch_preimage.push(4);
+                        batch_preimage.extend_from_slice(&(*layer as u32).to_be_bytes());
+                        batch_preimage.extend_from_slice(&z_first.encode());
+                        batch_preimage.extend_from_slice(&scale.encode());
                     }
                 }
             }
         }
+        let mut batch_message = b"BL/PQ512/WAVE2/GKR-MASK-BATCH/v2\0".to_vec();
+        batch_message.extend_from_slice(&(gkr_mask_constraints.len() as u32).to_be_bytes());
+        batch_message.extend_from_slice(&Sha3_512::digest(&batch_preimage));
         let ordinal = public_coin_ordinal.get();
         let batching = public_coin
             .borrow_mut()

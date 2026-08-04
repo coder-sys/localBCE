@@ -4,8 +4,8 @@
 //! component coefficients.  Materializing those rows or their relation forms
 //! would exceed the engineering memory target.  Instead, the producer supplies
 //! the sixteen component-polynomial evaluations of each relevant row at each
-//! of the five fixed GKR low points.  This module converts them into eighty
-//! source/relation states: seven claims times sixteen Frobenius conjugates.
+//! fixed GKR low point. This module converts them into the exact fixed claim
+//! count times sixteen Frobenius-conjugate source/relation states.
 //!
 //! Both sides of every state are folded independently.  Their product therefore
 //! produces the exact degree-two sumcheck message and preserves the cross terms
@@ -18,8 +18,8 @@ use core::fmt;
 use crate::{
     field::{Fp16, M31_MODULUS},
     fp16_zk_rs_gkr_binding::{
-        BOUNDARY_COUNT, COEFFICIENT_VARIABLES, Fp16ZkRsGkrBinding, GKR_CLAIM_COUNT, WORD_VARIABLES,
-        WORDS_PER_BOUNDARY, coordinate_linearized_coefficients,
+        BOUNDARY_COUNT, COEFFICIENT_VARIABLES, DIRECT_CLAIM_START, Fp16ZkRsGkrBinding,
+        GKR_CLAIM_COUNT, WORD_VARIABLES, WORDS_PER_BOUNDARY, coordinate_linearized_coefficients,
     },
     gkr_packed_bridge_fp16::PACKED_INSTANCES,
 };
@@ -91,6 +91,18 @@ fn row_states(
     let boundary = usize::from(claim.boundary);
     let source_boundary = global_word / WORDS_PER_BOUNDARY;
     let word = global_word % WORDS_PER_BOUNDARY;
+    if claim_ordinal >= DIRECT_CLAIM_START {
+        let direct_relation = if source_boundary == boundary {
+            equality_weight(word, &claim.claim.point[COEFFICIENT_VARIABLES..])
+        } else {
+            Fp16::ZERO
+        };
+        let mut source = [Fp16::ZERO; PACKED_INSTANCES];
+        let mut relation = [Fp16::ZERO; PACKED_INSTANCES];
+        source[0] = component_rows[claim_ordinal][global_word][0];
+        relation[0] = powers[claim_ordinal] * direct_relation;
+        return (source, relation);
+    }
     let mut conjugated_components = component_rows[claim_ordinal][global_word];
     let mut conjugated_high = if source_boundary == boundary {
         equality_weight(word, &claim.claim.point[COEFFICIENT_VARIABLES..])
@@ -159,6 +171,19 @@ impl Fp16ZkRsRowSumcheck {
             let boundary = usize::from(claim.boundary);
             let high_point = &claim.claim.point[COEFFICIENT_VARIABLES..];
             for (global_word, components) in rows.iter().enumerate() {
+                if claim_ordinal >= DIRECT_CLAIM_START {
+                    let source_boundary = global_word / WORDS_PER_BOUNDARY;
+                    let word = global_word % WORDS_PER_BOUNDARY;
+                    let state = claim_ordinal * PACKED_INSTANCES;
+                    let offset = state * GLOBAL_WORDS + global_word;
+                    source[offset] = components[0];
+                    relation[offset] = if source_boundary == boundary {
+                        claim_power * equality_weight(word, high_point)
+                    } else {
+                        Fp16::ZERO
+                    };
+                    continue;
+                }
                 let mut conjugated_components = *components;
                 let source_boundary = global_word / WORDS_PER_BOUNDARY;
                 let word = global_word % WORDS_PER_BOUNDARY;
@@ -503,6 +528,19 @@ mod tests {
             .collect()
     }
 
+    fn direct_rows(point: &[Fp16]) -> Vec<[Fp16; PACKED_INSTANCES]> {
+        (0..GLOBAL_WORDS)
+            .map(|global_word| {
+                let boundary = global_word / WORDS_PER_BOUNDARY;
+                let word = global_word % WORDS_PER_BOUNDARY;
+                let value = (0..SPARSE_COEFFICIENTS).fold(Fp16::ZERO, |sum, position| {
+                    sum + equality_weight(position, point) * source(boundary, word, position)
+                });
+                [value; PACKED_INSTANCES]
+            })
+            .collect()
+    }
+
     fn fixture() -> (Fp16ZkRsGkrBinding, Vec<Vec<[Fp16; PACKED_INSTANCES]>>) {
         let basis = lagrange_basis();
         let mut claims = Vec::new();
@@ -512,22 +550,38 @@ mod tests {
             let point = (0..BOUNDARY_VARIABLES)
                 .map(|coordinate| field(7_001 + 313 * claim_ordinal as u32 + coordinate as u32))
                 .collect::<Vec<_>>();
-            let claim_rows = component_rows(&point[..COEFFICIENT_VARIABLES]);
+            let claim_rows = if claim_ordinal >= DIRECT_CLAIM_START {
+                direct_rows(&point[..COEFFICIENT_VARIABLES])
+            } else {
+                component_rows(&point[..COEFFICIENT_VARIABLES])
+            };
             let high_point = &point[COEFFICIENT_VARIABLES..];
-            let component_evaluations = core::array::from_fn(|component| {
-                (0..WORDS_PER_BOUNDARY).fold(Fp16::ZERO, |sum, word| {
+            let component_evaluations = if claim_ordinal >= DIRECT_CLAIM_START {
+                let value = (0..WORDS_PER_BOUNDARY).fold(Fp16::ZERO, |sum, word| {
                     let global_word = boundary * WORDS_PER_BOUNDARY + word;
-                    sum + equality_weight(word, high_point) * claim_rows[global_word][component]
-                })
-            });
-            let shard_query = fp(19 + claim_ordinal as u32);
-            let value = component_evaluations
-                .iter()
-                .copied()
-                .zip(lagrange_evaluations(&basis, shard_query))
-                .fold(Fp16::ZERO, |sum, (evaluation, weight)| {
-                    sum + evaluation * weight
+                    sum + equality_weight(word, high_point) * claim_rows[global_word][0]
                 });
+                [value; PACKED_INSTANCES]
+            } else {
+                core::array::from_fn(|component| {
+                    (0..WORDS_PER_BOUNDARY).fold(Fp16::ZERO, |sum, word| {
+                        let global_word = boundary * WORDS_PER_BOUNDARY + word;
+                        sum + equality_weight(word, high_point) * claim_rows[global_word][component]
+                    })
+                })
+            };
+            let shard_query = fp(19 + claim_ordinal as u32);
+            let value = if claim_ordinal >= DIRECT_CLAIM_START {
+                component_evaluations[0]
+            } else {
+                component_evaluations
+                    .iter()
+                    .copied()
+                    .zip(lagrange_evaluations(&basis, shard_query))
+                    .fold(Fp16::ZERO, |sum, (evaluation, weight)| {
+                        sum + evaluation * weight
+                    })
+            };
             claims.push(PackedComponentClaim {
                 boundary: boundary as u8,
                 claim: LayerOutputClaim {

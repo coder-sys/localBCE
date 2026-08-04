@@ -13,7 +13,7 @@ const PROTOCOL_MAGIC: &[u8; 8] = b"BLZKRSV1";
 const PCS_MAGIC: &[u8; 8] = b"BLPQPCS1";
 const PCS_VERSION: u16 = 1;
 const SEGMENT_LEAF_DOMAIN: u16 = 516;
-const THEOREM_8_1_COMPLETE_SEGMENT_COUNTS: [usize; 2] = [20, 36];
+const THEOREM_8_1_COMPLETE_SEGMENT_COUNTS: [usize; 2] = [21, 37];
 const SEGMENT_KIND_BASE: u64 = 32;
 const INITIAL_TREE_LEAVES: usize = 1 << 17;
 const FP16_SIZE: usize = 64;
@@ -24,7 +24,9 @@ const SUMCHECK_LEAF_SIZE: usize = 9 * 64;
 const SUMCHECK_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * SUMCHECK_LEAF_SIZE;
 const GKR_MASK_LEAF_SIZE: usize = 64 * 64;
 const GKR_MASK_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * GKR_MASK_LEAF_SIZE;
-const COMPLETE_AUXILIARY_LEAF_SIZE: usize = 73 * 64;
+const COMPLETE_AUXILIARY_LEAF_SIZE: usize = 74 * 64;
+const STATE_SQUAREFREE_LEAF_SIZE: usize = 64;
+const STATE_SQUAREFREE_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * STATE_SQUAREFREE_LEAF_SIZE;
 const COMPLETE_AUXILIARY_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * COMPLETE_AUXILIARY_LEAF_SIZE;
 const MAIN_OPENING_COUNT: usize = 1_600;
 const AUXILIARY_OPENING_COUNT: usize = 1_218;
@@ -115,10 +117,10 @@ fn run(mutation_kat: bool) -> Result<(), String> {
             .map_err(|_| "segment_count".to_string())?;
     if !THEOREM_8_1_COMPLETE_SEGMENT_COUNTS.contains(&segment_count) {
         return Err(format!(
-            "segment_count:expected=20|36:actual={segment_count}"
+            "segment_count:expected=21|37:actual={segment_count}"
         ));
     }
-    let initial_segments = segment_count - 4;
+    let initial_segments = segment_count - 5;
     let segments_per_boundary = initial_segments / 2;
     let interleavings_per_segment = 256 / segments_per_boundary;
     let initial_leaf_size = interleavings_per_segment * FP16_SIZE;
@@ -198,6 +200,15 @@ fn run(mutation_kat: bool) -> Result<(), String> {
                 COMPLETE_AUXILIARY_DATA_SIZE,
                 AUXILIARY_TREE_LEAVES,
                 COMPLETE_AUXILIARY_LEAF_SIZE,
+                AUXILIARY_OPENING_COUNT,
+            )
+        } else if segment_ordinal == initial_segments + 4 {
+            (
+                2,
+                68,
+                STATE_SQUAREFREE_DATA_SIZE,
+                AUXILIARY_TREE_LEAVES,
+                STATE_SQUAREFREE_LEAF_SIZE,
                 AUXILIARY_OPENING_COUNT,
             )
         } else {

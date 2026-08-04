@@ -13,6 +13,11 @@ use bl_pq512_crypto_core::{
         claim_main_answer_target,
     },
     gkr_sumcheck::LayerOutputClaim,
+    multilinear_pcs::MultilinearOpeningClaim,
+    state_squarefree_pcs::{
+        MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS, STATE_SQUAREFREE_COEFFICIENT_VARIABLES,
+        state_squarefree_coefficient_functional,
+    },
 };
 use getrandom::fill;
 use sha3::{Digest, Sha3_512};
@@ -24,7 +29,7 @@ const MAIN_LOG: u32 = 17;
 const MAIN_DIMENSION: u32 = 67_584;
 const AUXILIARY_LOG: u32 = 13;
 const AUXILIARY_DIMENSION: u32 = 3_266;
-const COMPLETE_AUXILIARY_WORDS: u32 = 73;
+const COMPLETE_AUXILIARY_WORDS: u32 = 74;
 const MAIN_QUERIES: u32 = 1_600;
 const AUXILIARY_QUERIES: u32 = 1_218;
 const FP16_ENCODED_LENGTH: usize = 64;
@@ -33,6 +38,7 @@ const WORD_SUMCHECK_ROUNDS: usize = 9;
 const AUXILIARY_MESSAGE_VALUES: usize = 2_048;
 const GKR_MASK_WORDS: usize = 64;
 const GKR_MASK_MESSAGE_VALUES: usize = 512;
+
 const GKR_MASK_VALUES: usize = GKR_MASK_WORDS * GKR_MASK_MESSAGE_VALUES;
 const GKR_MASK_COORDINATES: usize = GKR_MASK_VALUES * COMPONENTS;
 const GKR_MASK_PAYLOAD_BYTES: usize = GKR_MASK_VALUES * FP16_ENCODED_LENGTH;
@@ -182,6 +188,7 @@ fn run_answer_code(allow_test_geometry: bool) -> Result<(), String> {
     let challenges = read_values(&mut reader, WORD_SUMCHECK_ROUNDS)?;
     let gkr_relation_terminals = read_values(&mut reader, GKR_MASK_WORDS)?;
     let main_scale = read_fp16(&mut reader)?;
+    let (state_squarefree_functional, _) = read_squarefree_binding(&mut reader)?;
     let expected_target = read_fp16(&mut reader)?;
     let main_coefficients = read_values(&mut reader, geometry.main_dimension as usize)?;
     let mut auxiliary_coefficients = (0..geometry.auxiliary_words)
@@ -238,6 +245,7 @@ fn run_answer_code(allow_test_geometry: bool) -> Result<(), String> {
         for (coefficients, relation_terminal) in auxiliary_coefficients
             .iter()
             .skip(WORD_SUMCHECK_ROUNDS)
+            .take(GKR_MASK_WORDS)
             .zip(&gkr_relation_terminals)
         {
             auxiliary_target = auxiliary_target
@@ -245,7 +253,16 @@ fn run_answer_code(allow_test_geometry: bool) -> Result<(), String> {
                     * *relation_terminal
                     * main_scale;
         }
-        if main_target * main_scale + auxiliary_target != expected_target {
+        auxiliary_target = auxiliary_target
+            + inner_product(
+                &auxiliary_coefficients
+                    .last()
+                    .ok_or_else(|| "squarefree_auxiliary_missing".to_string())?
+                    [..AUXILIARY_MESSAGE_VALUES],
+                &state_squarefree_functional,
+            )?;
+        let actual_target = main_target * main_scale + auxiliary_target;
+        if actual_target != expected_target {
             return Err("answer_target".to_string());
         }
     }
@@ -518,6 +535,14 @@ fn hash_parts(domain: u16, parts: &[&[u8]]) -> [u8; 64] {
     hash.finalize().into()
 }
 
+fn read_array<const N: usize>(reader: &mut impl Read) -> Result<[u8; N], String> {
+    let mut encoded = [0_u8; N];
+    reader
+        .read_exact(&mut encoded)
+        .map_err(|error| format!("read:{error}"))?;
+    Ok(encoded)
+}
+
 fn read_u32(reader: &mut impl Read) -> Result<u32, String> {
     let mut encoded = [0_u8; 4];
     reader
@@ -598,6 +623,65 @@ fn multilinear_evaluate(values: &[Fp16], challenges: &[Fp16]) -> Fp16 {
         active /= 2;
     }
     layer[0]
+}
+
+fn inner_product(left: &[Fp16], right: &[Fp16]) -> Result<Fp16, String> {
+    if left.len() != right.len() {
+        return Err("inner_product_shape".to_string());
+    }
+    Ok(left
+        .iter()
+        .copied()
+        .zip(right)
+        .fold(Fp16::ZERO, |sum, (value, weight)| sum + value * *weight))
+}
+
+fn read_squarefree_binding(reader: &mut impl Read) -> Result<(Vec<Fp16>, Fp16), String> {
+    if &read_array::<8>(reader)? != b"BLSQAB01" {
+        return Err("squarefree_binding_magic".to_string());
+    }
+    let capacity = usize::from(u16::from_be_bytes(read_array::<2>(reader)?));
+    let count = usize::from(u16::from_be_bytes(read_array::<2>(reader)?));
+    if read_array::<4>(reader)? != [0_u8; 4]
+        || !matches!((capacity, count), (0, 0) | (128, 2) | (512, 2))
+    {
+        return Err("squarefree_binding_shape".to_string());
+    }
+    let mut claims = Vec::with_capacity(count);
+    for phase in 0..count {
+        let point_length = usize::from(u16::from_be_bytes(read_array::<2>(reader)?));
+        if read_array::<6>(reader)? != [0_u8; 6]
+            || point_length != STATE_SQUAREFREE_COEFFICIENT_VARIABLES
+        {
+            return Err("squarefree_binding_point".to_string());
+        }
+        let point = (0..STATE_SQUAREFREE_COEFFICIENT_VARIABLES)
+            .map(|_| read_fp16(reader))
+            .collect::<Result<Vec<_>, _>>()?;
+        if (capacity == 128 && point[7..9].iter().any(|value| !value.is_zero()))
+            || point[10] != if phase == 0 { Fp16::ZERO } else { Fp16::ONE }
+        {
+            return Err("squarefree_binding_padding".to_string());
+        }
+        claims.push(MultilinearOpeningClaim {
+            point,
+            value: read_fp16(reader)?,
+        });
+    }
+    let mixing_count = if count == 0 {
+        4
+    } else {
+        MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS
+    };
+    let mut mixing = vec![Fp16::ZERO; mixing_count];
+    for value in &mut mixing {
+        *value = read_fp16(reader)?;
+    }
+    if capacity == 0 {
+        return Ok((vec![Fp16::ZERO; AUXILIARY_MESSAGE_VALUES], Fp16::ZERO));
+    }
+    state_squarefree_coefficient_functional(capacity, &claims, &mixing)
+        .map_err(|error| format!("squarefree_binding:{error:?}"))
 }
 
 fn root_for_log(log_code: u32) -> Result<Fp16, String> {

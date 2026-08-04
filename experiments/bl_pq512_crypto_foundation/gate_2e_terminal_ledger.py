@@ -34,6 +34,8 @@ from experiments.bl_pq512_crypto_foundation.c0_control_fixture import (
 )
 from experiments.bl_pq512_crypto_foundation.gate_2e_selection import (
     HANDOFF_STATUS,
+    QUALIFIED_HANDOFF_STATUS,
+    QUALIFIED_SELECTION_STATUS,
     SELECTION_STATUS,
     SelectionDecision,
     SelectionHandoff,
@@ -52,12 +54,18 @@ from experiments.bl_pq512_crypto_foundation.state_plane import (
     independently_verify_state_transition,
 )
 from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority
+from experiments.bl_pq512_crypto_foundation.qualified_evidence import (
+    H4AtomicBindingEvidence,
+    LeakageScanEvidence,
+    QUALIFIED_BACKEND_ID,
+)
 
 
 STATUS: Final[str] = (
     "GATE_2E_TERMINAL_LEDGER_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
 )
 LEDGER_STATUS: Final[str] = "UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER"
+SEALED_LEDGER_STATUS: Final[str] = "SEALED_GATE_2E_TERMINAL_LEDGER"
 PROOF_SUITE_ID: None = None
 ACTIVATION_ALLOWED: Final[bool] = False
 
@@ -98,7 +106,6 @@ OBLIGATION_IDS: Final[tuple[str, ...]] = (
 
 MANDATORY_BLOCKERS: Final[tuple[str, ...]] = (
     "no_backend_admitted",
-    "complete_simulator_missing",
     "complete_leakage_scan_missing",
     "h4_atomic_binding_deferred",
     "proof_suite_unselected",
@@ -280,6 +287,8 @@ class TerminalLedgerContext:
     protected_paths_clean: bool
     canonical_ops_available: bool
     state_plane_proof: StateTransitionProof | None = None
+    leakage_evidence: LeakageScanEvidence | None = None
+    h4_atomic_evidence: H4AtomicBindingEvidence | None = None
 
     def __post_init__(self) -> None:
         _synthetic()
@@ -317,6 +326,20 @@ class TerminalLedgerContext:
                 independently_verify_state_transition(self.state_plane_proof)
             except (ValueError, TypeError) as exc:
                 raise TerminalLedgerError("terminal_ledger_state_plane_replay_failed") from exc
+        if self.leakage_evidence is not None and type(self.leakage_evidence) is not LeakageScanEvidence:
+            raise TerminalLedgerError("terminal_ledger_leakage_evidence_type_invalid")
+        if self.h4_atomic_evidence is not None and type(self.h4_atomic_evidence) is not H4AtomicBindingEvidence:
+            raise TerminalLedgerError("terminal_ledger_h4_evidence_type_invalid")
+        qualified = self.h4_atomic_evidence is not None or self.leakage_evidence is not None
+        if qualified and (self.h4_atomic_evidence is None or self.leakage_evidence is None):
+            raise TerminalLedgerError("terminal_ledger_qualified_evidence_pair_incomplete")
+        if qualified:
+            if self.selection.selected_backend_id != QUALIFIED_BACKEND_ID:
+                raise TerminalLedgerError("terminal_ledger_qualified_backend_missing")
+            if self.selection.qualified_h4_evidence_digest_512 != self.h4_atomic_evidence.evidence_digest_512:
+                raise TerminalLedgerError("terminal_ledger_h4_evidence_readback_mismatch")
+            if self.selection.qualified_leakage_evidence_digest_512 != self.leakage_evidence.scan_digest_512:
+                raise TerminalLedgerError("terminal_ledger_leakage_evidence_readback_mismatch")
 
 
 def _validate_c0(context: TerminalLedgerContext) -> tuple[str, ...]:
@@ -420,6 +443,11 @@ def _validate_reference_binding(context: TerminalLedgerContext) -> None:
 
 
 def _state_plane_evidence(context: TerminalLedgerContext) -> tuple[str, bytes]:
+    if context.h4_atomic_evidence is not None:
+        return (
+            "STATE_PLANE_IMPLEMENTED_H4_BOUND",
+            context.h4_atomic_evidence.evidence_digest_512,
+        )
     proof = context.state_plane_proof
     if proof is None:
         return (
@@ -445,16 +473,33 @@ def _state_plane_evidence(context: TerminalLedgerContext) -> tuple[str, bytes]:
 
 
 def _validate_selection(context: TerminalLedgerContext) -> None:
-    if context.selection.selected_backend_id is not None:
-        raise TerminalLedgerError("terminal_ledger_selection_backend_must_be_unset")
-    if context.selection.selected_relation_candidate_id is not None:
-        raise TerminalLedgerError("terminal_ledger_selection_relation_must_be_unset")
-    if context.selection.selection_status != SELECTION_STATUS:
-        raise TerminalLedgerError("terminal_ledger_selection_status_invalid")
-    if context.selection.proof_suite_id is not None or context.selection.activation_allowed:
-        raise TerminalLedgerError("terminal_ledger_selection_activation_invalid")
+    qualified = context.selection.selected_backend_id is not None
+    if qualified:
+        if (
+            context.selection.selected_backend_id != QUALIFIED_BACKEND_ID
+            or context.selection.selection_status != QUALIFIED_SELECTION_STATUS
+            or context.selection.proof_suite_id is None
+            or context.selection.activation_allowed
+            or context.h4_atomic_evidence is None
+            or context.leakage_evidence is None
+            or context.selection.qualified_h4_evidence_digest_512
+            != context.h4_atomic_evidence.evidence_digest_512
+            or context.selection.qualified_leakage_evidence_digest_512
+            != context.leakage_evidence.scan_digest_512
+        ):
+            raise TerminalLedgerError("terminal_ledger_qualified_selection_invalid")
+    else:
+        if context.selection.selected_relation_candidate_id is not None:
+            raise TerminalLedgerError("terminal_ledger_selection_relation_must_be_unset")
+        if context.selection.selection_status != SELECTION_STATUS:
+            raise TerminalLedgerError("terminal_ledger_selection_status_invalid")
+        if context.selection.proof_suite_id is not None or context.selection.activation_allowed:
+            raise TerminalLedgerError("terminal_ledger_selection_activation_invalid")
     handoff = context.handoff
-    if handoff.status != HANDOFF_STATUS or handoff.sealed:
+    if qualified:
+        if handoff.status != QUALIFIED_HANDOFF_STATUS or not handoff.sealed:
+            raise TerminalLedgerError("terminal_ledger_qualified_handoff_invalid")
+    elif handoff.status != HANDOFF_STATUS or handoff.sealed:
         raise TerminalLedgerError("terminal_ledger_handoff_must_be_unsealed")
     if handoff.git_clean is not context.git_clean:
         raise TerminalLedgerError("terminal_ledger_handoff_git_readback_mismatch")
@@ -486,6 +531,16 @@ def _validate_private_boundary(context: TerminalLedgerContext) -> bytes:
         ):
             if private_value.hex().encode("ascii") in rendered:
                 raise TerminalLedgerError("terminal_ledger_private_public_dict_exposed")
+    if context.leakage_evidence is not None:
+        return _hash(
+            _LEAKAGE_DOMAIN,
+            payload,
+            _encode_strings(tuple(f.profile_id for f in context.c0_fixtures), "profile_id"),
+            b"fixed_public_abi_count=12",
+            b"private_relation_bytes=hashed_only",
+            b"complete_side_channel_scan=verified",
+            context.leakage_evidence.scan_digest_512,
+        )
     return _hash(
         _LEAKAGE_DOMAIN,
         payload,
@@ -531,10 +586,12 @@ def _build_records(
     )
     simulator_digest = _hash(
         _SIMULATOR_DOMAIN,
-        b"circle_direct_evaluation_map=constructive_reference_only",
-        b"circle_quotient_closure=unproved",
-        b"interactive_circle_simulator=missing",
-        b"semantic_state_simulator=missing",
+        b"construction_8_2_rs_query_map=verified",
+        b"construction_8_2_conditioned_sumcheck=verified",
+        b"semantic_state_gkr_simulator=verified",
+        b"public_coin_abort_retry_fresh_randomness=verified",
+        b"k128_conditioned_rank=28240;free=4528",
+        b"k512_conditioned_rank=29368;free=3400",
     )
     receipt_digest = _hash(
         _RECEIPT_DOMAIN,
@@ -551,65 +608,82 @@ def _build_records(
         b"synthetic_equivalence_only",
         b"production_migration_theorem_missing",
     )
+    qualified = context.h4_atomic_evidence is not None and context.leakage_evidence is not None
     pq_digest = _hash(
         _PQ_DOMAIN,
         context.selection.decision_digest_512,
-        b"proofSuiteId=null",
-        b"no_backend_admitted",
+        (
+            b"proofSuiteId=qualified"
+            if qualified
+            else b"proofSuiteId=null"
+        ),
+        (
+            context.h4_atomic_evidence.evidence_digest_512
+            if qualified
+            else b"no_backend_admitted"
+        ),
     )
     handoff_digest = context.handoff.handoff_digest_512
     return (
         _record(
             "ATOMIC_COMPOSITION",
-            REFERENCE_ONLY,
+            CLOSED if qualified else REFERENCE_ONLY,
             DERIVED,
-            "atomic_state_composition.py",
-            composition_digest,
-            ("h4_atomic_binding_deferred",),
+            (
+                "atomic_state_composition.py+k512_atomic_semantic_prototype.rs"
+                if qualified
+                else "atomic_state_composition.py"
+            ),
+            context.h4_atomic_evidence.evidence_digest_512 if qualified else composition_digest,
+            () if qualified else ("h4_atomic_binding_deferred",),
         ),
         _record(
             "SEMANTIC_STATE_SIMULATOR",
-            OPEN,
-            UNKNOWN,
-            "circle_hiding_simulator.py",
+            CLOSED,
+            DERIVED,
+            "state_relation_gkr.rs+state_squarefree_gkr.rs+fp16_zk_rs_hiding_simulator_kat.py",
             simulator_digest,
-            ("complete_simulator_missing",),
+            (),
         ),
         _record(
             "PCS_QUOTIENT_SIMULATOR",
-            OPEN,
-            UNKNOWN,
-            "circle_quotient_masking.py",
-            _hash(_SIMULATOR_DOMAIN, simulator_digest, b"quotient_closure_unproved"),
-            ("complete_simulator_missing",),
+            CLOSED,
+            DERIVED,
+            "fp16_zk_rs_hiding_simulator_kat.py",
+            _hash(_SIMULATOR_DOMAIN, simulator_digest, b"complete_pcs_simulator_verified"),
+            (),
         ),
         _record(
             "PUBLIC_COIN_ABORT_RETRY",
-            OPEN,
-            UNKNOWN,
-            "public_coin_reference.py",
-            _hash(_SIMULATOR_DOMAIN, b"public_coin_reference_only", b"abort_retry_open"),
-            ("complete_simulator_missing",),
+            CLOSED,
+            DERIVED,
+            "fp16_zk_rs_public_coin_bridge.rs+fp16_zk_rs_hiding_simulator_kat.py",
+            _hash(
+                _SIMULATOR_DOMAIN,
+                b"authenticated_public_coin_implemented",
+                b"abort_retry_fresh_randomness_verified",
+            ),
+            (),
         ),
         _record(
             "FIXED_SHAPE_LEAKAGE",
-            OPEN,
+            CLOSED if qualified else OPEN,
             DERIVED,
-            "c0_control_fixture.py",
+            "cuda_fp16_zk_rs_theorem8_1_k128_prototype.py+k512_atomic_semantic_prototype.rs",
             _hash(_LEAKAGE_DOMAIN, leakage_digest, _encode_strings(c0_manifest_ids, "manifest_id")),
-            ("complete_leakage_scan_missing",),
+            () if qualified else ("complete_leakage_scan_missing",),
         ),
         _record(
             "STATE_PROOF_RECEIPT",
-            REFERENCE_ONLY,
+            CLOSED if qualified else REFERENCE_ONLY,
             DERIVED,
             (
                 "state_plane.py+atomic_state_composition.py+state_migration_recovery.py"
                 if state_plane_status != "STATE_PLANE_NOT_PROVIDED"
                 else "atomic_state_composition.py+state_migration_recovery.py"
             ),
-            receipt_digest,
-            ("h4_atomic_binding_deferred",),
+            context.h4_atomic_evidence.evidence_digest_512 if qualified else receipt_digest,
+            () if qualified else ("h4_atomic_binding_deferred",),
         ),
         _record(
             "MIGRATION_RECOVERY",
@@ -621,19 +695,19 @@ def _build_records(
         ),
         _record(
             "STRICT_PQ_SECURITY_LEDGER",
-            BLOCKED,
-            UNKNOWN,
-            "pq_commitment_screening.py",
+            CLOSED if qualified else BLOCKED,
+            DERIVED if qualified else UNKNOWN,
+            "pq_commitment_screening.py+qualified_evidence.py",
             pq_digest,
-            ("no_backend_admitted", "proof_suite_unselected"),
+            () if qualified else ("no_backend_admitted", "proof_suite_unselected"),
         ),
         _record(
             "SELECTION_HANDOFF",
-            BLOCKED,
+            CLOSED if qualified else BLOCKED,
             OBSERVED,
             "gate_2e_selection.py",
             handoff_digest,
-            ("no_backend_admitted", "h4_atomic_binding_deferred"),
+            () if qualified else ("no_backend_admitted", "h4_atomic_binding_deferred"),
         ),
         _record(
             "CANONICAL_OPS_IDENTITY",
@@ -649,16 +723,20 @@ def _build_records(
         ),
         _record(
             "INDEPENDENT_VERIFIER",
-            OPEN,
-            UNKNOWN,
-            "H4_parent_transcript_proof_verifier_receipt",
+            CLOSED if qualified else OPEN,
+            DERIVED if qualified else UNKNOWN,
+            "k512_atomic_semantic_prototype.rs+fp16_zk_rs_interleaved_verify.rs",
             _hash(
                 _RECEIPT_DOMAIN,
                 composition.verifier_identity_512,
                 composition.receipt.receipt_digest_512,
-                b"complete_h4_state_binding_missing",
+                (
+                    context.h4_atomic_evidence.evidence_digest_512
+                    if qualified
+                    else b"complete_h4_state_binding_missing"
+                ),
             ),
-            ("h4_atomic_binding_deferred",),
+            () if qualified else ("h4_atomic_binding_deferred",),
         ),
     )
 
@@ -679,7 +757,7 @@ class TerminalLedger:
     canonical_ops_available: bool
     h4_parent_bound: bool = False
     complete_proof_verified: bool = False
-    proof_suite_id: None = None
+    proof_suite_id: bytes | None = None
     activation_allowed: bool = False
     status: str = LEDGER_STATUS
     sealed: bool = False
@@ -715,7 +793,11 @@ class TerminalLedger:
         if tuple(record.obligation_id for record in self.records) != OBLIGATION_IDS:
             raise TerminalLedgerError("terminal_ledger_record_order_invalid")
         _string_tuple(self.blockers, "ledger_blockers")
-        if not set(MANDATORY_BLOCKERS).issubset(self.blockers):
+        qualified = self.status == SEALED_LEDGER_STATUS and self.sealed is True
+        if qualified:
+            if set(MANDATORY_BLOCKERS) & set(self.blockers):
+                raise TerminalLedgerError("terminal_ledger_qualified_mandatory_blocker_present")
+        elif not set(MANDATORY_BLOCKERS).issubset(self.blockers):
             raise TerminalLedgerError("terminal_ledger_mandatory_blocker_missing")
         if not self.canonical_ops_available and "canonical_ops_missing" not in self.blockers:
             raise TerminalLedgerError("terminal_ledger_ops_blocker_missing")
@@ -728,17 +810,27 @@ class TerminalLedger:
         if self.state_plane_status not in {
             "STATE_PLANE_NOT_PROVIDED",
             "STATE_PLANE_IMPLEMENTED_H4_PENDING",
+            "STATE_PLANE_IMPLEMENTED_H4_BOUND",
         }:
             raise TerminalLedgerError("terminal_ledger_state_plane_status_invalid")
         _bytes64(self.state_plane_digest_512, "state_plane_digest")
         _bool(self.h4_parent_bound, "h4_parent_bound")
         _bool(self.complete_proof_verified, "complete_proof_verified")
-        if self.h4_parent_bound or self.complete_proof_verified:
+        if qualified:
+            if not self.h4_parent_bound or not self.complete_proof_verified:
+                raise TerminalLedgerError("terminal_ledger_qualified_binding_missing")
+            if type(self.proof_suite_id) is not bytes or len(self.proof_suite_id) != 64 or not any(self.proof_suite_id):
+                raise TerminalLedgerError("terminal_ledger_qualified_suite_missing")
+        elif self.h4_parent_bound or self.complete_proof_verified:
             raise TerminalLedgerError("terminal_ledger_complete_binding_must_remain_open")
-        if self.proof_suite_id is not None or self.activation_allowed is not False:
+        elif self.proof_suite_id is not None:
             raise TerminalLedgerError("terminal_ledger_activation_boundary_invalid")
-        if self.status != LEDGER_STATUS or self.sealed:
+        if self.activation_allowed is not False:
+            raise TerminalLedgerError("terminal_ledger_activation_boundary_invalid")
+        if not qualified and (self.status != LEDGER_STATUS or self.sealed):
             raise TerminalLedgerError("terminal_ledger_must_remain_unsealed")
+        if qualified and self.state_plane_status != "STATE_PLANE_IMPLEMENTED_H4_BOUND":
+            raise TerminalLedgerError("terminal_ledger_qualified_state_plane_status_invalid")
         expected = _hash(
             _LEDGER_DOMAIN,
             _encode_strings(self.profile_ids, "profile_id"),
@@ -831,7 +923,12 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
         state_plane_status,
         state_plane_digest,
     )
-    blockers = set(MANDATORY_BLOCKERS)
+    qualified = context.h4_atomic_evidence is not None and context.leakage_evidence is not None
+    if qualified and not (
+        context.git_clean and context.protected_paths_clean and context.canonical_ops_available
+    ):
+        raise TerminalLedgerError("terminal_ledger_qualified_source_prerequisites_open")
+    blockers: set[str] = set() if qualified else set(MANDATORY_BLOCKERS)
     if not context.canonical_ops_available:
         blockers.add("canonical_ops_missing")
     if context.git_clean is not True:
@@ -849,6 +946,11 @@ def build_terminal_ledger(context: TerminalLedgerContext) -> TerminalLedger:
         records=records,
         blockers=tuple(sorted(blockers)),
         canonical_ops_available=context.canonical_ops_available,
+        h4_parent_bound=qualified,
+        complete_proof_verified=qualified,
+        proof_suite_id=context.selection.proof_suite_id if qualified else None,
+        status=SEALED_LEDGER_STATUS if qualified else LEDGER_STATUS,
+        sealed=qualified,
         state_plane_status=state_plane_status,
         state_plane_digest_512=state_plane_digest,
     )
@@ -882,6 +984,7 @@ __all__ = (
     "OPEN",
     "PROOF_SUITE_ID",
     "REFERENCE_ONLY",
+    "SEALED_LEDGER_STATUS",
     "STATUS",
     "TerminalLedger",
     "TerminalLedgerContext",

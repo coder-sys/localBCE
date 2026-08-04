@@ -47,10 +47,10 @@ selection, the complete simulator/composition ledger, H5/H6, and the final ident
 No backend is selected merely because a toy, kernel, component, or single successful proof is fast
 or small.
 
-The current H4 state-composed bridge is a fixed-shape seven-claim, 6,111-round integration seam
-with two state PCS claims and a 25-round state-GKR prelude. It remains nonactivating: the relation
-currently covers operation/snapshot equality, Boolean presence, and empty-slot zeroing, while full
-state semantics, complete simulator/leakage closure, backend admission, H5, and H6 remain open.
+The current H4 state-composed bridge is a fixed-shape nineteen-claim integration seam with exact
+6,727/6,995 K128/K512 schedules. It covers operation/snapshot equality, Boolean presence,
+empty-slot zeroing, and linear square-free uniqueness. Conditioned simulator mechanics are closed;
+complete proof artifact leakage, backend admission, H5, and H6 remain open and nonactivating.
 
 R24's exact pre-implementation continuation is
 `docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md`. It permanently rejects the current

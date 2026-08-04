@@ -27,8 +27,18 @@ pub const WORDS_PER_BOUNDARY: usize = 1 << WORD_VARIABLES;
 pub const BOUNDARY_COUNT: usize = 2;
 pub const INTERLEAVED_WORDS: usize = BOUNDARY_COUNT * WORDS_PER_BOUNDARY;
 pub const OUTPUT_CLAIM_COUNT: usize = 1;
-pub const INPUT_CLAIM_COUNT: usize = 6;
+pub const HASH_INPUT_CLAIM_COUNT: usize = 4;
+pub const STATE_RELATION_INPUT_CLAIM_COUNT: usize = 2;
+pub const STATE_SQUAREFREE_INPUT_CLAIM_COUNT: usize = 12;
+pub const INPUT_CLAIM_COUNT: usize =
+    HASH_INPUT_CLAIM_COUNT + STATE_RELATION_INPUT_CLAIM_COUNT + STATE_SQUAREFREE_INPUT_CLAIM_COUNT;
 pub const GKR_CLAIM_COUNT: usize = OUTPUT_CLAIM_COUNT + INPUT_CLAIM_COUNT;
+/// Claims before this ordinal are packed M31 component polynomials. State
+/// claims at and after this ordinal are direct Fp16 multilinear polynomials.
+pub const PACKED_CLAIM_COUNT: usize = OUTPUT_CLAIM_COUNT + HASH_INPUT_CLAIM_COUNT;
+pub const DIRECT_CLAIM_START: usize = PACKED_CLAIM_COUNT;
+const LOW_MESSAGE_WIRES: usize = 1 << 11;
+const HASH_MESSAGE_WIRES: usize = 1_600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fp16ZkRsGkrBindingError {
@@ -58,7 +68,8 @@ impl core::error::Error for Fp16ZkRsGkrBindingError {}
 /// One GKR boundary claim and the small-field evaluations it asserts.
 ///
 /// Canonical order is one output claim on boundary zero followed by four
-/// relay-free RoundInput claims on boundary one.
+/// relay-free RoundInput claims, two state-relation claims, and twelve
+/// square-free state-source claims on boundary one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackedComponentClaim {
     pub boundary: u8,
@@ -88,6 +99,10 @@ fn equality_weight(index: usize, point: &[Fp16]) -> Fp16 {
                 weight * (Fp16::ONE - challenge)
             }
         })
+}
+
+fn is_hash_message_position(position: usize) -> bool {
+    position & (LOW_MESSAGE_WIRES - 1) < HASH_MESSAGE_WIRES
 }
 
 fn coordinate_batch(value: Fp16, challenge: Fp16) -> Fp16 {
@@ -135,7 +150,17 @@ fn validate_claims(claims: &[PackedComponentClaim]) -> Result<(), Fp16ZkRsGkrBin
     }
 
     let basis = lagrange_basis();
-    for claim in claims {
+    for (claim_ordinal, claim) in claims.iter().enumerate() {
+        if claim_ordinal >= DIRECT_CLAIM_START {
+            if claim
+                .component_evaluations
+                .iter()
+                .any(|evaluation| *evaluation != claim.claim.value)
+            {
+                return Err(Fp16ZkRsGkrBindingError::GkrValueMismatch);
+            }
+            continue;
+        }
         let shard_weights = lagrange_evaluations(&basis, claim.shard_query);
         let expected = claim
             .component_evaluations
@@ -152,7 +177,7 @@ fn validate_claims(claims: &[PackedComponentClaim]) -> Result<(), Fp16ZkRsGkrBin
     Ok(())
 }
 
-/// Bind the canonical five GKR claims to one packed-coefficient relation.
+/// Bind the canonical nineteen GKR claims to one packed-coefficient relation.
 ///
 /// Both batching challenges are authenticated verifier coins sampled only
 /// after all component evaluations are fixed.  Zero is rejected so no
@@ -172,14 +197,18 @@ pub fn bind_gkr_boundary_claims(
 
     let mut claim_power = Fp16::ONE;
     let mut expected_target = Fp16::ZERO;
-    for claim in claims {
-        let mut coordinate_power = Fp16::ONE;
-        for coordinate in 0..PACKED_INSTANCES {
-            expected_target = expected_target
-                + claim_power
-                    * coordinate_power
-                    * packed_component_coordinates(&claim.component_evaluations, coordinate);
-            coordinate_power = coordinate_power * coordinate_challenge;
+    for (claim_ordinal, claim) in claims.iter().enumerate() {
+        if claim_ordinal >= DIRECT_CLAIM_START {
+            expected_target = expected_target + claim_power * claim.claim.value;
+        } else {
+            let mut coordinate_power = Fp16::ONE;
+            for coordinate in 0..PACKED_INSTANCES {
+                expected_target = expected_target
+                    + claim_power
+                        * coordinate_power
+                        * packed_component_coordinates(&claim.component_evaluations, coordinate);
+                coordinate_power = coordinate_power * coordinate_challenge;
+            }
         }
         claim_power = claim_power * claim_challenge;
     }
@@ -207,14 +236,22 @@ pub fn relation_weight(
     }
     let mut claim_power = Fp16::ONE;
     let mut result = Fp16::ZERO;
-    for claim in &binding.claims {
+    for (claim_ordinal, claim) in binding.claims.iter().enumerate() {
         if usize::from(claim.boundary) == boundary {
-            result = result
-                + claim_power
-                    * coordinate_batch(
+            let relation = if claim_ordinal >= DIRECT_CLAIM_START {
+                equality_weight(index, &claim.claim.point)
+            } else {
+                let position = index & ((1 << COEFFICIENT_VARIABLES) - 1);
+                if is_hash_message_position(position) {
+                    coordinate_batch(
                         equality_weight(index, &claim.claim.point),
                         binding.coordinate_challenge,
-                    );
+                    )
+                } else {
+                    Fp16::ZERO
+                }
+            };
+            result = result + claim_power * relation;
         }
         claim_power = claim_power * binding.claim_challenge;
     }
@@ -325,10 +362,7 @@ fn claim_linearized_coefficients(
     } else {
         word_challenges[WORD_VARIABLES]
     };
-    let mut claim_power = Fp16::ONE;
-    for _ in 0..claim_ordinal {
-        claim_power = claim_power * binding.claim_challenge;
-    }
+    let claim_power = claim_power(binding, claim_ordinal);
     let scale = claim_power * boundary_weight;
     let high_point = &claim.claim.point[COEFFICIENT_VARIABLES..];
     let images = fp16_basis().map(|basis| {
@@ -339,6 +373,10 @@ fn claim_linearized_coefficients(
         }) * scale
     });
     linearized_coefficients(images)
+}
+
+fn claim_power(binding: &Fp16ZkRsGkrBinding, claim_ordinal: usize) -> Fp16 {
+    (0..claim_ordinal).fold(Fp16::ONE, |power, _| power * binding.claim_challenge)
 }
 
 fn equality_table(point: &[Fp16]) -> Vec<Fp16> {
@@ -371,10 +409,33 @@ pub fn folded_relation_table(
     }
     let mut relation = vec![Fp16::ZERO; 1 << COEFFICIENT_VARIABLES];
     for (claim_ordinal, claim) in binding.claims.iter().enumerate() {
+        if claim_ordinal >= DIRECT_CLAIM_START {
+            let boundary_weight = if claim.boundary == 0 {
+                Fp16::ONE - word_challenges[WORD_VARIABLES]
+            } else {
+                word_challenges[WORD_VARIABLES]
+            };
+            let claim_scale = claim_power(binding, claim_ordinal) * boundary_weight;
+            let low_table = equality_table(&claim.claim.point[..COEFFICIENT_VARIABLES]);
+            let high_scale = (0..WORDS_PER_BOUNDARY).fold(Fp16::ZERO, |sum, word| {
+                sum + word_fold_weight(word, &word_challenges[..WORD_VARIABLES])
+                    * equality_weight(word, &claim.claim.point[COEFFICIENT_VARIABLES..])
+            });
+            let coefficient = claim_scale * high_scale;
+            for (destination, equality) in relation.iter_mut().zip(low_table) {
+                *destination = *destination + coefficient * equality;
+            }
+            continue;
+        }
         let coefficients = claim_linearized_coefficients(binding, claim_ordinal, word_challenges);
         let mut conjugated_point = claim.claim.point[..COEFFICIENT_VARIABLES].to_vec();
         for coefficient in coefficients {
-            let table = equality_table(&conjugated_point);
+            let mut table = equality_table(&conjugated_point);
+            for (position, equality) in table.iter_mut().enumerate() {
+                if !is_hash_message_position(position) {
+                    *equality = Fp16::ZERO;
+                }
+            }
             for (destination, equality) in relation.iter_mut().zip(table) {
                 *destination = *destination + coefficient * equality;
             }
@@ -389,10 +450,19 @@ pub fn folded_relation_table(
 fn component_polynomial_evaluations(
     answer_coefficients: &[Fp16],
     point: &[Fp16],
+    hash_only: bool,
 ) -> [Fp16; PACKED_INSTANCES] {
     let equality = equality_table(point);
     let mut evaluations = [Fp16::ZERO; PACKED_INSTANCES];
-    for (coefficient, weight) in answer_coefficients.iter().copied().zip(equality) {
+    for (position, (coefficient, weight)) in answer_coefficients
+        .iter()
+        .copied()
+        .zip(equality)
+        .enumerate()
+    {
+        if hash_only && !is_hash_message_position(position) {
+            continue;
+        }
         for (evaluation, coordinate) in evaluations.iter_mut().zip(coefficient.coefficients()) {
             *evaluation = *evaluation
                 + weight.mul_by_m31(
@@ -425,10 +495,31 @@ pub fn claim_main_answer_target(
         .claims
         .get(claim_ordinal)
         .ok_or(Fp16ZkRsGkrBindingError::ClaimCount)?;
+    if claim_ordinal >= DIRECT_CLAIM_START {
+        let boundary_weight = if claim.boundary == 0 {
+            Fp16::ONE - word_challenges[WORD_VARIABLES]
+        } else {
+            word_challenges[WORD_VARIABLES]
+        };
+        let high_scale = (0..WORDS_PER_BOUNDARY).fold(Fp16::ZERO, |sum, word| {
+            sum + word_fold_weight(word, &word_challenges[..WORD_VARIABLES])
+                * equality_weight(word, &claim.claim.point[COEFFICIENT_VARIABLES..])
+        });
+        let scale = claim_power(binding, claim_ordinal) * boundary_weight * high_scale;
+        let low_table = equality_table(&claim.claim.point[..COEFFICIENT_VARIABLES]);
+        return Ok(answer_coefficients[..1 << COEFFICIENT_VARIABLES]
+            .iter()
+            .copied()
+            .zip(low_table)
+            .fold(Fp16::ZERO, |sum, (coefficient, equality)| {
+                sum + coefficient * equality * scale
+            }));
+    }
     let coefficients = claim_linearized_coefficients(binding, claim_ordinal, word_challenges);
     let mut components = component_polynomial_evaluations(
         &answer_coefficients[..1 << COEFFICIENT_VARIABLES],
         &claim.claim.point[..COEFFICIENT_VARIABLES],
+        true,
     );
     let basis = fp16_basis();
     let mut target = Fp16::ZERO;
@@ -499,7 +590,9 @@ mod tests {
     fn sparse_source(boundary: usize) -> [(usize, [M31; PACKED_INSTANCES]); SPARSE_PER_BOUNDARY] {
         core::array::from_fn(|entry| {
             let word = (17 + 71 * boundary + 43 * entry) % WORDS_PER_BOUNDARY;
-            let position = (101 + 137 * boundary + 997 * entry) % (1 << COEFFICIENT_VARIABLES);
+            let wire = (101 + 137 * boundary + 997 * entry) % HASH_MESSAGE_WIRES;
+            let group = (17 + 71 * boundary + 43 * entry) % 32;
+            let position = (group << 11) | wire;
             let components = core::array::from_fn(|component| {
                 M31::from_canonical(
                     (11 + 10_007 * boundary as u32 + 1_009 * entry as u32 + 131 * component as u32)
@@ -515,24 +608,37 @@ mod tests {
         ordinal: usize,
         boundary: usize,
         source: &[(usize, [M31; PACKED_INSTANCES]); SPARSE_PER_BOUNDARY],
+        direct: bool,
     ) -> PackedComponentClaim {
         let point = (0..BOUNDARY_VARIABLES)
             .map(|coordinate| field(31 + 401 * ordinal as u32 + 17 * coordinate as u32))
             .collect::<Vec<_>>();
-        let component_evaluations = core::array::from_fn(|component| {
-            source.iter().fold(Fp16::ZERO, |sum, (index, values)| {
-                sum + equality_weight(*index, &point).mul_by_m31(values[component])
-            })
-        });
-        let shard_query = field(7_001 + 211 * ordinal as u32);
-        let shard_weights = lagrange_evaluations(&lagrange_basis(), shard_query);
-        let value = component_evaluations
-            .iter()
-            .copied()
-            .zip(shard_weights)
-            .fold(Fp16::ZERO, |sum, (evaluation, weight)| {
-                sum + evaluation * weight
+        let component_evaluations = if direct {
+            let value = source.iter().fold(Fp16::ZERO, |sum, (index, values)| {
+                let packed = Fp16::from_coefficients(values.map(M31::as_u32)).unwrap();
+                sum + equality_weight(*index, &point) * packed
             });
+            [value; PACKED_INSTANCES]
+        } else {
+            core::array::from_fn(|component| {
+                source.iter().fold(Fp16::ZERO, |sum, (index, values)| {
+                    sum + equality_weight(*index, &point).mul_by_m31(values[component])
+                })
+            })
+        };
+        let shard_query = field(7_001 + 211 * ordinal as u32);
+        let value = if direct {
+            component_evaluations[0]
+        } else {
+            let shard_weights = lagrange_evaluations(&lagrange_basis(), shard_query);
+            component_evaluations
+                .iter()
+                .copied()
+                .zip(shard_weights)
+                .fold(Fp16::ZERO, |sum, (evaluation, weight)| {
+                    sum + evaluation * weight
+                })
+        };
         PackedComponentClaim {
             boundary: boundary as u8,
             claim: LayerOutputClaim {
@@ -552,9 +658,14 @@ mod tests {
     fn fixture() -> (Vec<PackedComponentClaim>, SparseBoundaryFixture) {
         let sources = [sparse_source(0), sparse_source(1)];
         let mut claims = Vec::with_capacity(GKR_CLAIM_COUNT);
-        claims.push(component_claim(0, 0, &sources[0]));
+        claims.push(component_claim(0, 0, &sources[0], false));
         for ordinal in 1..GKR_CLAIM_COUNT {
-            claims.push(component_claim(ordinal, 1, &sources[1]));
+            claims.push(component_claim(
+                ordinal,
+                1,
+                &sources[1],
+                ordinal >= DIRECT_CLAIM_START,
+            ));
         }
         (claims, sources)
     }

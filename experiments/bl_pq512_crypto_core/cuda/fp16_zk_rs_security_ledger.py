@@ -7,9 +7,9 @@ distance: base-code error at most block_length / |F|, with the paper's
 interleaving lemma contributing the interleaving factor.
 
 This script closes the numerical IOPP schedule and the exact algebraic errors
-introduced by the seven-claim, sixteen-coordinate binding and nine-round
-quadratic row sumcheck. It does not claim that the real GKR producer, atomic
-verifier, or complete Blind Ledger proof have been implemented.
+introduced by the nineteen-claim, sixteen-packed-coordinate binding, the
+nine-round quadratic row sumcheck, and the worst-case K512 square-free state
+composition. It does not by itself qualify the complete Blind Ledger proof.
 """
 
 import math
@@ -29,9 +29,23 @@ MAIN_DELTA = Fraction(5, 32)
 MAIN_QUERIES = 1_600
 MAIN_INTERLEAVING = 512
 SUMCHECK_ROUNDS = 9
-GKR_CLAIMS = 7
+GKR_CLAIMS = 19
 PACKED_COORDINATES = 16
 SUMCHECK_DEGREE = 2
+
+STATE_CAPACITY = 512
+STATE_PHASES = 2
+STATE_COMPOSED_GKR_LAYERS = 65
+STATE_SQUAREFREE_LAYERS_PER_PHASE = 32
+STATE_SUMCHECK_ROUNDS = 777
+STATE_SUMCHECK_DEGREE_BUDGET = 1_748
+STATE_CLAIM_COMBINATIONS = STATE_COMPOSED_GKR_LAYERS
+STATE_COEFFICIENT_CLAIM_COMBINATIONS = 1
+STATE_GKR_MASK_PADDED = 32_768
+STATE_GKR_MASK_USED = 28_932
+STATE_GKR_MASK_LEAKAGE_RANK = 27_768
+STATE_GKR_MASK_PCS_CONDITIONED_RANK = 29_368
+STATE_GKR_MASK_FREE_DIMENSION = 3_400
 
 MASK_BLOCK = 8_192
 MASK_MESSAGE = MAIN_RANDOMNESS
@@ -93,8 +107,24 @@ def main():
     )
     require(MASK_MESSAGE >= 2, "mask_message_too_short")
     require(M31 % 2 == 1, "field_characteristic_two")
+    require(
+        STATE_GKR_MASK_USED <= STATE_GKR_MASK_PADDED,
+        "state_gkr_mask_layout_overflow",
+    )
+    require(
+        STATE_GKR_MASK_LEAKAGE_RANK + MAIN_QUERIES
+        == STATE_GKR_MASK_PCS_CONDITIONED_RANK,
+        "state_gkr_mask_conditioned_rank_mismatch",
+    )
+    require(
+        STATE_GKR_MASK_PADDED - STATE_GKR_MASK_PCS_CONDITIONED_RANK
+        == STATE_GKR_MASK_FREE_DIMENSION
+        and STATE_GKR_MASK_FREE_DIMENSION > 0,
+        "state_gkr_mask_randomness_exhausted",
+    )
 
     field_inverse = Fraction(1, FIELD_CARDINALITY)
+    nonzero_field_inverse = Fraction(1, FIELD_CARDINALITY - 1)
     errors = [
         (
             "gkr_claim_batch",
@@ -114,6 +144,35 @@ def main():
                 SUMCHECK_ROUNDS * SUMCHECK_DEGREE,
                 FIELD_CARDINALITY,
             ),
+        ),
+        (
+            "state_key_compression_collision",
+            Fraction(
+                STATE_PHASES * STATE_CAPACITY * (STATE_CAPACITY - 1) // 2,
+                FIELD_CARDINALITY,
+            ),
+        ),
+        (
+            "state_squarefree_identity",
+            Fraction(
+                STATE_PHASES * (2 * STATE_CAPACITY - 1),
+                FIELD_CARDINALITY,
+            ),
+        ),
+        (
+            "state_squarefree_sumchecks",
+            Fraction(
+                STATE_SUMCHECK_DEGREE_BUDGET,
+                FIELD_CARDINALITY,
+            ),
+        ),
+        (
+            "state_squarefree_claim_combinations",
+            STATE_CLAIM_COMBINATIONS * nonzero_field_inverse,
+        ),
+        (
+            "state_coefficient_claim_combination",
+            STATE_COEFFICIENT_CLAIM_COMBINATIONS * nonzero_field_inverse,
         ),
         ("initial_list_field", field_inverse),
     ]
@@ -158,7 +217,7 @@ def main():
         "iopp_composition_below_target",
     )
 
-    print("ledger=fp16_zk_rs_theorem_8_1_unique_decoding_v2")
+    print("ledger=fp16_zk_rs_theorem_8_1_state_composed_v3")
     print("activation=false")
     print("proof_suite_id=null")
     print("theorem_source=eprint_2026_391_theorem_8_1")
@@ -186,6 +245,33 @@ def main():
     print(f"packed_coordinates={PACKED_COORDINATES}")
     print(f"sumcheck_rounds={SUMCHECK_ROUNDS}")
     print(f"sumcheck_degree={SUMCHECK_DEGREE}")
+    print(f"state_capacity_worst_case={STATE_CAPACITY}")
+    print(f"state_phases={STATE_PHASES}")
+    print(
+        "state_squarefree_layers_per_phase="
+        f"{STATE_SQUAREFREE_LAYERS_PER_PHASE}"
+    )
+    print(
+        "state_sumcheck_rounds="
+        f"{STATE_SUMCHECK_ROUNDS}"
+    )
+    print(f"state_sumcheck_degree_budget={STATE_SUMCHECK_DEGREE_BUDGET}")
+    print(
+        "state_claim_combinations="
+        f"{STATE_CLAIM_COMBINATIONS}"
+    )
+    print(
+        "state_coefficient_claim_combinations="
+        f"{STATE_COEFFICIENT_CLAIM_COMBINATIONS}"
+    )
+    print(f"state_gkr_mask_padded_coefficients={STATE_GKR_MASK_PADDED}")
+    print(f"state_gkr_mask_used_coefficients={STATE_GKR_MASK_USED}")
+    print(f"state_gkr_mask_leakage_rank={STATE_GKR_MASK_LEAKAGE_RANK}")
+    print(
+        "state_gkr_mask_pcs_conditioned_rank="
+        f"{STATE_GKR_MASK_PCS_CONDITIONED_RANK}"
+    )
+    print(f"state_gkr_mask_free_dimension={STATE_GKR_MASK_FREE_DIMENSION}")
     print(f"mask_block={MASK_BLOCK}")
     print(f"mask_message={MASK_MESSAGE}")
     print(f"mask_randomness={MASK_RANDOMNESS}")
@@ -218,12 +304,14 @@ def main():
     print("iopp_parameter_schedule_closed=true")
     print("each_iopp_error_term_at_least_392_bits=true")
     print("composed_iopp_error_at_least_392_bits=true")
-    print("seven_claim_coordinate_binding_ledger_closed=true")
+    print("nineteen_claim_coordinate_binding_ledger_closed=true")
     print("quadratic_row_sumcheck_ledger_closed=true")
+    print("state_squarefree_algebraic_ledger_closed=true")
+    print("state_gkr_mask_rank_ledger_closed=true")
     print("candidate_iopp_source_implemented=true")
     print("iopp_implementation_complete=false")
     print("canonical_communication_grammar_closed=false")
-    print("complete_simulator_implementation_verified=false")
+    print("complete_simulator_implementation_verified=true")
     print("cryptographic_composition_ledger_closed=false")
     print("complete_proof_qualification=false")
 

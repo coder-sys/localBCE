@@ -111,7 +111,6 @@ def test_h5_preflight_is_blocked_and_freezes_the_complete_campaign_shape(context
         "gate_2e_ledger_unsealed",
         "state_plane_unselected",
         "h4_atomic_binding_deferred",
-        "complete_simulator_missing",
         "complete_leakage_scan_missing",
         "strict_pq_security_ledger_open",
         "proof_suite_unselected",

@@ -1,38 +1,48 @@
 # Blind Ledger state
 
-Updated: 2026-08-02
+Updated: 2026-08-03
 
 ## Current execution boundary
 
-The authoritative clean transfer checkpoint is `WAVE2_HANDOFF_2026-07-26.md`; it is recovery
-history, not the current PCS choice. No proof process remains running. The current nonactivating
-blueprint is section 8.3 of `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`: the exact
-seven-layer/B=16 relay-free GKR plus Construction 8.2 random-padded interleaved Reed--Solomon PCS.
-The owner's K128 target is below 30 seconds for the complete fresh proof through independent
-verification, not only GKR.
+The authoritative recovery checkpoint remains `WAVE2_HANDOFF_2026-07-26.md`, but executable source
+and this newest entry supersede its partial proof shape. The current nonactivating H4 candidate is
+the exact seven-layer/B=16 relay-free Keccak GKR, the typed state relation, linear square-free
+before/after uniqueness, and Construction 8.2 random-padded interleaved Reed--Solomon PCS under one
+authenticated dual-PQ public coin. The fixed public ABI remains exactly twelve fields.
 
-The real uniform-zero-trace B=16 GKR producer, dual-PQ coordinator, and independent replay measured
-13.484277 seconds at 52.457472 MB host and 0.000000 MB device use. Segment-32 initial PCS mechanics measured
-3.586543 seconds, 191.533 MB host memory, 1,612.185152 MB device memory, and 0.000000 MB scratch.
-Their 17.070820-second component sum leaves 12.929180 seconds below the target, but native GKR
-masking, PCS attachment, semantic synchronization, setup/transfer, atomic join, parsing, and final
-independent verification remain unmeasured as one proof. This is component evidence, not a
-complete-proof projection or qualification.
+The state-composed boundary now carries nineteen GKR/PCS claims. It consumes 6,113 rounds through
+the relation/mask/PCS bridge, then 614 K128 or 882 K512 square-free rounds, for exact totals of
+6,727 and 6,995. K128 uses 221 committed GKR-mask layers and 27,744 of 32,768 coefficients; K512
+uses 233 layers and 28,932 coefficients. The complete transcript leakage ranks are 26,640 and
+27,768. Including the 1,600 PCS query rows leaves 4,528 K128 and 3,400 K512 free mask dimensions.
 
-The main RS instance has length 131,072, message length 65,536, random-padding length 2,048,
-proximity `5/32`, and 1,600 queries. Nine auxiliary instances have length 8,192, message length
-2,048, random-padding length 1,218, proximity `1/5`, and 1,218 queries. The current composed PCS
-ledger is 392.108419573 bits. The corrected five-claim boundary uses one output and four
-relay-free input claims. The corrected shared authenticated-public-coin schedule is 6,086 rounds;
-the real dual-PQ coordinator executed and independently replayed all 6,086 descriptors, while the
-complete producer still has not occupied the mask-batch and downstream PCS descriptors.
+The active hiding simulator now covers the Construction 8.2 query map, conditioned row sumcheck,
+typed state relation, both square-free phases, the complete state GKR mask layout, and fresh
+abort/retry public-coin randomness. The Gate 2E terminal ledger therefore closes its three
+simulator records. Its exact remaining blockers are `complete_leakage_scan_missing`,
+`h4_atomic_binding_deferred`, `no_backend_admitted`, and `proof_suite_unselected`. The composed
+security ledger remains at 392.108419573 bits and records the exact K512 state sumcheck degree
+budget of 1,748.
 
-The remaining critical path is exact: replace the deterministic fixture claims with the actual
-B=16 GKR producer in the same authenticated coordinator, bind the same committed RS source, run
-the bounded semantic AIR concurrently, form one retry-stable atomic state/proof receipt, close the
-complete composition/simulator/leakage ledger, and then run one fresh proof plus the warm-up and
-ten unique K128 qualification proofs. The Windows GPU driver must be reset before that production
-run. `proofSuiteId` remains null, activation remains false, and real PHI/payments remain forbidden.
+Two privacy defects found during composition are fixed without weakening verification: mask-batch
+constraints are now published only through a SHA3-512 commitment, and square-free coefficient
+claims use masked public values under a fixed 140-byte digest payload. Raw coefficient openings
+remain confined to internal PCS computation. Focused Rust privacy regressions, all ten square-free
+tests, the 6,113-round same-chain replay, the simulator KAT, and the Gate 2E/H5/H6 ledger tests pass.
+
+Fresh GPU boundary work is now recorded. Brave was closed, the scoped RTX 4060 driver reset
+completed, and the fresh monitored native runs had zero post-launch `nvlddmkm`/Display events and
+zero pagefile growth. The current K128 state-composed run verified its atomic boundary but measured
+`shard_0_proof_seconds=36.077706`, so its strict 30-second complete-proof qualification is false.
+The current K512 state-composed run independently verified all four sequential shards under one
+GPU with `complete_process_wall_seconds=153.860446`, `complete_proof_latency_gate=true`, but
+`complete_proof_qualification=false` because the candidate remains non-admitted. Its monitor
+recorded `external_exit_code=0`, `stderr_bytes=0`, `external_process_tree_peak_bytes=1605058560`,
+`external_gpu_peak_mib=2731`, `pagefile_growth_mb=0`, and `post_launch_driver_event_count=0`.
+The state binding and K512 hash-bus boundary were independently verified; the raw K512 stdout and
+stderr leakage-category checks returned `[]`. No exact 22-launch H5 campaign was run because the
+fail-closed H5 preflight still requires a sealed Gate 2E admission. `proofSuiteId` remains null,
+activation remains false, and real PHI/payments remain forbidden.
 
 Historical transfer-time verification (superseded by the current 2026-07-29 section below) was:
 `cargo test --lib --all-features` passed 229/229 tests in 1,069.89 seconds;
@@ -6747,3 +6757,236 @@ new auxiliary codeword in the CUDA path or extend the public-coin bridge, parent
 and independent production verifier. No Gate 2E, H5, H6, backend-admission, `proofSuiteId`, or
 activation credit is taken. The next action is that production orchestration, not another
 uniqueness construction.
+
+## 2026-08-03 Gate 2E production composition - CPU VERIFIED, GPU QUALIFICATION BLOCKED
+
+The selected linear square-free state proof is now composed through the nineteen-claim GKR/PCS
+binding, authenticated public-coin bridge, independent answer/target verifiers, interleaved
+verifier, parent grammar, atomic receipt, schedules, and security ledger. The fixed public ABI
+remains twelve fields and protected application/contract paths are unchanged. Activation remains
+false and `proofSuiteId` remains null.
+
+Production-boundary generation exposed a duplicated SHA3 rate error in the CUDA worker and prior
+documentation. SHA3-512 uses a 72-byte rate, not 136 bytes. The descriptor-derived state-composed
+totals are therefore 114,232 permutations for K128 and 413,370 for K512; the two state-root calls
+add 502 and 1,964 permutations. This entry explicitly supersedes the contrary totals recorded in
+the two earlier 2026-08-03 historical entries without rewriting that history. The generated K128
+boundary now reports:
+
+```text
+totals {1:114232,3:413370}
+input_words=11430400 output_words=11430400 nonuniform_groups=7140 packed_groups=7144
+boundary_compaction_verified=true
+```
+
+The corrected boundary regression, descriptor-tail Rust regression, parent exact-replay test,
+format check, all-bin `std,parallel` check, Python compilation, independent answer-target KAT,
+same-chain public-coin KAT, and security ledger pass. Decisive outputs:
+
+```text
+test hash_bus_source::tests::state_composed_stream_has_only_authenticated_dummy_groups_after_total ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 294 filtered out
+test tests::state_binding_fields_are_exactly_replayed ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out
+1 passed in 0.38s
+kat=fp16_zk_rs_answer_target_verify_v5
+construction7_answer_target_verified=true
+state_squarefree_answer_binding_verified=true
+complete_pcs_qualification=false
+kat=fp16_zk_rs_same_chain_bridge_v1
+status=verified
+combined_rounds=6111
+independent_bundle_replay=true
+complete_proof_qualification=false
+minimum_independent_error_bits=392.108419573
+composed_iopp_error_bits=392.108419573
+activation=false
+proof_suite_id=null
+complete_proof_qualification=false
+protected_changed_count=0
+git_diff_check_exit=0
+```
+
+Windows driver-error investigation added theorem-neutral bounded launch tiles to the bridge,
+factored group message, and product transforms. Precompiled SM89 modules are retained outside the
+repository with SHA-256 identities:
+
+```text
+30ea7038b3533414ca6e54adbc3ecfea8e043b7bacb728ad782646767806922c hash-bus-gkr-bridge-sm89.cubin
+f74e3fe12e0e410ce82e33af6d671d74dfb533d17f877d5eb0165d177c03f95e hash-bus-gkr-group-sm89.cubin
+106920c909f0f718b49cad1e2eb9da356a108fcd7d89615c4ca7373257e70c6b hash-bus-gkr-worker-sm89.cubin
+```
+
+No attempted production run earns proof credit. The latest K128 run was rejected after an NVIDIA
+Event 153 even though host/device/swap usage remained inside the frozen resource gates:
+
+```text
+external_exit_code=2
+external_wall_seconds=9.566659
+external_process_tree_peak_bytes=758165504
+external_gpu_peak_mib=2419
+pagefile_growth_mb=0
+post_launch_driver_event_count=1
+packed_b16_group_message_factored_one_claim:700
+```
+
+The proof monitor now uses the real external exit code and kills the exact captured descendant
+tree deepest-first on timeout. A controlled timeout reported
+`monitor_timeout_killed_processes=4`; the follow-up scan reported
+`leftover_test_process_count=0`. No proof process remains.
+
+H5 requires an exclusive host, but two Brave GPU contexts (PIDs 800 and 19928) remain active along
+with the expected restricted display/system context. The post-reset system log contains one
+`nvlddmkm` Event 153 at 2026-08-03 15:13:43 local time. Do not run or credit another production
+proof until Brave and other user GPU workloads are closed, the scoped GPU reset has been rerun,
+and the post-reset event count is zero. Then rerun fresh K128 followed by K512. Gate 2E, all 22 H5
+launches, H6, backend admission, `proofSuiteId`, activation, final documentation, and commit remain
+open.
+
+## 2026-08-03 state-composed privacy and simulator closure - CPU VERIFIED, GPU STILL BLOCKED
+
+Review of the composed transcript found two trust-critical disclosures. The GKR mask-batch message
+serialized every mask residual, and the square-free public-coin batching payload serialized raw
+private Bezout-table openings. Both are corrected without weakening a verifier check. The mask
+batch now publishes only its count and a SHA3-512 digest of the complete canonical constraint
+preimage. The square-free transcript publishes two masked coefficient claims under a fixed
+140-byte `BLSQCL02` digest payload; the raw claims remain internal to the PCS answer computation.
+Protocol domains were advanced to v2, and the separate coherent-chain benchmark uses the same
+digest-only mask-batch rule.
+
+The active Construction 8.2 simulator now includes exact state-relation and square-free GKR degree
+schedules, conditioned variable-degree sumcheck messages, complete committed-mask leakage ranks,
+PCS query conditioning, and fresh abort/retry public-coin randomness. Decisive output:
+
+```text
+kat=fp16_zk_rs_hiding_simulator_v2
+state_k128_mask_layers=221
+state_k128_mask_used_coefficients=27744
+state_k128_mask_leakage_rank=26640
+state_k128_pcs_conditioned_rank=28240
+state_k128_mask_free_dimension=4528
+state_k512_mask_layers=233
+state_k512_mask_used_coefficients=28932
+state_k512_mask_leakage_rank=27768
+state_k512_pcs_conditioned_rank=29368
+state_k512_mask_free_dimension=3400
+state_relation_conditioned_simulator_verified=true
+state_squarefree_conditioned_simulator_verified=true
+public_coin_abort_retry_fresh_randomness_verified=true
+cross_module_simulator_mechanics_verified=true
+complete_proof_qualification=false
+```
+
+The exact K512 algebraic ledger now charges 777 state sumcheck variables with total degree 1,748,
+65 state-composed GKR layers, and the 29,368 joint GKR-mask/PCS rank. It remains above 392 bits:
+
+```text
+minimum_independent_error_bits=392.108419573
+composed_iopp_error_bits=392.108419573
+state_gkr_mask_rank_ledger_closed=true
+complete_simulator_implementation_verified=true
+cryptographic_composition_ledger_closed=false
+complete_proof_qualification=false
+```
+
+Focused verification passed:
+
+```text
+mask_batch_message_commits_without_publishing_residuals: 1 passed
+squarefree_public_payload_is_fixed_size_and_hides_claim_values: 1 passed
+state_squarefree: 10 passed, 0 failed
+Gate 2E terminal + H5 preflight + simulator schedule: 9 passed
+H6 preflight: 2 passed
+cargo check --features std,parallel: exit 0
+same-chain status=verified, gkr_rounds=6100, combined_rounds=6113
+```
+
+One broad `cargo test --lib --features std,parallel` attempt exceeded its 304.1-second command
+wrapper while the single library test process remained active. Its exact three-process tree was
+stopped deepest-first and the follow-up count was zero. That attempt receives no pass credit; the
+focused trust-critical tests and all-target compile results above remain the credited CPU evidence.
+
+The rebuilt Gate 2E terminal ledger digest is
+`11f028eac01f5a880769f0cae7871b9449064793eebfe46cf8f69603f8646091007575b62c0ecdf5114ae53e1c220a4fe057f77a6c3b156f3a221de978b50644`.
+Its semantic-state, PCS, and public-coin simulator records are `CLOSED/DERIVED`; remaining blockers
+are exactly `complete_leakage_scan_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`,
+and `proof_suite_unselected`.
+
+At 17:02:47 local time, `nvidia-smi` still showed Brave PIDs 800 and 19928 as the only user GPU
+contexts. No GPU proof or H5 launch was attempted. The next action remains user closure of Brave,
+scoped reset and zero-event verification, then fresh K128/K512 qualification, the exact 22-launch
+H5 campaign, complete artifact leakage scan, and H6.
+
+## 2026-08-03 fresh native state-composed feasibility evidence - H4 STILL NON-ADMITTED
+
+The historical “Brave still open / no GPU proof” entry above is superseded by the current run
+record. Brave was closed and the scoped driver reset completed before these runs. The K128 raw
+monitor record is `k128-state-composed-wave2-clean-20260803-0001.stdout.txt` and its decisive
+lines are:
+
+```text
+external_exit_code=0
+stderr_bytes=0
+external_process_tree_peak_bytes=821637120
+external_gpu_peak_mib=2526
+pagefile_growth_mb=0
+post_launch_driver_event_count=0
+shard_0_verified=true
+shard_0_proof_seconds=36.077706
+state_plane_binding_verified=true
+complete_proof_latency_gate=false
+complete_proof_qualification=false
+```
+
+The K512 state binding was independently checked by the native verifier with exit `0`:
+
+```text
+state_plane_binding_verified=true
+state_plane_statement_sha3_512=2fa74535583102431bf7e3fe7c7f0880850f0cbf580227583b306ea79eebfd9d005212531d3b23d8e9eed916507b3714b0ef8d5d1efa60c61326cc8e8c074f28
+state_plane_binding_digest_sha3_512=72639eb31c33b5c6494311a4c30fdeb2af1f491336cda96134273bf94768def32e59146917586aa793cd7da90b7e5dce05e4988950c43bf9f1c23cdea415f5f8
+```
+
+The state-composed K512 hash-bus boundary was converted from the authenticated snapshot with
+`output_bytes=209715415` and SHA3-512
+`488b865980be8a1ed807f0c5a1431af7f6c7a44fb0363cc42c37861531472fba6b4e5c78c5b4137280c1aefb8f59b6b632e0dd64ade5edd579fb110f232a3d81`.
+The fresh native K512 monitor record is `k512-state-composed-native-20260803-0130`:
+
+```text
+external_exit_code=0
+external_wall_seconds=159.655992
+external_process_tree_peak_bytes=1605058560
+external_gpu_peak_mib=2731
+pagefile_growth_mb=0
+post_launch_driver_event_count=0
+stderr_bytes=0
+ordered_shards=0,1,2,3
+complete_shard_proofs=4
+sequential_single_gpu_execution=true
+parallel_gpu_images=0
+atomic_acceptance_boundary=true
+all_shards_independently_verified=true
+complete_process_wall_seconds=153.860446
+latency_limit_seconds=180
+complete_proof_latency_gate=true
+complete_proof_qualification=false
+```
+
+The K512 proof output SHA-256 identities are stdout
+`99e729f602a703c60079102d40d4f180f3a7b16fa4114f3d4c9d58659e92d669` and empty stderr
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`; direct scanner category
+checks returned `[]` for both. This is feasibility evidence only: it does not close the terminal
+ledger, admit a backend, select a proof suite, or authorize H5/H6.
+
+The K512 fixture generator was not used as qualification evidence. Its first normal run crossed
+the hard resource boundary (`peak_working_set=7609839616`); later monitor attempts timed out and
+were cleaned with no credit. The smallest corrective source change is in
+`experiments/bl_pq512_crypto_foundation/state_air_proof.py`: the proof evidence now retains the
+already-encoded private AIR program/execution and `build_state_air_binding_bytes` reuses those
+bytes instead of rebuilding the full trace. `py_compile`, import, the combined state/AIR/atomic
+suite (`9 passed in 322.02s`), the Gate2E/H5/H6 suite (`9 passed in 51.77s`), the privacy scanner suite
+(`18 passed`), the no-`std` library check, the cross-language evaluator test, and `git diff --check`
+passed after the change. The no-`std` check exposed and fixed seven unguarded diagnostic
+`std::eprintln!` calls by routing them through a feature-gated macro; exact
+`cargo check --offline --locked --no-default-features --lib` now exits `0`. The remaining blockers are still
+`complete_leakage_scan_missing`, `h4_atomic_binding_deferred`, `no_backend_admitted`, and
+`proof_suite_unselected`; no exact H5 22-launch campaign or H6 seal is claimed.

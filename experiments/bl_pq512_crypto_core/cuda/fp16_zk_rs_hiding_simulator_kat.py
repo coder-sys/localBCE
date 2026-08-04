@@ -27,6 +27,16 @@ MAIN_QUERY_ROWS = 1_600
 AUXILIARY_MESSAGE_COEFFICIENTS = 2_048
 AUXILIARY_RANDOM_COEFFICIENTS = 1_218
 AUXILIARY_QUERY_ROWS = 1_218
+GKR_BRIDGE_MASK_FIELDS = 46
+GKR_LAYER_TERMINAL_MASK_FIELDS = 4
+GKR_MASK_PADDED_COEFFICIENTS = 32_768
+GKR_PCS_QUERY_RANK = MAIN_QUERY_ROWS
+LEFT_WIRE_ROUNDS = (11, 10, 9, 9, 11, 11, 11)
+RIGHT_WIRE_ROUNDS = (11, 10, 11, 9, 9, 11, 11)
+STATE_MASK_EXPECTATIONS = {
+    128: (221, 27_744, 26_640, 28_240, 4_528),
+    512: (233, 28_932, 27_768, 29_368, 3_400),
+}
 ZERO = (0,) * 16
 ONE = (1,) + (0,) * 15
 INV_TWO = ((core.Q + 1) // 2,) + (0,) * 15
@@ -345,6 +355,126 @@ def stream_production_query_views(sampler):
     )
 
 
+def state_composed_mask_degrees(capacity):
+    if capacity not in (128, 512):
+        raise ValueError("state_mask_capacity")
+    state_variables = 7 if capacity == 128 else 9
+    layers = []
+    for _ in range(24):
+        for layer in reversed(range(7)):
+            degrees = [3] * 13
+            left = [2] * LEFT_WIRE_ROUNDS[layer]
+            right = [2] * RIGHT_WIRE_ROUNDS[layer]
+            left[-1] = 3
+            right[-1] = 3
+            layers.append(degrees + left + right + [2])
+
+    layers.append([3] * 12 + ([2] * 5 + [3]) * 2 + [2])
+    for _ in range(2):
+        layers.extend(([5, 5, 2], [5, 5, 2], [5, 5, 2]))
+        for source_variables in range(2, state_variables + 2):
+            for _ in range(2):
+                degrees = [2] * (2 * source_variables)
+                degrees[source_variables - 1] = 3
+                degrees[2 * source_variables - 1] = 3
+                layers.append(degrees + [2])
+        layers.append([2, 3, 2, 3, 2])
+        for source_variables in tuple(range(1, state_variables + 1)) + (
+            state_variables,
+        ):
+            degrees = [3] + [2] * (2 * source_variables)
+            terminal_degree = 5 if source_variables == 1 else 3
+            degrees[source_variables] = terminal_degree
+            degrees[2 * source_variables] = terminal_degree
+            layers.append(degrees + [2])
+    return tuple(tuple(layer) for layer in layers)
+
+
+def simulate_conditioned_gkr_layer(degrees, mask_sampler, coin_sampler, digest):
+    target = mask_sampler.field()
+    independent_rank = 1
+    public_fields = 0
+    for degree in degrees:
+        coefficients = [ZERO]
+        coefficients.extend(mask_sampler.field() for _ in range(degree))
+        independent_rank += degree
+        nonconstant_sum = ZERO
+        for coefficient in coefficients[1:]:
+            nonconstant_sum = add(nonconstant_sum, coefficient)
+        coefficients[0] = mul16(sub(target, nonconstant_sum), INV_TWO)
+        if add(evaluate(coefficients, ZERO), evaluate(coefficients, ONE)) != target:
+            raise AssertionError("state_conditioned_sumcheck_message")
+        for coefficient in coefficients:
+            digest.update(fp16_bytes(coefficient))
+        public_fields += len(coefficients)
+        target = evaluate(coefficients, coin_sampler.field())
+    return independent_rank, public_fields
+
+
+def state_composed_simulator_certificate(capacity, attempt_label):
+    layers = state_composed_mask_degrees(capacity)
+    expected_layers, expected_used, expected_rank, conditioned_rank, free = (
+        STATE_MASK_EXPECTATIONS[capacity]
+    )
+    if len(layers) != expected_layers:
+        raise AssertionError("state_mask_layer_count")
+    mask_sampler = ExactKatSampler(
+        b"BL/PQ512/STATE-COMPOSED-GKR-MASK-SIMULATOR/v2\0"
+        + capacity.to_bytes(2, "big")
+        + attempt_label
+    )
+    coin_sampler = ExactKatSampler(
+        b"BL/PQ512/STATE-COMPOSED-PUBLIC-COIN/v2\0"
+        + capacity.to_bytes(2, "big")
+        + attempt_label
+    )
+    digest = hashlib.sha3_512()
+    independent_rank = 0
+    public_fields = 0
+    for degrees in layers:
+        for _ in range(GKR_BRIDGE_MASK_FIELDS):
+            digest.update(fp16_bytes(mask_sampler.field()))
+        independent_rank += GKR_BRIDGE_MASK_FIELDS
+        public_fields += GKR_BRIDGE_MASK_FIELDS
+
+        layer_rank, layer_public_fields = simulate_conditioned_gkr_layer(
+            degrees,
+            mask_sampler,
+            coin_sampler,
+            digest,
+        )
+        independent_rank += layer_rank
+        public_fields += layer_public_fields
+
+        for _ in range(GKR_LAYER_TERMINAL_MASK_FIELDS):
+            digest.update(fp16_bytes(mask_sampler.field()))
+        independent_rank += GKR_LAYER_TERMINAL_MASK_FIELDS
+        public_fields += GKR_LAYER_TERMINAL_MASK_FIELDS
+
+    digest.update(fp16_bytes(mask_sampler.field()))
+    independent_rank += 1
+    public_fields += 1
+    if independent_rank != expected_rank:
+        raise AssertionError("state_mask_leakage_rank")
+    if independent_rank + GKR_PCS_QUERY_RANK != conditioned_rank:
+        raise AssertionError("state_mask_conditioned_rank")
+    if GKR_MASK_PADDED_COEFFICIENTS - conditioned_rank != free:
+        raise AssertionError("state_mask_free_dimension")
+    if expected_used > GKR_MASK_PADDED_COEFFICIENTS or free <= 0:
+        raise AssertionError("state_mask_randomness_exhausted")
+    return {
+        "layers": len(layers),
+        "used": expected_used,
+        "leakage_rank": independent_rank,
+        "conditioned_rank": conditioned_rank,
+        "free": free,
+        "public_fields": public_fields,
+        "digest": digest.hexdigest(),
+        "mask_rejections": mask_sampler.rejected_coordinates,
+        "coin_rejections": coin_sampler.rejected_coordinates,
+    }
+
+
 def main():
     sampler = ExactKatSampler(
         b"BL/PQ512/FP16-ZK-RS/HIDING-SIMULATOR-KAT/v1"
@@ -360,8 +490,24 @@ def main():
         query_view_digest,
     ) = stream_production_query_views(sampler)
     query_view_mb = query_view_fields * 64 / 1_000_000
+    state_certificates = {}
+    retry_certificates = {}
+    for capacity in (128, 512):
+        state_certificates[capacity] = state_composed_simulator_certificate(
+            capacity, b"attempt-0"
+        )
+        retry_certificates[capacity] = state_composed_simulator_certificate(
+            capacity, b"retry-1"
+        )
+        if (
+            state_certificates[capacity]["public_fields"]
+            != retry_certificates[capacity]["public_fields"]
+            or state_certificates[capacity]["digest"]
+            == retry_certificates[capacity]["digest"]
+        ):
+            raise AssertionError("state_abort_retry_independence")
 
-    print("kat=fp16_zk_rs_hiding_simulator_v1")
+    print("kat=fp16_zk_rs_hiding_simulator_v2")
     print("evidence_class=exact_algebra_plus_production_geometry_stream")
     print(f"construction_8_2_k={SUMCHECK_ROUNDS}")
     print("construction_8_2_n=0")
@@ -392,6 +538,17 @@ def main():
     print(f"production_query_rank_digest={rank_digest}")
     print(f"sumcheck_transcript_digest={sumcheck_digest}")
     print(f"query_view_digest={query_view_digest}")
+    for capacity in (128, 512):
+        certificate = state_certificates[capacity]
+        retry = retry_certificates[capacity]
+        print(f"state_k{capacity}_mask_layers={certificate['layers']}")
+        print(f"state_k{capacity}_mask_used_coefficients={certificate['used']}")
+        print(f"state_k{capacity}_mask_leakage_rank={certificate['leakage_rank']}")
+        print(f"state_k{capacity}_pcs_conditioned_rank={certificate['conditioned_rank']}")
+        print(f"state_k{capacity}_mask_free_dimension={certificate['free']}")
+        print(f"state_k{capacity}_simulated_public_fields={certificate['public_fields']}")
+        print(f"state_k{capacity}_transcript_digest={certificate['digest']}")
+        print(f"state_k{capacity}_retry_digest={retry['digest']}")
     print(
         "rejection_sampler_rejected_coordinates="
         f"{sampler.rejected_coordinates}"
@@ -405,6 +562,12 @@ def main():
     print("generic_affine_preimage_solver_implemented=true")
     print("lemma_7_3_conditioned_answer_mechanics_verified=true")
     print("sumcheck_conditioned_polynomials_verified=true")
+    print("state_relation_conditioned_simulator_verified=true")
+    print("state_squarefree_conditioned_simulator_verified=true")
+    print("state_gkr_mask_rank_budget_verified=true")
+    print("state_gkr_pcs_joint_rank_budget_verified=true")
+    print("public_coin_abort_retry_fresh_randomness_verified=true")
+    print("cross_module_simulator_mechanics_verified=true")
     print("construction_8_2_hiding_error_bits=infinite")
     print("simulator_runs_in_proof_generation=false")
     print("complete_pcs_qualification=false")

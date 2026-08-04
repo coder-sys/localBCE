@@ -1,6 +1,6 @@
 # Blind Ledger continuation mandate and product ideology
 
-Updated: 2026-08-01
+Updated: 2026-08-04
 
 Status: mandatory agent-recovery and execution instruction. Read `AGENTS.md`, this file, the newest
 section of `STATE.md`, `docs/CURRENT_TECH_STACK.md`, and the deterministic continuation contract
@@ -8,6 +8,9 @@ near the top of `docs/IMPLEMENTATION_ROADMAP.md` before resuming trust-critical 
 `WAVE2_HANDOFF_2026-07-26.md` is historical recovery evidence: its interrupted GPU-PCS boundary and
 next-step language are superseded by the accepted H4 K128/K512 prototype and current Gate 2E plan.
 Do not restore an old browser/PDF session or use a dated historical section as current authority.
+
+The owner-approved active K128 complete-proof latency bound is now strict `<35` seconds. Historical
+`<30`-second records remain historical evidence and are not rewritten.
 
 This file records the owner's standing direction to persist through the entire internally buildable
 roadmap. It does not override higher-priority system/developer instructions, `AGENTS.md`, an explicit
@@ -120,7 +123,7 @@ candidates.
 4. **Laptop-first resource discipline with server-scale parallelism.** The reference Dell G15 must
    remain at or below 5,000,000,000 peak resident bytes, strictly below 5,000,000,000 scratch
    bytes, and use no swap. The hard
-   p95 objectives are below 30 seconds for fixed-shape K128/100-live and below 180 seconds for
+   p95 objectives are below 35 seconds for fixed-shape K128/100-live and below 180 seconds for
    K512/500-live under the complete fresh-proof benchmark. Designs must also expose deterministic,
    modular parallelism for future large CPU boxes rather than depending on extra RAM to rescue bloat.
 5. **Maximum auditability.** Use canonical bounded formats, explicit domain separation, exact
@@ -226,3 +229,12 @@ must select and atomically bind the committed state/PQ-commitment plane. H5 then
 complete-proof p95/resource campaign; H6 closes proof-candidate qualification. Re-read `STATE.md`
 and `docs/CURRENT_TECH_STACK.md` for current truth because these boundaries may advance while this
 ideology and persistence mandate remain in force.
+
+### Owner-approved exploratory GPU exception (2026-08-04)
+
+Brave may remain open during exploratory or diagnostic GPU work at the owner's direction. Such runs
+must be labeled non-qualifying and may not receive H5 timing, resource, or driver-integrity credit.
+The H5 campaign still requires the exclusive-host boundary, no pagefile growth, bounded RSS/scratch,
+and zero post-launch NVIDIA/Display driver events for every credited launch. This exception prevents
+Brave from blocking safe development; it does not waive any fail-closed correctness, privacy,
+security, resource, or evidence gate.

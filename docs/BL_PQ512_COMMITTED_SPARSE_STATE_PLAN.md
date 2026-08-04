@@ -193,8 +193,9 @@ session/schedule, exact child grammar, and atomic receipt. The full
 `state_plane_executable_air.py` remains the version-2 compatibility path; the compact path keeps
 SHA3 roots on H4's authenticated bus rather than duplicating their Boolean traces. This is still
 component/prerequisite evidence only: the current hash-pad review rejects Gate 2E admission, no
-reviewed PQ backend or full proof-native H4 PCS/ZK composition is available, and the
-simulator/leakage ledger remains open. `proofSuiteId` and activation remain closed.
+reviewed PQ backend is admitted and the complete proof artifact leakage scan remains open. The
+conditioned state/PCS/public-coin simulator mechanics are closed. `proofSuiteId` and activation
+remain closed.
 
 The next admission boundary is explicit:
 
@@ -211,8 +212,8 @@ selection or Gate 2E closure.
 The native H4 seam now has a versioned, proof-native source boundary without changing the accepted
 state-free profile. `BLHBSN02`/version 2 snapshots and `BLHBB102`/version 2 B16 boundaries append
 exactly two state-root SHA3 calls to the authenticated bus. Their fixed capacity is
-`claim_slots*137+512`: 18,048 for K128 and 70,656 for K512, adding 266 and 1,040 live
-permutations. The resulting live permutation totals are 113,996 and 412,446. Rust independently
+`claim_slots*137+512`: 18,048 for K128 and 70,656 for K512, adding 502 and 1,964 live
+permutations. The resulting live permutation totals are 114,232 and 413,370. Rust independently
 checks the two root-call input/output patterns before child proof creation, and the worker derives
 the totals from the descriptor rather than a duplicated profile constant. The original
 `BLHBSN01`/`BLHBB101` bytes and descriptor commitment remain unchanged for the state-free profile.
@@ -224,8 +225,9 @@ state relation inside the custom H4 GKR/PCS proof, select a qualified backend, o
 manifest-bound H4 K128/K512 proof. H5 remains blocked.
 
 The current Rust H4 bridge now carries that state component into the same PCS shape: a fixed
-64-wire lane at wire offset 1,600, two boundary-one state claims, and a 25-round authenticated
-state prelude, producing seven claims and 6,111 rounds when state is supplied. The relation now
+64-wire lane at wire offset 1,600, two boundary-one state-relation claims, twelve square-free state
+claims, and two grouped coefficient openings. It produces nineteen fixed claims and exact
+6,727/6,995 K128/K512 rounds. The relation now
 checks operation/snapshot equality, authenticated slot index/order, Boolean presence, and
 empty-slot zeroing; the Rust source builder and native Rust/Python snapshot decoders reject
 duplicate present keys before source commitment. Proof-native high-cardinality uniqueness,
@@ -301,7 +303,7 @@ meaning: This selects the Gate 2E candidate; it is not H5 qualification. The adm
 must:
 
 Close the remaining admission work by selecting a reviewed state/commitment backend and completing
-the proof-native H4 PCS/ZK composition, simulator/leakage ledger, and qualification evidence. The
+the proof-native H4 PCS/ZK qualification, artifact leakage ledger, and qualification evidence. The
 native executable-AIR consumption, exact-witness v3 FRI composition, and canonical-envelope seams
 above are necessary prerequisite/component evidence, not admission or H5 credit.
 
@@ -318,7 +320,7 @@ The current record is:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
+preflight_digest_sha3_512=9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693
 canonical_ops_status=VERIFIED_TRACKED_SHA3_512_AUTHORITY
 reference_hardware_status=READY
 fresh_launch_count=22
@@ -327,7 +329,7 @@ activation_allowed=False
 ```
 
 It remains blocked by the unsealed/unselected Gate 2E state, deferred H4 binding, incomplete
-simulator/leakage/strict-PQ evidence, absent external monitoring, absent source readback, and no
+leakage/strict-PQ evidence, absent external monitoring, absent source readback, and no
 complete-proof campaign. The preflight suite
 passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed. The recorded disk reserve
 is 15,000 ppm (1.5%), requiring 7,310,026,937 free bytes; the immutable 5,000,000,000-byte
@@ -346,10 +348,10 @@ Current raw record:
 
 ```text
 status=BLOCKED_H6_PREFLIGHT
-h5_preflight_digest_sha3_512=5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1
+h5_preflight_digest_sha3_512=9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693
 suite_registry_digest_sha3_512=307439093721aeaa9a70ef00d546f06af5f50b73781f9f19b8b02cca8c3d36ee1ef36e9981d49a59d10d8d7768fec079d40e05b6c008d7913c9caf4cc52cf974
 suite_registry_canonical_digest_sha3_512=d082aaec00392f6ae7c7c37a52b6b18ab0fccd5fb08654ec9e326d8c20dd355e13f02b240577823f18b06f50aa165d25f5479d2ba1067beb80dd20ab9d6724e0
-preflight_digest_sha3_512=aaadf06e7416be5d20fb35b815fff3ccf419c1689e03dfb0a5ec62f0c2cedc89e0dd2856a11096f0225a9799fc61e25642656f679e9dd179126d8c6df66cae5c
+preflight_digest_sha3_512=f4257066c4d1bd6d810e1b96227aa6b286216b5f0385335d3f839cb3c8e0020bb0bc7e4512fd101fb9280a2ae1090c62560620c2a9b7ef659f9d9f3febeade32
 proofSuiteId=None
 activation_allowed=False
 ```

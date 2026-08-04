@@ -1211,6 +1211,69 @@ fn shared_group_terminal_extension_cubic_from_terms(
     }
 }
 
+/// Construction-2 terminal correction when the source has exactly one
+/// variable and there is no preceding group coordinate. In that edge case
+/// the layer mask's first coordinate is the varying sumcheck variable itself:
+/// `bit(x) * x(1-x) * (R(x,0)+R(x,1))` has degree five.
+fn shared_group_single_variable_terminal_extension(
+    terms: &[SparseGateTerm],
+    group_challenges: &[Fp16],
+    right_wire_values: &[Fp16],
+    terminal_left: Option<Fp16>,
+    layer_mask: &LibraLayerMask,
+    varying_left: bool,
+    fixed_left_equality: Option<&[Fp16]>,
+) -> Result<[Fp16; 6], GkrZkMaskError> {
+    if terms.is_empty() || right_wire_values.len() != 2 {
+        return Err(GkrZkMaskError::Shape);
+    }
+    let two = Fp16::ONE + Fp16::ONE;
+    let r = core::array::from_fn::<Fp16, 3, _>(|degree| {
+        two * layer_mask.coefficients[3 * degree]
+            + layer_mask.coefficients[3 * degree + 1]
+            + layer_mask.coefficients[3 * degree + 2]
+    });
+    // x(1-x) * (r0 + r1*x + r2*x^2)
+    let delta = [Fp16::ZERO, r[0], r[1] - r[0], r[2] - r[1], -r[2]];
+    let group_vanishing = group_challenges
+        .iter()
+        .fold(Fp16::ONE, |product, challenge| {
+            product * *challenge * (Fp16::ONE - *challenge)
+        });
+    let mut result = [Fp16::ZERO; 6];
+    for term in terms {
+        let (label, scale) = if varying_left {
+            let (_, slope) = gate_line(
+                term.formula,
+                true,
+                Fp16::ZERO,
+                Fp16::ONE,
+                right_wire_values[term.right],
+            );
+            (term.left, term.output_weight * slope * group_vanishing)
+        } else {
+            let fixed_left = terminal_left.ok_or(GkrZkMaskError::Shape)?;
+            let left_equality = fixed_left_equality
+                .filter(|weights| weights.len() == 2)
+                .ok_or(GkrZkMaskError::Shape)?;
+            let (_, slope) = gate_line(term.formula, false, Fp16::ZERO, Fp16::ONE, fixed_left);
+            (
+                term.right,
+                term.output_weight * left_equality[term.left] * slope * group_vanishing,
+            )
+        };
+        for degree in 0..delta.len() {
+            if label & 1 == 0 {
+                result[degree] = result[degree] + scale * delta[degree];
+                result[degree + 1] = result[degree + 1] - scale * delta[degree];
+            } else {
+                result[degree + 1] = result[degree + 1] + scale * delta[degree];
+            }
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaskedSparseLayerSumcheckProof {
     pub rounds: Vec<[Fp16; 3]>,
@@ -2933,48 +2996,90 @@ fn shared_group_round_polynomial(
         .iter()
         .map(|claim| equality_table(&claim.point[output_variables + round_index + 1..]))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut coefficients = [Fp16::ZERO; 4];
-    for (suffix, _) in remaining_weights[0].iter().enumerate() {
-        let left_zero_group = 2 * suffix * layer.left_width;
-        let left_one_group = left_zero_group + layer.left_width;
-        let right_zero_group = 2 * suffix * layer.right_width;
-        let right_one_group = right_zero_group + layer.right_width;
-        for (output_index, gate) in layer.gates.iter().copied().enumerate() {
-            if gate.kind == KeccakDagGateKind::Zero {
-                continue;
-            }
-            if gate.left >= layer.left_width || gate.right >= layer.right_width {
-                return Err(ProductSumcheckError::Wiring);
-            }
-            let left_zero = left_folded[left_zero_group + gate.left];
-            let left_delta = left_folded[left_one_group + gate.left] - left_zero;
-            let right_zero = right_folded[right_zero_group + gate.right];
-            let right_delta = right_folded[right_one_group + gate.right] - right_zero;
-            let gate_polynomial = gate_quadratic_both(
-                dag_gate_formula(gate.kind),
-                left_zero,
-                left_delta,
-                right_zero,
-                right_delta,
-            );
-            for (claim_index, claim) in claims.iter().enumerate() {
-                let group_coordinate = claim.point[output_variables + round_index];
-                let base = claim.coefficient
-                    * claim_prefixes[claim_index]
-                    * remaining_weights[claim_index][suffix]
-                    * output_weights[claim_index][output_index];
-                let contribution = equality_times_quadratic(
-                    base * (Fp16::ONE - group_coordinate),
-                    base * (group_coordinate + group_coordinate - Fp16::ONE),
-                    gate_polynomial,
+    let suffix_count = remaining_weights[0].len();
+    let compute = |start: usize, end: usize| -> Result<[Fp16; 4], ProductSumcheckError> {
+        let mut coefficients = [Fp16::ZERO; 4];
+        for suffix in start..end {
+            let left_zero_group = 2 * suffix * layer.left_width;
+            let left_one_group = left_zero_group + layer.left_width;
+            let right_zero_group = 2 * suffix * layer.right_width;
+            let right_one_group = right_zero_group + layer.right_width;
+            for (output_index, gate) in layer.gates.iter().copied().enumerate() {
+                if gate.kind == KeccakDagGateKind::Zero {
+                    continue;
+                }
+                if gate.left >= layer.left_width || gate.right >= layer.right_width {
+                    return Err(ProductSumcheckError::Wiring);
+                }
+                let left_zero = left_folded[left_zero_group + gate.left];
+                let left_delta = left_folded[left_one_group + gate.left] - left_zero;
+                let right_zero = right_folded[right_zero_group + gate.right];
+                let right_delta = right_folded[right_one_group + gate.right] - right_zero;
+                let gate_polynomial = gate_quadratic_both(
+                    dag_gate_formula(gate.kind),
+                    left_zero,
+                    left_delta,
+                    right_zero,
+                    right_delta,
                 );
-                for coordinate in 0..4 {
-                    coefficients[coordinate] = coefficients[coordinate] + contribution[coordinate];
+                for (claim_index, claim) in claims.iter().enumerate() {
+                    let group_coordinate = claim.point[output_variables + round_index];
+                    let base = claim.coefficient
+                        * claim_prefixes[claim_index]
+                        * remaining_weights[claim_index][suffix]
+                        * output_weights[claim_index][output_index];
+                    let contribution = equality_times_quadratic(
+                        base * (Fp16::ONE - group_coordinate),
+                        base * (group_coordinate + group_coordinate - Fp16::ONE),
+                        gate_polynomial,
+                    );
+                    for coordinate in 0..4 {
+                        coefficients[coordinate] =
+                            coefficients[coordinate] + contribution[coordinate];
+                    }
                 }
             }
         }
+        Ok(coefficients)
+    };
+
+    #[cfg(feature = "std")]
+    if suffix_count >= 64 {
+        let workers = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+            .min(suffix_count);
+        if workers > 1 {
+            let chunk = suffix_count.div_ceil(workers);
+            return std::thread::scope(|scope| {
+                let mut handles = Vec::with_capacity(workers);
+                for worker in 0..workers {
+                    let start = worker * chunk;
+                    let end = suffix_count.min(start + chunk);
+                    if start >= end {
+                        continue;
+                    }
+                    let compute = &compute;
+                    handles.push(scope.spawn(move || compute(start, end)));
+                }
+                handles
+                    .into_iter()
+                    .try_fold([Fp16::ZERO; 4], |sum, handle| {
+                        let value = handle
+                            .join()
+                            .map_err(|_| ProductSumcheckError::WorkerPanicked)??;
+                        Ok([
+                            sum[0] + value[0],
+                            sum[1] + value[1],
+                            sum[2] + value[2],
+                            sum[3] + value[3],
+                        ])
+                    })
+            });
+        }
     }
-    Ok(coefficients)
+
+    compute(0, suffix_count)
 }
 
 /// Nonactivating reference prover for a relay-free DAG layer repeated over a
@@ -3784,7 +3889,16 @@ fn prove_masked_shared_group_dag_layer_interactive_internal(
             .any(|(round, degree)| {
                 let final_left = round + 1 == left_variables;
                 let final_right = round + 1 == left_variables + right_variables;
-                *degree != if final_left || final_right { 3 } else { 2 }
+                let single_variable_terminal =
+                    (final_left && left_variables == 1) || (final_right && right_variables == 1);
+                *degree
+                    != if single_variable_terminal {
+                        5
+                    } else if final_left || final_right {
+                        3
+                    } else {
+                        2
+                    }
             })
         || variable_degrees[expected_variables - 1] != 2
         || sumcheck_rho.is_zero()
@@ -4015,24 +4129,42 @@ fn prove_masked_shared_group_dag_layer_interactive_internal(
         add(&mut base, &[prior_constant, -prior_constant])?;
         let mut final_prefix_equality = None;
         if round_index + 1 == left_variables {
-            let (cubic, prefix_equality) = shared_group_terminal_extension_cubic_from_terms(
-                layer,
-                &terms,
-                &group_challenges,
-                &wire_challenges,
-                &[],
-                if accelerate_wire_rounds {
-                    &right_folded
-                } else {
-                    &right_group_folded
-                },
-                None,
-                layer_mask,
-                true,
-                None,
-            )?;
-            final_prefix_equality = Some(prefix_equality);
-            add(&mut base, &cubic)?;
+            if left_variables == 1 {
+                let extension = shared_group_single_variable_terminal_extension(
+                    &terms,
+                    &group_challenges,
+                    if accelerate_wire_rounds {
+                        &right_folded
+                    } else {
+                        &right_group_folded
+                    },
+                    None,
+                    layer_mask,
+                    true,
+                    None,
+                )?;
+                final_prefix_equality = Some(vec![Fp16::ONE]);
+                add(&mut base, &extension)?;
+            } else {
+                let (cubic, prefix_equality) = shared_group_terminal_extension_cubic_from_terms(
+                    layer,
+                    &terms,
+                    &group_challenges,
+                    &wire_challenges,
+                    &[],
+                    if accelerate_wire_rounds {
+                        &right_folded
+                    } else {
+                        &right_group_folded
+                    },
+                    None,
+                    layer_mask,
+                    true,
+                    None,
+                )?;
+                final_prefix_equality = Some(prefix_equality);
+                add(&mut base, &cubic)?;
+            }
         }
         let mask = mask_rounds.round_polynomial(ordinal)?;
         let published = state.publish_round(&base, &mask, sumcheck_rho)?;
@@ -4116,24 +4248,42 @@ fn prove_masked_shared_group_dag_layer_interactive_internal(
         add(&mut base, &[prior_constant, -prior_constant])?;
         let mut final_prefix_equality = None;
         if round_index + 1 == right_variables {
-            let (cubic, prefix_equality) = shared_group_terminal_extension_cubic_from_terms(
-                layer,
-                &terms,
-                &group_challenges,
-                &wire_challenges[..left_variables],
-                &wire_challenges[left_variables..],
-                if accelerate_wire_rounds {
-                    &right_folded
-                } else {
-                    &right_group_folded
-                },
-                Some(masked_terminal_left),
-                layer_mask,
-                false,
-                terminal_left_equality.as_deref(),
-            )?;
-            final_prefix_equality = Some(prefix_equality);
-            add(&mut base, &cubic)?;
+            if right_variables == 1 {
+                let extension = shared_group_single_variable_terminal_extension(
+                    &terms,
+                    &group_challenges,
+                    if accelerate_wire_rounds {
+                        &right_folded
+                    } else {
+                        &right_group_folded
+                    },
+                    Some(masked_terminal_left),
+                    layer_mask,
+                    false,
+                    terminal_left_equality.as_deref(),
+                )?;
+                final_prefix_equality = Some(vec![Fp16::ONE]);
+                add(&mut base, &extension)?;
+            } else {
+                let (cubic, prefix_equality) = shared_group_terminal_extension_cubic_from_terms(
+                    layer,
+                    &terms,
+                    &group_challenges,
+                    &wire_challenges[..left_variables],
+                    &wire_challenges[left_variables..],
+                    if accelerate_wire_rounds {
+                        &right_folded
+                    } else {
+                        &right_group_folded
+                    },
+                    Some(masked_terminal_left),
+                    layer_mask,
+                    false,
+                    terminal_left_equality.as_deref(),
+                )?;
+                final_prefix_equality = Some(prefix_equality);
+                add(&mut base, &cubic)?;
+            }
         }
         let mask = mask_rounds.round_polynomial(ordinal)?;
         let published = state.publish_round(&base, &mask, sumcheck_rho)?;

@@ -159,8 +159,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{hash_bus::build_hash_bus_descriptor, wave1a_global_schedule::Profile};
+    use crate::{
+        hash_bus::{build_hash_bus_descriptor, build_hash_bus_descriptor_with_state},
+        wave1a_global_schedule::Profile,
+    };
     use sha3::{Digest, Sha3_512};
+    use std::vec;
 
     #[test]
     fn k128_and_k512_stream_exact_selected_groups_without_boundary_storage() {
@@ -240,5 +244,47 @@ mod tests {
             }),
             Err(HashBusSourceError::Overflow)
         );
+    }
+
+    #[test]
+    fn state_composed_stream_has_only_authenticated_dummy_groups_after_total() {
+        let descriptor = build_hash_bus_descriptor_with_state(Profile::K128Calibration).unwrap();
+        let empty_digest: [u8; 64] = Sha3_512::digest([]).into();
+        let final_capacity = descriptor.runs.last().unwrap().capacity as usize;
+        let final_message = vec![0x5a_u8; final_capacity];
+        let final_digest: [u8; 64] = Sha3_512::digest(&final_message).into();
+        let final_call = descriptor.total_calls - 1;
+        let messages = descriptor
+            .runs
+            .iter()
+            .flat_map(|run| core::iter::repeat_n(run.capacity, run.count as usize))
+            .enumerate()
+            .map(|(index, capacity)| HashBusMessage {
+                message: if index as u64 == final_call {
+                    &final_message
+                } else {
+                    &[]
+                },
+                capacity,
+                digest: if index as u64 == final_call {
+                    final_digest
+                } else {
+                    empty_digest
+                },
+            });
+        let first_dummy_group = descriptor
+            .total_permutations
+            .div_ceil(u64::from(PACKED_SHARDS));
+        for_each_hash_bus_b16_group(&descriptor, messages, |_, group, input, output| {
+            if u64::from(group) >= first_dummy_group {
+                assert_eq!(input, &[0_u16; KECCAK_STATE_BITS]);
+                for (wire, pattern) in output.iter().copied().enumerate() {
+                    let bit = (KECCAK_F_ZERO[wire / 64] >> (wire % 64)) & 1;
+                    assert_eq!(pattern, if bit == 0 { 0 } else { u16::MAX });
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
     }
 }

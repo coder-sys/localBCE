@@ -22,7 +22,7 @@ finally:
 def test_state_boundary_geometry_matches_descriptor_and_windows_byte_order(
     tmp_path: Path,
 ) -> None:
-    assert PROFILE_STATE_TOTAL_PERMUTATIONS == {1: 113_996, 3: 412_446}
+    assert PROFILE_STATE_TOTAL_PERMUTATIONS == {1: 114_232, 3: 413_370}
     file_bytes = BOUNDARY_HEADER_BYTES + 2 * LIVE_WIRES * GROUP_COUNT * 2
     path = tmp_path / "state-composed-zero-boundary.blhbb"
     header = (
@@ -47,5 +47,5 @@ def test_state_boundary_geometry_matches_descriptor_and_windows_byte_order(
     )
     assert len(input_values) == LIVE_WIRES * packed_groups
     assert len(output_values) == LIVE_WIRES * packed_groups
-    assert nonuniform_groups == (113_996 + 15) // 16
-    assert packed_groups == 7_128
+    assert nonuniform_groups == (114_232 + 15) // 16
+    assert packed_groups == 7_144

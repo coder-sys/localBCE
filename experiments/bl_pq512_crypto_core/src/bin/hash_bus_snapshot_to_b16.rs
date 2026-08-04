@@ -156,6 +156,7 @@ fn run() -> Result<(), String> {
         hex(&snapshot.semantic_port_commitment)
     );
     println!("coprocessor_shards={}", descriptor.coprocessor_shards);
+    println!("total_permutations={}", descriptor.total_permutations);
     println!(
         "groups={}",
         u64::from(descriptor.coprocessor_shards) * 8_192

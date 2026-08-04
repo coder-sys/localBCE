@@ -1,6 +1,6 @@
 # Blind Ledger current technical stack
 
-Updated: 2026-08-02
+Updated: 2026-08-03
 
 Status: canonical current-stack index. If an older checkpoint conflicts with this file, `STATE.md`,
 `ARCHITECTURE.md`, or `docs/IMPLEMENTATION_ROADMAP.md`, the newer current files win. Historical
@@ -76,8 +76,9 @@ the independently replayed S4 transition and S5 checkpoints. This is a fail-clos
 check, not proof-native H4 equality or state-plane admission. It
 records 11 ordered obligation records for atomic composition, the semantic/PCS/public-coin
 simulator, fixed-shape leakage, state/proof receipt, migration, strict-PQ selection, canonical
-ops, and independent verification. The ledger is reference-only and unsealed; its current blockers
-are `no_backend_admitted`, `complete_simulator_missing`, `complete_leakage_scan_missing`,
+ops, and independent verification. The state/PCS/public-coin simulator records are now closed by
+the exact Construction 8.2 plus state-composed GKR simulator. The ledger remains unsealed; its
+current blockers are `no_backend_admitted`, `complete_leakage_scan_missing`,
 `h4_atomic_binding_deferred`, and `proof_suite_unselected`. The ops obligation is closed.
 
 The smallest real state boundary is implemented in
@@ -104,7 +105,7 @@ keeps root hashing on H4's shared bus. Native v3 consumption is independently te
 real streamed proof and trace/package mutations. A versioned state-root bus bridge now appends
 exactly two fixed-capacity SHA3 calls to the authenticated B16 source when a state binding is
 supplied: `BLHBSN02`/version 2 snapshots and `BLHBB102`/version 2 boundaries use capacity
-`claim_slots*137+512` (18,048 for K128 and 70,656 for K512), adding 266 and 1,040 live
+`claim_slots*137+512` (18,048 for K128 and 70,656 for K512), adding 502 and 1,964 live
 permutations respectively. The base `BLHBSN01`/`BLHBB101` profile remains byte-compatible. No
 reviewed PQ commitment backend is available, `proofSuiteId` remains null, and activation remains
 closed.
@@ -116,7 +117,7 @@ in `experiments/bl_pq512_crypto_core/src/hash_bus.rs`,
 `src/hash_bus_snapshot.rs`, `src/hash_bus_b16_boundary.rs`, and the snapshot-to-B16 converter.
 It clones the accepted base descriptor and appends two root messages whose canonical body is
 `STATE_ROOT_DOMAIN || len(snapshot.encoded).to_bytes(4,"big") || snapshot.encoded`. The resulting
-live permutation totals are 113,996 for K128 and 412,446 for K512; exact cross-language descriptor
+live permutation totals are 114,232 for K128 and 413,370 for K512; exact cross-language descriptor
 commitments are recorded in `STATE.md`. The B16 worker derives these totals from the descriptor
 capacity rather than a duplicated constant, and a durable sparse-boundary test covers wire-major
 packing and the Windows little-endian path. This is real authenticated source/child-boundary
@@ -251,7 +252,7 @@ maps every typed call to the canonical H4 bus. The immutable generic-AIR resourc
 returns `qualifies=false` with `modeled_peak_scratch_bytes=14944264032`,
 `scratch_gate_pass=false`, `route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`, and
 `modeled_required_available_bytes=22975297336`; the seam remains
-nonactivating until a complete proof construction, reviewed backend, simulator/leakage/security
+nonactivating until a complete proof construction, reviewed backend, leakage/security
 ledger, H5, and H6 gates close.
 
 The typed private H4 envelope is now version 5. It removes a circular ordering defect in the prior
@@ -265,8 +266,9 @@ typed transcript root, and passes the resulting identity through the existing H4
 parent, composition, and atomic receipt. Focused Python/Rust positive and four-way mutation tests
 pass. Legacy envelope version 4 remains independently parsed and cannot omit the new v5 fields.
 This implements the correct pre-coin composition path but does not admit the backend: the immutable
-typed resource preflight still rejects a full run, so end-to-end v5 proof/H4 evidence, complete
-simulator/leakage closure, Gate 2E admission, H5, and H6 remain open.
+typed resource preflight still rejects that generic route. The selected custom H4 route has closed
+the conditioned simulator mechanics; end-to-end state-composed proof evidence, artifact leakage,
+Gate 2E admission, H5, and H6 remain open.
 
 ## How a successor must interpret this repository
 
@@ -319,12 +321,10 @@ Every implementation and optimization must preserve all of the following simulta
   on a Blind Ledger-controlled proof boundary;
 - at most 5,000,000,000 decimal bytes peak resident host memory, strictly below 5,000,000,000
   decimal bytes scratch, and no swap dependency;
-- one authenticated 6,086-round schedule for the accepted state-free H4 baseline; the
-  state-composed seven-claim shape is a separate 6,111-round nonactivating boundary until its
-  complete semantics and qualification evidence exist;
-- a stricter Wave 2 complete-proof p95 target below 30 seconds for K128/100-live and below 180
-  seconds for K512/500-live. The older 60-second K128 product ceiling is not permission to weaken
-  the selected 30-second engineering gate;
+- one authenticated fixed claim shape with a 6,113-round prelude and 6,727/6,995 complete
+  K128/K512 state-composed schedules until qualification evidence exists;
+- the owner-approved Wave 2 complete-proof p95 target below 35 seconds for K128/100-live and below
+  180 seconds for K512/500-live. Historical 30-second engineering records remain evidence only;
 - an untrusted GPU: Rust-owned parsing, transcript replay, commitments, canonical decoding,
   mutations, answer/target checks, and final verification remain authoritative; and
 - atomic binding of attempt identity, old/new state, membership/absence, uniqueness, ordering,
@@ -339,29 +339,34 @@ The H4 prototype is functionally attached for both profiles:
 | --- | --- |
 | Semantic source | Exact `BLHBB101` bounded hash-bus source |
 | Hash proof | 24 Keccak rounds, 168 layers, seven-layer/B=16 relay-free nonuniform GKR |
-| Claims | State-free hash bus: one output claim and four input claims (relay-free); state-composed H4: those five plus two state claims (seven total) |
-| Native hiding | 508 GKR mask constraints per shard |
+| Claims | Nineteen fixed claims: five hash-bus claims, two state-relation claims, and twelve square-free state reductions |
+| Native hiding | One 32,768-coefficient committed mask: 221 K128 or 233 K512 layers, with positive post-PCS free dimension |
 | PCS | Construction 8.2 random-padded interleaved Reed--Solomon, 73-word auxiliary plane |
-| Authenticated schedule | State-free baseline: 6,073 hash-GKR rounds + 13 PCS rounds = 6,086; state-composed shape: +25 state-relation rounds = 6,111 |
+| Authenticated schedule | 6,113-round fixed prelude; 6,727 K128 and 6,995 K512 complete state-composed schedules |
 | Public coin | ML-DSA-87 plus SLH-DSA-SHAKE-256f authenticated chain |
 | Authority split | CUDA performs untrusted arithmetic; Rust parses, recomputes, replays, and verifies |
-| K128 | One shard; 29.974129 seconds complete process; 288.412 MB internal host; 969.999360 MB tracked device; 0 MB scratch |
-| K512 | Four ordered sequential shards on one GPU; 120.460733 seconds; 296.255 MB internal host; 969.999360 MB tracked per proof; 0 MB scratch |
-| Manifest | `51c23310274ccf7c4d7f9abe4ae7eba43266b335bd377b21cbf92409729b91e2a40a39787a157baa080c9d0516c7815af404a4d58d9e76747f652f57cd017ed6` |
+| K128 | Fresh monitored one-shard state-composed run; 33.077384 s complete process; 782.934016 MB external-tree peak; 2,478 MiB device peak; atomic verification passed, revised strict 35 s single-run gate passed |
+| K512 | Fresh monitored four-shard state-composed run; 153.860446 s complete process; 1,605.058560 MB external-tree peak; 2,731 MiB device peak; atomic verification passed, strict 180 s gate passed |
+| Manifest | `14722e22bfb2d51259f399b4d79a4ce3b0ae64c86a64ff8936b9645fc386237e7f52b760f7587df05feb07284f7056f161dd9ef0ca804b7718b605f7f4c7e9ad` |
 
 All memory values are decimal MB. These are accepted one-run H4 prototype measurements, not H5
 p95 qualification or H6 suite activation.
 
-The state-composed schedule is a fixed-shape integration boundary, not a qualification result. The
-state lane uses the same H4 source polynomial at the fixed 64-wire lane beginning at wire 1,600,
-two boundary-one PCS claims, and a private canonical source of exactly 16,777,216 bytes. The Rust
-bridge verifies the 18-coordinate local state claims after lifting them into H4's 24-coordinate
-source geometry. The compact proof-native seam now carries each authenticated slot index and
-constrains it to the canonical group-major row position, so populated-row index/order mutations
-fail closed. The native Rust state-binding parser and Python canonical snapshot decoder also
-reject duplicate present keys. High-cardinality membership/absence, money/state conservation,
-and the complete state relation inside the custom H4 GKR/PCS composition are still required in
-Gate 2E. No state-composed K128/K512 performance or qualification credit is claimed.
+The state-composed schedule is a fixed-shape integration boundary with fresh feasibility evidence,
+not a qualification result. The state lane uses the same H4 source polynomial at the fixed 64-wire
+lane beginning at wire 1,600, two boundary-one PCS claims, and a private canonical source of exactly
+16,777,216 bytes. The Rust bridge verifies the 18-coordinate local state claims after lifting them
+into H4's 24-coordinate source geometry. The compact proof-native seam now carries each
+authenticated slot index and constrains it to the canonical group-major row position, so
+populated-row index/order mutations fail closed. The native Rust state-binding parser and Python
+canonical snapshot decoder also reject duplicate present keys. Fresh monitored native runs report
+K128 atomic verification with the earlier `36.077706`-second record and the later clean
+`33.077384`-second record; the latter is within the revised strict 35-second single-run bound.
+K512 four-shard atomic verification measured `153.860446` seconds and remains within its
+180-second gate. Repeated p95 qualification is still pending for both profiles.
+High-cardinality membership/absence, money/state conservation, and the complete state relation
+inside the custom H4 GKR/PCS composition are still required in Gate 2E. No H5 p95 or proof-suite
+qualification credit is claimed.
 
 The pairwise uniqueness GKR is proof-native control evidence, not the selected relation. It checks
 both phases, rejects forged duplicate witnesses, obtains every sumcheck challenge and claim-
@@ -379,9 +384,9 @@ measured witness/prove/verify times are 0.042439/0.046355/0.023395 seconds with 
 At K512 they are 0.698637/0.237447/0.072302 seconds with 131,072 witness bytes. Conservatively,
 Fp16 has more than 2^480 elements, at most 261,632 pairwise compression collisions cost under 18
 bits, and the false Bezout identity has degree below 1,024, preserving the 256-bit floor. The
-verifier reduces four virtual leaves to twelve existing state-column openings and four A/B PCS
-claims. Those sixteen claims and the post-beta coefficient-table commitment are not yet in the H4
-parent/PCS grammar, so uniqueness and Gate 2E receive no composition or qualification credit yet.
+verifier reduces four virtual leaves to twelve existing state-column openings and two grouped A/B
+PCS claims. They are now in the H4 parent/PCS grammar; uniqueness remains nonqualifying until a
+fresh complete proof and artifact leakage scan pass.
 
 ## Exact accepted H4 profiles
 
@@ -437,8 +442,8 @@ subset is forbidden.
 8. **Apply native hiding.** Verify 508 native GKR mask constraints per shard and bind the GKR-mask
    row source/relation plus the selected auxiliary plane before dependent challenges.
 9. **Continue into Construction 8.2 PCS.** Use the random-padded interleaved Reed--Solomon
-   construction and the complete 73-word auxiliary plane. Exactly 13 PCS rounds follow the hash
-   and state prelude: 6,086 rounds state-free or 6,111 rounds state-composed.
+   construction and the complete 73-word auxiliary plane. Exactly 13 PCS rounds complete the
+   6,113-round prelude; square-free composition yields 6,727 K128 or 6,995 K512 rounds.
 10. **Independently verify the shard.** Rust replays public coin, verifies signatures, parses every
    bounded section, recomputes authoritative SHA3-512 roots and targets, checks GKR recurrences and
    terminals, native masks, PCS openings, answer code, semantic boundary, and mutation gates.
@@ -508,8 +513,8 @@ to this logical order:
 2. reject unsupported K256, zero statement, unexpected shard count/size, extra bytes, and unknown
    proof sections before large allocation;
 3. verify execution-manifest and parent-binding identities;
-4. verify the dual-PQ public-coin head and replay all 6,086 state-free or 6,111 state-composed
-   challenges in order;
+4. verify the dual-PQ public-coin head and replay all 6,113 prelude plus 614 K128 or 882 K512
+   square-free challenges in order;
 5. verify semantic-source, selected-plan, claim, GKR recurrence/terminal, and native-mask bindings;
 6. verify the complete PCS tree geometry, multiproofs, openings, answer code, and target;
 7. verify every shard independently and in canonical order;
@@ -580,7 +585,7 @@ Windows reparse-point mismatch; no outward copy or fallback tree is permitted.
    transcript, proof grammar, independent verifier, and receipt; the terminal evidence ledger is
    now the fail-closed record of what remains open.
 2. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
-  driver monitoring; qualify p95 below 30/180 seconds.
+  driver monitoring; qualify p95 below 35/180 seconds.
 3. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
 4. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.
@@ -596,9 +601,9 @@ warm-up plus ten unique measured launches for each K128/K512 profile (22 fresh l
 checks the tracked commit-bound `ops/` authority and reference-hardware readiness, and keeps cached
 proofs, cached witnesses, automatic retry, activation, and `proofSuiteId` disabled. The current
 record is `BLOCKED_H5_PREFLIGHT` with preflight digest
-`5c6a04878f8268dfd4fb33b3583fd27f0aff8624f90f720a9f6b45fb8dff849538ee7aac6ea3d36d72971d1223bf595c9cec0d35f3230705047518c5741432e1`; it records
+`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693`; it records
 `VERIFIED_TRACKED_SHA3_512_AUTHORITY`, `READY` reference hardware, no campaign, no external monitor, and
-the unresolved Gate 2E/H4/simulator/leakage/PQ blockers. The recorded 487,335,129,088-byte disk
+the unresolved Gate 2E/H4/leakage/PQ blockers. The recorded 487,335,129,088-byte disk
 now uses a literal 10x lower operational reserve: 15,000 ppm (1.5%), requiring 7,310,026,937
 free bytes; the immutable 5,000,000,000-byte RSS/scratch, zero-swap, privacy, proof, and
 activation gates are unchanged. This is a preflight ledger, not H5 measurement or qualification

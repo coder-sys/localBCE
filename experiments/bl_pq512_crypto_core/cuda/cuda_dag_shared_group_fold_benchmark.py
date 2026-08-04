@@ -104,9 +104,11 @@ def copy(runtime, destination, value, label):
 
 
 def kernel_arguments(*values):
-    return (ctypes.c_void_p * len(values))(
+    result = (ctypes.c_void_p * len(values))(
         *(ctypes.cast(ctypes.byref(value), ctypes.c_void_p) for value in values)
     )
+    result._keepalive = values
+    return result
 
 
 def launch_first(runtime, function, packed, lookup, challenge, output, width, groups):

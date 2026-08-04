@@ -25,9 +25,16 @@ use sha3::{Digest, Sha3_512};
 
 use crate::{
     field::{Fp16, M31},
+    fp16_relay_free_gkr_uniform::{UniformGkrMaskConstraint, UniformGkrMaskFunctional},
     gkr_sumcheck::{
-        LayerOutputClaim, ProductSumcheckError, SharedGroupDagLayerProof,
-        prove_shared_group_dag_layer_reference, verify_shared_group_dag_layer_reference,
+        LayerOutputClaim, MaskedUniformSharedGroupDagLayerProof, ProductSumcheckError,
+        SharedGroupDagLayerProof, prove_masked_shared_group_dag_layer_interactive,
+        prove_shared_group_dag_layer_reference, shared_group_terminal_gate_claim,
+        verify_shared_group_dag_layer_reference,
+    },
+    gkr_zk_mask::{
+        GkrZkMaskError, LibraLayerMask, LibraPriorLayerCorrection, LibraVariableDegreeSumcheckMask,
+        boolean_vanishing, polynomial_evaluation,
     },
     keccak_gkr_dag::{KeccakDagGate, KeccakDagGateKind, KeccakDagLayer, KeccakDagSource},
     multilinear_pcs::{
@@ -108,6 +115,7 @@ pub enum StateRelationGkrError {
     Shape,
     Evaluation,
     Gkr(ProductSumcheckError),
+    Mask(GkrZkMaskError),
 }
 
 impl fmt::Display for StateRelationGkrError {
@@ -124,6 +132,12 @@ impl From<ProductSumcheckError> for StateRelationGkrError {
     }
 }
 
+impl From<GkrZkMaskError> for StateRelationGkrError {
+    fn from(error: GkrZkMaskError) -> Self {
+        Self::Mask(error)
+    }
+}
+
 impl From<MultilinearPcsError> for StateRelationGkrError {
     fn from(_: MultilinearPcsError) -> Self {
         Self::Evaluation
@@ -136,6 +150,13 @@ pub struct StateRelationGkrProof {
     pub group_challenges: Vec<Fp16>,
     pub wire_challenges: Vec<Fp16>,
     pub layer: SharedGroupDagLayerProof,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaskedStateRelationGkrProof {
+    pub output_claim: LayerOutputClaim,
+    pub sumcheck_rho: Fp16,
+    pub layer: MaskedUniformSharedGroupDagLayerProof,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -184,6 +205,66 @@ fn pack_entry(
     let key = pack_chunks(&entry.key)?;
     let value = pack_chunks(&entry.value)?;
     Ok([index, present, key[0], key[1], value[0], value[1]])
+}
+
+fn scalar_u32(value: Fp16) -> Result<u32, StateRelationGkrError> {
+    let coefficients = value.coefficients();
+    if coefficients[1..]
+        .iter()
+        .any(|coefficient| *coefficient != 0)
+    {
+        return Err(StateRelationGkrError::Encoding);
+    }
+    Ok(coefficients[0])
+}
+
+fn unpack_chunks(packed: [Fp16; 2]) -> Result<[u8; ENTRY_BYTES], StateRelationGkrError> {
+    let mut bytes = [0_u8; ENTRY_BYTES];
+    for (pack_index, value) in packed.into_iter().enumerate() {
+        for (coefficient, chunk_value) in value.coefficients().into_iter().enumerate() {
+            let chunk = pack_index * FP16_COEFFICIENTS + coefficient;
+            let offset = chunk * STATE_RELATION_CHUNK_BYTES;
+            if offset >= ENTRY_BYTES {
+                if chunk_value != 0 {
+                    return Err(StateRelationGkrError::Encoding);
+                }
+                continue;
+            }
+            let width = (ENTRY_BYTES - offset).min(STATE_RELATION_CHUNK_BYTES);
+            if (width < STATE_RELATION_CHUNK_BYTES && chunk_value >= 1 << (8 * width))
+                || chunk_value >= 1 << 24
+            {
+                return Err(StateRelationGkrError::Encoding);
+            }
+            let encoded = chunk_value.to_be_bytes();
+            bytes[offset..offset + width].copy_from_slice(&encoded[4 - width..]);
+        }
+    }
+    Ok(bytes)
+}
+
+fn unpack_entry(
+    source: &[Fp16],
+    offset: usize,
+) -> Result<StateRelationEntry, StateRelationGkrError> {
+    let fields = source
+        .get(offset..offset + STATE_RELATION_ENTRY_WIDTH)
+        .ok_or(StateRelationGkrError::Shape)?;
+    let present = match scalar_u32(fields[1])? {
+        0 => false,
+        1 => true,
+        _ => return Err(StateRelationGkrError::Encoding),
+    };
+    let entry = StateRelationEntry {
+        index: scalar_u32(fields[0])?,
+        present,
+        key: unpack_chunks([fields[2], fields[3]])?,
+        value: unpack_chunks([fields[4], fields[5]])?,
+    };
+    if !entry.present && (entry.key != ZERO_ENTRY || entry.value != ZERO_ENTRY) {
+        return Err(StateRelationGkrError::Encoding);
+    }
+    Ok(entry)
 }
 
 fn append_entry(
@@ -256,6 +337,54 @@ pub fn build_state_relation_source(
         }
     }
     Ok(source)
+}
+
+/// Recover the canonical bounded rows from the independently decoded H4 state
+/// source. This is the inverse of `build_state_relation_source` for the active
+/// profile prefix and lets post-commitment state subproofs consume the exact
+/// committed representation instead of a second host-provided witness.
+pub fn state_relation_rows_from_source(
+    source: &[Fp16],
+    capacity: usize,
+) -> Result<Vec<StateRelationRow>, StateRelationGkrError> {
+    if source.len() != STATE_RELATION_GROUP_COUNT * STATE_RELATION_SOURCE_WIDTH
+        || capacity == 0
+        || capacity > STATE_RELATION_GROUP_COUNT
+    {
+        return Err(StateRelationGkrError::Shape);
+    }
+    let mut rows = Vec::with_capacity(capacity);
+    for group in 0..capacity {
+        let row =
+            &source[group * STATE_RELATION_SOURCE_WIDTH..(group + 1) * STATE_RELATION_SOURCE_WIDTH];
+        let recovered = StateRelationRow {
+            operation_before: unpack_entry(row, 0)?,
+            operation_after: unpack_entry(row, STATE_RELATION_ENTRY_WIDTH)?,
+            snapshot_before: unpack_entry(row, 2 * STATE_RELATION_ENTRY_WIDTH)?,
+            snapshot_after: unpack_entry(row, 3 * STATE_RELATION_ENTRY_WIDTH)?,
+        };
+        let expected = u32::try_from(group).map_err(|_| StateRelationGkrError::Shape)?;
+        if [
+            recovered.operation_before.index,
+            recovered.operation_after.index,
+            recovered.snapshot_before.index,
+            recovered.snapshot_after.index,
+        ]
+        .into_iter()
+        .any(|index| index != expected)
+            || scalar_u32(row[STATE_RELATION_ROW_INDEX_WIRE])? != expected
+        {
+            return Err(StateRelationGkrError::Shape);
+        }
+        rows.push(recovered);
+    }
+    if source[capacity * STATE_RELATION_SOURCE_WIDTH..]
+        .iter()
+        .any(|value| !value.is_zero())
+    {
+        return Err(StateRelationGkrError::Shape);
+    }
+    Ok(rows)
 }
 
 /// Encode the relation source in the wire-major order consumed by the H4
@@ -618,6 +747,262 @@ pub fn prove_state_relation_gkr_interactive(
     })
 }
 
+/// Native witness-hiding state-relation reduction. The caller must source
+/// `sumcheck_rho`, every round challenge, and the terminal challenge from the
+/// authenticated message-first public coin after the mask commitment exists.
+/// The returned raw terminals are prover-internal PCS claims; only the masked
+/// terminals and published polynomials belong in the public transcript.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_masked_state_relation_gkr_interactive(
+    source: &[Fp16],
+    output_point: Vec<Fp16>,
+    sumcheck_mask: &LibraVariableDegreeSumcheckMask,
+    layer_mask: &LibraLayerMask,
+    sumcheck_rho: Fp16,
+    mut challenge: impl FnMut(
+        StateRelationRoundKind,
+        usize,
+        &[Fp16],
+    ) -> Result<Fp16, StateRelationGkrError>,
+    mut terminal_challenge: impl FnMut(&[Fp16], Fp16, Fp16) -> Result<Fp16, StateRelationGkrError>,
+) -> Result<MaskedStateRelationGkrProof, StateRelationGkrError> {
+    let output_claim = LayerOutputClaim {
+        point: output_point,
+        value: Fp16::ZERO,
+        coefficient: Fp16::ONE,
+    };
+    if output_claim.point.len() != STATE_RELATION_OUTPUT_VARIABLES + STATE_RELATION_GROUP_VARIABLES
+        || sumcheck_rho.is_zero()
+    {
+        return Err(StateRelationGkrError::Shape);
+    }
+    let layer = relation_layer();
+    let output = evaluate_output(&layer, source)?;
+    if evaluate_multilinear(&output, &output_claim.point)? != Fp16::ZERO {
+        return Err(StateRelationGkrError::Gkr(ProductSumcheckError::Claim));
+    }
+    let reduction = prove_masked_shared_group_dag_layer_interactive(
+        &layer,
+        STATE_RELATION_GROUP_COUNT,
+        source,
+        source,
+        core::slice::from_ref(&output_claim),
+        &LibraPriorLayerCorrection::zero(),
+        sumcheck_mask,
+        layer_mask,
+        sumcheck_rho,
+        |kind, round, published| {
+            let state_kind = match kind {
+                crate::gkr_sumcheck::SharedGroupDagRoundKind::Group => {
+                    StateRelationRoundKind::Group
+                }
+                crate::gkr_sumcheck::SharedGroupDagRoundKind::LeftWire
+                | crate::gkr_sumcheck::SharedGroupDagRoundKind::RightWire => {
+                    StateRelationRoundKind::Wire
+                }
+            };
+            challenge(state_kind, round, published).map_err(|_| GkrZkMaskError::Sequence)
+        },
+        |published, left, right| {
+            terminal_challenge(published, left, right).map_err(|_| GkrZkMaskError::Sequence)
+        },
+    )?;
+    Ok(MaskedStateRelationGkrProof {
+        output_claim,
+        sumcheck_rho,
+        layer: reduction,
+    })
+}
+
+/// Verify the public masked recurrence and terminal gate without reading the
+/// witness or mask coefficients. The caller must additionally verify the
+/// aggregate committed-mask functional and the raw PCS input claims.
+pub fn verify_masked_state_relation_gkr(
+    proof: &MaskedStateRelationGkrProof,
+) -> Result<(), StateRelationGkrError> {
+    let reduction = &proof.layer;
+    let ordinary_rounds = STATE_RELATION_GROUP_VARIABLES + 2 * STATE_RELATION_WIRE_VARIABLES;
+    if proof.output_claim.value != Fp16::ZERO
+        || proof.output_claim.coefficient != Fp16::ONE
+        || proof.output_claim.point.len()
+            != STATE_RELATION_OUTPUT_VARIABLES + STATE_RELATION_GROUP_VARIABLES
+        || proof.sumcheck_rho.is_zero()
+        || reduction.group_challenges.len() != STATE_RELATION_GROUP_VARIABLES
+        || reduction.wire_challenges.len() != 2 * STATE_RELATION_WIRE_VARIABLES
+        || reduction.published_rounds.len() != ordinary_rounds + 1
+        || reduction.w_published != reduction.published_rounds[ordinary_rounds]
+    {
+        return Err(StateRelationGkrError::Shape);
+    }
+    for round in 1..reduction.published_rounds.len() {
+        let previous_challenge = if round <= STATE_RELATION_GROUP_VARIABLES {
+            reduction.group_challenges[round - 1]
+        } else {
+            reduction.wire_challenges[round - 1 - STATE_RELATION_GROUP_VARIABLES]
+        };
+        let previous = &reduction.published_rounds[round - 1];
+        let current = &reduction.published_rounds[round];
+        if polynomial_evaluation(current, Fp16::ZERO) + polynomial_evaluation(current, Fp16::ONE)
+            != polynomial_evaluation(previous, previous_challenge)
+        {
+            return Err(StateRelationGkrError::Gkr(ProductSumcheckError::Claim));
+        }
+    }
+    let _terminal_gate = shared_group_terminal_gate_claim(
+        &relation_layer(),
+        STATE_RELATION_GROUP_COUNT,
+        core::slice::from_ref(&proof.output_claim),
+        &reduction.group_challenges,
+        &reduction.wire_challenges,
+        reduction.masked_terminal_left,
+        reduction.masked_terminal_right,
+    )?;
+    Ok(())
+}
+
+pub fn masked_state_relation_input_claims(
+    proof: &MaskedStateRelationGkrProof,
+    shard_query: Fp16,
+) -> Result<PackedGkrInputClaims, StateRelationGkrError> {
+    verify_masked_state_relation_gkr(proof)?;
+    masked_state_relation_input_claims_unchecked(proof, shard_query)
+}
+
+pub fn masked_state_relation_input_claims_unchecked(
+    proof: &MaskedStateRelationGkrProof,
+    shard_query: Fp16,
+) -> Result<PackedGkrInputClaims, StateRelationGkrError> {
+    let mut left_point =
+        Vec::with_capacity(STATE_RELATION_WIRE_VARIABLES + STATE_RELATION_GROUP_VARIABLES);
+    left_point.extend_from_slice(&proof.layer.wire_challenges[..STATE_RELATION_WIRE_VARIABLES]);
+    left_point.extend_from_slice(&proof.layer.group_challenges);
+    let mut right_point = Vec::with_capacity(left_point.len());
+    right_point.extend_from_slice(&proof.layer.wire_challenges[STATE_RELATION_WIRE_VARIABLES..]);
+    right_point.extend_from_slice(&proof.layer.group_challenges);
+    Ok(PackedGkrInputClaims {
+        claims: [
+            MultilinearOpeningClaim {
+                point: left_point,
+                value: proof.layer.raw_terminal_left,
+            },
+            MultilinearOpeningClaim {
+                point: right_point,
+                value: proof.layer.raw_terminal_right,
+            },
+        ],
+        shard_query,
+        wire_variables: STATE_RELATION_WIRE_VARIABLES as u8,
+    })
+}
+
+pub fn masked_state_relation_h4_input_claims(
+    proof: &MaskedStateRelationGkrProof,
+    shard_query: Fp16,
+) -> Result<[StateRelationH4InputClaim; 2], StateRelationGkrError> {
+    let claims = masked_state_relation_input_claims(proof, shard_query)?;
+    Ok(core::array::from_fn(|index| StateRelationH4InputClaim {
+        boundary: 1,
+        point: h4_state_point(&claims.claims[index].point).expect("validated state point"),
+        value: claims.claims[index].value,
+        shard_query,
+    }))
+}
+
+pub fn masked_state_relation_h4_input_claims_unchecked(
+    proof: &MaskedStateRelationGkrProof,
+    shard_query: Fp16,
+) -> Result<[StateRelationH4InputClaim; 2], StateRelationGkrError> {
+    let claims = masked_state_relation_input_claims_unchecked(proof, shard_query)?;
+    Ok(core::array::from_fn(|index| StateRelationH4InputClaim {
+        boundary: 1,
+        point: h4_state_point(&claims.claims[index].point).expect("validated state point"),
+        value: claims.claims[index].value,
+        shard_query,
+    }))
+}
+
+pub fn masked_state_relation_constraints(
+    proof: &MaskedStateRelationGkrProof,
+    mask_layer: usize,
+) -> Result<Vec<UniformGkrMaskConstraint>, StateRelationGkrError> {
+    verify_masked_state_relation_gkr(proof)?;
+    masked_state_relation_constraints_unchecked(proof, mask_layer)
+}
+
+pub fn masked_state_relation_constraints_unchecked(
+    proof: &MaskedStateRelationGkrProof,
+    mask_layer: usize,
+) -> Result<Vec<UniformGkrMaskConstraint>, StateRelationGkrError> {
+    let first = proof
+        .layer
+        .published_rounds
+        .first()
+        .ok_or(StateRelationGkrError::Shape)?;
+    let first_sum =
+        polynomial_evaluation(first, Fp16::ZERO) + polynomial_evaluation(first, Fp16::ONE);
+    let mut xy_point = proof.layer.group_challenges.clone();
+    xy_point.extend_from_slice(&proof.layer.wire_challenges);
+    let mut full_point = xy_point;
+    full_point.push(proof.layer.w_challenge);
+    let terminal_gate = shared_group_terminal_gate_claim(
+        &relation_layer(),
+        STATE_RELATION_GROUP_COUNT,
+        core::slice::from_ref(&proof.output_claim),
+        &proof.layer.group_challenges,
+        &proof.layer.wire_challenges,
+        proof.layer.masked_terminal_left,
+        proof.layer.masked_terminal_right,
+    )?;
+    let mut constraints = vec![
+        UniformGkrMaskConstraint {
+            functionals: vec![UniformGkrMaskFunctional::SumcheckBooleanSum {
+                layer: mask_layer,
+                scale: proof.sumcheck_rho,
+            }],
+            residual: first_sum,
+        },
+        UniformGkrMaskConstraint {
+            functionals: vec![UniformGkrMaskFunctional::SumcheckEvaluation {
+                layer: mask_layer,
+                point: full_point,
+                scale: proof.sumcheck_rho,
+            }],
+            residual: polynomial_evaluation(&proof.layer.w_published, proof.layer.w_challenge)
+                - (Fp16::ONE - proof.layer.w_challenge) * terminal_gate,
+        },
+    ];
+    for (point, raw, masked) in [
+        (
+            proof.layer.wire_challenges[..STATE_RELATION_WIRE_VARIABLES]
+                .iter()
+                .chain(&proof.layer.group_challenges)
+                .copied()
+                .collect::<Vec<_>>(),
+            proof.layer.raw_terminal_left,
+            proof.layer.masked_terminal_left,
+        ),
+        (
+            proof.layer.wire_challenges[STATE_RELATION_WIRE_VARIABLES..]
+                .iter()
+                .chain(&proof.layer.group_challenges)
+                .copied()
+                .collect::<Vec<_>>(),
+            proof.layer.raw_terminal_right,
+            proof.layer.masked_terminal_right,
+        ),
+    ] {
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: vec![UniformGkrMaskFunctional::LayerBooleanSum {
+                layer: mask_layer,
+                z_first: point[0],
+                scale: boolean_vanishing(&point),
+            }],
+            residual: masked - raw,
+        });
+    }
+    Ok(constraints)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StateRelationRoundKind {
     Group,
@@ -709,6 +1094,47 @@ mod tests {
     }
 
     #[test]
+    fn committed_source_recovers_the_exact_profile_rows() {
+        let first = row();
+        let mut second = StateRelationRow {
+            operation_before: entry(31, true),
+            operation_after: entry(43, true),
+            snapshot_before: entry(31, true),
+            snapshot_after: entry(43, true),
+        };
+        for entry in [
+            &mut second.operation_before,
+            &mut second.operation_after,
+            &mut second.snapshot_before,
+            &mut second.snapshot_after,
+        ] {
+            entry.index = 1;
+        }
+        let expected = vec![first, second];
+        let source = build_state_relation_source(&expected).unwrap();
+        assert_eq!(
+            state_relation_rows_from_source(&source, expected.len()).unwrap(),
+            expected
+        );
+
+        let mut malformed = source.clone();
+        let mut coefficients = [0_u32; FP16_COEFFICIENTS];
+        coefficients[0] = 1 << 24;
+        malformed[2] = Fp16::from_coefficients(coefficients).unwrap();
+        assert_eq!(
+            state_relation_rows_from_source(&malformed, 2),
+            Err(StateRelationGkrError::Encoding)
+        );
+
+        let mut nonzero_tail = source;
+        nonzero_tail[2 * STATE_RELATION_SOURCE_WIDTH] = Fp16::ONE;
+        assert_eq!(
+            state_relation_rows_from_source(&nonzero_tail, 2),
+            Err(StateRelationGkrError::Shape)
+        );
+    }
+
+    #[test]
     fn interactive_state_relation_releases_every_public_coin_after_a_message() {
         let source = build_state_relation_source(&[row()]).unwrap();
         let (claim, _, _) = challenges();
@@ -729,6 +1155,139 @@ mod tests {
                 .iter()
                 .all(|(_, _, published)| !published.is_empty())
         );
+    }
+
+    #[test]
+    fn masked_state_relation_hides_terminals_and_rejects_recurrence_mutation() {
+        let source = build_state_relation_source(&[row()]).unwrap();
+        let (claim, _, _) = challenges();
+        let degrees =
+            crate::fp16_relay_free_gkr_schedule::selected_state_composed_mask_variable_degrees(128)
+                .unwrap()
+                .remove(crate::fp16_relay_free_gkr_schedule::GKR_LAYERS as usize);
+        let sumcheck_mask = LibraVariableDegreeSumcheckMask::new(
+            scalar(1_001),
+            degrees
+                .iter()
+                .enumerate()
+                .map(|(variable, degree)| {
+                    (0..*degree)
+                        .map(|coefficient| scalar(1_101 + 7 * variable as u32 + coefficient as u32))
+                        .collect()
+                })
+                .collect(),
+        )
+        .unwrap();
+        let layer_mask = LibraLayerMask {
+            coefficients: core::array::from_fn(|index| scalar(2_001 + index as u32)),
+        };
+        let round_count = core::cell::Cell::new(0_u32);
+        let proof = prove_masked_state_relation_gkr_interactive(
+            &source,
+            claim.point,
+            &sumcheck_mask,
+            &layer_mask,
+            scalar(3_001),
+            |_, _, published| {
+                assert!(!published.is_empty());
+                round_count.set(round_count.get() + 1);
+                Ok(scalar(3_101 + round_count.get()))
+            },
+            |published, left, right| {
+                assert!(!published.is_empty());
+                assert_ne!(left, Fp16::ZERO);
+                assert_ne!(right, Fp16::ZERO);
+                round_count.set(round_count.get() + 1);
+                Ok(scalar(3_101 + round_count.get()))
+            },
+        )
+        .unwrap();
+        assert_eq!(round_count.get() as usize, degrees.len());
+        assert_ne!(
+            proof.layer.raw_terminal_left,
+            proof.layer.masked_terminal_left
+        );
+        assert_ne!(
+            proof.layer.raw_terminal_right,
+            proof.layer.masked_terminal_right
+        );
+        verify_masked_state_relation_gkr(&proof).unwrap();
+        let all_degrees =
+            crate::fp16_relay_free_gkr_schedule::selected_state_composed_mask_variable_degrees(128)
+                .unwrap();
+        let relation_mask = crate::fp16_relay_free_gkr_schedule::GKR_LAYERS as usize;
+        let all_sumcheck = all_degrees
+            .iter()
+            .enumerate()
+            .map(|(layer, degrees)| {
+                if layer == relation_mask {
+                    return sumcheck_mask.clone();
+                }
+                LibraVariableDegreeSumcheckMask::new(
+                    scalar(4_001 + layer as u32),
+                    degrees
+                        .iter()
+                        .enumerate()
+                        .map(|(variable, degree)| {
+                            (0..*degree)
+                                .map(|coefficient| {
+                                    scalar(
+                                        5_001
+                                            + 101 * layer as u32
+                                            + 5 * variable as u32
+                                            + coefficient as u32,
+                                    )
+                                })
+                                .collect()
+                        })
+                        .collect(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let all_layers = all_degrees
+            .iter()
+            .enumerate()
+            .map(|(layer, _)| {
+                if layer == relation_mask {
+                    return layer_mask.clone();
+                }
+                LibraLayerMask {
+                    coefficients: core::array::from_fn(|coefficient| {
+                        scalar(6_001 + 11 * layer as u32 + coefficient as u32)
+                    }),
+                }
+            })
+            .collect::<Vec<_>>();
+        let bridges = all_degrees
+            .iter()
+            .enumerate()
+            .map(|(layer, _)| {
+                (0..crate::gkr_packed_binary_bridge_fp16::PACKED_BINARY_MESSAGE_COEFFICIENTS)
+                    .map(|coefficient| scalar(7_001 + 47 * layer as u32 + coefficient as u32))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let layout =
+            crate::fp16_relay_free_gkr_schedule::selected_state_composed_mask_layout(128).unwrap();
+        let encoded = layout.encode(&bridges, &all_sumcheck, &all_layers).unwrap();
+        let constraints = masked_state_relation_constraints(&proof, relation_mask).unwrap();
+        assert_eq!(constraints.len(), 4);
+        let (weights, opening) =
+            crate::fp16_relay_free_gkr_uniform::aggregate_gkr_mask_constraints(
+                &layout,
+                &constraints,
+                scalar(8_001),
+            )
+            .unwrap();
+        assert_eq!(
+            crate::gkr_zk_mask::inner_product(&encoded, &weights).unwrap(),
+            opening
+        );
+
+        let mut forged = proof;
+        forged.layer.published_rounds[1][0] = forged.layer.published_rounds[1][0] + Fp16::ONE;
+        assert!(verify_masked_state_relation_gkr(&forged).is_err());
     }
 
     #[test]

@@ -30,6 +30,10 @@ from experiments.bl_pq512_crypto_foundation.state_plane import (
     StateTransitionProof,
     independently_verify_state_transition,
 )
+from experiments.bl_pq512_crypto_foundation.transparent_hash_code_candidate import (
+    TransparentHashCodeCommitment,
+    bind_authenticated_public_coin,
+)
 from experiments.fixed_shape_claim_air.air_binary_ir import (
     air_binary_commitment,
     air_program_commitment,
@@ -48,6 +52,7 @@ COMPONENT_ID: Final[str] = "BL-PQ512-STATE-AIR-PROOF-V1"
 PUBLIC_OUTPUT_BYTES: Final[int] = 384
 SIDECAR_BYTES: Final[int] = 744
 STATE_AIR_COMPOSED_BINDING_VERSION: Final[int] = 3
+TRANSPARENT_STATE_AIR_COMPOSED_BINDING_VERSION: Final[int] = 6
 STATE_AIR_COMPOSED_FRAGMENT_MAGIC: Final[bytes] = b"BLSA02"
 PROOF_PACKAGE_MAGIC: Final[bytes] = b"BLPQSPK1"
 PROOF_PACKAGE_VERSION: Final[int] = 1
@@ -61,6 +66,21 @@ _COMPOSED_FRAGMENT_DOMAIN: Final[bytes] = (
 _COMPOSED_H4_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v2\x00"
 _COMPOSED_BINDING_DOMAIN: Final[bytes] = (
     b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v2\x00"
+)
+_COMPONENT_BINDING_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/STATE-AIR-PROOF/COMPONENT-BINDING/v1\x00"
+)
+_TRANSPARENT_COMPONENT_BINDING_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/STATE-AIR-PROOF/COMPONENT-BINDING/v2\x00"
+)
+_TRANSPARENT_COMPOSED_FRAGMENT_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v3\x00"
+)
+_TRANSPARENT_COMPOSED_H4_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v3\x00"
+)
+_TRANSPARENT_COMPOSED_BINDING_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v3\x00"
 )
 
 
@@ -149,6 +169,29 @@ def _state_hash(domain: bytes, *parts: bytes) -> bytes:
     return digest.digest()
 
 
+def _component_binding_digest(proof: StateTransitionProof) -> bytes:
+    """Bind the sidecar to state identities without rebuilding root AIR."""
+
+    parts = [
+        proof.before.root_512,
+        proof.after.root_512,
+        proof.projection_digest_512,
+        proof.statement_digest_512,
+        proof.transition_digest_512,
+        proof.public_coin_digest_512,
+        proof.commitment.commitment_digest_512,
+        proof.proof_identity_512,
+        proof.attempt_id_512,
+        proof.receipt.receipt_digest_512,
+    ]
+    if type(proof.commitment) is TransparentHashCodeCommitment:
+        parts.append(bind_authenticated_public_coin(proof.commitment, proof.public_coin_digest_512))
+        domain = _TRANSPARENT_COMPONENT_BINDING_DOMAIN
+    else:
+        domain = _COMPONENT_BINDING_DOMAIN
+    return _state_hash(domain, *parts)
+
+
 def _component_public_outputs(proof: StateTransitionProof) -> bytes:
     encoded = b"".join(proof.projection_12)
     if len(encoded) != PUBLIC_OUTPUT_BYTES:
@@ -175,7 +218,7 @@ def _component_sidecar(
         proof.proof_identity_512,
         proof.attempt_id_512,
         proof.receipt.receipt_digest_512,
-        proof.binding_digest_512,
+        _component_binding_digest(proof),
         proof.projection_digest_512,
         proof.public_coin_digest_512,
     )
@@ -226,7 +269,12 @@ def _attribution_digest(result: SelectedProofResult) -> bytes:
 
 @dataclass(frozen=True, slots=True)
 class StateAirProofEvidence:
-    """Digest-only result of one independently verified state AIR proof."""
+    """Result of one independently verified state AIR proof.
+
+    The canonical evidence is digest-only; the private encoded AIR bytes are
+    retained so binding assembly can reuse the exact proof-phase encoding
+    without rebuilding the full state trace.
+    """
 
     component_id: str
     program_id: str
@@ -244,6 +292,8 @@ class StateAirProofEvidence:
     worker_report_digest_512: bytes
     proof_package_bytes: bytes = field(default=b"", repr=False, compare=False)
     status: str = STATUS
+    state_air_program_bytes: bytes = field(default=b"", repr=False, compare=False)
+    state_air_execution_bytes: bytes = field(default=b"", repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.component_id != COMPONENT_ID or self.program_id != PROGRAM_ID:
@@ -267,6 +317,14 @@ class StateAirProofEvidence:
         _validate_proof_package(self.proof_package_bytes, self.proof_bytes)
         if proof_package_commitment(self.proof_package_bytes) != self.proof_package_commitment_512:
             raise StructuralError("state_air_proof_package_commitment_mismatch")
+        if type(self.state_air_program_bytes) is not bytes or not self.state_air_program_bytes:
+            raise StructuralError("state_air_proof_program_bytes_missing")
+        if type(self.state_air_execution_bytes) is not bytes or not self.state_air_execution_bytes:
+            raise StructuralError("state_air_proof_execution_bytes_missing")
+        if air_program_commitment(self.state_air_program_bytes) != self.program_commitment_512:
+            raise StructuralError("state_air_proof_program_bytes_commitment_mismatch")
+        if air_binary_commitment(self.state_air_execution_bytes) != self.execution_commitment_512:
+            raise StructuralError("state_air_proof_execution_bytes_commitment_mismatch")
         if self.status != STATUS:
             raise StructuralError("state_air_proof_status_invalid")
 
@@ -299,6 +357,8 @@ def _evidence(
     program_commitment: bytes,
     execution_commitment: bytes,
     instance_public_values: tuple[int, ...],
+    program_bytes: bytes,
+    execution_bytes: bytes,
     result: SelectedProofResult,
     proof_package_bytes: bytes,
 ) -> StateAirProofEvidence:
@@ -338,6 +398,8 @@ def _evidence(
         proof_bytes=result.proof_bytes,
         worker_report_digest_512=_hash(b"worker-report", result.worker_report.encode("ascii")),
         proof_package_bytes=proof_package_bytes,
+        state_air_program_bytes=program_bytes,
+        state_air_execution_bytes=execution_bytes,
     )
     return StateAirProofEvidence(
         component_id=evidence.component_id,
@@ -355,6 +417,8 @@ def _evidence(
         proof_bytes=evidence.proof_bytes,
         worker_report_digest_512=evidence.worker_report_digest_512,
         proof_package_bytes=proof_package_bytes,
+        state_air_program_bytes=program_bytes,
+        state_air_execution_bytes=execution_bytes,
     )
 
 
@@ -423,6 +487,8 @@ def prove_state_air(
         program_commitment,
         execution_commitment,
         instance.public_values,
+        program_bytes,
+        execution_bytes,
         result,
         proof_package_bytes,
     )
@@ -443,26 +509,30 @@ def build_state_air_binding_bytes(
     if type(proof) is not StateTransitionProof or type(evidence) is not StateAirProofEvidence:
         raise StructuralError("state_air_composed_binding_types_invalid")
     independently_verify_state_transition(proof)
-    instance = build_state_relation_air(proof)
-    program_bytes = encode_air_program(instance.program)
-    execution_bytes = encode_air_execution(
-        instance.program,
-        instance.traces,
-        instance.public_values,
-    )
-    program_commitment = air_program_commitment(program_bytes)
-    execution_commitment = air_binary_commitment(execution_bytes)
+    program_bytes = evidence.state_air_program_bytes
+    execution_bytes = evidence.state_air_execution_bytes
     if (
-        evidence.program_commitment_512 != program_commitment
-        or evidence.execution_commitment_512 != execution_commitment
+        air_program_commitment(program_bytes) != evidence.program_commitment_512
+        or air_binary_commitment(execution_bytes) != evidence.execution_commitment_512
     ):
         raise StructuralError("state_air_composed_binding_air_commitment_mismatch")
+    program_commitment = evidence.program_commitment_512
+    execution_commitment = evidence.execution_commitment_512
     package_commitment = proof_package_commitment(evidence.proof_package_bytes)
     if package_commitment != evidence.proof_package_commitment_512:
         raise StructuralError("state_air_composed_binding_package_commitment_mismatch")
     canonical_evidence = evidence.canonical_bytes
+    transparent_coin_binding = (
+        bind_authenticated_public_coin(proof.commitment, proof.public_coin_digest_512)
+        if type(proof.commitment) is TransparentHashCodeCommitment
+        else b""
+    )
     fragment = _state_hash(
-        _COMPOSED_FRAGMENT_DOMAIN,
+        (
+            _TRANSPARENT_COMPOSED_FRAGMENT_DOMAIN
+            if transparent_coin_binding
+            else _COMPOSED_FRAGMENT_DOMAIN
+        ),
         proof.before.root_512,
         proof.after.root_512,
         proof.projection_digest_512,
@@ -476,9 +546,14 @@ def build_state_air_binding_bytes(
         package_commitment,
         evidence.proof_identity_512,
         canonical_evidence,
+        *(() if not transparent_coin_binding else (transparent_coin_binding,)),
     )
     composition = _state_hash(
-        _COMPOSED_H4_DOMAIN,
+        (
+            _TRANSPARENT_COMPOSED_H4_DOMAIN
+            if transparent_coin_binding
+            else _COMPOSED_H4_DOMAIN
+        ),
         proof.statement_digest_512,
         proof.transition_digest_512,
         proof.projection_digest_512,
@@ -492,9 +567,14 @@ def build_state_air_binding_bytes(
         evidence.proof_identity_512,
         canonical_evidence,
         fragment,
+        *(() if not transparent_coin_binding else (transparent_coin_binding,)),
     )
     binding_digest = _state_hash(
-        _COMPOSED_BINDING_DOMAIN,
+        (
+            _TRANSPARENT_COMPOSED_BINDING_DOMAIN
+            if transparent_coin_binding
+            else _COMPOSED_BINDING_DOMAIN
+        ),
         proof.before.root_512,
         proof.after.root_512,
         proof.statement_digest_512,
@@ -504,6 +584,7 @@ def build_state_air_binding_bytes(
         proof.receipt.receipt_digest_512,
         composition,
         fragment,
+        *(() if not transparent_coin_binding else (transparent_coin_binding,)),
     )
     before = proof.before.encoded
     after = proof.after.encoded
@@ -515,7 +596,13 @@ def build_state_air_binding_bytes(
     encoded = b"".join(
         (
             b"BLSB01",
-            bytes((STATE_AIR_COMPOSED_BINDING_VERSION,)),
+            bytes(
+                (
+                    TRANSPARENT_STATE_AIR_COMPOSED_BINDING_VERSION
+                    if transparent_coin_binding
+                    else STATE_AIR_COMPOSED_BINDING_VERSION,
+                )
+            ),
             len(before).to_bytes(4, "big"),
             before,
             len(after).to_bytes(4, "big"),
@@ -566,6 +653,7 @@ __all__ = (
     "PROOF_PACKAGE_MAGIC",
     "PROOF_PACKAGE_VERSION",
     "STATE_AIR_COMPOSED_BINDING_VERSION",
+    "TRANSPARENT_STATE_AIR_COMPOSED_BINDING_VERSION",
     "STATE_AIR_COMPOSED_FRAGMENT_MAGIC",
     "SIDECAR_BYTES",
     "STATUS",

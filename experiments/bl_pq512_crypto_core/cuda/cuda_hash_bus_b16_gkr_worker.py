@@ -35,6 +35,8 @@ from cuda_dag_shared_group_message_benchmark import (
 )
 from cuda_fp16_b16_binary_bridge_benchmark import (
     KERNEL as BRIDGE_KERNEL,
+    PRODUCT_LEFT_TILE_BLOCKS,
+    PRODUCT_RIGHT_TILE_BLOCKS,
     arguments,
     chunk_basis_table,
     launch,
@@ -70,10 +72,11 @@ GROUP_COUNT = 8_192
 LIVE_WIRES = 1_600
 PADDED_WIRES = 2_048
 MAX_CLAIMS = 4
-RATE_BYTES = 136
+RATE_BYTES = 72
 STATE_ROOT_ENTRY_WIDTH = 137
 STATE_ROOT_CAPACITY_BASE = 512
 BRIDGE_COEFFICIENTS = 46
+BRIDGE_TILE_GROUPS = 8_192
 PERMUTATIONS_PER_SHARD = GROUP_COUNT * 16
 PROFILE_TOTAL_PERMUTATIONS = {
     1: 113_730,
@@ -728,6 +731,27 @@ def read_plan(stream):
     return rounds
 
 
+def validate_boundary_tail(values, nonuniform_groups):
+    if (
+        len(values) != LIVE_WIRES * GROUP_COUNT
+        or nonuniform_groups <= 0
+        or nonuniform_groups > GROUP_COUNT
+    ):
+        raise ValueError("boundary_tail_shape")
+    if nonuniform_groups == GROUP_COUNT:
+        return
+    for wire in range(LIVE_WIRES):
+        source_start = wire * GROUP_COUNT
+        representative = values[source_start + nonuniform_groups]
+        if any(
+            value != representative
+            for value in values[
+                source_start + nonuniform_groups : source_start + GROUP_COUNT
+            ]
+        ):
+            raise ValueError("boundary_dummy_tail")
+
+
 def compact_boundary_plane(values, nonuniform_groups, packed_groups):
     if (
         len(values) != LIVE_WIRES * GROUP_COUNT
@@ -745,19 +769,11 @@ def compact_boundary_plane(values, nonuniform_groups, packed_groups):
         source_start = wire * GROUP_COUNT
         destination_start = wire * packed_groups
         representative = values[source_start + nonuniform_groups]
-        if any(
-            value != representative
-            for value in values[
-                source_start + nonuniform_groups : source_start + GROUP_COUNT
-            ]
-        ):
-            raise ValueError("boundary_dummy_tail")
         compact[
             destination_start : destination_start + nonuniform_groups
         ] = values[source_start : source_start + nonuniform_groups]
         compact[
-            destination_start + nonuniform_groups :
-            destination_start + packed_groups
+            destination_start + nonuniform_groups : destination_start + packed_groups
         ] = array.array(
             "H", [representative]
         ) * (packed_groups - nonuniform_groups)
@@ -812,6 +828,8 @@ def read_boundary(path, shard):
     if shard_permutations <= 0:
         raise ValueError("boundary_live_shard")
     nonuniform_groups = (shard_permutations + 15) // 16
+    validate_boundary_tail(input_values, nonuniform_groups)
+    validate_boundary_tail(output_values, nonuniform_groups)
     if nonuniform_groups == GROUP_COUNT:
         packed_groups = GROUP_COUNT
     else:
@@ -1240,12 +1258,18 @@ class Worker:
             coefficients[
                 16 * claim_index : 16 * (claim_index + 1)
             ] = array.array("I", coefficient_values[claim_index])
-        copy(self.runtime, self.points_d, points, "copy_claim_points")
+        context = f"{self.completed_layers}_{self.current_context}"
+        copy(
+            self.runtime,
+            self.points_d,
+            points,
+            f"copy_claim_points_{context}",
+        )
         copy(
             self.runtime,
             self.coefficients_d,
             coefficients,
-            "copy_claim_coefficients",
+            f"copy_claim_coefficients_{context}",
         )
 
     def _rank_claims(self, claims, output_variables):
@@ -1339,32 +1363,48 @@ class Worker:
             ck(self.runtime.cuda.cuMemsetD8_v2(pointer, 0, size), label)
 
     def _finalize_bridge(self, claim_count, formula_family):
-        launch(
-            self.runtime,
-            self.product_left_transform,
-            claim_count * 4 * 17 * 256,
-            256,
-            arguments(
-                ctypes.c_uint64(self.product_sum_d),
-                ctypes.c_uint64(self.basis_d),
-                ctypes.c_uint64(self.temporary_d),
-                ctypes.c_uint32(claim_count),
-            ),
-            "product_left_transform",
-        )
-        launch(
-            self.runtime,
-            self.product_right_transform,
-            claim_count * 4 * 17 * 17,
-            256,
-            arguments(
-                ctypes.c_uint64(self.temporary_d),
-                ctypes.c_uint64(self.basis_d),
-                ctypes.c_uint64(self.matrix_d),
-                ctypes.c_uint32(claim_count),
-            ),
-            "product_right_transform",
-        )
+        left_blocks = claim_count * 4 * 17 * 256
+        for block_offset in range(0, left_blocks, PRODUCT_LEFT_TILE_BLOCKS):
+            tile_blocks = min(
+                PRODUCT_LEFT_TILE_BLOCKS,
+                left_blocks - block_offset,
+            )
+            launch(
+                self.runtime,
+                self.product_left_transform,
+                tile_blocks,
+                256,
+                arguments(
+                    ctypes.c_uint64(self.product_sum_d),
+                    ctypes.c_uint64(self.basis_d),
+                    ctypes.c_uint64(self.temporary_d),
+                    ctypes.c_uint32(claim_count),
+                    ctypes.c_uint32(block_offset),
+                ),
+                "product_left_transform",
+            )
+        right_blocks = claim_count * 4 * 17 * 17
+        for block_offset in range(
+            0, right_blocks, PRODUCT_RIGHT_TILE_BLOCKS
+        ):
+            tile_blocks = min(
+                PRODUCT_RIGHT_TILE_BLOCKS,
+                right_blocks - block_offset,
+            )
+            launch(
+                self.runtime,
+                self.product_right_transform,
+                tile_blocks,
+                256,
+                arguments(
+                    ctypes.c_uint64(self.temporary_d),
+                    ctypes.c_uint64(self.basis_d),
+                    ctypes.c_uint64(self.matrix_d),
+                    ctypes.c_uint32(claim_count),
+                    ctypes.c_uint32(block_offset),
+                ),
+                "product_right_transform",
+            )
         launch(
             self.runtime,
             self.assemble_relation,
@@ -1459,8 +1499,10 @@ class Worker:
         claim_count = len(ranked_claims)
         phase_started = time.perf_counter()
         bridge_groups = GROUP_COUNT
+        dense_groups = GROUP_COUNT
         if self.initial_nonuniform_groups < GROUP_COUNT:
             bridge_groups = self.initial_nonuniform_groups + 1
+            dense_groups = self.initial_nonuniform_groups
             launch(
                 self.runtime,
                 self.sum_tail_group_weights,
@@ -1475,39 +1517,40 @@ class Worker:
                 ),
                 "sum_bridge_tail_group_weights",
             )
-        bridge_terms = self.plan.raw_width * bridge_groups * claim_count
-        launch(
-            self.runtime,
-            self.accumulate_b16_bridge_fused_shared,
-            (bridge_terms + 127) // 128,
-            128,
-            arguments(
-                ctypes.c_uint64(self.left_packed),
-                ctypes.c_uint64(self.right_packed),
-                ctypes.c_uint64(self.wire_weights_d),
-                ctypes.c_uint64(self.group_weight_a),
-                ctypes.c_uint64(self.tail_group_weights_d),
-                ctypes.c_uint64(self.base_left_d),
-                ctypes.c_uint64(self.base_right_d),
-                ctypes.c_uint64(self.formulas_d),
-                ctypes.c_uint64(self.product_sum_d),
-                ctypes.c_uint64(self.constant_low_d),
-                ctypes.c_uint64(self.constant_carry_d),
-                ctypes.c_uint32(self.plan.raw_width),
-                ctypes.c_uint32(bridge_groups),
-                ctypes.c_uint32(0),
-                ctypes.c_uint32(self.words_per_wire),
-                ctypes.c_uint32(MAX_RAW),
-                ctypes.c_uint32(GROUP_COUNT),
-                ctypes.c_uint32(self.initial_nonuniform_groups),
-                ctypes.c_uint32(claim_count),
-            ),
-            "accumulate_bridge_fused_shared",
-        )
-        if self.profile_enabled:
-            ck(
-                self.runtime.cuda.cuCtxSynchronize(),
-                "profile_bridge_accumulate_sync",
+        bridge_tile_groups = BRIDGE_TILE_GROUPS
+        for group_offset in range(0, bridge_groups, bridge_tile_groups):
+            tile_groups = min(
+                bridge_tile_groups,
+                bridge_groups - group_offset,
+            )
+            bridge_terms = self.plan.raw_width * tile_groups * claim_count
+            launch(
+                self.runtime,
+                self.accumulate_b16_bridge_fused_shared,
+                (bridge_terms + 127) // 128,
+                128,
+                arguments(
+                    ctypes.c_uint64(self.left_packed),
+                    ctypes.c_uint64(self.right_packed),
+                    ctypes.c_uint64(self.wire_weights_d),
+                    ctypes.c_uint64(self.group_weight_a),
+                    ctypes.c_uint64(self.tail_group_weights_d),
+                    ctypes.c_uint64(self.base_left_d),
+                    ctypes.c_uint64(self.base_right_d),
+                    ctypes.c_uint64(self.formulas_d),
+                    ctypes.c_uint64(self.product_sum_d),
+                    ctypes.c_uint64(self.constant_low_d),
+                    ctypes.c_uint64(self.constant_carry_d),
+                    ctypes.c_uint32(self.plan.raw_width),
+                    ctypes.c_uint32(tile_groups),
+                    ctypes.c_uint32(group_offset),
+                    ctypes.c_uint32(self.words_per_wire),
+                    ctypes.c_uint32(MAX_RAW),
+                    ctypes.c_uint32(GROUP_COUNT),
+                    ctypes.c_uint32(dense_groups),
+                    ctypes.c_uint32(claim_count),
+                ),
+                "accumulate_bridge_fused_shared",
             )
         self._profile_add("begin_bridge_tiles", phase_started)
         phase_started = time.perf_counter()
@@ -1660,7 +1703,6 @@ class Worker:
             result = launch_b16_packed_message(
                 self.runtime,
                 self.packed_b16_group_message,
-                self.packed_b16_group_message_factored_one_claim,
                 self.reduce_cubic_partials,
                 self.left_packed,
                 self.right_packed,
@@ -1677,6 +1719,9 @@ class Worker:
                 message_suffix_groups,
                 self.words_per_wire,
                 len(self.claims),
+                factored_one_claim_function=(
+                    self.packed_b16_group_message_factored_one_claim
+                ),
             )
         else:
             result = launch_fp16_message(

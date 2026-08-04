@@ -230,10 +230,12 @@ def test_terminal_ledger_replays_reference_boundary_and_remains_blocked(context)
     assert ledger.activation_allowed is False
     assert tuple(record.obligation_id for record in ledger.records) == OBLIGATION_IDS
     assert ledger.records[0].status == REFERENCE_ONLY
-    assert ledger.records[1].status == OPEN
+    assert ledger.records[1].status == CLOSED
+    assert ledger.records[2].status == CLOSED
+    assert ledger.records[3].status == CLOSED
     assert ledger.records[7].status == BLOCKED
     assert "no_backend_admitted" in ledger.blockers
-    assert "complete_simulator_missing" in ledger.blockers
+    assert "complete_simulator_missing" not in ledger.blockers
     assert "complete_leakage_scan_missing" in ledger.blockers
     assert ledger.records[9].status == CLOSED
     assert not {
@@ -241,6 +243,16 @@ def test_terminal_ledger_replays_reference_boundary_and_remains_blocked(context)
         "canonical_ops_recursive_identity_unverified",
     } & set(ledger.blockers)
     independently_verify_terminal_ledger(ledger, context)
+
+
+def test_terminal_ledger_routes_simulator_evidence_to_active_construction(context) -> None:
+    ledger = build_terminal_ledger(context)
+    sources = tuple(record.source_id for record in ledger.records)
+    assert any("fp16_zk_rs_hiding_simulator_kat.py" in source for source in sources)
+    assert any("fp16_zk_rs_public_coin_bridge.rs" in source for source in sources)
+    assert all("circle_hiding_simulator.py" not in source for source in sources)
+    assert all("circle_quotient_masking.py" not in source for source in sources)
+    assert "complete_simulator_missing" not in ledger.blockers
 
 
 def test_terminal_ledger_public_encoding_contains_only_bounded_identities(context) -> None:

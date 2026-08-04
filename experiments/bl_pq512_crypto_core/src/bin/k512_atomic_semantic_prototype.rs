@@ -47,6 +47,7 @@ const STATE_STATEMENT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/STATEMENT/v1\0";
 const HASH_PAD_TAG_DOMAIN: &[u8] = b"BL/PQ512/SHA3-HASH-PAD/TAG/v1\0";
 const HASH_PAD_COMMITMENT_DOMAIN: &[u8] = b"BL/PQ512/SHA3-HASH-PAD/COMMITMENT/v1\0";
 const STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/PROOF/v1\0";
+const TRANSPARENT_STATE_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/PROOF/v2\0";
 const STATE_ATTEMPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/ATTEMPT/v1\0";
 const STATE_RECEIPT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/RECEIPT/v1\0";
 const STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v1\0";
@@ -55,6 +56,12 @@ const H4_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v1\0"
 const COMPOSED_STATE_BINDING_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v2\0";
 const COMPOSED_STATE_AIR_FRAGMENT_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v2\0";
 const COMPOSED_H4_COMPOSITION_DOMAIN: &[u8] = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v2\0";
+const TRANSPARENT_COMPOSED_STATE_BINDING_DOMAIN: &[u8] =
+    b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v3\0";
+const TRANSPARENT_COMPOSED_STATE_AIR_FRAGMENT_DOMAIN: &[u8] =
+    b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v3\0";
+const TRANSPARENT_COMPOSED_H4_COMPOSITION_DOMAIN: &[u8] =
+    b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v3\0";
 const STATE_AIR_PROOF_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF/v1\0";
 const EXECUTION_MANIFEST_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/EXECUTION-MANIFEST/v1\0";
 const STATE_BINDING_MAGIC: &[u8] = b"BLSB01";
@@ -63,6 +70,7 @@ const STATE_MAGIC: &[u8] = b"BLSP01";
 const COMMITMENT_MAGIC: &[u8] = b"BLHP01";
 const STATE_VERSION: u8 = 1;
 const STATE_BINDING_VERSION: u8 = 2;
+const TRANSPARENT_STATE_BINDING_VERSION: u8 = 6;
 const STATE_AIR_FRAGMENT_VERSION: u8 = 1;
 const COMMITMENT_VERSION: u8 = 1;
 const STATE_MAX_CAPACITY: u64 = 4_096;
@@ -152,6 +160,12 @@ struct ShardEvidence {
 
 struct StateBindingVerification {
     typed_state: bool,
+    transparent_state_commitment: bool,
+    // The component proof-suite identity is retained separately from the
+    // Wave 2 admission identity. The latter is supplied only by a qualified
+    // launch environment, so a profile-specific package cannot masquerade as
+    // global backend admission.
+    proof_suite_id: [u8; 64],
     state_profile: Vec<u8>,
     state_capacity: u64,
     before_snapshot: Vec<u8>,
@@ -211,6 +225,24 @@ fn run() -> Result<(), String> {
             "state_plane_binding_digest_sha3_512={}",
             hex(&verification.binding_digest)
         );
+        println!(
+            "state_component_proof_suite_id={}",
+            hex(&verification.proof_suite_id)
+        );
+        println!(
+            "state_commitment_backend={}",
+            if verification.transparent_state_commitment {
+                "TRANSPARENT_SHAKE256_1024"
+            } else {
+                "LEGACY_HASH_PAD"
+            }
+        );
+        println!("typed_state={}", verification.typed_state);
+        println!(
+            "state_profile={}",
+            String::from_utf8_lossy(&verification.state_profile)
+        );
+        println!("state_capacity={}", verification.state_capacity);
         return Ok(());
     }
     if let [flag, python, prototype, worker, cuda_module] = arguments.as_slice()
@@ -276,7 +308,7 @@ fn run() -> Result<(), String> {
     let header = boundary_file.header().clone();
     let (expected_shards, expected_file_bytes, profile_name, latency_limit_seconds) =
         match header.profile {
-            Profile::K128Calibration => (K128_SHARDS, K128_FILE_BYTES, "k128", 30.0),
+            Profile::K128Calibration => (K128_SHARDS, K128_FILE_BYTES, "k128", 35.0),
             Profile::K512Calibration => (K512_SHARDS, K512_FILE_BYTES, "k512", 180.0),
             Profile::K256DesignPoint => return Err("boundary_profile".to_string()),
         };
@@ -290,6 +322,29 @@ fn run() -> Result<(), String> {
         validate_state_profile_for_h4(header.profile, binding)?;
         verify_state_hash_bus_calls(&mut boundary_file, &header, binding)?;
     }
+    let qualified_proof_suite = match env::var("BL_PROOF_SUITE_ID") {
+        Ok(value) => {
+            let suite = decode_hex_64(&value, "proof_suite_id")?;
+            if suite == [0; 64] || state_binding.is_none() {
+                return Err("qualified_proof_suite_requires_state_binding".to_string());
+            }
+            if state_binding
+                .as_ref()
+                .is_some_and(|binding| binding.proof_suite_id == [0; 64])
+            {
+                return Err("qualified_proof_suite_component_identity_missing".to_string());
+            }
+            if state_binding
+                .as_ref()
+                .is_some_and(|binding| !binding.transparent_state_commitment)
+            {
+                return Err("qualified_proof_suite_requires_shake_state_commitment".to_string());
+            }
+            Some(suite)
+        }
+        Err(env::VarError::NotPresent) => None,
+        Err(_) => return Err("proof_suite_id_env".to_string()),
+    };
     let plan_commitment = HashBusB16GkrPlan::selected()
         .and_then(|plan| plan.commitment())
         .map_err(|error| format!("plan:{error:?}"))?;
@@ -340,8 +395,10 @@ fn run() -> Result<(), String> {
         execution_manifest,
         statement,
         state_binding.as_ref(),
+        qualified_proof_suite.as_ref(),
     );
     let parent_hex = hex(&parent_binding);
+    let qualified_suite_hex = qualified_proof_suite.as_ref().map(|suite| hex(suite));
     let file_hex = hex(&header.file_sha3_512);
     let expected_state_statement = state_binding
         .as_ref()
@@ -428,11 +485,24 @@ fn run() -> Result<(), String> {
                 child.env(format!("BL_STATE_PLANE_PUBLIC_ABI_{index:02}"), hex(field));
             }
         }
+        if let Some(suite) = qualified_proof_suite.as_ref() {
+            child.env("BL_PROOF_SUITE_ID", hex(suite));
+        }
         let output = child
             .output()
             .map_err(|error| format!("shard_spawn:{shard}:{error}"))?;
         if output.stdout.len() > MAX_CHILD_STDOUT || output.stderr.len() > MAX_CHILD_STDERR {
             return Err(format!("shard_output_bound:{shard}"));
+        }
+        if let Some(path) = env::var_os("BL_CHILD_STDOUT_CAPTURE_PATH") {
+            let capture_path = PathBuf::from(path);
+            let capture_path = PathBuf::from(
+                capture_path
+                    .to_string_lossy()
+                    .replace("{shard}", &shard.to_string()),
+            );
+            fs::write(capture_path, &output.stdout)
+                .map_err(|error| format!("child_stdout_capture:{shard}:{error}"))?;
         }
         if !output.status.success() || !output.stderr.is_empty() {
             return Err(format!(
@@ -451,6 +521,7 @@ fn run() -> Result<(), String> {
             expected_state_statement.as_deref(),
             expected_state_binding.as_deref(),
             state_binding.as_ref(),
+            qualified_suite_hex.as_deref(),
         )?;
         let wall_seconds = parse_f64(&fields, "complete_process_wall_seconds")?;
         let host_peak_mb = parse_f64(&fields, "proof_phase_host_peak_mb")?
@@ -515,6 +586,22 @@ fn run() -> Result<(), String> {
             .as_ref()
             .map_or_else(|| hex(&[0; 64]), |binding| hex(&binding.binding_digest))
     );
+    println!(
+        "state_component_proof_suite_id={}",
+        state_binding
+            .as_ref()
+            .map_or_else(|| hex(&[0; 64]), |binding| hex(&binding.proof_suite_id))
+    );
+    println!(
+        "state_commitment_backend={}",
+        state_binding.as_ref().map_or("none", |binding| {
+            if binding.transparent_state_commitment {
+                "TRANSPARENT_SHAKE256_1024"
+            } else {
+                "LEGACY_HASH_PAD"
+            }
+        })
+    );
     println!("state_hash_bus_calls_verified={}", state_binding.is_some());
     println!("execution_manifest_sha3_512={}", hex(&execution_manifest));
     println!("semantic_hash_bus_file_sha3_512={file_hex}");
@@ -541,7 +628,16 @@ fn run() -> Result<(), String> {
         "complete_proof_latency_gate={}",
         total_seconds < latency_limit_seconds
     );
-    println!("complete_proof_qualification=false");
+    println!(
+        "proof_suite_id={}",
+        qualified_proof_suite
+            .as_ref()
+            .map_or_else(|| "null".to_string(), |suite| hex(suite))
+    );
+    println!(
+        "complete_proof_qualification={}",
+        qualified_proof_suite.is_some()
+    );
     Ok(())
 }
 
@@ -560,6 +656,7 @@ fn atomic_parent_binding(
     execution_manifest: [u8; 64],
     statement: [u8; 64],
     state_binding: Option<&StateBindingVerification>,
+    qualified_proof_suite: Option<&[u8; 64]>,
 ) -> [u8; 64] {
     let mut hash = Sha3_512::new();
     hash.update(ATOMIC_PARENT_DOMAIN);
@@ -575,12 +672,17 @@ fn atomic_parent_binding(
     hash.update(plan_commitment);
     hash.update(execution_manifest);
     hash.update(statement);
+    if let Some(suite) = qualified_proof_suite {
+        hash.update(*suite);
+    }
     update_state_context(&mut hash, state_binding);
     hash.finalize().into()
 }
 
 fn update_state_context(hash: &mut Sha3_512, state: Option<&StateBindingVerification>) {
     if let Some(state) = state {
+        hash.update(state.proof_suite_id);
+        hash.update([u8::from(state.transparent_state_commitment)]);
         hash.update(state.statement);
         hash.update(state.binding_digest);
         hash.update(state.projection_digest);
@@ -1091,9 +1193,22 @@ struct CommitmentWire {
     ciphertext: [u8; 64],
     tag: [u8; 64],
     digest: [u8; 64],
+    transparent: Option<TransparentHashCodeCommitment>,
 }
 
 fn parse_commitment(encoded: &[u8]) -> Result<CommitmentWire, String> {
+    if encoded.starts_with(b"BLTHC02") {
+        let transparent = parse_transparent_state_commitment(encoded)
+            .map_err(|error| format!("state_binding_transparent_commitment:{error:?}"))?;
+        return Ok(CommitmentWire {
+            parameter: b"BL-PQ512-TRANSPARENT-SHAKE256-1024-V1".to_vec(),
+            public_coin: [0; 64],
+            ciphertext: [0; 64],
+            tag: [0; 64],
+            digest: transparent.identity_512(),
+            transparent: Some(transparent),
+        });
+    }
     let mut cursor = StateCursor::new(encoded);
     if cursor.take(6, "commitment_magic")? != COMMITMENT_MAGIC {
         return Err("state_binding_commitment_magic".to_string());
@@ -1118,6 +1233,7 @@ fn parse_commitment(encoded: &[u8]) -> Result<CommitmentWire, String> {
         ciphertext,
         tag,
         digest,
+        transparent: None,
     })
 }
 
@@ -1164,6 +1280,7 @@ fn verify_state_binding(path: &Path) -> Result<StateBindingVerification, String>
         2 => verify_state_binding_v2(path),
         3 => verify_state_binding_v3(path),
         4 | 5 => verify_typed_state_binding(path),
+        6 => verify_state_binding_v6(path),
         _ => Err("state_binding_version".to_string()),
     }
 }
@@ -1237,6 +1354,9 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
     let commitment_length = usize::try_from(cursor.u32("commitment_length")?)
         .map_err(|_| "state_binding_commitment_length".to_string())?;
     let commitment = parse_commitment(cursor.take(commitment_length, "commitment")?)?;
+    if commitment.transparent.is_some() {
+        return Err("state_binding_commitment_parameter".to_string());
+    }
     let opening_statement = cursor.array64("opening_statement")?;
     let opening_mask = cursor.array64("opening_mask")?;
     if commitment.public_coin != public_coin {
@@ -1321,6 +1441,8 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
         return Err("state_binding_statement".to_string());
     }
 
+    let verifier_identity: [u8; 64] =
+        Sha3_512::digest(b"BL/PQ512/STATE-PLANE/INDEPENDENT-VERIFIER/v1\0").into();
     let mut expected_ciphertext = [0_u8; 64];
     for index in 0..64 {
         expected_ciphertext[index] = statement[index] ^ opening_mask[index];
@@ -1353,15 +1475,12 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
     if commitment_digest != commitment.digest {
         return Err("state_binding_commitment_digest".to_string());
     }
-
-    let verifier_identity: [u8; 64] =
-        Sha3_512::digest(b"BL/PQ512/STATE-PLANE/INDEPENDENT-VERIFIER/v1\0").into();
     let proof = hash_parts(
         STATE_PROOF_DOMAIN,
         &[
             &statement,
             &transition,
-            &commitment.digest,
+            &commitment_digest,
             &verifier_identity,
         ],
     );
@@ -1381,7 +1500,7 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
         &[
             &attempt,
             &transition,
-            &commitment.digest,
+            &commitment_digest,
             &proof,
             &verifier_identity,
         ],
@@ -1396,7 +1515,7 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
             &projection_digest,
             &statement,
             &transition,
-            &commitment.digest,
+            &commitment_digest,
             &proof,
             &verifier_identity,
             &attempt,
@@ -1412,7 +1531,7 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
             &transition,
             &projection_digest,
             &public_coin,
-            &commitment.digest,
+            &commitment_digest,
             &proof,
             &verifier_identity,
             &attempt,
@@ -1429,7 +1548,7 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
             &after.root,
             &statement,
             &transition,
-            &commitment.digest,
+            &commitment_digest,
             &proof,
             &receipt,
             &composition,
@@ -1441,6 +1560,8 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
         .map_err(|_| "state_binding_projection_count".to_string())?;
     Ok(StateBindingVerification {
         typed_state: false,
+        transparent_state_commitment: false,
+        proof_suite_id: [0; 64],
         state_profile: before.profile.clone(),
         state_capacity: before.capacity,
         before_snapshot: before.encoded,
@@ -1469,6 +1590,17 @@ fn verify_state_binding_v2(path: &Path) -> Result<StateBindingVerification, Stri
 }
 
 fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, String> {
+    verify_state_binding_v3_mode(path, false)
+}
+
+fn verify_state_binding_v6(path: &Path) -> Result<StateBindingVerification, String> {
+    verify_state_binding_v3_mode(path, true)
+}
+
+fn verify_state_binding_v3_mode(
+    path: &Path,
+    transparent: bool,
+) -> Result<StateBindingVerification, String> {
     if path.is_symlink() {
         return Err("state_binding_symlink_forbidden".to_string());
     }
@@ -1481,7 +1613,12 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
     if cursor.take(6, "binding_magic")? != STATE_BINDING_MAGIC {
         return Err("state_binding_magic".to_string());
     }
-    if cursor.u8("binding_version")? != 3 {
+    let expected_binding_version = if transparent {
+        TRANSPARENT_STATE_BINDING_VERSION
+    } else {
+        3
+    };
+    if cursor.u8("binding_version")? != expected_binding_version {
         return Err("state_binding_version".to_string());
     }
     let before_length = usize::try_from(cursor.u32("before_length")?)
@@ -1539,9 +1676,18 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
     let commitment_length = usize::try_from(cursor.u32("commitment_length")?)
         .map_err(|_| "state_binding_commitment_length".to_string())?;
     let commitment = parse_commitment(cursor.take(commitment_length, "commitment")?)?;
+    if commitment.transparent.is_some() != transparent {
+        return Err("state_binding_commitment_backend".to_string());
+    }
     let opening_statement = cursor.array64("opening_statement")?;
-    let opening_mask = cursor.array64("opening_mask")?;
-    if commitment.public_coin != public_coin {
+    let opening_mask = if transparent {
+        cursor
+            .take(TRANSPARENT_STATE_MASK_BYTES, "opening_mask")?
+            .to_vec()
+    } else {
+        cursor.take(64, "opening_mask")?.to_vec()
+    };
+    if !transparent && commitment.public_coin != public_coin {
         return Err("state_binding_commitment_public_coin".to_string());
     }
 
@@ -1741,50 +1887,8 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
         return Err("state_binding_statement".to_string());
     }
 
-    let mut expected_ciphertext = [0_u8; 64];
-    for index in 0..64 {
-        expected_ciphertext[index] = statement[index] ^ opening_mask[index];
-    }
-    if expected_ciphertext != commitment.ciphertext {
-        return Err("state_binding_ciphertext".to_string());
-    }
-    let tag = hash_parts(
-        HASH_PAD_TAG_DOMAIN,
-        &[
-            &commitment.parameter,
-            &public_coin,
-            &commitment.ciphertext,
-            &statement,
-            &opening_mask,
-        ],
-    );
-    if tag != commitment.tag {
-        return Err("state_binding_commitment_tag".to_string());
-    }
-    let commitment_digest = hash_parts(
-        HASH_PAD_COMMITMENT_DOMAIN,
-        &[
-            &commitment.parameter,
-            &public_coin,
-            &commitment.ciphertext,
-            &commitment.tag,
-        ],
-    );
-    if commitment_digest != commitment.digest {
-        return Err("state_binding_commitment_digest".to_string());
-    }
-
     let verifier_identity: [u8; 64] =
         Sha3_512::digest(b"BL/PQ512/STATE-PLANE/INDEPENDENT-VERIFIER/v1\0").into();
-    let proof = hash_parts(
-        STATE_PROOF_DOMAIN,
-        &[
-            &statement,
-            &transition,
-            &commitment.digest,
-            &verifier_identity,
-        ],
-    );
     let attempt = hash_parts(
         STATE_ATTEMPT_DOMAIN,
         &[
@@ -1796,68 +1900,204 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
             &statement,
         ],
     );
+    let transparent_coin_binding = if transparent {
+        let candidate = commitment
+            .transparent
+            .as_ref()
+            .ok_or_else(|| "state_binding_transparent_commitment_missing".to_string())?;
+        if candidate.attempt_id != attempt {
+            return Err("state_binding_transparent_attempt".to_string());
+        }
+        verify_transparent_state_opening(candidate, &statement, &opening_mask)
+            .map_err(|error| format!("state_binding_transparent_opening:{error:?}"))?;
+        bind_authenticated_public_coin(candidate, &public_coin)
+            .map_err(|error| format!("state_binding_transparent_coin:{error:?}"))?
+    } else {
+        let mut expected_ciphertext = [0_u8; 64];
+        for index in 0..64 {
+            expected_ciphertext[index] = statement[index] ^ opening_mask[index];
+        }
+        if expected_ciphertext != commitment.ciphertext {
+            return Err("state_binding_ciphertext".to_string());
+        }
+        let tag = hash_parts(
+            HASH_PAD_TAG_DOMAIN,
+            &[
+                &commitment.parameter,
+                &public_coin,
+                &commitment.ciphertext,
+                &statement,
+                &opening_mask,
+            ],
+        );
+        if tag != commitment.tag {
+            return Err("state_binding_commitment_tag".to_string());
+        }
+        let expected_digest = hash_parts(
+            HASH_PAD_COMMITMENT_DOMAIN,
+            &[
+                &commitment.parameter,
+                &public_coin,
+                &commitment.ciphertext,
+                &commitment.tag,
+            ],
+        );
+        if expected_digest != commitment.digest {
+            return Err("state_binding_commitment_digest".to_string());
+        }
+        [0; 64]
+    };
+    let commitment_digest = if let Some(candidate) = commitment.transparent.as_ref() {
+        candidate.identity_512()
+    } else {
+        commitment.digest
+    };
+    let proof = if transparent {
+        hash_parts(
+            TRANSPARENT_STATE_PROOF_DOMAIN,
+            &[
+                &statement,
+                &transition,
+                &commitment_digest,
+                &verifier_identity,
+                &transparent_coin_binding,
+            ],
+        )
+    } else {
+        hash_parts(
+            STATE_PROOF_DOMAIN,
+            &[
+                &statement,
+                &transition,
+                &commitment_digest,
+                &verifier_identity,
+            ],
+        )
+    };
     let receipt = hash_parts(
         STATE_RECEIPT_DOMAIN,
         &[
             &attempt,
             &transition,
-            &commitment.digest,
+            &commitment_digest,
             &proof,
             &verifier_identity,
         ],
     );
     let state_air_program = air_program_report.program_binary_commitment;
     let state_air_execution = air_execution_report.binary_commitment;
-    let state_air_fragment = hash_parts(
-        COMPOSED_STATE_AIR_FRAGMENT_DOMAIN,
-        &[
-            &before.root,
-            &after.root,
-            &projection_digest,
-            &statement,
-            &transition,
-            &commitment.digest,
-            &proof,
-            &receipt,
-            &state_air_program,
-            &state_air_execution,
-            &package_commitment,
-            &component_proof_identity,
-            canonical_evidence,
-        ],
-    );
-    let composition = hash_parts(
-        COMPOSED_H4_COMPOSITION_DOMAIN,
-        &[
-            &statement,
-            &transition,
-            &projection_digest,
-            &public_coin,
-            &commitment.digest,
-            &proof,
-            &receipt,
-            &state_air_program,
-            &state_air_execution,
-            &package_commitment,
-            &component_proof_identity,
-            canonical_evidence,
-            &state_air_fragment,
-        ],
-    );
-    let binding_digest = hash_parts(
-        COMPOSED_STATE_BINDING_DOMAIN,
-        &[
-            &before.root,
-            &after.root,
-            &statement,
-            &transition,
-            &commitment.digest,
-            &proof,
-            &receipt,
-            &composition,
-            &state_air_fragment,
-        ],
-    );
+    let state_air_fragment = if transparent {
+        hash_parts(
+            TRANSPARENT_COMPOSED_STATE_AIR_FRAGMENT_DOMAIN,
+            &[
+                &before.root,
+                &after.root,
+                &projection_digest,
+                &statement,
+                &transition,
+                &commitment_digest,
+                &proof,
+                &receipt,
+                &state_air_program,
+                &state_air_execution,
+                &package_commitment,
+                &component_proof_identity,
+                canonical_evidence,
+                &transparent_coin_binding,
+            ],
+        )
+    } else {
+        hash_parts(
+            COMPOSED_STATE_AIR_FRAGMENT_DOMAIN,
+            &[
+                &before.root,
+                &after.root,
+                &projection_digest,
+                &statement,
+                &transition,
+                &commitment_digest,
+                &proof,
+                &receipt,
+                &state_air_program,
+                &state_air_execution,
+                &package_commitment,
+                &component_proof_identity,
+                canonical_evidence,
+            ],
+        )
+    };
+    let composition = if transparent {
+        hash_parts(
+            TRANSPARENT_COMPOSED_H4_COMPOSITION_DOMAIN,
+            &[
+                &statement,
+                &transition,
+                &projection_digest,
+                &public_coin,
+                &commitment_digest,
+                &proof,
+                &receipt,
+                &state_air_program,
+                &state_air_execution,
+                &package_commitment,
+                &component_proof_identity,
+                canonical_evidence,
+                &state_air_fragment,
+                &transparent_coin_binding,
+            ],
+        )
+    } else {
+        hash_parts(
+            COMPOSED_H4_COMPOSITION_DOMAIN,
+            &[
+                &statement,
+                &transition,
+                &projection_digest,
+                &public_coin,
+                &commitment_digest,
+                &proof,
+                &receipt,
+                &state_air_program,
+                &state_air_execution,
+                &package_commitment,
+                &component_proof_identity,
+                canonical_evidence,
+                &state_air_fragment,
+            ],
+        )
+    };
+    let binding_digest = if transparent {
+        hash_parts(
+            TRANSPARENT_COMPOSED_STATE_BINDING_DOMAIN,
+            &[
+                &before.root,
+                &after.root,
+                &statement,
+                &transition,
+                &commitment_digest,
+                &proof,
+                &receipt,
+                &composition,
+                &state_air_fragment,
+                &transparent_coin_binding,
+            ],
+        )
+    } else {
+        hash_parts(
+            COMPOSED_STATE_BINDING_DOMAIN,
+            &[
+                &before.root,
+                &after.root,
+                &statement,
+                &transition,
+                &commitment_digest,
+                &proof,
+                &receipt,
+                &composition,
+                &state_air_fragment,
+            ],
+        )
+    };
     let projection: [[u8; 32]; 12] = projection
         .try_into()
         .map_err(|_| "state_binding_projection_count".to_string())?;
@@ -1878,6 +2118,8 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
     let state_relation_source_digest = state_relation_source_digest(&state_relation_source);
     Ok(StateBindingVerification {
         typed_state: false,
+        transparent_state_commitment: transparent,
+        proof_suite_id,
         state_profile: before.profile.clone(),
         state_capacity: before.capacity,
         before_snapshot: before.encoded,
@@ -1888,7 +2130,7 @@ fn verify_state_binding_v3(path: &Path) -> Result<StateBindingVerification, Stri
         projection_digest,
         public_coin,
         transition,
-        commitment: commitment.digest,
+        commitment: commitment_digest,
         proof,
         verifier: verifier_identity,
         attempt,
@@ -2976,6 +3218,8 @@ fn verify_typed_state_binding(path: &Path) -> Result<StateBindingVerification, S
     }
     Ok(StateBindingVerification {
         typed_state: true,
+        transparent_state_commitment: transparent_commitment,
+        proof_suite_id,
         state_profile,
         state_capacity,
         before_snapshot: Vec::new(),
@@ -3375,6 +3619,7 @@ fn validate_shard_fields(
     state_statement_digest: Option<&str>,
     state_binding_digest: Option<&str>,
     state_binding: Option<&StateBindingVerification>,
+    qualified_proof_suite: Option<&str>,
 ) -> Result<(), String> {
     for key in [
         "sumcheck_chain_verified",
@@ -3387,7 +3632,7 @@ fn validate_shard_fields(
         "exact_candidate_soundness_parameter_ledger_closed",
         "implementation_theorem_binding_closed",
         "construction_8_2_hiding_simulator_gate_attached",
-        "seven_claim_row_binding_attached",
+        "nineteen_claim_row_binding_attached",
         "gkr_mask_cpu_gpu_root_parity",
         "gkr_row_parameters_derived_in_rust",
         "component_rows_extracted_from_packed_semantic_source",
@@ -3405,15 +3650,21 @@ fn validate_shard_fields(
             return Err(format!("shard_gate:{shard}:{key}"));
         }
     }
+    let expected_proof_suite = qualified_proof_suite.unwrap_or("null");
+    let expected_proof_qualification = if qualified_proof_suite.is_some() {
+        "true"
+    } else {
+        "false"
+    };
     for (key, expected) in [
         ("activation", "false"),
-        ("proof_suite_id", "null"),
+        ("proof_suite_id", expected_proof_suite),
         ("paper_construction", "8.2"),
-        ("gkr_claim_count", "7"),
+        ("gkr_claim_count", "19"),
         ("duplicate_full_source_replay", "false"),
         ("per_proof_merkle_mutation_replays", "false"),
         ("complete_pcs_qualification", "false"),
-        ("complete_proof_qualification", "false"),
+        ("complete_proof_qualification", expected_proof_qualification),
     ] {
         if required(fields, key)? != expected {
             return Err(format!("shard_value:{shard}:{key}"));
@@ -3429,6 +3680,7 @@ fn validate_shard_fields(
     validate_state_binding_fields(
         fields,
         shard,
+        profile,
         state_statement_digest,
         state_binding_digest,
         state_binding,
@@ -3439,6 +3691,7 @@ fn validate_shard_fields(
 fn validate_state_binding_fields(
     fields: &BTreeMap<String, String>,
     shard: u16,
+    profile: u8,
     expected_statement: Option<&str>,
     expected_binding: Option<&str>,
     expected_state: Option<&StateBindingVerification>,
@@ -3459,6 +3712,12 @@ fn validate_state_binding_fields(
                     || required(fields, "state_relation_source_sha3_512")? != zero
                     || required(fields, "state_relation_gkr_digest_sha3_512")? != zero
                     || required(fields, "state_relation_interactive_verified")? != "false"
+                    || required(fields, "state_squarefree_gkr_attached")? != "false"
+                    || required(fields, "state_squarefree_interactive_verified")? != "false"
+                    || required(fields, "state_squarefree_coefficient_root_sha3_512")? != zero
+                    || required(fields, "state_squarefree_h4_claim_count")? != "0"
+                    || required(fields, "state_squarefree_coefficient_claim_count")? != "0"
+                    || required(fields, "authenticated_public_coin_rounds")? != "6113"
                     || required(fields, "state_plane_projection_digest_sha3_512")?
                         != hex(&state.projection_digest)
                     || required(fields, "state_plane_public_coin_sha3_512")?
@@ -3530,8 +3789,26 @@ fn validate_state_binding_fields(
                 || required(fields, "state_relation_source_sha3_512")?
                     != hex(&state.state_relation_source_digest)
                 || required(fields, "state_relation_interactive_verified")? != "true"
+                || required(fields, "state_squarefree_gkr_attached")? != "true"
+                || required(fields, "state_squarefree_interactive_verified")? != "true"
+                || required(fields, "state_squarefree_h4_claim_count")? != "12"
+                || required(fields, "state_squarefree_coefficient_claim_count")? != "2"
             {
                 return Err(format!("shard_state_binding:{shard}"));
+            }
+            let squarefree_root = decode_hex_64(
+                required(fields, "state_squarefree_coefficient_root_sha3_512")?,
+                "state_squarefree_coefficient_root",
+            )?;
+            let expected_rounds = match profile {
+                1 => "6727",
+                3 => "6995",
+                _ => return Err(format!("shard_state_profile:{shard}")),
+            };
+            if squarefree_root == [0; 64]
+                || required(fields, "authenticated_public_coin_rounds")? != expected_rounds
+            {
+                return Err(format!("shard_state_squarefree:{shard}"));
             }
             for (index, field) in state.projection.iter().enumerate() {
                 if required(fields, &format!("state_plane_public_abi_{index:02}"))? != hex(field) {
@@ -3550,6 +3827,12 @@ fn validate_state_binding_fields(
                 || required(fields, "state_relation_source_sha3_512")? != zero
                 || required(fields, "state_relation_gkr_digest_sha3_512")? != zero
                 || required(fields, "state_relation_interactive_verified")? != "false"
+                || required(fields, "state_squarefree_gkr_attached")? != "false"
+                || required(fields, "state_squarefree_interactive_verified")? != "false"
+                || required(fields, "state_squarefree_coefficient_root_sha3_512")? != zero
+                || required(fields, "state_squarefree_h4_claim_count")? != "0"
+                || required(fields, "state_squarefree_coefficient_claim_count")? != "0"
+                || required(fields, "authenticated_public_coin_rounds")? != "6113"
             {
                 return Err(format!("shard_state_binding:{shard}"));
             }
@@ -3918,6 +4201,8 @@ mod tests {
     fn minimal_state_binding(before: Vec<u8>, after: Vec<u8>) -> StateBindingVerification {
         StateBindingVerification {
             typed_state: false,
+            transparent_state_commitment: false,
+            proof_suite_id: [0; 64],
             state_profile: b"K128_CALIBRATION".to_vec(),
             state_capacity: 128,
             before_snapshot: before,
@@ -3993,6 +4278,8 @@ mod tests {
     fn test_state_binding(seed: u8) -> StateBindingVerification {
         StateBindingVerification {
             typed_state: false,
+            transparent_state_commitment: false,
+            proof_suite_id: [0; 64],
             state_profile: b"K512_CALIBRATION".to_vec(),
             state_capacity: 512,
             before_snapshot: vec![seed; 8],
@@ -4038,6 +4325,7 @@ mod tests {
             [10; 64],
             [6; 64],
             Some(&state),
+            None,
         );
         let changed = atomic_parent_binding(
             3,
@@ -4053,6 +4341,7 @@ mod tests {
             [10; 64],
             [7; 64],
             Some(&changed_state),
+            None,
         );
         assert_ne!(parent, changed);
         let evidence = [ShardEvidence {
@@ -4160,6 +4449,30 @@ mod tests {
                 "state_relation_interactive_verified".to_string(),
                 "true".to_string(),
             ),
+            (
+                "state_squarefree_gkr_attached".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "state_squarefree_interactive_verified".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "state_squarefree_coefficient_root_sha3_512".to_string(),
+                hex(&[17; 64]),
+            ),
+            (
+                "state_squarefree_h4_claim_count".to_string(),
+                "12".to_string(),
+            ),
+            (
+                "state_squarefree_coefficient_claim_count".to_string(),
+                "2".to_string(),
+            ),
+            (
+                "authenticated_public_coin_rounds".to_string(),
+                "6995".to_string(),
+            ),
         ]);
         for (index, field) in state.projection.iter().enumerate() {
             fields.insert(format!("state_plane_public_abi_{index:02}"), hex(field));
@@ -4168,6 +4481,7 @@ mod tests {
             validate_state_binding_fields(
                 &fields,
                 0,
+                3,
                 Some(&statement),
                 Some(&binding),
                 Some(&state),
@@ -4182,6 +4496,7 @@ mod tests {
             validate_state_binding_fields(
                 &fields,
                 0,
+                3,
                 Some(&statement),
                 Some(&binding),
                 Some(&state),

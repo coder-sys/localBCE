@@ -22,12 +22,17 @@ use crate::{
         STATE_RELATION_WIRE_VARIABLES, h4_state_point,
     },
     state_squarefree_gkr::{
-        STATE_SQUAREFREE_MAX_CAPACITY, StateSquarefreeGkrProof, StateSquarefreeWitness,
-        state_squarefree_state_reductions, verify_state_squarefree_gkr,
+        MaskedStateSquarefreeGkrProof, STATE_SQUAREFREE_MAX_CAPACITY, StateSquarefreeGkrProof,
+        StateSquarefreeStateReduction, StateSquarefreeWitness,
+        masked_state_squarefree_public_coefficient_claims_unchecked,
+        masked_state_squarefree_state_reductions,
+        masked_state_squarefree_state_reductions_unchecked, state_squarefree_state_reductions,
+        verify_masked_state_squarefree_composed, verify_state_squarefree_gkr,
     },
 };
 
 pub const STATE_SQUAREFREE_COEFFICIENT_TABLES: usize = 4;
+pub const MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS: usize = 2;
 pub const STATE_SQUAREFREE_COEFFICIENT_BLOCK: usize = STATE_SQUAREFREE_MAX_CAPACITY;
 pub const STATE_SQUAREFREE_AUXILIARY_MESSAGE_VALUES: usize = 2_048;
 pub const STATE_SQUAREFREE_AUXILIARY_RANDOM_VALUES: usize = 1_218;
@@ -150,6 +155,94 @@ fn lift_coefficient_point(
     Ok(lifted)
 }
 
+pub fn masked_state_squarefree_coefficient_claims(
+    proof: &MaskedStateSquarefreeGkrProof,
+) -> Result<
+    [MultilinearOpeningClaim; MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS],
+    StateSquarefreePcsError,
+> {
+    verify_masked_state_squarefree_composed(proof).map_err(|_| StateSquarefreePcsError::Shape)?;
+    masked_state_squarefree_coefficient_claims_unchecked(proof)
+}
+
+pub fn masked_state_squarefree_coefficient_claims_unchecked(
+    proof: &MaskedStateSquarefreeGkrProof,
+) -> Result<
+    [MultilinearOpeningClaim; MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS],
+    StateSquarefreePcsError,
+> {
+    let row_variables = proof.layout.capacity.ilog2() as usize;
+    let mut lifted = Vec::with_capacity(MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS);
+    for phase in 0..2 {
+        let claim = proof.coefficient_claims[phase]
+            .first()
+            .ok_or(StateSquarefreePcsError::Shape)?;
+        if claim.point.len() != row_variables + 1 {
+            return Err(StateSquarefreePcsError::Shape);
+        }
+        let table_coordinate = claim.point[row_variables];
+        let mut point = claim.point[..row_variables].to_vec();
+        point.resize(
+            STATE_SQUAREFREE_COEFFICIENT_BLOCK.ilog2() as usize,
+            Fp16::ZERO,
+        );
+        point.push(table_coordinate);
+        point.push(if phase == 0 { Fp16::ZERO } else { Fp16::ONE });
+        if point.len() != STATE_SQUAREFREE_COEFFICIENT_VARIABLES {
+            return Err(StateSquarefreePcsError::Shape);
+        }
+        lifted.push(MultilinearOpeningClaim {
+            point,
+            value: claim.value,
+        });
+    }
+    lifted
+        .try_into()
+        .map_err(|_| StateSquarefreePcsError::Shape)
+}
+
+pub fn masked_state_squarefree_public_pcs_coefficient_claims(
+    proof: &MaskedStateSquarefreeGkrProof,
+) -> Result<
+    [MultilinearOpeningClaim; MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS],
+    StateSquarefreePcsError,
+> {
+    verify_masked_state_squarefree_composed(proof).map_err(|_| StateSquarefreePcsError::Shape)?;
+    masked_state_squarefree_public_pcs_coefficient_claims_unchecked(proof)
+}
+
+pub fn masked_state_squarefree_public_pcs_coefficient_claims_unchecked(
+    proof: &MaskedStateSquarefreeGkrProof,
+) -> Result<
+    [MultilinearOpeningClaim; MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS],
+    StateSquarefreePcsError,
+> {
+    let claims = masked_state_squarefree_public_coefficient_claims_unchecked(proof)
+        .map_err(|_| StateSquarefreePcsError::Shape)?;
+    let row_variables = proof.layout.capacity.ilog2() as usize;
+    let mut lifted = Vec::with_capacity(MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS);
+    for (phase, claim) in claims.into_iter().enumerate() {
+        if claim.point.len() != row_variables + 1 {
+            return Err(StateSquarefreePcsError::Shape);
+        }
+        let table_coordinate = claim.point[row_variables];
+        let mut point = claim.point[..row_variables].to_vec();
+        point.resize(
+            STATE_SQUAREFREE_COEFFICIENT_BLOCK.ilog2() as usize,
+            Fp16::ZERO,
+        );
+        point.push(table_coordinate);
+        point.push(if phase == 0 { Fp16::ZERO } else { Fp16::ONE });
+        lifted.push(MultilinearOpeningClaim {
+            point,
+            value: claim.value,
+        });
+    }
+    lifted
+        .try_into()
+        .map_err(|_| StateSquarefreePcsError::Shape)
+}
+
 /// Construct the one auxiliary linear form that opens all four private
 /// coefficient tables.  The caller must obtain `mixing_coefficients` from the
 /// authenticated public coin after every claim point and value is fixed.
@@ -183,17 +276,21 @@ pub fn compose_state_squarefree_coefficient_claims(
         &verified.coefficient_claims[1][1],
     ];
     let mut claims = Vec::with_capacity(STATE_SQUAREFREE_COEFFICIENT_TABLES);
-    let mut functional = vec![Fp16::ZERO; STATE_SQUAREFREE_AUXILIARY_MESSAGE_VALUES];
-    let mut target = Fp16::ZERO;
-    for (table, (claim, mixing)) in short_claims
-        .into_iter()
-        .zip(mixing_coefficients)
-        .enumerate()
-    {
-        let lifted = MultilinearOpeningClaim {
+    for (table, claim) in short_claims.into_iter().enumerate() {
+        claims.push(MultilinearOpeningClaim {
             point: lift_coefficient_point(&claim.point, proof.layout.capacity, table)?,
             value: claim.value,
-        };
+        });
+    }
+    let claims: [MultilinearOpeningClaim; STATE_SQUAREFREE_COEFFICIENT_TABLES] = claims
+        .try_into()
+        .map_err(|_| StateSquarefreePcsError::Shape)?;
+    let (functional, target) = state_squarefree_coefficient_functional(
+        proof.layout.capacity,
+        &claims,
+        &mixing_coefficients,
+    )?;
+    for lifted in &claims {
         let actual = evaluate_multilinear(
             &auxiliary_source[..STATE_SQUAREFREE_AUXILIARY_MESSAGE_VALUES],
             &lifted.point,
@@ -202,11 +299,6 @@ pub fn compose_state_squarefree_coefficient_claims(
         if actual != lifted.value {
             return Err(StateSquarefreePcsError::Opening);
         }
-        for (index, weight) in functional.iter_mut().enumerate() {
-            *weight = *weight + mixing * equality_weight(index, &lifted.point);
-        }
-        target = target + mixing * lifted.value;
-        claims.push(lifted);
     }
     let actual_target = auxiliary_source[..STATE_SQUAREFREE_AUXILIARY_MESSAGE_VALUES]
         .iter()
@@ -217,13 +309,53 @@ pub fn compose_state_squarefree_coefficient_claims(
         return Err(StateSquarefreePcsError::Opening);
     }
     Ok(StateSquarefreeCoefficientComposition {
-        claims: claims
-            .try_into()
-            .map_err(|_| StateSquarefreePcsError::Shape)?,
+        claims,
         mixing_coefficients,
         functional,
         target,
     })
+}
+
+/// Reconstruct the verifier-owned fixed auxiliary functional from either the
+/// four legacy table claims or the two proof-native phase-combined claims.
+pub fn state_squarefree_coefficient_functional(
+    capacity: usize,
+    claims: &[MultilinearOpeningClaim],
+    mixing_coefficients: &[Fp16],
+) -> Result<(Vec<Fp16>, Fp16), StateSquarefreePcsError> {
+    if !matches!(capacity, 128 | 512)
+        || claims.len() != mixing_coefficients.len()
+        || !matches!(
+            claims.len(),
+            MASKED_STATE_SQUAREFREE_COEFFICIENT_CLAIMS | STATE_SQUAREFREE_COEFFICIENT_TABLES
+        )
+        || mixing_coefficients
+            .iter()
+            .any(|coefficient| coefficient.is_zero())
+    {
+        return Err(
+            if mixing_coefficients
+                .iter()
+                .any(|coefficient| coefficient.is_zero())
+            {
+                StateSquarefreePcsError::ZeroMixingCoefficient
+            } else {
+                StateSquarefreePcsError::Shape
+            },
+        );
+    }
+    let mut functional = vec![Fp16::ZERO; STATE_SQUAREFREE_AUXILIARY_MESSAGE_VALUES];
+    let mut target = Fp16::ZERO;
+    for (claim, mixing) in claims.iter().zip(mixing_coefficients.iter().copied()) {
+        if claim.point.len() != STATE_SQUAREFREE_COEFFICIENT_VARIABLES {
+            return Err(StateSquarefreePcsError::Shape);
+        }
+        for (index, weight) in functional.iter_mut().enumerate() {
+            *weight = *weight + mixing * equality_weight(index, &claim.point);
+        }
+        target = target + mixing * claim.value;
+    }
+    Ok((functional, target))
 }
 
 fn state_column_opening(
@@ -269,6 +401,40 @@ pub fn state_squarefree_h4_input_claims(
     }
     let reductions =
         state_squarefree_state_reductions(proof).map_err(|_| StateSquarefreePcsError::Shape)?;
+    lift_state_reductions(source, &reductions, shard_query)
+}
+
+pub fn masked_state_squarefree_h4_input_claims(
+    source: &[Fp16],
+    proof: &MaskedStateSquarefreeGkrProof,
+    shard_query: Fp16,
+) -> Result<[StateSquarefreeH4InputClaim; STATE_SQUAREFREE_H4_CLAIMS], StateSquarefreePcsError> {
+    if shard_query.is_zero() {
+        return Err(StateSquarefreePcsError::Shape);
+    }
+    let reductions = masked_state_squarefree_state_reductions(proof)
+        .map_err(|_| StateSquarefreePcsError::Shape)?;
+    lift_state_reductions(source, &reductions, shard_query)
+}
+
+pub fn masked_state_squarefree_h4_input_claims_unchecked(
+    source: &[Fp16],
+    proof: &MaskedStateSquarefreeGkrProof,
+    shard_query: Fp16,
+) -> Result<[StateSquarefreeH4InputClaim; STATE_SQUAREFREE_H4_CLAIMS], StateSquarefreePcsError> {
+    if shard_query.is_zero() {
+        return Err(StateSquarefreePcsError::Shape);
+    }
+    let reductions = masked_state_squarefree_state_reductions_unchecked(proof)
+        .map_err(|_| StateSquarefreePcsError::Shape)?;
+    lift_state_reductions(source, &reductions, shard_query)
+}
+
+fn lift_state_reductions(
+    source: &[Fp16],
+    reductions: &[[StateSquarefreeStateReduction; 2]; 2],
+    shard_query: Fp16,
+) -> Result<[StateSquarefreeH4InputClaim; STATE_SQUAREFREE_H4_CLAIMS], StateSquarefreePcsError> {
     let mut claims = Vec::with_capacity(STATE_SQUAREFREE_H4_CLAIMS);
     for (phase, phase_reductions) in reductions.iter().enumerate() {
         for (reduction_index, reduction) in phase_reductions.iter().enumerate() {

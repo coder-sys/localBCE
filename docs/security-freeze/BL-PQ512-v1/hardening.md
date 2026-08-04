@@ -8,13 +8,13 @@ Current architecture: conditional work now targets the atomic heterogeneous proo
 coprocessor share one hiding bus and authenticated interactive transcript. Direct-SHA3-STARK
 layouts remain negative baselines only.
 
-Current planning interpretation: the state-free H4 baseline executes the selected 168-layer
-native-masked Fp16 GKR, Construction 8.2 PCS, and 6,086-round dual-PQ authenticated transcript.
-The current state-composed integration shape adds two state claims and 25 authenticated rounds for
-6,111 total, but has no qualification credit. The atomic K128/K512 coordinator, canonical parser,
+Current planning interpretation: H4 executes the selected 168-layer native-masked Fp16 GKR,
+Construction 8.2 PCS, and a 6,113-round fixed dual-PQ authenticated prelude. The current
+state-composed integration shape has nineteen fixed claims and 6,727/6,995 K128/K512 rounds, but
+has no qualification credit. The atomic K128/K512 coordinator, canonical parser,
 mutation gates, and independent verifier remain authoritative. The older R35 Circle-FRI/BaseFold
 substrate is historical lineage, not an alternate current stack. Gate 2E state binding, complete
-semantic-STARK composition and simulator, durable challenge custody/retry governance, H5 repeated
+artifact leakage, durable challenge custody/retry governance, H5 repeated
 p95, H6 suite qualification, production verifier, and reproducible module identities remain open.
 
 The review found no reason to abandon application-specific M31 arithmetic. It found two reasons the

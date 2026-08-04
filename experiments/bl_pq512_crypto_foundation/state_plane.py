@@ -28,6 +28,15 @@ from pathlib import Path
 import tempfile
 from typing import Final, Iterator, Sequence
 
+from experiments.bl_pq512_crypto_foundation.transparent_hash_code_candidate import (
+    TransparentHashCodeCommitment,
+    TransparentHashCodeOpening,
+    bind_authenticated_public_coin,
+    commit as commit_transparent_hash_code,
+    open_commitment as open_transparent_hash_code,
+    verify_opening as verify_transparent_hash_code_opening,
+)
+
 
 STATUS: Final[str] = "STATE_PLANE_V1_IMPLEMENTED_NONACTIVATING_H4_PENDING"
 COMMITMENT_STATUS: Final[str] = (
@@ -40,6 +49,7 @@ STATE_MAGIC: Final[bytes] = b"BLSP01"
 STATE_VERSION: Final[int] = 1
 STATE_BINDING_MAGIC: Final[bytes] = b"BLSB01"
 STATE_BINDING_VERSION: Final[int] = 2
+TRANSPARENT_STATE_BINDING_VERSION: Final[int] = 6
 STATE_AIR_FRAGMENT_MAGIC: Final[bytes] = b"BLSA01"
 STATE_AIR_FRAGMENT_VERSION: Final[int] = 1
 COMMITMENT_MAGIC: Final[bytes] = b"BLHP01"
@@ -67,11 +77,16 @@ _STATEMENT_DOMAIN = b"BL/PQ512/STATE-PLANE/STATEMENT/v1\x00"
 _COMMITMENT_TAG_DOMAIN = b"BL/PQ512/SHA3-HASH-PAD/TAG/v1\x00"
 _COMMITMENT_DIGEST_DOMAIN = b"BL/PQ512/SHA3-HASH-PAD/COMMITMENT/v1\x00"
 _PROOF_DOMAIN = b"BL/PQ512/STATE-PLANE/PROOF/v1\x00"
+_TRANSPARENT_PROOF_DOMAIN = b"BL/PQ512/STATE-PLANE/PROOF/v2\x00"
 _ATTEMPT_DOMAIN = b"BL/PQ512/STATE-PLANE/ATTEMPT/v1\x00"
 _RECEIPT_DOMAIN = b"BL/PQ512/STATE-PLANE/RECEIPT/v1\x00"
 _H4_BINDING_DOMAIN = b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v1\x00"
 _STATE_AIR_FRAGMENT_DOMAIN = b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v1\x00"
 _H4_COMPOSITION_DOMAIN = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v1\x00"
+_TRANSPARENT_STATE_AIR_FRAGMENT_DOMAIN = (
+    b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v3\x00"
+)
+_TRANSPARENT_H4_COMPOSITION_DOMAIN = b"BL/PQ512/STATE-PLANE/H4-COMPOSITION/v3\x00"
 _MAX_STATE_BINDING_BYTES = 256 * 1024 * 1024
 
 
@@ -532,8 +547,8 @@ class StateTransitionProof:
     operations: tuple[StateOperation, ...]
     projection_12: tuple[bytes, ...]
     public_coin_digest_512: bytes
-    commitment: HashPadCommitment
-    opening: HashPadOpening
+    commitment: HashPadCommitment | TransparentHashCodeCommitment
+    opening: HashPadOpening | TransparentHashCodeOpening
     manifest_digest_512: bytes = b""
     projection_digest_512: bytes = b""
     statement_digest_512: bytes = b""
@@ -569,11 +584,22 @@ class StateTransitionProof:
             raise StatePlaneError("state_plane_transition_operation_type_invalid")
         _projection(self.projection_12)
         _bytes(self.public_coin_digest_512, "transition_public_coin", SHA3_512_LENGTH, nonzero=True)
-        if type(self.commitment) is not HashPadCommitment or type(self.opening) is not HashPadOpening:
+        transparent_commitment = type(self.commitment) is TransparentHashCodeCommitment
+        if type(self.commitment) is HashPadCommitment:
+            if type(self.opening) is not HashPadOpening:
+                raise StatePlaneError("state_plane_transition_commitment_type_invalid")
+            if self.commitment.public_coin_digest_512 != self.public_coin_digest_512:
+                raise StatePlaneError("state_plane_transition_public_coin_mismatch")
+            verify_hash_pad_opening(self.commitment, self.opening)
+        elif transparent_commitment:
+            if type(self.opening) is not TransparentHashCodeOpening:
+                raise StatePlaneError("state_plane_transition_commitment_type_invalid")
+            try:
+                verify_transparent_hash_code_opening(self.commitment, self.opening)
+            except (TypeError, ValueError) as exc:
+                raise StatePlaneError("state_plane_transparent_opening_rejected") from exc
+        else:
             raise StatePlaneError("state_plane_transition_commitment_type_invalid")
-        if self.commitment.public_coin_digest_512 != self.public_coin_digest_512:
-            raise StatePlaneError("state_plane_transition_public_coin_mismatch")
-        verify_hash_pad_opening(self.commitment, self.opening)
         manifest = _manifest_digest(self.before, self.after, self.operations)
         projection_digest = _hash(_PROJECTION_DOMAIN, *self.projection_12)
         transition_bytes = _transition_bytes(self.before, self.after, manifest, projection_digest)
@@ -581,13 +607,6 @@ class StateTransitionProof:
         statement = _hash(_STATEMENT_DOMAIN, transition_bytes, transition_digest)
         if self.opening.statement_digest_512 != statement:
             raise StatePlaneError("state_plane_transition_statement_opening_mismatch")
-        proof_identity = _hash(
-            _PROOF_DOMAIN,
-            statement,
-            transition_digest,
-            self.commitment.commitment_digest_512,
-            VERIFIER_IDENTITY_512,
-        )
         attempt_id = _hash(
             _ATTEMPT_DOMAIN,
             _text(self.before.profile_id, "profile_id", MAX_PROFILE_LENGTH),
@@ -597,6 +616,34 @@ class StateTransitionProof:
             self.before.root_512,
             statement,
         )
+        if transparent_commitment:
+            if self.commitment.attempt_id != attempt_id:
+                raise StatePlaneError("state_plane_transparent_attempt_mismatch")
+            try:
+                coin_binding = bind_authenticated_public_coin(
+                    self.commitment,
+                    self.public_coin_digest_512,
+                )
+            except (TypeError, ValueError) as exc:
+                raise StatePlaneError("state_plane_transparent_coin_binding_invalid") from exc
+            proof_identity = _hash(
+                _TRANSPARENT_PROOF_DOMAIN,
+                statement,
+                transition_digest,
+                self.commitment.commitment_digest_512,
+                VERIFIER_IDENTITY_512,
+                coin_binding,
+            )
+        else:
+            coin_binding = b""
+            proof_identity = _hash(
+                _PROOF_DOMAIN,
+                statement,
+                transition_digest,
+                self.commitment.commitment_digest_512,
+                VERIFIER_IDENTITY_512,
+            )
+
         expected_receipt = AtomicStateReceipt(
             attempt_id,
             transition_digest,
@@ -677,7 +724,13 @@ class StateTransitionProof:
         encoded = b"".join(
             (
                 STATE_BINDING_MAGIC,
-                bytes((STATE_BINDING_VERSION,)),
+                bytes(
+                    (
+                        TRANSPARENT_STATE_BINDING_VERSION
+                        if type(self.commitment) is TransparentHashCodeCommitment
+                        else STATE_BINDING_VERSION,
+                    )
+                ),
                 len(before).to_bytes(4, "big"),
                 before,
                 len(after).to_bytes(4, "big"),
@@ -706,7 +759,11 @@ class StateTransitionProof:
     def binding_digest_512(self) -> bytes:
         _, _, _, _, state_air_fragment, h4_composition = _state_air_artifacts(self)
         return _hash(
-            _H4_BINDING_DOMAIN,
+            (
+                _TRANSPARENT_H4_COMPOSITION_DOMAIN
+                if type(self.commitment) is TransparentHashCodeCommitment
+                else _H4_BINDING_DOMAIN
+            ),
             self.before.root_512,
             self.after.root_512,
             self.statement_digest_512,
@@ -758,8 +815,17 @@ def _state_air_artifacts(
     )
     program_commitment = air_program_commitment(program_bytes)
     execution_commitment = air_binary_commitment(execution_bytes)
+    transparent_coin_binding = (
+        bind_authenticated_public_coin(proof.commitment, proof.public_coin_digest_512)
+        if type(proof.commitment) is TransparentHashCodeCommitment
+        else b""
+    )
     fragment_digest = _hash(
-        _STATE_AIR_FRAGMENT_DOMAIN,
+        (
+            _TRANSPARENT_STATE_AIR_FRAGMENT_DOMAIN
+            if transparent_coin_binding
+            else _STATE_AIR_FRAGMENT_DOMAIN
+        ),
         proof.before.root_512,
         proof.after.root_512,
         proof.projection_digest_512,
@@ -772,9 +838,14 @@ def _state_air_artifacts(
         proof.receipt.receipt_digest_512,
         program_commitment,
         execution_commitment,
+        *(() if not transparent_coin_binding else (transparent_coin_binding,)),
     )
     composition_digest = _hash(
-        _H4_COMPOSITION_DOMAIN,
+        (
+            _TRANSPARENT_H4_COMPOSITION_DOMAIN
+            if transparent_coin_binding
+            else _H4_COMPOSITION_DOMAIN
+        ),
         proof.statement_digest_512,
         proof.transition_digest_512,
         proof.projection_digest_512,
@@ -787,6 +858,7 @@ def _state_air_artifacts(
         program_commitment,
         execution_commitment,
         fragment_digest,
+        *(() if not transparent_coin_binding else (transparent_coin_binding,)),
     )
     object.__setattr__(proof, "state_air_program_bytes", program_bytes)
     object.__setattr__(proof, "state_air_execution_bytes", execution_bytes)
@@ -810,6 +882,8 @@ def build_state_transition(
     projection_12: Sequence[bytes],
     public_coin_digest_512: bytes,
     mask_512: bytes,
+    *,
+    commitment_backend: str = "HASH_PAD",
 ) -> StateTransitionProof:
     if type(before) is not StateSnapshot:
         raise StatePlaneError("state_plane_build_snapshot_type_invalid")
@@ -823,11 +897,26 @@ def build_state_transition(
     transition_bytes = _transition_bytes(before, after, manifest, projection_digest)
     transition_digest = _hash(_TRANSITION_DOMAIN, transition_bytes)
     statement = _hash(_STATEMENT_DOMAIN, transition_bytes, transition_digest)
-    commitment, opening = build_hash_pad_commitment(
+    attempt_id = _hash(
+        _ATTEMPT_DOMAIN,
+        _text(before.profile_id, "profile_id", MAX_PROFILE_LENGTH),
+        _text(before.parameter_identity, "parameter_identity", MAX_PARAMETER_LENGTH),
+        before.epoch.to_bytes(8, "big"),
+        before.sequence.to_bytes(8, "big"),
+        before.root_512,
         statement,
-        mask_512,
-        public_coin_digest_512,
     )
+    if commitment_backend == "TRANSPARENT_SHAKE256_1024":
+        commitment = commit_transparent_hash_code(statement, attempt_id, mask_512)
+        opening = open_transparent_hash_code(commitment, statement, mask_512)
+    elif commitment_backend == "HASH_PAD":
+        commitment, opening = build_hash_pad_commitment(
+            statement,
+            mask_512,
+            public_coin_digest_512,
+        )
+    else:
+        raise StatePlaneError("state_plane_commitment_backend_invalid")
     return StateTransitionProof(
         before,
         after,
@@ -853,6 +942,11 @@ def independently_verify_state_transition(proof: StateTransitionProof) -> None:
         proof.projection_12,
         proof.public_coin_digest_512,
         proof.opening.mask_512,
+        commitment_backend=(
+            "TRANSPARENT_SHAKE256_1024"
+            if type(proof.commitment) is TransparentHashCodeCommitment
+            else "HASH_PAD"
+        ),
     )
     if expected != proof:
         raise StatePlaneError("state_plane_verifier_replay_mismatch")
@@ -1005,6 +1099,7 @@ __all__: tuple[str, ...] = (
     "SHA3_512_LENGTH",
     "STATE_BINDING_MAGIC",
     "STATE_BINDING_VERSION",
+    "TRANSPARENT_STATE_BINDING_VERSION",
     "STATE_AIR_FRAGMENT_MAGIC",
     "STATE_AIR_FRAGMENT_VERSION",
     "STATE_PARAMETER_IDENTITY",
