@@ -134,11 +134,12 @@ def _parse_key_values(data: bytes, label: str) -> dict[str, str]:
     return values
 
 
-def _parse_monitor(data: bytes, stdout: bytes, stderr: bytes) -> dict[str, str]:
+def _parse_monitor(data: bytes, stdout: bytes, stderr: bytes) -> dict[str, Any]:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise H5CampaignEvidenceError("h5_campaign_monitor_not_utf8") from exc
+    text = text.replace("\r\n", "\n")
     marker_stdout = "---stdout---\n"
     marker_stderr = "\n---stderr---\n"
     if marker_stdout not in text or marker_stderr not in text:
@@ -149,7 +150,20 @@ def _parse_monitor(data: bytes, stdout: bytes, stderr: bytes) -> dict[str, str]:
         raise H5CampaignEvidenceError("h5_campaign_monitor_stdout_disagreement")
     if embedded_stderr.splitlines() != stderr.decode("utf-8").splitlines():
         raise H5CampaignEvidenceError("h5_campaign_monitor_stderr_disagreement")
-    return _parse_key_values(head, "monitor")
+    values: dict[str, Any] = _parse_key_values(head.encode("utf-8"), "monitor")
+    for key in (
+        "external_exit_code",
+        "external_process_tree_peak_bytes",
+        "pagefile_growth_mb",
+        "post_launch_driver_event_count",
+        "stdout_bytes",
+        "stderr_bytes",
+    ):
+        raw = values.get(key)
+        if type(raw) is not str or re.fullmatch(r"-?[0-9]+", raw) is None:
+            raise H5CampaignEvidenceError(f"h5_campaign_monitor_integer_invalid:{key}")
+        values[key] = int(raw)
+    return values
 
 
 def _require_fields(values: Mapping[str, str], fields: set[str], label: str) -> None:
@@ -277,6 +291,11 @@ def _validate_run(raw: Mapping[str, Any], *, profile_id: str, expected_phase: st
     monitor = _parse_monitor(monitor_bytes, stdout_bytes, stderr_bytes)
     stdout = _parse_key_values(stdout_bytes, "stdout")
     _require_fields(stdout, _required_stdout_fields(profile_id), f"stdout_{profile_id}")
+    for key in ("latency_limit_seconds", "complete_process_wall_seconds", "scratch_mb"):
+        raw = stdout[key]
+        if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw) is None:
+            raise H5CampaignEvidenceError(f"h5_campaign_stdout_number_invalid:{key}")
+        stdout[key] = float(raw)
     if _int(item["monitor_exit_code"], "monitor_exit_code") != 0:
         raise H5CampaignEvidenceError("h5_campaign_monitor_exit_code_failed")
     if _int(monitor["external_exit_code"], "external_exit_code") != 0:
