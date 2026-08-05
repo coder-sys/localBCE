@@ -1,11 +1,10 @@
 # Blind Ledger PQ-ZK claim-proof security architecture
 
-Updated: 2026-08-01
+Updated: 2026-08-04
 
-Status: selected target architecture with complete one-run H4 K128/K512 prototypes through
-independent verification and active Wave 2 qualification work. Gate 2E state selection, the H5
-repeated p95/resource benchmark, H6 suite identity, the final independent audit, and approval for
-real PHI remain open.
+Status: selected target architecture with a sealed nonactivating Gate 2E context and a validated
+exact H5 K128/K512 p95/resource campaign. H6 suite qualification, the final independent audit,
+and approval for real PHI remain open.
 
 Build boundary: the proof system, native hiding, strict-PQ suite, verifier, state, custody ports,
 tests, and qualification evidence are internal engineering packages. Independent reviewers do not
@@ -86,14 +85,15 @@ dual-PQ-authenticated public coin, atomic one/four-shard coordinator, canonical 
 independent Rust verification. Fresh K128/K512 prototypes completed in 29.974129/120.460733 seconds
 with 288.412/296.255 MB internal host peaks, 681.607168/706.523136 MB external process-tree peaks,
 969.999360 MB per-proof tracked device state, 0.000000 MB scratch, and no accepted-attempt pagefile
-growth.
+growth. The later state-bound H5 campaign passed exact 22-launch validation with p95
+32.360845/148.861885 seconds for K128/K512, maximum process-tree RSS 850837504 bytes, and zero
+scratch under the owner-approved Brave-open exception.
 
 The 9.03 TB monolithic, 950.76 GB streamed, 554.26 GB de-duplicated direct-SHA3-STARK layouts, and
 3.59/4.41 GB raw all-Fp16 GKR baselines are historical rejection or differential evidence, not
-fallbacks. The current compact joined row state is 12.058624 MB. H4 therefore resolves the former
-raw proof-engine resource block, but it does not qualify the product: gate 2E must select and bind
-the authoritative state plane before H5's repeated campaign, and the complete simulator/security
-composition plus H6 remain open. Hard limits remain 5,000,000,000 peak resident bytes, strictly
+fallbacks. The current compact joined row state is 12.058624 MB. H4/Gate 2E now have a sealed
+nonactivating context and the state-bound H5 campaign passes its strict p95/resource gates; the
+complete simulator/security composition plus H6 remain open. Hard limits remain 5,000,000,000 peak resident bytes, strictly
 below 5,000,000,000 scratch bytes, and no swap on the reference laptop.
 
 The 2026-08-01 Round 1 compact diagnostic corrected lookup-backed LogUp work-domain geometry and
@@ -121,10 +121,10 @@ security ledger, backend admission, H5, H6, or `proofSuiteId`.
 
 The current native H4 bridge now carries a fixed-shape state-GKR integration seam: two boundary-one
 PCS claims, a 64-wire lane at H4 wire offset 1,600, 25 authenticated state-relation rounds, and
-seven total H4 claims when state is supplied. This seam is nonactivating and unqualified. Its current
-relation checks operation/snapshot equality, Boolean presence, and empty-slot zeroing; complete
-ordering, uniqueness, membership/absence, money/state conservation, simulator/leakage closure,
-backend admission, H5, and H6 remain open.
+seven total H4 claims when state is supplied. This seam remains nonactivating. Its current relation
+checks operation/snapshot equality, Boolean presence, and empty-slot zeroing; the exact state-bound
+H5 campaign now passes, while complete ordering, uniqueness, membership/absence, money/state
+conservation, simulator/leakage closure, and H6 remain open.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
@@ -640,7 +640,7 @@ not proof that the side channel is closed.
 | Backend | Selected role | Production privacy status |
 | --- | --- | --- |
 | S-two/Circle-STARK sibling | Algebra/PCS base for the M31 semantic module only; upstream QM31/hash/transcript defaults remain rejected. | Internal build blocked until semantic hiding and strict-PQ implementation qualify. |
-| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path, with SHA3-512 commitments and authenticated interactive public coin. | H4 passes the real bridge, native masks, Construction 8.2 PCS, atomic verifier, one-run resource gates, and K128/K512 prototypes. State/composition qualification, H5, H6, and activation remain open. |
+| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path, with SHA3-512 commitments and authenticated interactive public coin. | H4/Gate 2E have a sealed nonactivating state-bound context and H5 passes the exact p95/resource campaign. H6 qualification and activation remain open. |
 | Shout-like/Twist-like memory checking | Read-only governed-table and read/write replay/payment bake-off against the current endpoint-multiproof/sorted-memory control. | Research only until the exact SHA3-512 root bridge, Fp16/public-coin composition, hiding, fixed-shape privacy, attacks, and K128 resource evidence pass. |
 | Persistent sparse-memory / transparent dictionary / projection RAM | Mandatory Wave 2 state-replacement bake-off under one versioned interface; current SHA3 tree remains the control. | Unselected until exact semantic equivalence, native hiding, strict-PQ theorem, SHA3-512 state identifier, migration attacks, independent verifier, and full laptop evidence pass. |
 | Jindo / Grand Danois / Hachi / RoKoko-style PQ commitments | Isolated commitment/compression candidates for the mandatory state bake-off. | No primitive-name credit: exact assumptions, 256-bit security/encryption parameters, adaptive binding, knowledge soundness, evaluation hiding, public-coin composition, grammar, license, and implementation must qualify. |

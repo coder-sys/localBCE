@@ -1,6 +1,6 @@
 # Blind Ledger current technical stack
 
-Updated: 2026-08-03
+Updated: 2026-08-04
 
 Status: canonical current-stack index. If an older checkpoint conflicts with this file, `STATE.md`,
 `ARCHITECTURE.md`, or `docs/IMPLEMENTATION_ROADMAP.md`, the newer current files win. Historical
@@ -21,8 +21,9 @@ R01-R12 package complete.
 
 Blind Ledger is a nonactivating zero-knowledge payment-system prototype. Wave 1 is the sealed
 synthetic semantic relation. Wave 2 is the strict post-quantum proof and throughput-recovery wave.
-Six of 93 engineering packages are complete. `proofSuiteId=null`, activation is false, and real
-PHI or payments are forbidden.
+Six of 93 engineering packages are complete. Gate 2E now has a sealed nonactivating terminal
+ledger and H5 has a validated exact 22-launch campaign; H6 remains blocked. `proofSuiteId=null`,
+activation is false, and real PHI or payments are forbidden.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
 measurement module. Gate 2E-1/S1 is implemented as 13 bounded descriptors plus strict
@@ -62,9 +63,11 @@ Gate 2E-6/S6 and 2E-7/S7 now have a reference measurement/selection ledger in
 `gate_2e_selection.py`. It measures the identical synthetic S2/S3/S4 component twice for each
 screened backend and both K128/K512 profiles, recomputes the S3 rejection reasons, and refuses to
 grant timing credit when no backend is admitted. All five backends remain rejected; C0 is retained
-as an unselected control, complete warm-up/complete-boundary runs are not authorized, and the
-selection handoff is explicitly unsealed. The five-by-two-by-two observation count is 20 derived
-reference observations. Focused positive/attack tests pass 6/6.
+as an unselected control, complete warm-up/complete-boundary runs are not authorized at that
+component-only boundary, and the selection handoff is explicitly unsealed. The five-by-two-by-two
+observation count is 20 derived reference observations. Focused positive/attack tests pass 6/6.
+The later qualified H4 context admits `TRANSPARENT_SHAKE256_1024` nonactivating and seals the
+terminal ledger; it does not turn the candidate into an active production suite.
 
 The terminal Gate 2E evidence boundary is now implemented in
 `gate_2e_terminal_ledger.py`. It independently replays S4, derives S5 checkpoints, checks the
@@ -77,9 +80,11 @@ check, not proof-native H4 equality or state-plane admission. It
 records 11 ordered obligation records for atomic composition, the semantic/PCS/public-coin
 simulator, fixed-shape leakage, state/proof receipt, migration, strict-PQ selection, canonical
 ops, and independent verification. The state/PCS/public-coin simulator records are now closed by
-the exact Construction 8.2 plus state-composed GKR simulator. The ledger remains unsealed; its
-current blockers are `no_backend_admitted`, `complete_leakage_scan_missing`,
-`h4_atomic_binding_deferred`, and `proof_suite_unselected`. The ops obligation is closed.
+the exact Construction 8.2 plus state-composed GKR simulator. The latest qualified context seals
+the ledger as `SEALED_GATE_2E_TERMINAL_LEDGER` with no blockers,
+`h4_parent_bound=true`, and `complete_proof_verified=true`. It remains nonactivating with
+`proofSuiteId=null` and `activation_allowed=false`; the strict-PQ/H6 qualification ledger is still
+open. The ops obligation is closed.
 
 The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
@@ -204,9 +209,10 @@ snapshot_trace_mutation=ERR:state_binding_air_execution:LookupMultisetMismatch
 
 This closes the native state-file component boundary, not Gate 2E admission. The full state
 relation is still not algebraically composed inside the custom H4 GKR/PCS proof; the selected
-commitment backend, complete simulator, leakage/security composition, repeated resource campaign,
-and proof-suite admission remain open. `proofSuiteId=null`, activation remains false, H5 has not
-started, and no production CUDA or real PHI/payment data was used.
+commitment backend, complete simulator, leakage/security composition, and proof-suite admission
+remain open. H5 was not run for this capacity-8 component fixture; the exact state-bound campaign
+is recorded in the current execution section below. `proofSuiteId=null`, activation remains false,
+and no production CUDA or real PHI/payment data was used.
 
 ## Typed C0 state relation executable component (nonactivating)
 
@@ -267,8 +273,9 @@ parent, composition, and atomic receipt. Focused Python/Rust positive and four-w
 pass. Legacy envelope version 4 remains independently parsed and cannot omit the new v5 fields.
 This implements the correct pre-coin composition path but does not admit the backend: the immutable
 typed resource preflight still rejects that generic route. The selected custom H4 route has closed
-the conditioned simulator mechanics; end-to-end state-composed proof evidence, artifact leakage,
-Gate 2E admission, H5, and H6 remain open.
+the conditioned simulator mechanics; the later exact state-bound H5 campaign supplies measured
+end-to-end evidence and the qualified context seals Gate 2E nonactivating. Artifact leakage,
+strict-PQ, and H6 qualification remain open.
 
 ## How a successor must interpret this repository
 
@@ -297,8 +304,10 @@ Words have exact meanings:
 | Activated | Production configuration identifies the suite and permits real operation. This has not happened. |
 | Audited | The final independent audit accepted the finished release candidate. This has not happened. |
 
-If evidence supports only a weaker term, the stronger term is forbidden. In particular, H4 is
-prototype-accepted, not H5-qualified, H6-qualified, activated, production-ready, or audited.
+If evidence supports only a weaker term, the stronger term is forbidden. In particular, the
+state-free H4 prototype is prototype-accepted; the state-bound candidate is H5-qualified only for
+the exact nonactivating 22-launch campaign recorded above. Neither is H6-qualified, activated,
+production-ready, or audited.
 
 ## Frozen system invariants
 
@@ -351,6 +360,19 @@ The H4 prototype is functionally attached for both profiles:
 
 All memory values are decimal MB. These are accepted one-run H4 prototype measurements, not H5
 p95 qualification or H6 suite activation.
+
+The exact state-bound H5 campaign subsequently passed source validation. It ran one warm-up plus
+ten unique measured launches per profile (22 launches total) under the owner-approved Brave-open
+exception. The measured p95 values were 32.360845 seconds for K128 and 148.861885 seconds for
+K512, against strict `<35`/`<180` second gates. Maximum external process-tree RSS was
+850,837,504 bytes and maximum scratch was 0 bytes; all launches had exit 0, empty stderr, zero
+pagefile growth, zero post-launch driver events, cleanup success, and independent verification.
+The campaign identity is `h5-exact-22-20260804`, its campaign digest is
+`199a1b1c7e553b73597f1bd3192a72db732529599da68d820bf072e2e2ee3dabe1d7dda2d72efbd9fd23e17a6b2366f70d51ed96d9c152483d3f34165e7bedf5`, and its execution manifest digest is
+`999aef8a16f97a52e6ce6ead7b7470eea2fdc50f32d13e95a3a1e021cd093aef42f8f5a2420cd3f4e35f77a42ff161f791888b5905ec3fcdf8cb8f8765992545`.
+The campaign manifest's prover source identity is `47ca7dab146b56a85ebbf9d2d2fe797c4fee2fae`; later
+telemetry-parser corrections are recorded separately and are not substituted for that identity.
+This is H5 qualification evidence, not H6 suite activation.
 
 The state-composed schedule is a fixed-shape integration boundary with fresh feasibility evidence,
 not a qualification result. The state lane uses the same H4 source polynomial at the fixed 64-wire
@@ -581,42 +603,37 @@ Windows reparse-point mismatch; no outward copy or fallback tree is permitted.
 
 ## Current execution order
 
-1. Admit and atomically bind a reviewed state relation/commitment plane into the H4 parent,
-   transcript, proof grammar, independent verifier, and receipt; the terminal evidence ledger is
-   now the fail-closed record of what remains open.
-2. Run H5: one warm-up plus ten unique K128 and ten unique K512 proofs with external resource and
-  driver monitoring; qualify p95 below 35/180 seconds.
-3. Run H6 suite, parser, mutation, rollback, recovery, reproducibility, and activation gates.
+1. Preserve the sealed nonactivating Gate 2E terminal ledger and the exact H5 campaign evidence;
+   it is the fail-closed record of what has passed and what remains open.
+2. Close H6's strict-PQ theorem, complete simulator, grammar, attack, identity, reproducibility,
+   side-channel, migration, evidence-manifest, and Wave 3 boundaries.
+3. Keep `proofSuiteId=null` and activation disabled until H6 and the later roadmap gates pass.
 4. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.
 
-The terminal ledger reference is implemented, but it is not the Gate 2E close: S6/S7 retained C0
-without selecting a PQ backend because S3 admission is closed. Do not start the repeated H5
-campaign until one state plane is selected and atomically bound into the H4 parent, transcript,
-proof grammar, verifier, and receipt.
+The terminal ledger is now sealed for the qualified nonactivating candidate context. It does not
+activate a proof suite or waive H6. The selected candidate/admission identity is retained only as
+nonactivating evidence until the strict-PQ theorem, complete simulator, grammar, supply-chain,
+side-channel, migration, and Wave 3 obligations close.
 
-`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now records that boundary
-without launching a prover. It independently replays the terminal ledger, freezes one uncounted
-warm-up plus ten unique measured launches for each K128/K512 profile (22 fresh launches total),
-checks the tracked commit-bound `ops/` authority and reference-hardware readiness, and keeps cached
-proofs, cached witnesses, automatic retry, activation, and `proofSuiteId` disabled. The current
-record is `BLOCKED_H5_PREFLIGHT` with preflight digest
-`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693`; it records
-`VERIFIED_TRACKED_SHA3_512_AUTHORITY`, `READY` reference hardware, no campaign, no external monitor, and
-the unresolved Gate 2E/H4/leakage/PQ blockers. The recorded 487,335,129,088-byte disk
-now uses a literal 10x lower operational reserve: 15,000 ppm (1.5%), requiring 7,310,026,937
-free bytes; the immutable 5,000,000,000-byte RSS/scratch, zero-swap, privacy, proof, and
-activation gates are unchanged. This is a preflight ledger, not H5 measurement or qualification
-evidence.
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now replays the sealed
+terminal ledger and the validated exact campaign. The current record is
+`QUALIFIED_H5_CAMPAIGN_NONACTIVATING`, with campaign status
+`QUALIFIED_EXACT_22_LAUNCH_CAMPAIGN` and external monitor status
+`CONFIGURED_EXTERNAL_PROCESS_RESOURCE_MONITOR`. The failed earlier pagefile-growth campaign is
+preserved with zero credit. Cached proofs, cached witnesses, automatic retry, activation, and
+`proofSuiteId` remain disabled.
 
-`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` now records the next
-qualification boundary without launching a prover. It independently replays the H5/2E context,
-validates the candidate registry's `CANDIDATE_UNQUALIFIED` state and eight null module identities,
-and emits all twelve H6 obligations with explicit evidence classes. The current record is
-`BLOCKED_H6_PREFLIGHT` with five blocked, five open, and two reference-only records; no obligation
-is closed, `proofSuiteId` remains null, and activation remains false. Its focused/attack suite is
-6/6 and the containing S1-S7, terminal-ledger, H5, and H6 set is 85/85; these are ledger-test
-observations, not complete-proof qualification.
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` now consumes either the
+blocked H5 record or the validated exact campaign without weakening the activation boundary. The
+current qualified-input record is `BLOCKED_H6_PREFLIGHT` with exactly one closed obligation,
+`H5_RESOURCE_EVIDENCE`; the other eleven records remain open, blocked, or reference-only. Its
+latest blockers are `h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
+`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
+`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
+`side_channel_unlinkability_open`, `production_migration_theorem_open`,
+`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
+`wave3_verifier_state_custody_open`. `proofSuiteId` remains null and activation remains false.
 
 The current-source UDR/native-hiding KAT boundary was reconciled on 2026-08-02. The implementation
 now derives the six unselected query candidates as `617/378/309/281/268/262` and the interface
@@ -627,14 +644,16 @@ superseded historical values remain historical evidence.
 
 ## Open boundaries and nonclaims
 
-- Gate 2E has not selected authoritative persistent state or its PQ commitment. S2 scalar controls,
-  S3 commitment envelopes, S4 atomic composition, and S5 migration/recovery are correctness and
-  differential reference evidence only; S6/S7 timing is component-only and no candidate has reviewed
-  native-hiding composition, complete proof composition, migration theorem, or complete-boundary
-  measurement.
+- Gate 2E's latest terminal context is sealed and nonactivating, and the exact state-bound H5
+  campaign passed. S2 scalar controls, S3 commitment envelopes, S4 atomic composition, and S5
+  migration/recovery remain correctness/reference evidence; the candidate does not receive a
+  production proof-suite identity until H6 closes the strict-PQ, parser, supply-chain, privacy,
+  migration, and evidence obligations.
 - The complete semantic-STARK/state/GKR/PCS zero-knowledge simulator and composed 256-bit ledger are
   not closed; the new terminal ledger records this as an explicit open obligation.
-- H5 has not run one warm-up plus ten unique K128 and ten unique K512 complete proofs.
+- H5 has run and passed the exact one-warm-up-plus-ten-unique-per-profile campaign; its p95 values
+  are 32.360845 seconds (K128) and 148.861885 seconds (K512), with the campaign/source identities
+  recorded above.
 - H6 has not frozen `proofSuiteId`, final module identities, reproducible artifacts, custody, or the
   production parser/verifier.
 - The tracked ops authority passes exact SHA3-512 inventory readback; this former blocker is closed.

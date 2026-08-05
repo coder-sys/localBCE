@@ -1,6 +1,6 @@
 # BL-PQ512 shared-bus Boolean hash coprocessor
 
-Updated: 2026-08-02
+Updated: 2026-08-04
 
 Status: selected nonactivating Wave 2 architecture. Historical experiments and superseded
 measurements are preserved in
@@ -252,10 +252,9 @@ same public claim shape with zero state claims/source digest.
 The current relation proves operation/snapshot field equality, authenticated slot index/order,
 Boolean presence, and empty-slot zeroing. The native Rust binding parser and Python canonical
 snapshot decoder reject duplicate present keys. High-cardinality membership/absence and
-money/state-conservation semantics remain supplied by the typed state-AIR boundary. No
-state-composed performance or qualification credit is claimed; the exact state source and
-transcript are integration evidence only until those obligations and the Gate 2E
-leakage/backend gates close; the complete conditioned simulator mechanics are now verified.
+money/state-conservation semantics remain supplied by the typed state-AIR boundary. The exact
+state-bound H5 campaign now passes its p95/resource gates under the approved Brave-open exception;
+the complete conditioned simulator/security and H6 qualification obligations remain open.
 
 The separate C0 typed-state executable AIR now supplies the missing ordered-map/payment semantic
 slice at its semantic-AIR boundary. It binds replay and payment roots/cursors, fixed slot
@@ -295,10 +294,9 @@ boundary is established. This is a driver-integrity gate, not a VRAM-capacity ga
 
 ## 10. Next dependency
 
-Gate 2E must complete the state relation inside the H4 proof and select/admit a reviewed PQ
-commitment, then atomically bind the state plane into the H4 parent, transcript, proof grammar,
-independent verifier, and receipt. Only then does H5 run the exact 22-launch campaign and H6 close
-the theorem/simulator/identity seal.
+Gate 2E has a sealed nonactivating state-bound context and H5 has passed the exact 22-launch
+campaign. The next dependency is H6: close the theorem/simulator/identity/grammar/supply-chain/
+privacy/migration/evidence obligations before any suite identity or activation.
 
 Do not start another proof-backend bake-off, revive BaseFold/zkDeepFold, run H5 on the state-free
 H4 proof, increase worker lifetime, parallelize K512 shards without a theorem, duplicate source

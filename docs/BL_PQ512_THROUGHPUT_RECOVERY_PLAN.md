@@ -1,6 +1,6 @@
 # BL-PQ512 throughput and proof-size recovery plan
 
-Updated: 2026-08-02
+Updated: 2026-08-04
 
 Status: current-only performance contract. Historical experiments, profiles, and intermediate
 measurements are preserved verbatim in
@@ -249,16 +249,17 @@ backends and two profiles, retain exact rejection evidence, and leave complete-b
 unauthorized; their focused/attack result is 6 passed in 34.04 seconds. The terminal ledger
 reference is now implemented and independently rechecked: it has 11 ordered obligation records,
 focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger result 73 passed in
-91.58 seconds, and status `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. Its blockers remain no
-backend admission, missing complete leakage evidence, deferred H4 binding, and unset
-`proofSuiteId`. The tracked `ops/` authority is verified and the former sibling-layout blocker is closed.
+91.58 seconds. The latest qualified context supersedes that blocked record with
+`SEALED_GATE_2E_TERMINAL_LEDGER`, no blockers, `h4_parent_bound=true`, and
+`complete_proof_verified=true`; `proofSuiteId` remains null and activation remains false. The
+tracked `ops/` authority is verified and the former sibling-layout blocker is closed.
 The v5 typed C0 AIR remains the executable semantic/differential oracle and native H4 readback
 seam, but its generic main/interaction/composition oracle lifetime is rejected as the complete
 proof route. The exact K128 model retains 13,808,394,080 persistent bytes and 1,135,869,952 peak
 temporary bytes, so `modeled_peak_scratch_bytes=14944264032`, `scratch_gate_pass=false`, and
-`route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`. This is reference evidence only;
-continue the selected custom H4 state-composition lane. Do not start H5 or another complete-proof
-backend bake-off until a reviewed state plane is selected and atomically bound.
+`route_status=REJECTED_CURRENT_PERSISTENT_ORACLE_LIFETIME`. This remains reference evidence only;
+the selected custom H4 state-composition lane is the state-bound candidate used by the exact H5
+campaign.
 
 The first custom-lane uniqueness control checks every unordered pair in both phases and verified
 with two PCS input claims. K128/128-slot proving measured 21.902903 seconds; K512/512-slot proving
@@ -286,40 +287,53 @@ projection or Gate 2E decision.
 ## 12. H5 qualification preflight boundary
 
 `experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` now provides a read-only,
-fail-closed preflight for the next campaign. It independently replays the 11-record terminal
+fail-closed replay for the qualified campaign. It independently replays the sealed terminal
 ledger, validates the recorded reference hardware, checks the one tracked commit-bound `ops/`
-authority, and freezes exactly one uncounted warm-up plus ten unique measured
-launches for each profile: 22 fresh launches total. It never starts CUDA, accepts cached proofs or
-witnesses, substitutes a failed run, assigns `proofSuiteId`, or authorizes activation.
+authority, and validates exactly one uncounted warm-up plus ten unique measured launches for each
+profile: 22 fresh launches total. It never accepts cached proofs or witnesses, substitutes a failed
+run, assigns `proofSuiteId`, or authorizes activation.
 
-Current preflight evidence:
+Current qualified campaign evidence:
 
 ```text
-status=BLOCKED_H5_PREFLIGHT
-preflight_digest_sha3_512=9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693
+status=QUALIFIED_H5_CAMPAIGN_NONACTIVATING
+campaign_id=h5-exact-22-20260804
+campaign_digest_sha3_512=199a1b1c7e553b73597f1bd3192a72db732529599da68d820bf072e2e2ee3dabe1d7dda2d72efbd9fd23e17a6b2366f70d51ed96d9c152483d3f34165e7bedf5
+preflight_digest_sha3_512=8e745c45ea26826c076fcaca5e74e6173695acc31be92e03e2406b4481c3432d6d4a869f0eb5a37d015d0101a8a08ecc95c12f82f4f19334a0a4ceaef233e7aa
 canonical_ops_status=VERIFIED_TRACKED_SHA3_512_AUTHORITY
 reference_hardware_status=READY
 fresh_launch_count=22
+campaign_status=QUALIFIED_EXACT_22_LAUNCH_CAMPAIGN
+external_monitor_status=CONFIGURED_EXTERNAL_PROCESS_RESOURCE_MONITOR
+k128_p95_seconds=32.360845
+k512_p95_seconds=148.861885
+max_peak_rss_bytes=850837504
+max_scratch_bytes=0
 proofSuiteId=None
 activation_allowed=False
 ```
 
-The preflight focused/attack suite passed 6 tests in 44.60 seconds; the benchmark, S6/S7,
-terminal-ledger, and preflight containing set passed 61 tests in 117.72 seconds. The complete
-S1-S7 plus terminal-ledger and preflight set passed 79 tests in 175.33 seconds. These are test-run
-times, not complete-proof measurements. The recorded reference disk is 487,335,129,088 bytes
-with 59,091,513,344 bytes free; the operational reserve is now 15,000 ppm (1.5%), requiring
-7,310,026,937 bytes. This does not change the immutable 5,000,000,000-byte RSS/scratch or
-zero-swap gates.
+The runner returned `campaign_run_count=22` and `campaign_failed_run_count=0`; every measured
+launch passed correctness, provenance, empty-stderr, cleanup, pagefile, driver-event, and
+independent-verification gates. The earlier pagefile-growth campaign remains preserved with zero
+credit. The campaign manifest's prover source identity is
+`47ca7dab146b56a85ebbf9d2d2fe797c4fee2fae`; later telemetry-parser corrections are not substituted
+for that identity. The immutable 5,000,000,000-byte RSS/scratch and zero-swap gates are unchanged.
 
 ## 13. H6 qualification preflight boundary
 
 `experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` is a non-launching
-qualification ledger. It independently replays H5 and Gate 2E, validates the unselected suite
-registry, and records all twelve H6 obligations without assigning timing or qualification credit.
-The current record is `BLOCKED_H6_PREFLIGHT`: five obligations are blocked, five are open, and two
-are reference-only, with 22 distinct blockers. No proof, witness, retry, state admission,
-`proofSuiteId`, or activation path is accepted by this boundary.
+qualification ledger. It independently replays the sealed Gate 2E context and qualified H5
+campaign, validates the still-unselected suite registry, and records all twelve H6 obligations.
+The current record is `BLOCKED_H6_PREFLIGHT` with exactly one closed obligation,
+`H5_RESOURCE_EVIDENCE`; the other eleven remain open, blocked, or reference-only. Its blockers
+are `h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
+`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
+`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
+`side_channel_unlinkability_open`, `production_migration_theorem_open`,
+`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
+`wave3_verifier_state_custody_open`. No proof, witness, retry, state admission, `proofSuiteId`, or
+activation path is accepted by this boundary.
 
 Focused H6 preflight/attack verification passed `6 passed in 30.02s`; the containing S1-S7,
 terminal-ledger, H5-preflight, and H6-preflight set passed `85 passed in 151.88s`. These are

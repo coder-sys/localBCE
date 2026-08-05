@@ -2,7 +2,7 @@
 
 Status: architectural source of truth for the target system.
 
-Updated: 2026-08-01
+Updated: 2026-08-04
 
 Current inner-proof execution checkpoint: the newest dated section of `../STATE.md`; the original
 transfer record is `../WAVE2_HANDOFF_2026-07-26.md`. The GPU accelerates only untrusted field
@@ -10,8 +10,9 @@ arithmetic inside the selected claim-proof topology. The manifest-bound H4 proto
 real native-masked GKR, Construction 8.2 PCS, atomic one/four-shard coordinator, parsing, and
 independent verification in 29.974129 seconds for K128 and 120.460733 seconds for K512. This does
 not change the rollup architecture, settlement trust boundary, ordered 12-field public ABI, package
-count, or activation status. Gate 2E state selection, H5, H6, and the production L2/L1 verifier
-path remain open; `proofSuiteId` remains null.
+count, or activation status. Gate 2E is now sealed nonactivating and the exact H5 campaign passes
+its strict p95/resource gates; H6 and the production L2/L1 verifier path remain open,
+`proofSuiteId` remains null, and activation remains forbidden.
 
 Planning boundary: `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` makes R01-R12 counted internal
 engineering packages. The rollup, bridge, finality, deployment automation, and sandbox end-to-end
@@ -225,11 +226,11 @@ proof profile, schema/artifact identity, and known-answer vectors must make that
 explicit; it must never be silently presented as the old proof relation.
 
 The checkpoint remains experimental. Wave 1 seals the fixed-shape executable claim AIR and exact
-SHA3 schedule, and H4 now supplies a native-masked shared-bus Boolean-coprocessor/PCS prototype with
-independent one/four-shard verification. That prototype is not a qualified proof suite: the 2E
-authoritative-state selection and migration, complete simulator/composition ledger, H5 repeated p95
-campaign, H6 suite qualification, production claim verifier, and containing rollup remain
-unfinished. Upstream unmasked S-two receipts remain validity-only and are not approved for real PHI.
+SHA3 schedule, H4/Gate 2E now supply a sealed nonactivating state-bound context, and the exact H5
+campaign passes its strict p95/resource gates. The proof suite is still not activated: complete H6
+theorem/simulator/grammar/supply-chain/privacy/migration qualification, the production claim
+verifier, and the containing rollup remain unfinished. Upstream unmasked S-two receipts remain
+validity-only and are not approved for real PHI.
 
 ## Required implementation sequence
 

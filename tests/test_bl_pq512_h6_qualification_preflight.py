@@ -18,15 +18,21 @@ from experiments.bl_pq512_crypto_foundation.gate_2e_terminal_ledger import (
     build_terminal_ledger,
 )
 from experiments.bl_pq512_crypto_foundation.h5_qualification_preflight import (
+    CAMPAIGN_QUALIFIED,
+    EXTERNAL_MONITOR_CONFIGURED,
     H5PreflightContext,
     build_h5_preflight,
 )
 from experiments.bl_pq512_crypto_foundation.h6_qualification_preflight import (
     BLOCKED,
+    CLOSED,
+    H6EvidenceRecord,
     H6_OBLIGATION_IDS,
     H6Preflight,
     H6PreflightContext,
+    OBSERVED,
     PREFLIGHT_BLOCKED,
+    PREFLIGHT_QUALIFIED,
     build_h6_preflight,
     independently_verify_h6_preflight,
 )
@@ -136,3 +142,37 @@ def test_h6_public_record_excludes_private_state_material(context) -> None:
             assert private_value.hex().encode("ascii") not in rendered
     assert preflight.as_public_dict()["proofSuiteId"] is None
     assert preflight.as_public_dict()["activation_allowed"] is False
+
+
+def test_h6_model_accepts_only_empty_blocker_qualified_records() -> None:
+    records = tuple(
+        H6EvidenceRecord(
+            obligation_id=obligation_id,
+            status=CLOSED,
+            evidence_class=OBSERVED,
+            source_id="test-qualified-evidence",
+            evidence_identity_512=sha3_512(obligation_id.encode("ascii")).digest(),
+            blockers=(),
+        )
+        for obligation_id in H6_OBLIGATION_IDS
+    )
+    preflight = H6Preflight(
+        h5_preflight_digest_512=b"h" * 64,
+        suite_registry_digest_512=b"s" * 64,
+        suite_registry_canonical_digest_512=b"c" * 64,
+        suite_registry_status="CANDIDATE_UNQUALIFIED",
+        suite_registry_module_count=8,
+        h5_profile_ids=("K128_CALIBRATION", "K512_CALIBRATION"),
+        h5_warmup_count=1,
+        h5_measured_repetitions=10,
+        h5_fresh_launch_count=22,
+        h5_campaign_status=CAMPAIGN_QUALIFIED,
+        h5_external_monitor_status=EXTERNAL_MONITOR_CONFIGURED,
+        records=records,
+        blockers=(),
+        source_git_clean=True,
+        protected_paths_clean=True,
+        status=PREFLIGHT_QUALIFIED,
+    )
+    assert preflight.status == PREFLIGHT_QUALIFIED
+    assert all(record.status == CLOSED for record in preflight.records)

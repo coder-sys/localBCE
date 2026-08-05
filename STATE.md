@@ -1,6 +1,6 @@
 # Blind Ledger state
 
-Updated: 2026-08-03
+Updated: 2026-08-04
 
 ## Current execution boundary
 
@@ -16,13 +16,13 @@ the relation/mask/PCS bridge, then 614 K128 or 882 K512 square-free rounds, for 
 uses 233 layers and 28,932 coefficients. The complete transcript leakage ranks are 26,640 and
 27,768. Including the 1,600 PCS query rows leaves 4,528 K128 and 3,400 K512 free mask dimensions.
 
-The active hiding simulator now covers the Construction 8.2 query map, conditioned row sumcheck,
-typed state relation, both square-free phases, the complete state GKR mask layout, and fresh
-abort/retry public-coin randomness. The Gate 2E terminal ledger therefore closes its three
-simulator records. Its exact remaining blockers are `complete_leakage_scan_missing`,
-`h4_atomic_binding_deferred`, `no_backend_admitted`, and `proof_suite_unselected`. The composed
-security ledger remains at 392.108419573 bits and records the exact K512 state sumcheck degree
-budget of 1,748.
+The active hiding simulator covers the Construction 8.2 query map, conditioned row sumcheck, typed
+state relation, both square-free phases, the complete state GKR mask layout, and fresh abort/retry
+public-coin randomness. The latest qualified Gate 2E context seals the terminal ledger with
+`h4_parent_bound=true`, `complete_proof_verified=true`, and no terminal-ledger blockers. It remains
+nonactivating: `proofSuiteId=null` and `activation_allowed=false`. The composed security ledger
+remains at 392.108419573 bits and records the exact K512 state sumcheck degree budget of 1,748;
+the strict-PQ implementation/composition ledger is still open.
 
 Two privacy defects found during composition are fixed without weakening verification: mask-batch
 constraints are now published only through a SHA3-512 commitment, and square-free coefficient
@@ -30,19 +30,48 @@ claims use masked public values under a fixed 140-byte digest payload. Raw coeff
 remain confined to internal PCS computation. Focused Rust privacy regressions, all ten square-free
 tests, the 6,113-round same-chain replay, the simulator KAT, and the Gate 2E/H5/H6 ledger tests pass.
 
-Fresh GPU boundary work is now recorded. Brave was closed, the scoped RTX 4060 driver reset
-completed, and the fresh monitored native runs had zero post-launch `nvlddmkm`/Display events and
-zero pagefile growth. The current K128 state-composed run verified its atomic boundary but measured
-`shard_0_proof_seconds=36.077706`, so its strict 30-second complete-proof qualification is false.
-The current K512 state-composed run independently verified all four sequential shards under one
-GPU with `complete_process_wall_seconds=153.860446`, `complete_proof_latency_gate=true`, but
-`complete_proof_qualification=false` because the candidate remains non-admitted. Its monitor
-recorded `external_exit_code=0`, `stderr_bytes=0`, `external_process_tree_peak_bytes=1605058560`,
-`external_gpu_peak_mib=2731`, `pagefile_growth_mb=0`, and `post_launch_driver_event_count=0`.
-The state binding and K512 hash-bus boundary were independently verified; the raw K512 stdout and
-stderr leakage-category checks returned `[]`. No exact 22-launch H5 campaign was run because the
-fail-closed H5 preflight still requires a sealed Gate 2E admission. `proofSuiteId` remains null,
-activation remains false, and real PHI/payments remain forbidden.
+Fresh GPU boundary work is now recorded. The owner-approved Brave-open exception governs the H5
+campaign; Brave being open did not disqualify a launch. The exact H5 campaign later completed and
+the source validator returned:
+
+```text
+h5_validator=PASS
+campaign_id=h5-exact-22-20260804
+campaign_digest_sha3_512=199a1b1c7e553b73597f1bd3192a72db732529599da68d820bf072e2e2ee3dabe1d7dda2d72efbd9fd23e17a6b2366f70d51ed96d9c152483d3f34165e7bedf5
+execution_manifest_sha3_512=999aef8a16f97a52e6ce6ead7b7470eea2fdc50f32d13e95a3a1e021cd093aef42f8f5a2420cd3f4e35f77a42ff161f791888b5905ec3fcdf8cb8f8765992545
+proof_suite_id=719ed6d4e9fe8bb69efdb51e5bee0133718b0cc7bdbe9b82a70c68c5522e7efeb620fc9fdc67e3fc3538e57d6518b360a548a114648f3f7640f1475566cd7e6b
+k128_p95_seconds=32.360845
+k512_p95_seconds=148.861885
+max_peak_rss_bytes=850837504
+max_scratch_bytes=0
+```
+
+The runner's raw terminal result was `campaign_run_count=22` and
+`campaign_failed_run_count=0`. Every measured launch had fresh unique input identity, exit 0,
+empty stderr, zero pagefile growth, zero post-launch driver events, and complete independent
+verification. The active bounds were strict `<35` seconds for K128 and `<180` seconds for K512.
+The campaign manifest records execution `source_commit=47ca7dab146b56a85ebbf9d2d2fe797c4fee2fae`;
+the later current-checkout telemetry-parser corrections are not retroactively claimed as the
+prover source. The campaign is therefore H5 qualification evidence, not a claim that every later
+checkout file was present during launch.
+
+The earlier campaign `h5-campaign-20260804-final` stopped at measured K128 ordinal 5 after
+`pagefile_growth_mb=15`; it receives zero H5 credit and remains preserved. A diagnostic idle
+pagefile run also changed 2002 MB to 2018 MB in 20 seconds and was not qualification evidence.
+The first proof-attack corpus command named a nonexistent
+`tests/attacks/test_bl_pq512_selected_public_coin_schedule_attacks.py`; it ran zero tests and is
+recorded as a misaddressed/skipped command. The corrected proof, state, and foundation corpora
+then passed 38, 46, and 52 tests respectively (136 corrected attack tests total).
+
+The same qualified context now feeds H6. H6 has exactly one closed record,
+`H5_RESOURCE_EVIDENCE`, and remains `BLOCKED_H6_PREFLIGHT` with these blockers:
+`h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
+`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
+`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
+`side_channel_unlinkability_open`, `production_migration_theorem_open`,
+`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
+`wave3_verifier_state_custody_open`. `proofSuiteId` remains null, activation remains false, and
+real PHI/payments remain forbidden.
 
 Historical transfer-time verification (superseded by the current 2026-07-29 section below) was:
 `cargo test --lib --all-features` passed 229/229 tests in 1,069.89 seconds;
@@ -7133,3 +7162,51 @@ each: `size=11300476`,
 `entries=780`, `duplicates=0`, `crc=PASS`, `payload_mismatches=0`, and
 `independent_identity=PASS`. Earlier copies were preserved under
 `work/archive-v2-stage/previous-targets-20260804-brave-exception/`.
+
+## 2026-08-04 Exact H5 campaign and H6 qualified-input replay - VERIFIED H5, H6 BLOCKED
+
+The owner-approved Brave-open exception was applied. The exact H5 campaign directory was
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\wave2\h5-campaign-20260804-final-r2`.
+The runner exited zero with `campaign_run_count=22` and `campaign_failed_run_count=0`. The
+independent source validator exited zero with `h5_validator=PASS` and reported:
+
+```text
+campaign_id=h5-exact-22-20260804
+campaign_digest_sha3_512=199a1b1c7e553b73597f1bd3192a72db732529599da68d820bf072e2e2ee3dabe1d7dda2d72efbd9fd23e17a6b2366f70d51ed96d9c152483d3f34165e7bedf5
+execution_manifest_sha3_512=999aef8a16f97a52e6ce6ead7b7470eea2fdc50f32d13e95a3a1e021cd093aef42f8f5a2420cd3f4e35f77a42ff161f791888b5905ec3fcdf8cb8f8765992545
+proof_suite_id=719ed6d4e9fe8bb69efdb51e5bee0133718b0cc7bdbe9b82a70c68c5522e7efeb620fc9fdc67e3fc3538e57d6518b360a548a114648f3f7640f1475566cd7e6b
+k128_p95_seconds=32.360845
+k512_p95_seconds=148.861885
+max_peak_rss_bytes=850837504
+max_scratch_bytes=0
+```
+
+The manifest's launch source identity is `47ca7dab146b56a85ebbf9d2d2fe797c4fee2fae`; the
+current checkout subsequently contains telemetry-parser-only corrections, so no later source
+identity is substituted for the prover identity. The failed earlier campaign remains preserved
+with zero credit because its measured K128 ordinal 5 had 15 MB pagefile growth. The nonexistent
+attack-test path and its zero-test result are recorded above; the corrected attack subsets passed
+38 + 46 + 52 = 136 tests.
+
+The latest qualified-evidence replay sealed Gate 2E nonactivating with
+`terminal_ledger_status=SEALED_GATE_2E_TERMINAL_LEDGER`, `terminal_ledger_blockers=()`,
+`terminal_ledger_h4_parent_bound=true`, `terminal_ledger_complete_proof_verified=true`,
+`terminal_ledger_proof_suite_id=None`, and `terminal_ledger_activation_allowed=false`. Its
+terminal-ledger digest was
+`d573997944f84897ea5e184776b89f995860660372b71fbf769687b65c5e2e753ac70d00399e7bb3d349b972e818ec5e5ada465e3614b1ecae35dac29f748a71` and its H5 preflight digest was
+`8e745c45ea26826c076fcaca5e74e6173695acc31be92e03e2406b4481c3432d6d4a869f0eb5a37d015d0101a8a08ecc95c12f82f4f19334a0a4ceaef233e7aa`.
+
+H6 consumed that qualified H5 record and closed only `H5_RESOURCE_EVIDENCE`. It remains
+`BLOCKED_H6_PREFLIGHT` with twelve blockers:
+`h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
+`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
+`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
+`side_channel_unlinkability_open`, `production_migration_theorem_open`,
+`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
+`wave3_verifier_state_custody_open`. The H6 preflight digest was
+`d144117b6e340dfe6b2c33c7a243b2ad43284d3aea6053bc9aae46cf02b6b3c1eac3efd6623ec8be8a5ab7b4e55115ba0c8fc5a713db451b222f3ea392eb733`.
+
+The strict security-ledger command remained fail-closed:
+`iopp_implementation_complete=false`, `canonical_communication_grammar_closed=false`,
+`cryptographic_composition_ledger_closed=false`, and `complete_proof_qualification=false`.
+No proof suite was activated, no real data was used, and no Wave 2 completion claim is made.

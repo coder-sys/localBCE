@@ -1,11 +1,10 @@
 """Fail-closed H6 qualification preflight.
 
-This module records the twelve H6 qualification obligations without claiming
-that any of them are closed.  It independently replays the blocked H5
-preflight, re-reads the candidate suite registry, and emits bounded public
-identities plus explicit blockers.  It never launches a prover, accepts a
-cached proof, selects a state or commitment backend, assigns ``proofSuiteId``,
-or enables activation.
+This module records the twelve H6 qualification obligations and consumes either
+the blocked H5 preflight or the independently validated exact H5 campaign.
+It emits bounded public identities plus explicit blockers.  It never launches
+a prover, accepts a cached proof, selects a state or commitment backend,
+assigns ``proofSuiteId``, or enables activation.
 """
 
 from __future__ import annotations
@@ -25,13 +24,16 @@ from experiments.bl_pq512_crypto_foundation.gate_2e_terminal_ledger import (
     TerminalLedgerContext,
 )
 from experiments.bl_pq512_crypto_foundation.h5_qualification_preflight import (
+    CAMPAIGN_QUALIFIED,
     CAMPAIGN_NOT_STARTED,
+    EXTERNAL_MONITOR_CONFIGURED,
     EXTERNAL_MONITOR_NOT_CONFIGURED,
     FRESH_LAUNCH_COUNT,
     H5Preflight,
     H5PreflightContext,
     MEASURED_REPETITIONS,
     PREFLIGHT_BLOCKED as H5_PREFLIGHT_BLOCKED,
+    PREFLIGHT_QUALIFIED as H5_PREFLIGHT_QUALIFIED,
     PROFILE_IDS,
     WARMUP_COUNT,
     independently_verify_h5_preflight,
@@ -45,6 +47,7 @@ DEFAULT_SUITE_REGISTRY_PATH: Final[Path] = (
 
 STATUS: Final[str] = "H6_QUALIFICATION_PREFLIGHT_V1_SYNTHETIC_REFERENCE_NONPRODUCTION"
 PREFLIGHT_BLOCKED: Final[str] = "BLOCKED_H6_PREFLIGHT"
+PREFLIGHT_QUALIFIED: Final[str] = "QUALIFIED_H6_NONACTIVATING"
 SUITE_REGISTRY_STATUS: Final[str] = "CANDIDATE_UNQUALIFIED"
 MODULE_COUNT: Final[int] = 8
 
@@ -301,13 +304,16 @@ class H6EvidenceRecord:
             raise H6PreflightError("h6_preflight_unknown_obligation")
         if self.status not in EVIDENCE_STATUSES:
             raise H6PreflightError("h6_preflight_evidence_status_invalid")
-        if self.status == CLOSED:
-            raise H6PreflightError("h6_preflight_closed_record_forbidden")
         if self.evidence_class not in EVIDENCE_CLASSES:
             raise H6PreflightError("h6_preflight_evidence_class_invalid")
         _text(self.source_id, "source_id")
         _digest(self.evidence_identity_512, "evidence_identity")
-        if type(self.blockers) is not tuple or not self.blockers:
+        if type(self.blockers) is not tuple:
+            raise H6PreflightError("h6_preflight_record_blockers_required")
+        if self.status == CLOSED:
+            if self.blockers:
+                raise H6PreflightError("h6_preflight_closed_record_forbidden")
+        elif not self.blockers:
             raise H6PreflightError("h6_preflight_record_blockers_required")
         if len(self.blockers) != len(set(self.blockers)):
             raise H6PreflightError("h6_preflight_record_blockers_duplicate")
@@ -373,7 +379,7 @@ class H6PreflightContext:
 
 @dataclass(frozen=True, slots=True)
 class H6Preflight:
-    """Public, blocked H6 record; no obligation may be marked closed."""
+    """Public H6 record; qualification remains nonactivating."""
 
     h5_preflight_digest_512: bytes
     suite_registry_digest_512: bytes
@@ -413,8 +419,10 @@ class H6Preflight:
             raise H6PreflightError("h6_preflight_suite_id_must_remain_null")
         if self.suite_registry_activation_allowed is not False:
             raise H6PreflightError("h6_preflight_suite_activation_must_remain_false")
-        if self.status != PREFLIGHT_BLOCKED:
-            raise H6PreflightError("h6_preflight_status_must_remain_blocked")
+        if self.status not in {PREFLIGHT_BLOCKED, PREFLIGHT_QUALIFIED}:
+            if self.status == "QUALIFIED":
+                raise H6PreflightError("h6_preflight_status_must_remain_blocked")
+            raise H6PreflightError("h6_preflight_status_invalid")
         if self.h5_profile_ids != PROFILE_IDS:
             raise H6PreflightError("h6_preflight_h5_profile_shape_invalid")
         if (
@@ -426,9 +434,12 @@ class H6Preflight:
             or self.h5_fresh_launch_count != FRESH_LAUNCH_COUNT
         ):
             raise H6PreflightError("h6_preflight_h5_campaign_shape_invalid")
-        if self.h5_campaign_status != CAMPAIGN_NOT_STARTED:
+        if self.h5_campaign_status not in {CAMPAIGN_NOT_STARTED, CAMPAIGN_QUALIFIED}:
             raise H6PreflightError("h6_preflight_h5_campaign_status_invalid")
-        if self.h5_external_monitor_status != EXTERNAL_MONITOR_NOT_CONFIGURED:
+        if self.h5_external_monitor_status not in {
+            EXTERNAL_MONITOR_NOT_CONFIGURED,
+            EXTERNAL_MONITOR_CONFIGURED,
+        }:
             raise H6PreflightError("h6_preflight_h5_monitor_status_invalid")
         if type(self.records) is not tuple or len(self.records) != len(H6_OBLIGATION_IDS):
             raise H6PreflightError("h6_preflight_record_count_invalid")
@@ -436,9 +447,9 @@ class H6Preflight:
             raise H6PreflightError("h6_preflight_record_type_invalid")
         if tuple(record.obligation_id for record in self.records) != H6_OBLIGATION_IDS:
             raise H6PreflightError("h6_preflight_record_order_invalid")
-        if any(record.status == CLOSED for record in self.records):
+        if any(record.status == CLOSED and record.blockers for record in self.records):
             raise H6PreflightError("h6_preflight_closed_record_forbidden")
-        if type(self.blockers) is not tuple or not self.blockers:
+        if type(self.blockers) is not tuple:
             raise H6PreflightError("h6_preflight_blockers_required")
         if len(self.blockers) != len(set(self.blockers)):
             raise H6PreflightError("h6_preflight_blockers_duplicate")
@@ -448,6 +459,17 @@ class H6Preflight:
             raise H6PreflightError("h6_preflight_source_flags_boolean_required")
         if self.proof_suite_id is not None or self.activation_allowed is not False:
             raise H6PreflightError("h6_preflight_activation_boundary_invalid")
+        if self.status == PREFLIGHT_QUALIFIED:
+            if self.blockers:
+                raise H6PreflightError("h6_preflight_qualified_blockers_present")
+            if self.h5_campaign_status != CAMPAIGN_QUALIFIED:
+                raise H6PreflightError("h6_preflight_qualified_h5_campaign_required")
+            if self.h5_external_monitor_status != EXTERNAL_MONITOR_CONFIGURED:
+                raise H6PreflightError("h6_preflight_qualified_h5_monitor_required")
+            if any(record.status != CLOSED or record.blockers for record in self.records):
+                raise H6PreflightError("h6_preflight_qualified_records_required")
+        elif not self.blockers:
+            raise H6PreflightError("h6_preflight_blockers_required")
 
         expected = _hash(
             _PREFLIGHT_DOMAIN,
@@ -552,7 +574,7 @@ def _terminal_record(ledger: TerminalLedger, obligation_id: str) -> bytes:
 
 
 def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
-    """Replay H5/2E and construct a blocked, non-launching H6 record."""
+    """Replay H5/2E and construct a non-launching H6 record."""
 
     _synthetic()
     if type(context) is not H6PreflightContext:
@@ -567,7 +589,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
 
     h5 = context.h5_preflight
     if (
-        h5.status != H5_PREFLIGHT_BLOCKED
+        h5.status not in {H5_PREFLIGHT_BLOCKED, H5_PREFLIGHT_QUALIFIED}
         or h5.proof_suite_id is not None
         or h5.activation_allowed is not False
     ):
@@ -605,6 +627,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         if gate_2e_qualified
         else ("complete_leakage_scan_missing", "side_channel_unlinkability_open")
     )
+    h5_campaign_qualified = h5.status == H5_PREFLIGHT_QUALIFIED
 
     records: list[H6EvidenceRecord] = []
     blockers: list[str] = []
@@ -713,13 +736,17 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
     add(
         _record(
             obligation_id="H5_RESOURCE_EVIDENCE",
-            status=BLOCKED,
-            evidence_class=UNKNOWN,
-            source_id="h5_qualification_preflight.py",
+            status=(CLOSED if h5_campaign_qualified else BLOCKED),
+            evidence_class=(OBSERVED if h5_campaign_qualified else UNKNOWN),
+            source_id=(
+                "h5_campaign_evidence.py+exact_22_launch_campaign"
+                if h5_campaign_qualified
+                else "h5_qualification_preflight.py"
+            ),
             h5_digest=h5.preflight_digest_512,
             suite_digest=suite.raw_digest_512,
-            evidence_parts=(h5.preflight_digest_512,),
-            blockers=tuple(h5.blockers),
+            evidence_parts=(h5.preflight_digest_512, h5.campaign_digest_512),
+            blockers=() if h5_campaign_qualified else tuple(h5.blockers),
         )
     )
     add(
@@ -781,7 +808,14 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         _append_unique(blockers, "git_dirty")
     if h5.protected_paths_clean is not True:
         _append_unique(blockers, "protected_path_changed")
-    _append_unique(blockers, "h6_no_qualified_evidence")
+    if any(record.status != CLOSED for record in records):
+        _append_unique(blockers, "h6_no_qualified_evidence")
+
+    final_status = (
+        PREFLIGHT_QUALIFIED
+        if not blockers and all(record.status == CLOSED for record in records)
+        else PREFLIGHT_BLOCKED
+    )
 
     return H6Preflight(
         h5_preflight_digest_512=h5.preflight_digest_512,
@@ -801,6 +835,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         protected_paths_clean=h5.protected_paths_clean,
         suite_registry_proof_suite_id=suite.proof_suite_id,
         suite_registry_activation_allowed=suite.activation_allowed,
+        status=final_status,
     )
 
 
@@ -834,6 +869,7 @@ __all__: tuple[str, ...] = (
     "OBSERVED",
     "OPEN",
     "PREFLIGHT_BLOCKED",
+    "PREFLIGHT_QUALIFIED",
     "REFERENCE_ONLY",
     "STATUS",
     "SUITE_REGISTRY_STATUS",
