@@ -7353,3 +7353,30 @@ that remain rejected by default; and three are research/meta/economic inputs wit
 implementation dependency. The live refresh changed EIP-8070 from the prior local `Draft` label
 to its current `Review` label. No production, activation, or end-to-end Ethereum-security claim
 was added; the updated architecture and roadmap records preserve the fail-closed boundary.
+
+## 2026-08-05 Live Strawmap audit release refresh - VERIFIED
+
+The audit documentation was committed at source commit
+`adfb7daa80858804b71a14870fa0fee57fa30c96`. The reviewed 779-file allowlist was rebuilt from the
+current source; three allowlisted documents changed: `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`,
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`, and `docs/IMPLEMENTATION_ROADMAP.md`.
+
+```text
+builder_version=blind-ledger-release-archive-v1
+archive_bytes=11350709
+archive_sha256=6dcd053066160f7fa6577501d118210745455ed3a3cf19a7a82b788cf02c4826
+archive_sha3_512=71b002aa03d2ee93956e3321fbe861eb386dea2d53944fc9e5304e185efe9e391124ba41032ce2d2ac1e2503c4f562a267202f98e737564534002fdaace5878e
+manifest_sha256=ef8587f5b2046b1612d43ecc658d064f21ff8b567c85518508f5a75c1777af36
+entry_count=780
+payload_file_count=779
+payload_bytes=11038209
+target_copy_count=3
+target_copy_readback=byte_for_byte_identical
+```
+
+The deterministic builder and independent ZIP readback both passed: no CRC errors, duplicates,
+missing/unexpected entries, or payload hash/size mismatches. The Desktop root, Desktop
+Full-Workspace, and Downloads Source-Complete copies now share the exact archive identity above.
+The temporary staging and rollback directories were removed after successful readback. `STATE.md`
+is not in the reviewed allowlist, so this receipt is recorded in the repository but is not embedded
+in the published ZIP.
