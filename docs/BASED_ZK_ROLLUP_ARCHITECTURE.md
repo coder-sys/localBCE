@@ -29,8 +29,9 @@ coprocessor, sidecar, and verifier identities selected by Wave 2/3.
 
 Ethereum-roadmap compatibility and its maturity gates are defined in
 `docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. It inventories every live-map EIP and
-planned through-line. Draft/Review/Stagnant items are versioned compatibility targets, not
-dependencies of the deployment-ready baseline.
+planned through-line. Its 2026-08-05 live-map refresh covers 60 underlying links, including all
+23 EIPs, and records which L1 behavior requires a based-rollup adapter. Draft/Review/Stagnant
+items are versioned compatibility targets, not dependencies of the deployment-ready baseline.
 
 ## Decision
 

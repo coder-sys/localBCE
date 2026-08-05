@@ -58,6 +58,11 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | H6 | Qualified, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody and final audit remain; no suite activation |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
 
+The live Strawmap compatibility contract was refreshed on 2026-08-05 from 60 underlying links
+(23 EIPs and 37 non-EIP links). It confirms that Wave 5 must bind deployed L1 sequencing, fork,
+execution, data-availability, and finality behavior through versioned adapters; Draft, Stagnant,
+research, and optional items remain rejected-by-default or observation-only.
+
 Current progress is 6 of 93 engineering packages complete. `proofSuiteId=null`, activation is
 false, real PHI and payments are forbidden, and the final independent audit has not begun.
 

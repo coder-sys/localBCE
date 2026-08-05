@@ -1,6 +1,6 @@
 # Ethereum Strawmap compatibility contract
 
-Updated: 2026-08-01
+Updated: 2026-08-05
 
 Status: current architecture and roadmap contract for the containing Ethereum rollup. This
 document records a source snapshot and engineering consequences; it does not claim that a draft
@@ -27,7 +27,8 @@ Blind Ledger **is an Ethereum-settled, EVM-compatible based validity rollup**. T
 
 ## Source snapshot and authority
 
-The live source was read from [strawmap.org](https://strawmap.org/) and its linked Google Drawing,
+The following paragraphs preserve the prior 2026-08-01 snapshot for provenance; the current
+2026-08-05 refresh is recorded below. The prior snapshot was read from [strawmap.org](https://strawmap.org/) and its linked Google Drawing,
 not from a PDF, screenshot, or secondary transcription. The Drawing identifier is
 `1GkcGfQv9kxgrYQMyu0BYGcZya0gIDG_wQ7GsFJEsdzY`; its live label said “updated Jul 29, 2026.”
 The fetched SVG SHA-256 was
@@ -52,6 +53,70 @@ pinned client behavior outrank it. Therefore:
 3. Draft items receive versioned, fail-closed adapter design and tests;
 4. Stagnant items are research or rejection evidence, never current dependencies; and
 5. map dates and throughput labels are projections until a deployed fork and measurements prove them.
+
+## 2026-08-05 live link audit
+
+The live Strawmap page and linked Google Drawing were fetched as HTML/SVG on 2026-08-05,
+without a browser plugin, screenshot, or PDF. The Drawing identifier is
+`1GkcGfQv9kxgrYQMyu0BYGcZya0gIDG_wQ7GsFJEsdzY`. The current raw source readback was:
+
+```text
+strawmap_html_status=200
+strawmap_html_bytes=16732
+strawmap_html_sha256=3cb5d371ec515a84e3260cf6bb26ead1117247e90c8aa0938ab75fff25776a04
+drawing_svg_status=200
+drawing_svg_bytes=2176494
+drawing_svg_sha256=f6eb66b2f1899eee675490aee037d74801f1aaf7292bd9c677a971a07b7b72bc
+unique_underlying_url_count=60
+eip_url_count=23
+non_eip_url_count=37
+normalized_url_manifest_sha256=ad41badff1dfac6fd1a27b8b290610b9b9de64aef1fb6b67aefe0ccd096902ad
+```
+
+All 23 EIP pages and their current `ethereum/EIPs` source files were read. The current sorted
+`filename:SHA-256` manifest hashes to
+`86414227b3c9f8c86e01b7b1634f9693350e572644835a5cbae246160ee51c49`. EIP-8070 is now marked
+`Review` rather than `Draft`; the other current status labels are recorded in the matrix below.
+
+The 37 non-EIP links contain 36 non-PDF links and one PDF. All 36 non-PDF links were fetched
+successfully except the linked public Google document, which returned HTTP 401 for its direct URL
+and the `embedded`, `output=html`, `rm=minimal`, and `headers=false` public variants. The PDF
+`https://eprint.iacr.org/2020/025.pdf` was intentionally skipped at the owner's direction. No
+PDF reader or browser plugin was used. The inaccessible document and skipped PDF receive no
+authority or compatibility credit.
+
+### L1 ownership versus based-rollup response
+
+All 23 EIPs are L1-owned proposals or L1 fork/meta inputs. L1-owned means Ethereum clients,
+consensus, execution, networking, or fork governance would implement the change; Blind Ledger
+must observe and bind the final deployed behavior rather than reimplement Ethereum consensus.
+
+| Disposition | Links | Blind Ledger response |
+| --- | --- | --- |
+| L1 behavior the based rollup must observe or bind | EIP-7732, 7805, 7928, 8070, 8077, 8136, 8142, 8198, 8297; the consensus, cryptography, networking, blob-streaming, reconstruction, finality, and gas-repricing references | Versioned L1 observer, Engine/transaction/receipt/DA parsers, based-ordering tests, finality/reorg handling, reconstruction, and rollback. Never reimplement L1 consensus or call a preconfirmation finality. |
+| L1 fork or execution changes requiring conditional compatibility | EIP-7773, 7999, 8007, 8081, 8200; Hegotá repricing and Ethereum fork notes | Pin the deployed fork bill and client behavior. Update the L2 executor/prover only when the selected L2 profile mirrors the final L1 rule; never implement a draft bill as if scheduled. |
+| Optional L1/L2 adapter, rejected by default | EIP-8025, 8079, 8141, 8184, 8250, 8272; PQ frame, native-rollup, encrypted-mempool, keyed-nonce, and recent-root research | Keep disabled until final specification, interoperable implementation, threat review, privacy/PQ review, differential tests, migration, rollback, and measured benefit. None may replace based ordering, the mandatory rollup proof, or the Blind Ledger proof. |
+| Research, meta, economics, or context only | EIP-7503, 7919, 7938; RISC-V, proof-of-custody, ephemeral-key, VOPS, PQ-validator, hyper-state, VDF, gas-futures, lean-chain, recovery, attester/includer, decoupled-consensus, dynamic-availability, fast-confirmation, leanVM, social, and video links | Monitor and use only to anticipate a future boundary. No implementation, capacity, privacy, PQ, or finality credit is granted until a final deployed specification enters the compatibility manifest. |
+
+The non-EIP source families read in this refresh were `protocol.ethereum.foundation`, Ethereum
+consensus and cryptography specifications, `ethp2p`, `leanSpec` and its XMSS path, `leanMultisig`
+(which currently redirects to `leanVM`), `Verified-zkEVM/evm-asm`, the two blob transport/
+reconstruction notes, Hegotá repricing notes, two Ethereum Notes pages, twelve Ethereum Research
+pages, the RISC-V proposal, two linked EIP pull requests, fast confirmation, leanVM data-
+availability slides, the EF protocol page, one YouTube explanation, and four X profile pages.
+The last two are context only, not technical authority.
+
+The current map also links these additional URLs that were not present in the prior source index:
+
+- [map more-info document](https://docs.google.com/document/d/e/2PACX-1vRtpbntq45GCTG3srzetWDkjsF1d-60iXL1rVeumnJW-Gbm343oV5Xvm3O6rALKJjXgr4mpL1a0uT4t/pub) -- HTTP 401; no authority credit;
+- [EIP-11772 pull request](https://github.com/ethereum/EIPs/pull/11772) and [EIP-12081 pull request](https://github.com/ethereum/EIPs/pull/12081) -- L1 proposal context only;
+- [blob streaming note](https://hackmd.io/@gMH0wL_0Sr69C7I7inO8MQ/B125sCUtZx), [local blob reconstruction note](https://hackmd.io/@marcopolo/SJrlt4Uubl), and [Hegotá repricing notes](https://misilva73.github.io/hegota-repricings/) -- L1 DA/gas compatibility context;
+- [leanVM Reed-Solomon/DA slides](https://frisitano.github.io/slides/decks/leanvm-fold-in-circuit-das-2026-05-08/index.html?v=20260708155502%231) -- external L1/DA research only;
+- [one-round finality note](https://notes.ethereum.org/@yannvon/S1wIxIDqbe) and [long-tail cleanup note](https://notes.ethereum.org/@JustinDrake/BkPH7AXSfl) -- L1 consensus/serialization context;
+- [RISC-V execution-layer proposal](https://ethereum-magicians.org/t/long-term-l1-execution-layer-proposal-replace-the-evm-with-risc-v/23617) -- L1 execution research only;
+- [leanConsensus APS video](https://www.youtube.com/watch?v=5OOzMqCOoKM) -- L1 consensus context only;
+- [Justin Drake](https://x.com/drakefjustin), [Toni Wahrstätter](https://x.com/nero_eth), [soispoke](https://x.com/soispoke), and [Vitalik Buterin](https://x.com/VitalikButerin) profiles -- non-authoritative context only; and
+- [the linked research paper](https://eprint.iacr.org/2020/025.pdf) -- intentionally not read because the owner requested no PDF tooling.
 
 ### Canonical source index
 
@@ -121,7 +186,7 @@ No PDF was used as an authority for this snapshot.
 | 7999 | Draft | Unified multidimensional pricing | R01/R06/R08/R11 model execution, blob, and calldata resources independently. A scalar fee must not hide saturation, and current fee constants must not be hard-coded as future economics. Test reserve-price, packing, FOCIL classification, and builder-centralization edge cases. |
 | 8007 | Draft Meta | Glamsterdam repricing | Pin final opcode/precompile/state/transaction gas costs in the selected EVM and prover. Gas changes are compatibility inputs, not Blind Ledger proof-security parameters. Differential gas tests must cover every finally included repricing. |
 | 8025 | Draft | Optional execution proofs / 2-of-3 direction | Optional Ethereum execution proofs may be a shadow-verification and interoperability input only. They cannot replace authoritative re-execution, the production L2 verifier, the Blind Ledger proof, or the mandatory rollup validity proof. Bind proof type, guest, chain config, block, public inputs, and size; reject unknown types. |
-| 8070 | Draft Networking | Sparse blobpool | R08 tests partial-cell fetch, custody-set changes, provider/sampler selection, reconstruction, selective withholding, eclipse/Sybil/free-rider behavior, sampling noise, truncated responses, and rollback. Its probabilistic availability numbers are not Blind Ledger guarantees. |
+| 8070 | Review Networking | Sparse blobpool | R08 tests partial-cell fetch, custody-set changes, provider/sampler selection, reconstruction, selective withholding, eclipse/Sybil/free-rider behavior, sampling noise, truncated responses, and rollback. Its probabilistic availability numbers are not Blind Ledger guarantees. |
 | 8077 | Draft Networking | Announce transaction nonce | Treat announced address/nonce as untrusted hints until the transaction hash and payload verify. Mismatches are protocol violations; they never mutate attempt/nullifier state. |
 | 8079 | Draft | Native rollups | Optional adapter only. The proposed `EXECUTE` precompile, proof/security model, custom-feature limits, tests, and reference implementation remain incomplete/TBD. Based sequencing and mandatory Blind Ledger validity remain invariant. |
 | 8081 | Draft Meta | Hegotá fork | Track the final fork bill. At this snapshot FOCIL is scheduled and frame transactions are considered; proposed lists are not deployed behavior. |

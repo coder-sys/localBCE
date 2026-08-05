@@ -7326,3 +7326,30 @@ scratch, failed calibration attempts, and temporary archive stages. The exact H5
 referenced state-binding inputs, H6 evidence manifest, and prior State-referenced archive backup
 directories were preserved. This remains a nonactivating Wave 2 evidence/archive state; it does
 not activate a proof suite or claim production completion.
+
+## 2026-08-05 Live Strawmap refresh and L1/rollup compatibility audit - VERIFIED
+
+The live `strawmap.org` page and linked Google Drawing were fetched as HTML/SVG without a browser
+plugin or PDF reader. The normalized live drawing inventory contains 60 underlying URLs: 23 EIPs
+and 37 non-EIP links. All 23 EIP pages and current raw `ethereum/EIPs` files were read. Of the
+37 non-EIP links, 35 returned successfully; the linked public Google document returned HTTP 401
+for five public URL variants, and the one PDF was intentionally skipped at the owner's direction.
+
+```text
+strawmap_html_status=200
+strawmap_html_sha256=3cb5d371ec515a84e3260cf6bb26ead1117247e90c8aa0938ab75fff25776a04
+drawing_svg_status=200
+drawing_svg_sha256=f6eb66b2f1899eee675490aee037d74801f1aaf7292bd9c677a971a07b7b72bc
+normalized_url_manifest_sha256=ad41badff1dfac6fd1a27b8b290610b9b9de64aef1fb6b67aefe0ccd096902ad
+current_eip_source_manifest_sha256=86414227b3c9f8c86e01b7b1634f9693350e572644835a5cbae246160ee51c49
+eip_status_counts=Draft:17,Review:3,Stagnant:3
+browser_plugin_used=false
+pdf_read=false
+```
+
+The compatibility classification is: nine EIPs are direct L1 behavior that the based rollup must
+observe or bind; five are conditional L1 fork/execution compatibility; six are optional adapters
+that remain rejected by default; and three are research/meta/economic inputs with no current
+implementation dependency. The live refresh changed EIP-8070 from the prior local `Draft` label
+to its current `Review` label. No production, activation, or end-to-end Ethereum-security claim
+was added; the updated architecture and roadmap records preserve the fail-closed boundary.
