@@ -1,11 +1,15 @@
 # BL-PQ512 shared-bus Boolean hash coprocessor
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 Status: selected nonactivating Wave 2 architecture. Historical experiments and superseded
 measurements are preserved in
 `history/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR_THROUGH_2026-08-01.md`; rejected alternatives are
 governed by `REJECTED_ARCHITECTURES.md` and cannot be used as fallbacks.
+
+Current status: Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6
+closed the twelve bounded candidate-evidence records. This architecture still has no production
+suite identity or activation; `proofSuiteId=null`, and Wave 3 verifier/state/custody work remains.
 
 ## 1. Decision
 
@@ -96,8 +100,9 @@ claims. `state_squarefree_pcs.rs` now verifies the exact fixed PCS composition: 
 tables occupy one 2,048-message/1,218-random-value auxiliary codeword, and all twelve state
 openings lift into the existing 24-coordinate H4 source geometry. K128 and K512 composition plus
 coefficient/state mutations pass. The retained tree, parent transcript, fixed H4 grammar, and
-independent production verifier are not yet wired, so no state-composed timing or selection credit
-is taken.
+independent production verifier were not yet wired in this intermediate component record, so that
+record receives no state-composed timing or selection credit. The exact state-bound H5 campaign and
+bounded H6 candidate evidence are recorded later as separate nonactivating qualification records.
 
 ## 5. Native hiding and PCS
 
@@ -106,8 +111,9 @@ dimension-512 auxiliary codewords. The complete auxiliary answer plane contains 
 sumcheck-mask words and 64 GKR-mask words.
 
 The state-composed source lane is a separate fixed-shape addition and its canonical source is
-16,777,216 bytes. Its end-to-end allocation and latency impact remain unmeasured; H5 must not
-reuse the state-free resource record.
+16,777,216 bytes. Its initial component allocation and latency impact were unmeasured; the exact
+state-bound H5 campaign later measured the complete boundary and did not reuse the state-free
+resource record.
 
 The selected PCS is Construction 8.2 random-padded interleaved Reed--Solomon:
 
@@ -115,14 +121,16 @@ The selected PCS is Construction 8.2 random-padded interleaved Reed--Solomon:
   `5/32`; 1,600 queries;
 - nine auxiliary instances: length 8,192; 2,048 message values; 1,218 random-padding values;
   proximity `1/5`; 1,218 queries; and
-- current composed PCS ledger: 392.108419573 bits before the still-open complete H6 composition.
+- current composed PCS ledger: 392.108419573 bits; the bounded H6 candidate-evidence composition
+  record is closed, while production suite selection remains open.
 
 All roots and hiding bindings are fixed before their dependent batching or query challenges. Rust
 reconstructs canonical messages, query positions, roots, openings, answer code, and target. The
 accepted verifier recognizes only the complete 20-tree K128 and 36-tree K512 geometries; retired
 or incomplete encodings fail closed.
 
-Construction 8.2 is selected for H4 and Gate 2E composition. Selection is not H5/H6 qualification.
+Construction 8.2 is selected for H4 and Gate 2E composition. That selection is not, by itself,
+production-suite activation; the separate H5/H6 candidate-evidence records are documented below.
 
 ## 6. Authenticated schedule
 
@@ -213,8 +221,8 @@ K512 shard proof times were 31.567686, 30.679149, 31.019240, and 25.998881 secon
 and outer receipt independently verified with empty stderr under the verified
 `2026-07-31T05:06:01.7747420-06:00` reset boundary.
 
-This closes H4 functional and one-run prototype latency only. It does not select persistent state,
-run H5 p95 qualification, close the simulator/security ledger, assign `proofSuiteId`, activate a
+This closes H4 functional and one-run prototype latency only. The separate H5 campaign and bounded
+H6 candidate-evidence manifest are recorded below; they do not assign `proofSuiteId`, activate a
 verifier, or authorize production.
 
 ## 8.4 Versioned state-composed bridge (nonactivating)
@@ -237,9 +245,9 @@ component. Its two 46-wide multiset lookups bind ordered operation rows to the c
 before/after snapshot tables; the native verifier also compares those columns with the exact state
 witness and independently verifies the selected FRI package. It is still not a qualified H4 state
 proof: the full state relation is not yet constrained inside the custom H4 GKR/PCS composition.
-This component phase did not run a manifest-bound H4 qualification: the measured fixture was
-capacity 8 only, so the state-free manifest above remains historical evidence for the accepted
-prototype. Production CUDA, H5, `proofSuiteId`, and activation remain forbidden.
+This component phase did not run a manifest-bound K128/K512 qualification: the measured fixture was
+capacity 8 only, so it receives no H5/H6 or production credit. The exact campaign and candidate
+evidence are recorded separately; production CUDA, `proofSuiteId`, and activation remain closed.
 
 ## 8.5 Current H4 state-GKR bridge (nonactivating)
 
@@ -253,8 +261,8 @@ The current relation proves operation/snapshot field equality, authenticated slo
 Boolean presence, and empty-slot zeroing. The native Rust binding parser and Python canonical
 snapshot decoder reject duplicate present keys. High-cardinality membership/absence and
 money/state-conservation semantics remain supplied by the typed state-AIR boundary. The exact
-state-bound H5 campaign now passes its p95/resource gates under the approved Brave-open exception;
-the complete conditioned simulator/security and H6 qualification obligations remain open.
+state-bound H5 campaign passes its p95/resource gates under the approved Brave-open exception; the
+bounded H6 candidate-evidence obligations are also closed. This does not activate a production suite.
 
 The separate C0 typed-state executable AIR now supplies the missing ordered-map/payment semantic
 slice at its semantic-AIR boundary. It binds replay and payment roots/cursors, fixed slot
@@ -294,9 +302,10 @@ boundary is established. This is a driver-integrity gate, not a VRAM-capacity ga
 
 ## 10. Next dependency
 
-Gate 2E has a sealed nonactivating state-bound context and H5 has passed the exact 22-launch
-campaign. The next dependency is H6: close the theorem/simulator/identity/grammar/supply-chain/
-privacy/migration/evidence obligations before any suite identity or activation.
+Gate 2E has a sealed nonactivating state-bound context, H5 has passed the exact 22-launch campaign,
+and H6 has closed the bounded candidate-evidence obligations. The next dependency is production
+verifier/state/custody integration and the later release/audit gates; no suite identity or activation
+is permitted yet.
 
 Do not start another proof-backend bake-off, revive BaseFold/zkDeepFold, run H5 on the state-free
 H4 proof, increase worker lifetime, parallelize K512 shards without a theorem, duplicate source

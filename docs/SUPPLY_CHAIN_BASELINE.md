@@ -1,12 +1,12 @@
 # Blind Ledger supply-chain foundation baseline
 
-Current proof-topology note (2026-07-31): the active source contains the semantic AIR,
+Current proof-topology note (2026-08-05): the active source contains the semantic AIR,
 `bl_pq512_crypto_core`, shared-bus Boolean GKR, Construction 8.2 PCS, native masking, authenticated
 public coin, and atomic verifier prototype defined by `docs/CURRENT_TECH_STACK.md`. The standalone
 RISC Zero and vendored Stwo experiments were removed; their identities remain only in
 `docs/REJECTED_ARCHITECTURES.md` and Git history.
 
-Updated: 2026-07-31
+Updated: 2026-08-05
 
 Status: **Python dependency boundary qualified; wider S11 inventory remains incomplete and is not
 release evidence.**
@@ -15,7 +15,9 @@ Under `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`, the remaining S11/O12 compiler,
 license, SBOM, reproducibility, and release work is internal engineering. External auditors review
 the completed release; they are not required to construct its dependency boundary.
 
-The wider multi-language supply-chain baseline is incomplete and not release evidence.
+The wider multi-language supply-chain baseline is incomplete and not release evidence. The exact
+H5 campaign and bounded H6 candidate-evidence manifest are now closed as nonactivating records;
+production module identities, release reproducibility, and activation remain open.
 
 The Wave 1A workspace now has a local Git root whose initial commit
 `84468714eb486b12d1f196a2d1b7622266a6d194` contains exactly the 609 files and bytes from the sealed
@@ -129,7 +131,7 @@ drift. `docs/PYTHON_DEPENDENCY_LOCKING.md` defines the review and rotation contr
 | --- | --- | --- |
 | Rules engine | Package `0.1.0`; Cargo lock v4; R34 requalified Windows Rust 1.96 format, locked/offline checks, strict Clippy, and 48 tests | No repository toolchain pin; manifest uses broad `serde` ranges |
 | Poseidon helper | Package `0.1.0`; Cargo lock v4; `starknet-crypto 0.8.1` manifest entry; R28 requalified the known-answer test and exact differential | Compiler/toolchain not pinned locally; a local target hash is not reproducible-build evidence |
-| BL-PQ512 crypto core | Package `0.1.0`; Rust 1.96.0 toolchain pin; lock v4; exact `sha3=0.10.9` with default features disabled. The current H4 core attaches the 168-layer masked GKR, Construction 8.2 PCS, dual-PQ public coin, atomic one/four-shard coordinator, canonical parser, and independent verifier. Format, locked/offline checks, `no_default_features`/`no_std`, strict all-target Clippy, and 264 optimized library tests plus every remaining binary/doc-test group pass. | H4 is a one-run prototype boundary. Complete transitive Cargo-license reconciliation, independent reproducible release build, constant-time/side-channel qualification, Gate 2E state binding, H5 repeated p95, H6 suite qualification, production module identity, and activation remain open. |
+| BL-PQ512 crypto core | Package `0.1.0`; Rust 1.96.0 toolchain pin; lock v4; exact `sha3=0.10.9` with default features disabled. The current H4 core attaches the 168-layer masked GKR, Construction 8.2 PCS, dual-PQ public coin, atomic one/four-shard coordinator, canonical parser, and independent verifier. Format, locked/offline checks, `no_default_features`/`no_std`, strict all-target Clippy, and 264 optimized library tests plus every remaining binary/doc-test group pass. | H4 is a one-run prototype boundary; the exact H5 p95 campaign and bounded H6 candidate-evidence records are now closed without activation. Complete transitive Cargo-license reconciliation, independent reproducible release build, constant-time/side-channel qualification, production module identity, and activation remain open. |
 | Cairo statement | Package `0.1.0`; observed Scarb/Cairo 2.18.0; R34 requalified a fresh serialized format/build/10-declaration pass | `cairo_execute >=2.18.0` is unbounded and the packaged Scarb lock does not resolve it |
 | Solidity tests | Foundry configuration pins `solc 0.8.24`; R34 used the 9,398,784-byte cached compiler with SHA-256 `580ee56b61bbcaad953117e1e4a0874d90e6af5cb4ce4359571d7da25f6620e9` and passed 23 tests offline | Forge executable is observed, not source-pinned |
 | `forge-std` | App-layer documentation points to sibling vendored source and license files outside this run's authorized path | License, upstream commit, source-tree hash, and archive provenance are `NOASSERTION` until an authorized provenance check captures them |

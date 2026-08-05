@@ -1,16 +1,16 @@
 # Frontier throughput and Ethereum-alignment addendum
 
-Updated: 2026-07-31
+Updated: 2026-08-05
 
 Status: authoritative cross-wave research and implementation addendum. It adds acceptance work to
 existing packages; it does not add packages, reopen sealed Wave 1 semantics, select a proof suite,
 authorize real PHI, or make an unmeasured performance claim.
 
 Current proof checkpoint: the manifest-bound H4 heterogeneous prototype independently verifies
-K128 and four-shard K512 in 29.974129/120.460733 seconds. That evidence does not select the
-authenticated-state topology, close the mandatory gate 2E bake-off, satisfy H5's one-warm-up-plus-ten
-p95 campaign, qualify H6, or activate a suite. The state plane must be selected and bound before the
-repeat campaign so H5 measures the candidate that can actually advance to H6.
+K128 and four-shard K512 in 29.974129/120.460733 seconds. Gate 2E is sealed nonactivating, H5
+passed the exact 22-launch p95/resource campaign, and H6 closed the twelve bounded candidate-
+evidence obligations. The state plane, production verifier/custody, rollup, and suite identity
+remain unselected; `proofSuiteId=null` and activation remain false.
 
 ## Plain English
 

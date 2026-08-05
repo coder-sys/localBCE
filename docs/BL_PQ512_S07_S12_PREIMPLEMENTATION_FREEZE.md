@@ -19,8 +19,9 @@ Current architecture interpretation: R24 remains the immutable rejection/paramet
 now realizes its replacement direction as the heterogeneous semantic-STARK/shared-bus/Boolean-GKR
 construction in `docs/CURRENT_TECH_STACK.md`. H4 now attaches the bridge, native GKR masks,
 Construction 8.2 PCS, and complete one-run K128/K512 proofs through independent verification. This
-does not alter sealed R24 bytes or select `proofSuiteId`; Gate 2E state binding, the complete
-composition/simulator theorem, H5, and H6 remain hard gates.
+does not alter sealed R24 bytes or select `proofSuiteId`. The later Gate 2E context is sealed
+nonactivating, the exact H5 campaign passed, and the bounded H6 candidate-evidence manifest closed
+all twelve records; production verifier/state/custody, suite selection, and activation remain open.
 
 This is the durable context-restoration document for the R24 work through roadmap items S07-S12.
 It preserves the exact Privacy V2 `bytes32[12]` boundary. It does not generate a proof, activate a

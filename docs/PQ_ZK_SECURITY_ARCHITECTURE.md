@@ -1,10 +1,10 @@
 # Blind Ledger PQ-ZK claim-proof security architecture
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
-Status: selected target architecture with a sealed nonactivating Gate 2E context and a validated
-exact H5 K128/K512 p95/resource campaign. H6 suite qualification, the final independent audit,
-and approval for real PHI remain open.
+Status: selected target architecture with a sealed nonactivating Gate 2E context, a validated exact
+H5 K128/K512 p95/resource campaign, and a closed twelve-record H6 candidate-evidence manifest.
+Production suite identity, the final independent audit, and approval for real PHI remain open.
 
 Build boundary: the proof system, native hiding, strict-PQ suite, verifier, state, custody ports,
 tests, and qualification evidence are internal engineering packages. Independent reviewers do not
@@ -93,7 +93,7 @@ The 9.03 TB monolithic, 950.76 GB streamed, 554.26 GB de-duplicated direct-SHA3-
 3.59/4.41 GB raw all-Fp16 GKR baselines are historical rejection or differential evidence, not
 fallbacks. The current compact joined row state is 12.058624 MB. H4/Gate 2E now have a sealed
 nonactivating context and the state-bound H5 campaign passes its strict p95/resource gates; the
-complete simulator/security composition plus H6 remain open. Hard limits remain 5,000,000,000 peak resident bytes, strictly
+bounded H6 candidate-evidence composition is also closed. Hard limits remain 5,000,000,000 peak resident bytes, strictly
 below 5,000,000,000 scratch bytes, and no swap on the reference laptop.
 
 The 2026-08-01 Round 1 compact diagnostic corrected lookup-backed LogUp work-domain geometry and
@@ -116,15 +116,17 @@ operation/snapshot column with the exact parsed witness, and independently verif
 v2 FRI package. A fresh capacity-8 streamed fixture completed with 11,616,597 proof bytes and
 11,741,761 binding bytes; native lookup mutation rejected with
 `ERR:state_binding_air_execution:LookupMultisetMismatch`.
-This closes neither the full custom-H4 GKR/PCS composition nor the hiding/simulator/leakage
-security ledger, backend admission, H5, H6, or `proofSuiteId`.
+This component paragraph does not by itself close the full custom-H4 GKR/PCS composition,
+production backend admission, or `proofSuiteId`; the current Gate 2E/H5/H6 candidate evidence is
+recorded in the qualified nonactivating manifest.
 
 The current native H4 bridge now carries a fixed-shape state-GKR integration seam: two boundary-one
 PCS claims, a 64-wire lane at H4 wire offset 1,600, 25 authenticated state-relation rounds, and
 seven total H4 claims when state is supplied. This seam remains nonactivating. Its current relation
 checks operation/snapshot equality, Boolean presence, and empty-slot zeroing; the exact state-bound
-H5 campaign now passes, while complete ordering, uniqueness, membership/absence, money/state
-conservation, simulator/leakage closure, and H6 remain open.
+H5 campaign now passes, and the bounded H6 candidate-evidence manifest is closed. Production
+ordering, uniqueness, membership/absence, money/state conservation, durable custody, and the
+verifier/settlement path remain later-wave work.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
@@ -640,7 +642,7 @@ not proof that the side channel is closed.
 | Backend | Selected role | Production privacy status |
 | --- | --- | --- |
 | S-two/Circle-STARK sibling | Algebra/PCS base for the M31 semantic module only; upstream QM31/hash/transcript defaults remain rejected. | Internal build blocked until semantic hiding and strict-PQ implementation qualify. |
-| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path, with SHA3-512 commitments and authenticated interactive public coin. | H4/Gate 2E have a sealed nonactivating state-bound context and H5 passes the exact p95/resource campaign. H6 qualification and activation remain open. |
+| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path, with SHA3-512 commitments and authenticated interactive public coin. | H4/Gate 2E have a sealed nonactivating state-bound context; H5 and bounded H6 candidate evidence pass. Production suite identity and activation remain open. |
 | Shout-like/Twist-like memory checking | Read-only governed-table and read/write replay/payment bake-off against the current endpoint-multiproof/sorted-memory control. | Research only until the exact SHA3-512 root bridge, Fp16/public-coin composition, hiding, fixed-shape privacy, attacks, and K128 resource evidence pass. |
 | Persistent sparse-memory / transparent dictionary / projection RAM | Mandatory Wave 2 state-replacement bake-off under one versioned interface; current SHA3 tree remains the control. | Unselected until exact semantic equivalence, native hiding, strict-PQ theorem, SHA3-512 state identifier, migration attacks, independent verifier, and full laptop evidence pass. |
 | Jindo / Grand Danois / Hachi / RoKoko-style PQ commitments | Isolated commitment/compression candidates for the mandatory state bake-off. | No primitive-name credit: exact assumptions, 256-bit security/encryption parameters, adaptive binding, knowledge soundness, evaluation hiding, public-coin composition, grammar, license, and implementation must qualify. |
@@ -652,7 +654,8 @@ not proof that the side channel is closed.
 
 No currently available backend is a production-ready drop-in satisfying fixed-shape claim semantics,
 audited witness hiding, exact settlement compatibility, and strict 128-bit quantum security. The
-selected architecture now has a delivered H4 prototype, not a qualified or production suite.
+selected architecture now has a delivered H4 prototype plus qualified H5/H6 candidate evidence,
+but not a production suite or activation.
 
 The suite lifecycle is `UNSELECTED` -> `BUILT_AUDIT_PENDING` -> `AUDIT_ACCEPTED`. The repository is
 currently `UNSELECTED` with `proofSuiteId=null`; internal engineering may advance it only through

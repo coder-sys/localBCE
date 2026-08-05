@@ -1,6 +1,6 @@
 # Technical architecture
 
-Updated: 2026-07-31
+Updated: 2026-08-05
 
 Execution checkpoint: read the newest dated section of `../STATE.md`; the original transfer record
 is `../WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 path is an untrusted arithmetic accelerator inside
@@ -8,9 +8,10 @@ the existing heterogeneous topology, not a new trust boundary. Rust remains auth
 SHA3-512, transcript, commitments, multiproofs, public-coin replay, canonical parsing, and final
 verification. The manifest-bound H4 prototype now completes the real 168-layer native-masked GKR,
 Construction 8.2 PCS, and one/four-shard coordinator through independent verification in
-29.974129 seconds for K128 and 120.460733 seconds for K512. This closes only H4's one-run prototype
-boundary. Gate 2E state selection, H5's repeated p95 campaign, H6 suite qualification, every
-activation gate, and `proofSuiteId=null` remain unchanged.
+29.974129 seconds for K128 and 120.460733 seconds for K512. Gate 2E is now sealed nonactivating;
+H5 passed the exact 22-launch campaign; and H6 closed the twelve bounded candidate-evidence records.
+Every activation gate remains closed, `proofSuiteId=null`, and production verifier/state/custody
+work is still open.
 
 The compulsory target protocol is defined in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`: an
 Ethereum-settled based validity rollup with private Blind Ledger claim proofs verified inside the
@@ -41,8 +42,8 @@ conformance. An optional feature is never accepted merely because a client expos
 `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` makes the state selection a mandatory Wave 2 gate:
 the existing SHA3-512 state proof is the control, and persistent sparse-memory, transparent-
 dictionary, touched-projection-RAM, shuffle-based memory, and native-hiding PQ commitment candidates
-must be implemented and measured before the H5 repeated K128/K512 qualification campaign. The H4
-prototype is proof-engine evidence, not state-layout selection.
+remain replaceable production-state options. The nonactivating Gate 2E/H5/H6 evidence does not
+select a production state layout; the H4 prototype and candidate ledger remain proof-engine evidence.
 
 ## Runtime boundaries
 

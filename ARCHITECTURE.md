@@ -1,6 +1,6 @@
 # Blind Ledger architecture
 
-Updated: 2026-08-02
+Updated: 2026-08-05
 
 Canonical navigation: `docs/CURRENT_TECH_STACK.md` defines the current implementation inventory;
 `docs/REJECTED_ARCHITECTURES.md` is the only rejection ledger. Historical measurements in other
@@ -17,15 +17,11 @@ boundary remains `WAVE2_HANDOFF_2026-07-26.md`. The RTX 4060 is an untrusted fie
 accelerator, while Rust retains authoritative SHA3-512 commitment, transcript, canonical decoding,
 multiproof, answer-code, target, public-coin replay, and verification duties. The real 168-layer
 masked GKR producer, native masks, Construction 8.2 PCS, and authenticated same-chain coordinator
-now pass as one manifest-bound semantic prototype. The state-composed coordinator has a fixed
-nineteen-claim shape with exact 6,727/6,995 K128/K512 schedules, but has not received a new
-manifest-bound K128/K512 qualification run. Under the verified
-`2026-07-31T05:06:01.7747420-06:00` driver-reset boundary, fresh K128 and four-shard K512 proofs
-completed through independent verification in 29.974129 and 120.460733 seconds. Both accepted
-attempts had zero pagefile growth, zero scratch, empty stderr, and zero later
-`nvlddmkm` Event 153 or Display Event 4101. This closes the H4 one/four-shard prototype and latency
-boundary, not H5's warm-up-plus-ten p95 campaign, H6 suite qualification, or activation.
-`proofSuiteId=null` remains unchanged.
+pass as the sealed H4 prototype. Gate 2E is sealed nonactivating; H5 passed the exact 22-launch
+campaign; and H6 closed the twelve bounded candidate-evidence records. `proofSuiteId=null`,
+activation is false, and production verifier/state/custody, rollup, and final audit work remain
+open. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline, not the H5 p95
+record.
 
 The selected state-free bounded join does not require multi-gigabyte host state. The five-claim component
 rows plus claim source/relation rows are 7.864320 MB decimal. The simultaneously live GKR-mask row
@@ -137,10 +133,10 @@ row plane, 12.058624 MB total, and is extracted from live commitment tiles witho
 source replay. The real producer, native mask, 73-word auxiliary plane, 6,113-round fixed prelude,
 PCS openings, and independent verifier pass together. State composition adds 614/882 square-free
 rounds and reaches 6,727/6,995 for K128/K512. CPU integration and conditioned simulator mechanics
-pass, but repeated proof qualification and leakage performance remain open. The final fresh state-free proof
-measured 29.974129 seconds for K128 and 120.460733 seconds for four-shard K512 inside the atomic
-coordinator. `complete_proof_qualification=false` remains correct until the H5 campaign and H6
-qualification gates close.
+pass, but the H4 baseline is not itself H5/H6 evidence. The exact H5 campaign and bounded H6
+candidate-evidence manifest are recorded separately, while production identity and activation
+remain closed. The final fresh state-free proof measured 29.974129 seconds for K128 and 120.460733
+seconds for four-shard K512 inside the atomic coordinator.
 
 The reference Dell release envelope is no more than 5,000,000,000 peak resident bytes, scratch
 strictly below 5,000,000,000 bytes, and no swap. The selected bounded implementation uses
@@ -154,10 +150,10 @@ optimization policy is `docs/PROVING_OPTIMIZATION_REVIEW.md`; former paper scree
 orders are quarantined under `docs/history/`. A new candidate must re-enter through exact theorem,
 privacy, PQ, independent-verifier, resource, migration, and complete-boundary measurement gates.
 
-The state plane remains unselected: `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md` requires the
-current SHA3-512 endpoint-multiproof path and all admitted sparse-state/PQ-commitment candidates to
-be implemented and measured before the H5 repeated K128/K512 qualification campaign. The H4
-one-run prototype does not select a state layout or close gate 2E.
+The production state plane remains unselected: `docs/BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md`
+keeps the SHA3-512 endpoint-multiproof path and sparse-state/PQ-commitment alternatives behind one
+replaceable interface. The nonactivating Gate 2E context and H5/H6 candidate evidence are complete,
+but they do not authorize a production state layout.
 
 The native state boundary now has a nonactivating v3 component path in
 `experiments/bl_pq512_crypto_foundation/state_air_proof.py`: a compact packed transition AIR,
@@ -165,15 +161,17 @@ private streamed dual-PQ FRI package, and native exact-witness cross-check. This
 component-verification evidence and is bound by the v3 state envelope before the H4 parent,
 transcript, child grammar, and receipt. It does not turn the unselected state plane into a selected
 backend, and it does not claim the full state relation is algebraically inside the custom H4 GKR/PCS
-proof; the simulator, leakage/security composition, H5, H6, and activation gates remain open.
+proof; the simulator and candidate-evidence records are complete in the bounded H6 manifest.
+Production state/custody, suite identity, and activation remain open.
 
 The current native H4 state-GKR seam is implemented in
 `experiments/bl_pq512_crypto_core/src/state_relation_gkr.rs` and its public-coin bridge. It binds a
 fixed 64-wire state lane at H4 wire offset 1,600, two boundary-one PCS claims, and a canonical
 16,777,216-byte private source. The relation currently covers operation/snapshot field equality,
 Boolean presence, and empty-slot zeroing only; full operation order, uniqueness, membership/absence,
-and money/state conservation remain Gate 2E obligations. This is an authenticated integration
-slice, not state admission, H5, H6, or activation evidence.
+and money/state conservation remain production-state obligations. This is an authenticated
+integration slice. By itself it is not state admission, a production verifier, or activation
+evidence.
 
 The next measured boundary is authenticated state: 46,208 of 46,858 K128 SHA3 calls arise from
 replay/payment state. Current maps remain authoritative while a versioned topology bake-off,
@@ -190,8 +188,8 @@ remains 46,208 calls. Positive and split mutation checks passed, including fixed
 asset-registry byte. The native H4 coordinator consumes the full typed AIR program/execution,
 replays its authority/root interfaces, and maps all 46,210 typed calls to the canonical H4 bus,
 including the two appended state-root calls. The selected typed AIR proof route then failed the
-immutable resource preflight, so this is an implemented nonactivating H4 readback seam; it does
-not close Gate 2E or authorize H5/H6.
+immutable resource preflight, so this is an implemented nonactivating readback seam. It receives
+no production-suite or activation credit.
 
 ## Operational artifact layout
 
@@ -229,8 +227,9 @@ bounded one-GPU design and completed atomically in 120.460733 seconds.
 Final decimal internal host peaks are 288.412 MB for K128 and 296.255 MB for K512. External
 process-tree peaks are 681.607168 and 706.523136 MB; per-proof tracked device allocation is
 969.999360 MB and K512's externally sampled total GPU residency is 2,770.337792 MB. Both accepted
-attempts used 0.000000 MB scratch and had zero pagefile growth. K512 remains sequential; four-way
-image duplication and theorem-free challenge sharing are prohibited.
+attempts used 0.000000 MB scratch and had zero pagefile growth. This sealed H4/qualified-suite
+baseline is serial; the unqualified native experiment now defaults to two lanes, but its fresh
+default launches failed the external pagefile gate and receive no qualification credit.
 
 The active regression objective is low-hundreds-of-MB internal host use while preserving the
 immutable 5,000 MB host, below-5,000 MB scratch, and no-swap gates.
@@ -273,6 +272,8 @@ is kept ready. Zero standby would expose fresh-context latency; more than one is
 residency/launch bloat. Python starts with `-S` because the manifest-bound workers use only the
 standard library and local pinned modules.
 
-The newest complete K128/K512 proofs pass all functional and 30/180-second prototype gates at
-29.974129/120.460733 seconds. Qualification remains closed because one successful attempt is not
-the required warm-up-plus-ten p95 campaign and H6 suite qualification has not run.
+The newest complete K128/K512 proofs pass all functional and 30/180-second H4 prototype gates at
+29.974129/120.460733 seconds. The separate exact H5 p95 campaign passed, and the bounded H6
+candidate-evidence manifest closed all twelve records. Production use remains closed because
+`proofSuiteId` is still null and the production verifier/state/custody and audit gates remain
+unfinished.

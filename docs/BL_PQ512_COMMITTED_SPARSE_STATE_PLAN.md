@@ -1,31 +1,29 @@
 # BL-PQ512 committed sparse-state and PQ commitment plan
 
-Updated: 2026-08-02
+Updated: 2026-08-05
 
 Status: mandatory Wave 2 research, implementation, and selection gate. This document does not
 select or activate a proof suite or state layout. `proofSuiteId` remains null, production use is
 forbidden, and real PHI or payment credentials remain forbidden.
 
-Current evidence boundary: read the newest dated section of `../STATE.md`; the original transfer
-record is `../WAVE2_HANDOFF_2026-07-26.md`. The H4 GPU/GKR/Construction 8.2 prototype now passes one
-K128 and one four-shard K512 attempt through independent verification, but it does not qualify,
-replace, or close this state-selection gate. The historical 782/706 controls were not canonical
-state derivations. Every candidate's semantic-equivalence, fixed-shape leakage, atomic CAS,
-equivocation, rollback, reorganization, recovery, migration, and 256-bit security/encryption
-composition obligations below remain open. H5 must run only after this gate selects and binds the
-state plane used by the candidate being qualified.
+Current evidence boundary: read the newest current-status section of `../STATE.md`; the original
+transfer record is `../WAVE2_HANDOFF_2026-07-26.md`. The H4/GKR/Construction 8.2 candidate context
+is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6 closed the twelve bounded
+candidate-evidence obligations. This plan still governs replaceable production state-plane work:
+no production state layout or suite identity is selected, `proofSuiteId=null`, and real PHI or
+payment credentials remain forbidden.
 
 Execution authority: the deterministic continuation contract near the top of
 `IMPLEMENTATION_ROADMAP.md` defines the exact 2E-0 through 2E-7 sequence, finalist measurement
 boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen with exact
 K128/K512 fixture identities, independent negative controls, and fresh-process state-only and
  complete-boundary measurements. S1/2E-1 bounded interfaces is also frozen and tested. S2/2E-2
-scalar C1-C4 controls are now implemented and parity-tested; S3/2E-3 reference commitment screening
-is complete with no backend admitted; S4/2E-4 through S7/2E-7 reference boundaries and the
-terminal composition/simulator/leakage/state-proof receipt ledger are now implemented, tested, and
-still unsealed. The immediate work is reviewed state/commitment admission and atomic H4 binding,
-not another paper benchmark; scalar work counters and reference-ledger timing are not throughput
-or selection evidence.
+scalar C1-C4 controls are now implemented and parity-tested; S3/2E-3 reference commitment
+screening is complete with no production backend admitted; S4/2E-4 through S7/2E-7 reference
+boundaries and the terminal composition/simulator/leakage/state-proof receipt ledger are implemented
+and tested. The later qualified context seals the nonactivating candidate evidence. The immediate
+work is production state/verifier/custody integration, not another paper benchmark; scalar work
+counters and reference-ledger timing are not throughput or selection evidence.
 
 ## 1. Decision
 
@@ -155,9 +153,10 @@ fail closed.
    interface, exact descriptor identities, dual-PQ authenticated-public-coin round, and independent
    verifier are implemented in `pq_commitment_screening.py`. Five descriptors are screened. The
    three lattice families lack pinned construction evidence, the retired hash-pad control fails its
-   public-coin/quantum review, and the clean-room `TRANSPARENT_SHAKE256_1024` candidate is rejected
-   only for missing complete H4 composition. All five remain rejected; no backend is admitted or
-   selected.
+   public-coin/quantum review, and at the S3 screening boundary the clean-room
+   `TRANSPARENT_SHAKE256_1024` candidate was held for missing complete H4 composition. All five
+   reject at that boundary; the later qualified context uses the clean-room candidate as
+   nonactivating candidate evidence. No production backend is admitted or selected.
 5. **S4 - atomic composition (reference complete).** `atomic_state_composition.py` independently
    replays the scalar relation, binds the S3 authenticated opening to the fixed projection and BLTR
    transition, hashes private relation material in the canonical payload, and constructs an
@@ -170,15 +169,15 @@ fail closed.
    cases fail closed; the 10-test focused/attack suite passes. This is not a production migration
    theorem or durable custody result.
 7. **S6 - exact bake-off (reference boundary complete).** `gate_2e_selection.py` repeats the
-   identical synthetic S2/S3/S4 component twice for each of the five screened backends and K128/K512
-   profiles, with independent verification, observed timing labels, derived work labels, and no
-   proof/complete-boundary credit. All five S3 screens reject, so no finalist receives a complete
-   warm-up or externally monitored complete proof.
+  identical synthetic S2/S3/S4 component twice for each of the five screened backends and K128/K512
+  profiles, with independent verification, observed timing labels, derived work labels, and no
+  proof/complete-boundary credit. All five S3 screens reject at that reference boundary; the later
+  qualified context is separately recorded and remains nonactivating.
 8. **S7 - selection/handoff (reference boundary complete).** The selector recomputes every rejection,
-   retains C0 as an unselected control with no timing credit, and emits an explicitly unsealed
-   handoff. `selected_backend_id=null`, `proofSuiteId=null`, and activation is false. Tracked
-   `ops/` authority is verified; the former sibling-layout blocker is closed. A production state
-   plane is not selected until a reviewed backend and complete H4 binding exist.
+  retains C0 as an unselected control with no timing credit, and emits an explicitly unsealed
+  pre-manifest handoff. `selected_backend_id=null`, `proofSuiteId=null`, and activation is false.
+  Tracked `ops/` authority is verified; the former sibling-layout blocker is closed. The later
+  qualified candidate context is nonactivating; a production state plane is still not selected.
 
 The smallest nonactivating state boundary is implemented separately in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It provides fixed-shape SHA3-512 roots,
@@ -191,21 +190,18 @@ record; Rust independently evaluates it, compares every packed operation/snapsho
 exact witness, verifies the FRI package, and binds the component into the v3 parent, authenticated interactive
 session/schedule, exact child grammar, and atomic receipt. The full
 `state_plane_executable_air.py` remains the version-2 compatibility path; the compact path keeps
-SHA3 roots on H4's authenticated bus rather than duplicating their Boolean traces. This is still
-component/prerequisite evidence only: the current hash-pad review rejects Gate 2E admission, no
-reviewed PQ backend is admitted and the complete proof artifact leakage scan remains open. The
-conditioned state/PCS/public-coin simulator mechanics are closed. `proofSuiteId` and activation
-remain closed.
+SHA3 roots on H4's authenticated bus rather than duplicating their Boolean traces. This is
+component/prerequisite evidence only: the hash-pad candidate remains rejected, while the later
+clean-room candidate context is nonactivating. The bounded H6 candidate-evidence manifest closes
+the candidate leakage/strict-PQ records; no production PQ backend or state layout is selected.
+`proofSuiteId` and activation remain closed.
 
-The next admission boundary is explicit:
+The next production boundary is explicit:
 
-Complete the remaining admission obligations before selecting the state plane: a reviewed backend,
-full proof-native H4 GKR/PCS composition, simulator, leakage, and state-receipt/security closure.
-Bind the selected state plane into
-   the actual H4 parent, transcript, proof, independent verifier, and atomic receipt only after
-those obligations pass.
-The v3 component is the native verifier boundary needed for that work; it is not itself backend
-selection or Gate 2E closure.
+Select and bind a production state plane only after the later verifier, custody, migration,
+resource-telemetry, and release gates are complete. The v3 component is the native verifier
+boundary needed for that work; the already qualified H4/H5/H6 candidate evidence is nonactivating
+and does not itself authorize production.
 
 ### Current state-bus prerequisite
 
@@ -221,8 +217,9 @@ the totals from the descriptor rather than a duplicated profile constant. The or
 This seam proves that state roots enter the authenticated source/child boundary. Together with the
 v3 compact state-AIR/FRI component it provides native state-file composition evidence and an
 algebraic ordered operation-to-snapshot equality boundary, but it does not yet put the complete
-state relation inside the custom H4 GKR/PCS proof, select a qualified backend, or produce a new
-manifest-bound H4 K128/K512 proof. H5 remains blocked.
+state relation inside the custom H4 GKR/PCS proof, select a production backend, or produce a new
+manifest-bound H4 K128/K512 proof. The exact H5 campaign and bounded H6 evidence are recorded
+above; this prerequisite seam receives no additional qualification credit.
 
 The current Rust H4 bridge now carries that state component into the same PCS shape: a fixed
 64-wire lane at wire offset 1,600, two boundary-one state-relation claims, twelve square-free state
@@ -231,15 +228,16 @@ claims, and two grouped coefficient openings. It produces nineteen fixed claims 
 checks operation/snapshot equality, authenticated slot index/order, Boolean presence, and
 empty-slot zeroing; the Rust source builder and native Rust/Python snapshot decoders reject
 duplicate present keys before source commitment. Proof-native high-cardinality uniqueness,
-membership/absence, and money/state conservation remain open and must be proven before Gate 2E
-can close.
+membership/absence, and money/state conservation remain open for production state selection and
+must pass the later verifier/custody gates.
 
 The new isolated candidate is `TRANSPARENT_SHAKE256_1024`,
 `BL-PQ512-TRANSPARENT-SHAKE256-1024-V1`: SHAKE256-1024 with a 128-byte mask and 128-byte
 commitment, committed before the later authenticated coin. Its conservative ledger is 341-bit
 quantum collision, 32-bit multi-target loss, 309-bit effective binding, and 480-bit effective
-hiding. It is a reviewed reference candidate but remains rejected solely for missing complete H4
-composition; no `proofSuiteId` is assigned.
+hiding. It was rejected at the screening boundary solely for missing complete H4 composition. The
+later H4/H5/H6 candidate context records this clean-room path as nonactivating evidence; no
+production `proofSuiteId` is assigned.
 
 ## 6. Acceptance gates
 
@@ -282,41 +280,47 @@ conditions is a normal candidate rejection, not permission to relax a gate.
 
 ## 6.2 Terminal Gate 2E evidence ledger
 
-`experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py` now provides the bounded
-terminal evidence record for the current synthetic references. It replays S4, derives S5
-checkpoints, verifies both C0 profile shapes and all seven C0 negative classes, checks the fixed
-12-field/public-private boundary, and recomputes S6/S7 selection and handoff identities. The
-11-record ledger remains reference-only and unsealed with
-`status=UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`. When supplied, it records the new state-plane
-identity as `STATE_PLANE_IMPLEMENTED_H4_PENDING`; the default preflight remains
-`STATE_PLANE_NOT_PROVIDED`. The ledger does not admit a relation or PQ commitment, close the
-complete simulator or leakage scan, establish state constraints inside H4, qualify H5, assign
-`proofSuiteId`, or authorize activation. The separate tracked-ops authority is verified.
+`experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py` provides both the preserved
+pre-campaign reference record and the later qualified nonactivating context. The historical
+11-record ledger is retained as
+`status=UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER`; it does not represent the current status. The
+latest context is `SEALED_GATE_2E_TERMINAL_LEDGER` with the nonactivating state-bound candidate,
+independent replay, and no production suite identity. The exact H5 campaign and bounded H6
+candidate-evidence manifest are recorded separately below and are closed without activation.
+`proofSuiteId` remains null; production verifier/state/custody and release work remain open.
+The separate tracked-ops authority is verified.
 
 The hash-pad review at `docs/BL_PQ512_HASH_PAD_COMMITMENT_SECURITY_REVIEW.md` is an explicit
 rejection record, not selection evidence. It credits only the exact one-time-pad condition for
 ciphertext hiding and the independently replayed reference opening. It gives no generic SHA3
 collision, QROM, Fiat-Shamir, grinding, or unfrozen public-coin-order credit.
 
-When a reviewed candidate is eventually admitted, the resulting decision has the following
-meaning: This selects the Gate 2E candidate; it is not H5 qualification. The admission handoff
-must:
+The qualified context already records the nonactivating candidate boundary; it does not select a
+production state/commitment backend or activate a suite. The remaining production boundary is to
+complete the verifier/state/custody, migration, resource-telemetry, release, and final-audit work.
+The native executable-AIR consumption, exact-witness v3 FRI composition, and canonical-envelope
+seams above are prerequisite/component evidence, not a production selection or activation decision.
 
-Close the remaining admission work by selecting a reviewed state/commitment backend and completing
-the proof-native H4 PCS/ZK qualification, artifact leakage ledger, and qualification evidence. The
-native executable-AIR consumption, exact-witness v3 FRI composition, and canonical-envelope seams
-above are necessary prerequisite/component evidence, not admission or H5 credit.
+## 6.3 Current qualification records
 
-## 6.3 H5 qualification preflight
+The current H5 record is `QUALIFIED_H5_CAMPAIGN_NONACTIVATING`: the exact 22-launch
+campaign passed with p95 values of 32.360845 seconds for K128 and 148.861885 seconds for K512.
+The current H6 record is `QUALIFIED_H6_NONACTIVATING`: all twelve candidate-evidence
+records are closed and its blocker tuple is empty. These records remain nonactivating because the
+production verifier, durable state/custody, release identity, and final audit are still open;
+`proofSuiteId` remains null.
 
-`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` is the current bounded
-H5 boundary while admission is absent. It independently replays the terminal ledger, validates
-the reference hardware record, verifies the one tracked commit-bound `ops/` authority, and freezes
-one uncounted warm-up plus ten unique measured launches for each
-profile. The total is exactly 22 fresh launches. Cached proofs, cached witnesses, automatic retry,
-partial-campaign substitution, CUDA launch, `proofSuiteId`, and activation remain forbidden.
+### Historical H5 qualification preflight (superseded record)
 
-The current record is:
+The following pre-manifest record is retained verbatim as historical evidence. At that time,
+`experiments/bl_pq512_crypto_foundation/h5_qualification_preflight.py` was the bounded
+H5 boundary while admission was absent. It independently replayed the terminal ledger, validated
+the reference hardware record, verified the one tracked commit-bound `ops/` authority, and froze
+one uncounted warm-up plus ten unique measured launches for each profile. The total was exactly
+22 fresh launches. Cached proofs, cached witnesses, automatic retry, partial-campaign substitution,
+CUDA launch, `proofSuiteId`, and activation remained forbidden.
+
+The historical record was:
 
 ```text
 status=BLOCKED_H5_PREFLIGHT
@@ -328,23 +332,24 @@ proofSuiteId=None
 activation_allowed=False
 ```
 
-It remains blocked by the unsealed/unselected Gate 2E state, deferred H4 binding, incomplete
+It was blocked by the unsealed/unselected Gate 2E state, deferred H4 binding, incomplete
 leakage/strict-PQ evidence, absent external monitoring, absent source readback, and no
-complete-proof campaign. The preflight suite
-passed 6 tests in 44.60 seconds; no H5 measurement credit is claimed. The recorded disk reserve
+complete-proof campaign. The preflight suite passed 6 tests in 44.60 seconds; no H5 measurement
+credit was claimed. The recorded disk reserve
 is 15,000 ppm (1.5%), requiring 7,310,026,937 free bytes; the immutable 5,000,000,000-byte
 RSS/scratch and zero-swap gates remain unchanged.
 
-## 6.4 H6 qualification preflight
+### Historical H6 qualification preflight (superseded record)
 
-`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` now replays the blocked H5
-and terminal Gate 2E context and independently reads
-`docs/bl_pq512_suite_candidate_v1.json`. It requires the candidate registry to remain
+The following pre-manifest record is retained verbatim as historical evidence. At that time,
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` replayed the blocked H5
+and terminal Gate 2E context and independently read
+`docs/bl_pq512_suite_candidate_v1.json`. It required the candidate registry to remain
 `CANDIDATE_UNQUALIFIED`, with eight null module identities, null `proofSuiteId`, and activation
-disabled. It emits exactly twelve H6 obligation records: five `BLOCKED`, five `OPEN`, and two
-`REFERENCE_ONLY`, with 22 distinct blockers. No record may be closed by this preflight.
+disabled. It emitted exactly twelve H6 obligation records: five `BLOCKED`, five `OPEN`, and two
+`REFERENCE_ONLY`, with 22 distinct blockers. No record could be closed by that preflight.
 
-Current raw record:
+Historical raw record:
 
 ```text
 status=BLOCKED_H6_PREFLIGHT
@@ -366,8 +371,9 @@ py -3.14 -m pytest -q tests/test_bl_pq512_state_interface.py tests/attacks/test_
 85 passed in 151.88s (0:02:31)
 ```
 
-This is H6 evidence-boundary scaffolding, not theorem, simulator, attack, reproducibility,
-resource, qualification, state-admission, H5, or activation evidence.
+This is the preserved pre-manifest record, not the current qualification status. The current
+candidate-evidence closure is recorded above; it still does not select a production suite or
+authorize activation.
 
 ## 7. Primary research record
 

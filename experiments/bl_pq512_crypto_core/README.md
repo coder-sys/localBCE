@@ -1,6 +1,6 @@
 # BL-PQ512 crypto core
 
-Updated: 2026-08-02
+Updated: 2026-08-05
 
 Status: authoritative implementation guide for the selected nonactivating H4 proof core. Former
 checkpoint narrative is archived at
@@ -12,8 +12,10 @@ This crate implements the M31/Fp16/SHA3-512 proof substrate, shared-bus B16 Bool
 coprocessor, native GKR hiding, Construction 8.2 PCS, authenticated public coin, canonical proof
 grammar, atomic one/four-shard coordinator, and authoritative independent verifier.
 
-It does not select persistent state, assign H5/H6 qualification, assign a suite identity, authorize
-production activation, or provide Ethereum settlement. The native coordinator has a bounded
+It does not select persistent state, assign a production suite identity, authorize production
+activation, or provide Ethereum settlement. The exact H5 campaign and bounded H6 candidate-evidence
+manifest are recorded in the current docs; they do not change this crate's nonactivating role. The
+native coordinator has a bounded
 `--verify-state-binding` path and accepts `state-file:<path>` for both the version-2 compatibility
 envelope and the nonactivating version-3 compact state-AIR/FRI envelope. Version 3 exports a
 private streamed dual-PQ FRI package; native Rust replays the state, compares the compact trace
@@ -30,7 +32,7 @@ machinery, not alternate proof backends.
 | --- | ---: | ---: |
 | Live claims | 100 | 500 |
 | Semantic SHA3 calls | 46,858 | 165,762 |
-| Shards | 1 | 4 ordered sequential |
+| Shards | 1 | 4 ordered sequential in the sealed H4/qualified-suite baseline |
 | Padded permutations/shard | 131,072 | 131,072 |
 | Live input wires/permutation | 1,600 | 1,600 |
 | `BLHBB101` bytes | 52,429,015 | 209,715,415 |
@@ -150,7 +152,10 @@ name alone; trace imports, manifest identity, tests, codecs, and verifier consum
 - Upload immutable topology once per worker.
 - Read the semantic file once and derive same-source aliases.
 - Start Python proof workers with `-S` and manifest-bound local imports only.
-- Keep K512 shards sequential on one GPU with independent challenge streams.
+- Keep K512 shards sequential on one GPU with independent challenge streams when a qualified suite
+  identity is present. When no suite identity is present, the native experimental coordinator may
+  select two independent lanes by default; its fresh default launches failed the external pagefile
+  gate and receive no H5/H6 or production credit.
 
 Before any production CUDA proof, audit the Windows System log and establish a clean reset
 boundary. The 56-layer experiment faulted at layer 54 and produced `nvlddmkm` Event 153; this is a
@@ -186,28 +191,43 @@ python cuda/fp16_zk_rs_retired_format_rejection_kat.py
 These are field, dimension, trace-generation, or rejection diagnostics. They are not complete-proof
 throughput evidence.
 
-## Current next dependency
+## Current status and next dependency
 
-The terminal Gate 2E composition/simulator/leakage/state-proof receipt ledger reference is now
-implemented and tested, but it is deliberately unsealed. The complete state relation is now inside
-the H4 proof boundary; Gate 2E must still admit a reviewed state/PQ commitment plane and seal it
-into the H4 parent, transcript, proof grammar, independent verifier, and receipt. H5 then runs one warm-up plus ten
-unique K128 and ten unique K512 proofs; H6 closes the theorem, simulator, parser, attack,
-reproducibility, resource, and identity obligations.
+The current nonactivating evidence is complete for this crate's Wave 2 candidate boundary:
+Gate 2E is sealed, the exact H5 campaign passed, and the H6 candidate-evidence manifest closed
+all twelve records. The exact H5 p95 values were 32.360845 seconds for K128 and 148.861885
+seconds for K512. The current candidate record is
+`QUALIFIED_H6_NONACTIVATING`; it does not select a production suite.
 
-The read-only H5 preflight now freezes that campaign boundary and returns
-`BLOCKED_H5_PREFLIGHT`: 22 fresh launches are required, but the current terminal ledger is
-unsealed, no state plane is selected, and no complete-proof
-campaign or external monitor has run. The recorded reference hardware now meets the reduced
-1.5% operational disk floor (7,310,026,937 bytes required); its refreshed preflight digest is
-`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693`. This does not assign
+Production work is still open: the authoritative verifier, durable state and custody, release
+identities, and final audit have not been completed. Therefore `proofSuiteId=null`,
+activation is false, and real PHI/payments remain forbidden. The native coordinator's two-lane
+default is an unqualified experiment; it receives no H5/H6 or production credit.
+
+The pre-manifest H5/H6 records below are preserved as historical evidence. They explain the
+earlier blocked boundary and must not be read as the current status.
+
+### Historical pre-manifest checkpoint (superseded)
+
+At that earlier checkpoint, the terminal Gate 2E composition/simulator/leakage/state-proof receipt
+ledger reference was implemented and tested but deliberately unsealed. The complete state relation
+was being moved into the H4 proof boundary; Gate 2E still had to admit a reviewed state/PQ
+commitment plane and seal it into the H4 parent, transcript, proof grammar, independent verifier,
+and receipt. H5 was planned as one warm-up plus ten unique K128 and ten unique K512 proofs; H6
+was planned to close the theorem, simulator, parser, attack, reproducibility, resource, and
+identity obligations.
+
+The read-only H5 preflight at that time returned
+`BLOCKED_H5_PREFLIGHT`: 22 fresh launches were required, but the terminal ledger was
+unsealed, no state plane was selected, and no complete-proof campaign or external monitor had run.
+The recorded reference hardware met the reduced 1.5% operational disk floor
+(7,310,026,937 bytes required); its preflight digest was
+`9c8cd9e4836576487431af85e3c1ae2b458d44580c144ceeda971f500cd9be279910ea88045761f59699d7b67a8520920a17f07b33d173ce9270d0d064d31693`. This historical record did not assign
 `proofSuiteId`, authorize CUDA, or grant qualification credit.
 
-`proofSuiteId=null`, activation is false, and real PHI/payments remain forbidden.
-
-The fail-closed H6 preflight now records all twelve qualification obligations without claiming any
-are closed. Its current record is `BLOCKED_H6_PREFLIGHT`; it replays the H5/2E evidence, confirms
-the candidate suite registry remains `CANDIDATE_UNQUALIFIED` with eight null module identities,
-and reports five blocked, five open, and two reference-only obligation records. This is evidence
-boundary scaffolding only: no H5 launch, proof-suite selection, H4 state admission, or activation
-credit is granted.
+The fail-closed H6 preflight at that time recorded all twelve qualification obligations without
+claiming any were closed. Its historical record was `BLOCKED_H6_PREFLIGHT`; it replayed
+the H5/2E evidence, confirmed the candidate suite registry remained
+`CANDIDATE_UNQUALIFIED` with eight null module identities, and reported five blocked,
+five open, and two reference-only obligation records. It was evidence-boundary scaffolding only:
+no H5 launch, proof-suite selection, H4 state admission, or activation credit was granted.

@@ -13,16 +13,18 @@ Blind Ledger currently uses the exact seven-layer B=16 Fp16 GKR hash coprocessor
 four relay-free hash input claims, native GKR masks, Construction 8.2 random-padded interleaved-RS
 PCS, the 6,113-round fixed dual-PQ authenticated prelude, authoritative Rust verification, and
 one/four-shard atomic coordination. The state-composed shape has nineteen fixed claims and reaches
-6,727/6,995 K128/K512 rounds; its complete-boundary performance is not yet measured.
+6,727/6,995 K128/K512 rounds. The exact H5 campaign measured the complete state-boundary p95 at
+32.360845 seconds for K128 and 148.861885 seconds for K512.
 
 Complete one-run H4 evidence is 29.974129 seconds for K128 and 120.460733 seconds for K512.
 Internal host peaks are 288.412/296.255 decimal MB; external process-tree peaks are
 681.607168/706.523136 MB; tracked device state is 969.999360 MB per proof; K512 sampled total GPU
 residency is 2,770.337792 MB; scratch and pagefile growth are zero.
 
-These measurements are state-free H4 baseline evidence. The state-composed shape is an integration
-boundary only, not H5/H6-qualified. Gate 2E state selection, full state semantics, and binding are
-the current optimization dependencies.
+These measurements are state-free H4 baseline evidence. Gate 2E is sealed nonactivating, H5 is
+qualified for the exact 22-launch campaign, and H6 is qualified for the bounded candidate-evidence
+scope. The current optimization dependencies are production state/verifier integration, resource
+telemetry ownership, and the downstream Waves 3-6 gates; `proofSuiteId` remains null.
 
 ## Decision rule
 
@@ -56,9 +58,9 @@ privacy, migration, independent-verifier, memory, scratch, and no-swap gate.
 
 ### H5 measured dominant-stage refinement
 
-After Gate 2E is sealed, run the 22-launch campaign. If a STOP or latency failure occurs, profile
-the complete process and refine only the measured dominant stage. Rerun the containing campaign
-from a new coherent commit; never replace or discard a failed measurement.
+The exact 22-launch campaign is now complete and recorded above. If a future change affects the
+complete process, profile only the measured dominant stage, rerun the containing campaign from a
+new coherent commit, and retain every failed measurement; never replace or discard it.
 
 ### Server-scale parallelism
 

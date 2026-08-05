@@ -2,8 +2,9 @@
 
 Updated: 2026-07-18
 
-Status: **review-ready synthetic-only S07-S09 research; current S-two parameters rejected; no
-production proof suite selected or activated.**
+Status: **historical review-ready synthetic-only S07-S09 research; the S-two parameters described
+here remain rejected. The later H4/H5/H6 candidate evidence is nonactivating; no production proof
+suite is selected or activated.**
 
 Current architecture addendum: the replacement direction is now the heterogeneous construction in
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. The sealed M31 semantic AIR uses a shared hiding
@@ -22,8 +23,9 @@ activation, settlement, or a claim that `BL-PQ512-v1` has passed external crypto
 
 The later R24 continuation corrects the exact algebra/query worksheet and adds the nonactivatable
 suite registry, 744-byte sidecar candidate, lifecycle, and S12 formal-statement draft in
-`docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md`. The current suite remains rejected and the
-candidate `proofSuiteId` remains unset.
+`docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md`. The suite described by this freeze remains
+rejected. The current H4/H5/H6 candidate evidence is recorded in the active Wave 2 documents,
+remains nonactivating, and leaves `proofSuiteId` unset.
 
 ## Executive result
 

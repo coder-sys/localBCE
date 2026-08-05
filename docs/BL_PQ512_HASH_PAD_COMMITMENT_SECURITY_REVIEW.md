@@ -2,8 +2,9 @@
 
 Updated: 2026-08-02
 
-Decision: **rejected for Gate 2E admission**. `proofSuiteId` remains null and
-activation remains disabled.
+Decision: **rejected for Gate 2E admission**. This is a component-specific rejection record; the
+later H4/H5/H6 candidate-evidence context is nonactivating and does not admit this hash-pad route.
+`proofSuiteId` remains null and activation remains disabled.
 
 ## What was actually reviewed
 
@@ -42,19 +43,18 @@ output, the conservative quantum collision model is `2^(512/3)`, below the
 required 256-bit per-term floor. No Fiat-Shamir, QROM, grinding, or optimistic
 collision claim receives credit.
 
-The current construction also is not yet composed into the actual H4 AIR.
+At the time of this review, the current construction was not yet composed into the actual H4 AIR.
 Accordingly `TRANSPARENT_HASH_CODE` remains rejected with an explicit
-`hash_pad_security_review_rejected` reason; this record does not select a
-backend or authorize H5. The newer clean-room `TRANSPARENT_SHAKE256_1024`
-candidate is tracked in the S3 registry separately; its 1,024-bit reference
-ledger closes the two local hash-pad defects but does not close H4 composition,
-the complete simulator, or leakage review.
+`hash_pad_security_review_rejected` reason; this record does not select a backend or authorize
+H5. The newer clean-room `TRANSPARENT_SHAKE256_1024` candidate is tracked in the S3 registry
+separately. Its later bounded H4/H5/H6 evidence is nonactivating candidate evidence; it does not
+make this rejected hash-pad route a production suite.
 
 ## Required next closure
 
-Admission needs a reviewed construction with a frozen public-coin lifecycle,
-an exact 256-bit post-quantum hiding/binding/composition theorem, complete
-state constraints inside the H4 AIR, and independent cross-language evidence.
+Production admission still needs a reviewed construction with a frozen public-coin lifecycle,
+an exact 256-bit post-quantum hiding/binding/composition theorem, complete state constraints inside
+the H4 AIR, and independent cross-language evidence.
 The tracked `ops/` authority is now the sole verified canonical tree; the former
 sibling-layout blocker is closed. The remaining blockers are cryptographic
 composition, complete state proof coverage, simulator/leakage closure, and H4

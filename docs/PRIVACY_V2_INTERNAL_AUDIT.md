@@ -19,10 +19,12 @@ operator activation inputs.
 
 Current topology addendum: this 2026-07-12 audit predates the sealed Wave 1 relation and the H4
 shared-bus Boolean GKR/Construction-8.2 prototype. Its findings remain historical inputs. H4 now
-attaches native masks and independent verification for one K128/K512 run; Gate 2E state binding,
-the complete adaptive simulator/composition ledger, H5, H6, and the production verifier remain open.
-The later frontier addendum adds CBAM, state/scheduler, adapter-evidence, and public-DA privacy gates;
-it does not retroactively change this audit's evidence or close a finding.
+attaches native masks and independent verification for one K128/K512 run; the later Gate 2E context
+is sealed, the exact H5 campaign passed, and the bounded H6 candidate-evidence manifest closed all
+twelve records without activating production. The production verifier, durable state/custody,
+release identity, and final audit remain open. The later frontier addendum adds CBAM, state/
+scheduler, adapter-evidence, and public-DA privacy gates; it does not retroactively change this
+audit's evidence or close a production finding.
 
 ## Audit passes
 

@@ -1,6 +1,20 @@
 # Blind Ledger state
 
-Updated: 2026-08-04
+Updated: 2026-08-05
+
+## Current status in plain English
+
+This is the current status as of 2026-08-05; the dated sections below preserve the full run history.
+Gate 2E is sealed as a nonactivating candidate context. H5 passed the exact 22-launch campaign with
+K128 p95 32.360845 seconds and K512 p95 148.861885 seconds. H6 then closed all twelve bounded
+candidate-evidence records. The production suite is still unselected: `proofSuiteId=null`,
+activation is false, production verifier/state/custody and rollup work remain open, the final audit
+has not started, and real PHI/payments remain forbidden. Progress remains 6 of 93 packages.
+
+The native unqualified K512 experiment now defaults to two independent lanes. Two fresh default-mode
+launches verified all four shards but failed the unchanged external pagefile-growth gate, so they
+receive no H5/H6 or production credit. Serial remains the qualified-suite default until production
+resource telemetry is integrated.
 
 ## Current execution boundary
 
@@ -22,7 +36,8 @@ public-coin randomness. The latest qualified Gate 2E context seals the terminal 
 `h4_parent_bound=true`, `complete_proof_verified=true`, and no terminal-ledger blockers. It remains
 nonactivating: `proofSuiteId=null` and `activation_allowed=false`. The composed security ledger
 remains at 392.108419573 bits and records the exact K512 state sumcheck degree budget of 1,748;
-the strict-PQ implementation/composition ledger is still open.
+the bounded H6 candidate-evidence manifest closes the strict-PQ implementation/composition
+obligations for this nonactivating candidate. Production suite identity and activation remain open.
 
 Two privacy defects found during composition are fixed without weakening verification: mask-batch
 constraints are now published only through a SHA3-512 commitment, and square-free coefficient
@@ -63,15 +78,12 @@ The first proof-attack corpus command named a nonexistent
 recorded as a misaddressed/skipped command. The corrected proof, state, and foundation corpora
 then passed 38, 46, and 52 tests respectively (136 corrected attack tests total).
 
-The same qualified context now feeds H6. H6 has exactly one closed record,
-`H5_RESOURCE_EVIDENCE`, and remains `BLOCKED_H6_PREFLIGHT` with these blockers:
-`h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
-`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
-`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
-`side_channel_unlinkability_open`, `production_migration_theorem_open`,
-`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
-`wave3_verifier_state_custody_open`. `proofSuiteId` remains null, activation remains false, and
-real PHI/payments remain forbidden.
+The same qualified context first produced a pre-manifest H6 record with one closed obligation,
+`H5_RESOURCE_EVIDENCE`, and an explicit blocker tuple. The former blockers are retained in the
+dated pre-manifest H6 section below; that record is historical zero-credit preflight evidence.
+The current H6 record is
+`QUALIFIED_H6_NONACTIVATING`: all twelve obligations are closed with an empty blocker tuple.
+`proofSuiteId` remains null, activation remains false, and real PHI/payments remain forbidden.
 
 Historical transfer-time verification (superseded by the current 2026-07-29 section below) was:
 `cargo test --lib --all-features` passed 229/229 tests in 1,069.89 seconds;
@@ -7655,3 +7667,46 @@ the exact byte-identical `11,341,646`-byte archive above. The intermediate `11,3
 copies were preserved at
 `C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\archive-v2-stage\previous-targets-20260805-default-r1`.
 The sealed H5/H6 evidence directories were not modified.
+
+## 2026-08-05 Source-Complete archive refresh after documentation consistency pass - VERIFIED
+
+The active documentation and code-facing README consistency pass changed only Markdown files.
+The reviewed archive allowlist was reused unchanged in membership; `STATE.md` is intentionally
+outside that allowlist. The staging copy carried `29` changed allowlisted documents, recomputed
+their manifest hashes, and left the sealed H5/H6 evidence directories untouched.
+
+The first staged builder invocation was blocked before output publication because it was launched
+without the repository `tools` import path; no ZIP was produced. The corrected invocation supplied
+the existing repository scanner path and passed the strict builder/readback gates:
+
+`text
+stage_entries=779
+archive_bytes=11348269
+archive_sha256=f0552c551e015b56a548c32a5026102e2ce23db71b4361a9c296d8af0f15fb5a
+manifest_sha256=91ae15561d797d02b2af6d6564a94c52a0ab4d12e04040c77052d8c39263d973
+entry_count=780
+payload_file_count=779
+payload_bytes=11062270
+builder_version=blind-ledger-release-archive-v1
+`
+
+Independent readback of all three published targets returned:
+
+`text
+three_way_byte_identical=true
+bytes=11348269
+sha256=f0552c551e015b56a548c32a5026102e2ce23db71b4361a9c296d8af0f15fb5a
+sha3_512=cb185539d914b4078cb0167e8a2503913f037878ae97096ceb564de355d61385dd93359e492436e3030b5952ab2c3ab90c4d761678d78c3ceef03f9cd735bba8
+entries=780
+duplicates=0
+crc=PASS
+manifest_first=Blind-Ledger-Release/RELEASE_FILE_MANIFEST.json
+payload_hash_readback=PASS
+`
+
+The old three published copies were backed up first at
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\archive-v2-stage\previous-targets-20260805-docs-audit`;
+each old copy was `11,341,646` bytes with SHA-256
+`a5c060f85359b1b63c038c5bccddcc43b631eaf2f95530c3783a3399adeaebfc`. The new copies are the
+exact byte-identical `11,348,269`-byte archive above. This packaging refresh changes no proof,
+H5, H6, or activation evidence.

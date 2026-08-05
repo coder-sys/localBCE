@@ -51,12 +51,12 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Boundary | State | Verified evidence | Still required |
 | --- | --- | --- | --- |
 | Wave 1 | Sealed, synthetic, nonactivating | Exact fixed-shape semantics and global SHA3 schedule | Durable authoritative state and activation |
-| H0-H3 | Prototype implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification, and complete conditioned simulator mechanics | H6 acceptance and final evidence identity |
-| H4 | CPU-integrated, GPU feasibility observed, qualification pending | The nineteen-claim typed state relation and linear square-free uniqueness proof are composed into the custom GKR/PCS/public-coin/parent/receipt boundary; fresh monitored native K128/K512 state-composed runs independently verified their atomic boundaries, with one-run measurements of 29.974129 s for K128 and 120.460733 s for K512 | Complete K128 p95, complete K512 repeated p95, artifact leakage scan, reviewed PQ admission, sealed H4 parent binding, final suite identity |
-| Gate 2E | Sealed nonactivating terminal context | Exact state-bound H4 parent/receipt replay, qualified candidate admission, leakage scan, canonical ops, and independent CPU/native replay | H6 strict-PQ/simulator/grammar/supply-chain/privacy/migration evidence; `proofSuiteId` remains null |
-| H5 | Qualified, nonactivating | Exact 22-launch campaign; p95 32.360845 s K128 and 148.861885 s K512; RSS/scratch/pagefile/driver/stderr gates pass | H6 suite qualification and final module identity |
-| H6 | Qualified, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody and final audit remain; no suite activation |
-| Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
+| H0-H3 | Core implementation complete | Exact bus, seven-layer B16 GKR, native masks, Construction 8.2 PCS, public coin, component verification, and conditioned simulator mechanics | Production integration and later-wave acceptance |
+| H4 | Candidate proof boundary complete, nonactivating | Nineteen-claim typed state relation and linear square-free uniqueness are composed into the custom GKR/PCS/public-coin/parent/receipt boundary; one-run H4 baselines are 29.974129 s K128 and 120.460733 s K512 | Production suite identity and downstream verifier/state/custody work |
+| Gate 2E | Sealed nonactivating terminal context | Exact state-bound H4 parent/receipt replay, candidate admission evidence, leakage scan, canonical ops, and independent CPU/native replay | Production state-plane selection and downstream activation gates; `proofSuiteId` remains null |
+| H5 | Qualified, nonactivating | Exact 22-launch campaign; p95 32.360845 s K128 and 148.861885 s K512; RSS/scratch/pagefile/driver/stderr gates pass | Production integration and final suite identity |
+| H6 | Qualified candidate evidence, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody, release, final audit, and suite activation |
+| Waves 3-6 | Open downstream work | Reference components and candidate evidence only | Production verifier/state/custody, adapters, rollup, operations, release |
 
 The live Strawmap compatibility contract was refreshed on 2026-08-05 from 60 underlying links
 (23 EIPs and 37 non-EIP links). It confirms that Wave 5 must bind deployed L1 sequencing, fork,
@@ -237,18 +237,19 @@ common fixed-width masked commitment/opening envelope, exact parameter identitie
 families, a dual-ML-DSA-87/SLH-DSA-SHAKE-256f authenticated public-coin round, and an independent
 opening verifier. The reference envelope is synthetic and nonproduction. The three lattice
 families lack pinned source/parameters/theorem evidence; the retired hash-pad control fails its
-specific public-coin/quantum review; and `TRANSPARENT_SHAKE256_1024` has a reviewed candidate
-ledger but still lacks complete H4 composition. Its exact `BLTHC02` grammar, SHAKE commitment,
-coin-binding transcript identity, strict Rust parser, and Python/Rust KAT are now implemented as
-reference evidence; they do not close the missing H4 composition, simulator, or leakage ledger.
-All five descriptors fail closed. No candidate is admitted, selected, bound to H4, or assigned
-`proofSuiteId`.
+specific public-coin/quantum review; and, at the S3 screening boundary,
+`TRANSPARENT_SHAKE256_1024` was held for missing complete H4 composition. Its exact
+`BLTHC02` grammar, SHAKE commitment, coin-binding transcript identity, strict Rust parser,
+and Python/Rust KAT are implemented as reference evidence. The later qualified context records
+bounded H4/H5/H6 candidate evidence for this clean-room path without selecting a production suite.
+The S3 screening record retains all five descriptors as fail-closed at that boundary; no production
+candidate is admitted or assigned `proofSuiteId`.
 
-The typed envelope v5 now implements the candidate's correct pre-coin ordering and raw-opening
-verification path into the H4 transcript, parent, composition, and receipt. This is focused
-implementation/mutation evidence only. The candidate remains rejected for
-`complete_composition_missing` until a resource-qualified complete typed proof traverses that path;
-the screening flag is not changed from partial code-path evidence.
+The typed envelope v5 implements the candidate's correct pre-coin ordering and raw-opening
+verification path into the H4 transcript, parent, composition, and receipt. This specific envelope
+route remains focused implementation/mutation evidence and retains its screening flag
+`complete_composition_missing`; the later qualified H4/H5/H6 context is separate
+nonactivating evidence and does not turn this route into a production suite.
 
 Focused command and raw result:
 
@@ -302,8 +303,9 @@ receipt bind the full transition, commitment, verifier, attempt, receipt, ordere
 projection, compact AIR, package, and component identities. The separate hash-pad security review
 still rejects the candidate at the pre-qualification screening boundary because its full 256-bit
 quantum binding/composition theorem and commit-before-coin lifecycle are not closed; the later
-qualified context admits the H4 candidate nonactivating, while full custom-H4 GKR/PCS composition
-and H6 remain open.
+qualified context admits the H4 candidate nonactivating. The exact H5 campaign and
+bounded H6 candidate-evidence manifest are now recorded as closed nonactivating evidence; the
+production verifier, durable state/custody, and suite selection remain open.
 
 ### 2E-5 - close migration and failure semantics
 
@@ -369,20 +371,20 @@ The terminal Gate 2E ledger is now implemented in
 `experiments/bl_pq512_crypto_foundation/gate_2e_terminal_ledger.py`. Its builder independently
 replays the S4 composition and S5 checkpoints, verifies both C0 profile shapes and all seven C0
 negative classes, checks the fixed 12-field boundary and public/private encoding boundary, and
-recomputes the S6/S7 identities. It emits 11 ordered records. The pre-campaign record remains
+recomputes the S6/S7 identities. It emits 11 ordered records. The historical pre-campaign record remains
 preserved as `UNSEALED_BLOCKED_GATE_2E_TERMINAL_LEDGER` with
 `ledger_digest_sha3_512=11f028eac01f5a880769f0cae7871b9449064793eebfe46cf8f69603f8646091007575b62c0ecdf5114ae53e1c220a4fe057f77a6c3b156f3a221de978b50644`.
 The latest qualified context is `SEALED_GATE_2E_TERMINAL_LEDGER` with no blockers,
 `h4_parent_bound=true`, `complete_proof_verified=true`, `proof_suite_id=None`, and
 `activation_allowed=false`. A real nonactivating state plane is independently replayable and is
 bound in that qualified context. The selected candidate/admission identity remains nonactivating
-until H6 closes its strict-PQ, parser, supply-chain, privacy, migration, and Wave 3 obligations.
+while production verifier/state/custody and release identity remain open.
 The terminal ledger closes its simulator records from the active Construction 8.2 hiding KAT,
 state GKR/square-free relation, authenticated public-coin bridge, and native independent verifier;
 the rejected Circle simulator is not an evidence source. The active PCS KAT verifies exact
-production query rank, conditioned state-GKR mechanics, and fresh abort/retry randomness, but the
-complete H6 composition/theorem remains open. The ledger is sealed nonactivating evidence; it does
-not assign `proofSuiteId`, activate production, or waive H6.
+production query rank, conditioned state-GKR mechanics, and fresh abort/retry randomness. The exact
+H5 campaign and bounded H6 candidate-evidence manifest are the current qualification records. The
+ledger is sealed nonactivating evidence; it does not assign `proofSuiteId` or activate production.
 
 ### 2E-7 - seal the selection handoff
 
@@ -392,8 +394,9 @@ results; component and complete measurements; rejected candidates; updated sourc
 commit/tree/clean status/protected-path readback; and the exact H5 command, monitor, environment,
 input generator, and STOP conditions.
 
-2E closes only when the selected state plane is present in the H4 parent, transcript, proof,
-independent verifier, and atomic receipt. The current versioned `BLHBSN02`/`BLHBB102` root-bus seam
+The production/activating 2E boundary closes only when the selected state plane is present in the
+H4 parent, transcript, proof, independent verifier, and atomic receipt. The current versioned
+`BLHBSN02`/`BLHBB102` root-bus seam
 and the v3 compact state-AIR/FRI component are prerequisite/native-consumption evidence for that
 boundary, not its closure. The compact relation now algebraically links ordered operation rows to
 both fixed-capacity snapshots through the v2 46-wide lookup grammar, and the H4 seam carries
@@ -403,7 +406,9 @@ composes the ordered-map/payment authorities and verifies root/cursor, slot-orde
 asset-registry, and replay/payment hash-port mutations for the K128 C0 witness. The native
 coordinator consumes the version-4 state-binding AIR program/execution, verifies the
 authority/root bindings, and maps
-its 46,210 calls to the canonical H4 bus; the base replay/payment bus remains 46,208 calls. The
+its 46,210 calls to the canonical H4 bus; the base replay/payment bus remains 46,208 calls. This
+is component evidence inside the sealed nonactivating candidate context, not production state
+selection. The
 current typed component is `BL-PQ512-C0-TYPED-STATE-AIR-v5` with 56 tables and 79 lookups; its
 source bundle remains packed into 8-lane rows, operation/log preimages use 64-lane vector lookup
 messages with fixed live bits, and root messages use the canonical authority root columns
@@ -420,8 +425,8 @@ source change: an earlier K128 record measured `36.077706` seconds, while the la
 run measured `complete_process_wall_seconds=33.077384` with zero pagefile growth and zero
 post-launch driver events, within the owner-approved strict 35-second single-run limit. K512
 verified four sequential shards with `complete_process_wall_seconds=153.860446` against its
-180-second limit. Both profiles report `complete_proof_qualification=false`; repeated p95 evidence
-and the remaining Gate 2E controls are still required.
+180-second limit. These are H4 feasibility records; the separate exact H5 campaign and bounded H6
+candidate-evidence manifest are the current qualification records.
 
 ## H5: repeated complete-proof qualification campaign
 
@@ -591,7 +596,7 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 | --- | --- | --- |
 | P01 | Freeze canonical SHA3-512 leaf/node/empty/type/position encodings. | Candidate v1 implemented nonactivating in `wave3_nullifier_authority.py`; production freeze/review remains open. |
 | P02 | Derive legacy and wide state independently from identical raw records. | Candidate v1 implemented and tested from A12 raw bytes; production integration remains open. |
-| P03 | Prove authoritative 512-bit nullifier roots and transitions. | Candidate depth-64 predecessor/insertion transition implemented and independently replayed; Gate 2E/H6 and production custody remain open. |
+| P03 | Prove authoritative 512-bit nullifier roots and transitions. | Candidate depth-64 predecessor/insertion transition implemented and independently replayed; the current H6 evidence is nonactivating, while production state/custody remains open. |
 | P04 | Implement governed wide-root registry, epochs, identifiers, and PQ authority. | Open. |
 | P05 | Implement wide master/value commitments and fresh 512-bit salts. | Open; durable state and hiding remain. |
 | P06 | Freeze one fixed-length canonical sidecar encoder/parser. | Open; selected suite/state identity remains. |

@@ -231,8 +231,9 @@ approval/denial/cover mix, insertion/update mix, and repeated keys cannot change
 proof size. At K128 the three map lanes have exact fixed maxima of 34,026 node hashes, 2,048
 leaf-hash slots, six state headers, 36,080 SHA3-512 calls, and 74,208 Keccak permutations. Durable
 rollover/migration remains current Wave 3 state work. Full Wave 1 global/Rust composition is sealed
-by Section 0; activation is still forbidden because neither a complete Wave 2 K128 application proof
-nor authoritative durable state exists.
+by Section 0; activation is still forbidden because an authoritative durable state, production
+verifier, and production suite identity do not yet exist. The later nonactivating H4/H5/H6 candidate
+evidence does not change that boundary.
 The Python executable specification now materializes these padded table families and proves exact
 SHA3 composition on a bounded fixture; the Rust backend streams all 1,780,992 K128 economic Keccak
 round rows without retaining the full Python object graph.

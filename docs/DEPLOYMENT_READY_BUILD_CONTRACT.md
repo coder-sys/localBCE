@@ -1,6 +1,6 @@
 # Blind Ledger deployment-ready build contract
 
-Updated: 2026-07-31
+Updated: 2026-08-05
 
 The frontier additions in `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` are internal work
 inside the existing 93 packages. They do not create a new external dependency, change the count, or
@@ -23,13 +23,12 @@ inefficient; inefficiency is recorded as candidate evidence, not used to skip th
 Status: authoritative boundary between internal engineering completion, independent security
 assurance, and operator activation.
 
-Current proof checkpoint: H4's manifest-bound K128/K512 prototype passes one fresh attempt per
-profile through independent verification in 29.974129/120.460733 seconds, within the immutable
-5,000,000,000-byte host, below-5,000,000,000-byte scratch, and no-swap gates. This is not internal
-engineering completion or `BUILT_AUDIT_PENDING`. Gate 2E state selection and atomic composition must
-precede H5's one-warm-up-plus-ten p95 campaign; H6 suite qualification and the remaining 87 packages
-also remain open. `proofSuiteId=null`, `production_usable=false`, and the ban on real PHI/payments
-remain authoritative.
+Current proof checkpoint: the H4 prototype passes one fresh K128/K512 attempt through independent
+verification in 29.974129/120.460733 seconds. Gate 2E is sealed nonactivating, H5 passed the exact
+22-launch p95/resource campaign, and H6 closed the twelve bounded candidate-evidence obligations.
+This is still not `BUILT_AUDIT_PENDING`: the production verifier/state/custody, adapters, rollup,
+release evidence, and final audit remain open. `proofSuiteId=null`, `production_usable=false`, and
+the ban on real PHI/payments remain authoritative.
 
 ## Product objective
 
@@ -158,7 +157,7 @@ supplying authorized activation configuration.
 
 | State | Meaning | Activation |
 | --- | --- | --- |
-| `UNSELECTED` | No suite has satisfied S07-S09; `proofSuiteId` is null. This is the current state. | Forbidden |
+| `UNSELECTED` | No production suite has satisfied the full S07-S09 and release-selection boundary; `proofSuiteId` is null. This remains the current state even though nonactivating H4/H5/H6 candidate evidence exists. | Forbidden |
 | `BUILT_AUDIT_PENDING` | Engineering selected, implemented, pinned, and internally qualified the exact suite. | Release-candidate testing only; `production_usable=false` |
 | `AUDIT_ACCEPTED` | The independent audit accepted the exact suite and release identities. | Eligible for authorized operator activation |
 

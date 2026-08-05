@@ -2,14 +2,15 @@
 
 Original qualification decision: 2026-07-12
 
-Updated: 2026-08-02
+Updated: 2026-08-05
 
 Status: the removed RISC Zero qualification remains dated historical evidence only. Its active
 selection and source tree are superseded by `docs/CURRENT_TECH_STACK.md` and the rejection record
 in `docs/REJECTED_ARCHITECTURES.md`. The custom strict-PQ
 path now produces manifest-bound K128 and four-shard K512 H4 prototypes through independent
-verification in 29.974129/120.460733 seconds. Gate 2E state selection, the H5 repeated p95/resource
-campaign, H6 suite qualification, and final suite selection remain open.
+verification in 29.974129/120.460733 seconds. Gate 2E is sealed nonactivating, H5 passed the exact
+22-launch p95/resource campaign, and H6 closed the twelve bounded candidate-evidence records.
+Production suite selection and activation remain open.
 
 `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` separates internal implementation from the final audit.
 No external party is required to choose or build the backend. The exact internally qualified suite
@@ -42,15 +43,16 @@ that compact result is historical pre-H4 grammar evidence rather than a complete
 The active Construction 8.2 H4 path now completes K128/K512 through independent verification with
 288.412/296.255 MB internal host peaks, 969.999360 MB per-proof tracked device state, and
 0.000000 MB scratch. The 9.03 TB monolithic, 950.76 GB streamed, and 554.26 GB de-duplicated
-direct-SHA3-STARK layouts remain retired. These one-run results do not select the suite: 2E state
-selection, the complete simulator/composition ledger, H5/H6, and the final identities remain open.
-No backend is selected merely because a toy, kernel, component, or single successful proof is fast
-or small.
+direct-SHA3-STARK layouts remain retired. These one-run results are the H4 baseline; the separate
+H5 campaign and bounded H6 candidate-evidence manifest qualify the nonactivating candidate but do
+not select a production suite. No backend is selected merely because a toy, kernel, component, or
+single successful proof is fast or small.
 
 The current H4 state-composed bridge is a fixed-shape nineteen-claim integration seam with exact
 6,727/6,995 K128/K512 schedules. It covers operation/snapshot equality, Boolean presence,
-empty-slot zeroing, and linear square-free uniqueness. Conditioned simulator mechanics are closed;
-complete proof artifact leakage, backend admission, H5, and H6 remain open and nonactivating.
+empty-slot zeroing, and linear square-free uniqueness. The conditioned simulator, exact H5 campaign,
+and bounded H6 candidate-evidence records are closed without activation; production backend
+admission, verifier/state/custody, and final suite identity remain open.
 
 R24's exact pre-implementation continuation is
 `docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md`. It permanently rejects the current
@@ -103,7 +105,7 @@ Backend roles are now:
 | Backend | Role |
 | --- | --- |
 | S-two/Circle-STARK | Primary algebra/performance base for the custom sibling implementation. Upstream QM31, hash, Fiat-Shamir, grinding, and non-hiding defaults are not BL-PQ512 parameters. |
-| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path. H4 passes the real bridge, native masks, Construction 8.2 PCS, atomic verifier, one-run resource gates, and complete K128/K512 prototypes. The state/composition ledger, repeated H5 campaign, H6 suite qualification, and activation remain open. |
+| Shared-bus Boolean GKR over Fp16 | Primary SHA3 coprocessor implementation path. H4 passes the real bridge, native masks, Construction 8.2 PCS, atomic verifier, one-run resource gates, and complete K128/K512 prototypes. H5 and bounded H6 candidate evidence pass; production suite identity and activation remain open. |
 | Shout-like/Twist-like memory checking | Nonactivating read-only/read-write state bake-off against the optimized endpoint-multiproof/sorted-memory control; it must preserve the SHA3-512 root bridge and exact Blind Ledger transcript/security profile. |
 | Persistent memory / IRONDICT-derived dictionary / projection RAM / Two-Shuffles relation | Mandatory Wave 2 committed sparse-state bake-off behind one state interface. Published pairing, KZG, VOLE, structured-setup, random-oracle, or two-party backends are not adopted. |
 | Jindo / Grand Danois / Hachi / RoKoko-style commitments | Isolated native-hiding PQ commitment experiments for the state bake-off. Each remains unselected pending exact assumptions, parameters, field mapping, public-coin composition, grammar, independent verifier, and laptop evidence. |
@@ -116,8 +118,8 @@ Backend roles are now:
 No currently available backend is a production-ready drop-in satisfying the complete claim,
 audited witness hiding, authenticated interactive public coin, exact settlement compatibility, and
 the selected strict quantum target. The application relation and H4 K128/K512 prototypes exist;
-qualified repeated proof/resource evidence, authoritative state, production settlement verifier,
-and final suite identity remain open.
+qualified H5/H6 candidate evidence exists, while authoritative state, production settlement
+verifier, and final suite identity remain open.
 
 ## Historical 2026-07-12 qualification decision
 

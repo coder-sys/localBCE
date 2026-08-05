@@ -1,11 +1,16 @@
 # BL-PQ512 throughput and proof-size recovery plan
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 Status: current-only performance contract. Historical experiments, profiles, and intermediate
 measurements are preserved verbatim in
 `history/BL_PQ512_THROUGHPUT_RECOVERY_PLAN_THROUGH_2026-08-01.md`. Rejected performance designs are
 non-executable and belong in `REJECTED_ARCHITECTURES.md`.
+
+Current status: Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6
+closed the twelve bounded candidate-evidence obligations. The production suite remains unselected,
+`proofSuiteId=null`, and activation is false. The two-lane native K512 experiment is a separate
+nonqualifying optimization candidate.
 
 ## 1. Objective
 
@@ -234,10 +239,12 @@ replay verifier and requires full C0 positive/negative parity for both profiles.
 C3 quadratic projection counter, and C4 persistent-scan counter are derived risk labels, not
 throughput measurements. The four S0 fresh-process measurements remain recorded in
 `IMPLEMENTATION_ROADMAP.md` and `STATE.md`; pagefile usage deltas remain observed telemetry, not a
-swap conclusion. Gate 2E-3/S3 now has a tested dual-PQ authenticated commitment-screening reference;
-all five descriptors remain rejected: the three lattice families lack pinned reviewed evidence, the
-old hash-pad control fails its public-coin/quantum review, and the new SHAKE256-1024 candidate lacks
-complete H4 composition. Gate 2E-4/S4 now has a tested synthetic composition reference that independently replays
+swap conclusion. Gate 2E-3/S3 has a tested dual-PQ authenticated commitment-screening reference.
+At that screening boundary all five descriptors remain fail-closed: the three lattice families
+lack pinned reviewed evidence, the old hash-pad control fails its public-coin/quantum review, and
+the SHAKE256-1024 candidate was held for missing complete H4 composition. The later qualified
+context records nonactivating H4/H5/H6 candidate evidence without selecting a production suite.
+Gate 2E-4/S4 now has a tested synthetic composition reference that independently replays
 the scalar relation, verifies the screened opening, and binds the transition, deferred H4 identity,
 verifier identity, and receipt; its focused/attack result is 6 passed in 10.11 seconds. This is not
 complete-proof throughput evidence and does not admit a backend. Execute Gate 2E-5/S5 migration and
@@ -251,7 +258,8 @@ reference is now implemented and independently rechecked: it has 11 ordered obli
 focused/attack result 7 passed in 29.70 seconds, containing S1-S7 plus ledger result 73 passed in
 91.58 seconds. The latest qualified context supersedes that blocked record with
 `SEALED_GATE_2E_TERMINAL_LEDGER`, no blockers, `h4_parent_bound=true`, and
-`complete_proof_verified=true`; `proofSuiteId` remains null and activation remains false. The
+`complete_proof_verified=true`; H5 and the bounded H6 candidate-evidence manifest are also
+qualified without activation. `proofSuiteId` remains null and activation remains false. The
 tracked `ops/` authority is verified and the former sibling-layout blocker is closed.
 The v5 typed C0 AIR remains the executable semantic/differential oracle and native H4 readback
 seam, but its generic main/interaction/composition oracle lifetime is rejected as the complete
@@ -324,16 +332,12 @@ for that identity. The immutable 5,000,000,000-byte RSS/scratch and zero-swap ga
 
 `experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py` is a non-launching
 qualification ledger. It independently replays the sealed Gate 2E context and qualified H5
-campaign, validates the still-unselected suite registry, and records all twelve H6 obligations.
-The current record is `BLOCKED_H6_PREFLIGHT` with exactly one closed obligation,
-`H5_RESOURCE_EVIDENCE`; the other eleven remain open, blocked, or reference-only. Its blockers
-are `h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
-`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
-`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
-`side_channel_unlinkability_open`, `production_migration_theorem_open`,
-`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
-`wave3_verifier_state_custody_open`. No proof, witness, retry, state admission, `proofSuiteId`, or
-activation path is accepted by this boundary.
+campaign, validates the still-unselected production-suite registry, and records all twelve H6
+obligations. The current record is `QUALIFIED_H6_NONACTIVATING`: all twelve records are closed,
+the aggregate blocker tuple is empty, and the manifest/source identities are recorded in
+`STATE.md` and `IMPLEMENTATION_ROADMAP.md`. The older
+`BLOCKED_H6_PREFLIGHT` record and its blockers remain preserved as historical zero-credit
+evidence. The preflight never launches a prover, assigns `proofSuiteId`, or enables activation.
 
 Focused H6 preflight/attack verification passed `6 passed in 30.02s`; the containing S1-S7,
 terminal-ledger, H5-preflight, and H6-preflight set passed `85 passed in 151.88s`. These are

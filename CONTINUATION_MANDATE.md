@@ -1,6 +1,6 @@
 # Blind Ledger continuation mandate and product ideology
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 Status: mandatory agent-recovery and execution instruction. Read `AGENTS.md`, this file, the newest
 section of `STATE.md`, `docs/CURRENT_TECH_STACK.md`, and the deterministic continuation contract
@@ -222,12 +222,13 @@ it does not make the roadmap depend on outside help.
 
 ## 8. Current standing reminder
 
-Current recorded position: progress is 6 of 93 packages complete, Wave 1 is sealed and
-nonactivating, H4's manifest-bound one-run K128/K512 prototypes pass, Wave 2 remains active,
-`proofSuiteId` is null, and real PHI/payments remain forbidden. Gate 2E is the next dependency: it
-must select and atomically bind the committed state/PQ-commitment plane. H5 then runs the repeated
-complete-proof p95/resource campaign; H6 closes proof-candidate qualification. Re-read `STATE.md`
-and `docs/CURRENT_TECH_STACK.md` for current truth because these boundaries may advance while this
+Current recorded position: progress is 6 of 93 packages complete. Wave 1 is sealed and
+nonactivating; Gate 2E is sealed as a nonactivating candidate context; the exact H5 campaign
+passed; and the bounded H6 candidate-evidence manifest closed all twelve records. Wave 2 remains
+active because the production verifier, durable state/custody, release identities, downstream
+rollup/operations, and final audit are unfinished. `proofSuiteId` is null, activation is false,
+and real PHI/payments remain forbidden. Re-read `STATE.md` and
+`docs/CURRENT_TECH_STACK.md` for current truth because these boundaries may advance while this
 ideology and persistence mandate remain in force.
 
 ### Owner-authorized Brave-open H5 exception (2026-08-04, clarified 2026-08-04)

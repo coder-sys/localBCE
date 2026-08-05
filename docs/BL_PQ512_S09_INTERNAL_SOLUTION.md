@@ -4,9 +4,10 @@ Updated: 2026-07-22
 
 Status: **historical construction-lineage record. H4 supersedes this document's R35 kernel and
 BaseFold/Circle-FRI implementation status with the current 168-layer native-masked GKR plus
-Construction 8.2 prototype in `docs/CURRENT_TECH_STACK.md`. S09 remains open for complete
-composition/simulator and security-ledger closure, durable public-coin/PQ custody, final module
-identity, H5, and H6 before `proofSuiteId` can be assigned.**
+Construction 8.2 prototype in `docs/CURRENT_TECH_STACK.md`. At this record's checkpoint, S09,
+H5, and H6 were still open. Later current records close the bounded H4/H5/H6 candidate evidence
+without assigning `proofSuiteId`; production verifier/state/custody and final module identity remain
+open.**
 
 Machine-readable safety state:
 

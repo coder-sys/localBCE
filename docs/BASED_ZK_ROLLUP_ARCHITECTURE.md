@@ -2,7 +2,7 @@
 
 Status: architectural source of truth for the target system.
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 Current inner-proof execution checkpoint: the newest dated section of `../STATE.md`; the original
 transfer record is `../WAVE2_HANDOFF_2026-07-26.md`. The GPU accelerates only untrusted field
@@ -10,9 +10,9 @@ arithmetic inside the selected claim-proof topology. The manifest-bound H4 proto
 real native-masked GKR, Construction 8.2 PCS, atomic one/four-shard coordinator, parsing, and
 independent verification in 29.974129 seconds for K128 and 120.460733 seconds for K512. This does
 not change the rollup architecture, settlement trust boundary, ordered 12-field public ABI, package
-count, or activation status. Gate 2E is now sealed nonactivating and the exact H5 campaign passes
-its strict p95/resource gates; H6 and the production L2/L1 verifier path remain open,
-`proofSuiteId` remains null, and activation remains forbidden.
+count, or activation status. Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign,
+and H6 closed the twelve bounded candidate-evidence records. The production L2/L1 verifier path,
+durable state/custody, `proofSuiteId`, and activation remain open/disabled.
 
 Planning boundary: `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` makes R01-R12 counted internal
 engineering packages. The rollup, bridge, finality, deployment automation, and sandbox end-to-end

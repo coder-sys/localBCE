@@ -9,6 +9,23 @@ policy/rules engine, sealed M31 semantic relation, Rust-authoritative Fp16/GKR/P
 untrusted CUDA acceleration, and a protected Solidity settlement shell. Cairo is a historical
 differential reference, not the selected proof backend.
 
+## Plain-English current status
+
+As of 2026-08-05, the Wave 2 candidate evidence is complete without being activated:
+
+- Gate 2E has a sealed, nonactivating state-bound proof context.
+- H5 passed the exact 22-launch campaign: K128 p95 was 32.360845 seconds and K512 p95 was
+  148.861885 seconds, with the required verification and resource checks passing.
+- H6 closed all twelve candidate-evidence obligations, including the strict-PQ ledger, parser/KAT,
+  attack, supply-chain, reproducibility, privacy, migration, and Wave 3-boundary records.
+- Production is still disabled: `proofSuiteId=null`, activation is false, the production verifier,
+  durable state/custody, rollup, and final audit are still unfinished, and real PHI/payments remain
+  forbidden.
+
+The native unqualified K512 experiment now defaults to two independent shard lanes. Two fresh
+default-mode checks verified all shards but failed the unchanged external no-pagefile-growth
+gate, so that optimization receives no H5/H6 or production credit.
+
 The complete product roadmap is internally finishable: **6 of 93 engineering packages are complete
 and 87 are open**. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
 executable relation. Current Wave 2, historically called Wave 1B, is the strict-PQ proof and

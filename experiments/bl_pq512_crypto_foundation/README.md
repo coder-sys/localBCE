@@ -4,6 +4,11 @@ Current Wave 2 role: these are scalar/differential inputs to the shared-bus Bool
 coprocessor contract in `../../docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`; they are not a
 monolithic direct-SHA3-STARK release design.
 
+Current evidence: Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6
+closed the twelve bounded candidate-evidence records. These Python modules remain references and
+qualification-ledger machinery; none assigns `proofSuiteId`, enables activation, or authorizes
+real data.
+
 These modules make the current S09 algebra, theorem-interface parameter work, Circle-FRI substrate,
 public-coin construction, PQ authentication, retry governance, hiding worksheet, and proof framing
 testable without pretending that a proof suite exists.
@@ -43,7 +48,7 @@ testable without pretending that a proof suite exists.
   `618c06447efc67bca80ca9bb4c59a89970e7c42a26ea6a45a298c8dc8e1e8b2643f3c51a923d1b89ebb6a2311dc22edfffeea70471a9f97c5378b8a43fb607c2`.
   New governed files plus alias, attribute, `hashlib.new`, dynamic-import, and dynamic-`getattr` forms
   fail closed. The old `51*K` rerun remains superseded audit evidence only; current K128 bus mapping
-  and resource evidence remain open.
+and current H5/H6 evidence are recorded in the current Wave 2 documents.
 - `application_sha3_shared_schedule.py` proves the fixed dense-tree topology for claim/oracle trees
   across K128/K256/K512. The claim tree hashes every node once; the oracle lane hashes one exact
   2,133-byte bundle per claim and one ordered execution root while its audit tree reuses the leaf
@@ -78,17 +83,17 @@ testable without pretending that a proof suite exists.
   closed because reviewed native-hiding, strict-PQ theorem, or complete-proof evidence is missing;
   the reference envelope is not a PCS, proof suite, H4 binding, or activation path.
 - `atomic_state_composition.py`, `state_migration_recovery.py`, and `gate_2e_selection.py` provide
-  the S4-S7 synthetic composition, migration/recovery, measurement, rejection, and unsealed
+  the S4-S7 synthetic composition, migration/recovery, measurement, rejection, and pre-manifest
   handoff references. `gate_2e_terminal_ledger.py` independently replays those boundaries and
-  preserves the unresolved simulator, leakage, strict-PQ, and H4-binding blockers; tracked
-  `ops/` authority is verified.
-- `h5_qualification_preflight.py` freezes one uncounted warm-up plus ten unique measured launches
-  for each K128/K512 profile (22 fresh launches total) without starting CUDA. It remains blocked
-  while Gate 2E is unsealed. The tracked ops authority and reference-hardware disk floor now pass;
-  no campaign has started.
-- `h6_qualification_preflight.py` replays the blocked H5/2E context, validates the unselected
-  candidate registry, and records all twelve H6 obligations with explicit evidence classes and
-  blockers. It cannot close an obligation, assign `proofSuiteId`, or enable activation.
+  preserves the historical pre-manifest blockers; the later qualified context is nonactivating and
+  tracked `ops/` authority is verified.
+- `h5_qualification_preflight.py` freezes and replays one uncounted warm-up plus ten unique
+  measured launches for each K128/K512 profile (22 fresh launches total) without starting CUDA.
+  The exact campaign is qualified; failed earlier pagefile-growth attempts remain preserved with
+  zero credit.
+- `h6_qualification_preflight.py` replays the qualified H5/2E context, validates the unselected
+  production-suite registry, and records all twelve H6 obligations. The current candidate record
+  is `QUALIFIED_H6_NONACTIVATING`; it cannot assign `proofSuiteId` or enable activation.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the
