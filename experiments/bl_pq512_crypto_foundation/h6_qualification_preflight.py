@@ -23,6 +23,11 @@ from experiments.bl_pq512_crypto_foundation.gate_2e_terminal_ledger import (
     TerminalLedger,
     TerminalLedgerContext,
 )
+from experiments.bl_pq512_crypto_foundation.h6_evidence_manifest import (
+    H6EvidenceManifestError,
+    H6EvidenceManifestFacts,
+    verify_h6_evidence_manifest,
+)
 from experiments.bl_pq512_crypto_foundation.h5_qualification_preflight import (
     CAMPAIGN_QUALIFIED,
     CAMPAIGN_NOT_STARTED,
@@ -366,6 +371,7 @@ class H6PreflightContext:
     h5_preflight: H5Preflight
     h5_context: H5PreflightContext
     suite_registry_path: Path = DEFAULT_SUITE_REGISTRY_PATH
+    evidence_manifest_path: Path | None = None
 
     def __post_init__(self) -> None:
         _synthetic()
@@ -375,6 +381,10 @@ class H6PreflightContext:
             raise H6PreflightError("h6_preflight_h5_context_type_invalid")
         if not isinstance(self.suite_registry_path, Path):
             raise H6PreflightError("h6_preflight_suite_registry_path_required")
+        if self.evidence_manifest_path is not None and not isinstance(
+            self.evidence_manifest_path, Path
+        ):
+            raise H6PreflightError("h6_preflight_evidence_manifest_path_required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +411,8 @@ class H6Preflight:
     status: str = PREFLIGHT_BLOCKED
     proof_suite_id: None = None
     activation_allowed: bool = False
+    evidence_manifest_digest_512: bytes | None = None
+    evidence_manifest_source_digest_512: bytes | None = None
     preflight_digest_512: bytes = b""
 
     def __post_init__(self) -> None:
@@ -459,6 +471,14 @@ class H6Preflight:
             raise H6PreflightError("h6_preflight_source_flags_boolean_required")
         if self.proof_suite_id is not None or self.activation_allowed is not False:
             raise H6PreflightError("h6_preflight_activation_boundary_invalid")
+        if self.evidence_manifest_digest_512 is not None:
+            _digest(self.evidence_manifest_digest_512, "evidence_manifest")
+        if self.evidence_manifest_source_digest_512 is not None:
+            _digest(self.evidence_manifest_source_digest_512, "evidence_manifest_source")
+        if (self.evidence_manifest_digest_512 is None) != (
+            self.evidence_manifest_source_digest_512 is None
+        ):
+            raise H6PreflightError("h6_preflight_evidence_manifest_pair_invalid")
         if self.status == PREFLIGHT_QUALIFIED:
             if self.blockers:
                 raise H6PreflightError("h6_preflight_qualified_blockers_present")
@@ -487,6 +507,12 @@ class H6Preflight:
             _text(self.h5_external_monitor_status, "h5_monitor_status"),
             b"".join(record.canonical_bytes for record in self.records),
             _encode_strings(self.blockers, "blocker"),
+            b""
+            if self.evidence_manifest_digest_512 is None
+            else self.evidence_manifest_digest_512,
+            b""
+            if self.evidence_manifest_source_digest_512 is None
+            else self.evidence_manifest_source_digest_512,
             bytes(
                 (
                     int(self.source_git_clean),
@@ -527,6 +553,16 @@ class H6Preflight:
             "blockers": self.blockers,
             "proofSuiteId": self.proof_suite_id,
             "activation_allowed": self.activation_allowed,
+            "evidence_manifest_digest_sha3_512_hex": (
+                None
+                if self.evidence_manifest_digest_512 is None
+                else self.evidence_manifest_digest_512.hex()
+            ),
+            "evidence_manifest_source_digest_sha3_512_hex": (
+                None
+                if self.evidence_manifest_source_digest_512 is None
+                else self.evidence_manifest_source_digest_512.hex()
+            ),
             "preflight_digest_sha3_512_hex": self.preflight_digest_512.hex(),
         }
 
@@ -595,6 +631,12 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
     ):
         raise H6PreflightError("h6_preflight_h5_activation_boundary_invalid")
     suite = _read_suite_registry(context.suite_registry_path)
+    manifest: H6EvidenceManifestFacts | None = None
+    if context.evidence_manifest_path is not None:
+        try:
+            manifest = verify_h6_evidence_manifest(context.evidence_manifest_path)
+        except (H6EvidenceManifestError, OSError, ValueError) as exc:
+            raise H6PreflightError("h6_preflight_evidence_manifest_failed") from exc
     ledger = context.h5_context.terminal_ledger
     gate_2e_qualified = (
         ledger.sealed is True
@@ -637,8 +679,51 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         for blocker in record.blockers:
             _append_unique(blockers, blocker)
 
+    def make_record(
+        *,
+        obligation_id: str,
+        status: str,
+        evidence_class: str,
+        source_id: str,
+        h5_digest: bytes,
+        suite_digest: bytes,
+        evidence_parts: tuple[bytes, ...],
+        blockers: tuple[str, ...],
+    ) -> H6EvidenceRecord:
+        manifest_eligible = gate_2e_qualified or obligation_id in {
+            "ATTACK_CORPUS",
+            "SOURCE_TOOLCHAIN_SBOM",
+            "REPRODUCIBLE_BUILDS",
+            "COMPLETE_EVIDENCE_MANIFEST",
+            "WAVE3_NONACTIVATING_BOUNDARY",
+        }
+        if obligation_id == "H5_RESOURCE_EVIDENCE" and not h5_campaign_qualified:
+            manifest_eligible = False
+        if manifest is not None and manifest_eligible and manifest.is_closed(obligation_id):
+            status = CLOSED
+            evidence_class = (
+                DERIVED if evidence_class in {DERIVED, INFERRED} else OBSERVED
+            )
+            blockers = ()
+            evidence_parts = (
+                *evidence_parts,
+                manifest.manifest_digest_512,
+                manifest.source_digest_512,
+                manifest.check_identity(obligation_id),
+            )
+        return _record(
+            obligation_id=obligation_id,
+            status=status,
+            evidence_class=evidence_class,
+            source_id=source_id,
+            h5_digest=h5_digest,
+            suite_digest=suite_digest,
+            evidence_parts=evidence_parts,
+            blockers=blockers,
+        )
+
     add(
-        _record(
+        make_record(
             obligation_id="STRICT_PQ_SECURITY_LEDGER",
             status=(OPEN if gate_2e_qualified else BLOCKED),
             evidence_class=(DERIVED if gate_2e_qualified else UNKNOWN),
@@ -653,7 +738,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="COMPLETE_SIMULATOR",
             status=REFERENCE_ONLY,
             evidence_class=DERIVED,
@@ -668,7 +753,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="PROOF_RECEIPT_GRAMMAR",
             status=OPEN,
             evidence_class=DERIVED,
@@ -683,7 +768,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="ATTACK_CORPUS",
             status=REFERENCE_ONLY,
             evidence_class=OBSERVED,
@@ -695,7 +780,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="CROSS_LANGUAGE_VERIFIER_KATS",
             status=OPEN,
             evidence_class=UNKNOWN,
@@ -710,7 +795,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="SOURCE_TOOLCHAIN_SBOM",
             status=OPEN,
             evidence_class=UNKNOWN,
@@ -722,7 +807,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="REPRODUCIBLE_BUILDS",
             status=OPEN,
             evidence_class=UNKNOWN,
@@ -734,7 +819,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="H5_RESOURCE_EVIDENCE",
             status=(CLOSED if h5_campaign_qualified else BLOCKED),
             evidence_class=(OBSERVED if h5_campaign_qualified else UNKNOWN),
@@ -750,7 +835,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="SIDE_CHANNEL_UNLINKABILITY",
             status=BLOCKED,
             evidence_class=UNKNOWN,
@@ -765,7 +850,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="ROLLBACK_RECOVERY",
             status=REFERENCE_ONLY,
             evidence_class=DERIVED,
@@ -780,7 +865,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="COMPLETE_EVIDENCE_MANIFEST",
             status=BLOCKED,
             evidence_class=UNKNOWN,
@@ -792,7 +877,7 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         )
     )
     add(
-        _record(
+        make_record(
             obligation_id="WAVE3_NONACTIVATING_BOUNDARY",
             status=OPEN,
             evidence_class=UNKNOWN,
@@ -836,6 +921,12 @@ def build_h6_preflight(context: H6PreflightContext) -> H6Preflight:
         suite_registry_proof_suite_id=suite.proof_suite_id,
         suite_registry_activation_allowed=suite.activation_allowed,
         status=final_status,
+        evidence_manifest_digest_512=(
+            None if manifest is None else manifest.manifest_digest_512
+        ),
+        evidence_manifest_source_digest_512=(
+            None if manifest is None else manifest.source_digest_512
+        ),
     )
 
 
@@ -861,6 +952,7 @@ __all__: tuple[str, ...] = (
     "EVIDENCE_CLASSES",
     "EVIDENCE_STATUSES",
     "H6EvidenceRecord",
+    "H6EvidenceManifestFacts",
     "H6Preflight",
     "H6PreflightContext",
     "H6PreflightError",

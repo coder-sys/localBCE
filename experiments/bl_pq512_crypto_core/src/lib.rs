@@ -65,6 +65,8 @@ pub mod gkr_sumcheck;
 #[cfg(feature = "parallel")]
 pub mod gkr_worker;
 pub mod gkr_zk_mask;
+pub mod h6_proof_body_format;
+pub mod h6_receipt_format;
 pub mod hash_bus;
 #[cfg(feature = "std")]
 pub mod hash_bus_b16_boundary;
