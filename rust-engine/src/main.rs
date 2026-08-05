@@ -184,6 +184,17 @@ struct AppConfig {
     stark_nullifier_state_path: Option<String>,
     stark_artifacts_directory: Option<String>,
     stark_chain_id: Option<u64>,
+    stark_attestor_mode: Option<String>,
+    stark_attestor_signer_program: Option<String>,
+    stark_attestor_signer_args: Option<Vec<String>>,
+    stark_attestor_allowed_key_ids: Option<Vec<String>>,
+    stark_attestor_address: Option<String>,
+    stark_attestor_signer_timeout_seconds: Option<u64>,
+    stark_policy_manifest_hash: Option<String>,
+    stark_finality_mode: Option<String>,
+    stark_finality_timeout_seconds: Option<u64>,
+    stark_finality_poll_seconds: Option<u64>,
+    stark_allow_test_mined_finality: Option<bool>,
     rules_backend: Option<String>,
     rules_file: Option<String>,
     rules_sha256: Option<String>,
@@ -1113,9 +1124,15 @@ fn run_stark_attested_app(
     claim_hash: &str,
     expected_reason: Option<&str>,
 ) -> Result<(), String> {
-    let attestor_private_key = env::var("STARK_ATTESTOR_PRIVATE_KEY").map_err(|_| {
-        "STARK_ATTESTOR_PRIVATE_KEY is required for stark_attested mode".to_string()
-    })?;
+    let attestor_mode = config
+        .stark_attestor_mode
+        .as_deref()
+        .unwrap_or("local_private_key");
+    if !matches!(attestor_mode, "local_private_key" | "external_command") {
+        return Err(format!(
+            "unsupported stark_attestor_mode '{attestor_mode}'; expected local_private_key or external_command"
+        ));
+    }
     let binary = config
         .stark_engine_binary
         .as_deref()
@@ -1160,7 +1177,10 @@ fn run_stark_attested_app(
     })?;
 
     log_proof_event("stark_settlement", "started", &claim.claim_id, claim_hash);
-    let output = Command::new(binary)
+    let submitter_private_key =
+        env::var("STARK_SUBMITTER_PRIVATE_KEY").unwrap_or_else(|_| config.private_key.clone());
+    let mut command = Command::new(binary);
+    command
         .arg(STARK_BRIDGE_INPUT_OUTPUT_PATH)
         .arg(state_path)
         .arg(&artifact_directory)
@@ -1169,8 +1189,94 @@ fn run_stark_attested_app(
         .arg(registry)
         .arg(&config.rpc_url)
         .arg(&config.transaction_value)
-        .env("STARK_ATTESTOR_PRIVATE_KEY", attestor_private_key)
-        .env("STARK_SUBMITTER_PRIVATE_KEY", &config.private_key)
+        .env("STARK_ATTESTOR_MODE", attestor_mode)
+        .env("STARK_SUBMITTER_PRIVATE_KEY", submitter_private_key);
+    if attestor_mode == "local_private_key" {
+        command.env(
+            "STARK_ATTESTOR_PRIVATE_KEY",
+            env::var("STARK_ATTESTOR_PRIVATE_KEY").map_err(|_| {
+                "STARK_ATTESTOR_PRIVATE_KEY is required for local_private_key mode".to_string()
+            })?,
+        );
+    } else {
+        let signer_program = config
+            .stark_attestor_signer_program
+            .as_deref()
+            .ok_or_else(|| "stark_attestor_signer_program is required".to_string())?;
+        let allowed_key_ids = config
+            .stark_attestor_allowed_key_ids
+            .as_ref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "stark_attestor_allowed_key_ids is required".to_string())?;
+        command
+            .env("STARK_ATTESTOR_SIGNER_PROGRAM", signer_program)
+            .env(
+                "STARK_ATTESTOR_SIGNER_ARGS_JSON",
+                serde_json::to_string(
+                    config
+                        .stark_attestor_signer_args
+                        .as_deref()
+                        .unwrap_or_default(),
+                )
+                .map_err(|error| format!("could not serialize signer args: {error}"))?,
+            )
+            .env(
+                "STARK_ATTESTOR_ALLOWED_KEY_IDS_JSON",
+                serde_json::to_string(allowed_key_ids)
+                    .map_err(|error| format!("could not serialize key IDs: {error}"))?,
+            )
+            .env(
+                "STARK_ATTESTOR_ADDRESS",
+                config
+                    .stark_attestor_address
+                    .as_deref()
+                    .ok_or_else(|| "stark_attestor_address is required".to_string())?,
+            )
+            .env(
+                "STARK_POLICY_MANIFEST_HASH",
+                config
+                    .stark_policy_manifest_hash
+                    .as_deref()
+                    .ok_or_else(|| "stark_policy_manifest_hash is required".to_string())?,
+            )
+            .env(
+                "STARK_ATTESTOR_SIGNER_TIMEOUT_SECONDS",
+                config
+                    .stark_attestor_signer_timeout_seconds
+                    .unwrap_or(30)
+                    .to_string(),
+            );
+    }
+    let finality_mode = config.stark_finality_mode.as_deref().unwrap_or_else(|| {
+        if attestor_mode == "external_command" {
+            "finalized"
+        } else {
+            "mined"
+        }
+    });
+    command
+        .env("STARK_FINALITY_MODE", finality_mode)
+        .env(
+            "STARK_FINALITY_TIMEOUT_SECONDS",
+            config
+                .stark_finality_timeout_seconds
+                .unwrap_or(900)
+                .to_string(),
+        )
+        .env(
+            "STARK_FINALITY_POLL_SECONDS",
+            config.stark_finality_poll_seconds.unwrap_or(5).to_string(),
+        );
+    if config.stark_allow_test_mined_finality.unwrap_or(false) {
+        if config.stark_chain_id != Some(31337) || finality_mode != "test_mined" {
+            return Err(
+                "stark_allow_test_mined_finality is restricted to chain 31337 and test_mined mode"
+                    .to_string(),
+            );
+        }
+        command.env("STARK_ALLOW_TEST_MINED_FINALITY", "1");
+    }
+    let output = command
         .output()
         .map_err(|error| format!("could not execute STARK settlement engine: {error}"))?;
     if !output.status.success() {
@@ -1191,7 +1297,14 @@ fn run_stark_attested_app(
     })?;
     let receipt: Value = serde_json::from_str(&receipt_json)
         .map_err(|error| format!("invalid STARK settlement receipt: {error}"))?;
-    validate_stark_runtime_receipt(&receipt, claim, claim_hash, expected_reason)?;
+    validate_stark_runtime_receipt(
+        &receipt,
+        claim,
+        claim_hash,
+        expected_reason,
+        config.stark_allow_test_mined_finality.unwrap_or(false),
+        config.stark_chain_id,
+    )?;
     let tx_hash = receipt["transaction_hash"]
         .as_str()
         .expect("validated transaction_hash")
@@ -1222,12 +1335,19 @@ fn validate_stark_runtime_receipt(
     _claim: &ClaimInput,
     claim_hash: &str,
     expected_reason: Option<&str>,
+    allow_test_mined: bool,
+    configured_chain_id: Option<u64>,
 ) -> Result<(), String> {
     let expected_decision = bool_u8(expected_reason.is_none());
     let expected_failure = expected_reason.map(stark_failure_code).unwrap_or(0);
     let checks = [
         (
-            receipt["schema_version"].as_str() == Some("stark-production-settlement-receipt-v1"),
+            matches!(
+                receipt["schema_version"].as_str(),
+                Some("stark-production-settlement-receipt-v1")
+                    | Some("stark-production-settlement-receipt-v2")
+                    | Some("stark-production-settlement-receipt-v2-test-only")
+            ),
             "unexpected settlement receipt schema",
         ),
         (
@@ -1267,6 +1387,47 @@ fn validate_stark_runtime_receipt(
     for (valid, message) in checks {
         if !valid {
             return Err(message.to_string());
+        }
+    }
+    if receipt["schema_version"].as_str() == Some("stark-production-settlement-receipt-v2") {
+        let governed_checks = [
+            (
+                receipt["finalized_on_chain"].as_bool() == Some(true),
+                "governed STARK settlement is not finalized",
+            ),
+            (
+                receipt["finality_mode"].as_str() == Some("finalized"),
+                "governed STARK settlement has the wrong finality mode",
+            ),
+            (
+                receipt["policy_manifest_hash"]
+                    .as_str()
+                    .is_some_and(|value| value.len() == 66),
+                "governed STARK receipt is missing policy manifest hash",
+            ),
+            (
+                receipt["signer_key_id"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "governed STARK receipt is missing signer key ID",
+            ),
+        ];
+        for (valid, message) in governed_checks {
+            if !valid {
+                return Err(message.to_string());
+            }
+        }
+    }
+    if receipt["schema_version"].as_str()
+        == Some("stark-production-settlement-receipt-v2-test-only")
+    {
+        let test_only_valid = allow_test_mined
+            && configured_chain_id == Some(31337)
+            && receipt["finality_mode"].as_str() == Some("test_mined")
+            && receipt["finalized_on_chain"].as_bool() == Some(false)
+            && receipt["signer_backend"].as_str() == Some("mock_mpc_test_only");
+        if !test_only_valid {
+            return Err("invalid test-only STARK settlement receipt boundary".to_string());
         }
     }
     let tx_hash = receipt["transaction_hash"]
@@ -1792,6 +1953,8 @@ mod tests {
                 &claim,
                 receipt["claim_hash"].as_str().unwrap(),
                 None,
+                false,
+                None,
             ),
             Ok(())
         );
@@ -1819,6 +1982,8 @@ mod tests {
                 &receipt,
                 &claim,
                 receipt["claim_hash"].as_str().unwrap(),
+                None,
+                false,
                 None,
             )
             .unwrap_err()

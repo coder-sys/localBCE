@@ -43,6 +43,11 @@ pub mod production_verifier_handoff;
 pub mod production_stark_attestation;
 
 #[cfg(feature = "production-air-winterfell")]
+pub mod production_attestation_signer;
+
+#[cfg(feature = "production-air-winterfell")]
+pub mod native_verifier_candidate;
+#[cfg(feature = "production-air-winterfell")]
 pub mod production_stark_settlement;
 
 /// Mapping quality from the active Rust claim model into the imported

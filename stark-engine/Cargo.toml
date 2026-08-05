@@ -17,6 +17,7 @@ serde_json = "1"
 sha2 = "0.10"
 sha3 = "0.10"
 secp256k1 = { version = "0.31", features = ["recovery"] }
+wait-timeout = "0.2"
 winterfell = { version = "0.13.1", optional = true }
 
 [[bin]]
@@ -112,4 +113,19 @@ required-features = ["production-air-winterfell"]
 [[bin]]
 name = "execute_production_stark_settlement"
 path = "src/bin/execute_production_stark_settlement.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "reconcile_production_stark_settlement"
+path = "src/bin/reconcile_production_stark_settlement.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "generate_native_verifier_vectors"
+path = "src/bin/generate_native_verifier_vectors.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
+name = "validate_native_verifier_vectors"
+path = "src/bin/validate_native_verifier_vectors.rs"
 required-features = ["production-air-winterfell"]

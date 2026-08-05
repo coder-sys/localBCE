@@ -29,9 +29,9 @@ claim_input.json
 -> real Winterfell proof and local verification
 -> proof artifact and verifier handoff
 -> controlled-attestation envelope
--> StarkAttestationVerifier
--> StarkClaimsRegistry
--> settlement receipt and atomic local state update
+-> governed StarkAttestationVerifierV2 / StarkClaimsRegistryV2 candidate
+-> finalized settlement journal
+-> atomic local state update
 ```
 
 ## STARK Migration Status
@@ -55,6 +55,11 @@ Implemented and tested:
 - approved and denied runtime settlement through `rust-engine`
 - opt-in backend routing while Groth16 remains the default
 - disposable-Anvil end-to-end validation
+- external-command signer validation with request/key/address/low-s checks
+- parallel non-proxy V2 contracts with a 72-hour timelock and emergency pause
+- versioned finality journal and idempotent post-submission reconciliation CLI
+- canonical policy manifest, monitoring definitions, deployment pins, and CI
+- inactive native-verifier mutation vectors and activation gates
 
 The trust boundary is important: Solidity verifies an authorized attestor
 signature over the settlement inputs and proof commitment. It does not execute
@@ -66,6 +71,7 @@ off-chain. See `STARK_RUNTIME.md`.
 ```bash
 bash scripts/validate_stark_bridge_chain.sh
 bash scripts/validate_stark_runtime_settlement.sh
+bash scripts/validate_stark_v2_anvil.sh
 RUN_STARK_RUNTIME_SETTLEMENT=1 bash scripts/validate_localbce.sh
 ```
 
@@ -100,11 +106,12 @@ ported into active folders.
 
 ## Production Readiness
 
-The technical path is complete, but production approval is not. Remaining
-launch gates include independent audit, key custody and rotation, governed
-source/oracle policy, monitoring and recovery, load testing, and deployment
-change control. A native on-chain STARK verifier is an optional trust-model
-upgrade, not something the current controlled-attestation profile claims.
+The governed V2 implementation is locally testable but is not deployed to
+Sepolia. Safe creation, MPC credentials, funding, approved policy sources,
+legal approval, finalized public canaries, operational drills, and independent
+audits remain external launch blockers. The native EVM verifier is an inactive
+candidate until complete transcript/FRI parity, EIP-170, gas, adversarial, and
+audit gates pass.
 
 ## Rules Engine Status
 

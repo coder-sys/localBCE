@@ -1,0 +1,28 @@
+{
+  "schema_version": "localbce-stark-policy-manifest-v1",
+  "manifest_id": "localbce-sepolia-pilot-example",
+  "version": "1.0.0",
+  "status": "example_inactive",
+  "issuer": {
+    "issuer_id": "localbce-governance-example",
+    "name": "localBCE governance example",
+    "authority_url": "https://www.example.gov/"
+  },
+  "effective_from": "2026-01-01T00:00:00Z",
+  "effective_until": "2026-12-31T23:59:59Z",
+  "maximum_evidence_age_seconds": 86400,
+  "fee_schedule_root": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "official_sources": [
+    {
+      "source_id": "example-federal-register",
+      "issuer_id": "federal-register",
+      "jurisdiction": "US",
+      "url": "https://www.federalregister.gov/",
+      "official": true,
+      "required": true
+    }
+  ],
+  "canonical_hash_algorithm": "sha256_canonical_json_without_canonical_hash",
+  "canonical_hash": "0x1136a8a6990d50ca5d6c7bcba9e4c87d970c2d94e188f87d35fd6051a3e46b06",
+  "authenticity_disclaimer": "The manifest binds controlled-attestation inputs. Winterfell does not by itself prove the legal validity or source authenticity of claim and oracle data."
+}

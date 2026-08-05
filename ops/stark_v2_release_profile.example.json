@@ -1,0 +1,25 @@
+{
+  "schema_version": "localbce-stark-v2-release-profile-v1",
+  "environment": "sepolia_pilot_example_non_production",
+  "production_usable": false,
+  "chain_id": 11155111,
+  "current_backend": "groth16",
+  "candidate_backend": "stark_attested",
+  "automatic_fallback": false,
+  "rollback_mode": "manual_governed",
+  "native_verifier_active": false,
+  "activation_gates": {
+    "local_v2_validation_passed": false,
+    "safe_and_timelock_deployed": false,
+    "external_mpc_key_approved": false,
+    "policy_manifest_approved": false,
+    "deployment_pins_complete": false,
+    "approved_canary_finalized": false,
+    "denied_canary_finalized": false,
+    "reconciliation_report_clean": false,
+    "legal_approval_recorded": false,
+    "independent_audits_complete": false
+  },
+  "release_action": "A human-approved timelock operation may switch current_backend only after every activation gate is true.",
+  "rollback_action": "Pause immediately if necessary, reconcile pending settlements, then execute a human-approved manual rollback to groth16. Never retry a failed STARK settlement through Groth16 automatically."
+}

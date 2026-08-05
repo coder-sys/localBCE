@@ -23,9 +23,27 @@ claim_input.json
 5. Confirm `rust-engine/config.json` points to the intended local
    `ClaimsRegistry` address.
 
-## STARK Planning Preflight
+## STARK Pilot Preflight
 
-The STARK path is currently planning/pre-prover only. It may be checked with:
+The opt-in STARK path now generates and locally verifies real Winterfell proofs.
+The governed pilot settles a controlled secp256k1 attestation over the verified
+proof commitment and public inputs; it does not verify Winterfell natively in
+Solidity.
+
+Before a Sepolia pilot:
+
+1. Run `bash scripts/validate_stark_bridge_chain.sh`.
+2. Run `bash scripts/validate_stark_v2_anvil.sh` on disposable Anvil.
+3. Validate the policy manifest and all deployment pins.
+4. Create the 2-of-3 Safe and deploy its 72-hour `TimelockController`.
+5. Enroll an approved MPC key ID and remove local-key mode from pilot config.
+6. Deploy V2 on chain `11155111`, verify bytecode, and timelock the registry
+   allowlist operation.
+7. Execute approved and denied canaries and wait for RPC `finalized` coverage.
+8. Reconcile the journal and require a clean pilot report before changing the
+   release profile.
+
+The earlier compatibility pipeline remains available with:
 
 ```text
 rust-engine:
@@ -41,17 +59,28 @@ stark-engine:
   generate_winterfell_gap_plan
 ```
 
-These commands do not generate a real STARK proof and do not submit on-chain.
+These compatibility commands do not themselves submit on-chain.
+
+## Release And Recovery
+
+- `ops/stark_v2_release_profile.example.json` keeps Groth16 current until every
+  pilot gate is approved.
+- A failed STARK settlement must never be retried through Groth16 automatically.
+- Emergency pause is immediate through the Safe; unpause and configuration
+  changes are timelocked.
+- Rollback is a manual governed action after journal reconciliation.
+- Local nullifier state is committed only after finalized-chain confirmation.
 
 ## Production Deployment Gate
 
 Do not deploy production contracts until:
 
-- Native STARK proof generation is real and externally reviewed.
-- A native STARK verifier strategy is selected and audited.
+- The controlled-attestation proof and settlement path passes all local gates.
+- Safe, timelock, MPC, policy, deployment pins, and finalized canaries are owned
+  and approved by their external operators.
 - Public input schemas are signed off.
-- Governance multisig and timelock configuration have passed dry-run upgrade
-  and rollback tests.
+- Governance and manual rollback procedures have passed dry-run tests.
 - Monitoring for settlement, roots, verifier artifacts, and rule ratification is
   active.
-
+- The isolated native verifier candidate remains inactive until transcript,
+  bytecode, gas, adversarial, and independent-audit gates all pass.

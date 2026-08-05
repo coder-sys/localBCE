@@ -1,0 +1,19 @@
+{
+  "schema_version": "localbce-stark-v2-deployment-pin-v1",
+  "environment": "sepolia_example_non_production",
+  "production_usable": false,
+  "chain_id": 11155111,
+  "openzeppelin_contracts_version": "v5.6.1",
+  "cargo_lock_sha256": "REPLACE_AFTER_BUILD",
+  "proof_parameters_sha256": "REPLACE_AFTER_BUILD",
+  "deployment_transaction": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "governance_safe": "0x1111111111111111111111111111111111111111",
+  "timelock": "0x2222222222222222222222222222222222222222",
+  "emergency_safe": "0x3333333333333333333333333333333333333333",
+  "attestor": "0x4444444444444444444444444444444444444444",
+  "verifier": "0x5555555555555555555555555555555555555555",
+  "registry": "0x1111111111111111111111111111111111111111",
+  "policy_manifest_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "verifier_runtime_bytecode_sha256": "REPLACE_AFTER_DEPLOYMENT",
+  "registry_runtime_bytecode_sha256": "REPLACE_AFTER_DEPLOYMENT"
+}

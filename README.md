@@ -16,6 +16,11 @@ backend now generates and locally verifies a real Winterfell proof and settles
 through controlled-attestation Solidity contracts. See `STARK_RUNTIME.md` for
 the exact trust boundary and operating commands.
 
+A parallel governed V2 Sepolia pilot candidate adds external MPC signing,
+72-hour timelocked administration, emergency pause, policy-hash binding,
+finalized settlement journaling, and recovery tooling. It remains inactive
+until external deployment, Safe, MPC, legal, and audit gates are satisfied.
+
 ---
 
 # Current Workflows
@@ -56,6 +61,9 @@ bash scripts/validate_localbce.sh
 This runs:
 
 - `python3 scripts/validate_ops_scaffold.py`
+- `python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json`
+- `python3 scripts/validate_openzeppelin_pin.py`
+- `python3 scripts/scan_secrets.py`
 - `bash scripts/validate_rules_pipeline.sh`
 - `cargo test` and `cargo check` in `rust-engine/`
 - `cargo test` and `cargo check` in `stark-engine/`
@@ -63,6 +71,10 @@ This runs:
 
 Set `RUN_STARK_RUNTIME_SETTLEMENT=1` to add the disposable-Anvil live STARK
 settlement gate.
+
+Run `bash scripts/validate_stark_v2_anvil.sh` for the governed V2
+external-signer canary. Its `test_mined` receipt is hard-gated to chain 31337
+and the mock signer; Sepolia always requires finalized RPC coverage.
 
 Foundry may print lint notes for generated verifier constants and deployment
 JSON smoke-test file cheatcodes. Those notes are not failures when the test and
@@ -178,6 +190,12 @@ localBCE/
   semantics.
 - The production artifact validator deserializes the saved proof bytes and
   re-verifies them locally; it does not trust a stored success flag.
+- Parallel V2 contracts preserve V1 settlement behavior while separating
+  timelocked governance, emergency pause, and treasury authority.
+- Canonical native-verifier mutation vectors are generated and checked against
+  the Rust verifier. The Solidity native candidate remains deliberately
+  inactive; it does not substitute proof-commitment equality for FRI proof
+  verification.
 - The atomic executor reconciles persistent local nullifier state with the
   on-chain registry, submits settlement, and applies state only after receipt
   confirmation.

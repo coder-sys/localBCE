@@ -24,6 +24,9 @@ REQUIRED_JSON_FILES = [
     "governance_config.example.json",
     "oracle_source_manifest.example.json",
     "verifier_artifact_pin.example.json",
+    "policy_manifest.example.json",
+    "stark_v2_deployment_pin.example.json",
+    "stark_v2_release_profile.example.json",
 ]
 
 EXAMPLE_ADDRESSES = {
@@ -179,6 +182,44 @@ def validate_verifier_artifact_pin(data: dict[str, Any]) -> None:
         )
 
 
+def validate_stark_v2_deployment_pin(data: dict[str, Any]) -> None:
+    if data.get("production_usable") is not False:
+        raise ValidationError(
+            "stark_v2_deployment_pin.example.json must have production_usable=false"
+        )
+    if data.get("chain_id") != 11155111:
+        raise ValidationError("stark_v2_deployment_pin.example.json must pin Sepolia chain_id")
+    if data.get("openzeppelin_contracts_version") != "v5.6.1":
+        raise ValidationError("stark_v2_deployment_pin.example.json must pin OpenZeppelin v5.6.1")
+
+
+def validate_stark_v2_release_profile(data: dict[str, Any]) -> None:
+    if data.get("production_usable") is not False:
+        raise ValidationError(
+            "stark_v2_release_profile.example.json must have production_usable=false"
+        )
+    if data.get("chain_id") != 11155111:
+        raise ValidationError("stark_v2_release_profile.example.json must pin Sepolia chain_id")
+    if data.get("current_backend") != "groth16":
+        raise ValidationError("inactive release profile must keep groth16 as current_backend")
+    if data.get("candidate_backend") != "stark_attested":
+        raise ValidationError("release profile candidate_backend must be stark_attested")
+    if data.get("automatic_fallback") is not False:
+        raise ValidationError("release profile must prohibit automatic fallback")
+    if data.get("rollback_mode") != "manual_governed":
+        raise ValidationError("release profile rollback_mode must be manual_governed")
+    if data.get("native_verifier_active") is not False:
+        raise ValidationError("inactive release profile must not activate native verification")
+
+    gates = data.get("activation_gates")
+    if not isinstance(gates, dict) or not gates:
+        raise ValidationError("release profile must define activation_gates")
+    for name, value in gates.items():
+        require_bool(value, f"release profile activation_gates.{name}")
+    if all(gates.values()):
+        raise ValidationError("example release profile must retain at least one open gate")
+
+
 def validate() -> list[str]:
     loaded: dict[str, dict[str, Any]] = {}
     ok_messages: list[str] = []
@@ -202,6 +243,12 @@ def validate() -> list[str]:
 
     validate_verifier_artifact_pin(loaded["verifier_artifact_pin.example.json"])
     ok_messages.append("[OK] verifier_artifact_pin.example.json is marked non-production")
+
+    validate_stark_v2_deployment_pin(loaded["stark_v2_deployment_pin.example.json"])
+    ok_messages.append("[OK] stark_v2_deployment_pin.example.json pins Sepolia and remains inactive")
+
+    validate_stark_v2_release_profile(loaded["stark_v2_release_profile.example.json"])
+    ok_messages.append("[OK] stark_v2_release_profile.example.json is gated with manual rollback")
 
     return ok_messages
 

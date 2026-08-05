@@ -1,2 +1,10 @@
 blind-ledger/deployment.json
-blind-ledger/deployment.json
+blind-ledger/stark_deployment.json
+blind-ledger/stark_v2_deployment.json
+blind-ledger/out/
+blind-ledger/cache/
+rust-engine/target/
+stark-engine/target/
+rust-engine/stark_bridge_input.json
+stark-engine/runtime-artifacts/
+stark-engine/runtime-state/

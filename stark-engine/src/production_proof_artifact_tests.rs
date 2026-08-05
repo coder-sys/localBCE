@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{
     StarkBridgeInput,
+    native_verifier_candidate::WinterfellNativeVerifierVectorSetV1,
     production_air_winterfell::{
         PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION,
         PUBLIC_INPUT_ROOT_SCHEMA_VERSION, unpack_public_input_root_bytes32,
@@ -24,6 +25,24 @@ use crate::{
         ORACLE_FACTS_ROOT_HASH_FUNCTION, ORACLE_FACTS_ROOT_SCHEMA_VERSION,
     },
 };
+
+#[test]
+fn native_verifier_vectors_differentially_reject_mutations_and_remain_inactive() {
+    let artifact = ProductionStarkProofArtifactV4::from_bridge_input(&approved_bridge()).unwrap();
+    let vectors = WinterfellNativeVerifierVectorSetV1::from_artifact(&artifact).unwrap();
+    assert_eq!(vectors.mutation_vectors.len(), 11);
+    assert!(
+        vectors
+            .mutation_vectors
+            .iter()
+            .all(|value| value.rust_winterfell_rejected)
+    );
+    assert!(!vectors.activation_gates.activation_allowed);
+
+    let mut falsely_activated = vectors;
+    falsely_activated.activation_gates.activation_allowed = true;
+    assert!(falsely_activated.validate().is_err());
+}
 
 fn approved_bridge() -> StarkBridgeInput {
     serde_json::from_value(json!({

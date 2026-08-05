@@ -917,14 +917,18 @@ fn real_prover_adapter_invocation_is_default_blocked() {
         invocation.feature_enabled,
         real_prover::REAL_PROVER_ADAPTER_FEATURE_ENABLED
     );
-    assert_eq!(
-        invocation.adapter_status,
+    let expected_adapter_status = if real_prover::REAL_PROVER_ADAPTER_FEATURE_ENABLED {
+        real_prover::RealProverAdapterInvocation::ADAPTER_STATUS_EVIDENCE_MISSING
+    } else {
         real_prover::RealProverAdapterInvocation::ADAPTER_STATUS_FEATURE_DISABLED
-    );
-    assert_eq!(
-        invocation.blocker_status,
+    };
+    let expected_blocker_status = if real_prover::REAL_PROVER_ADAPTER_FEATURE_ENABLED {
+        real_prover::RealProverAttemptArtifact::BLOCKER_STATUS
+    } else {
         "real_prover_adapter_feature_disabled"
-    );
+    };
+    assert_eq!(invocation.adapter_status, expected_adapter_status);
+    assert_eq!(invocation.blocker_status, expected_blocker_status);
     assert_eq!(
         invocation.source_attempt_status,
         real_prover::RealProverAttemptArtifact::ATTEMPT_STATUS

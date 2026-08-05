@@ -102,6 +102,7 @@ STARK_SETTLEMENT_INTEGRATION_GAP_REPORT="${TMP_DIR}/stark_settlement_integration
 STARK_SETTLEMENT_IMPLEMENTATION_PLAN="${TMP_DIR}/stark_settlement_implementation_plan.json"
 STARK_SETTLEMENT_RUNTIME_READINESS_REPORT="${TMP_DIR}/stark_settlement_runtime_readiness_report.json"
 PRODUCTION_STARK_PROOF_ARTIFACT="${TMP_DIR}/production_stark_proof_artifact.json"
+NATIVE_VERIFIER_VECTORS="${TMP_DIR}/native_verifier_vectors.json"
 PRODUCTION_STARK_VERIFIER_HANDOFF="${TMP_DIR}/production_stark_verifier_handoff.json"
 PRODUCTION_STARK_ATTESTATION_ENVELOPE="${TMP_DIR}/production_stark_attestation_envelope.json"
 PRODUCTION_CLAIM_SOURCE_ROOT="${TMP_DIR}/production_claim_source_root.json"
@@ -568,6 +569,16 @@ run_in_dir "Validate production STARK proof artifact" "stark-engine" \
   cargo run --features production-air-winterfell \
     --bin validate_production_stark_proof_artifact -- \
     "${PRODUCTION_STARK_PROOF_ARTIFACT}"
+
+run_in_dir "Generate inactive native verifier differential vectors" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin generate_native_verifier_vectors -- \
+    "${PRODUCTION_STARK_PROOF_ARTIFACT}" "${NATIVE_VERIFIER_VECTORS}"
+
+run_in_dir "Validate inactive native verifier differential vectors" "stark-engine" \
+  cargo run --features production-air-winterfell \
+    --bin validate_native_verifier_vectors -- \
+    "${NATIVE_VERIFIER_VECTORS}"
 
 python3 - "${PRODUCTION_CLAIM_SOURCE_ROOT}" "${PRODUCTION_ORACLE_FACTS_ROOT}" "${PRODUCTION_FEE_SCHEDULE_ROOT}" "${PRODUCTION_NULLIFIER_ROOT_TRANSITION}" "${PRODUCTION_STARK_PROOF_ARTIFACT}" <<'PY'
 import json

@@ -842,14 +842,26 @@ fn settlement_boundary_artifact_generates_solidity_verifier_interface_plan() {
         plan.interface_status,
         "solidity_interface_plan_only_no_contract_changes"
     );
-    assert_eq!(plan.interface_name, "IStarkClaimsVerifierPreview");
-    assert!(plan.function_signature.contains("verifyClaim("));
+    assert_eq!(plan.interface_name, "IStarkClaimsVerifierV1Candidate");
+    assert!(plan.function_signature.contains("verifyStarkClaim("));
     assert_eq!(
         plan.solidity_inputs
             .iter()
             .map(|input| input.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["claimHash", "decision", "failureCode", "proofCommitment"]
+        vec![
+            "claimHash",
+            "decision",
+            "failureCode",
+            "publicInputRoot",
+            "claimSourceRoot",
+            "oracleFactsRoot",
+            "feeScheduleRoot",
+            "nullifierRootBefore",
+            "nullifierRootAfter",
+            "batchRoot",
+            "proof",
+        ]
     );
     assert!(!plan.contract_modification_allowed);
     assert!(!plan.runtime_wired);

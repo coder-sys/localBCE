@@ -28,6 +28,9 @@ run_in_dir() {
 }
 
 run_step "Validate ops scaffold" python3 "${ROOT_DIR}/scripts/validate_ops_scaffold.py"
+run_step "Validate governed policy manifest" python3 "${ROOT_DIR}/scripts/validate_policy_manifest.py" "${ROOT_DIR}/ops/policy_manifest.example.json"
+run_step "Validate OpenZeppelin source pin" python3 "${ROOT_DIR}/scripts/validate_openzeppelin_pin.py"
+run_step "Scan tracked files for secrets" python3 "${ROOT_DIR}/scripts/scan_secrets.py"
 run_step "Validate deterministic rules pipeline" bash "${ROOT_DIR}/scripts/validate_rules_pipeline.sh"
 
 run_in_dir "Rust engine tests" "rust-engine" cargo test

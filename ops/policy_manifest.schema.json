@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localbce.example/schemas/stark-policy-manifest-v1.json",
+  "title": "localBCE STARK Policy Manifest V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "version",
+    "status",
+    "issuer",
+    "effective_from",
+    "effective_until",
+    "maximum_evidence_age_seconds",
+    "fee_schedule_root",
+    "official_sources",
+    "canonical_hash_algorithm",
+    "canonical_hash",
+    "authenticity_disclaimer"
+  ],
+  "properties": {
+    "schema_version": {"const": "localbce-stark-policy-manifest-v1"},
+    "manifest_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "status": {"enum": ["example_inactive", "pilot_approved", "retired"]},
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer_id", "name", "authority_url"],
+      "properties": {
+        "issuer_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "authority_url": {"type": "string", "pattern": "^https://"}
+      }
+    },
+    "effective_from": {"type": "string", "format": "date-time"},
+    "effective_until": {"type": "string", "format": "date-time"},
+    "maximum_evidence_age_seconds": {"type": "integer", "minimum": 1},
+    "fee_schedule_root": {"type": "string", "pattern": "^0x[0-9a-f]{64}$"},
+    "official_sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "issuer_id", "jurisdiction", "url", "official", "required"],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "issuer_id": {"type": "string", "minLength": 1},
+          "jurisdiction": {"type": "string", "minLength": 1},
+          "url": {"type": "string", "pattern": "^https://"},
+          "official": {"const": true},
+          "required": {"type": "boolean"}
+        }
+      }
+    },
+    "canonical_hash_algorithm": {"const": "sha256_canonical_json_without_canonical_hash"},
+    "canonical_hash": {"type": "string", "pattern": "^0x[0-9a-f]{64}$"},
+    "authenticity_disclaimer": {"type": "string", "minLength": 1}
+  }
+}

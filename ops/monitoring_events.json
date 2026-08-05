@@ -50,6 +50,60 @@
       "required_fields": [
         "blockers"
       ]
+    },
+    {
+      "source": "StarkAttestationVerifierV2",
+      "name": "PolicyManifestHashUpdated",
+      "severity": "critical",
+      "required_fields": ["previousHash", "newHash", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "StarkAttestationVerifierV2",
+      "name": "RegistryAuthorizationUpdated",
+      "severity": "critical",
+      "required_fields": ["registry", "authorized", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "StarkAttestationVerifierV2",
+      "name": "AttestorUpdated",
+      "severity": "critical",
+      "required_fields": ["previousAttestor", "newAttestor", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "StarkClaimsRegistryV2",
+      "name": "StarkProofRejected",
+      "severity": "warning",
+      "required_fields": ["claimHash", "batchRoot", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "StarkClaimsRegistryV2",
+      "name": "NullifierRootAdvanced",
+      "severity": "critical",
+      "required_fields": ["rootBefore", "rootAfter", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "StarkGovernedV2",
+      "name": "PausedStateChanged",
+      "severity": "critical",
+      "required_fields": ["contract", "paused", "account", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "stark-engine",
+      "name": "settlement_journal_state_changed",
+      "severity": "info",
+      "required_fields": ["claim_hash", "batch_root", "status", "retry_count", "transaction_hash"]
+    },
+    {
+      "source": "stark-engine",
+      "name": "settlement_reorg_or_conflict",
+      "severity": "critical",
+      "required_fields": ["claim_hash", "transaction_hash", "expected_block_hash", "actual_block_hash"]
+    },
+    {
+      "source": "stark-engine",
+      "name": "external_attestation_signer_failure",
+      "severity": "critical",
+      "required_fields": ["request_id", "signer_backend", "key_id", "reason"]
     }
   ]
 }

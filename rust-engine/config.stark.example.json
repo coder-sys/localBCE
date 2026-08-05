@@ -10,5 +10,16 @@
   "stark_attestation_verifier_address": "REPLACE_WITH_STARK_ATTESTATION_VERIFIER_ADDRESS",
   "stark_nullifier_state_path": "../stark-engine/runtime-state/nullifier_state.json",
   "stark_artifacts_directory": "../stark-engine/runtime-artifacts",
-  "stark_chain_id": 31337
+  "stark_chain_id": 11155111,
+  "stark_attestor_mode": "external_command",
+  "stark_attestor_signer_program": "/absolute/path/to/approved-mpc-signer",
+  "stark_attestor_signer_args": ["sign", "--profile", "localbce-sepolia"],
+  "stark_attestor_allowed_key_ids": ["REPLACE_WITH_APPROVED_MPC_KEY_ID"],
+  "stark_attestor_address": "REPLACE_WITH_ATTESTOR_ADDRESS",
+  "stark_attestor_signer_timeout_seconds": 30,
+  "stark_policy_manifest_hash": "REPLACE_WITH_VALIDATED_POLICY_MANIFEST_HASH",
+  "stark_finality_mode": "finalized",
+  "stark_finality_timeout_seconds": 900,
+  "stark_finality_poll_seconds": 12,
+  "stark_allow_test_mined_finality": false
 }

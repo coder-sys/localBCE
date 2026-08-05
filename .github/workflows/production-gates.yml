@@ -1,0 +1,57 @@
+name: production-gates
+
+on:
+  push:
+    branches: [codex-dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rules-and-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 scripts/validate_ops_scaffold.py
+      - run: python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
+      - run: python3 scripts/validate_openzeppelin_pin.py
+      - run: bash scripts/validate_rules_pipeline.sh
+      - run: python3 scripts/scan_secrets.py
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path rust-engine/Cargo.toml --jobs 1
+      - run: cargo check --manifest-path rust-engine/Cargo.toml --jobs 1
+      - run: cargo test --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
+      - run: cargo check --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
+
+  foundry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: forge test --root blind-ledger
+      - run: forge build --root blind-ledger
+      - run: forge test --root blind-ledger --gas-report
+
+  stark-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash scripts/validate_stark_bridge_chain.sh
+
+  governed-v2-anvil:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: bash scripts/validate_stark_v2_anvil.sh

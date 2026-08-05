@@ -878,15 +878,29 @@ impl ProductionStarkProofArtifactV4 {
 
     pub fn verify_serialized_proof(&self) -> Result<(), Vec<String>> {
         let proof_bytes = self.proof.decoded_bytes()?;
-        let proof = Proof::from_bytes(&proof_bytes)
-            .map_err(|error| vec![format!("invalid serialized Winterfell proof: {error}")])?;
+        let proof = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Proof::from_bytes(&proof_bytes)
+        }))
+        .map_err(|_| {
+            vec!["serialized Winterfell proof parser panicked and was rejected".to_string()]
+        })?
+        .map_err(|error| vec![format!("invalid serialized Winterfell proof: {error}")])?;
         if proof.to_bytes() != proof_bytes {
             return Err(vec![
                 "serialized Winterfell proof contains trailing or non-canonical data".to_string(),
             ]);
         }
         let public_inputs = self.public_inputs.to_air_public_inputs()?;
-        verify_production_air_result(proof, public_inputs).map_err(|error| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_production_air_result(proof, public_inputs)
+        }))
+        .map_err(|_| {
+            vec![
+                "Winterfell verifier panicked on malformed proof and the proof was rejected"
+                    .to_string(),
+            ]
+        })?
+        .map_err(|error| {
             vec![format!(
                 "serialized production STARK proof failed local verification: {error}"
             )]

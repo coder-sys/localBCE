@@ -1,0 +1,8 @@
+{
+  "schema_version": "localbce-openzeppelin-contracts-pin-v1",
+  "upstream": "https://github.com/OpenZeppelin/openzeppelin-contracts",
+  "tag": "v5.6.1",
+  "package_version": "5.6.1",
+  "vendored_path": "blind-ledger/lib/openzeppelin-contracts",
+  "aggregate_sha256": "889746e3408a87ce3f986cb222aa5258af8dfa6da9302903bff9013317328cea"
+}

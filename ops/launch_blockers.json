@@ -40,6 +40,30 @@
       "owner": "compliance_owner",
       "external_required": true,
       "exit_criteria": "Legal, compliance, and payment operations approve the exact pilot scope and settlement controls."
+    },
+    {
+      "id": "LB-006",
+      "title": "Sepolia Safe, timelock, and MPC signer activation",
+      "status": "open",
+      "owner": "security_owner",
+      "external_required": true,
+      "exit_criteria": "The 2-of-3 Safe, 72-hour timelock, approved MPC key ID, recovery process, and signer monitoring are live and independently reviewed."
+    },
+    {
+      "id": "LB-007",
+      "title": "Finalized Sepolia canary settlements",
+      "status": "open",
+      "owner": "release_owner",
+      "external_required": true,
+      "exit_criteria": "Approved and denied canaries finalize on Sepolia, reconciliation reports match chain and local roots, and rollback rehearsal succeeds."
+    },
+    {
+      "id": "LB-008",
+      "title": "Native Winterfell EVM verifier activation gates",
+      "status": "open",
+      "owner": "cryptography_engineering",
+      "external_required": true,
+      "exit_criteria": "Transcript and FRI parity, EIP-170 bytecode, gas below half the target block limit, adversarial vectors, and independent cryptographic and Solidity audits all pass."
     }
   ]
 }

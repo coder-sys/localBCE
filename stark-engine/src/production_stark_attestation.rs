@@ -6,9 +6,13 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as Sha2Digest;
 use sha3::Keccak256;
 
-use crate::production_verifier_handoff::ProductionStarkVerifierHandoffV4;
+use crate::{
+    production_attestation_signer::{AttestationSignRequestV1, ExternalCommandSigner},
+    production_verifier_handoff::ProductionStarkVerifierHandoffV4,
+};
 
 const ATTESTATION_DOMAIN_LABEL: &[u8] = b"localBCE.stark.attestation.v1";
+const GOVERNED_ATTESTATION_DOMAIN_LABEL: &[u8] = b"localBCE.stark.attestation.v2";
 const ETHEREUM_SIGNED_MESSAGE_PREFIX: &[u8] = b"\x19Ethereum Signed Message:\n32";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -30,6 +34,12 @@ pub struct ProductionStarkAttestationEnvelopeV2 {
     pub signature_r: String,
     pub signature_s: String,
     pub signature_v: u8,
+    #[serde(default)]
+    pub policy_manifest_hash: Option<String>,
+    #[serde(default)]
+    pub signer_backend: String,
+    #[serde(default)]
+    pub signer_key_id: Option<String>,
     pub proof_envelope_encoding: String,
     pub proof_envelope_hex: String,
     pub proof_envelope_size_bytes: usize,
@@ -55,7 +65,10 @@ pub struct SolidityStarkPublicInputsV1 {
 
 impl ProductionStarkAttestationEnvelopeV2 {
     pub const SCHEMA_VERSION: &'static str = "stark-production-attestation-envelope-v2";
+    pub const GOVERNED_SCHEMA_VERSION: &'static str = "stark-production-attestation-envelope-v3";
     pub const TRUST_MODEL: &'static str = "authorized_attestor_after_local_winterfell_verification";
+    pub const GOVERNED_TRUST_MODEL: &'static str =
+        "threshold_attestor_after_local_winterfell_verification_and_policy_binding";
     pub const PROOF_ENVELOPE_ENCODING: &'static str =
         "r_32_s_32_v_1_then_winterfell_proof_keccak256_32_then_claim_amount_uint256_32";
 
@@ -136,6 +149,9 @@ impl ProductionStarkAttestationEnvelopeV2 {
             signature_r: encode_hex(&compact[..32]),
             signature_s: encode_hex(&compact[32..]),
             signature_v,
+            policy_manifest_hash: None,
+            signer_backend: "local_private_key".to_string(),
+            signer_key_id: None,
             proof_envelope_encoding: Self::PROOF_ENVELOPE_ENCODING.to_string(),
             proof_envelope_hex: encode_hex(&envelope),
             proof_envelope_size_bytes: envelope.len(),
@@ -149,14 +165,116 @@ impl ProductionStarkAttestationEnvelopeV2 {
         Ok(artifact)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_handoff_with_external_signer(
+        handoff: &ProductionStarkVerifierHandoffV4,
+        chain_id: u64,
+        verifier_address: &str,
+        registry_address: &str,
+        claim_amount: u64,
+        policy_manifest_hash: &str,
+        signer: &ExternalCommandSigner,
+    ) -> Result<Self, Vec<String>> {
+        handoff.validate()?;
+        if chain_id == 0 {
+            return Err(vec!["chain_id must be nonzero".to_string()]);
+        }
+        let verifier = decode_address(verifier_address)?;
+        if verifier == [0; 20] {
+            return Err(vec!["verifier_address must be nonzero".to_string()]);
+        }
+        let verifier_address = encode_hex(verifier);
+        let registry = decode_address(registry_address)?;
+        if registry == [0; 20] {
+            return Err(vec!["registry_address must be nonzero".to_string()]);
+        }
+        let registry_address = encode_hex(registry);
+        let policy_hash = decode_fixed::<32>(policy_manifest_hash, "policy_manifest_hash")?;
+        if policy_hash == [0; 32] {
+            return Err(vec!["policy_manifest_hash must be nonzero".to_string()]);
+        }
+
+        let public_inputs = SolidityStarkPublicInputsV1::from_handoff(handoff);
+        public_inputs.validate()?;
+        let proof = decode_hex(&handoff.source_artifact.proof.bytes_hex, "proof bytes")?;
+        if proof.is_empty() {
+            return Err(vec!["Winterfell proof bytes must not be empty".to_string()]);
+        }
+        let public_inputs_hash = public_inputs.abi_hash()?;
+        let proof_keccak = keccak256(&proof);
+        let payload_hash = governed_attestation_payload_hash(
+            chain_id,
+            verifier,
+            registry,
+            public_inputs_hash,
+            proof_keccak,
+            policy_hash,
+            claim_amount,
+        );
+        let digest = ethereum_signed_digest(payload_hash);
+        let request = AttestationSignRequestV1::new(
+            &encode_hex(digest),
+            chain_id,
+            &verifier_address,
+            &registry_address,
+            &encode_hex(public_inputs_hash),
+            &encode_hex(proof_keccak),
+            &encode_hex(policy_hash),
+            claim_amount,
+        )?;
+        let signed = signer.sign(&request)?;
+        let compact = &signed.signature[..64];
+        let signature_v = signed.signature[64];
+
+        let mut envelope = Vec::with_capacity(129);
+        envelope.extend_from_slice(&signed.signature);
+        envelope.extend_from_slice(&proof_keccak);
+        envelope.extend_from_slice(&uint256_slot(claim_amount));
+
+        let mut artifact = Self {
+            schema_version: Self::GOVERNED_SCHEMA_VERSION.to_string(),
+            source_schema_version: ProductionStarkVerifierHandoffV4::SCHEMA_VERSION.to_string(),
+            trust_model: Self::GOVERNED_TRUST_MODEL.to_string(),
+            chain_id,
+            verifier_address,
+            registry_address,
+            claim_amount,
+            attestor_address: signed.attestor_address.clone(),
+            public_inputs,
+            public_inputs_hash_keccak256: encode_hex(public_inputs_hash),
+            winterfell_proof_sha256: handoff.proof_bytes_sha256.clone(),
+            winterfell_proof_keccak256: encode_hex(proof_keccak),
+            attestation_payload_hash: encode_hex(payload_hash),
+            attestation_digest: encode_hex(digest),
+            signature_r: encode_hex(&compact[..32]),
+            signature_s: encode_hex(&compact[32..]),
+            signature_v,
+            policy_manifest_hash: Some(encode_hex(policy_hash)),
+            signer_backend: signed.signer_backend,
+            signer_key_id: Some(signed.key_id),
+            proof_envelope_encoding: Self::PROOF_ENVELOPE_ENCODING.to_string(),
+            proof_envelope_hex: encode_hex(envelope),
+            proof_envelope_size_bytes: 129,
+            locally_recovered_attestor: signed.attestor_address,
+            locally_validated: true,
+            native_on_chain_stark_verification: false,
+            settlement_ready: true,
+        };
+        artifact.validate()?;
+        artifact.locally_validated = true;
+        Ok(artifact)
+    }
+
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        check_equal(
-            "schema_version",
-            &self.schema_version,
-            Self::SCHEMA_VERSION,
-            &mut errors,
-        );
+        let governed = self.schema_version == Self::GOVERNED_SCHEMA_VERSION;
+        if self.schema_version != Self::SCHEMA_VERSION && !governed {
+            errors.push(format!(
+                "schema_version must be {} or {}",
+                Self::SCHEMA_VERSION,
+                Self::GOVERNED_SCHEMA_VERSION
+            ));
+        }
         check_equal(
             "source_schema_version",
             &self.source_schema_version,
@@ -166,7 +284,11 @@ impl ProductionStarkAttestationEnvelopeV2 {
         check_equal(
             "trust_model",
             &self.trust_model,
-            Self::TRUST_MODEL,
+            if governed {
+                Self::GOVERNED_TRUST_MODEL
+            } else {
+                Self::TRUST_MODEL
+            },
             &mut errors,
         );
         check_equal(
@@ -177,6 +299,41 @@ impl ProductionStarkAttestationEnvelopeV2 {
         );
         if self.chain_id == 0 {
             errors.push("chain_id must be nonzero".to_string());
+        }
+        if self.signer_backend.trim().is_empty() {
+            errors.push("signer_backend must not be empty".to_string());
+        }
+        let policy_hash = if governed {
+            match self.policy_manifest_hash.as_deref() {
+                Some(value) => match decode_fixed::<32>(value, "policy_manifest_hash") {
+                    Ok(bytes) if bytes == [0; 32] => {
+                        errors.push("policy_manifest_hash must be nonzero".to_string());
+                        None
+                    }
+                    Ok(bytes) => Some(bytes),
+                    Err(mut value) => {
+                        errors.append(&mut value);
+                        None
+                    }
+                },
+                None => {
+                    errors.push("governed attestation requires policy_manifest_hash".to_string());
+                    None
+                }
+            }
+        } else {
+            if self.policy_manifest_hash.is_some() {
+                errors.push("legacy attestation must not include policy_manifest_hash".to_string());
+            }
+            None
+        };
+        if governed
+            && self
+                .signer_key_id
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            errors.push("governed attestation requires signer_key_id".to_string());
         }
         if let Err(mut input_errors) = self.public_inputs.validate() {
             errors.append(&mut input_errors);
@@ -261,14 +418,25 @@ impl ProductionStarkAttestationEnvelopeV2 {
                             "public_inputs_hash_keccak256 does not match ABI encoding".to_string(),
                         );
                     }
-                    let payload_hash = attestation_payload_hash(
-                        self.chain_id,
-                        verifier,
-                        registry,
-                        public_inputs_hash,
-                        proof_keccak,
-                        self.claim_amount,
-                    );
+                    let payload_hash = match policy_hash {
+                        Some(policy_hash) => governed_attestation_payload_hash(
+                            self.chain_id,
+                            verifier,
+                            registry,
+                            public_inputs_hash,
+                            proof_keccak,
+                            policy_hash,
+                            self.claim_amount,
+                        ),
+                        None => attestation_payload_hash(
+                            self.chain_id,
+                            verifier,
+                            registry,
+                            public_inputs_hash,
+                            proof_keccak,
+                            self.claim_amount,
+                        ),
+                    };
                     let digest = ethereum_signed_digest(payload_hash);
                     if self.attestation_payload_hash != encode_hex(&payload_hash) {
                         errors.push(
@@ -422,6 +590,27 @@ fn attestation_payload_hash(
     encoded.extend_from_slice(&address_slot(registry));
     encoded.extend_from_slice(&public_inputs_hash);
     encoded.extend_from_slice(&proof_hash);
+    encoded.extend_from_slice(&uint256_slot(claim_amount));
+    keccak256(&encoded)
+}
+
+fn governed_attestation_payload_hash(
+    chain_id: u64,
+    verifier: [u8; 20],
+    registry: [u8; 20],
+    public_inputs_hash: [u8; 32],
+    proof_hash: [u8; 32],
+    policy_manifest_hash: [u8; 32],
+    claim_amount: u64,
+) -> [u8; 32] {
+    let mut encoded = Vec::with_capacity(8 * 32);
+    encoded.extend_from_slice(&keccak256(GOVERNED_ATTESTATION_DOMAIN_LABEL));
+    encoded.extend_from_slice(&uint256_slot(chain_id));
+    encoded.extend_from_slice(&address_slot(verifier));
+    encoded.extend_from_slice(&address_slot(registry));
+    encoded.extend_from_slice(&public_inputs_hash);
+    encoded.extend_from_slice(&proof_hash);
+    encoded.extend_from_slice(&policy_manifest_hash);
     encoded.extend_from_slice(&uint256_slot(claim_amount));
     keccak256(&encoded)
 }
@@ -635,6 +824,19 @@ mod tests {
                 public_inputs_hash,
                 proof_hash,
                 50_001,
+            )
+        );
+    }
+
+    #[test]
+    fn governed_payload_binds_policy_manifest() {
+        let baseline = governed_attestation_payload_hash(
+            11_155_111, [0x11; 20], [0x22; 20], [0x33; 32], [0x44; 32], [0x55; 32], 50_000,
+        );
+        assert_ne!(
+            baseline,
+            governed_attestation_payload_hash(
+                11_155_111, [0x11; 20], [0x22; 20], [0x33; 32], [0x44; 32], [0x56; 32], 50_000,
             )
         );
     }
