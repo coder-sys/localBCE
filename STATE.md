@@ -7287,3 +7287,42 @@ This closes the Wave 2 H6 candidate-evidence gate only. It does not activate a s
 `proofSuiteId`, authorize real PHI/payments, close the independent audit, or claim that the
 production verifier/state/custody work in Waves 3-6 is complete. The six-of-93 package count is
 unchanged; those downstream production packages remain blocked on this nonactivating boundary.
+
+## 2026-08-05 Workspace cleanup and three-copy release refresh - VERIFIED
+
+The current reviewed 779-file release allowlist was rebuilt from source commit
+`90cc2332c63024349135d99649573169864194fc`. Six allowlisted payloads changed since the prior
+archive: `docs/CURRENT_TECH_STACK.md`, `docs/IMPLEMENTATION_ROADMAP.md`,
+`experiments/bl_pq512_crypto_core/Cargo.toml`,
+`experiments/bl_pq512_crypto_core/rust-toolchain.toml`,
+`experiments/bl_pq512_crypto_core/src/lib.rs`, and
+`experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`.
+
+The deterministic release builder returned:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+archive_bytes=11344046
+archive_sha256=823974b4f29d95351946a5fb72d22c6570b9a1800c9af5c9780db0cec6d550c9
+manifest_sha256=334db4c6ef7a32f7694a70aabb065c46059b21d418bb985eff7dc9e21e5e7ce0
+entry_count=780
+payload_file_count=779
+payload_bytes=11031546
+```
+
+Independent ZIP readback passed for all three Source-Complete copies. Each has 780 entries,
+779 payload files, no CRC errors, no duplicates, no missing/unexpected entries, and is byte-for-
+byte identical. The shared SHA3-512 identity is
+`060df390a25ab17d3da21cafc53104dfbb9526635d8f92962182146fa2dbf1eb0b50ea208a200b657c37dd22ddb7e9102c470733d4db8cc998ac42083761fec7`.
+The targets are the Desktop root copy, the Desktop Full-Workspace copy, and the Downloads copy.
+`STATE.md` is not in the reviewed release allowlist, so this receipt update does not change the
+published archive bytes.
+
+After generated scratch cleanup, the authoritative H5 and H6 manifests independently returned
+`PASS`: H5 has 22 runs with K128 p95 `32.360845` seconds, K512 p95 `148.861885` seconds, and
+zero scratch; H6 has 12 closed obligations and zero blockers. The cleanup removed 24,657
+generated files totaling `8892184613` bytes, including obsolete build targets, reproducibility
+scratch, failed calibration attempts, and temporary archive stages. The exact H5 campaign,
+referenced state-binding inputs, H6 evidence manifest, and prior State-referenced archive backup
+directories were preserved. This remains a nonactivating Wave 2 evidence/archive state; it does
+not activate a proof suite or claim production completion.
