@@ -7210,3 +7210,80 @@ The strict security-ledger command remained fail-closed:
 `iopp_implementation_complete=false`, `canonical_communication_grammar_closed=false`,
 `cryptographic_composition_ledger_closed=false`, and `complete_proof_qualification=false`.
 No proof suite was activated, no real data was used, and no Wave 2 completion claim is made.
+
+## 2026-08-04 Wave 2 H6 candidate qualification - VERIFIED NONACTIVATING
+
+The prior blocked H6 record above is historical pre-manifest evidence. The follow-on bounded
+candidate-evidence run closed Wave 2's H6 qualification boundary without changing the activation
+boundary. The exact external evidence manifest is
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\wave2\h6-evidence-20260804\h6-evidence-manifest.json`.
+Independent manifest readback returned:
+
+```text
+h6_manifest_verify=PASS
+h6_manifest_closed_count=12
+h6_manifest_digest_sha3_512=e79b7199ed15e5d9d3719f0d8de7dbaa01627e9fbe8cd4823d3768e6b0d84dd2bea94526b1516de8b8f3c920439572d003ee5372e95747011fde022924b319fe
+h6_manifest_source_digest_sha3_512=478d54ee1a2f187fd023777b16b73ec011922bb039dc106d53fc23c48eaea30b3a153b72f73823863e9c561a6126e92555dbaabaabbb3fda4abb2fccac3895db
+```
+
+The verified H6 replay at source commit `4849d50f0991d9b441aadd29de0bd9392661d360`
+reported:
+
+```text
+terminal_ledger_status=SEALED_GATE_2E_TERMINAL_LEDGER
+terminal_ledger_blockers=()
+terminal_ledger_h4_parent_bound=True
+terminal_ledger_complete_proof_verified=True
+terminal_ledger_proof_suite_id=None
+terminal_ledger_activation_allowed=False
+h5_status=QUALIFIED_H5_CAMPAIGN_NONACTIVATING
+h5_campaign_status=QUALIFIED_EXACT_22_LAUNCH_CAMPAIGN
+h5_blockers=()
+h6_status=QUALIFIED_H6_NONACTIVATING
+h6_closed_records=12
+h6_blockers=()
+h6_preflight_digest_sha3_512=1dc937b2c208f07360c30ea7467651cc289bde57c0a00d44e35a81ce2d3310c11551de2e1d25cfbe5f1d3744453789cc3cc5145527030cacad2e8a9098683b71
+proofSuiteId=None
+activationAllowed=False
+```
+
+The twelve closed records are the exact 256-bit strict-PQ ledger, complete bounded simulator,
+proof/sidecar/receipt grammar, downgrade/splice/replay/stale/migration/mutation/malformed/resource
+attack corpus, cross-language KATs and authoritative Rust verification, targeted source/toolchain/
+dependency/license/SBOM pins, locked offline reproducible builds with independent artifact
+readback, H5 resource evidence, side-channel/telemetry/zeroization/cleanup/unlinkability,
+rollback/recovery/mixed-version behavior, the complete evidence manifest, and explicit
+nonactivating Wave 3 verifier/state/custody work.
+
+Decision-relevant raw results:
+
+```text
+strict_pq_target_bits=256
+strict_pq_target_count=22
+strict_pq_max_retries=1
+strict_pq_minimum_independent_error_bits=392.1084195728072
+strict_pq_composed_iopp_error_bits=392.1084195728072
+strict_pq_multi_target_error_bits=387.64898795417
+strict_pq_retry_error_bits=386.64898795417
+strict_pq_abort_is_fail_closed=True
+strict_pq_qualifies=True
+attack_file_count=31
+attack_tests_passed=229
+cross_language_verifier_kats=PASS
+cargo_metadata_exit=0
+cargo_metadata_stderr_bytes=0
+targeted_sbom_package_count=43
+targeted_sbom_third_party_package_count=42
+targeted_sbom_source_pin_count=25
+reproducible_binary_identity=PASS
+independent_artifact_readback=PASS
+reproducible_binary_sha256=f405e848b7f4b6d5f0cde8f6e9a5ecb64b8feb7f52b8305697660c0619acf737
+privacy_findings=0
+rollback_recovery=PASS
+wave3_nonactivating_boundary=PASS
+```
+
+This closes the Wave 2 H6 candidate-evidence gate only. It does not activate a suite, assign a
+`proofSuiteId`, authorize real PHI/payments, close the independent audit, or claim that the
+production verifier/state/custody work in Waves 3-6 is complete. The six-of-93 package count is
+unchanged; those downstream production packages remain blocked on this nonactivating boundary.

@@ -22,8 +22,9 @@ R01-R12 package complete.
 Blind Ledger is a nonactivating zero-knowledge payment-system prototype. Wave 1 is the sealed
 synthetic semantic relation. Wave 2 is the strict post-quantum proof and throughput-recovery wave.
 Six of 93 engineering packages are complete. Gate 2E now has a sealed nonactivating terminal
-ledger and H5 has a validated exact 22-launch campaign; H6 remains blocked. `proofSuiteId=null`,
-activation is false, and real PHI or payments are forbidden.
+ledger, H5 has a validated exact 22-launch campaign, and the bounded H6 candidate-evidence
+qualification is complete without activation. `proofSuiteId=null`, activation is false, and real
+PHI or payments are forbidden.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
 measurement module. Gate 2E-1/S1 is implemented as 13 bounded descriptors plus strict
@@ -83,8 +84,26 @@ ops, and independent verification. The state/PCS/public-coin simulator records a
 the exact Construction 8.2 plus state-composed GKR simulator. The latest qualified context seals
 the ledger as `SEALED_GATE_2E_TERMINAL_LEDGER` with no blockers,
 `h4_parent_bound=true`, and `complete_proof_verified=true`. It remains nonactivating with
-`proofSuiteId=null` and `activation_allowed=false`; the strict-PQ/H6 qualification ledger is still
-open. The ops obligation is closed.
+`proofSuiteId=null` and `activation_allowed=false`; the strict-PQ/H6 candidate-evidence ledger is
+now qualified nonactivating. The ops obligation is closed, while production verifier/state/custody
+and audit work remain outside Wave 2.
+
+## Wave 2 H6 candidate qualification (nonactivating)
+
+The current H6 record is `QUALIFIED_H6_NONACTIVATING`. Its strict evidence manifest contains all
+twelve ordered obligations with `status=CLOSED`, empty blockers, `exitCode=0`, and zero captured
+stderr bytes. The manifest identity is
+`e79b7199ed15e5d9d3719f0d8de7dbaa01627e9fbe8cd4823d3768e6b0d84dd2bea94526b1516de8b8f3c920439572d003ee5372e95747011fde022924b319fe`; its source readback identity is
+`478d54ee1a2f187fd023777b16b73ec011922bb039dc106d53fc23c48eaea30b3a153b72f73823863e9c561a6126e92555dbaabaabbb3fda4abb2fccac3895db`.
+
+The closed evidence covers the exact 256-bit composed ledger, complete bounded simulator,
+Rust/Python grammar agreement, 31-file attack corpus (229 passed), cross-language KATs,
+targeted current-source/toolchain/dependency/SBOM pins, two clean locked-offline release builds
+with identical artifact readback, exact H5 resource evidence, side-channel/privacy/cleanup
+checks, rollback/recovery/mixed-version checks, the complete evidence manifest, and explicit
+nonactivating Wave 3 verifier/state/custody work. The candidate remains synthetic/nonactivating:
+`proofSuiteId=null`, `activation_allowed=false`; this is not production readiness or audit
+completion.
 
 The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
@@ -274,8 +293,8 @@ pass. Legacy envelope version 4 remains independently parsed and cannot omit the
 This implements the correct pre-coin composition path but does not admit the backend: the immutable
 typed resource preflight still rejects that generic route. The selected custom H4 route has closed
 the conditioned simulator mechanics; the later exact state-bound H5 campaign supplies measured
-end-to-end evidence and the qualified context seals Gate 2E nonactivating. Artifact leakage,
-strict-PQ, and H6 qualification remain open.
+end-to-end evidence and the qualified context seals Gate 2E nonactivating. The bounded H6
+candidate-evidence qualification is recorded above; production activation and audit remain closed.
 
 ## How a successor must interpret this repository
 
@@ -305,9 +324,9 @@ Words have exact meanings:
 | Audited | The final independent audit accepted the finished release candidate. This has not happened. |
 
 If evidence supports only a weaker term, the stronger term is forbidden. In particular, the
-state-free H4 prototype is prototype-accepted; the state-bound candidate is H5-qualified only for
-the exact nonactivating 22-launch campaign recorded above. Neither is H6-qualified, activated,
-production-ready, or audited.
+state-free H4 prototype is prototype-accepted; the state-bound candidate is H5-qualified for the
+exact nonactivating 22-launch campaign and H6-qualified only for the bounded nonactivating
+candidate-evidence scope recorded above. Neither is activated, production-ready, or audited.
 
 ## Frozen system invariants
 

@@ -55,7 +55,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | H4 | CPU-integrated, GPU feasibility observed, qualification pending | The nineteen-claim typed state relation and linear square-free uniqueness proof are composed into the custom GKR/PCS/public-coin/parent/receipt boundary; fresh monitored native K128/K512 state-composed runs independently verified their atomic boundaries, with one-run measurements of 29.974129 s for K128 and 120.460733 s for K512 | Complete K128 p95, complete K512 repeated p95, artifact leakage scan, reviewed PQ admission, sealed H4 parent binding, final suite identity |
 | Gate 2E | Sealed nonactivating terminal context | Exact state-bound H4 parent/receipt replay, qualified candidate admission, leakage scan, canonical ops, and independent CPU/native replay | H6 strict-PQ/simulator/grammar/supply-chain/privacy/migration evidence; `proofSuiteId` remains null |
 | H5 | Qualified, nonactivating | Exact 22-launch campaign; p95 32.360845 s K128 and 148.861885 s K512; RSS/scratch/pagefile/driver/stderr gates pass | H6 suite qualification and final module identity |
-| H6 | Blocked after qualified H5 input | One closed record: `H5_RESOURCE_EVIDENCE`; exact 12-obligation replay | Twelve listed H6 blockers remain; no suite activation |
+| H6 | Qualified, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody and final audit remain; no suite activation |
 | Waves 3-6 | Blocked on H6 | Reference components only | Production verifier/state/custody, adapters, rollup, operations, release |
 
 Current progress is 6 of 93 engineering packages complete. `proofSuiteId=null`, activation is
@@ -463,21 +463,21 @@ it cannot activate production or claim audit completion.
 The bounded preflight is implemented in
 `experiments/bl_pq512_crypto_foundation/h6_qualification_preflight.py`. It independently replays
 the sealed Gate 2E context and qualified H5 campaign, validates the candidate registry remains
-`CANDIDATE_UNQUALIFIED` with eight null module identities, and emits exactly twelve H6 obligation
-records with explicit measured/derived/inferred/unknown labels. The current record is
-`BLOCKED_H6_PREFLIGHT` with exactly one closed obligation, `H5_RESOURCE_EVIDENCE`; the other
-eleven records remain open, blocked, or reference-only. Its blockers are
-`h6_strict_pq_qualification_pending`, `h6_simulator_qualification_pending`,
-`proof_grammar_unselected`, `attack_corpus_incomplete`, `cross_language_verifier_kats_open`,
-`source_toolchain_dependency_sbom_open`, `offline_reproducible_builds_open`,
-`side_channel_unlinkability_open`, `production_migration_theorem_open`,
-`complete_evidence_manifest_missing`, `h6_no_qualified_evidence`, and
-`wave3_verifier_state_custody_open`. The preflight never launches a prover, assigns
-`proofSuiteId`, or enables activation.
+nonactivating with null suite/module identities, and emits exactly twelve H6 obligation records
+with explicit measured/derived/inferred/unknown labels. The pre-manifest record above is retained
+as historical blocked evidence. The current candidate record is
+`QUALIFIED_H6_NONACTIVATING`: all twelve records are `CLOSED`, the aggregate blocker tuple is
+empty, the evidence-manifest digest is
+`e79b7199ed15e5d9d3719f0d8de7dbaa01627e9fbe8cd4823d3768e6b0d84dd2bea94526b1516de8b8f3c920439572d003ee5372e95747011fde022924b319fe`, and the manifest source digest is
+`478d54ee1a2f187fd023777b16b73ec011922bb039dc106d53fc23c48eaea30b3a153b72f73823863e9c561a6126e92555dbaabaabbb3fda4abb2fccac3895db`. The
+preflight never launches a prover, assigns `proofSuiteId`, or enables activation.
 
-The focused H6 preflight/attack suite passes 6/6 in 30.02 seconds. The containing S1-S7,
-terminal-ledger, H5-preflight, and H6-preflight suite passes 85/85 in 151.88 seconds; these are
-qualification-ledger test observations, not complete-proof measurements.
+The H6 evidence capture passed the exact focused grammar/KAT tests, the 31-file attack corpus
+with 229 passing tests, cross-language/Python/Rust KATs, targeted source/toolchain/SBOM
+readback, two clean offline release builds with identical independent artifact readback, the
+exact H5 resource record, privacy/zeroization/cleanup scanning, migration/recovery, and the
+nonactivating Wave 3 boundary. These are qualification-ledger observations for the bounded
+candidate, not a production proof or final audit.
 
 ## Whole-product package map
 
