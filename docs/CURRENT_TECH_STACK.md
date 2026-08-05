@@ -1,6 +1,6 @@
 # Blind Ledger current technical stack
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 Status: canonical current-stack index. If an older checkpoint conflicts with this file, `STATE.md`,
 `ARCHITECTURE.md`, or `docs/IMPLEMENTATION_ROADMAP.md`, the newer current files win. Historical
@@ -530,6 +530,24 @@ The H4 allocation is the regression baseline. Any Gate 2E/H5 change that materia
 per-proof device state, 2,770.337792 MB K512 sampled total device residency, or 0 MB scratch must
 identify the theorem-required reason and demonstrate a complete-boundary throughput gain. The hard
 host/scratch gates still govern even when a smaller H4 regression threshold is exceeded.
+
+The 2026-08-05 two-lane K512 candidate was measured as a nonactivating experiment. It retains
+independent shard challenges, canonical receipt order, and conservative concurrent resource
+summation. The native coordinator now defaults to two lanes when no qualified proof-suite identity
+is supplied; a qualified suite keeps the default serial and explicit parallel mode remains rejected.
+A fresh one-warmup/ten-measured
+campaign recorded p95 `101.798191` seconds, maximum reported host/device peaks
+`605.774000`/`1976.484224` MB, maximum candidate-tree RSS `1467.465728` MB, zero scratch,
+zero pagefile growth, zero driver events, and zero stderr. The generic proving scheduler now
+terminates the complete process tree on timeout and fails closed if that cannot be confirmed, but
+it is a separate Cairo/encrypted-worker path and does not silently route ordinary claim jobs to
+this native coordinator. The two-lane default therefore applies to the unqualified native K512
+path only; it receives no H5/H6 credit, no suite identity, and no activation.
+
+Two fresh no-override launches of the rebuilt coordinator verified the default (`shard_concurrency=2`)
+and all four shards, but the external no-swap monitor rejected pagefile growth of `305` MB and
+`18` MB. The default selection is therefore implemented and fail-closed under the existing
+monitor; those launches are not qualification or production-admission evidence.
 
 ## Privacy and data-placement boundary
 

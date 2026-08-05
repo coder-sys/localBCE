@@ -235,6 +235,21 @@ image duplication and theorem-free challenge sharing are prohibited.
 The active regression objective is low-hundreds-of-MB internal host use while preserving the
 immutable 5,000 MB host, below-5,000 MB scratch, and no-swap gates.
 
+### Native K512 default decision (2026-08-05)
+
+The native atomic K512 coordinator now selects two independent shard lanes by default when no
+qualified proof-suite identity is present. A qualified suite keeps serial execution by default,
+and any explicit parallel request with a qualified suite is rejected. Each lane retains its own
+authenticated challenge stream and proof; the coordinator waits for the complete group, verifies
+every shard, and commits the receipt in canonical order. This is a nonactivating optimization
+default for the native experiment only. The generic Cairo/encrypted-worker queue is a separate
+input boundary and is not silently rerouted to this coordinator.
+
+Two fresh no-override launches selected two lanes and independently verified all four shards, but
+the external monitor rejected pagefile growth of `305` MB and `18` MB. This preserves the no-swap
+gate: the code-level default is present, while those launches are not production-admission or
+qualification evidence.
+
 ## Atomic semantic execution boundary
 
 The active H4 prototype has one acceptance boundary for both profiles. K128 is one canonical B16

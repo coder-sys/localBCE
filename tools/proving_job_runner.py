@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -719,6 +720,79 @@ def _update_status(path: Path, status: dict[str, Any], **changes: object) -> Non
     _write_json_atomic(path, status)
 
 
+def _terminate_process_tree(
+    process: subprocess.Popen[Any], *, force: bool
+) -> dict[str, Any]:
+    """Terminate a prover and its descendants, or fail closed if that is unproven."""
+
+    if process.poll() is not None:
+        return {
+            "ok": True,
+            "tree_confirmed": True,
+            "method": "already_exited",
+        }
+
+    if os.name == "nt":
+        command = ["taskkill", "/PID", str(process.pid), "/T"]
+        if force:
+            command.append("/F")
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result = None
+            error = str(exc)
+        else:
+            if result.returncode == 0:
+                return {
+                    "ok": True,
+                    "tree_confirmed": True,
+                    "method": "taskkill_tree",
+                    "command": command,
+                    "returncode": result.returncode,
+                }
+            error = f"taskkill exited with code {result.returncode}"
+        if process.poll() is not None:
+            return {
+                "ok": True,
+                "tree_confirmed": True,
+                "method": "exited_during_taskkill",
+                "command": command,
+                "error": error,
+            }
+        try:
+            process.kill()
+        except OSError as exc:
+            error = f"{error}; parent kill failed: {exc}"
+        return {
+            "ok": False,
+            "tree_confirmed": False,
+            "method": "taskkill_tree_failed",
+            "command": command,
+            "error": error,
+        }
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+    except OSError as exc:
+        return {
+            "ok": False,
+            "tree_confirmed": False,
+            "method": "process_group_failed",
+            "error": str(exc),
+        }
+    return {
+        "ok": True,
+        "tree_confirmed": True,
+        "method": "process_group",
+    }
+
+
 def _run_attempt(
     request: dict[str, Any],
     attempt_dir: Path,
@@ -793,6 +867,7 @@ def _run_attempt(
                 stderr=stderr,
                 text=True,
                 shell=False,
+                start_new_session=(os.name != "nt"),
             )
             last_heartbeat = 0.0
             timed_out = False
@@ -800,12 +875,18 @@ def _run_attempt(
                 elapsed = time.monotonic() - started
                 if elapsed >= request["timeout_seconds"]:
                     timed_out = True
-                    process.terminate()
+                    process_tree_termination = _terminate_process_tree(
+                        process, force=True
+                    )
                     try:
-                        process.wait(timeout=10)
+                        process.wait(timeout=30)
                     except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=10)
+                        process_tree_termination = {
+                            **process_tree_termination,
+                            "ok": False,
+                            "tree_confirmed": False,
+                            "error": "process remained alive after tree termination",
+                        }
                     break
                 if elapsed - last_heartbeat >= 5.0:
                     last_heartbeat = elapsed
@@ -842,9 +923,20 @@ def _run_attempt(
         )
     elapsed = time.monotonic() - started
     if timed_out:
+        if not process_tree_termination["tree_confirmed"]:
+            return False, False, {
+                "failure_class": "process_tree_termination",
+                "error": "timed out prover process tree could not be confirmed terminated",
+                "process_tree_termination": process_tree_termination,
+                "command": command,
+                "elapsed_seconds": elapsed,
+                "stdout_log": str(stdout_path),
+                "stderr_log": str(stderr_path),
+            }
         return False, True, {
             "failure_class": "timeout",
             "error": f"proof command exceeded {request['timeout_seconds']} seconds",
+            "process_tree_termination": process_tree_termination,
             "command": command,
             "elapsed_seconds": elapsed,
             "stdout_log": str(stdout_path),

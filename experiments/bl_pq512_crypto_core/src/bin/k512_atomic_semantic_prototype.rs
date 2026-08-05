@@ -3,7 +3,7 @@ use std::{
     env, fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
     time::Instant,
 };
 
@@ -407,155 +407,219 @@ fn run() -> Result<(), String> {
         .as_ref()
         .map(|binding| hex(&binding.binding_digest));
 
+    let shard_concurrency = match env::var("BL_SHARD_CONCURRENCY") {
+        Ok(value) => parse_shard_concurrency(Some(&value), qualified_proof_suite.is_some())?,
+        Err(env::VarError::NotPresent) => {
+            parse_shard_concurrency(None, qualified_proof_suite.is_some())?
+        }
+        Err(_) => return Err("shard_concurrency_env".to_string()),
+    };
+    if shard_concurrency == 0 || shard_concurrency > expected_shards || shard_concurrency > 2 {
+        return Err("shard_concurrency_range".to_string());
+    }
+    if shard_concurrency > 1 && qualified_proof_suite.is_some() {
+        return Err("parallel_shards_not_qualified".to_string());
+    }
+
     let total_started = Instant::now();
     let mut evidence = Vec::with_capacity(usize::from(expected_shards));
-    for shard in 0..expected_shards {
-        let shard_started = Instant::now();
-        let mut child = Command::new(&python);
-        child
-            .arg("-S")
-            .arg(&prototype)
-            .env("BL_HASH_BUS_B16_BOUNDARY", &boundary)
-            .env("BL_HASH_BUS_B16_SHARD", shard.to_string())
-            .env("BL_HASH_BUS_GKR_WORKER", &worker)
-            .env("BL_ATOMIC_PARENT_BINDING", &parent_hex)
-            .env("BL_NATIVE_RELEASE_DIR", &native_directory)
-            .env(
-                "BL_MULTIPROOF_VERIFIER",
-                native_directory.join(NATIVE_EXECUTABLES[0]),
-            )
-            .env(
-                "BL_SPOTCHECK_VERIFIER",
-                native_directory.join(NATIVE_EXECUTABLES[2]),
-            );
-        if let Some(binding) = state_binding.as_ref() {
+    let mut peak_concurrent_host_mb = 0.0_f64;
+    let mut peak_concurrent_device_mb = 0.0_f64;
+    let mut peak_concurrent_scratch_mb = 0.0_f64;
+    for shard_start in (0..expected_shards).step_by(usize::from(shard_concurrency)) {
+        let shard_end = expected_shards.min(shard_start + shard_concurrency);
+        let mut children: Vec<(u16, Instant, Child)> =
+            Vec::with_capacity(usize::from(shard_end - shard_start));
+        for shard in shard_start..shard_end {
+            let shard_started = Instant::now();
+            let mut child = Command::new(&python);
             child
-                .env("BL_STATE_PLANE_STATEMENT_DIGEST", hex(&binding.statement))
+                .arg("-S")
+                .arg(&prototype)
+                .env("BL_HASH_BUS_B16_BOUNDARY", &boundary)
+                .env("BL_HASH_BUS_B16_SHARD", shard.to_string())
+                .env("BL_HASH_BUS_GKR_WORKER", &worker)
+                .env("BL_ATOMIC_PARENT_BINDING", &parent_hex)
+                .env("BL_NATIVE_RELEASE_DIR", &native_directory)
                 .env(
-                    "BL_STATE_PLANE_BINDING_DIGEST",
-                    hex(&binding.binding_digest),
+                    "BL_MULTIPROOF_VERIFIER",
+                    native_directory.join(NATIVE_EXECUTABLES[0]),
                 )
                 .env(
-                    "BL_STATE_PLANE_PROJECTION_DIGEST",
-                    hex(&binding.projection_digest),
-                )
-                .env("BL_STATE_PLANE_PUBLIC_COIN", hex(&binding.public_coin))
-                .env("BL_STATE_PLANE_TRANSITION_DIGEST", hex(&binding.transition))
-                .env("BL_STATE_PLANE_COMMITMENT_DIGEST", hex(&binding.commitment))
-                .env("BL_STATE_PLANE_PROOF_IDENTITY", hex(&binding.proof))
-                .env("BL_STATE_PLANE_VERIFIER_IDENTITY", hex(&binding.verifier))
-                .env("BL_STATE_PLANE_ATTEMPT_ID", hex(&binding.attempt))
-                .env("BL_STATE_PLANE_RECEIPT_DIGEST", hex(&binding.receipt))
-                .env(
-                    "BL_STATE_PLANE_COMPOSITION_DIGEST",
-                    hex(&binding.composition),
-                )
-                .env(
-                    "BL_STATE_AIR_PROGRAM_COMMITMENT",
-                    hex(&binding.state_air_program),
-                )
-                .env(
-                    "BL_STATE_AIR_EXECUTION_COMMITMENT",
-                    hex(&binding.state_air_execution),
-                )
-                .env(
-                    "BL_STATE_AIR_FRAGMENT_DIGEST",
-                    hex(&binding.state_air_fragment),
+                    "BL_SPOTCHECK_VERIFIER",
+                    native_directory.join(NATIVE_EXECUTABLES[2]),
                 );
-            if binding.typed_state {
+            if let Some(binding) = state_binding.as_ref() {
                 child
-                    .env("BL_TYPED_STATE_BINDING", "1")
+                    .env("BL_STATE_PLANE_STATEMENT_DIGEST", hex(&binding.statement))
                     .env(
-                        "BL_TYPED_STATE_ROOT_BEFORE",
-                        hex(&binding.typed_state_root_before),
+                        "BL_STATE_PLANE_BINDING_DIGEST",
+                        hex(&binding.binding_digest),
                     )
                     .env(
-                        "BL_TYPED_STATE_ROOT_AFTER",
-                        hex(&binding.typed_state_root_after),
+                        "BL_STATE_PLANE_PROJECTION_DIGEST",
+                        hex(&binding.projection_digest),
+                    )
+                    .env("BL_STATE_PLANE_PUBLIC_COIN", hex(&binding.public_coin))
+                    .env("BL_STATE_PLANE_TRANSITION_DIGEST", hex(&binding.transition))
+                    .env("BL_STATE_PLANE_COMMITMENT_DIGEST", hex(&binding.commitment))
+                    .env("BL_STATE_PLANE_PROOF_IDENTITY", hex(&binding.proof))
+                    .env("BL_STATE_PLANE_VERIFIER_IDENTITY", hex(&binding.verifier))
+                    .env("BL_STATE_PLANE_ATTEMPT_ID", hex(&binding.attempt))
+                    .env("BL_STATE_PLANE_RECEIPT_DIGEST", hex(&binding.receipt))
+                    .env(
+                        "BL_STATE_PLANE_COMPOSITION_DIGEST",
+                        hex(&binding.composition),
+                    )
+                    .env(
+                        "BL_STATE_AIR_PROGRAM_COMMITMENT",
+                        hex(&binding.state_air_program),
+                    )
+                    .env(
+                        "BL_STATE_AIR_EXECUTION_COMMITMENT",
+                        hex(&binding.state_air_execution),
+                    )
+                    .env(
+                        "BL_STATE_AIR_FRAGMENT_DIGEST",
+                        hex(&binding.state_air_fragment),
                     );
-            } else {
-                let source = private_state_relation_source
-                    .as_ref()
-                    .ok_or_else(|| "state_relation_source_missing".to_string())?;
-                child
-                    .env("BL_STATE_RELATION_SOURCE_PATH", source.path.as_os_str())
-                    .env("BL_STATE_RELATION_SOURCE_SHA3_512", hex(&source.digest));
+                if binding.typed_state {
+                    child
+                        .env("BL_TYPED_STATE_BINDING", "1")
+                        .env(
+                            "BL_TYPED_STATE_ROOT_BEFORE",
+                            hex(&binding.typed_state_root_before),
+                        )
+                        .env(
+                            "BL_TYPED_STATE_ROOT_AFTER",
+                            hex(&binding.typed_state_root_after),
+                        );
+                } else {
+                    let source = private_state_relation_source
+                        .as_ref()
+                        .ok_or_else(|| "state_relation_source_missing".to_string())?;
+                    child
+                        .env("BL_STATE_RELATION_SOURCE_PATH", source.path.as_os_str())
+                        .env("BL_STATE_RELATION_SOURCE_SHA3_512", hex(&source.digest));
+                }
+                for (index, field) in binding.projection.iter().enumerate() {
+                    child.env(format!("BL_STATE_PLANE_PUBLIC_ABI_{index:02}"), hex(field));
+                }
             }
-            for (index, field) in binding.projection.iter().enumerate() {
-                child.env(format!("BL_STATE_PLANE_PUBLIC_ABI_{index:02}"), hex(field));
+            if let Some(suite) = qualified_proof_suite.as_ref() {
+                child.env("BL_PROOF_SUITE_ID", hex(suite));
+            }
+            let child = match child.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    for (_, _, mut running) in children {
+                        let _ = running.kill();
+                        let _ = running.wait();
+                    }
+                    return Err(format!("shard_spawn:{shard}:{error}"));
+                }
+            };
+            children.push((shard, shard_started, child));
+        }
+
+        let mut concurrent_host_mb = 0.0_f64;
+        let mut concurrent_device_mb = 0.0_f64;
+        let mut concurrent_scratch_mb = 0.0_f64;
+        let mut outputs = Vec::with_capacity(children.len());
+        let mut pending = children.into_iter();
+        while let Some((shard, shard_started, child)) = pending.next() {
+            match child.wait_with_output() {
+                Ok(output) => outputs.push((shard, shard_started, output)),
+                Err(error) => {
+                    for (_, _, mut running) in pending {
+                        let _ = running.kill();
+                        let _ = running.wait();
+                    }
+                    return Err(format!("shard_wait:{shard}:{error}"));
+                }
             }
         }
-        if let Some(suite) = qualified_proof_suite.as_ref() {
-            child.env("BL_PROOF_SUITE_ID", hex(suite));
-        }
-        let output = child
-            .output()
-            .map_err(|error| format!("shard_spawn:{shard}:{error}"))?;
-        if output.stdout.len() > MAX_CHILD_STDOUT || output.stderr.len() > MAX_CHILD_STDERR {
-            return Err(format!("shard_output_bound:{shard}"));
-        }
-        if let Some(path) = env::var_os("BL_CHILD_STDOUT_CAPTURE_PATH") {
-            let capture_path = PathBuf::from(path);
-            let capture_path = PathBuf::from(
-                capture_path
-                    .to_string_lossy()
-                    .replace("{shard}", &shard.to_string()),
+        for (shard, shard_started, output) in outputs {
+            if output.stdout.len() > MAX_CHILD_STDOUT || output.stderr.len() > MAX_CHILD_STDERR {
+                return Err(format!("shard_output_bound:{shard}"));
+            }
+            if let Some(path) = env::var_os("BL_CHILD_STDOUT_CAPTURE_PATH") {
+                let capture_path = PathBuf::from(path);
+                let capture_path = PathBuf::from(
+                    capture_path
+                        .to_string_lossy()
+                        .replace("{shard}", &shard.to_string()),
+                );
+                fs::write(capture_path, &output.stdout)
+                    .map_err(|error| format!("child_stdout_capture:{shard}:{error}"))?;
+            }
+            if !output.status.success() || !output.stderr.is_empty() {
+                return Err(format!(
+                    "shard_process:{shard}:status={:?}:stderr={}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            let fields = parse_fields(&output.stdout)?;
+            validate_shard_fields(
+                &fields,
+                shard,
+                header.profile as u8,
+                &file_hex,
+                &parent_hex,
+                expected_state_statement.as_deref(),
+                expected_state_binding.as_deref(),
+                state_binding.as_ref(),
+                qualified_suite_hex.as_deref(),
+            )?;
+            let wall_seconds = parse_f64(&fields, "complete_process_wall_seconds")?;
+            let host_peak_mb = parse_f64(&fields, "proof_phase_host_peak_mb")?
+                .max(parse_f64(&fields, "parent_process_lifetime_host_peak_mb")?)
+                .max(parse_f64(&fields, "native_verifier_peak_mb")?);
+            let device_peak_mb = parse_f64(&fields, "tracked_device_peak_mb")?;
+            let scratch_mb = parse_f64(&fields, "scratch_mb")?;
+            if wall_seconds <= 0.0
+                || host_peak_mb <= 0.0
+                || host_peak_mb > 5_000.0
+                || device_peak_mb <= 0.0
+                || device_peak_mb > 5_000.0
+                || !(0.0..5_000.0).contains(&scratch_mb)
+            {
+                return Err(format!("shard_resource_gate:{shard}"));
+            }
+            let bundle_digest = decode_hex_64(
+                required(&fields, "public_coin_bundle_sha3_512")?,
+                "bundle_digest",
+            )?;
+            evidence.push(ShardEvidence {
+                wall_seconds,
+                host_peak_mb,
+                device_peak_mb,
+                scratch_mb,
+                stdout_digest: Sha3_512::digest(&output.stdout).into(),
+                bundle_digest,
+            });
+            println!("shard_{shard}_verified=true");
+            println!("shard_{shard}_proof_seconds={wall_seconds:.6}");
+            println!(
+                "shard_{shard}_coordinator_wall_seconds={:.6}",
+                shard_started.elapsed().as_secs_f64()
             );
-            fs::write(capture_path, &output.stdout)
-                .map_err(|error| format!("child_stdout_capture:{shard}:{error}"))?;
+            concurrent_host_mb += host_peak_mb;
+            concurrent_device_mb += device_peak_mb;
+            concurrent_scratch_mb += scratch_mb;
         }
-        if !output.status.success() || !output.stderr.is_empty() {
+        if concurrent_host_mb > 5_000.0
+            || concurrent_device_mb > 5_000.0
+            || concurrent_scratch_mb >= 5_000.0
+        {
             return Err(format!(
-                "shard_process:{shard}:status={:?}:stderr={}",
-                output.status.code(),
-                String::from_utf8_lossy(&output.stderr)
+                "concurrent_resource_gate:{shard_start}:{concurrent_host_mb:.6}:{concurrent_device_mb:.6}:{concurrent_scratch_mb:.6}"
             ));
         }
-        let fields = parse_fields(&output.stdout)?;
-        validate_shard_fields(
-            &fields,
-            shard,
-            header.profile as u8,
-            &file_hex,
-            &parent_hex,
-            expected_state_statement.as_deref(),
-            expected_state_binding.as_deref(),
-            state_binding.as_ref(),
-            qualified_suite_hex.as_deref(),
-        )?;
-        let wall_seconds = parse_f64(&fields, "complete_process_wall_seconds")?;
-        let host_peak_mb = parse_f64(&fields, "proof_phase_host_peak_mb")?
-            .max(parse_f64(&fields, "parent_process_lifetime_host_peak_mb")?)
-            .max(parse_f64(&fields, "native_verifier_peak_mb")?);
-        let device_peak_mb = parse_f64(&fields, "tracked_device_peak_mb")?;
-        let scratch_mb = parse_f64(&fields, "scratch_mb")?;
-        if wall_seconds <= 0.0
-            || host_peak_mb <= 0.0
-            || host_peak_mb > 5_000.0
-            || device_peak_mb <= 0.0
-            || device_peak_mb > 5_000.0
-            || !(0.0..5_000.0).contains(&scratch_mb)
-        {
-            return Err(format!("shard_resource_gate:{shard}"));
-        }
-        let bundle_digest = decode_hex_64(
-            required(&fields, "public_coin_bundle_sha3_512")?,
-            "bundle_digest",
-        )?;
-        evidence.push(ShardEvidence {
-            wall_seconds,
-            host_peak_mb,
-            device_peak_mb,
-            scratch_mb,
-            stdout_digest: Sha3_512::digest(&output.stdout).into(),
-            bundle_digest,
-        });
-        println!("shard_{shard}_verified=true");
-        println!("shard_{shard}_proof_seconds={wall_seconds:.6}");
-        println!(
-            "shard_{shard}_coordinator_wall_seconds={:.6}",
-            shard_started.elapsed().as_secs_f64()
-        );
+        peak_concurrent_host_mb = peak_concurrent_host_mb.max(concurrent_host_mb);
+        peak_concurrent_device_mb = peak_concurrent_device_mb.max(concurrent_device_mb);
+        peak_concurrent_scratch_mb = peak_concurrent_scratch_mb.max(concurrent_scratch_mb);
     }
 
     let receipt = match state_binding.as_ref() {
@@ -563,18 +627,9 @@ fn run() -> Result<(), String> {
         None => atomic_receipt(parent_binding, statement, &evidence),
     };
     let total_seconds = total_started.elapsed().as_secs_f64();
-    let peak_host_mb = evidence
-        .iter()
-        .map(|item| item.host_peak_mb)
-        .fold(0.0_f64, f64::max);
-    let peak_device_mb = evidence
-        .iter()
-        .map(|item| item.device_peak_mb)
-        .fold(0.0_f64, f64::max);
-    let peak_scratch_mb = evidence
-        .iter()
-        .map(|item| item.scratch_mb)
-        .fold(0.0_f64, f64::max);
+    let peak_host_mb = peak_concurrent_host_mb;
+    let peak_device_mb = peak_concurrent_device_mb;
+    let peak_scratch_mb = peak_concurrent_scratch_mb;
     println!("status=verified");
     println!("evidence_class={profile_name}_atomic_semantic_prototype");
     println!("atomic_parent_binding_sha3_512={parent_hex}");
@@ -613,8 +668,16 @@ fn run() -> Result<(), String> {
             .join(",")
     );
     println!("complete_shard_proofs={expected_shards}");
-    println!("sequential_single_gpu_execution=true");
-    println!("parallel_gpu_images=0");
+    println!("shard_concurrency={shard_concurrency}");
+    println!("sequential_single_gpu_execution={}", shard_concurrency == 1);
+    println!(
+        "parallel_gpu_images={}",
+        if shard_concurrency == 1 {
+            0
+        } else {
+            shard_concurrency
+        }
+    );
     println!("theorem_free_challenge_sharing=false");
     println!("atomic_acceptance_boundary=true");
     println!("all_shards_independently_verified=true");
@@ -3882,6 +3945,18 @@ fn parse_f64(fields: &BTreeMap<String, String>, key: &str) -> Result<f64, String
     Ok(value)
 }
 
+fn parse_shard_concurrency(
+    configured: Option<&str>,
+    qualified_proof_suite_present: bool,
+) -> Result<u16, String> {
+    match configured {
+        Some(value) => value
+            .parse::<u16>()
+            .map_err(|_| "shard_concurrency".to_string()),
+        None => Ok(if qualified_proof_suite_present { 1 } else { 2 }),
+    }
+}
+
 fn decode_hex_64(encoded: &str, label: &str) -> Result<[u8; 64], String> {
     if encoded.len() != 128 {
         return Err(format!("{label}_length"));
@@ -4075,6 +4150,14 @@ mod tests {
         );
         assert_eq!(parse_fields(b"A=true\n").unwrap_err(), "stdout_field");
         assert_eq!(parse_fields(b"a\n").unwrap_err(), "stdout_line");
+    }
+
+    #[test]
+    fn two_lanes_are_the_unqualified_default_but_qualified_suite_stays_serial() {
+        assert_eq!(parse_shard_concurrency(None, false).unwrap(), 2);
+        assert_eq!(parse_shard_concurrency(None, true).unwrap(), 1);
+        assert_eq!(parse_shard_concurrency(Some("1"), false).unwrap(), 1);
+        assert_eq!(parse_shard_concurrency(Some("2"), false).unwrap(), 2);
     }
 
     #[test]

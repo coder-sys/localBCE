@@ -7380,3 +7380,278 @@ Full-Workspace, and Downloads Source-Complete copies now share the exact archive
 The temporary staging and rollback directories were removed after successful readback. `STATE.md`
 is not in the reviewed allowlist, so this receipt is recorded in the repository but is not embedded
 in the published ZIP.
+
+## 2026-08-05 Deterministic two-lane K512 shard-overlap experiment - RETAINED, NONQUALIFYING
+
+The rejected theorem-free shard-parallelism idea was reconsidered without shared challenges or a
+proof-semantic change. Each child retained its independent shard-bound public-coin bundle and proof;
+the coordinator waited for the launched group, independently validated every output, and assembled
+the receipt in canonical shard order. `BL_SHARD_CONCURRENCY` is opt-in, serial remains the default,
+parallel mode refuses `BL_PROOF_SUITE_ID`, and the accepted range is hard-capped at two lanes.
+
+On the same K512 boundary, state binding, release binaries, RTX 4060 laptop, and Brave-open host:
+
+```text
+serial_complete_process_wall_seconds=134.095254
+two_lane_confirmation_1_seconds=104.094428
+two_lane_confirmation_2_seconds=100.412382
+two_lane_mean_seconds=102.253405
+two_lane_mean_wall_reduction_percent=23.75
+two_lane_complete_shard_proofs=4
+two_lane_all_shards_independently_verified=true
+two_lane_max_reported_host_upper_bound_mb=598.081000
+two_lane_peak_device_mb_conservative=1976.484224
+two_lane_external_total_gpu_peak_mib=5284
+two_lane_scratch_mb=0.000000
+two_lane_pagefile_growth_mb=0
+two_lane_proof_suite_id=null
+two_lane_complete_proof_qualification=false
+```
+
+A four-lane negative control independently verified but was rejected: `128.583416` seconds,
+`7,890` MiB externally sampled GPU residency, 100% sampled GPU utilization, and `126` MB pagefile
+growth. It was slower than two lanes and violated the no-swap/resource discipline. This result does
+not modify or receive credit from the sealed 22-launch H5 campaign or H6 evidence, does not activate
+a proof suite, and does not update the three published Source-Complete archives. Promotion requires
+a fresh campaign and production scheduler cancellation/recovery/resource-accounting review.
+
+## 2026-08-05 Two-lane promotion campaign and scheduler boundary - VERIFIED, NONQUALIFYING
+
+The requested promotion checks were run against the finalized two-lane coordinator with fresh
+proof randomness and eleven distinct K512 state-binding inputs: one warmup and ten measured
+launches. The campaign was intentionally run without `BL_PROOF_SUITE_ID`; it therefore cannot
+receive H5/H6 credit or activate a suite even though every functional and resource gate below
+passed.
+
+The first wrapper attempt is retained as a failed measurement, not counted: its warmup verified
+all four shards but the external monitor observed `pagefile_growth_mb=2`, so the strict no-swap
+gate returned exit `2`. The corrected rerun used a separate evidence directory and did not relax
+that gate.
+
+Fresh campaign directory:
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\wave2\promotion-k512-two-lane-20260805-r2`
+
+Decision-relevant raw campaign output:
+
+```text
+campaign_id=promotion-k512-two-lane-20260805-r2
+run_count=11
+warmup_count=1
+measured_count=10
+state_binding_input_count=11
+state_binding_unique_sha3_512_count=11
+all_state_binding_verifications=exit_0
+all_monitor_exits=0
+all_status=verified
+all_complete_shard_proofs=4
+all_proof_suite_id=null
+all_complete_proof_qualification=false
+measured_wall_seconds_sorted=100.392184,100.598097,100.820600,101.004053,101.178240,101.419610,101.483205,101.529263,101.712457,101.798191
+p95_measured_wall_seconds=101.798191
+mean_measured_wall_seconds=101.193590
+max_reported_host_mb=605.774000
+max_reported_device_mb=1976.484224
+max_external_process_tree_mb=1467.465728
+max_external_gpu_peak_mib=5314
+max_pagefile_growth_mb=0
+max_post_launch_driver_event_count=0
+max_stderr_bytes=0
+latency_limit_seconds=180
+latency_gate=true
+resource_gate=true
+```
+
+Cancellation/recovery was also exercised on the same K512 binding. A live coordinator, two
+Python workers, and two native bridge children were present before cancellation. Windows
+`taskkill /PID 22200 /T /F` returned exit `0` and reported termination of the coordinator and all
+seven descendants; the only post-check match was the surrounding PowerShell host, not a
+proof coordinator, worker, or bridge. The same state binding was then rerun from scratch and
+returned:
+
+```text
+recovery_exit=0
+status=verified
+complete_shard_proofs=4
+complete_process_wall_seconds=100.138295
+peak_host_mb=604.340000
+peak_device_mb=1976.484224
+scratch_mb=0.000000
+proof_suite_id=null
+complete_proof_qualification=false
+```
+
+The production scheduler review found that the generic path previously terminated only its
+parent on timeout, while the encrypted-witness path already used a Windows Job Object. The
+smallest safe change added process-tree termination to `tools/proving_job_runner.py`, starts a
+new POSIX process group where applicable, and marks tree-termination uncertainty non-retryable.
+The focused scheduler suite is `19 passed in 1.20s`; Python compilation exited `0`. The scheduler
+still does not own GPU/pagefile telemetry for this experimental coordinator, so this candidate
+remains opt-in and non-production; production resource admission remains a Wave 3 integration
+boundary rather than an implied pass.
+
+The sealed Wave 2 evidence was not changed. Before this record, the retained evidence descriptors
+were:
+
+```text
+h5_campaign_file_count=111
+h5_campaign_descriptor_sha256=be89e967ceb7ea9f8c6a24c799276088c8f835884fef1be905ac20c60f66ee41
+h5_manifest_sha256=e8305158d3bd8f8521948300b76d8e162d9f7650dca26ecf66e23f02d162346f
+h6_evidence_file_count=35
+h6_evidence_descriptor_sha256=1fff148bbd56f4586458c08d1f7bea5f38d78e01483633052051a08f39d1d2de
+h6_manifest_sha256=5dae45336a215baf07779453cdf730514ea3780f3519122ab7131c0596738c26
+published_source_complete_archive_updates=0
+proofSuiteId=None
+activationAllowed=False
+```
+
+The two-lane result is a measured throughput-positive, correctness-preserving optimization
+candidate, not a new Wave 2 qualification or activation. Serial remains the production default
+until the scheduler owns the same resource telemetry and the later Wave 3 verifier/state/custody
+boundary is complete.
+
+## 2026-08-05 Native K512 default selection and fail-closed verification - VERIFIED, NONQUALIFYING
+
+The native K512 coordinator now selects two shard lanes when `BL_SHARD_CONCURRENCY` is absent and
+no qualified proof-suite identity is present. When a qualified suite identity is present, the
+absence of an override selects serial execution; an explicit parallel request still returns
+`ERR:parallel_shards_not_qualified`. This is a default-selection change for the nonactivating
+native coordinator only. The generic Cairo/encrypted-worker queue was not rerouted because its
+request schema does not contain the native boundary, state-binding, prototype, worker, or
+execution-manifest inputs required by this coordinator.
+
+Changed implementation and test:
+
+```text
+experiments/bl_pq512_crypto_core/src/bin/k512_atomic_semantic_prototype.rs
+tests embedded in k512_atomic_semantic_prototype.rs
+```
+
+The default-selection unit test passed alongside the native test suite:
+
+```text
+cargo +1.96.0 fmt --check                         exit=0
+cargo +1.96.0 check --features std --bin k512_atomic_semantic_prototype   exit=0
+cargo +1.96.0 test --features std --bin k512_atomic_semantic_prototype   exit=0
+test result: ok. 9 passed; 0 failed; 0 ignored
+cargo +1.96.0 build --release --features std --bin k512_atomic_semantic_prototype   exit=0
+uv run --no-project --with pytest==9.0.3 --with cryptography==49.0.0 pytest -q tests/test_proving_job_runner.py   exit=0
+...................                                                      [100%]
+19 passed in 1.60s
+python -m py_compile tools/proving_job_runner.py tests/test_proving_job_runner.py   exit=0
+```
+
+The first no-override launch was retained as a failed setup attempt because the supplied
+execution-manifest environment value was stale. It failed closed before proving:
+
+```text
+external_exit_code=2
+pagefile_growth_mb=0
+post_launch_driver_event_count=0
+stdout_bytes=0
+stderr_bytes=290
+ERR:execution_manifest_mismatch:33d94e63a93499550808facb0c0cf58c4461647bb1fd00acc81d124a33d88b97d91b5052c5ef03406b2e6fec5ba2e4cc9c196d0c9e8a39470ef78aa0374a542a/e8bdfd542988bd523637a3895c05274d2c1502982ab0fb052560aa3a1d0433f99b4652653e221725d1d60806c6744ff3e331488d7bc16e9e4d1b9e4eb3452029
+```
+
+The corrected no-override launches both selected two lanes and independently verified all four
+shards, but both were rejected by the unchanged external no-swap gate:
+
+```text
+default-k512-two-lane-20260805-r2
+external_exit_code=0
+external_wall_seconds=113.562421
+external_process_tree_peak_mb=1700.524032
+external_gpu_peak_mib=5253
+pagefile_before_mb=1393
+pagefile_after_mb=1698
+pagefile_growth_mb=305
+post_launch_driver_event_count=0
+stdout_bytes=2142
+stderr_bytes=0
+status=verified
+complete_shard_proofs=4
+shard_concurrency=2
+complete_process_wall_seconds=107.919881
+peak_host_mb=803.598000
+peak_device_mb=1976.484224
+scratch_mb=0.000000
+proof_suite_id=null
+complete_proof_latency_gate=true
+complete_proof_qualification=false
+monitor_exit=2
+
+default-k512-two-lane-20260805-r3
+external_exit_code=0
+external_wall_seconds=114.133691
+external_process_tree_peak_mb=1697.595392
+external_gpu_peak_mib=5429
+pagefile_before_mb=1697
+pagefile_after_mb=1715
+pagefile_growth_mb=18
+post_launch_driver_event_count=0
+stdout_bytes=2142
+stderr_bytes=0
+status=verified
+complete_shard_proofs=4
+shard_concurrency=2
+complete_process_wall_seconds=107.845533
+peak_host_mb=802.583000
+peak_device_mb=1976.484224
+scratch_mb=0.000000
+proof_suite_id=null
+complete_proof_latency_gate=true
+complete_proof_qualification=false
+monitor_exit=2
+```
+
+The raw corrected stdout SHA-256 values are `9abd9dfc9b408dd03afbef0338ace6d2668d5044a56101d66baab6b0669c886b`
+and `721670c476f9348086562aebac5d2b72042fbabf6bf839217eb186fb6d3aa344`; both stderr files are
+zero bytes. The captured r3 monitor output is
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\wave2\default-k512-two-lane-20260805-r3.monitor-output.txt`
+with 5,368 bytes and SHA-256
+`d1356d0c0b46341d38e0a3a6c735fe193ee64c9126db455bdfe5e334e0290963`. No coordinator, worker,
+or native bridge descendants remained after either rejected launch.
+
+These runs prove that the code-level default selects the faster two-lane path and that the proof
+boundary still verifies atomically, but they do not prove resource admission on this current host.
+The pagefile gate was not weakened, the runs receive no H5/H6 credit, `proofSuiteId` remains null,
+activation remains false, and the sealed H5/H6 evidence remains unchanged. The published archives
+are refreshed separately below only because the source/documentation change was substantive.
+
+## 2026-08-05 Source-Complete archive refresh after default change - VERIFIED
+
+The substantive native-default and documentation changes required a Source-Complete refresh. The
+reviewed allowlist was reused unchanged in membership; the staging helper copied `779` listed
+source files from the authoritative checkout and rewrote only their manifest hashes. The strict
+builder then passed its own deterministic temporary and published readbacks:
+
+```text
+stage_entries=779
+archive_bytes=11341646
+archive_sha256=a5c060f85359b1b63c038c5bccddcc43b631eaf2f95530c3783a3399adeaebfc
+manifest_sha256=5582ae1fe7a215e83e1462893e8bb13ffba59a37e05dc12f8c2dad424e24bb3f
+entry_count=780
+payload_file_count=779
+payload_bytes=11055647
+builder_version=blind-ledger-release-archive-v1
+```
+
+Independent readback of all three exact published targets returned:
+
+```text
+three_way_byte_identical=true
+bytes=11341531
+sha256=6a6f9ff2b6db68ce9098ff897e8b36df857a59f92baa07de3a72bc4240894540
+sha3_512=26bac3ba47ddd79396e1a4832a586219671a3ac2ebb9bd456238246017c3551055b998260c58182bb9f7d114cd838a833b4be1da0f495b9b990513815b26ad85
+entries=780
+duplicates=0
+crc=PASS
+```
+
+The old three published copies were first backed up at
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\archive-v2-stage\previous-targets-20260805-default`;
+each old copy was `11,350,709` bytes with SHA-256
+`6dcd053066160f7fa6577501d118210745455ed3a3cf19a7a82b788cf02c4826`. The new three copies are
+the exact byte-identical `11,341,646`-byte archive above. The intermediate `11,341,531`-byte
+copies were preserved at
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\archive-v2-stage\previous-targets-20260805-default-r1`.
+The sealed H5/H6 evidence directories were not modified.

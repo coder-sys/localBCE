@@ -1,6 +1,6 @@
 # Blind Ledger implementation roadmap
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 Status: authoritative current execution plan. This file contains no dated run narrative and no
 executable fallback architecture. Historical roadmap text is preserved verbatim in
@@ -62,6 +62,28 @@ The live Strawmap compatibility contract was refreshed on 2026-08-05 from 60 und
 (23 EIPs and 37 non-EIP links). It confirms that Wave 5 must bind deployed L1 sequencing, fork,
 execution, data-availability, and finality behavior through versioned adapters; Draft, Stagnant,
 research, and optional items remain rejected-by-default or observation-only.
+
+The two-lane K512 optimization promotion checks were completed on 2026-08-05 as a nonactivating
+candidate review. A fresh one-warmup/ten-measured campaign over eleven distinct state bindings
+returned K512 p95 `101.798191` seconds, mean `101.193590` seconds, four independently verified
+shards on every run, maximum reported host/device peaks `605.774000`/`1976.484224` MB, maximum
+externally sampled candidate-tree RSS `1467.465728` MB, zero scratch, zero pagefile growth, zero
+driver events, and zero stderr. One earlier warmup is retained as a failed attempt because its
+strict monitor observed `2` MB pagefile growth; the campaign was rerun without weakening the gate.
+Cancellation killed the complete coordinator/worker/bridge tree and a fresh recovery rerun passed.
+The generic scheduler now fails closed when Windows/POSIX process-tree termination cannot be
+confirmed, with its focused suite at `19 passed`; it remains a separate Cairo/encrypted-worker
+path and does not silently route ordinary claim jobs to this native coordinator. The native
+coordinator defaults to two lanes for an unqualified nonactivating K512 run and keeps serial as
+the default when a qualified suite identity is present. `proofSuiteId` remains null for this
+candidate, activation remains false, and the sealed H5/H6 evidence receives no credit from this
+experiment. The three published Source-Complete archives were refreshed only to carry the
+substantive source/documentation changes and are not qualification evidence.
+
+The default-path verification itself is fail-closed: two fresh launches with no concurrency
+override selected two lanes and independently verified four shards, but the external monitor
+rejected pagefile growth of `305` MB and `18` MB. The no-swap gate was not relaxed, and these
+launches do not qualify H5/H6 or production admission.
 
 Current progress is 6 of 93 engineering packages complete. `proofSuiteId=null`, activation is
 false, real PHI and payments are forbidden, and the final independent audit has not begun.

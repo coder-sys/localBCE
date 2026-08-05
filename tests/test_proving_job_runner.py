@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -261,6 +262,27 @@ class ProvingJobRunnerTests(unittest.TestCase):
 
     def test_process_probe_recognizes_the_current_windows_process_without_signaling_it(self) -> None:
         self.assertTrue(runner._process_is_alive(os.getpid()))
+
+    def test_windows_timeout_uses_fail_closed_process_tree_termination(self) -> None:
+        process = mock.Mock(pid=1234)
+        process.poll.return_value = None
+        taskkill = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        with (
+            mock.patch.object(runner.os, "name", "nt"),
+            mock.patch.object(runner.subprocess, "run", taskkill),
+        ):
+            result = runner._terminate_process_tree(process, force=True)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["tree_confirmed"])
+        taskkill.assert_called_once_with(
+            ["taskkill", "/PID", "1234", "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        process.kill.assert_not_called()
 
     def test_job_without_matching_enqueue_audit_event_is_never_run(self) -> None:
         self._enqueue()

@@ -1,6 +1,6 @@
 # Proving optimization review
 
-Updated: 2026-08-02
+Updated: 2026-08-05
 
 Status: current optimization policy. The former paper screen, intermediate arithmetic, and
 superseded prototype sequence are preserved verbatim in
@@ -64,8 +64,69 @@ from a new coherent commit; never replace or discard a failed measurement.
 
 The reference path may use the best safely measured count from 16 logical CPU workers with
 deterministic partitioning and canonical merge. Future large CPU boxes may scale independent
-bounded work, but the laptop cannot depend on server RAM. K512 shards remain sequential on one GPU
-until a complete batching theorem authorizes shared challenges and measurement proves a benefit.
+bounded work, but the laptop cannot depend on server RAM. Shared challenges still require a complete
+batching theorem; independent shard proofs do not receive that shortcut.
+
+An August 5, 2026 laptop experiment reconsidered the previously excluded parallel-shard mechanism
+without sharing challenges or changing proof semantics. The coordinator launched at most two
+independently bound shard workers, waited for the complete group, validated and committed outputs in
+canonical shard order, conservatively summed concurrent resource peaks, and rejected any qualified
+suite identity in parallel mode. On the same K512 boundary, state binding, binaries, and Brave-open
+host, serial execution independently verified in `134.095254` seconds. The corrected two-lane,
+nonqualifying confirmation independently verified in `104.094428` seconds, a `22.37%` wall-time
+reduction, with `596.279` MB conservative host peak, `1,976.484224` MB conservative device peak,
+zero scratch, and no pagefile growth. The finalized binary then independently verified a second
+two-lane run in `100.412382` seconds with `5,284` MiB externally sampled total GPU residency and no
+pagefile growth. The two nonqualifying confirmations average `102.253405` seconds, a `23.75%`
+reduction from the serial control. The immutable 5 GB limit governs host RSS and scratch, not total
+GPU residency; the latter remains mandatory telemetry. A four-lane run was rejected: it took
+`128.583416` seconds,
+reached `7,890` MiB externally sampled GPU residency, and grew pagefile usage by `126` MB. The
+exploratory coordinator is therefore hard-capped at two lanes; the sealed H4/H5 execution remains
+serial, while the unqualified native coordinator now defaults to two lanes. The sealed H5/H6 evidence
+is unchanged. This default is nonactivating and does not turn the generic Cairo/encrypted-worker
+scheduler into a native K512 scheduler.
+
+### Promotion checks completed for the two-lane candidate
+
+The fresh K512 campaign used one warmup plus ten measured launches over eleven distinct state
+bindings, with no proof-suite identity supplied. All eleven state-binding checks and external
+monitor runs passed: four shards independently verified, stderr was empty, driver events were
+zero, scratch was zero, and pagefile growth was zero. Measured wall times were
+`100.392184, 100.598097, 100.820600, 101.004053, 101.178240, 101.419610, 101.483205,
+101.529263, 101.712457, 101.798191` seconds; p95 was `101.798191` seconds and mean was
+`101.193590` seconds. Maximum reported host/device peaks were `605.774000`/`1976.484224` MB;
+maximum externally sampled candidate-tree RSS was `1467.465728` MB and system GPU residency was
+`5314` MiB. The first wrapper warmup is retained but excluded because its strict monitor observed
+`2` MB pagefile growth; the corrected campaign did not relax that gate.
+
+A live cancellation killed the coordinator, Python workers, and native bridge descendants with
+Windows `taskkill /T /F`; a fresh rerun of the same binding independently verified all four shards
+in `100.138295` seconds. The production scheduler review also closed the generic timeout gap by
+adding fail-closed process-tree termination and a focused unit test (`19 passed`); failure to
+confirm tree termination is now non-retryable. The native coordinator's default is now two lanes
+without a qualified suite identity and serial with one; explicit parallel mode with a qualified
+suite is rejected. The default remains nonactivating, receives no H5/H6 credit, does not change
+sealed evidence, and does not activate a suite.
+
+### Default decision recorded on 2026-08-05
+
+The default change is intentionally limited to the native K512 coordinator. Ordinary queued claim
+and encrypted-envelope jobs continue using their existing Cairo/isolated-worker backends because
+their request schema does not contain the native boundary, state-binding, prototype, worker, and
+execution-manifest inputs required by this coordinator. Routing them through the experimental path
+would be an unverified semantic change, not an optimization. The coordinator therefore selects
+two independent shard lanes automatically only for an unqualified native run; a qualified suite
+selects serial execution, and an explicit qualified parallel request fails closed.
+
+The rebuilt binary was then exercised twice with `BL_SHARD_CONCURRENCY` absent. Both launches
+reported `shard_concurrency=2`, verified all four shards, returned `proof_suite_id=null`, and
+passed the internal latency/resource checks (`107.919881` and `107.845533` seconds; internal
+host `803.598`/`802.583` MB; device `1976.484224` MB; scratch `0`). The external no-swap gate
+rejected both: the first recorded pagefile growth of `305` MB and the second `18` MB. Their
+external process-tree peaks were `1700.524032`/`1697.595392` MB, GPU peaks were `5253`/`5429` MiB,
+driver-event counts were `0`, and stderr bytes were `0`. These are default-path functional
+checks plus resource failures, not qualification evidence; the no-swap gate remains unchanged.
 
 ## Not optimization knobs
 
