@@ -16,6 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - run: python3 scripts/validate_ops_scaffold.py
       - run: python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
       - run: python3 scripts/validate_openzeppelin_pin.py

@@ -17,6 +17,7 @@
     "approved_canary_finalized": false,
     "denied_canary_finalized": false,
     "reconciliation_report_clean": false,
+    "pause_recovery_rehearsed": false,
     "legal_approval_recorded": false,
     "independent_audits_complete": false
   },

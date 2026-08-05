@@ -27,6 +27,7 @@ run_in_dir() {
   )
 }
 
+run_step "Validate Sepolia pilot runner" python3 -m unittest discover -s "${ROOT_DIR}/scripts/tests" -p 'test_*.py'
 run_step "Validate ops scaffold" python3 "${ROOT_DIR}/scripts/validate_ops_scaffold.py"
 run_step "Validate governed policy manifest" python3 "${ROOT_DIR}/scripts/validate_policy_manifest.py" "${ROOT_DIR}/ops/policy_manifest.example.json"
 run_step "Validate OpenZeppelin source pin" python3 "${ROOT_DIR}/scripts/validate_openzeppelin_pin.py"

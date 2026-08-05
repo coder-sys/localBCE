@@ -1,0 +1,56 @@
+{
+  "claim_id": "CLAIM-SEPOLIA-CANARY-DENIED-EXAMPLE",
+  "claim_amount": 1000,
+  "member_id": "MEMBER-CANARY-EXAMPLE-002",
+  "provider_npi": "1234567893",
+  "diagnosis_count": 1,
+  "max_charge_cents": 150000,
+  "diagnosis_codes": ["Z00.00"],
+  "service_lines": [
+    {
+      "procedure_code": "99213",
+      "charge_cents": 100000,
+      "units": 1
+    }
+  ],
+  "oracle_source_manifest_id": "DEMO-OFFICIAL-SOURCES-V1",
+  "oracle_facts": [
+    {
+      "fact_type": "program_eligibility_status",
+      "fact_key": "eligibility_active",
+      "fact_value": "1",
+      "source_url": "https://example.gov/demo/oracle-facts",
+      "source_label": "Example canary source - not production",
+      "verification_status": "verified"
+    }
+  ],
+  "oracle_attestation_refs": ["example-attestation:eligibility:denied:v1"],
+  "fee_schedule_id": "DEMO-FEE-SCHEDULE-V1",
+  "fee_schedule_entries": [
+    {
+      "fee_code": "99213",
+      "unit_amount_cents": 100000,
+      "currency": "USD",
+      "effective_from": 19000,
+      "effective_thru": 22000,
+      "source_url": "https://example.gov/demo/fee-schedule",
+      "verification_status": "verified"
+    }
+  ],
+  "eligibility_active": 1,
+  "aid_code": 53,
+  "benefit_level_exists": 1,
+  "date_of_service_from": 20000,
+  "eligibility_period_from": 19900,
+  "eligibility_period_thru": 21000,
+  "soc_amount": 0,
+  "soc_met": 1,
+  "provider_enrolled": 1,
+  "provider_type_valid": 1,
+  "billing_code_valid": 1,
+  "units_valid": 1,
+  "is_duplicate": 0,
+  "disability_determination_valid": 1,
+  "recipient_not_deceased": 0,
+  "physician_certification_valid": 1
+}

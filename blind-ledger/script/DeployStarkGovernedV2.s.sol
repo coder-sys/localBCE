@@ -23,13 +23,15 @@ contract DeployStarkGovernedV2 is Script {
         address attestor = vm.envAddress("STARK_ATTESTOR");
         bytes32 policyManifestHash = vm.envBytes32("STARK_POLICY_MANIFEST_HASH");
         bytes32 initialNullifierRoot = vm.envBytes32("STARK_INITIAL_NULLIFIER_ROOT");
+        uint256 deployerPrivateKey = vm.envUint("STARK_DEPLOYER_PRIVATE_KEY");
+        require(deployerPrivateKey != 0, "STARK_DEPLOYER_PRIVATE_KEY must be nonzero");
 
         address[] memory proposers = new address[](1);
         proposers[0] = governanceSafe;
         address[] memory executors = new address[](1);
         executors[0] = governanceSafe;
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
         TimelockController timelock = new TimelockController(REQUIRED_DELAY, proposers, executors, address(0));
         StarkAttestationVerifierV2 verifier =
             new StarkAttestationVerifierV2(address(timelock), emergencySafe, attestor, policyManifestHash);

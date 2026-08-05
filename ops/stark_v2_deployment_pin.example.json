@@ -3,17 +3,46 @@
   "environment": "sepolia_example_non_production",
   "production_usable": false,
   "chain_id": 11155111,
+  "source_commit": "REPLACE_WITH_REVIEWED_COMMIT_SHA",
   "openzeppelin_contracts_version": "v5.6.1",
   "cargo_lock_sha256": "REPLACE_AFTER_BUILD",
   "proof_parameters_sha256": "REPLACE_AFTER_BUILD",
-  "deployment_transaction": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "proof_parameters": {
+    "schema_version": "localbce-winterfell-proof-parameters-v1",
+    "air": "production-g1-g10-v1",
+    "trace_length": 1024,
+    "base_field": "f64",
+    "field_extension": "quadratic",
+    "hash_function": "blake3_256",
+    "random_coin": "blake3_256",
+    "merkle_tree": "blake3_256",
+    "acceptable_min_conjectured_security_bits": 80,
+    "proof_options": {
+      "num_queries": 32,
+      "blowup_factor": 16,
+      "grinding_factor": 0,
+      "fri_folding_factor": 8,
+      "fri_max_remainder_degree": 31,
+      "constraint_batching": "linear",
+      "deep_poly_batching": "linear"
+    },
+    "source_path": "stark-engine/src/production_air_winterfell.rs",
+    "source_sha256": "REPLACE_AFTER_BUILD"
+  },
+  "deployment_transactions": [
+    "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000000000000000000000000000"
+  ],
   "governance_safe": "0x1111111111111111111111111111111111111111",
-  "timelock": "0x2222222222222222222222222222222222222222",
-  "emergency_safe": "0x3333333333333333333333333333333333333333",
+  "emergency_safe": "0x1111111111111111111111111111111111111111",
+  "treasury": "0x2222222222222222222222222222222222222222",
+  "timelock": "0x3333333333333333333333333333333333333333",
   "attestor": "0x4444444444444444444444444444444444444444",
   "verifier": "0x5555555555555555555555555555555555555555",
-  "registry": "0x1111111111111111111111111111111111111111",
+  "registry": "0x6666666666666666666666666666666666666666",
   "policy_manifest_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "verifier_runtime_bytecode_sha256": "REPLACE_AFTER_DEPLOYMENT",
-  "registry_runtime_bytecode_sha256": "REPLACE_AFTER_DEPLOYMENT"
+  "registry_runtime_bytecode_sha256": "REPLACE_AFTER_DEPLOYMENT",
+  "native_on_chain_winterfell": false
 }

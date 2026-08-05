@@ -104,6 +104,42 @@
       "name": "external_attestation_signer_failure",
       "severity": "critical",
       "required_fields": ["request_id", "signer_backend", "key_id", "reason"]
+    },
+    {
+      "source": "Safe",
+      "name": "ExecutionSuccess",
+      "severity": "critical",
+      "required_fields": ["safe", "transactionHash", "safeTxHash", "nonce", "blockNumber"]
+    },
+    {
+      "source": "Safe",
+      "name": "ExecutionFailure",
+      "severity": "critical",
+      "required_fields": ["safe", "transactionHash", "safeTxHash", "nonce", "blockNumber"]
+    },
+    {
+      "source": "TimelockController",
+      "name": "CallScheduled",
+      "severity": "critical",
+      "required_fields": ["operationId", "target", "data", "delay", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "TimelockController",
+      "name": "CallExecuted",
+      "severity": "critical",
+      "required_fields": ["operationId", "target", "data", "transactionHash", "blockNumber"]
+    },
+    {
+      "source": "stark-sepolia-pilot",
+      "name": "pilot_gate_changed",
+      "severity": "warning",
+      "required_fields": ["gate", "previous", "current", "evidence_sha256", "source_commit"]
+    },
+    {
+      "source": "stark-sepolia-pilot",
+      "name": "pilot_reconciliation_completed",
+      "severity": "critical",
+      "required_fields": ["transactionHash", "claimHash", "batchRoot", "chainRoot", "localRoot", "finalizedBlock"]
     }
   ]
 }

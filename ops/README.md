@@ -22,6 +22,9 @@ The following machine-readable JSON files are included as inactive scaffolding:
 - `governance_config.example.json`
 - `oracle_source_manifest.example.json`
 - `verifier_artifact_pin.example.json`
+- `stark_sepolia_pilot.example.json`
+- `stark_v2_deployment_pin.example.json`
+- `stark_v2_release_profile.example.json`
 
 These files are examples and planning inputs only. They are not active runtime
 configuration, do not enable production mode, and do not replace
@@ -32,6 +35,7 @@ Validate the inactive JSON scaffolding with:
 ```bash
 python3 scripts/validate_ops_scaffold.py
 python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 ```
 
 `policy_manifest.example.json`, `stark_v2_deployment_pin.example.json`, and
@@ -48,13 +52,21 @@ with real deployment, journal, receipt, state, pin, and RPC inputs:
 ```bash
 python3 scripts/generate_stark_pilot_reconciliation_report.py \
   --deployment blind-ledger/stark_v2_deployment.json \
-  --deployment-pin ops/stark_v2_deployment_pin.json \
+  --deployment-pin stark-engine/runtime-artifacts/sepolia-pilot/deployment_pin.json \
+  --release-profile stark-engine/runtime-artifacts/sepolia-pilot/release_profile.json \
   --journal stark-engine/runtime-artifacts/settlement_journal.json \
   --receipt stark-engine/runtime-artifacts/settlement_receipt.json \
   --state stark-engine/runtime-state/nullifier_state.json \
   --rpc-url "$SEPOLIA_RPC_URL" \
   --output stark_pilot_reconciliation_report.json
 ```
+
+The credential-gated, idempotent pilot sequence is documented in
+`ops/SEPOLIA_STARK_PILOT_RUNBOOK.md`. The runner generates public deployment
+pins, a fail-closed release profile, Safe transaction bundles, canary evidence,
+reconciliation evidence, and an audit package. It does not submit Safe
+transactions, approve policy or legal status, provision an MPC signer, or
+activate the STARK release backend.
 
 The validator checks file presence, JSON parsing, `schema_version` fields,
 example/demo governance addresses, required-source HTTPS/official flags, and

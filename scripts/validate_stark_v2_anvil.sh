@@ -82,9 +82,10 @@ echo "==> Deploy governed V2 contracts"
   STARK_ATTESTOR="${ATTESTOR}" \
   STARK_POLICY_MANIFEST_HASH="${POLICY_HASH}" \
   STARK_INITIAL_NULLIFIER_ROOT="${INITIAL_ROOT}" \
+  STARK_DEPLOYER_PRIVATE_KEY="${DEPLOYER_KEY}" \
   STARK_ALLOW_LOCAL_TEST_CHAIN=true \
     forge script script/DeployStarkGovernedV2.s.sol:DeployStarkGovernedV2 \
-      --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_KEY}" --broadcast >/dev/null
+      --rpc-url "${RPC_URL}" --broadcast >/dev/null
 )
 readarray -t DEPLOYED < <(python3 - "${ROOT_DIR}/blind-ledger/stark_v2_deployment.json" <<'PY'
 import json, sys

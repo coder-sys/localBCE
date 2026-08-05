@@ -113,6 +113,13 @@ Keep private keys in environment variables; do not put them in config files.
 For governed V2, use the external signer fields in that example and validate
 `ops/policy_manifest.example.json` before replacing it with an approved policy.
 
+The governed Sepolia sequence is automated by the idempotent, credential-gated
+`scripts/run_stark_sepolia_pilot.py` runner. It performs local gates, preflight,
+deployment and pinning, signer health validation, denied-then-approved canaries,
+finalized reconciliation, recovery evidence, and audit packaging. Safe
+transactions remain human-reviewed and externally submitted. See
+`ops/SEPOLIA_STARK_PILOT_RUNBOOK.md` for the exact sequence and stop conditions.
+
 ## Validation
 
 Run the deterministic bridge and artifact chain:

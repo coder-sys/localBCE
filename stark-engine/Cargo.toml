@@ -121,6 +121,11 @@ path = "src/bin/reconcile_production_stark_settlement.rs"
 required-features = ["production-air-winterfell"]
 
 [[bin]]
+name = "validate_external_attestation_signer"
+path = "src/bin/validate_external_attestation_signer.rs"
+required-features = ["production-air-winterfell"]
+
+[[bin]]
 name = "generate_native_verifier_vectors"
 path = "src/bin/generate_native_verifier_vectors.rs"
 required-features = ["production-air-winterfell"]
