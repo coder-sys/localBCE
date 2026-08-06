@@ -27,25 +27,41 @@ from experiments.bl_pq512_crypto_foundation.public_coin_reference import (
     TheoremProverMessage,
     sample_query_positions,
 )
+from experiments.bl_pq512_crypto_foundation.selected_proof_parameters import proof_suite_id
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
 TRANSCRIPT_EVIDENCE_DOMAIN: Final[bytes] = (
     b"BL/PQ512/WAVE1B/SELECTED-PUBLIC-COIN-EVIDENCE/v1\x00"
 )
+PRODUCTION_STATEMENT_EVIDENCE_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/PRODUCTION-CANDIDATE/EVIDENCE/v1\x00"
+)
 CHALLENGE_BUNDLE_MAGIC: Final[bytes] = b"BLPQSCB1"
 CHALLENGE_BUNDLE_VERSION: Final[int] = 1
 MAX_CHALLENGE_BUNDLE_BYTES: Final[int] = 1 << 20
+SELECTED_TRANSCRIPT_MAGIC: Final[bytes] = b"BLPQTR01"
+SELECTED_TRANSCRIPT_VERSION: Final[int] = 1
+MAX_SELECTED_TRANSCRIPT_BYTES: Final[int] = 16 << 20
+
+_PQ_SUITE_CODES: Final[dict[str, int]] = {
+    "FIPS204-ML-DSA-87": 1,
+    "FIPS205-SLH-DSA-SHAKE-256F": 2,
+}
 
 
-def _framed_hash(*parts: bytes) -> bytes:
-    digest = sha3_512(TRANSCRIPT_EVIDENCE_DOMAIN)
+def _framed_hash_domain(domain: bytes, *parts: bytes) -> bytes:
+    digest = sha3_512(domain)
     for part in parts:
         if type(part) is not bytes or len(part) > 0xFFFF_FFFF:
             raise StructuralError("selected_public_coin_evidence_part_invalid")
         digest.update(len(part).to_bytes(4, "big"))
         digest.update(part)
     return digest.digest()
+
+
+def _framed_hash(*parts: bytes) -> bytes:
+    return _framed_hash_domain(TRANSCRIPT_EVIDENCE_DOMAIN, *parts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +192,68 @@ def encode_selected_challenge_bundle(bundle: SelectedChallengeBundle) -> bytes:
     return encoded
 
 
+def encode_selected_transcript_evidence(
+    transcript: SelectedPublicCoinTranscript,
+) -> bytes:
+    """Encode the complete private transcript for Rust-authoritative replay.
+
+    This is proof-private evidence.  It is never a public output, calldata,
+    log, or telemetry field.  Challenges are intentionally omitted because
+    the Rust verifier derives them from the authenticated seed and checks
+    them against the selected challenge bundle.
+    """
+
+    if type(transcript) is not SelectedPublicCoinTranscript:
+        raise TypeError("selected_public_coin_transcript_required")
+    expected_suite = proof_suite_id(
+        transcript.schedule.program_binary_commitment,
+        transcript.schedule.schedule_commitment,
+    )
+    if transcript.schedule.proof_suite_id != expected_suite:
+        raise StructuralError("selected_public_coin_transcript_suite_mismatch")
+    encoded = bytearray(
+        b"".join(
+            (
+                SELECTED_TRANSCRIPT_MAGIC,
+                SELECTED_TRANSCRIPT_VERSION.to_bytes(2, "big"),
+                transcript.session_id,
+                transcript.public_outputs,
+                transcript.sidecar,
+                transcript.schedule.proof_suite_id,
+                transcript.schedule.schedule_commitment,
+                len(transcript.contributors).to_bytes(2, "big"),
+            )
+        )
+    )
+    for contributor in transcript.contributors:
+        try:
+            suite_code = _PQ_SUITE_CODES[contributor.suite_id]
+        except KeyError as exc:
+            raise StructuralError("selected_public_coin_transcript_suite_invalid") from exc
+        encoded.extend(contributor.contributor_id)
+        encoded.extend(contributor.key_id)
+        encoded.extend(suite_code.to_bytes(2, "big"))
+        encoded.extend(len(contributor.public_key).to_bytes(4, "big"))
+        encoded.extend(contributor.public_key)
+    encoded.extend(len(transcript.evidence).to_bytes(4, "big"))
+    for evidence in transcript.evidence:
+        encoded.extend(evidence.descriptor.encode())
+        encoded.extend(len(evidence.prover_message).to_bytes(4, "big"))
+        encoded.extend(evidence.prover_message)
+        for envelopes in (evidence.commitments, evidence.reveals):
+            encoded.extend(len(envelopes).to_bytes(2, "big"))
+            for envelope in envelopes:
+                encoded.extend(envelope.contributor_id)
+                encoded.extend(envelope.payload)
+                encoded.extend(len(envelope.signature).to_bytes(4, "big"))
+                encoded.extend(envelope.signature)
+        encoded.extend(evidence.resulting_root)
+    encoded.extend(transcript.final_transcript_root)
+    if len(encoded) > MAX_SELECTED_TRANSCRIPT_BYTES:
+        raise StructuralError("selected_public_coin_transcript_size_cap_exceeded")
+    return bytes(encoded)
+
+
 def decode_selected_challenge_bundle(encoded: bytes) -> SelectedChallengeBundle:
     if type(encoded) is not bytes or not 10 <= len(encoded) <= MAX_CHALLENGE_BUNDLE_BYTES:
         raise StructuralError("selected_challenge_bundle_encoding_length_invalid")
@@ -258,35 +336,23 @@ def capture_selected_transcript(session: PublicCoinSession) -> SelectedPublicCoi
 
 
 def _evidence_commitment(transcript: SelectedPublicCoinTranscript) -> bytes:
-    parts: list[bytes] = [
-        transcript.session_id,
+    """Bind the exported proof bundle to the exact public statement.
+
+    The Python coordinator has already replayed every dual-PQ round before it
+    emits this bundle.  The outer Rust verifier can recompute this compact
+    binding from the twelve public fields, the fixed sidecar, and the
+    authenticated final transcript root without receiving caller-supplied
+    proof results.
+    """
+
+    return _framed_hash_domain(
+        PRODUCTION_STATEMENT_EVIDENCE_DOMAIN,
+        transcript.public_outputs,
+        transcript.sidecar,
+        transcript.final_transcript_root,
         transcript.schedule.schedule_commitment,
         transcript.schedule.proof_suite_id,
-    ]
-    for evidence in transcript.evidence:
-        parts.extend(
-            (
-                evidence.round_index.to_bytes(4, "big"),
-                evidence.descriptor.encode(),
-                evidence.prior_root,
-                evidence.prover_message,
-                evidence.challenge.seed,
-                evidence.resulting_root,
-            )
-        )
-        for commitment, reveal in zip(
-            evidence.commitments, evidence.reveals, strict=True
-        ):
-            parts.extend(
-                (
-                    commitment.contributor_id,
-                    commitment.payload,
-                    commitment.signature,
-                    reveal.payload,
-                    reveal.signature,
-                )
-            )
-    return _framed_hash(*parts)
+    )
 
 
 def verify_selected_transcript(
@@ -380,10 +446,14 @@ def verify_selected_transcript(
 
 
 __all__ = (
+    "MAX_SELECTED_TRANSCRIPT_BYTES",
     "SelectedChallengeBundle",
     "SelectedPublicCoinTranscript",
+    "SELECTED_TRANSCRIPT_MAGIC",
+    "SELECTED_TRANSCRIPT_VERSION",
     "capture_selected_transcript",
     "decode_selected_challenge_bundle",
     "encode_selected_challenge_bundle",
+    "encode_selected_transcript_evidence",
     "verify_selected_transcript",
 )

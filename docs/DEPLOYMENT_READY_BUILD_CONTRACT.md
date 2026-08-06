@@ -1,6 +1,6 @@
 # Blind Ledger deployment-ready build contract
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 The frontier additions in `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` are internal work
 inside the existing 93 packages. They do not create a new external dependency, change the count, or
@@ -26,10 +26,13 @@ assurance, and operator activation.
 Current proof checkpoint: the H4 prototype passes one fresh K128/K512 attempt through independent
 verification in 29.974129/120.460733 seconds. Gate 2E is sealed nonactivating, H5 passed the exact
 22-launch p95/resource campaign, and H6 closed the twelve bounded candidate-evidence obligations.
-This is still not `BUILT_AUDIT_PENDING`: the production verifier/state/custody, whole-product
-release evidence, and final audit remain open. Wave 4 adapters/operations and Wave 5 R01-R12
-containing-rollup engineering are complete only as local/synthetic, nonactivating boundaries.
-`proofSuiteId=null`, `production_usable=false`, and the ban on real PHI/payments remain authoritative.
+The local candidate boundary can now produce a per-proof `BUILT_AUDIT_PENDING` record after the
+standalone Rust verifier returns its exact bound `OK` receipt. This does not make the whole product
+deployment-ready: production settlement/state integration, HSM/FIPS custody, external anti-rollback,
+whole-product release evidence, and final audit remain open. Wave 4 adapters/operations and Wave 5
+R01-R12 containing-rollup engineering remain local/synthetic and nonactivating.
+The legacy operational state remains `UNSELECTED` with `proofSuiteId=null`, `production_usable=false`,
+and the ban on real PHI/payments remains authoritative.
 
 ## Product objective
 
@@ -158,8 +161,8 @@ supplying authorized activation configuration.
 
 | State | Meaning | Activation |
 | --- | --- | --- |
-| `UNSELECTED` | No production suite has satisfied the full S07-S09 and release-selection boundary; `proofSuiteId` is null. This remains the current state even though nonactivating H4/H5/H6 candidate evidence exists. | Forbidden |
-| `BUILT_AUDIT_PENDING` | Engineering selected, implemented, pinned, and internally qualified the exact suite. | Release-candidate testing only; `production_usable=false` |
+| `UNSELECTED` | The legacy/global operational registry has no whole-product production suite; `proofSuiteId` remains null. A separate local per-proof candidate record does not change this state. | Forbidden |
+| `BUILT_AUDIT_PENDING` | A specific proof has been selected, implemented, pinned, and accepted by the native Rust receipt and candidate-boundary checks. This is not whole-product deployment readiness. | Release-candidate testing only; `production_usable=false` |
 | `AUDIT_ACCEPTED` | The independent audit accepted the exact suite and release identities. | Eligible for authorized operator activation |
 
 Internal suite selection is a trust-critical engineering decision with explicit proofs, constants,

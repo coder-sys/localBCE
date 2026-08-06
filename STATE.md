@@ -1,19 +1,22 @@
 # Blind Ledger state
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 ## Current status in plain English
 
 This is the current status as of 2026-08-05; the dated sections below preserve the full run history.
 Gate 2E is sealed as a nonactivating candidate context. H5 passed the exact 22-launch campaign with
 K128 p95 32.360845 seconds and K512 p95 148.861885 seconds. H6 then closed all twelve bounded
-candidate-evidence records. The production suite is still unselected: `proofSuiteId=null`,
-activation is false, production verifier/state/custody and rollup work remain open, the final audit
-has not started, and real PHI/payments remain forbidden. Wave 1 remains sealed as a synthetic,
-nonactivating relation. Wave 3 P01-P12, Wave 4 I01-I08/O01-O06/O12, Wave 5 R01-R12, and the
-remaining Wave 2 internal fixed-K/12-field/sidecar reference packages are complete at the
-local/synthetic, nonactivating engineering boundary. The reconciled internal ledger is 93 of 93
-packages complete and 0 open; this is not production activation or production assurance.
+candidate-evidence records. The new standalone Rust candidate verifier accepts a fresh synthetic
+proof and the Python selector can issue a nonzero per-proof `BUILT_AUDIT_PENDING` identity only
+after the exact native `OK` receipt and commitment checks pass. The legacy production planning
+state remains `UNSELECTED` with `proofSuiteId=null`; activation is false, production
+verifier/state/custody and rollup work remain open, the final audit has not started, and real
+PHI/payments remain forbidden. Wave 1 remains sealed as a synthetic, nonactivating relation. Wave 3
+P01-P12, Wave 4 I01-I08/O01-O06/O12, Wave 5 R01-R12, and the remaining Wave 2 internal fixed-K/
+12-field/sidecar reference packages are complete at the local/synthetic, nonactivating engineering
+boundary. The reconciled internal ledger is 93 of 93 packages complete and 0 open; this is not
+production activation or production assurance.
 
 The native K512 coordinator now defaults to two independent lanes for the native boundary, including
 suite-bound runs; `BL_SHARD_CONCURRENCY=1` is the explicit serial fallback. The separate exact
@@ -23,6 +26,52 @@ evidence only. Four fresh current-checkout refresh attempts were rejected by the
 pagefile-growth gate and receive no H5/H6 or production credit. The sealed serial H5/H6 evidence
 remains unchanged.
 
+## 2026-08-06 native candidate verifier and suite-identity boundary - VERIFIED, NONACTIVATING
+
+The local candidate verifier boundary is now implemented in `experiments/bl_pq512_crypto_core`.
+`production_candidate_verify` is the standalone Rust entry point. The v2 `BLPQENV1` envelope
+contains the exact ordered 12-field public boundary, canonical 744-byte sidecar, selected proof
+package, and private selected-public-coin transcript evidence. Rust performs canonical parsing,
+state-AIR/package verification, PQ signature verification, transcript challenge derivation and
+replay, and atomic statement/proof/transcript identity checks. The matching Python selector accepts
+only the exact native `OK` receipt; it does not accept a caller-provided success flag.
+
+The selected `proofSuiteId` is derived from the nonzero selected parameter, program commitment,
+and public-coin schedule commitment and is bound into the sidecar, package, transcript, envelope,
+and receipt. A fresh synthetic end-to-end proof passed the native verifier and produced a nonzero
+per-proof identity with status `BUILT_AUDIT_PENDING`, `activation_allowed=false`, and
+`production_usable=false`. The legacy `ops/launch_blockers.json` planning state, H6 record,
+and global operational registry remain `NOT_DEPLOYMENT_READY` / `UNSELECTED` with
+`proofSuiteId=null`; no activation or production credit is assigned.
+
+The native RustCrypto FIPS-205 SLH-DSA service is software-only and internal/reference-only. It is
+not evidence of HSM custody or a FIPS-validated module. The software custody certificate remains
+`hsm_backed=false`, `fips_validated=false`, `activation_allowed=false`, and
+`production_usable=false`. HSM/FIPS qualification and external anti-rollback authority remain
+open. The four historical Circle hiding identifiers remain preserved; the active Construction 8.2
+rebase certificate closes only the current candidate-boundary bookkeeping, not independent audit
+or production theorem acceptance.
+
+Verification receipt:
+
+```text
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --features std,parallel
+307 core tests passed; all binary/doc-test groups passed; 0 failed
+cargo +1.96.0 clippy --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --all-targets --offline --locked --features std,parallel -- -D warnings
+exit=0
+py -3.14 -m pytest tests/test_bl_pq512_production_candidate.py -k 'not real_rust' -q
+4 passed, 1 deselected
+py -3.14 -m pytest tests/test_bl_pq512_production_candidate.py -k real_rust -vv -s
+1 passed, 4 deselected
+containing candidate/transcript/Wave-3 tests: 28 passed, 1 deselected; PQ-governance: 44 passed;
+hiding/attack: 42 passed.
+```
+
+Production verifier/state/settlement integration, Privacy V2 production admission, HSM/FIPS
+custody, external anti-rollback, release sealing, whole-product deployment readiness, and the
+independent audit remain open. No live Ethereum, PHI, government data, payment authority, live
+credentials, or production activation was used.
+
 ## Current internal completion and closeout receipt (2026-08-05)
 
 The authoritative internal completion check reports `internal_engineering_packages=93`,
@@ -31,12 +80,15 @@ The authoritative internal completion check reports `internal_engineering_packag
 `proofSuiteId=null`, live credentials are false, and network access is false. The remaining
 conformance receipt likewise reports all 31 packages in its scoped ledger as
 `COMPLETE_INTERNAL_NONACTIVATING`, preserves the exact ordered 12-field public boundary, and
-keeps `private_public_payload=false` and `security_ledger_qualifies=true`. Its native hiding
-receipt still records these four candidate coverage gaps rather than claiming theorem closure:
+keeps `private_public_payload=false` and `security_ledger_qualifies=true`. The retained H6
+receipt preserves the following four historical Circle identifiers rather than claiming independent
+theorem closure:
 `FINAL_CIRCLE_SPLIT_LOG_DEGREE_AND_PROVER_INTEGRATION`,
 `FINAL_SHA3_AIR_INTERACTION_ORACLE_DIMENSIONS`,
 `FINAL_MULTI_DOMAIN_FRI_ORACLE_WIDTHS_AFTER_SHA3_AIR_EXPANSION`, and
-`INTERACTIVE_CIRCLE_SIMULATOR_TRANSCRIPT`. The backend remains non-production because
+`INTERACTIVE_CIRCLE_SIMULATOR_TRANSCRIPT`. The separate 2026-08-06 candidate rebase certificate
+covers the active Construction 8.2 obligation set; it does not rewrite the H6 receipt or make the
+backend production because
 `production_native_stark_verifier=false`; the preserved production blockers are LB-001,
 LB-002, LB-003, LB-004, LB-005, LB-006, LB-007, LB-009, and LB-010.
 

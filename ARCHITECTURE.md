@@ -1,6 +1,6 @@
 # Blind Ledger architecture
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 Canonical navigation: `docs/CURRENT_TECH_STACK.md` defines the current implementation inventory;
 `docs/REJECTED_ARCHITECTURES.md` is the only rejection ledger. Historical measurements in other
@@ -18,8 +18,10 @@ accelerator, while Rust retains authoritative SHA3-512 commitment, transcript, c
 multiproof, answer-code, target, public-coin replay, and verification duties. The real 168-layer
 masked GKR producer, native masks, Construction 8.2 PCS, and authenticated same-chain coordinator
 pass as the sealed H4 prototype. Gate 2E is sealed nonactivating; H5 passed the exact 22-launch
-campaign; and H6 closed the twelve bounded candidate-evidence records. `proofSuiteId=null`,
-activation is false, and production verifier/state/custody and final audit work remain open. Wave 4
+campaign; and H6 closed the twelve bounded candidate-evidence records. The local candidate
+verifier can issue a nonzero per-proof identity only as `BUILT_AUDIT_PENDING` after a Rust
+receipt; the legacy operational registry remains `proofSuiteId=null`. Activation is false, and
+production verifier/state/custody and final audit work remain open. Wave 4
 adapter/operations engineering and Wave 5 containing-rollup engineering are now complete internally
 at local/synthetic, nonactivating boundaries. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline,
 not the H5 p95 record.
@@ -85,6 +87,7 @@ specifically requires another directory, such as the Rust crate or `zk-cairo-sha
 | Rules engine | `rules-engine-rust/` plus Python adapter/fallback | Policy adjudication. Local Python fallback is for tests/benchmarks only, not production adjudication. |
 | Claim-proof references | `zk-cairo-sharp/`, `experiments/fixed_shape_claim_air/`, `experiments/bl_pq512_crypto_core/` | Cairo is historical semantic evidence; the sealed M31 AIR is the semantic module; Wave 2 builds the shared-bus Boolean hash coprocessor, mandatory committed sparse-state/PQ-commitment bake-off, and atomic verifier. |
 | Wave 3 internal verifier/state/custody | `experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`, `wave3_verifier_state_custody.py`, and `wave3_full_internal.py` | Nonactivating internal P01-P12 boundary: A12-derived dual roots, fixed 256-slot batch replay plus hidden salt-use insertion, canonical 744-byte proof envelope, full S10 state tuple, private payment-root recomputation, durable governed registry bound into state creation/reopen/refresh, local Rust-authoritative binding port, recovery/migration/rollback, and digest-only custody evidence. Production verifier, HSM/FIPS, external anti-rollback, and activation remain open. |
+| Native candidate verifier | `experiments/bl_pq512_crypto_core/src/bin/production_candidate_verify.rs`, `production_verifier.rs`, and `selected_public_coin.rs` | Local Rust-authoritative envelope, selected proof-package, and private public-coin transcript verification. It can produce a per-proof `BUILT_AUDIT_PENDING` identity only; it is not the production `INativeStarkVerifier`, settlement integration, or activation surface. |
 | Wave 2 internal reference seam | `app/wave2_internal.py`, `tools/wave2_internal_conformance.py`, `ops/wave2_internal_release_profile.json` | Local/synthetic fixed-K Privacy V2 shape, exact 12-field projection, 744-byte sidecar, bounded proof grammar, and public-binding reference verifier. It is not a ZK proof, production verifier, suite selection, or activation surface. |
 | Solidity contracts | `contracts/` | Verifier and settlement-facing on-chain code. Protected from casual edits. |
 | Operations | `ops/` | Sole commit-bound policy spec, verifier pin manifest, deployment config, and readiness authority. |
@@ -103,7 +106,7 @@ specifically requires another directory, such as the Rust crate or `zk-cairo-sha
    coprocessor atomically under authenticated interactive public coin.
 6. Settlement/verifier code consumes the pinned verifier artifacts and public-input boundary.
 
-The current step 6 is incomplete: Cairo `batch_main` returns 12 values, while the V1 settlement contract accepts a separate 21-value caller-supplied array, and the repository contains no production `INativeStarkVerifier` implementation. The target design requires one exact proof-authenticated output ABI before any state transition can settle.
+The current step 6 has a local candidate path but remains incomplete for production: the standalone Rust `production_candidate_verify` command verifies one exact envelope, selected proof package, and private public-coin transcript, while Cairo `batch_main` returns 12 values and the V1 settlement contract accepts a separate 21-value caller-supplied array. The repository still has no production `INativeStarkVerifier` implementation or exact settlement ABI binding. The target design requires one exact proof-authenticated output ABI before any state transition can settle.
 
 ## Target rollup layers
 
@@ -281,6 +284,7 @@ standard library and local pinned modules.
 
 The newest complete K128/K512 proofs pass all functional and 30/180-second H4 prototype gates at
 29.974129/120.460733 seconds. The separate exact H5 p95 campaign passed, and the bounded H6
-candidate-evidence manifest closed all twelve records. Production use remains closed because
-`proofSuiteId` is still null and the production verifier/state/custody and audit gates remain
-unfinished.
+candidate-evidence manifest closed all twelve records. Production use remains closed. A fresh local
+proof can now receive a per-proof `BUILT_AUDIT_PENDING` identity after the native Rust receipt, while
+the legacy operational registry remains `proofSuiteId=null` and the production verifier/state/custody,
+settlement, release, and audit gates remain unfinished.

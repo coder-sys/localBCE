@@ -162,3 +162,13 @@ required-features = ["std"]
 name = "h6_proof_body_kat"
 path = "src/bin/h6_proof_body_kat.rs"
 required-features = ["std"]
+
+[[bin]]
+name = "production_candidate_verify"
+path = "src/bin/production_candidate_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "selected_slh_dsa_service"
+path = "src/bin/selected_slh_dsa_service.rs"
+required-features = ["std"]

@@ -1,6 +1,6 @@
 # Blind Ledger implementation roadmap
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 Status: authoritative current execution plan. This file contains no dated run narrative and no
 executable fallback architecture. Historical roadmap text is preserved verbatim in
@@ -57,6 +57,15 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | H5 | Qualified, nonactivating | Exact 22-launch campaign; p95 32.360845 s K128 and 148.861885 s K512; RSS/scratch/pagefile/driver/stderr gates pass | Production integration and final suite identity |
 | H6 | Qualified candidate evidence, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody, release, final audit, and suite activation |
 | Waves 3-5 | Wave 3, Wave 4, and Wave 5 internal engineering complete, nonactivating | P01-P12, I01-I08/O01-O06/O12, and R01-R12 source, acceptance tests, and local/synthetic reference evidence are complete; no production selection | Production verifier/state/custody, HSM/FIPS custody qualification, whole-product release, audit |
+| Native candidate verifier | Per-proof candidate boundary complete, nonactivating | Fresh synthetic proof accepted by the standalone Rust envelope/package/transcript verifier; Python selector requires the exact native `OK` receipt and emits `BUILT_AUDIT_PENDING` only for that proof | Production `INativeStarkVerifier`, exact settlement ABI, HSM/FIPS custody, external anti-rollback, release seal, final audit, and operator activation |
+
+The native candidate boundary is intentionally separate from the global operational selection. A
+nonzero per-proof `proofSuiteId` is now derived from the selected parameters, program commitment, and
+public-coin schedule and is admitted only after the standalone Rust verifier emits a bound `OK`
+receipt. The legacy `ops/launch_blockers.json` planning state remains `NOT_DEPLOYMENT_READY` and
+`UNSELECTED` with `proofSuiteId=null`; no activation or production credit flows from the local
+candidate record. The next boundary is whole-product production verifier/state/settlement and
+custody/release qualification, followed by the independent audit.
 
 The live Strawmap compatibility contract was refreshed on 2026-08-05 from 60 underlying links
 (23 EIPs and 37 non-EIP links). It confirms that Wave 5 must bind deployed L1 sequencing, fork,

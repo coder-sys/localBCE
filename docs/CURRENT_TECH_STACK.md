@@ -1,6 +1,6 @@
 # Blind Ledger current technical stack
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 Status: canonical current-stack index. If an older checkpoint conflicts with this file, `STATE.md`,
 `ARCHITECTURE.md`, or `docs/IMPLEMENTATION_ROADMAP.md`, the newer current files win. Historical
@@ -26,14 +26,19 @@ nonactivating terminal ledger, H5 has a validated exact 22-launch campaign, H6 c
 complete, Wave 3 P01-P12 is internally complete, and Wave 4 I01-I08/O01-O06/O12 passes local
 simulator/conformance gates without activation. Wave 5 R01-R12 now passes the local/synthetic
 claim-to-finalized-L1, DA, bridge, forced-inclusion, fork-migration, and rollback boundary.
-`proofSuiteId=null`, activation is false, and real PHI or payments are forbidden.
+The new local candidate verifier can issue a nonzero per-proof identity only as
+`BUILT_AUDIT_PENDING` after an actual Rust verification receipt; activation and production use
+remain false. The legacy operational registry remains `UNSELECTED` with
+`proofSuiteId=null`, and real PHI or payments are forbidden.
 
 The internal package ledger is closed by `tools/remaining_internal_conformance.py`: every
 S01-S12, A01-A16, Z01-Z12, T01-T14, P01-P12, I01-I08, O01-O06/O12, and R01-R12 identifier has
-a local completion receipt. This closes internal engineering scope only. Production native proof
-verification, exact settlement ABI binding, Privacy V2 production acceptance, HSM/FIPS custody,
-live Ethereum/client deployment, production credentials, release activation, and the independent
-audit remain closed until their separate evidence exists.
+a local completion receipt. This closes internal engineering scope only. The standalone Rust candidate
+verifier and transcript replay now exist and pass a fresh local synthetic proof, but production native
+proof verification, exact settlement ABI binding, Privacy V2 production acceptance, HSM/FIPS custody,
+live Ethereum/client deployment, production credentials, release activation, and the independent audit
+remain closed until their separate evidence exists. See
+`docs/PRODUCTION_CANDIDATE_VERIFIER_BOUNDARY.md`.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
 measurement module. Gate 2E-1/S1 is implemented as 13 bounded descriptors plus strict
@@ -116,6 +121,21 @@ checks, rollback/recovery/mixed-version checks, the complete evidence manifest, 
 nonactivating Wave 3 verifier/state/custody work. The candidate remains synthetic/nonactivating:
 `proofSuiteId=null`, `activation_allowed=false`; this is not production readiness or audit
 completion.
+
+## Native candidate verifier boundary (nonactivating)
+
+`experiments/bl_pq512_crypto_core/src/bin/production_candidate_verify.rs` is now the local
+Rust-authoritative verifier for a selected proof package. It parses the versioned outer envelope,
+checks the exact ordered 12-field public boundary and 744-byte sidecar, verifies the selected
+state-AIR package, replays the complete private authenticated public-coin transcript, and binds
+the proof, transcript, program, schedule, and candidate identity. The matching Python selector
+requires the actual native `OK` receipt and emits `BUILT_AUDIT_PENDING` only for that exact
+proof.
+
+This is a candidate boundary, not the production `INativeStarkVerifier`, on-chain settlement
+integration, or audit acceptance. The legacy readiness registry and H6 record intentionally remain
+`proofSuiteId=null`; the nonzero candidate identity is scoped to the verified local proof and
+does not authorize activation. HSM/FIPS custody and external anti-rollback authority remain open.
 
 ## Wave 2 internal reference boundary (nonactivating)
 
