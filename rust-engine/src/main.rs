@@ -1,5 +1,9 @@
+mod advanced_rules;
 mod rules_engine;
 
+use advanced_rules::{
+    evaluate_promotion_queue_path, validate_canonical_bundle_path, validate_promotion_queue_path,
+};
 use rules_engine::{
     CURRENT_RULESET_SHA256, ClaimRuleFacts, DeterministicRuleBundle, validate_claude_shadow_bundle,
 };
@@ -872,6 +876,27 @@ fn main() {
         args.next()
             .ok_or_else(|| "rules-shadow-validate requires a bundle path".to_string())
             .and_then(|path| run_rules_shadow_validate(Path::new(&path)))
+    } else if arg.as_deref() == Some("rules-canonical-validate") {
+        args.next()
+            .ok_or_else(|| "rules-canonical-validate requires a bundle path".to_string())
+            .and_then(|path| run_rules_canonical_validate(Path::new(&path)))
+    } else if arg.as_deref() == Some("rules-promotion-queue-validate") {
+        args.next()
+            .ok_or_else(|| "rules-promotion-queue-validate requires a queue path".to_string())
+            .and_then(|path| run_rules_promotion_queue_validate(Path::new(&path)))
+    } else if arg.as_deref() == Some("rules-shadow-evaluate") {
+        args.next()
+            .ok_or_else(|| "rules-shadow-evaluate requires a queue path".to_string())
+            .and_then(|queue_path| {
+                args.next()
+                    .ok_or_else(|| "rules-shadow-evaluate requires a facts path".to_string())
+                    .and_then(|facts_path| {
+                        run_advanced_rules_shadow_evaluate(
+                            Path::new(&queue_path),
+                            Path::new(&facts_path),
+                        )
+                    })
+            })
     } else {
         run_app()
     };
@@ -880,6 +905,51 @@ fn main() {
         eprintln!("{}", err);
         std::process::exit(1);
     }
+}
+
+fn run_rules_canonical_validate(path: &Path) -> Result<(), String> {
+    let (rules_sha256, rule_count) = validate_canonical_bundle_path(path)?;
+    println!(
+        "{}",
+        json!({
+            "event": "canonical_government_rules_validation",
+            "status": "ok",
+            "path": path,
+            "rules_sha256": rules_sha256,
+            "rule_count": rule_count,
+            "runtime_activation": false,
+            "proof_binding": false,
+        })
+    );
+    Ok(())
+}
+
+fn run_rules_promotion_queue_validate(path: &Path) -> Result<(), String> {
+    let validation = validate_promotion_queue_path(path)?;
+    println!(
+        "{}",
+        json!({
+            "event": "government_rules_promotion_queue_validation",
+            "status": "ok",
+            "path": path,
+            "queue_id": validation.queue_id,
+            "items_sha256": validation.items_sha256,
+            "queue_items": validation.queue_items,
+            "program_count": validation.program_count,
+            "runtime_eligible": validation.runtime_eligible,
+            "runtime_activation": false,
+            "proof_binding": false,
+        })
+    );
+    Ok(())
+}
+
+fn run_advanced_rules_shadow_evaluate(queue_path: &Path, facts_path: &Path) -> Result<(), String> {
+    let report = evaluate_promotion_queue_path(queue_path, facts_path)?;
+    let output = serde_json::to_string_pretty(&report)
+        .map_err(|error| format!("could not serialize rules shadow evaluation: {error}"))?;
+    println!("{output}");
+    Ok(())
 }
 
 fn run_rules_shadow_validate(path: &Path) -> Result<(), String> {

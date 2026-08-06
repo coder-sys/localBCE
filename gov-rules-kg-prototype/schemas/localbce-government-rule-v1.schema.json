@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localbce.example/schemas/localbce-government-rule-v1.schema.json",
+  "title": "localBCE canonical government rule v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "rule_id",
+    "version",
+    "program",
+    "jurisdiction",
+    "authority",
+    "rule_type",
+    "conditions",
+    "outcome",
+    "effective_from",
+    "effective_through",
+    "source",
+    "review_status",
+    "legal_verification_status",
+    "runtime_eligibility_status"
+  ],
+  "properties": {
+    "schema_version": { "const": "localbce-government-rule-v1" },
+    "rule_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]*$" },
+    "version": { "type": "string", "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$" },
+    "program": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "jurisdiction": { "$ref": "#/$defs/jurisdiction" },
+    "authority": { "$ref": "#/$defs/authority" },
+    "rule_type": {
+      "enum": [
+        "administration_rule",
+        "appeal_rule",
+        "deadline_rule",
+        "documentation_rule",
+        "eligibility_rule",
+        "enforcement_rule",
+        "enrollment_rule",
+        "exception_rule",
+        "payment_rule",
+        "provider_rule",
+        "reporting_rule",
+        "verification_rule"
+      ]
+    },
+    "conditions": { "$ref": "#/$defs/condition" },
+    "outcome": { "$ref": "#/$defs/outcome" },
+    "effective_from": { "type": "string", "format": "date" },
+    "effective_through": { "type": ["string", "null"], "format": "date" },
+    "source": { "$ref": "#/$defs/source" },
+    "review_status": {
+      "enum": ["unreviewed", "machine_reviewed", "human_reviewed", "approved", "rejected"]
+    },
+    "legal_verification_status": {
+      "enum": ["not_verified", "pending", "verified", "rejected"]
+    },
+    "runtime_eligibility_status": {
+      "enum": ["blocked", "shadow_only", "eligible", "active"]
+    }
+  },
+  "$defs": {
+    "jurisdictionLevel": {
+      "enum": ["federal", "state", "local", "tribal", "territory"]
+    },
+    "jurisdiction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["country", "level", "state"],
+      "properties": {
+        "country": { "const": "US" },
+        "level": { "$ref": "#/$defs/jurisdictionLevel" },
+        "state": { "type": ["string", "null"], "pattern": "^[A-Z]{2}$" },
+        "locality": { "type": ["string", "null"] }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "level", "citation"],
+      "properties": {
+        "issuer": { "type": "string", "minLength": 1 },
+        "level": { "$ref": "#/$defs/jurisdictionLevel" },
+        "citation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "typedValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "boolean" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "integer" },
+            "value": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "decimal" },
+            "value": { "type": "string", "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "string" },
+            "value": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "date" },
+            "value": { "type": "string", "format": "date" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "list" },
+            "value": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/typedValue" }
+            }
+          }
+        }
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "conditions"],
+          "properties": {
+            "op": { "enum": ["all", "any"] },
+            "conditions": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/condition" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "condition"],
+          "properties": {
+            "op": { "const": "not" },
+            "condition": { "$ref": "#/$defs/condition" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "fact", "fact_type", "operator", "value"],
+          "properties": {
+            "op": { "const": "compare" },
+            "fact": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" },
+            "fact_type": { "enum": ["boolean", "integer", "decimal", "string", "date", "list"] },
+            "operator": {
+              "enum": [
+                "eq",
+                "neq",
+                "lt",
+                "lte",
+                "gt",
+                "gte",
+                "in",
+                "not_in",
+                "contains",
+                "before",
+                "on_or_before",
+                "after",
+                "on_or_after"
+              ]
+            },
+            "value": { "$ref": "#/$defs/typedValue" }
+          }
+        }
+      ]
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "parameters"],
+      "properties": {
+        "kind": {
+          "enum": ["administrative", "appeal", "deadline", "decision", "enforcement", "obligation", "payment"]
+        },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_.:-]*$" },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/typedValue" }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "citation_text", "artifact_path", "sha256"],
+      "properties": {
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "citation_text": { "type": "string", "minLength": 1 },
+        "artifact_path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

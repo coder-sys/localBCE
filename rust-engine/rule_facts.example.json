@@ -1,0 +1,36 @@
+{
+  "schema_version": "localbce-rule-facts-v1",
+  "program": "medicaid",
+  "jurisdiction": {
+    "country": "US",
+    "level": "federal",
+    "state": null
+  },
+  "evaluation_date": "2026-08-05",
+  "facts": {
+    "age": {
+      "type": "integer",
+      "value": 42
+    },
+    "coverage_status": {
+      "type": "string",
+      "value": "active"
+    },
+    "eligibility_active": {
+      "type": "boolean",
+      "value": true
+    },
+    "household_status": {
+      "type": "string",
+      "value": "qualified"
+    },
+    "income": {
+      "type": "decimal",
+      "value": "24000.00"
+    },
+    "provider_status": {
+      "type": "string",
+      "value": "enrolled"
+    }
+  }
+}

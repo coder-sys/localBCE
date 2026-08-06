@@ -8,6 +8,7 @@ from .access import dependency_report, phase0_access_check
 from .agent_discovery import build_agent_discovery_plan, discover_sources_from_plan, discovered_sources_to_config_sources, write_agent_discovery_reports, write_official_source_pack
 from .ai import AIOptions, AIProviderError, validate_ai_provider
 from .bulk_plan import build_bulk_plan
+from .canonical_rules import validate_promotion_queue_file, write_promotion_queue
 from .claude_web_audit import write_claude_web_audit
 from .claude_web_coverage import write_claude_web_coverage
 from .claude_web_executable import write_claude_web_executable_candidates, write_claude_web_proof_report
@@ -85,6 +86,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claude-web-mapping-qa", help="Report deterministic mapping weaknesses and next fix buckets")
     subparsers.add_parser("claude-web-export-rust-shadow", help="Export QA-passed Claude mappings into a deterministic non-runtime Rust shadow bundle")
     subparsers.add_parser("rules-corpus-audit", help="Write the Phase R1 JSON-only rules corpus inventory and runtime-boundary report")
+    subparsers.add_parser(
+        "rules-build-promotion-queue",
+        help="Build the deterministic all-program R2-R3 promotion queue without runtime activation",
+    )
+    promotion_validate_parser = subparsers.add_parser(
+        "rules-validate-promotion-queue",
+        help="Validate an existing R2-R3 promotion queue",
+    )
+    promotion_validate_parser.add_argument(
+        "--queue",
+        type=Path,
+        default=Path("reports/rules_promotion_queue_v1.json"),
+    )
     claude_scale_parser = subparsers.add_parser("claude-web-scale-plan", help="Plan structured Claude web expansion batches across programs, jurisdictions, and source types")
     claude_scale_parser.add_argument("--target-candidates-per-branch", type=int, default=10)
     claude_scale_parser.add_argument("--batch-size", type=int, default=5)
@@ -328,6 +342,24 @@ def main() -> None:
     if args.command == "rules-corpus-audit":
         try:
             payload = write_rules_corpus_audit(workdir)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "rules-build-promotion-queue":
+        try:
+            payload = write_promotion_queue(workdir)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "rules-validate-promotion-queue":
+        try:
+            payload = validate_promotion_queue_file(workdir, args.queue)
         except (FileNotFoundError, ValueError) as exc:
             print(str(exc))
             raise SystemExit(2) from exc
