@@ -5126,6 +5126,7 @@ def main():
         print("prototype=fp16_zk_rs_theorem8_1_k128_v2")
         print("activation=false")
         qualified_suite = qualified_proof_suite_id()
+        parallel_shards = os.environ.get("BL_SHARD_CONCURRENCY") == "2"
         print(
             "proof_suite_id="
             + ("null" if qualified_suite is None else qualified_suite.hex())
@@ -5444,7 +5445,7 @@ def main():
         print("complete_pcs_qualification=false")
         print(
             "complete_proof_qualification="
-            + str(qualified_suite is not None).lower()
+            + str(qualified_suite is not None and not parallel_shards).lower()
         )
     finally:
         if memory is not None:

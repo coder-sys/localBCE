@@ -408,18 +408,15 @@ fn run() -> Result<(), String> {
         .map(|binding| hex(&binding.binding_digest));
 
     let shard_concurrency = match env::var("BL_SHARD_CONCURRENCY") {
-        Ok(value) => parse_shard_concurrency(Some(&value), qualified_proof_suite.is_some())?,
-        Err(env::VarError::NotPresent) => {
-            parse_shard_concurrency(None, qualified_proof_suite.is_some())?
-        }
+        Ok(value) => parse_shard_concurrency(Some(&value))?,
+        Err(env::VarError::NotPresent) => parse_shard_concurrency(None)?,
         Err(_) => return Err("shard_concurrency_env".to_string()),
     };
     if shard_concurrency == 0 || shard_concurrency > expected_shards || shard_concurrency > 2 {
         return Err("shard_concurrency_range".to_string());
     }
-    if shard_concurrency > 1 && qualified_proof_suite.is_some() {
-        return Err("parallel_shards_not_qualified".to_string());
-    }
+    let complete_proof_qualification =
+        qualification_for_execution(qualified_proof_suite.is_some(), shard_concurrency);
 
     let total_started = Instant::now();
     let mut evidence = Vec::with_capacity(usize::from(expected_shards));
@@ -438,6 +435,7 @@ fn run() -> Result<(), String> {
                 .arg(&prototype)
                 .env("BL_HASH_BUS_B16_BOUNDARY", &boundary)
                 .env("BL_HASH_BUS_B16_SHARD", shard.to_string())
+                .env("BL_SHARD_CONCURRENCY", shard_concurrency.to_string())
                 .env("BL_HASH_BUS_GKR_WORKER", &worker)
                 .env("BL_ATOMIC_PARENT_BINDING", &parent_hex)
                 .env("BL_NATIVE_RELEASE_DIR", &native_directory)
@@ -561,17 +559,18 @@ fn run() -> Result<(), String> {
                 ));
             }
             let fields = parse_fields(&output.stdout)?;
-            validate_shard_fields(
-                &fields,
+            validate_shard_fields(ShardFieldValidationContext {
+                fields: &fields,
                 shard,
-                header.profile as u8,
-                &file_hex,
-                &parent_hex,
-                expected_state_statement.as_deref(),
-                expected_state_binding.as_deref(),
-                state_binding.as_ref(),
-                qualified_suite_hex.as_deref(),
-            )?;
+                profile: header.profile as u8,
+                file_digest: &file_hex,
+                parent_binding: &parent_hex,
+                state_statement_digest: expected_state_statement.as_deref(),
+                state_binding_digest: expected_state_binding.as_deref(),
+                state_binding: state_binding.as_ref(),
+                qualified_proof_suite: qualified_suite_hex.as_deref(),
+                complete_proof_qualification,
+            })?;
             let wall_seconds = parse_f64(&fields, "complete_process_wall_seconds")?;
             let host_peak_mb = parse_f64(&fields, "proof_phase_host_peak_mb")?
                 .max(parse_f64(&fields, "parent_process_lifetime_host_peak_mb")?)
@@ -699,7 +698,7 @@ fn run() -> Result<(), String> {
     );
     println!(
         "complete_proof_qualification={}",
-        qualified_proof_suite.is_some()
+        complete_proof_qualification
     );
     Ok(())
 }
@@ -2331,8 +2330,8 @@ fn typed_map_messages(
     let mut messages = Vec::with_capacity(usize::try_from(schedule.sha3_call_rows).unwrap_or(0));
     for phase in ["before", "after"] {
         let present = typed_column(tables, &endpoint_table, &format!("{phase}_present"))?;
-        for row in 0..endpoint_rows {
-            match present[row].as_u32() {
+        for (row, presence) in present.iter().enumerate().take(endpoint_rows) {
+            match presence.as_u32() {
                 0 => {}
                 1 => messages.push(typed_map_leaf_message(
                     tables,
@@ -2453,8 +2452,8 @@ fn typed_digest_vector(
     }
     let mut digests = vec![[0_u8; 64]; total_calls];
     let mut seen = vec![false; total_calls];
-    for row in 0..total_calls {
-        let call = usize::try_from(call_values[row].as_u32())
+    for (row, call_value) in call_values.iter().enumerate().take(total_calls) {
+        let call = usize::try_from(call_value.as_u32())
             .map_err(|_| "typed_state_digest_call_index".to_string())?;
         if call >= total_calls || seen[call] {
             return Err("typed_state_digest_call_index".to_string());
@@ -2664,8 +2663,8 @@ fn verify_typed_root_interface(
             .checked_add(phase as u32)
             .ok_or_else(|| "typed_state_root_call_index".to_string())?;
         let mut digest_row = None;
-        for row in 0..digest_call.len() {
-            if digest_call[row].as_u32() != call {
+        for (row, call_value) in digest_call.iter().enumerate() {
+            if call_value.as_u32() != call {
                 continue;
             }
             if digest_row.replace(row).is_some() {
@@ -3385,7 +3384,7 @@ fn verify_state_hash_bus_calls(
         }
         if cached_shard
             .as_ref()
-            .map_or(true, |(cached_id, _)| *cached_id != shard_id)
+            .is_none_or(|(cached_id, _)| *cached_id != shard_id)
         {
             let shard = boundary
                 .read_shard(shard_id)
@@ -3563,7 +3562,7 @@ fn verify_typed_state_hash_bus_calls(
         }
         if cached_shard
             .as_ref()
-            .map_or(true, |(cached_id, _)| *cached_id != shard_id)
+            .is_none_or(|(cached_id, _)| *cached_id != shard_id)
         {
             let shard = boundary
                 .read_shard(shard_id)
@@ -3673,17 +3672,32 @@ fn parse_fields(stdout: &[u8]) -> Result<BTreeMap<String, String>, String> {
     Ok(fields)
 }
 
-fn validate_shard_fields(
-    fields: &BTreeMap<String, String>,
+struct ShardFieldValidationContext<'a> {
+    fields: &'a BTreeMap<String, String>,
     shard: u16,
     profile: u8,
-    file_digest: &str,
-    parent_binding: &str,
-    state_statement_digest: Option<&str>,
-    state_binding_digest: Option<&str>,
-    state_binding: Option<&StateBindingVerification>,
-    qualified_proof_suite: Option<&str>,
-) -> Result<(), String> {
+    file_digest: &'a str,
+    parent_binding: &'a str,
+    state_statement_digest: Option<&'a str>,
+    state_binding_digest: Option<&'a str>,
+    state_binding: Option<&'a StateBindingVerification>,
+    qualified_proof_suite: Option<&'a str>,
+    complete_proof_qualification: bool,
+}
+
+fn validate_shard_fields(context: ShardFieldValidationContext<'_>) -> Result<(), String> {
+    let ShardFieldValidationContext {
+        fields,
+        shard,
+        profile,
+        file_digest,
+        parent_binding,
+        state_statement_digest,
+        state_binding_digest,
+        state_binding,
+        qualified_proof_suite,
+        complete_proof_qualification,
+    } = context;
     for key in [
         "sumcheck_chain_verified",
         "terminal_target_verified",
@@ -3714,7 +3728,7 @@ fn validate_shard_fields(
         }
     }
     let expected_proof_suite = qualified_proof_suite.unwrap_or("null");
-    let expected_proof_qualification = if qualified_proof_suite.is_some() {
+    let expected_proof_qualification = if complete_proof_qualification {
         "true"
     } else {
         "false"
@@ -3945,16 +3959,20 @@ fn parse_f64(fields: &BTreeMap<String, String>, key: &str) -> Result<f64, String
     Ok(value)
 }
 
-fn parse_shard_concurrency(
-    configured: Option<&str>,
-    qualified_proof_suite_present: bool,
-) -> Result<u16, String> {
+fn parse_shard_concurrency(configured: Option<&str>) -> Result<u16, String> {
     match configured {
         Some(value) => value
             .parse::<u16>()
             .map_err(|_| "shard_concurrency".to_string()),
-        None => Ok(if qualified_proof_suite_present { 1 } else { 2 }),
+        None => Ok(2),
     }
+}
+
+fn qualification_for_execution(
+    qualified_proof_suite_present: bool,
+    shard_concurrency: u16,
+) -> bool {
+    qualified_proof_suite_present && shard_concurrency == 1
 }
 
 fn decode_hex_64(encoded: &str, label: &str) -> Result<[u8; 64], String> {
@@ -4153,11 +4171,13 @@ mod tests {
     }
 
     #[test]
-    fn two_lanes_are_the_unqualified_default_but_qualified_suite_stays_serial() {
-        assert_eq!(parse_shard_concurrency(None, false).unwrap(), 2);
-        assert_eq!(parse_shard_concurrency(None, true).unwrap(), 1);
-        assert_eq!(parse_shard_concurrency(Some("1"), false).unwrap(), 1);
-        assert_eq!(parse_shard_concurrency(Some("2"), false).unwrap(), 2);
+    fn two_lanes_are_the_native_default_and_serial_is_explicit_fallback() {
+        assert_eq!(parse_shard_concurrency(None).unwrap(), 2);
+        assert_eq!(parse_shard_concurrency(Some("1")).unwrap(), 1);
+        assert_eq!(parse_shard_concurrency(Some("2")).unwrap(), 2);
+        assert!(qualification_for_execution(true, 1));
+        assert!(!qualification_for_execution(true, 2));
+        assert!(!qualification_for_execution(false, 2));
     }
 
     #[test]
