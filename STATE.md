@@ -11,7 +11,9 @@ candidate-evidence records. The production suite is still unselected: `proofSuit
 activation is false, production verifier/state/custody and rollup work remain open, the final audit
 has not started, and real PHI/payments remain forbidden. Wave 3 P01-P12 internal engineering and
 Wave 4 I01-I08/O01-O06/O12 adapter/operations engineering are complete but nonactivating. Progress
-is 33 of 93 packages complete and 60 remain open.
+Wave 5 R01-R12 is also complete internally through the local/synthetic based-rollup and recovery
+boundary, and the Wave 2 internal fixed-K/12-field/sidecar reference seam is now executable without
+changing activation. Progress is 45 of 93 packages complete and 48 remain open.
 
 The native K512 coordinator now defaults to two independent lanes for the native boundary, including
 suite-bound runs; `BL_SHARD_CONCURRENCY=1` is the explicit serial fallback. The separate exact

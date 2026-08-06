@@ -1,0 +1,36 @@
+{
+  "schema": "blind_ledger_wave2_internal_release_profile_v1",
+  "wave": 2,
+  "profile": "WAVE2-INTERNAL-REFERENCE-V1",
+  "public_boundary": {
+    "field_count": 12,
+    "sidecar_bytes": 744,
+    "proof_body_grammar": "BLPQPF01_REFERENCE_ONLY"
+  },
+  "profiles": [
+    "K128_LOCAL_SYNTHETIC",
+    "K512_LOCAL_SYNTHETIC"
+  ],
+  "proof_backend": "REFERENCE_GRAMMAR_AND_PUBLIC_BINDING_ONLY",
+  "zero_knowledge_proof_verified": false,
+  "software_kms": "ML-KEM-1024-AES-256-GCM_REFERENCE_ONLY",
+  "hsm_backed": false,
+  "fips_validated": false,
+  "network_access": false,
+  "live_credentials": false,
+  "production_usable": false,
+  "proofSuiteId": null,
+  "activation_allowed": false,
+  "package_evidence": {
+    "S04": "complete_internal_nonactivating_candidate_sidecar",
+    "T01": "complete_internal_nonactivating_reference_vector",
+    "T04": "complete_internal_nonactivating_fixed_shape_cases",
+    "T05": "complete_internal_nonactivating_K128_K512_boundary_cases",
+    "T08": "complete_internal_nonactivating_canonical_and_privacy_attacks",
+    "T09": "complete_internal_nonactivating_binding_attacks",
+    "T11": "partial_internal_evidence_no_public_private_payload",
+    "T12": "partial_internal_evidence_shape_only",
+    "T13": "not_run_reference_path_not_qualification_benchmark",
+    "T14": "partial_internal_evidence_wave2_scope_only"
+  }
+}

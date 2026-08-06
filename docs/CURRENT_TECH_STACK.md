@@ -110,6 +110,29 @@ nonactivating Wave 3 verifier/state/custody work. The candidate remains syntheti
 `proofSuiteId=null`, `activation_allowed=false`; this is not production readiness or audit
 completion.
 
+## Wave 2 internal reference boundary (nonactivating)
+
+The narrow remaining local/synthetic Wave 2 seam is now executable in `app/wave2_internal.py`.
+It connects fixed-shape K128/K512 private schedules, the exact ordered twelve-field Privacy V2
+projection, the canonical 744-byte candidate sidecar, the bounded `BLPQPF01` proof-body grammar,
+and a fail-closed public-binding/transcript reference verifier. `tools/wave2_internal_conformance.py`
+and `ops/wave2_internal_release_profile.json` provide the offline receipt and machine-readable
+boundary.
+
+The reference proof body is fixed at 696 bytes with four 64-byte commitment sections. It contains
+no public-output array or sidecar bytes, and the private synthetic schedule is available only under
+the explicit local/test environment guard. The verifier checks canonical parsing, candidate
+identity, the twelve public fields, sidecar statement binding, and transcript binding. It does not
+claim semantic proof soundness, zero-knowledge witness hiding, audited PCS security, production
+constant-time behavior, or a production proof suite. The receipt therefore keeps
+`proofSuiteId=null`, `activation_allowed=false`, `production_usable=false`, network access false,
+and live credentials false.
+
+The local receipt passes K128 and K512 cover/one-real/all-real shape cases, H6 candidate privacy
+controls, and the software ML-KEM-1024/AES-256-GCM KMS roundtrip. The final native proof/verifier,
+complete hiding/simulator theorem, HSM/FIPS authority, production rollup verifier, release
+qualification, and independent audit remain open.
+
 The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,
 all-slot old/new replay, a 512-bit pad-masked SHA3 commitment, independent replay verification,
@@ -736,8 +759,9 @@ superseded historical values remain historical evidence.
   remain open.
 - The tracked ops authority passes exact SHA3-512 inventory readback; this former blocker is closed.
 - No production `INativeStarkVerifier` implementation exists; the Solidity test verifier is a mock.
-- The containing based rollup, bridge, forced inclusion, data availability, exits, finality, and
-  deployment rehearsal are not implemented.
+- The local/synthetic containing based-rollup, bridge, forced-inclusion, data-availability, exits,
+  finality, and recovery fixture is implemented in `app/wave5_rollup.py`; a real Ethereum client
+  deployment, production L2/proof verifier, and production deployment rehearsal remain open.
 - Blind Ledger-controlled boundaries are not yet end-to-end PQ because wider custody, transport,
   governance, backup, and recovery migration remains open.
 - No real PHI, payment credentials, production activation, Ethereum-security, audit completion, or

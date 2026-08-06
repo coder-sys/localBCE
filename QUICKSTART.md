@@ -110,6 +110,16 @@ global boundary composition, master-input adapter, exact global SHA3 schedule, a
 `docs/WAVE1A_EXECUTABLE_AIR_SPEC.md` for the authoritative test inventory and commitments; do not
 replace a failed gate with a smaller historical subset.
 
+The local/synthetic Wave 2 fixed-shape, exact-ABI, sidecar, proof-grammar, privacy, H6-control, and
+software-PQ-KMS reference receipt is:
+
+```powershell
+py -3.14 -B tools/wave2_internal_conformance.py --repo-root .
+```
+
+It is structural/reference evidence only. It intentionally reports `proofSuiteId=null`,
+`activation_allowed=false`, `production_usable=false`, and `zero_knowledge_proof_verified=false`.
+
 ## Rust rules engine
 
 ```powershell

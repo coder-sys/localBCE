@@ -555,6 +555,14 @@ I01-I08/O01-O06/O12, and Wave 5 R01-R12 boundaries are recorded separately. This
 privacy, strict-PQ, full-claim, or production claim. Therefore **45 of 93 internal engineering
 packages are complete and 48 remain open**.
 
+The 2026-08-05 Wave 2 internal reference boundary adds local/synthetic evidence for the exact
+12-field projection, the 744-byte candidate sidecar, fixed-shape K128/K512 schedules, bounded
+`BLPQPF01` parsing, public-binding mutation rejection, and software-PQ-KMS roundtrip behavior. Its
+receipt is in `tools/wave2_internal_conformance.py` and its profile is
+`ops/wave2_internal_release_profile.json`. These are explicitly nonactivating reference results;
+they do not change the 45/93 package count or close the production proof, native hiding, suite
+selection, HSM/FIPS, release, or audit gates.
+
 ### Specification and security freeze - 12 packages
 
 | ID | Current deliverable | Status |
