@@ -4,7 +4,7 @@ Updated: 2026-08-06
 
 ## Current status in plain English
 
-This is the current status as of 2026-08-05; the dated sections below preserve the full run history.
+This is the current status as of 2026-08-06; the dated sections below preserve the full run history.
 Gate 2E is sealed as a nonactivating candidate context. H5 passed the exact 22-launch campaign with
 K128 p95 32.360845 seconds and K512 p95 148.861885 seconds. H6 then closed all twelve bounded
 candidate-evidence records. The new standalone Rust candidate verifier accepts a fresh synthetic
@@ -25,6 +25,58 @@ gates with K512 p95 101.798191 seconds, so the execution mode is qualified as no
 evidence only. Four fresh current-checkout refresh attempts were rejected by the unchanged
 pagefile-growth gate and receive no H5/H6 or production credit. The sealed serial H5/H6 evidence
 remains unchanged.
+
+## 2026-08-06 manual cleanup, containing verification, and archive refresh - VERIFIED, NONACTIVATING
+
+The manual source/test/gate audit completed against commit `a7d35bee9fae20b8dad44e8627e6c99f33e23191`.
+The only newly removed executable item was the private `_read_part` helper in
+`experiments/bl_pq512_crypto_foundation/wave3_full_internal.py`; it had zero callers, no external
+references, and was not exported. The three stale positive tests already present in the worktree
+were removed from active collection after their current producers/consumers were traced:
+`test_bl_pq512_hidden_state_batch_screen.py`,
+`test_bl_pq512_hint_mlwe_392_parameter_gate.py`, and
+`test_bl_pq512_oracle_layout_optimizer.py`. Their rejected source and attack-side boundary evidence
+remain available. No duplicate test files were found, no live protocol ports were removed, and no
+protected repository path changed.
+
+The current Python inventory is 1,738 tests across 274 ordinary modules and 69 attack modules.
+Split deterministic execution and isolated slow lanes produced 1,737 passes and one skip at
+`tests/test_locked_python_dependencies.py:112` because the platform account cannot create
+symlinks. The broad monolithic wrapper remains uncredited after exit `124` at `904043` ms without
+a pytest terminal summary. The full current Rust gate passed formatting, strict all-target Clippy,
+and release verification with 307 tests passed, 0 failed, 0 ignored, and all binary/doc-test groups
+passing. Wave 2, Wave 4, Wave 5, remaining-internal, whole-product-KAT, Wave 2 specification,
+Privacy V2, and tracked-ops conformance receipts all passed with network access false, live
+credentials false, `proofSuiteId=null`, `activation_allowed=false`, and `production_usable=false`.
+
+The three published `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip` targets were refreshed from
+the reviewed 803-file allowlist plus 14 current candidate-verifier boundary files. The deterministic
+builder and independent readback reported:
+
+```text
+source_commit=a7d35bee9fae20b8dad44e8627e6c99f33e23191
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=817
+payload_bytes=11772799
+entry_count=818
+archive_bytes=12121243
+archive_sha256=1f7a82fccc0389cae9b7cfd2dc970f27a69b75714ba730edac2b82750f7e27ae
+manifest_sha256=dd2b1ef0952feb13e9c74b047b4e127298a863a47f3f0b8b82f89cae1fd5452d
+zip_crc_readback=PASS
+duplicates=0
+three_way_byte_identical=true
+candidate_boundary_files_present=true
+state_generated_private_paths_absent=true
+```
+
+The exact targets are the Desktop root, nested Desktop full-workspace, and Downloads copies. Each
+was independently read back at the identity above. The replaced three 12,024,082-byte copies are
+recoverable under
+`C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave2-published-backup-cleanup-a7d35be`.
+The archive refresh changes no proof-suite or activation boundary: the global operational registry
+remains `UNSELECTED`, `proofSuiteId=null`, activation remains false, and HSM/FIPS, production
+verifier/state/settlement, external anti-rollback, release authorization, and the final independent
+audit remain open.
 
 ## 2026-08-06 native candidate verifier and suite-identity boundary - VERIFIED, NONACTIVATING
 
