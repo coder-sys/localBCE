@@ -8379,3 +8379,35 @@ anti-rollback authority, whole-product release sealing, final independent audit,
 activation. The repository-wide aggregate remains unclaimed because the prior bounded aggregate
 run timed out without a result; only the completed boundary-specific suites above are recorded as
 verification.
+
+## 2026-08-05 Wave 5 Source-Complete archive refresh - VERIFIED, NONACTIVATING
+
+The three published `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip` copies were rebuilt from
+the exact prior Source-Complete allowlist plus the Wave 5 source, test, configuration, and
+documentation files. The release builder and independent ZIP readback both passed:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=796
+payload_bytes=11566896
+entry_count=797
+archive_bytes=11858435
+archive_sha256=0582750c5de81011ffaa220815d1065439200bb8e591053929d1a2a50994a8fe
+archive_sha3_512=5a2deb72293c45caf6d6e097eeb182c5a153755eb4f6e2e81f045914ad1053e005ffa341038ad7dd48772c986688f78b88df82ea4a2538f9901f517faa5272e
+manifest_sha256=778f7731341259d6e466d40d5e86453999ca6bfa5273bad7272abdf16c1d34f2
+three_way_byte_identical=true
+zip_crc_readback=PASS
+duplicates=0
+```
+
+The exact updated targets are the Desktop root copy, the nested Desktop full-workspace copy, and
+the Downloads copy. Each was independently hash-checked after replacement. The prior three
+copies remain recoverable at
+`C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave5-published-backup-20260805`,
+with the prior SHA-256 `a417e0d336ad82f3ef2a086e5ee327f3d0886b3455c16ddb2ebf201244aa310c`.
+The archive contains the seven new Wave 5 files and the intended allowlisted canonical/ops
+updates; it contains no `STATE.md`, generated cache/target/proof/scratch directory, PHI, live
+Ethereum data, or production credential. `app/operational_readiness.py` remains in the repository
+and in the Git checkpoint but stays outside this exact release allowlist because the existing
+release builder correctly rejects it under the structural privacy gate; that gate and the source
+file were not weakened or changed for packaging.
