@@ -141,6 +141,35 @@ class PrivacyV2AbiTests(unittest.TestCase):
             bundle["serialized_arguments_hex_json"],
         )
 
+    def test_public_receipt_has_only_the_ordered_twelve_fields(self) -> None:
+        bundle = self._bundle()
+        receipt = privacy_v2.privacy_v2_public_receipt(bundle["expected_output"])
+        self.assertEqual(
+            tuple(receipt),
+            privacy_v2.PRIVACY_V2_PUBLIC_OUTPUT_NAMES,
+        )
+        self.assertEqual(receipt["protocolVersion"], 2)
+        self.assertNotIn("private_data_commitment", receipt)
+        self.assertNotIn("value_salt", receipt)
+        self.assertNotIn("total_allowed_cents", receipt)
+
+    def test_local_replay_verifier_accepts_fresh_recomputation(self) -> None:
+        bundle = self._bundle()
+        with mock.patch.object(
+            privacy_v2, "flatten_batch_claim_input_witness", return_value=[2001, 2002]
+        ):
+            self.assertTrue(
+                privacy_v2.verify_privacy_v2_bundle(
+                    self._v1_bundle(),
+                    bundle,
+                    settlement_domain=1001,
+                    batch_nonce=1002,
+                    private_data_commitment=1003,
+                    privacy_salt=1004,
+                    value_salt=1005,
+                )
+            )
+
     def test_contract_has_no_amount_count_or_claim_payload_submission_fields(self) -> None:
         source = (ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlementV2.sol").read_text(
             encoding="utf-8"
