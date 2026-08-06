@@ -121,6 +121,19 @@ py -3.14 -B tools/wave2_internal_conformance.py --repo-root .
 It is structural/reference evidence only. It intentionally reports `proofSuiteId=null`,
 `activation_allowed=false`, `production_usable=false`, and `zero_knowledge_proof_verified=false`.
 
+The local native-to-settlement-to-rollup boundary is covered by the focused receipt tests:
+
+```powershell
+py -3.14 -B -m pytest -q -p no:cacheprovider `
+  tests/test_bl_pq512_public_input_projection.py `
+  tests/test_bl_pq512_production_boundary.py `
+  tests/test_bl_pq512_wave5_native_boundary.py
+```
+
+This path requires the lossless 108-limb public-input projection, recomputes the exact ordered
+Privacy V2 fields before local state publication, and reports only commitment/lifecycle metadata.
+It is synthetic/nonactivating; the global registry remains `proofSuiteId=null`.
+
 ## Rust rules engine
 
 ```powershell

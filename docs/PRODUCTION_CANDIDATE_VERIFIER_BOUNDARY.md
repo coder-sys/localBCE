@@ -28,6 +28,22 @@ program-binary, and public-coin-schedule commitments. It is carried and checked 
 proof package, transcript, envelope, and native receipt. The resulting candidate record is
 `BUILT_AUDIT_PENDING`, with `activation_allowed=false` and `production_usable=false`.
 
+The native port now requires the lossless public-input projection. Each of the twelve canonical
+`bytes32` outputs is split into nine little-endian 30-bit limbs, producing exactly 108 M31 inputs
+without reduction or aliasing. `app/production_boundary.py` derives this file from the envelope
+before invoking Rust, passes the projection schema identity, and rejects a caller-supplied static
+vector. The Rust verifier recomputes the same 108 limbs and rejects any mismatch. The standalone
+`production_candidate_verify` binary requires the projection-schema argument as well; there is no
+six-argument compatibility mode in the active verifier path.
+
+The local Privacy V2 and based-rollup seams are now executable around that port. `LocalSettlementV2`
+recomputes the ordered twelve fields from the sidecar, governed roots, domain, and nonce, verifies
+the native receipt, and publishes its in-memory state only after every binding succeeds.
+`NativeRollupClaimVerifier` rechecks the same envelope against the Wave 5 claim context and suite
+identity. `app/local_stack_candidate.py` independently recomputes the native, settlement, and
+rollup commitments and emits a commitment-only `LOCAL_SYNTHETIC_NONACTIVATING` receipt. This is
+local end-to-end engineering evidence, not an on-chain verifier or activation decision.
+
 ## Cross-language PQ boundary
 
 The candidate transcript uses the RustCrypto `slh-dsa` FIPS-205 implementation through
@@ -66,10 +82,11 @@ therefore has two intentionally different statements:
   `NOT_DEPLOYMENT_READY`, `UNSELECTED`, `proofSuiteId=null`, and activation-disabled. They are not
   flipped by a local proof and remain the fail-closed production gate.
 
-This boundary does not implement the production `INativeStarkVerifier` interface, exact settlement
-ABI integration, Privacy V2 production admission, HSM/FIPS custody, external live rollup
-integration, release sealing, or the independent audit. No live credentials, live Ethereum,
-government data, PHI, payment authority, or production artifact was used.
+This boundary does not implement the production/on-chain `INativeStarkVerifier` deployment, HSM/FIPS
+custody, external live rollup integration, release authorization, or the independent audit. The
+local exact settlement and Privacy V2 admission seam is implemented and remains nonactivating.
+No live credentials, live Ethereum, government data, PHI, payment authority, or production artifact
+was used.
 
 ## Verification receipt
 

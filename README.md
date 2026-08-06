@@ -21,9 +21,12 @@ As of 2026-08-06, the Wave 2 candidate evidence is complete without being activa
 - Wave 5 R01-R12 now passes the local/synthetic based-rollup boundary: exact 12-field-plus-sidecar
   binding, L2 transition proof fixture, finalized-only settlement, commitment-only DA, based ordering,
   bridge, forced inclusion, exit delay, fork migration, and rollback.
-- Production is still disabled: `proofSuiteId=null`, activation is false, the production verifier,
-  durable state/custody, HSM/FIPS authority, whole-product release, and final audit are still
-  unfinished, and real PHI/payments remain forbidden.
+- The local native→Privacy V2→based-rollup seam now passes: Rust derives the lossless 108-limb
+  projection, local settlement publishes only after native receipt checks, and a commitment-only
+  cross-layer receipt binds the rollup handoff.
+- Production is still disabled: global `proofSuiteId=null`, activation is false, deployed
+  verifier/state/custody, HSM/FIPS authority, whole-product release authorization, and final audit
+  are still unfinished, and real PHI/payments remain forbidden.
 
 The native K512 experiment now defaults to two independent shard lanes. A separate fail-closed
 validator now qualifies the captured two-lane execution mode as nonactivating evidence while
@@ -86,6 +89,9 @@ dependency is explicitly provisioned and its source identity is recorded.
 - The sealed relation under `experiments/fixed_shape_claim_air/` supplies semantic constraints and the exact hash schedule.
 - `experiments/bl_pq512_crypto_core/` supplies the current Fp16/GKR/Construction-8.2 proof, authenticated public coin, independent verifier, and resource gates.
 - CUDA performs untrusted arithmetic; Rust remains authoritative for parsing, commitments, transcript replay, mutation checks, and final verification.
+- `app/production_boundary.py` and `app/wave5_native_boundary.py` connect the Rust receipt to the
+  exact local Privacy V2 settlement and based-rollup claim context; `app/local_stack_candidate.py`
+  emits only commitment/lifecycle metadata for that synthetic handoff.
 - Protected Cairo code remains a differential reference. Solidity contains no production native verifier and cannot yet settle the current proof.
 - Operational manifests under `ops/` pin policy and verifier artifacts.
 
@@ -97,10 +103,11 @@ Ledger claim proofs verify inside the L2; a rollup validity proof authenticates 
 state transition on Ethereum L1. Patient and claim records remain in government-controlled
 encrypted storage and are represented publicly only by commitments.
 
-The target production L2 is not yet implemented. The repository now contains a local/synthetic
-based-rollup boundary, but it has no production `INativeStarkVerifier` implementation, and the
-current Cairo output does not match the settlement contract's caller-supplied public-input schema.
-See `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md` and `KNOWN_ISSUES.md`.
+The target production L2 is not yet deployed. The repository now contains a local/synthetic
+based-rollup boundary plus a native claim adapter and exact local Privacy V2 settlement seam, but it
+has no deployed production `INativeStarkVerifier`; the protected V1 Solidity path still has its
+caller-supplied public-input schema and remains outside this local change. See
+`docs/BASED_ZK_ROLLUP_ARCHITECTURE.md` and `KNOWN_ISSUES.md`.
 
 Government APIs, oracles, KMS/HSMs, governance, and payment systems are integrated through
 versioned provider-neutral adapters. The finished release must include local simulators, sandbox

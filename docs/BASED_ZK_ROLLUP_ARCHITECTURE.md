@@ -222,6 +222,17 @@ No production or Ethereum-security claim is permitted until one real verifier au
 ordered Cairo output consumed by settlement. Caller-supplied values that are not part of the proven
 statement must never advance canonical state.
 
+The local/synthetic implementation of that requirement is now present without changing the
+protected Solidity boundary. `app/production_boundary.py` recomputes the ordered twelve-field
+Privacy V2 projection from the sidecar, governed roots, settlement domain, and batch nonce; its
+Rust port derives a lossless 108-limb M31 input vector from those fields and verifies the native
+receipt before atomic local state publication. `app/wave5_native_boundary.py` binds the same
+envelope to the based-rollup claim context, and `app/local_stack_candidate.py` independently
+recomputes the native, settlement, and rollup commitments into a commitment-only
+`LOCAL_SYNTHETIC_NONACTIVATING` receipt. This closes the local engineering seam only. The protected
+V1 Solidity mock, deployed production verifier, live Ethereum settlement, and activation remain
+outside this receipt.
+
 ## Privacy V2 implementation checkpoint
 
 The first parallel V2 ABI uses 12 exact Cairo outputs and a settlement contract that reconstructs
@@ -236,9 +247,9 @@ explicit; it must never be silently presented as the old proof relation.
 The checkpoint remains experimental. Wave 1 seals the fixed-shape executable claim AIR and exact
 SHA3 schedule, H4/Gate 2E now supply a sealed nonactivating state-bound context, and the exact H5
 campaign passes its strict p95/resource gates. The proof suite is still not activated: complete H6
-theorem/simulator/grammar/supply-chain/privacy/migration qualification, the production claim
-verifier, and the containing rollup remain unfinished. Upstream unmasked S-two receipts remain
-validity-only and are not approved for real PHI.
+evidence is nonactivating, while deployed production verifier/state/custody, HSM/FIPS authority,
+external anti-rollback, live Ethereum settlement, and the independent audit remain unfinished.
+Upstream unmasked S-two receipts remain validity-only and are not approved for real PHI.
 
 ## Required implementation sequence
 

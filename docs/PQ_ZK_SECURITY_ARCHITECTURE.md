@@ -128,6 +128,16 @@ H5 campaign now passes, and the bounded H6 candidate-evidence manifest is closed
 ordering, uniqueness, membership/absence, money/state conservation, durable custody, and the
 verifier/settlement path remain later-wave work.
 
+The current local bridge now covers the verifier/settlement shape without changing the selected
+security claims. `app/native_public_input_projection.py` maps the exact ordered twelve `bytes32`
+outputs to nine 30-bit M31 limbs per field without reduction or aliasing. The Rust candidate
+verifier rederives those 108 inputs, `LocalSettlementV2` recomputes the Privacy V2 statement and
+publishes state only after the native receipt passes, and `NativeRollupClaimVerifier` rechecks the
+same envelope against the based-rollup context. `app/local_stack_candidate.py` binds the three
+receipts using commitments only. This is local synthetic evidence; it does not close the complete
+witness-hiding theorem, production/on-chain verifier deployment, HSM/FIPS custody, audit, or
+activation.
+
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
 one shared commitment bus, a constrained byte/bit bridge, native hiding, a complete adaptive

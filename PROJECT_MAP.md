@@ -7,14 +7,15 @@ Plain-English status: Gate 2E is sealed as nonactivating evidence, H5 passed the
 campaign, and H6 closed the twelve bounded candidate-evidence records. The production suite is
 still unselected (`proofSuiteId=null`). Wave 3 P01-P12 verifier/state/custody engineering, Wave 4
 I01-I08/O01-O06/O12 adapters/operations engineering, and Wave 5 R01-R12 containing-rollup
-engineering are complete as nonactivating source and synthetic evidence; production
-verifier/state/custody, HSM/FIPS authority, whole-product release, and final audit work remain open;
+engineering are complete as nonactivating source and synthetic evidence; the local native→Privacy
+V2→based-rollup binding is now implemented and tested, while deployed verifier/state/custody,
+HSM/FIPS authority, whole-product release authorization, and final audit work remain open;
 real PHI/payments remain forbidden.
 
 The internal package ledger is currently 93/93 complete through local, synthetic, nonactivating
-receipts. That count does not mean production activation: the native production verifier, exact
-settlement binding, HSM/FIPS custody, live deployment inputs, release authorization, and final
-independent audit remain open.
+receipts. That count does not mean production activation: deployed production verifier/state,
+HSM/FIPS custody, live deployment inputs, release authorization, and final independent audit
+remain open.
 
 | Path | What it is | Edit risk |
 | --- | --- | --- |
@@ -32,6 +33,10 @@ independent audit remain open.
 | `tools/` | Measurement and utility scripts. | Medium. |
 | `app/wave4_adapters.py` | Versioned provider-neutral adapter SDK, dual-PQ provenance capsules, local transport/credential simulators, bounded retries, idempotency, circuit breaking, and capability registry. | High at the external-data boundary; synthetic-only until activation. |
 | `app/wave4_operations.py` | Nonactivating PQ custody reference, root lifecycle, isolated profile, non-PHI audit, fixed cadence, incident drill, and release manifest. | High at the operations boundary; software/HSM distinction is explicit. |
+| `app/native_public_input_projection.py` | Lossless versioned projection of the exact ordered twelve `bytes32` outputs into nine 30-bit M31 limbs per field. | High at the native verifier boundary; no reduction or aliasing is permitted. |
+| `app/production_boundary.py` | Rust receipt port, exact Privacy V2 public projection, and atomic local state/settlement binding. | High at the settlement boundary; local/synthetic and nonactivating. |
+| `app/wave5_native_boundary.py` | Native claim adapter that rechecks the Wave 5 context, sidecar, public fields, and native receipt. | High at the rollup boundary; local/synthetic and nonactivating. |
+| `app/local_stack_candidate.py` | Commitment-only receipt that recomputes and binds native verification, Privacy V2 settlement, and the based-rollup claim handoff. | High at the cross-layer boundary; never stores claim data or enables activation. |
 | `app/wave5_rollup.py` | Local/synthetic R01-R12 based-validity boundary: fork manifest, EL/CL/L2 fixture, 12-field-plus-sidecar claim binding, L2 transition proof fixture, finalized-only settlement, based ordering, commitment-only DA, bridge, forced inclusion, exits, fork adapters, and rollback. | High at the rollup boundary; the reference verifier and outer-chain model are nonactivating. |
 | `app/wave2_internal.py` | Local/synthetic fixed-K Privacy V2 shape, exact 12-field projection, 744-byte candidate sidecar, bounded `BLPQPF01` reference body, and fail-closed public-binding verifier. | High at the Wave 2 boundary; structural/reference-only, no zero-knowledge or activation credit. |
 | `tools/wave2_internal_conformance.py` | Offline K128/K512 fixed-shape, privacy, H6-control, and software-PQ-KMS receipt runner. | Medium; creates no artifacts or network access. |

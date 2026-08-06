@@ -55,11 +55,14 @@ pinned client behavior outrank it. Therefore:
 4. Stagnant items are research or rejection evidence, never current dependencies; and
 5. map dates and throughput labels are projections until a deployed fork and measurements prove them.
 
-The local/synthetic R01-R12 implementation is `app/wave5_rollup.py`. It uses a pinned baseline and
-future-shadow profile, records all 23 EIP maturity entries, rejects unshipped/optional features by
-default, and exercises based ordering, finalized settlement, commitment-only DA, bridge, exits,
-migration, and rollback. It is internal nonactivating evidence, not proof that a live Ethereum
-client or production L2 verifier is present.
+The local/synthetic R01-R12 implementation is `app/wave5_rollup.py`. The native claim handoff is
+implemented in `app/wave5_native_boundary.py`, and the exact local Privacy V2 settlement seam is
+implemented in `app/production_boundary.py`. Together they use a pinned baseline and future-shadow
+profile, record all 23 EIP maturity entries, reject unshipped/optional features by default, and
+exercise based ordering, finalized settlement, commitment-only DA, bridge, exits, migration,
+rollback, and commitment-bound native claim admission. This remains internal nonactivating
+evidence, not proof that a live Ethereum client, deployed L1 settlement, or production L2 verifier
+is present.
 
 ## 2026-08-05 live link audit
 

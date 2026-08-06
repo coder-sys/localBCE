@@ -27,10 +27,13 @@ Current proof checkpoint: the H4 prototype passes one fresh K128/K512 attempt th
 verification in 29.974129/120.460733 seconds. Gate 2E is sealed nonactivating, H5 passed the exact
 22-launch p95/resource campaign, and H6 closed the twelve bounded candidate-evidence obligations.
 The local candidate boundary can now produce a per-proof `BUILT_AUDIT_PENDING` record after the
-standalone Rust verifier returns its exact bound `OK` receipt. This does not make the whole product
-deployment-ready: production settlement/state integration, HSM/FIPS custody, external anti-rollback,
-whole-product release evidence, and final audit remain open. Wave 4 adapters/operations and Wave 5
-R01-R12 containing-rollup engineering remain local/synthetic and nonactivating.
+standalone Rust verifier returns its exact bound `OK` receipt. The local implementation now also
+derives the lossless 12-field-to-108-M31 projection, binds the native receipt to the atomic Privacy
+V2 settlement model, and rechecks the same envelope through the based-rollup claim adapter into a
+commitment-only local stack receipt. This does not make the whole product deployment-ready:
+deployed production settlement/state integration, HSM/FIPS custody, external anti-rollback,
+whole-product release authorization, and final audit remain open. Wave 4 adapters/operations and
+Wave 5 R01-R12 containing-rollup engineering remain local/synthetic and nonactivating.
 The legacy operational state remains `UNSELECTED` with `proofSuiteId=null`, `production_usable=false`,
 and the ban on real PHI/payments remains authoritative.
 

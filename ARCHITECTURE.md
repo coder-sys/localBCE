@@ -88,6 +88,7 @@ specifically requires another directory, such as the Rust crate or `zk-cairo-sha
 | Claim-proof references | `zk-cairo-sharp/`, `experiments/fixed_shape_claim_air/`, `experiments/bl_pq512_crypto_core/` | Cairo is historical semantic evidence; the sealed M31 AIR is the semantic module; Wave 2 builds the shared-bus Boolean hash coprocessor, mandatory committed sparse-state/PQ-commitment bake-off, and atomic verifier. |
 | Wave 3 internal verifier/state/custody | `experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`, `wave3_verifier_state_custody.py`, and `wave3_full_internal.py` | Nonactivating internal P01-P12 boundary: A12-derived dual roots, fixed 256-slot batch replay plus hidden salt-use insertion, canonical 744-byte proof envelope, full S10 state tuple, private payment-root recomputation, durable governed registry bound into state creation/reopen/refresh, local Rust-authoritative binding port, recovery/migration/rollback, and digest-only custody evidence. Production verifier, HSM/FIPS, external anti-rollback, and activation remain open. |
 | Native candidate verifier | `experiments/bl_pq512_crypto_core/src/bin/production_candidate_verify.rs`, `production_verifier.rs`, and `selected_public_coin.rs` | Local Rust-authoritative envelope, selected proof-package, and private public-coin transcript verification. It can produce a per-proof `BUILT_AUDIT_PENDING` identity only; it is not the production `INativeStarkVerifier`, settlement integration, or activation surface. |
+| Local native/V2/rollup seam | `app/native_public_input_projection.py`, `app/production_boundary.py`, `app/wave5_native_boundary.py`, `app/local_stack_candidate.py` | Lossless public-input projection, atomic local Privacy V2 settlement, native Wave 5 claim binding, and commitment-only cross-layer receipt; synthetic and nonactivating. |
 | Wave 2 internal reference seam | `app/wave2_internal.py`, `tools/wave2_internal_conformance.py`, `ops/wave2_internal_release_profile.json` | Local/synthetic fixed-K Privacy V2 shape, exact 12-field projection, 744-byte sidecar, bounded proof grammar, and public-binding reference verifier. It is not a ZK proof, production verifier, suite selection, or activation surface. |
 | Solidity contracts | `contracts/` | Verifier and settlement-facing on-chain code. Protected from casual edits. |
 | Operations | `ops/` | Sole commit-bound policy spec, verifier pin manifest, deployment config, and readiness authority. |
@@ -106,7 +107,16 @@ specifically requires another directory, such as the Rust crate or `zk-cairo-sha
    coprocessor atomically under authenticated interactive public coin.
 6. Settlement/verifier code consumes the pinned verifier artifacts and public-input boundary.
 
-The current step 6 has a local candidate path but remains incomplete for production: the standalone Rust `production_candidate_verify` command verifies one exact envelope, selected proof package, and private public-coin transcript, while Cairo `batch_main` returns 12 values and the V1 settlement contract accepts a separate 21-value caller-supplied array. The repository still has no production `INativeStarkVerifier` implementation or exact settlement ABI binding. The target design requires one exact proof-authenticated output ABI before any state transition can settle.
+The current step 6 now has a complete local/synthetic binding seam: the standalone Rust
+`production_candidate_verify` command verifies one exact envelope, selected proof package, and
+private public-coin transcript; `app/production_boundary.py` derives the lossless 12-field-to-108-
+M31 projection and atomically binds native verification to the Privacy V2 state transition; and
+`app/wave5_native_boundary.py` binds the same envelope to the Wave 5 claim context. The
+commitment-only `app/local_stack_candidate.py` receipt independently recomputes the native,
+settlement, and rollup identities. The protected V1 settlement contract still accepts its separate
+caller-supplied 21-value array and remains a mock/test boundary; no deployed production
+`INativeStarkVerifier` exists. The local seam therefore proves the required shape and binding
+without claiming on-chain deployment, audit acceptance, or activation.
 
 ## Target rollup layers
 

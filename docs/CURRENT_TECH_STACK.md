@@ -132,8 +132,21 @@ the proof, transcript, program, schedule, and candidate identity. The matching P
 requires the actual native `OK` receipt and emits `BUILT_AUDIT_PENDING` only for that exact
 proof.
 
-This is a candidate boundary, not the production `INativeStarkVerifier`, on-chain settlement
-integration, or audit acceptance. The legacy readiness registry and H6 record intentionally remain
+The active port requires a lossless public-input projection: each canonical `bytes32` output is
+encoded as nine little-endian 30-bit M31 limbs, giving 108 inputs with no field reduction or
+aliasing. `NativeStarkVerifierPort` derives the projection from the envelope and passes its schema
+identity to Rust; both sides reject a caller-supplied vector that does not match. The standalone
+Rust binary requires the projection-schema argument too.
+
+The local verifier is now connected to the exact Privacy V2 settlement seam and the Wave 5 native
+claim port. `LocalSettlementV2` recomputes the ordered fields and publishes state only after the
+native receipt and all commitment bindings pass. `app/local_stack_candidate.py` recomputes the
+native, settlement, and rollup identities into a commitment-only
+`LOCAL_SYNTHETIC_NONACTIVATING` receipt. This is local end-to-end engineering evidence; it is not
+an on-chain deployment or a production activation decision.
+
+This is a candidate/local boundary, not the production or on-chain `INativeStarkVerifier`
+deployment or audit acceptance. The legacy readiness registry and H6 record intentionally remain
 `proofSuiteId=null`; the nonzero candidate identity is scoped to the verified local proof and
 does not authorize activation. HSM/FIPS custody and external anti-rollback authority remain open.
 
@@ -687,7 +700,8 @@ proof with fresh randomness; no proof fragment, challenge tail, mask, or partial
 | Authoritative proof core | `experiments/bl_pq512_crypto_core/` | Fp16, GKR, PCS, authenticated public coin, independent verifier, resource gates |
 | Current GPU workers | `experiments/bl_pq512_crypto_core/cuda/cuda_hash_bus_b16_gkr_worker.py`, `cuda_fp16_zk_rs_interleaved_k128_prototype.py`, and their manifest-bound local verifier modules | Untrusted acceleration only |
 | Historical semantic reference | `zk-cairo-sharp/` | Protected differential source; not the selected proof backend |
-| Settlement shell | `contracts/` | Protected mock/test settlement boundary; no production `INativeStarkVerifier` exists |
+| Local native/V2/rollup seam | `app/native_public_input_projection.py`, `app/production_boundary.py`, `app/wave5_native_boundary.py`, `app/local_stack_candidate.py` | Lossless 12-field-to-M31 projection, Rust receipt port, atomic local Privacy V2 settlement, native Wave 5 claim adapter, and commitment-only cross-layer receipt; synthetic and nonactivating |
+| Settlement shell | `contracts/` | Protected mock/test settlement boundary; no deployed production `INativeStarkVerifier` exists |
 | Wave 4 adapters/operations | `app/wave4_adapters.py`, `app/wave4_operations.py`, `tools/wave4_conformance.py`, `ops/wave4_*.json` | Local/synthetic provider-neutral ports, dual-PQ evidence, isolated operations, and reproducible Wave 4 conformance; nonactivating |
 | Wave 5 containing rollup | `app/wave5_rollup.py`, `tools/wave5_conformance.py`, `ops/wave5_*.json`, `docs/WAVE5_BASED_ROLLUP.md` | Local/synthetic based ordering, exact 12-field-plus-sidecar binding, L2 transition proof fixture, DA, finalized-only settlement, bridge, forced inclusion, fork adapters, and rollback; nonactivating |
 | Operations | tracked `ops/` | Sole commit-bound policy/verifier authority with exact file-set, length, and SHA3-512 verification |
@@ -785,10 +799,14 @@ superseded historical values remain historical evidence.
   `proofSuiteId`; final production module identities, custody, and the production parser/verifier
   remain open.
 - The tracked ops authority passes exact SHA3-512 inventory readback; this former blocker is closed.
-- No production `INativeStarkVerifier` implementation exists; the Solidity test verifier is a mock.
+- The local Rust-authoritative verifier and exact Privacy V2/rollup binding now exist, but no
+  deployed production `INativeStarkVerifier` exists; the protected Solidity test verifier is a
+  mock and remains outside this local change.
 - The local/synthetic containing based-rollup, bridge, forced-inclusion, data-availability, exits,
-  finality, and recovery fixture is implemented in `app/wave5_rollup.py`; a real Ethereum client
-  deployment, production L2/proof verifier, and production deployment rehearsal remain open.
+  finality, recovery, native claim adapter, and exact local settlement fixture are implemented in
+  `app/wave5_rollup.py`, `app/wave5_native_boundary.py`, and `app/production_boundary.py`; a real
+  Ethereum client deployment, production L2/proof verifier, and production deployment rehearsal
+  remain open.
 - Blind Ledger-controlled boundaries are not yet end-to-end PQ because wider custody, transport,
   governance, backup, and recovery migration remains open.
 - No real PHI, payment credentials, production activation, Ethereum-security, audit completion, or
