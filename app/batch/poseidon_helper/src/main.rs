@@ -57,7 +57,9 @@ fn run_server() -> Result<(), String> {
             Err(err) => serde_json::json!({ "error": err }),
         };
         writeln!(stdout, "{}", response).map_err(|err| format!("failed to write stdout: {err}"))?;
-        stdout.flush().map_err(|err| format!("failed to flush stdout: {err}"))?;
+        stdout
+            .flush()
+            .map_err(|err| format!("failed to flush stdout: {err}"))?;
     }
     Ok(())
 }
@@ -80,7 +82,10 @@ fn run() -> Result<(), String> {
         return Err("Poseidon request too large".to_string());
     }
     let hashes = hash_rows_json(&input)?;
-    println!("{}", serde_json::to_string(&hashes).map_err(|err| err.to_string())?);
+    println!(
+        "{}",
+        serde_json::to_string(&hashes).map_err(|err| err.to_string())?
+    );
     Ok(())
 }
 
