@@ -9,12 +9,17 @@ Gate 2E is sealed as a nonactivating candidate context. H5 passed the exact 22-l
 K128 p95 32.360845 seconds and K512 p95 148.861885 seconds. H6 then closed all twelve bounded
 candidate-evidence records. The production suite is still unselected: `proofSuiteId=null`,
 activation is false, production verifier/state/custody and rollup work remain open, the final audit
-has not started, and real PHI/payments remain forbidden. Progress remains 6 of 93 packages.
+has not started, and real PHI/payments remain forbidden. Wave 3 P01-P12 internal engineering and
+Wave 4 I01-I08/O01-O06/O12 adapter/operations engineering are complete but nonactivating. Progress
+is 33 of 93 packages complete and 60 remain open.
 
-The native unqualified K512 experiment now defaults to two independent lanes. Two fresh default-mode
-launches verified all four shards but failed the unchanged external pagefile-growth gate, so they
-receive no H5/H6 or production credit. Serial remains the qualified-suite default until production
-resource telemetry is integrated.
+The native K512 coordinator now defaults to two independent lanes for the native boundary, including
+suite-bound runs; `BL_SHARD_CONCURRENCY=1` is the explicit serial fallback. The separate exact
+one-warmup/ten-measured two-lane campaign passed unchanged verification, resource, and no-swap
+gates with K512 p95 101.798191 seconds, so the execution mode is qualified as nonactivating
+evidence only. Four fresh current-checkout refresh attempts were rejected by the unchanged
+pagefile-growth gate and receive no H5/H6 or production credit. The sealed serial H5/H6 evidence
+remains unchanged.
 
 ## Current execution boundary
 
@@ -7710,3 +7715,601 @@ each old copy was `11,341,646` bytes with SHA-256
 `a5c060f85359b1b63c038c5bccddcc43b631eaf2f95530c3783a3399adeaebfc`. The new copies are the
 exact byte-identical `11,348,269`-byte archive above. This packaging refresh changes no proof,
 H5, H6, or activation evidence.
+
+## 2026-08-05 K512 two-lane native execution promotion - IMPLEMENTED, NONACTIVATING
+
+The bounded two-lane K512 coordinator is now the active native execution default for suite-bound
+and unqualified native runs. The prior `parallel_shards_not_qualified` policy rejection was
+removed because it did not protect a proof, privacy, semantic, or resource invariant. The
+coordinator still hard-caps concurrency at two, keeps independent authenticated challenge streams,
+validates every child in Rust, commits the receipt in canonical shard order, and applies the
+conservative concurrent host/device/scratch gates. `BL_SHARD_CONCURRENCY=1` remains the explicit
+serial fallback for reproducing the sealed H4/H5 evidence boundary. The generic Cairo/encrypted
+worker queue was not rerouted. `proofSuiteId` remains null, activation remains false, and no
+sealed H5/H6 or production credit was assigned; a new parallel campaign is required for parallel
+qualification credit. The external no-swap gate was not changed.
+
+Changed source and current architecture documents:
+
+```text
+experiments/bl_pq512_crypto_core/src/bin/k512_atomic_semantic_prototype.rs
+experiments/bl_pq512_crypto_core/cuda/cuda_fp16_zk_rs_theorem8_1_k128_prototype.py
+ARCHITECTURE.md
+docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md
+docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md
+docs/CURRENT_TECH_STACK.md
+docs/IMPLEMENTATION_ROADMAP.md
+docs/PROVING_OPTIMIZATION_REVIEW.md
+experiments/bl_pq512_crypto_core/README.md
+```
+
+Focused verification:
+
+```text
+cargo +1.96.0 fmt --all -- --check
+exit=0
+
+cargo +1.96.0 check --release --offline --locked --features std --bin k512_atomic_semantic_prototype
+exit=0
+
+cargo +1.96.0 check --release --offline --locked --lib --no-default-features
+exit=0
+
+cargo +1.96.0 test --release --offline --locked --features std --bin k512_atomic_semantic_prototype
+test result: ok; 9 passed; 0 failed
+
+python -m py_compile experiments/bl_pq512_crypto_core/cuda/cuda_fp16_zk_rs_theorem8_1_k128_prototype.py
+exit=0
+
+uv run --no-project --with pytest==9.0.3 --with cryptography==49.0.0 --with pqcrypto==0.4.0 pytest -q tests/test_bl_pq512_h5_qualification_preflight.py tests/test_bl_pq512_h6_qualification_preflight.py
+5 passed
+
+git diff --check
+exit=0
+```
+
+Containing checks with pre-existing failures retained exactly:
+
+```text
+cargo +1.96.0 test --release --offline --locked --features std,parallel
+303 passed; 3 failed
+```
+
+The three failures are unchanged `chained_public_coin_control.rs` tests:
+`selected_schedule_has_exact_corrected_round_counts` observed `26` versus `25`, and
+`downstream_pcs_descriptors_are_complete_and_ordered` plus
+`every_architecture_round_has_a_closed_descriptor_and_message_shape` reached
+`PCS schedule has thirteen rounds`. Strict Clippy also remains blocked by unchanged
+`src/disk_deep.rs:339` (`too_many_arguments`) and `src/gkr_sumcheck.rs:3002`
+(`needless_range_loop`). Neither failure is caused by a changed file in this promotion.
+
+## 2026-08-05 First-principles active gate/test cleanup - VERIFIED, NONACTIVATING
+
+The Wave 2 gate/test inventory was traced against current producers, consumers, manifests,
+selected proof geometry, trust boundaries, and the sealed rejection corpus. Only positive suites
+with no current release or trust-boundary consumer, or with stale expected identities, were
+removed from active pytest collection. Rejected designs and their source rationale remain
+available for reference.
+
+Removed from active collection:
+
+```text
+tests/test_bl_pq512_hint_mlwe_392_parameter_gate.py       (43 tests)
+tests/test_bl_pq512_hidden_state_batch_screen.py            (3 tests)
+tests/test_bl_pq512_oracle_layout_optimizer.py              (4 tests)
+```
+
+This removes 50 obsolete positive tests. The standalone oracle-layout attack/rejection suite
+`tests/attacks/test_bl_pq512_oracle_layout_optimizer_attacks.py` remains active. The Hint-MLWE
+392-bit source tree, README, historical bounds, and rejection rationale also remain available;
+they are reference material, not the current 256-bit security ledger, selected Construction 8.2
+proof path, or Gate 2E/H5/H6 qualification input.
+
+Evidence for the cleanup:
+
+```text
+pre-cleanup focused reference run: 54 passed, 2 failed in 0.99s
+stale oracle-layout failures: selected profile minimum and optimizer identity
+broad ordinary `test_bl_pq512_*.py` sweep: timed out at the 300-second wrapper; no pass credit
+active Gate 2E/H5/H6 slice, CPython 3.14.4: 111 passed in 191.26s
+retained current/rejection slice, CPython 3.14.4: 75 passed in 15.05s
+post-cleanup collection, CPython 3.14.4: 1642 tests collected in 3.11s; exit=0
+git diff --check: exit=0
+```
+
+An initial active-slice run under Python 3.11 reported 110 passes and one failure because that
+interpreter lacks `WindowsPath.is_junction()`. The required Quickstart runtime is CPython 3.14.4;
+the junction rejection gate was retained and passed in the authoritative rerun. No privacy,
+post-quantum, fixed-shape, ordered-boundary, Rust-authority, resource, fixed-cadence, no-swap,
+atomic-binding, based-validity-rollup, or activation gate was removed or weakened. `proofSuiteId`
+remains null and activation remains false.
+
+## 2026-08-05 Rust schedule and strict Clippy repair - VERIFIED, NONACTIVATING
+
+The three stale `chained_public_coin_control` failures were corrected at the schedule boundary,
+not by weakening assertions. The control now follows the executable state-composed constants:
+6,073 GKR rounds, 26 state-relation rounds with 19 output challenges, one separate kind-143 final
+state mask batch, and 13 PCS rounds for 6,113 total. The PCS descriptor window and message-shape
+tests now cover the mask-batch boundary explicitly.
+
+The two original strict-Clippy blockers were repaired without `allow` suppressions: disk DEEP
+parallel mapping returns its feature-gated result directly and quotient evaluation groups its two
+related claims into a named value object; shared-group sumcheck iteration uses the canonical suffix
+iterator. The strict all-target run also exposed five additional current warnings, which were
+fixed without semantic changes: iterator-based indexed validation in the K512 binary, `is_none_or`
+for cached shards, a named shard-field validation context, and the public-coin bridge helper's
+test-module ordering.
+
+Verification:
+
+```text
+cargo +1.96.0 fmt --all -- --check
+exit=0
+
+cargo +1.96.0 clippy --all-targets --release --offline --locked --features std,parallel -- -D warnings
+exit=0
+
+cargo +1.96.0 test --release --offline --locked --bin chained_public_coin_control --features std,parallel
+3 passed; 0 failed
+
+cargo +1.96.0 test --release --offline --locked --bin fp16_zk_rs_public_coin_bridge --features std,parallel
+1 passed; 0 failed
+
+cargo +1.96.0 test --release --offline --locked --bin k512_atomic_semantic_prototype --features std,parallel
+9 passed; 0 failed
+
+cargo +1.96.0 check --release --offline --locked --lib --no-default-features
+exit=0
+
+cargo +1.96.0 test --release --offline --locked --features std,parallel
+303 passed; 0 failed; 0 ignored
+```
+
+No protected path, activation condition, public ABI, privacy boundary, post-quantum boundary,
+resource/no-swap gate, atomic binding, or K512 qualification status was changed. `proofSuiteId`
+remains null and activation remains false.
+
+## 2026-08-05 Wave 3 P04-P12 candidate verifier/state/custody boundary - VERIFIED, NONACTIVATING
+
+The first Wave 3 continuation beyond the existing P01-P03 candidate is implemented in
+`experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py` with focused synthetic
+coverage in `tests/test_bl_pq512_wave3_verifier_state_custody.py`. The candidate supplies an
+append-only governed wide-root registry with dual ML-DSA/SLH-DSA authorization, a fresh private
+salt-use-tag commitment wrapper, the existing exact 744-byte sidecar binding, a fail-closed
+12-field verifier port, bounded private file-backed state with replay recomputation and atomic
+readback, migration, known-checkpoint rollback, occupied-lock rejection, and a locked
+ML-KEM-1024/AES-256-GCM software/reference envelope with expected key-ID binding.
+
+This does not close production Wave 3. The authority and KEM ports are software-only and neither
+HSM-backed nor FIPS-validated; the state file has no external anti-rollback anchor; no production
+`INativeStarkVerifier` exists; `PROOF_SUITE_ID=None`, `ACTIVATION_ALLOWED=False`,
+`proofSuiteId=null`, and activation remains false. The 6-of-93 package count is unchanged. No
+PHI, real government data, real payment authority, live Ethereum, or production credentials were
+used. Existing pre-Wave-3 worktree changes were preserved and no protected path was edited.
+
+Wave 3 focused verification:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py
+...........                                                              [100%]
+11 passed in 3.14s
+
+py -3.14 -m py_compile experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py tests/test_bl_pq512_wave3_verifier_state_custody.py
+exit=0
+```
+
+The focused state test includes post-rollback reopen/readback, duplicate replay rejection, an
+occupied lock rejection, private plaintext absence from the KEM envelope, expected key-ID binding,
+and tamper rejection. Related containing positive slices also passed: master commitments `4`, state
+interface `18`, state migration `4`, S09 governance `4`, S09 foundation `6`, selected public coin
+schedule `2`, selected public coin transcript `3`, PQ commitment screening `4`, verifier receipt
+`6` plus `3` subtests, and Gate 2E terminal ledger `5` tests. Related attack slices passed `39`
+tests across state interface, state migration, PQ commitment screening, S09 governance/foundation,
+Gate 2E terminal ledger, and atomic state composition.
+
+Containing/full-run limits were retained, not weakened:
+
+```text
+21-file Wave 2/Wave 3 containing command: exit=124; timed out after 244055 ms with no terminal pytest result.
+state_plane.py: exit=124; timed out after 94069 ms with no terminal pytest result.
+state_plane_executable_air.py: exit=124; timed out after 94048 ms with no terminal pytest result.
+py -3.14 -m pytest -q: exit=124; timed out after 904036 ms with no terminal pytest result.
+py -3.14 -m pytest -q --ignore tests/test_bl_pq512_state_plane.py --ignore tests/test_bl_pq512_state_plane_executable_air.py: exit=124; timed out after 904060 ms with no terminal pytest result.
+```
+
+The full and broad commands receive no pass credit. `py -3.14 -m black --check` and
+`py -3.14 -m ruff check` were attempted for the new Python files but both were unavailable in the
+existing environment (`No module named black` / `No module named ruff`); no installation was
+performed. `git diff --check` exited `0`, the protected-path check reported
+`protected_path_changes=0`, and the repository remained on `main` at
+`d9fdfb8bfa6f23fc4677d6f2b0fa4e273fbe39a4` with the pre-existing dirty worktree plus the Wave 3
+source/test and documentation changes. No commit was created.
+
+## 2026-08-05 Wave 3 P01-P12 internal engineering boundary - VERIFIED, NONACTIVATING
+
+The full internal Wave 3 state/verifier/custody package is now implemented and verified. This is
+an engineering completion boundary, not production activation. P01-P03 remain rooted in the
+authoritative `wave3_nullifier_authority.py` dual-root replay implementation. P04-P12 are completed
+in `experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py` and covered by
+`tests/test_bl_pq512_wave3_verifier_state_custody.py`:
+
+```text
+P01-P03  canonical A12-derived legacy/wide roots, typed depth-64 transitions, independent replay
+P04      canonical manifest-derived governed roots, append-only registry, dual-PQ authorization
+P05      v2 master/value commitments with private fresh 512-bit salt-use tags
+P06      one exact 744-byte sidecar path; no alternate encoding
+P07      typed 12-field/sidecar/proof/verifier context and explicit local candidate verifier
+P08      private atomic state payload with proof/sidecar binding, replay, readback, and lock
+P09      genesis, migration, monotonic upgrade, rollback, signed recovery anchor, fail-closed config
+P10      stale/replay/profile/parser/partial-write/race/forgery/downgrade rejection coverage
+P11      locked ML-KEM-1024 plus AES-256-GCM software/reference envelope; no RSA fallback
+P12      ML-DSA-87 plus SLH-DSA-SHAKE-256f ports, conformance, rotation, and downgrade rejection
+```
+
+The Wave 3 state file carries an atomic binding digest over the exact sidecar, ordered 12 public
+fields, proof digest, and verifier artifact identity. Raw-only state cannot overwrite a proof-bound
+state. Migration and rollback preserve the binding rather than silently clearing it. Recovery
+requires a dual-PQ-signed checkpoint, exact registry identity, replayed root equality, and atomic
+replacement. The activation configuration remains fail-closed because `ACTIVATION_ALLOWED=False`.
+
+Verification receipt:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py
+15 passed in 5.75s
+
+py -3.14 -m pytest -q tests/test_deployment_ready_roadmap_contract.py tests/test_security_freeze_spec.py
+9 passed in 0.17s
+
+Wave 3 containing positive slices
+43 passed, 3 subtests passed in 29.43s
+
+Wave 3 containing attack slices
+63 passed in 34.13s
+
+py -3.14 -m py_compile experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py
+exit=0
+
+git diff --check
+exit=0
+
+protected_path_changes=0
+```
+
+The current roadmap count is **18 of 93 internal engineering packages complete and 75 open**:
+the original six plus P01-P12. `proofSuiteId=null`, activation remains false, and the following
+remain downstream: a production `INativeStarkVerifier`, selected proof suite, HSM/FIPS-qualified
+providers, external anti-rollback custody, government/payment adapters, based-validity rollup,
+release evidence, and the final independent audit. No PHI, live Ethereum, real government data,
+payment authority, or production credentials were used. Existing worktree changes were preserved;
+no commit was created.
+
+Repository receipt: branch `main`, HEAD
+`d9fdfb8bfa6f23fc4677d6f2b0fa4e273fbe39a4` (`Align active documentation with qualified
+nonactivating evidence`), dirty worktree preserved, protected-path check zero.
+
+## 2026-08-05 Wave 3 full internal boundary - VERIFIED, NONACTIVATING
+
+The prior Wave 3 run stopped at the P01-P12 reference module and did not close the full batch,
+state, proof-container, Rust-port, and durable-custody seams. Those internal seams are now closed
+in the new `experiments/bl_pq512_crypto_foundation/wave3_full_internal.py` boundary, with
+`tests/test_bl_pq512_wave3_full_internal.py` as the executable receipt. The module remains a
+synthetic/local candidate and does not select a proof suite or activate production.
+
+```text
+fixed batch admission       exact 256 A12 preimages plus one context-free hidden salt-use key
+payment binding             private batch/value commitments plus salt-use tag recompute the successor root
+public boundary             exact ordered 12 canonical fields; exact 744-byte sidecar; strict envelope
+authoritative state         full S10 tuple, private batch records, atomic file digest, lock, readback
+governance                  durable append-only dual-PQ root registry bound into state refresh/readback
+Rust boundary               local BLSB v2 state-binding verifier port; Python only parses/rechecks its projection
+recovery                    dual-PQ-signed checkpoint anchor, monotonic context migration/upgrade/rollback
+custody evidence            digest-only append-only audit chain and durable nondecreasing counter
+```
+
+The state file stores synthetic raw A12 preimages and commitment digests as private authoritative
+state; the proof envelope and public 12-field tuple contain no master salt, PHI, exact amount, or
+private commitment bytes. The hidden salt-use tag is inserted into the strong replay root without
+fabricating a legacy A12 record. The full batch commitment binds the persisted salt-use tag rather
+than the discarded raw salt, so durable replay can recompute the commitment and atomic context
+without retaining the master salt. The authoritative state now accepts the durable registry on
+create, reopen, recovery, migration, upgrade, and rollback, and rejects an unexpected registry
+commitment change instead of continuing with stale in-memory governance. `PROOF_SUITE_ID=None`,
+`ACTIVATION_ALLOWED=False`,
+`proofSuiteId=null`, and activation remains false.
+
+Exact verification receipt for this continuation:
+
+```text
+py -3.14 -m pytest -q tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py tests/test_bl_pq512_wave3_full_internal.py
+19 passed in 85.51s
+
+py -3.14 -m pytest -q tests/test_pq_state_reference.py tests/test_pq_strong_nullifier_reference.py tests/attacks/test_pq_state_reference_attacks.py tests/test_bl_pq512_state_migration_recovery.py tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py
+38 passed, 10 subtests passed in 9.30s
+
+py -3.14 -m pytest -q tests/test_deployment_ready_roadmap_contract.py tests/test_security_freeze_spec.py
+9 passed in 0.20s
+
+py -3.14 -m pytest --collect-only -q
+1655 tests collected in 2.64s
+warning: StarletteDeprecationWarning from fastapi.testclient/httpx; collection still completed
+
+py -3.14 -m py_compile experiments/bl_pq512_crypto_foundation/wave3_full_internal.py experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py tests/test_bl_pq512_wave3_full_internal.py
+exit=0
+
+git diff --check
+exit=0
+
+protected_path_changes=0
+```
+
+The 18-of-93 count is unchanged: P01-P12 are now complete as the full internal Wave 3 engineering
+boundary, while production `INativeStarkVerifier` selection, HSM/FIPS custody, external
+anti-rollback authority, adapters, based-validity rollup, release evidence, and the independent
+audit remain downstream. The complete repository pytest run remains uncredited because the earlier
+run timed out without terminal results; no gate was relaxed. No PHI, live Ethereum, real government
+data, payment authority, or production credentials were used. No commit was created.
+
+## 2026-08-05 K512 two-lane execution evidence boundary - IMPLEMENTED, QUALIFIED NONACTIVATING
+
+The committed native path is now the bounded two-lane default for K512, with
+`BL_SHARD_CONCURRENCY=1` as the explicit serial fallback. The Rust coordinator still launches
+independent shard workers, validates every child, sums concurrent host/device/scratch use, and
+binds the receipt in canonical shard order. `proofSuiteId=null` and activation remain false.
+
+The new `experiments/bl_pq512_crypto_foundation/k512_parallel_campaign_evidence.py` module is a
+separate fail-closed evidence contract; it does not weaken the serial H5 validator or grant
+retroactive H5/H6 credit. It independently validated the external campaign directory
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\wave2\promotion-k512-two-lane-20260805-r2`:
+
+```text
+schema_version=blind_ledger_k512_parallel_campaign_evidence_v1
+status=QUALIFIED_K512_TWO_LANE_NONACTIVATING
+campaign_id=promotion-k512-two-lane-20260805-r2
+campaign_digest_sha3_512=be029710c5da9ab74eb1e19925da3c179bea889758619a2c3e43c85ff16753c250d3afb0c12a6856be9e9c151c58c69a78a4d67e40ab92ddacf2d863fca3c7ee
+execution_manifest_sha3_512=e8bdfd542988bd523637a3895c05274d2c1502982ab0fb052560aa3a1d0433f99b4652653e221725d1d60806c6744ff3e331488d7bc16e9e4d1b9e4eb3452029
+run_count=11
+warmup_count=1
+measured_count=10
+shard_count=4
+shard_concurrency=2
+p95_seconds=101.798191
+mean_seconds=101.193590
+max_peak_rss_bytes=1467465728
+max_scratch_bytes=0
+max_external_gpu_peak_mib=5314
+proofSuiteId=null
+activation_allowed=false
+```
+
+All eleven captured runs had four independent shard verifications, state and monitor exits zero,
+empty stderr, zero driver events, zero scratch, and no positive pagefile growth. Mutation tests
+for pagefile growth, concurrency spoofing, duplicate state identity, summary tampering, and
+negative pagefile change passed (`6 passed`). The scoped implementation is committed in
+`8d1cb80` with the native two-lane source and evidence boundary in `e6fb4c1`.
+
+Four fresh exact-campaign refresh attempts against the current committed execution manifest were
+preserved as failed evidence because the external monitor observed positive pagefile growth:
+`r3` warmup `+743` MB, `r4` run 1 `+177` MB after a `-15` MB decrease, `r5` warmup `+30` MB, and
+`r6` warmup `+303` MB. Each failed run's Rust proof returned `status=verified`, all four shards
+verified independently, stderr was empty, and no driver event occurred; the unchanged pagefile
+gate rejected the campaign. At the stopping boundary the host reported only `2778108 KiB` free
+physical memory of `16053108 KiB` total while background WSL/desktop processes were active. No
+further GPU campaign was launched under that unsafe resource condition, and no gate was relaxed.
+
+Focused verification:
+
+```text
+cargo +1.96.0 fmt --all -- --check
+exit=0
+
+cargo +1.96.0 build --release --offline --locked --features std,parallel --bin k512_atomic_semantic_prototype
+exit=0
+
+py -3.14 -m pytest -q tests/test_bl_pq512_k512_parallel_campaign_evidence.py
+6 passed
+```
+
+The result is native execution-mode qualification only. Production verifier/state/custody,
+HSM/FIPS authority, external anti-rollback, adapters, rollup integration, release sealing, and
+the independent audit remain open. No PHI, real government data, real payment authority, live
+Ethereum, or production credentials were used.
+
+## 2026-08-05 Source-complete archive refresh after cleanup - VERIFIED, NONACTIVATING
+
+The release boundary was refreshed from the actual current checkout after the current-summary
+documentation correction and generated-artifact cleanup. The reviewed v2 allowlist retained its
+privacy exclusions and intentionally continued to exclude `STATE.md`, the handoff, and the
+evidence-only files outside that allowlist. It removed the three positive tests already deleted
+from the checkout and added the six current Wave 3/K512 source-and-test files named by the active
+architecture:
+
+```text
+experiments/bl_pq512_crypto_foundation/k512_parallel_campaign_evidence.py
+experiments/bl_pq512_crypto_foundation/wave3_full_internal.py
+experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py
+tests/test_bl_pq512_k512_parallel_campaign_evidence.py
+tests/test_bl_pq512_wave3_full_internal.py
+tests/test_bl_pq512_wave3_verifier_state_custody.py
+```
+
+The strict builder produced three independently built outputs with identical readback:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=782
+payload_bytes=11326944
+entry_count=783
+archive_bytes=11614219
+archive_sha256=44f18c08a260595c45b63854454b3eb6052b5ec1aa464f16fce08e83d875f2b7
+manifest_sha256=b8386c349c074e73586312ae81df2fa7e9ab58f3350530f0c436b184c2f88c5b
+zip_crc_readback=PASS
+manifest_entries_match=true
+three_way_byte_identical=true
+```
+
+The three published Source-Complete targets were updated at the Desktop root, the nested Desktop
+full-workspace directory, and Downloads. Each is exactly `11614219` bytes with the SHA-256 above;
+each previous `11348269`-byte copy with SHA-256
+`f0552c551e015b56a548c32a5026102e2ce23db71b4361a9c296d8af0f15fb5a` is preserved under
+`C:\Users\neers\Documents\Codex\2026-08-02\files-mentioned-by-the-user-you\work\archive-v2-stage\previous-targets-20260805-cleanup-r1`.
+The ZIPs contain no `STATE.md`, generated target/cache directory, proof/scratch directory, or
+deleted test; the six added files are present. The two failed prepublication wrapper attempts and
+the first invalid Windows replacement call created no published ZIP and did not alter a live target.
+
+The cleanup removed exactly 14 generated directories, 5,338 files, and 1,206,766,177 bytes from
+the checkout: `.pytest_cache`, twelve `__pycache__` directories, and the Rust `target` directory.
+The intentional CUDA runtime package remains present at 11 files and 187,059,841 bytes. No source,
+protected path, historical state section, rejected design, proof evidence directory, PHI, live
+Ethereum data, or production credential was removed. Production verifier/state/custody, HSM/FIPS,
+external anti-rollback, adapters, rollup integration, release qualification, and the final audit
+remain open; `proofSuiteId=null` and activation remain false.
+
+## 2026-08-05 Wave 4 adapter and operations boundary - VERIFIED, COMPLETE INTERNALLY, NONACTIVATING
+
+Wave 4 is now closed at its internal local/synthetic boundary. The implementation covers the exact
+roadmap scope `I01-I08` plus `O01-O06/O12`; R01-R12 remains the separate Wave 5 containing-rollup
+boundary. New source and evidence paths are:
+
+```text
+app/wave4_adapters.py
+app/wave4_operations.py
+tools/wave4_conformance.py
+tests/test_wave4_adapters_operations.py
+ops/wave4_release_profile.json
+ops/wave4_sandbox_config.json
+docs/WAVE4_ADAPTERS_AND_OPERATIONS.md
+```
+
+The adapter boundary is versioned and provider-neutral. Requests contain only commitments, a
+bounded source epoch/deadline, and an idempotency key. Responses keep private facts in memory and
+publish only a bounded provenance capsule binding exact source-byte SHA3-512, schema and
+normalization versions, endpoint/tenant identity, freshness, completeness/absence, idempotency,
+error class, and exactly one ML-DSA-87 plus one SLH-DSA-SHAKE-256f signature. The registry covers
+22 I02-I07 capabilities. Unknown versions, downgrades, conflicting idempotency reuse, stale or
+missing source, malformed data, and unauthenticated mutation fail closed. Retry is bounded and
+the circuit breaker is explicit; no network transport, live credential, caller-fact fallback, or
+vendor response enters the canonical boundary.
+
+The operations boundary supplies a software-only ML-KEM-1024/AES-256-GCM reference behind a
+provider-neutral port, root-only monotonic lifecycle records, entropy and nonce-reuse checks,
+mutable-buffer zeroization, an isolated no-network/no-live-credential/no-swap sandbox profile, an
+append-only non-PHI SHA3-512 audit chain, fixed-cadence bounded queue with opaque cover slots and
+one public rejection class, pause/recovery/resume incident drills, and a deterministic source
+allowlist release manifest. Software custody remains explicitly `hsm_backed=false`,
+`fips_validated=false`, `production_usable=false`.
+
+Exact focused verification:
+
+```text
+py -3.14 -B -m pytest -q tests/test_wave4_adapters_operations.py
+8 passed in 8.40s
+
+py -3.14 -B tools/wave4_conformance.py --repo-root .
+adapter.capability_count=22
+adapter.failure_count=0
+adapter.passed_count=67
+operations.ok=true
+release.file_count=7
+release.package_count=15
+release.manifest_digest_sha3_512=cc29ba41e1c0bd376e25fc59a435ed369d8b61efd2d2f497e54cf2957ea25afe69a6438624c8887ed0c2491d4f56964657a405c771cd1718660aba1bf3918eec
+network_access=false
+live_credentials=false
+activation_allowed=false
+proofSuiteId=null
+
+git diff --check
+exit=0
+```
+
+The roadmap and launch-blocker planning count now read `33` complete and `60` open. The 15 Wave 4
+packages are complete internally, but this does not close the production verifier/state acceptance,
+HSM/FIPS module qualification, external anti-rollback authority, proof-suite selection, based
+rollup, whole-product release seal, final independent audit, or operator activation. No PHI, live
+Ethereum, real government data, payment authority, or production credentials were used. The
+published Source-Complete ZIPs were not refreshed by this boundary change.
+
+## 2026-08-05 Wave 4 hardening, Git checkpoint, and Source-Complete archive refresh - VERIFIED, NONACTIVATING
+
+The Wave 4 I01-I08/O01-O06/O12 boundary was hardened and checkpointed in commit
+`2bfb625` (`Close Wave 4 adapters and operations boundary`). The working tree still contains
+pre-existing Wave 3/reference changes outside that checkpoint; no protected path was staged or
+changed by this boundary. The hardening preserves the fixed-shape semantics, ordered 12-field
+boundary, dual-PQ profile, local/synthetic-only policy, and `proofSuiteId=null` state while adding
+direct-construction validation, bounded signature/cache/transport/KMS/audit inputs, strict audit
+record shape and duplicate/unknown-key rejection, incident transition checks, and unlinked release
+file checks. The non-PHI audit capability allowlist explicitly permits fixed operational labels such
+as `payment` without permitting private values or exact amounts.
+
+Final Wave 4 verification:
+
+```text
+py -3.14 -B -m pytest -q tests/test_wave4_adapters_operations.py
+9 passed in 8.14s
+
+py -3.14 -B -m pytest -q tests/test_wave4_adapters_operations.py tests/test_operational_readiness.py tests/test_deployment_ready_roadmap_contract.py tests/test_production_readiness.py tests/test_build_release_archive.py tests/test_security_freeze_spec.py tests/test_privacy_artifact_scan.py tests/test_privacy_v2_abi.py tests/test_privacy_v2_statement.py
+83 passed, 58 subtests passed in 10.10s
+
+py -3.14 -B -m pytest -q tests/test_bl_pq512_wave3_full_internal.py tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py tests/test_bl_pq512_k512_parallel_campaign_evidence.py tests/test_verifier_receipt.py
+31 passed, 3 subtests passed in 99.48s
+
+py -3.14 -B -m pytest -q tests/test_government_reference_adapter.py tests/test_evidence_and_public_inputs.py tests/test_fixed_k_privacy_reference.py tests/test_phase1_security_regressions.py tests/test_bl_pq512_selected_public_coin_schedule.py tests/test_bl_pq512_selected_public_coin_transcript.py
+34 passed, 3 warnings, 4 subtests passed in 16.36s
+
+py -3.14 -B -m pytest -q tests/attacks/test_bl_pq512_gate_2e_selection_attacks.py tests/attacks/test_bl_pq512_gate_2e_terminal_ledger_attacks.py tests/attacks/test_bl_pq512_h5_qualification_preflight_attacks.py tests/attacks/test_bl_pq512_h6_closure_attacks.py tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py
+22 passed in 78.93s
+
+py -3.14 -B -m pytest -q tests/attacks/test_new_architecture_security_hunt.py tests/attacks/test_bl_pq512_application_sha3_port_inventory_attacks.py tests/attacks/test_bl_pq512_application_sha3_shared_schedule_attacks.py
+18 passed in 7.34s
+
+verify_ops_authority()
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+py -3.14 -B tools/wave4_conformance.py --repo-root .
+adapter.capability_count=22
+adapter.failure_count=0
+adapter.passed_count=67
+operations.ok=true
+release.file_count=7
+release.package_count=15
+release.manifest_digest_sha3_512=cc29ba41e1c0bd376e25fc59a435ed369d8b61efd2d2f497e54cf2957ea25afe69a6438624c8887ed0c2491d4f56964657a405c771cd1718660aba1bf3918eec
+network_access=false
+live_credentials=false
+activation_allowed=false
+proofSuiteId=null
+
+git diff --check
+exit=0
+```
+
+The repository-wide `1669`-test aggregate and `455`-case aggregate attack invocation each exceeded
+the bounded `124`-second command window without emitting a test result; they were not treated as
+passes. The boundary-specific regression and attack groups above completed successfully. The three
+Source-Complete archives were rebuilt from a separate exact allowlist with `789` payload files and
+`790` ZIP entries:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=789
+payload_bytes=11438695
+entry_count=790
+archive_bytes=11728112
+archive_sha256=a417e0d336ad82f3ef2a086e5ee327f3d0886b3455c16ddb2ebf201244aa310c
+archive_sha3_512=77629dc6be619ec0c626ff560f1d22d579082247c933e8a22bae062e4502952623ad928282172a5f972fb30fa7b7df8f42ea7b580bd7eb30d556e1c19d4b6a9a
+manifest_sha256=cf11988c7d1999958efe1ffaa4301711166c3eced01b1a22008f002ecc8985bd
+three_way_byte_identical=true
+zip_crc_readback=PASS
+duplicates=0
+```
+
+The exact published targets are the Desktop root copy, the nested Desktop full-workspace copy, and
+the Downloads copy of `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. Each is `11728112` bytes
+with the archive SHA-256 above. The prior three copies remain recoverable at
+`C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave4-published-backup-20260805`.
+The archive includes the six current Wave 3/K512 source-and-test files and the seven Wave 4 source,
+test, configuration, and documentation files; it contains no `STATE.md`, generated cache/target/
+proof/scratch directory, deleted test, PHI, live Ethereum data, or production credential.
+
+Wave 4 is complete only as an internally qualified local/synthetic nonactivating boundary. Production
+verifier/state acceptance, HSM/FIPS custody, external anti-rollback, proof-suite selection, based
+rollup, whole-product release seal, final independent audit, and operator activation remain open.
