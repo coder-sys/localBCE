@@ -10,7 +10,7 @@ As of 2026-08-06. Historical measurements are retained only where the row labels
 | Proof artifacts | Not packaged. Regenerate locally when needed. |
 | External CUDA prover | A local WSL CUDA proof run was recorded, but the custom external prover build is not included in this archive. |
 | Production verifier acceptance | The local Rust-authoritative candidate verifier has a fresh passing synthetic proof and is exercised through local Privacy V2 settlement and the native rollup adapter. Do not claim deployed production verification unless the deployed verifier command runs in the current environment and succeeds. |
-| `ops` authority | Closed on 2026-08-02: tracked `ops/` is the sole commit-bound authority. Its exact canonical path, 14-file set, lengths, and SHA3-512 identities are independently checked; alternate roots, sibling copies, fallback paths, symlinks, junctions, and Windows reparse redirection are forbidden. |
+| `ops` authority | Closed on 2026-08-02: tracked `ops/` is the sole commit-bound authority. Its exact canonical path, 19-file set, lengths, and SHA3-512 identities are independently checked; alternate roots, sibling copies, fallback paths, symlinks, junctions, and Windows reparse redirection are forbidden. |
 | Python rules-engine fallback | Local fallback is for tests/benchmarks only and must not be used as production adjudication. |
 | Oracle feeds | Development/test attestation paths exist; production oracle feed operation still needs deployment hardening. |
 | Protected paths | Cryptographic circuit, settlement contracts, and core batch/public-input files are protected from casual edits. |

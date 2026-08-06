@@ -209,7 +209,7 @@ no production-suite or activation credit.
 
 ## Operational artifact layout
 
-Tracked `ops/` is the sole repository authority. Its exact 14-file regular-file inventory, lengths,
+Tracked `ops/` is the sole repository authority. Its exact 19-file regular-file inventory, lengths,
 and SHA3-512 identities are frozen in `ops_authority.py`; policy hashing uses the same tracked path.
 Sibling copies, mirrors, symlinks, and fallback resolution are rejected so one mutable copy cannot
 silently outrank another. Policy bytes and verifier pins remain trust-critical reviewed material.
