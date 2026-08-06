@@ -9,18 +9,31 @@ from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.production_boundary import (
     GovernedRootsV2,
+    LocalSettlementV2,
     NativeVerificationResult,
+    SettlementReceiptV2,
     _BATCH_NONCE_BINDING,
     _SETTLEMENT_DOMAIN_BINDING,
     _digest,
     build_v2_public_fields,
 )
+from app.local_stack_candidate import (
+    LocalStackCandidateError,
+    build_local_stack_receipt,
+)
 from app.wave5_native_boundary import (
     NativeRollupClaimVerifier,
     build_native_claim_envelope,
 )
-from app.wave5_rollup import RollupClaimContext, RollupSuiteIdentity, Wave5RollupError
+from app.wave5_rollup import (
+    ClaimVerificationReceipt,
+    RollupClaimContext,
+    RollupClaimEnvelope,
+    RollupSuiteIdentity,
+    Wave5RollupError,
+)
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
+    BuiltAuditPendingSuite,
     NativeVerificationReceipt,
     PROOF_PACKAGE_COMMITMENT_DOMAIN,
     ProductionProofEnvelope,
@@ -141,6 +154,80 @@ class _StubNativeVerifier:
             statement_commitment=receipt.statement_commitment,
         )
 
+    def verify(self, envelope: ProductionProofEnvelope) -> NativeVerificationResult:
+        return self.verify_encoded(envelope.encode())
+
+
+def _local_stack_fixture() -> tuple[
+    ProductionProofEnvelope,
+    NativeVerificationReceipt,
+    BuiltAuditPendingSuite,
+    SettlementReceiptV2,
+    RollupClaimEnvelope,
+    RollupClaimContext,
+    RollupSuiteIdentity,
+    ClaimVerificationReceipt,
+]:
+    native, context, identity = _fixture()
+    verifier = _StubNativeVerifier(native)
+    rollup_envelope = build_native_claim_envelope(
+        native_envelope=native,
+        context=context,
+    )
+    rollup_receipt = NativeRollupClaimVerifier(verifier).verify(
+        envelope=rollup_envelope,
+        context=context,
+        identity=identity,
+    )
+    sidecar = CandidateSidecarV1.decode(native.sidecar)
+    domain = _field("native-settlement-domain")
+    nonce = _field("native-batch-nonce")
+    roots = GovernedRootsV2(
+        claim_source_root=_field("native-claim-source"),
+        oracle_facts_root=_field("native-oracle-facts"),
+        policy_root=_field("native-policy"),
+        ruleset_root=_field("native-ruleset"),
+    )
+    submitter = _wide("local-submitter")
+    settlement = LocalSettlementV2(
+        verifier=verifier,
+        settlement_domain=domain,
+        governed_roots=roots,
+        initial_nullifier_root=(
+            int.from_bytes(sidecar.strong_nullifier_root_before, "big")
+            % (FIELD_MODULUS - 1)
+            + 1
+        ).to_bytes(32, "big"),
+        authorized_submitters=(submitter,),
+    )
+    settlement_receipt = settlement.submit(
+        envelope=native,
+        batch_nonce=nonce,
+        submitter=submitter,
+    )
+    native_receipt = verifier.verify_encoded(native.encode()).receipt
+    candidate = BuiltAuditPendingSuite(
+        proof_suite_id=native.suite_id,
+        schema_id=native.schema_id,
+        verifier_artifact_identity=native.verifier_artifact_identity,
+        active_hiding_certificate_sha3_512=sha3_512(b"hiding").hexdigest(),
+        software_custody_certificate_sha3_512=sha3_512(b"custody").hexdigest(),
+        proof_package_sha3_512=native_receipt.proof_package_commitment.hex(),
+        transcript_evidence_sha3_512=native_receipt.transcript_commitment.hex(),
+        statement_commitment_sha3_512=native_receipt.statement_commitment.hex(),
+        evidence_commitment_sha3_512=native_receipt.evidence_commitment.hex(),
+    )
+    return (
+        native,
+        native_receipt,
+        candidate,
+        settlement_receipt,
+        rollup_envelope,
+        context,
+        identity,
+        rollup_receipt,
+    )
+
 
 def test_native_adapter_rechecks_exact_outer_bindings() -> None:
     native, context, identity = _fixture()
@@ -183,3 +270,61 @@ def test_native_adapter_rejects_proof_body_mutation_before_native_call() -> None
             identity=identity,
         )
     assert verifier.calls == 0
+
+
+def test_local_stack_receipt_binds_native_settlement_and_rollup() -> None:
+    (
+        native,
+        native_receipt,
+        candidate,
+        settlement_receipt,
+        rollup_envelope,
+        context,
+        identity,
+        rollup_receipt,
+    ) = _local_stack_fixture()
+    receipt = build_local_stack_receipt(
+        envelope=native,
+        native_receipt=native_receipt,
+        candidate=candidate,
+        settlement_receipt=settlement_receipt,
+        rollup_envelope=rollup_envelope,
+        rollup_context=context,
+        rollup_identity=identity,
+        rollup_receipt=rollup_receipt,
+    )
+    public = receipt.as_public_dict()
+    assert receipt.proof_suite_id == native.suite_id
+    assert receipt.stack_identity_sha3_512 != "0" * 128
+    assert public["globalProofSuiteId"] is None
+    assert public["activationAllowed"] is False
+    assert public["productionUsable"] is False
+    assert "publicOutputs" not in public
+
+
+def test_local_stack_receipt_rejects_rollup_receipt_splice() -> None:
+    (
+        native,
+        native_receipt,
+        candidate,
+        settlement_receipt,
+        rollup_envelope,
+        context,
+        identity,
+        rollup_receipt,
+    ) = _local_stack_fixture()
+    forged = replace(
+        rollup_receipt,
+        statement_digest_512=sha3_512(b"splice").digest(),
+    )
+    with pytest.raises(LocalStackCandidateError, match="rollup_receipt"):
+        build_local_stack_receipt(
+            envelope=native,
+            native_receipt=native_receipt,
+            candidate=candidate,
+            settlement_receipt=settlement_receipt,
+            rollup_envelope=rollup_envelope,
+            rollup_context=context,
+            rollup_identity=identity,
+            rollup_receipt=forged,
+        )

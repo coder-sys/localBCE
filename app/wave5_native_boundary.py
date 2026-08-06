@@ -99,6 +99,54 @@ def _check_identity(
         raise Wave5RollupError("native_claim_context_identity_mismatch")
 
 
+def native_claim_context_digest(context: RollupClaimContext) -> bytes:
+    if type(context) is not RollupClaimContext:
+        raise TypeError("native_claim_context_required")
+    return _digest(_CONTEXT_DOMAIN, context.canonical_bytes())
+
+
+def native_claim_proof_digest(
+    *,
+    proof_body: bytes,
+    context: RollupClaimContext,
+    public_fields: tuple[bytes, ...],
+    sidecar: bytes,
+) -> bytes:
+    if type(context) is not RollupClaimContext:
+        raise TypeError("native_claim_context_required")
+    return _digest(
+        _PROOF_DOMAIN,
+        proof_body,
+        context.canonical_bytes(),
+        b"".join(public_fields),
+        sidecar,
+    )
+
+
+def native_claim_statement_digest(
+    *,
+    sidecar: bytes,
+    public_fields: tuple[bytes, ...],
+    context: RollupClaimContext,
+    native_statement_commitment: bytes,
+    native_envelope_commitment: bytes,
+) -> bytes:
+    if type(context) is not RollupClaimContext:
+        raise TypeError("native_claim_context_required")
+    return _digest(
+        _STATEMENT_DOMAIN,
+        sidecar,
+        b"".join(public_fields),
+        context.canonical_bytes(),
+        native_statement_commitment,
+        native_envelope_commitment,
+    )
+
+
+def native_claim_sidecar_digest(sidecar: bytes) -> bytes:
+    return _digest(_SIDECAR_DOMAIN, sidecar)
+
+
 def build_native_claim_envelope(
     *,
     native_envelope: ProductionProofEnvelope,
@@ -112,18 +160,16 @@ def build_native_claim_envelope(
         raise TypeError("native_claim_context_required")
     fields = _public_fields(native_envelope.public_outputs)
     encoded = native_envelope.encode()
-    context_bytes = context.canonical_bytes()
     return RollupClaimEnvelope(
         public_fields=fields,
         encoded_sidecar=native_envelope.sidecar,
         proof_body=encoded,
-        context_digest_512=_digest(_CONTEXT_DOMAIN, context_bytes),
-        claim_proof_digest_512=_digest(
-            _PROOF_DOMAIN,
-            encoded,
-            context_bytes,
-            b"".join(fields),
-            native_envelope.sidecar,
+        context_digest_512=native_claim_context_digest(context),
+        claim_proof_digest_512=native_claim_proof_digest(
+            proof_body=encoded,
+            context=context,
+            public_fields=fields,
+            sidecar=native_envelope.sidecar,
         ),
     )
 
@@ -153,16 +199,14 @@ class NativeRollupClaimVerifier:
         sidecar = _sidecar(envelope.encoded_sidecar)
         _check_identity(sidecar=sidecar, context=context, identity=identity)
         fields = _public_fields(b"".join(envelope.public_fields))
-        context_bytes = context.canonical_bytes()
-        expected_context = _digest(_CONTEXT_DOMAIN, context_bytes)
+        expected_context = native_claim_context_digest(context)
         if envelope.context_digest_512 != expected_context:
             raise Wave5RollupError("native_claim_context_digest_mismatch")
-        expected_proof = _digest(
-            _PROOF_DOMAIN,
-            envelope.proof_body,
-            context_bytes,
-            b"".join(fields),
-            envelope.encoded_sidecar,
+        expected_proof = native_claim_proof_digest(
+            proof_body=envelope.proof_body,
+            context=context,
+            public_fields=fields,
+            sidecar=envelope.encoded_sidecar,
         )
         if envelope.claim_proof_digest_512 != expected_proof:
             raise Wave5RollupError("native_claim_proof_digest_mismatch")
@@ -209,20 +253,26 @@ class NativeRollupClaimVerifier:
         ):
             raise Wave5RollupError("native_claim_receipt_binding_mismatch")
 
-        statement = _digest(
-            _STATEMENT_DOMAIN,
-            envelope.encoded_sidecar,
-            b"".join(fields),
-            context_bytes,
-            result.statement_commitment,
-            result.envelope_commitment,
+        statement = native_claim_statement_digest(
+            sidecar=envelope.encoded_sidecar,
+            public_fields=fields,
+            context=context,
+            native_statement_commitment=result.statement_commitment,
+            native_envelope_commitment=result.envelope_commitment,
         )
         return ClaimVerificationReceipt(
             statement_digest_512=statement,
             proof_digest_512=expected_proof,
             verifier_artifact_identity_512=identity.verifier_artifact_identity_512,
-            sidecar_digest_512=_digest(_SIDECAR_DOMAIN, envelope.encoded_sidecar),
+            sidecar_digest_512=native_claim_sidecar_digest(envelope.encoded_sidecar),
         )
 
 
-__all__ = ("NativeRollupClaimVerifier", "build_native_claim_envelope")
+__all__ = (
+    "NativeRollupClaimVerifier",
+    "build_native_claim_envelope",
+    "native_claim_context_digest",
+    "native_claim_proof_digest",
+    "native_claim_sidecar_digest",
+    "native_claim_statement_digest",
+)

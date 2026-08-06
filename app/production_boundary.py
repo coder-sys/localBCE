@@ -382,6 +382,12 @@ def validate_v2_public_projection(
     return observed
 
 
+def public_fields_commitment(public_fields: Sequence[bytes]) -> bytes:
+    """Commit to the exact ordered twelve-field V2 projection."""
+
+    return _digest(_SETTLEMENT_COMMITMENT_BINDING, b"".join(_canonical_fields(public_fields)))
+
+
 @dataclass(frozen=True, slots=True)
 class SettlementReceiptV2:
     sequence_before: int
@@ -553,7 +559,7 @@ class LocalSettlementV2:
             sequence_after=parsed_sidecar.sequence_after,
             nullifier_root_before=self._current_nullifier_root,
             nullifier_root_after=next_root,
-            public_fields_commitment=_digest(_SETTLEMENT_COMMITMENT_BINDING, b"".join(fields)),
+            public_fields_commitment=public_fields_commitment(fields),
             envelope_commitment=result.envelope_commitment,
             native_statement_commitment=result.statement_commitment,
             proof_suite_id=receipt.proof_suite_id,
@@ -580,5 +586,6 @@ __all__ = (
     "SettlementReceiptV2",
     "SettlementSnapshotV2",
     "build_v2_public_fields",
+    "public_fields_commitment",
     "validate_v2_public_projection",
 )
