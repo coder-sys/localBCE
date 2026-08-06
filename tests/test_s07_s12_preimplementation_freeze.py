@@ -93,11 +93,11 @@ def test_registry_is_explicitly_unqualified_and_nonactivatable() -> None:
     assert sha3_air["traceBaseColumns"] == 1_704
     assert sha3_air["coreRoundLookupMessages"] == 1_024
     assert sha3_air["firstRoundLookupMessages"] == 1_096
-    assert sha3_air["applicationPortStaticCallsites"] == 79
+    assert sha3_air["applicationPortStaticCallsites"] == 89
     assert sha3_air["applicationPortAirCallsites"] == 39
     assert sha3_air["applicationPortPublicPrecomputedCallsites"] == 5
-    assert sha3_air["applicationPortHostEvidenceOnlyCallsites"] == 21
-    assert sha3_air["applicationPortWave1cVerifierStateCallsites"] == 11
+    assert sha3_air["applicationPortHostEvidenceOnlyCallsites"] == 29
+    assert sha3_air["applicationPortWave1cVerifierStateCallsites"] == 13
     assert sha3_air["applicationPortSupersededReferenceCallsites"] == 3
     assert sha3_air["applicationPortComprehensiveSourceScopeCurrent"] is True
     assert sha3_air["applicationPortGovernedSourceDirectories"] == [

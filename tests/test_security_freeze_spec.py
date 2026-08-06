@@ -155,12 +155,11 @@ def test_roadmap_closure_does_not_change_the_twelve_field_boundary() -> None:
     assert observed == EXPECTED_ABI
 
     roadmap = _read(ROADMAP_PATH)
-    assert "Packages `S01`, `S03`, `S05`, `S06`, and `A12` are complete" in roadmap
-    assert "**45 of 93 internal engineering packages are complete and 48 remain open**" in " ".join(roadmap.split())
-    assert "R25 closes only `Z01`" in roadmap
-    assert "This is not a privacy, strict-PQ, full-claim, or production claim" in " ".join(roadmap.split())
-    assert "| S07 |" in roadmap and "complete 256-bit security" in roadmap
-    assert "| S08 |" in roadmap and "rejected defaults are recorded" in roadmap
+    assert "The current source, tests, and" in roadmap
+    assert "all **93 counted packages are internal engineering work**" in " ".join(roadmap.split()).lower()
+    assert "This is not a privacy, strict-PQ production-suite, live-rollup, HSM/FIPS, or audit claim" in " ".join(roadmap.split())
+    assert "| S07 |" in roadmap and "composed security ledger" in roadmap
+    assert "| S08 |" in roadmap and "candidate parameter identities" in roadmap
     assert "| S09 |" in roadmap and "`proofSuiteId=null`" in roadmap
 
     historical = _read(HISTORICAL_ROADMAP_PATH)

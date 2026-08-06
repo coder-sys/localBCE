@@ -222,7 +222,8 @@ it does not make the roadmap depend on outside help.
 
 ## 8. Current standing reminder
 
-Current recorded position: progress is 45 of 93 packages complete internally. Wave 1 is sealed and
+Current recorded position: all 93 of 93 internal engineering packages are complete at the
+local/nonactivating boundary. Wave 1 is sealed and
 nonactivating; Gate 2E is sealed as a nonactivating candidate context; the exact H5 campaign
 passed; the bounded H6 candidate-evidence manifest closed all twelve records; Wave 3 P01-P12
 internal verifier/state/custody engineering is complete nonactivating; and Wave 4 I01-I08/O01-O06/O12

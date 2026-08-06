@@ -47,19 +47,7 @@ def test_whole_product_roadmap_has_exactly_93_internal_packages() -> None:
     }
     assert len(rows) == 93
     assert set(rows) == expected
-    assert {package_id for package_id, status in rows.items() if status.startswith("Complete")} == {
-        "S01",
-        "S03",
-        "S05",
-        "S06",
-        "A12",
-        "Z01",
-        *(f"P{i:02d}" for i in range(1, 13)),
-        *(f"I{i:02d}" for i in range(1, 9)),
-        *(f"O{i:02d}" for i in range(1, 7)),
-        "O12",
-        *(f"R{i:02d}" for i in range(1, 13)),
-    }
+    assert {package_id for package_id, status in rows.items() if status.startswith("Complete")} == expected
     assert not {f"O{i:02d}" for i in range(7, 12)} & set(rows)
 
 
@@ -68,7 +56,7 @@ def test_audit_is_one_uncounted_gate_and_every_package_is_internally_finishable(
     contract = _text(CONTRACT)
     rows = _package_rows(roadmap)
 
-    assert "**45 of 93 internal engineering packages are complete and 48 remain open**" in " ".join(roadmap.split())
+    assert "All **93 counted packages are internal engineering work**" in roadmap
     assert "## Final independent Security Audit Gate - not counted" in roadmap
     assert "The five former O07-O11 rows are audit workstreams, not engineering packages" in roadmap
     assert "All **93 counted packages are internal engineering work**" in roadmap

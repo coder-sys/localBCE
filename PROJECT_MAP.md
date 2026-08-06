@@ -11,6 +11,11 @@ engineering are complete as nonactivating source and synthetic evidence; product
 verifier/state/custody, HSM/FIPS authority, whole-product release, and final audit work remain open;
 real PHI/payments remain forbidden.
 
+The internal package ledger is currently 93/93 complete through local, synthetic, nonactivating
+receipts. That count does not mean production activation: the native production verifier, exact
+settlement binding, HSM/FIPS custody, live deployment inputs, release authorization, and final
+independent audit remain open.
+
 | Path | What it is | Edit risk |
 | --- | --- | --- |
 | `app/` | Python app layer: ingestion, adjudication, batching, portals, and API helpers. | Medium to high. |

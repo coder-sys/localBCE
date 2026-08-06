@@ -27,8 +27,8 @@ SALT_USE_LENGTH = 78
 
 # Filled from the canonical JSON instance after every reviewed registry change.
 EXPECTED_REGISTRY_CANONICAL_SHA3_512 = (
-    "d082aaec00392f6ae7c7c37a52b6b18ab0fccd5fb08654ec9e326d8c20dd355e"
-    "13f02b240577823f18b06f50aa165d25f5479d2ba1067beb80dd20ab9d6724e0"
+    "4dd71275a1c400c8d19a2bd53792f92c70375e159982034b6a56108c1a2f9249"
+    "29edd35dc20150930e2bd09462a48ae6ebc41dd80853850d274bc269dcfe583e"
 )
 
 SIDECAR_LAYOUT_SPEC = (
@@ -190,19 +190,19 @@ EXPECTED_SHA3_AIR_CANDIDATE = {
     "applicationPortReconciledAdditionMeasurementCurrent": True,
     "applicationPortReconciledAdditionCount": 5,
     "applicationPortInventoryProfileId": "K128_CALIBRATION",
-    "applicationPortStaticCallsites": 79,
+    "applicationPortStaticCallsites": 89,
     "applicationPortAirCallsites": 39,
     "applicationPortPublicPrecomputedCallsites": 5,
-    "applicationPortHostEvidenceOnlyCallsites": 21,
-    "applicationPortWave1cVerifierStateCallsites": 11,
+    "applicationPortHostEvidenceOnlyCallsites": 29,
+    "applicationPortWave1cVerifierStateCallsites": 13,
     "applicationPortSupersededReferenceCallsites": 3,
     "applicationPortObservedInvocations": 404_482,
     "applicationPortConservativeInvocations": 401_275,
     "applicationPortConservativePermutations": 1_205_016,
     "applicationPortConservativeKeccakRoundRows": 28_920_384,
     "applicationPortInventorySha3_512": (
-        "618c06447efc67bca80ca9bb4c59a89970e7c42a26ea6a45a298c8dc8e1e8b2"
-        "643f3c51a923d1b89ebb6a2311dc22edfffeea70471a9f97c5378b8a43fb607c2"
+        "f583d02e68c3de7b7b946b1decb620757f04b1cb0850fa23660f8e8965b611f1"
+        "11b4075c8ad8b6c246fde2c3732ab9c90effd6d17ccaf3d820f261825d1fa992"
     ),
     "applicationPortFinalScheduleSelected": False,
     "applicationPortInventoryImplementation": (

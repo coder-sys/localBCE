@@ -81,7 +81,7 @@ rule also match across languages, and a byte-oriented SHA3-512 AIR now freezes a
 lookup core and 1,704-column/1,096-first-round-lookup sponge envelope at composed degree 3 with FIPS
 KAT parity. Historical inventories classified 52 and later 50 live SHA3 callsites, followed by an
 interim 55-site drift reconciliation. H0 now independently scans both governed source trees and
-reconciles 79/79 current callsites, 39 `AIR_REQUIRED`, with exact dynamic measurements for all five
+reconciles 89/89 current callsites, 39 `AIR_REQUIRED`, with exact dynamic measurements for all five
 post-R36 additions and fail-closed new-file/noncanonical-form attacks. Both earlier K128
 host-recomputation envelopes are historical and forbidden for parameter use. The sealed semantic
 topology uses one exact 2,133-byte

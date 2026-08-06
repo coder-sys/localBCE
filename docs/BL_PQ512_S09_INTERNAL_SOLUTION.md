@@ -313,10 +313,10 @@ measurement above explicitly supersedes it:
 896/2,048/4,608 claim-membership links, and 14,322/28,644/57,288 SHA3 permutations. The old
   `51*K` measurement remains historical only. Its 50-live-callsite inventory digest was
   `d86734cefb1c6e3e89cc0c5a3d05547c08ac8243da2a09a2ce031d80a349ddf7b93c363e9a63b8b4de836abb7f3e74706167d1559f16db602fc48fba12739f3c`.
-  H0 now independently enumerates both governed source trees and reconciles 79/79 current callsites:
-  39 `AIR_REQUIRED`, five public-precomputed, 21 host-evidence-only, 11 Wave-1C verifier-state,
+  H0 now independently enumerates both governed source trees and reconciles 89/89 current callsites:
+  39 `AIR_REQUIRED`, five public-precomputed, 29 host-evidence-only, 13 Wave-1C verifier-state,
   and three superseded-reference sites. Its current inventory digest is
-  `618c06447efc67bca80ca9bb4c59a89970e7c42a26ea6a45a298c8dc8e1e8b2643f3c51a923d1b89ebb6a2311dc22edfffeea70471a9f97c5378b8a43fb607c2`;
+  `f583d02e68c3de7b7b946b1decb620757f04b1cb0850fa23660f8e8965b611f111b4075c8ad8b6c246fde2c3732ab9c90effd6d17ccaf3d820f261825d1fa992`;
   new files and noncanonical alias, attribute, `hashlib.new`, dynamic-import, and dynamic-`getattr`
   forms fail closed. Current K128 bus-mapping and resource evidence remain open.
 - the economic-map candidate fixes 24-bit shards and K128 worst-case padding at 34,026 node hashes,

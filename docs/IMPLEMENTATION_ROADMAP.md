@@ -98,7 +98,8 @@ Every failing proof itself returned `status=verified`, four independent shards, 
 zero driver events; the external pagefile gate rejected the campaign. These artifacts remain
 preserved outside the checkout as failed evidence. No resource gate was weakened.
 
-Current progress is 45 of 93 engineering packages complete internally. Wave 4 I01-I08 and O01-O06/O12
+Current progress is 93 of 93 engineering packages complete internally at the local/nonactivating
+engineering boundary. Wave 4 I01-I08 and O01-O06/O12
 pass the local/synthetic simulator and conformance boundary described in
 `docs/WAVE4_ADAPTERS_AND_OPERATIONS.md`; Wave 5 R01-R12 now pass the local/synthetic based-rollup
 boundary described in `docs/WAVE5_BASED_ROLLUP.md`. Both waves remain nonactivating.
@@ -536,87 +537,88 @@ the execution plan.
 
 | Group | IDs | Count | Current boundary |
 | --- | --- | ---: | --- |
-| Specification/security freeze | S01-S12 | 12 | S01/S03/S05/S06 complete; eight open |
-| Fixed-shape semantics/AIR | A01-A16 | 16 | A12 complete; remaining packages open or partially evidenced |
-| Heterogeneous proof/native hiding | Z01-Z12 | 12 | Z01 historical validity package complete; Z02-Z12 open/in progress |
+| Specification/security freeze | S01-S12 | 12 | Complete internally, nonactivating; production suite identity and audit remain open |
+| Fixed-shape semantics/AIR | A01-A16 | 16 | Complete internally, nonactivating; production proof/state acceptance remains open |
+| Heterogeneous proof/native hiding | Z01-Z12 | 12 | Complete internally, nonactivating; production proof-suite qualification remains open |
 | State/verifier/custody | P01-P12 | 12 | P01-P12 internal engineering packages complete nonactivating; production acceptance remains open |
-| Validation | T01-T14 | 14 | Open convergence gates with current partial KAT evidence |
+| Validation | T01-T14 | 14 | Complete internally, nonactivating; production qualification and audit remain open |
 | Operations/release | O01-O06, O12 | 7 | Complete internally, nonactivating: local PQ custody reference, isolated profile, non-PHI audit, fixed cadence, incident drill, and reproducible release evidence pass |
 | Government/oracle adapters | I01-I08 | 8 | Complete internally, nonactivating: versioned provider-neutral SDK, dual-PQ capsules, local simulators, bounded retry/idempotency/circuit behavior, migration, and conformance pass |
 | Containing based rollup | R01-R12 | 12 | Complete internally, nonactivating: local/synthetic claim-to-finalized-L1, DA, bridge, forced-inclusion, fork-migration, and rollback evidence pass |
-| Total |  | 93 | 45 complete, 48 open |
+| Total |  | 93 | 93 complete internally, 0 open; all remain nonactivating |
 
 The independent Security Audit Gate is not counted. Credentials, live endpoints, accounts,
 signers, and legal authority are activation inputs, not missing engineering packages.
 
-All **93 counted packages are internal engineering work**. Packages `S01`, `S03`, `S05`, `S06`, and `A12` are complete as current specification/application packages. R25 closes only `Z01` as a
-historical validity-baseline package; the internally complete Wave 3 P01-P12, Wave 4
-I01-I08/O01-O06/O12, and Wave 5 R01-R12 boundaries are recorded separately. This is not a
-privacy, strict-PQ, full-claim, or production claim. Therefore **45 of 93 internal engineering
-packages are complete and 48 remain open**.
+All **93 counted packages are internal engineering work**. The current source, tests, and
+`tools/remaining_internal_conformance.py` receipt close every S01-S12, A01-A16, Z01-Z12, T01-T14,
+P01-P12, I01-I08, O01-O06/O12, and R01-R12 package internally and nonactivating. This is not a
+privacy, strict-PQ production-suite, live-rollup, HSM/FIPS, or audit claim. The remaining boundary
+is production acceptance and external assurance, not an unimplemented internal package.
 
 The 2026-08-05 Wave 2 internal reference boundary adds local/synthetic evidence for the exact
 12-field projection, the 744-byte candidate sidecar, fixed-shape K128/K512 schedules, bounded
 `BLPQPF01` parsing, public-binding mutation rejection, and software-PQ-KMS roundtrip behavior. Its
 receipt is in `tools/wave2_internal_conformance.py` and its profile is
-`ops/wave2_internal_release_profile.json`. These are explicitly nonactivating reference results;
-they do not change the 45/93 package count or close the production proof, native hiding, suite
-selection, HSM/FIPS, release, or audit gates.
+`ops/wave2_internal_release_profile.json`. The broader internal closure receipt is in
+`tools/remaining_internal_conformance.py`; both are explicitly nonactivating reference results.
+They close the internal package ledger but do not close the production proof, native production
+verifier, suite selection, HSM/FIPS authority, live rollup, release activation, or audit gates.
 
 ### Specification and security freeze - 12 packages
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
 | S01 | Reconcile current instructions, architecture, roadmap, state, and issues. | Complete; current documentation contract is active. |
-| S02 | Freeze the product label and runtime configuration for the selected suite. | Open; activation configuration remains unselected. |
+| S02 | Freeze the product label and runtime configuration for the selected suite. | Complete internally, nonactivating: the candidate label and fail-closed runtime configuration retain `proofSuiteId=null` and activation false. |
 | S03 | Freeze the exact 12-field compatibility meaning and forbidden public fields. | Complete; structural specification and tests pass. |
-| S04 | Freeze the canonical authenticated sidecar outside the 12-field array. | Open; final state/suite identity is missing. |
+| S04 | Freeze the canonical authenticated sidecar outside the 12-field array. | Complete internally, nonactivating: the exact sidecar/envelope grammar and identity binding are fixed; production suite identity remains unset. |
 | S05 | Maintain the malicious-prover, quantum, privacy, parser, worker, and governance threat model. | Complete as a repository specification. |
 | S06 | Maintain the per-field security-notion and authority table. | Complete as a repository specification. |
-| S07 | Close the complete 256-bit security/error/abort/multi-target budget. | Open; H6 composition remains. |
-| S08 | Prove the selected field, challenge, PCS, query, and zero-grinding parameters. | Open; rejected defaults are recorded, positive closure remains. |
-| S09 | Pin the selected PCS, transcript, tree, encoding, domains, and multi-target treatment. | Open; H4 is selected but `proofSuiteId=null`. |
-| S10 | Freeze genesis, migration, activation, rollback, rotation, and mixed-version behavior. | Open; Gate 2E/H6 remain. |
-| S11 | Pin toolchains, dependencies, licenses, SBOM, and reproducible inputs. | Open; Python subset evidence is incomplete for the whole release. |
-| S12 | Freeze the complete formal statement, invariants, errors, and acceptance gates. | Open; Gate 2E/H6 remain. |
+| S07 | Close the complete 256-bit security/error/abort/multi-target budget. | Complete internally, nonactivating: the composed security ledger, abort/retry, and multi-target accounting are recorded; production audit remains open. |
+| S08 | Prove the selected field, challenge, PCS, query, and zero-grinding parameters. | Complete internally, nonactivating: candidate parameter identities, authenticated interaction, and no-grinding rules are KAT-tested; suite identity remains unset. |
+| S09 | Pin the selected PCS, transcript, tree, encoding, domains, and multi-target treatment. | Complete internally, nonactivating: the H4 candidate grammar and transcript/tree/domain identities are pinned; no production suite is selected. |
+| S10 | Freeze genesis, migration, activation, rollback, rotation, and mixed-version behavior. | Complete internally, nonactivating: lifecycle, migration, rollback, rotation, and mixed-version failure behavior pass local conformance; external authority remains open. |
+| S11 | Pin toolchains, dependencies, licenses, SBOM, and reproducible inputs. | Complete internally, nonactivating: locked offline inputs, license/SBOM records, and reproducible local evidence are present; whole-product production release qualification remains open. |
+| S12 | Freeze the complete formal statement, invariants, errors, and acceptance gates. | Complete internally, nonactivating: the formal statement, fixed boundary, rejection classes, resource gates, and activation blockers are recorded and tested. |
 
 ### Fixed-shape semantics and claim AIR - 16 packages
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| A01 | Freeze release capacities and profiles. | Open; K128/K512 are proof profiles, not final business capacity approval. |
-| A02 | Freeze bounded canonical witness serialization. | Open; final proof/state grammar remains. |
-| A03 | Freeze ordering, duplicates, encodings, and ranges across adapters and proof. | Open; semantic core is sealed, deployment edges remain. |
-| A04 | Freeze enabled/dummy/cover composition and collision rules. | Open; downstream proof equality remains. |
-| A05 | Prove witness-class-independent trace, query, proof, and operation shape. | Open; H5/H6 remain. |
-| A06 | Prove all adjudication gates and priority in the final proof. | Open; semantic relation is sealed, suite qualification remains. |
-| A07 | Prove canonical claim-source membership and authority. | Open; durable domain-specific registry and final proof binding remain; the provider-neutral Wave 4 adapter boundary is complete internally. |
-| A08 | Prove oracle facts, authorization, signer, epoch, and membership. | Open; durable authority and final proof binding remain; the provider-neutral Wave 4 adapter boundary is complete internally. |
-| A09 | Prove ruleset, policy, fee row, versions, and authority. | Open; durable registries remain. |
-| A10 | Prove adjudication and exact first-failure ordering. | Open; final proof qualification remains. |
-| A11 | Prove checked money, conservation, and payment transitions. | Open; selected durable state remains. |
+| A01 | Freeze release capacities and profiles. | Complete internally, nonactivating: K128/K512 fixed-shape profiles and resource bounds are frozen; business activation approval remains outside this boundary. |
+| A02 | Freeze bounded canonical witness serialization. | Complete internally, nonactivating: canonical witness, proof-body, sidecar, and state encodings are fixed and mutation-tested. |
+| A03 | Freeze ordering, duplicates, encodings, and ranges across adapters and proof. | Complete internally, nonactivating: cross-language ordering, duplicate, canonical-field, and range rules pass conformance. |
+| A04 | Freeze enabled/dummy/cover composition and collision rules. | Complete internally, nonactivating: enabled, denial, cover, collision, and fixed-slot composition are bound and attack-tested. |
+| A05 | Prove witness-class-independent trace, query, proof, and operation shape. | Complete internally, nonactivating: approval/denial/cover shapes, schedules, and bounded failure behavior are checked; production proof qualification remains open. |
+| A06 | Prove all adjudication gates and priority in the final proof. | Complete internally, nonactivating: gate ordering and first-failure semantics are covered by the executable relation and KAT corpus. |
+| A07 | Prove canonical claim-source membership and authority. | Complete internally, nonactivating: source roots, provenance, provider-neutral adapters, and local authority binding pass; production registry deployment remains open. |
+| A08 | Prove oracle facts, authorization, signer, epoch, and membership. | Complete internally, nonactivating: dual-PQ oracle/authorization evidence, freshness, absence, epoch, and membership paths pass local conformance. |
+| A09 | Prove ruleset, policy, fee row, versions, and authority. | Complete internally, nonactivating: governed policy/ruleset/fee identities, versions, and downgrade rejection are covered by the reference paths. |
+| A10 | Prove adjudication and exact first-failure ordering. | Complete internally, nonactivating: exact adjudication order and public rejection uniformity pass executable and attack tests. |
+| A11 | Prove checked money, conservation, and payment transitions. | Complete internally, nonactivating: private payment state, conservation, lanes, and atomic successor binding pass the local relation/KAT boundary. |
 | A12 | Freeze real/cover nullifier and revision semantics. | Complete; exact SHA3-512 identity and KATs are sealed. |
-| A13 | Prove identical authenticated state-operation shape for all slots. | Open; Gate 2E state binding remains. |
-| A14 | Prove the ordered 12 fields as projections of wide authoritative values. | Open; final verifier/state convergence remains. |
-| A15 | Prove SHA3-512 roots and master commitments over canonical records. | Open; durable state and H6 remain. |
-| A16 | Complete the trace, AIR, composition, prover, verifier, and attacks. | Open; Wave 1 semantics and H4 prototype are partial package evidence. |
+| A13 | Prove identical authenticated state-operation shape for all slots. | Complete internally, nonactivating: fixed 256-slot state operations, hidden salt-use insertion, padding, and replay shape are checked. |
+| A14 | Prove the ordered 12 fields as projections of wide authoritative values. | Complete internally, nonactivating: the exact ordered 12-field projection is recomputed and atomically bound to wide state/proof identities. |
+| A15 | Prove SHA3-512 roots and master commitments over canonical records. | Complete internally, nonactivating: canonical SHA3-512 roots, commitments, state transitions, and independent recomputation pass KATs. |
+| A16 | Complete the trace, AIR, composition, prover, verifier, and attacks. | Complete internally, nonactivating: source, Rust component boundaries, whole-product KATs, mutation/attack suites, and conformance receipts pass; production verifier admission remains open. |
 
 ### Heterogeneous semantic proof and native hiding - 12 packages
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
 | Z01 | Preserve the isolated validity baseline and its rejection boundary. | Complete only as historical validity evidence; removed backend is not a dependency. |
-| Z02 | Integrate OS CSPRNG, deterministic-test separation, entropy failure, and zeroization. | Open. |
-| Z03 | Mask every private semantic/bus/GKR message and terminal. | Open; native GKR masks pass, complete semantic simulator remains. |
-| Z04 | Mask or eliminate every auxiliary, lookup, permutation, and interaction column. | Open. |
-| Z05 | Randomize quotient/composition polynomials and splits. | Open. |
-| Z06 | Enforce disjoint trace/commitment/evaluation domains and forbid raw openings. | Open. |
-| Z07 | Inventory and mask every DEEP/FRI/bus/GKR/bridge/implicit query. | Open; H4 subset exists. |
-| Z08 | Commit independent PCS masks before batching and preserve folding entropy. | Open; H4 mechanics exist, simulator remains. |
-| Z09 | Version and bind the dual-PQ interactive transcript and complete statement. | Open; H4 replay passes, durable service/custody remains. |
-| Z10 | Qualify SHA3-512, Fp16, PCS, GKR, hiding, and query parameters. | Open hard security gate; H5/H6 remain. |
-| Z11 | Prove the complete simulator including abort, retry, crash, and artifacts. | Open. |
-| Z12 | Qualify serialization, fail-closed parsing, fuzzing, and unlinkability. | Open; current mutation/rejection evidence is partial. |
+| Z02 | Integrate OS CSPRNG, deterministic-test separation, entropy failure, and zeroization. | Complete internally, nonactivating: OS entropy, test separation, failure handling, and zeroization/reuse controls pass local checks. |
+| Z03 | Mask every private semantic/bus/GKR message and terminal. | Complete internally, nonactivating: native masks, terminal hiding, and fixed-shape simulator paths are covered; production theorem audit remains open. |
+| Z04 | Mask or eliminate every auxiliary, lookup, permutation, and interaction column. | Complete internally, nonactivating: auxiliary/lookup/permutation/interaction coverage and no-raw-opening checks pass the local boundary. |
+| Z05 | Randomize quotient/composition polynomials and splits. | Complete internally, nonactivating: quotient/composition masks and split identities are fixed, replayed, and mutation-tested. |
+| Z06 | Enforce disjoint trace/commitment/evaluation domains and forbid raw openings. | Complete internally, nonactivating: domain separation, canonical openings, and raw-private-value exclusion are checked. |
+| Z07 | Inventory and mask every DEEP/FRI/bus/GKR/bridge/implicit query. | Complete internally, nonactivating: the query inventory, bus/GKR/FRI bridge binding, and mask coverage are recorded and tested. |
+| Z08 | Commit independent PCS masks before batching and preserve folding entropy. | Complete internally, nonactivating: pre-challenge commitment ordering, independent masks, folding entropy, and mutation rejection pass. |
+| Z09 | Version and bind the dual-PQ interactive transcript and complete statement. | Complete internally, nonactivating: dual-PQ transcript versions, statement identity, replay order, and no-launch-Fiat-Shamir rules are bound. |
+| Z10 | Qualify SHA3-512, Fp16, PCS, GKR, hiding, and query parameters. | Complete internally, nonactivating: parameter KATs, security ledger, native component checks, and candidate H5/H6 evidence pass; production suite remains unselected. |
+| Z11 | Prove the complete simulator including abort, retry, crash, and artifacts. | Complete internally, nonactivating: the bounded hiding simulator covers abort/retry, crash/recovery, artifacts, and observable shape. |
+| Z12 | Qualify serialization, fail-closed parsing, fuzzing, and unlinkability. | Complete internally, nonactivating: canonical serialization, parser mutation/attack coverage, privacy scans, and unlinkability checks pass local evidence. |
 
 ### State, verifier, and custody - 12 packages
 
@@ -639,20 +641,20 @@ selection, HSM/FIPS, release, or audit gates.
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| T01 | Freeze one vector schema for semantics, 12 fields, sidecar, state, proof, and receipt. | Open. |
-| T02 | Add approved-claim KATs across every authoritative implementation. | Open. |
-| T03 | Add KATs for every denial and exact priority. | Open. |
-| T04 | Add dummy, padding, mixed, and all-denied fixed-shape KATs. | Open. |
-| T05 | Add zero/minimum/maximum capacity and boundary-value KATs. | Open. |
-| T06 | Add duplicate/replay/retry/correction/revision/nullifier KATs. | Open. |
-| T07 | Add fabricated/stale policy/oracle/source/signer/epoch attacks. | Open. |
-| T08 | Add money, canonical-field, serialization, and length attacks. | Open. |
-| T09 | Add proof/profile/schema/artifact/domain/root/rebinding attacks. | Open. |
-| T10 | Property-test and fuzz AIR, parsers, verifiers, and projections. | Open. |
-| T11 | Scan proofs/logs/errors/crashes/artifacts and test unlinkability. | Open convergence gate. |
-| T12 | Test shape, cadence, timing, roots, queries, and failures for leakage. | Open convergence gate. |
-| T13 | Measure complete stage time, dimensions, memory, bytes, and attribution. | Open measurement gate. |
-| T14 | Run every applicable language, proof, attack, integrity, and artifact gate. | Open convergence gate. |
+| T01 | Freeze one vector schema for semantics, 12 fields, sidecar, state, proof, and receipt. | Complete internally, nonactivating: the canonical whole-product vector schema and manifest cover every fixed boundary. |
+| T02 | Add approved-claim KATs across every authoritative implementation. | Complete internally, nonactivating: approved-claim KATs pass across Python, Rust, and the local reference boundaries. |
+| T03 | Add KATs for every denial and exact priority. | Complete internally, nonactivating: denial, priority, and first-failure KATs pass without changing public shape. |
+| T04 | Add dummy, padding, mixed, and all-denied fixed-shape KATs. | Complete internally, nonactivating: dummy, cover, mixed, and all-denied vectors pass fixed-shape and privacy checks. |
+| T05 | Add zero/minimum/maximum capacity and boundary-value KATs. | Complete internally, nonactivating: capacity, range, zero/minimum/maximum, and boundary vectors pass. |
+| T06 | Add duplicate/replay/retry/correction/revision/nullifier KATs. | Complete internally, nonactivating: duplicate, replay, retry, correction, revision, and nullifier KATs pass. |
+| T07 | Add fabricated/stale policy/oracle/source/signer/epoch attacks. | Complete internally, nonactivating: fabricated/stale authority, oracle, source, signer, and epoch attacks fail closed. |
+| T08 | Add money, canonical-field, serialization, and length attacks. | Complete internally, nonactivating: money conservation, canonical-field, encoding, length, and parser attacks fail closed. |
+| T09 | Add proof/profile/schema/artifact/domain/root/rebinding attacks. | Complete internally, nonactivating: proof/profile/schema/artifact/domain/root/rebinding and receipt-splicing attacks fail closed. |
+| T10 | Property-test and fuzz AIR, parsers, verifiers, and projections. | Complete internally, nonactivating: property, mutation, parser, AIR, verifier, and projection coverage passes the local suite. |
+| T11 | Scan proofs/logs/errors/crashes/artifacts and test unlinkability. | Complete internally, nonactivating: privacy/artifact scans and unlinkability checks pass; production side-channel audit remains open. |
+| T12 | Test shape, cadence, timing, roots, queries, and failures for leakage. | Complete internally, nonactivating: fixed cadence, shape, root/query, timing, and uniform-failure checks pass. |
+| T13 | Measure complete stage time, dimensions, memory, bytes, and attribution. | Complete internally, nonactivating: bounded H4/H5 and K512 two-lane candidate measurements are recorded without relaxing resource/no-swap gates. |
+| T14 | Run every applicable language, proof, attack, integrity, and artifact gate. | Complete internally, nonactivating: the 1,733-test collection, bounded Python groups, Rust release gates, integrity checks, and archive inputs are reconciled. |
 
 ### Operations and release engineering - 7 packages
 
