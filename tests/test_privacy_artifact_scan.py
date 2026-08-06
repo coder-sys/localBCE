@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import base64
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from tools.privacy_artifact_scan import main as privacy_scan_main
 from tools.privacy_artifact_scan import scan_artifacts
 
 
@@ -42,6 +45,14 @@ class PrivacyArtifactScanTests(unittest.TestCase):
     def test_empty_artifact_directory_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             self.assertEqual([], scan_artifacts(Path(temporary)))
+
+    def test_cli_accepts_documented_repo_root_option(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            with patch("sys.argv", ["privacy_artifact_scan.py", "--repo-root", temporary]):
+                with redirect_stdout(output):
+                    privacy_scan_main()
+        self.assertEqual("privacy_findings=0\n", output.getvalue())
 
     def test_plaintext_witness_and_claim_structures_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

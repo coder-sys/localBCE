@@ -45,6 +45,10 @@ from experiments.bl_pq512_crypto_foundation.h6_supply_chain import (
     verify_h6_supply_chain,
     write_h6_spdx,
 )
+from experiments.bl_pq512_crypto_foundation.internal_package_matrix import (
+    package_evidence as build_open_package_evidence,
+    validate_open_package_matrix,
+)
 from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority
 from tools.wave2_internal_conformance import build_receipt as build_wave2_conformance_receipt
 from tools.wave4_conformance import build_receipt as build_wave4_conformance_receipt
@@ -57,10 +61,11 @@ from app.wave4_adapters import (
 from app.wave5_rollup import PqGovernance, run_wave5_conformance
 
 
-STATUS: Final[str] = "INTERNAL_ENGINEERING_COMPLETE_NONACTIVATING"
-RELEASE_CANDIDATE_STATE: Final[str] = "DEPLOYMENT_READY_AUDIT_PENDING"
+STATUS: Final[str] = "INTERNAL_CONFORMANCE_RECONCILED_NONACTIVATING"
+RELEASE_CANDIDATE_STATE: Final[str] = "NOT_DEPLOYMENT_READY"
 PROOF_SUITE_STATE: Final[str] = "UNSELECTED"
 PACKAGE_STATUS: Final[str] = "COMPLETE_INTERNAL_NONACTIVATING"
+OPEN_PACKAGE_STATUS: Final[str] = "OPEN_INTERNAL_ENGINEERING"
 PACKAGE_COUNT: Final[int] = 93
 EXTERNAL_AUDIT_ID: Final[str] = "LB-002"
 ACTIVATION_INPUT_IDS: Final[tuple[str, ...]] = ("LB-003", "LB-004", "LB-005")
@@ -76,6 +81,96 @@ PACKAGE_IDS: Final[tuple[str, ...]] = (
     *(f"I{index:02d}" for index in range(1, 9)),
     *(f"R{index:02d}" for index in range(1, 13)),
 )
+
+# This is the roadmap's current package ledger, not a claim that one shared
+# conformance receipt closes every package.  Keep the production blockers
+# visible until a package-specific acceptance gate actually closes them.
+CLOSED_PACKAGE_IDS: Final[frozenset[str]] = frozenset(
+    {
+        "S01",
+        "S03",
+        "S05",
+        "S06",
+        "A12",
+        "Z01",
+        *(f"P{index:02d}" for index in range(1, 13)),
+        *(f"O{index:02d}" for index in range(1, 7)),
+        "O12",
+        *(f"I{index:02d}" for index in range(1, 9)),
+        *(f"R{index:02d}" for index in range(1, 13)),
+    }
+)
+OPEN_PACKAGE_IDS: Final[tuple[str, ...]] = tuple(
+    package_id for package_id in PACKAGE_IDS if package_id not in CLOSED_PACKAGE_IDS
+)
+RELEASE_CANDIDATE_BLOCKERS: Final[tuple[str, ...]] = (
+    "LB-001",
+    "LB-006",
+    "LB-007",
+    "LB-009",
+    "LB-010",
+)
+
+OPEN_PACKAGE_REASONS: Final[dict[str, str]] = {
+    "S02": "runtime and production suite remain unselected",
+    "S04": "final suite/state identity is not active",
+    "S07": "complete composed security/error budget is not production-qualified",
+    "S08": "field/PCS/query parameters remain candidate-only",
+    "S09": "proof-suite identity and production transcript selection remain unset",
+    "S10": "production genesis/migration/rotation policy remains unselected",
+    "S11": "whole-product reproducible release/SBOM closure remains open",
+    "S12": "complete production statement and acceptance contract remain open",
+    "A01": "business capacity approval is not the current proof-profile evidence",
+    "A02": "final claim/state/proof serialization remains unselected",
+    "A03": "deployment-edge ordering and adapter equality remain open",
+    "A04": "complete proof equality and collision boundary remain open",
+    "A05": "complete-boundary shape qualification remains open",
+    "A06": "final proof qualification of adjudication remains open",
+    "A07": "durable claim-source registry and proof binding remain open",
+    "A08": "durable oracle authority and proof binding remain open",
+    "A09": "durable policy/ruleset registries remain open",
+    "A10": "final proof qualification of adjudication ordering remains open",
+    "A11": "selected durable payment/state plane remains open",
+    "A13": "production state-operation proof binding remains open",
+    "A14": "wide-value projection convergence remains open",
+    "A15": "durable root/master commitment selection remains open",
+    "A16": "complete claim proof/prover/verifier integration remains open",
+    **{
+        f"Z{index:02d}": reason
+        for index, reason in {
+            2: "production entropy/zeroization boundary remains open",
+            3: "complete semantic witness-hiding composition remains open",
+            4: "complete auxiliary/lookup masking inventory remains open",
+            5: "production quotient/composition randomization remains open",
+            6: "production domain separation and raw-opening exclusion remain open",
+            7: "complete implicit-query masking inventory remains open",
+            8: "production PCS mask commitment and folding entropy remain open",
+            9: "durable transcript custody and complete statement binding remain open",
+            10: "strict-PQ parameter qualification remains a hard gate",
+            11: "complete abort/retry/crash/artifact simulator remains unqualified",
+            12: "whole-product parser/fuzz/unlinkability qualification remains open",
+        }.items()
+    },
+    **{
+        f"T{index:02d}": reason
+        for index, reason in {
+            1: "one whole-product vector schema is not frozen",
+            2: "approved-claim KATs are not closed across every implementation",
+            3: "all denial/priority KATs are not closed at the final proof boundary",
+            4: "dummy/padding/mixed/all-denied KATs are not final-proof evidence",
+            5: "capacity and boundary KATs are not final-proof evidence",
+            6: "replay/retry/correction/revision KATs are not final-proof evidence",
+            7: "source/policy/oracle/signer attack closure is not final-proof evidence",
+            8: "money/serialization attack closure is not final-proof evidence",
+            9: "proof/profile/schema rebinding attack closure remains open",
+            10: "whole-product property/fuzz coverage remains open",
+            11: "whole-product artifact/linkability scan remains open",
+            12: "whole-product leakage/shape qualification remains open",
+            13: "complete-boundary resource measurement remains open",
+            14: "whole-product language/proof/attack/integrity convergence remains open",
+        }.items()
+    },
+}
 
 _PUBLIC_BOUNDARY_SOURCE: Final[tuple[str, ...]] = (
     "app/privacy_v2.py",
@@ -252,6 +347,13 @@ def _regular(root: Path, relative: str) -> Path:
 
 
 def _evidence(root: Path, package_id: str) -> dict[str, object]:
+    if package_id in OPEN_PACKAGE_IDS:
+        evidence = build_open_package_evidence(root, package_id)
+        return {
+            **evidence,
+            "status": OPEN_PACKAGE_STATUS,
+            "closure_reason": OPEN_PACKAGE_REASONS[package_id],
+        }
     group = package_id[0]
     try:
         sources, tests = _GROUP_EVIDENCE[group]
@@ -267,12 +369,26 @@ def _evidence(root: Path, package_id: str) -> dict[str, object]:
         }
         for relative in (*sources, *tests)
     )
+    status = PACKAGE_STATUS if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_STATUS
+    reason = OPEN_PACKAGE_REASONS.get(package_id)
+    if package_id not in CLOSED_PACKAGE_IDS and reason is None:
+        raise InternalCompletionError(f"internal_completion_open_reason_missing:{package_id}")
     return {
         "package_id": package_id,
-        "status": PACKAGE_STATUS,
+        "status": status,
+        "closure_reason": reason,
         "sources": tuple(sources),
         "tests": tuple(tests),
-        "evidence_sha3_512": hashlib.sha3_512(_canonical_json(source_records)).hexdigest(),
+        "evidence_sha3_512": hashlib.sha3_512(
+            _canonical_json(
+                {
+                    "package_id": package_id,
+                    "status": status,
+                    "closure_reason": reason,
+                    "records": source_records,
+                }
+            )
+        ).hexdigest(),
     }
 
 
@@ -379,6 +495,10 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         raise InternalCompletionError("internal_completion_wrong_repository_root")
     if len(PACKAGE_IDS) != PACKAGE_COUNT or len(set(PACKAGE_IDS)) != PACKAGE_COUNT:
         raise InternalCompletionError("internal_completion_package_set_invalid")
+    try:
+        validate_open_package_matrix(root)
+    except Exception as exc:
+        raise InternalCompletionError("internal_completion_package_matrix_invalid") from exc
 
     boundary = _verify_public_boundary(root)
     git = _git_identity(root)
@@ -466,9 +586,27 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         raise InternalCompletionError(f"internal_completion_gate_failed:{','.join(failed)}")
 
     package_evidence = tuple(_evidence(root, package_id) for package_id in PACKAGE_IDS)
-    package_statuses = {package_id: PACKAGE_STATUS for package_id in PACKAGE_IDS}
+    package_statuses = {
+        package_id: PACKAGE_STATUS if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_STATUS
+        for package_id in PACKAGE_IDS
+    }
+    if len(CLOSED_PACKAGE_IDS) != 45 or len(OPEN_PACKAGE_IDS) != 48:
+        raise InternalCompletionError("internal_completion_roadmap_count_invalid")
+    checks["package_ledger"] = (
+        tuple(package_statuses) == PACKAGE_IDS
+        and tuple(package_id for package_id in PACKAGE_IDS if package_statuses[package_id] == OPEN_PACKAGE_STATUS)
+        == OPEN_PACKAGE_IDS
+    )
+    checks["release_blockers_preserved"] = (
+        RELEASE_CANDIDATE_STATE == "NOT_DEPLOYMENT_READY"
+        and len(RELEASE_CANDIDATE_BLOCKERS) == 5
+        and PROOF_SUITE_STATE == "UNSELECTED"
+    )
+    if not all(checks.values()):
+        failed = tuple(key for key, value in checks.items() if not value)
+        raise InternalCompletionError(f"internal_completion_gate_failed:{','.join(failed)}")
     return {
-        "schema": "blind_ledger_internal_completion_receipt_v1",
+        "schema": "blind_ledger_internal_conformance_receipt_v2",
         "status": STATUS,
         "release_candidate_state": RELEASE_CANDIDATE_STATE,
         "proof_suite_state": PROOF_SUITE_STATE,
@@ -479,7 +617,9 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         "live_credentials": False,
         "internal_engineering_packages": PACKAGE_COUNT,
         "internal_complete": sum(status == PACKAGE_STATUS for status in package_statuses.values()),
-        "internal_open": 0,
+        "internal_open": sum(status == OPEN_PACKAGE_STATUS for status in package_statuses.values()),
+        "open_package_ids": OPEN_PACKAGE_IDS,
+        "release_candidate_blockers": RELEASE_CANDIDATE_BLOCKERS,
         "package_statuses": package_statuses,
         "package_evidence": package_evidence,
         "checks": checks,
@@ -516,6 +656,10 @@ __all__: tuple[str, ...] = (
     "PACKAGE_COUNT",
     "PACKAGE_IDS",
     "PACKAGE_STATUS",
+    "OPEN_PACKAGE_STATUS",
+    "CLOSED_PACKAGE_IDS",
+    "OPEN_PACKAGE_IDS",
+    "RELEASE_CANDIDATE_BLOCKERS",
     "PROOF_SUITE_STATE",
     "RELEASE_CANDIDATE_STATE",
     "STATUS",

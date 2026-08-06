@@ -423,9 +423,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Reject artifacts containing plaintext claim, witness, log, or crash data."
     )
-    parser.add_argument("path", type=Path)
+    parser.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        help="artifact directory to scan (defaults to the repository root)",
+    )
+    parser.add_argument(
+        "--repo-root",
+        dest="repo_root",
+        type=Path,
+        help="explicit artifact/repository directory to scan",
+    )
     args = parser.parse_args()
-    findings = scan_artifacts(args.path)
+    if args.path is not None and args.repo_root is not None:
+        parser.error("path and --repo-root are mutually exclusive")
+    target = args.repo_root or args.path or Path(__file__).resolve().parents[1]
+    findings = scan_artifacts(target)
     if findings:
         for finding in findings:
             print(f"privacy_finding={finding}")
