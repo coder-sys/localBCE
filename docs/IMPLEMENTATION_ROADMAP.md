@@ -613,7 +613,7 @@ verifier, suite selection, HSM/FIPS authority, live rollup, release activation, 
 | A13 | Prove identical authenticated state-operation shape for all slots. | Complete internally, nonactivating: fixed 256-slot state operations, hidden salt-use insertion, padding, and replay shape are checked. |
 | A14 | Prove the ordered 12 fields as projections of wide authoritative values. | Complete internally, nonactivating: the exact ordered 12-field projection is recomputed and atomically bound to wide state/proof identities. |
 | A15 | Prove SHA3-512 roots and master commitments over canonical records. | Complete internally, nonactivating: canonical SHA3-512 roots, commitments, state transitions, and independent recomputation pass KATs. |
-| A16 | Complete the trace, AIR, composition, prover, verifier, and attacks. | Complete internally, nonactivating: source, Rust component boundaries, whole-product KATs, mutation/attack suites, and conformance receipts pass; production verifier admission remains open. |
+| A16 | Complete the trace, AIR, composition, prover, verifier, and attacks. | Complete internally, nonactivating: source, Rust component boundaries, whole-product KATs, mutation/attack suites, and conformance receipts pass; deployed production verifier admission remains open. |
 
 ### Heterogeneous semantic proof and native hiding - 12 packages
 
@@ -753,7 +753,7 @@ side channels, and operations. Findings return to their owning internal package.
 | --- | --- | --- |
 | 1 | Claim relation and executable AIR | Sealed at synthetic nonactivating boundary |
 | 2 | Strict-PQ proof and throughput | Gate 2E, H5, and H6 all pass |
-| 3 | Verifier, state, custody | Production verifier/state publication/custody/migration/rollback pass |
+| 3 | Verifier, state, custody | Local/synthetic verifier/state/custody/migration/rollback pass; deployed production acceptance remains open |
 | 4 | Adapters and operations | I01-I08 and O01-O06/O12 pass simulator and conformance gates; Wave 4 is internally complete and nonactivating |
 | 5 | Containing rollup | R01-R12 pass claim-to-Ethereum synthetic finality and recovery | Complete internally, nonactivating |
 | 6 | Release candidate | Reproducible one-command deployment, rollback, evidence, and audit packet pass |

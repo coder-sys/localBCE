@@ -109,7 +109,11 @@ py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_public_input_pr
 16 passed, 1 deselected
 
 py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_production_candidate.py -k real_rust
-1 passed, 4 deselected
+1 passed, 4 deselected in 134.88s
+
+The real synthetic proof in that last test also passed `LocalSettlementV2`, the native rollup claim
+verifier, and the commitment-only local stack receipt. No live chain, government data, PHI, payment
+authority, or production credential was used.
 
 py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_deployment_ready_roadmap_contract.py tests/test_operational_readiness.py tests/test_production_readiness.py
 20 passed

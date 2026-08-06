@@ -37,7 +37,10 @@ WAVE5_PUBLIC_FIELD_NAMES: Final[tuple[str, ...]] = tuple(PUBLIC_INPUT_FIELD_NAME
 WAVE5_PACKAGE_IDS: Final[frozenset[str]] = frozenset(f"R{index:02d}" for index in range(1, 13))
 WAVE5_PRODUCTION_USABLE: Final[bool] = False
 WAVE5_ACTIVATION_ALLOWED: Final[bool] = False
-MAX_PROOF_BODY_BYTES: Final[int] = 2 * 1024 * 1024
+# The native candidate envelope has the same fixed upper bound.  The local
+# rollup claim port carries that encoded envelope as its proof body, so a
+# smaller legacy cap would reject a valid native proof before verification.
+MAX_PROOF_BODY_BYTES: Final[int] = 512 * 1024 * 1024
 MAX_CELLS: Final[int] = 256
 MAX_CELL_BYTES: Final[int] = 64
 MAX_TRANSACTIONS: Final[int] = 256
@@ -72,7 +75,7 @@ def _digest(domain: bytes, *parts: bytes) -> bytes:
     hasher.update(len(domain).to_bytes(2, "big"))
     hasher.update(domain)
     for part in parts:
-        if type(part) is not bytes or len(part) > 16 * 1024 * 1024:
+        if type(part) is not bytes or len(part) > MAX_PROOF_BODY_BYTES:
             raise Wave5RollupError("wave5_digest_part_invalid")
         hasher.update(len(part).to_bytes(8, "big"))
         hasher.update(part)

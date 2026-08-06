@@ -21,7 +21,7 @@ pass as the sealed H4 prototype. Gate 2E is sealed nonactivating; H5 passed the 
 campaign; and H6 closed the twelve bounded candidate-evidence records. The local candidate
 verifier can issue a nonzero per-proof identity only as `BUILT_AUDIT_PENDING` after a Rust
 receipt; the legacy operational registry remains `proofSuiteId=null`. Activation is false, and
-production verifier/state/custody and final audit work remain open. Wave 4
+deployed production verifier/state/custody, release, and final audit work remain open. Wave 4
 adapter/operations engineering and Wave 5 containing-rollup engineering are now complete internally
 at local/synthetic, nonactivating boundaries. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline,
 not the H5 p95 record.
@@ -296,5 +296,5 @@ The newest complete K128/K512 proofs pass all functional and 30/180-second H4 pr
 29.974129/120.460733 seconds. The separate exact H5 p95 campaign passed, and the bounded H6
 candidate-evidence manifest closed all twelve records. Production use remains closed. A fresh local
 proof can now receive a per-proof `BUILT_AUDIT_PENDING` identity after the native Rust receipt, while
-the legacy operational registry remains `proofSuiteId=null` and the production verifier/state/custody,
-settlement, release, and audit gates remain unfinished.
+the legacy operational registry remains `proofSuiteId=null` and the deployed production
+verifier/state/custody, on-chain settlement, release, and audit gates remain unfinished.

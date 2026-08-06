@@ -19,13 +19,13 @@
     {
       "id": "LB-001",
       "title": "Production native STARK prover and verifier",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "cryptography_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
-      "exit_criteria": "The complete native STARK prover and independent verifier lane is internally implemented, reproducible, pinned, and qualified for the exact statement, suite, sidecar, and public-input schema, with proofSuiteId in BUILT_AUDIT_PENDING."
+      "exit_criteria": "The complete native STARK prover and independent verifier lane is internally implemented, reproducible, pinned, and qualified for the exact statement, suite, sidecar, and public-input schema, with a per-proof candidate identity in BUILT_AUDIT_PENDING; the global operational proofSuiteId remains unset until deployed acceptance and audit."
     },
     {
       "id": "LB-002",
@@ -41,22 +41,22 @@
     {
       "id": "LB-006",
       "title": "Exact claim-proof output and settlement ABI binding",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "cryptography_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
       "exit_criteria": "One real verifier authenticates the exact versioned 12-field output and full sidecar consumed by settlement; length, order, encoding, proof format, suite, schema, and verifier identities are reproducibly pinned, and no caller-supplied unproven value can advance state."
     },
     {
       "id": "LB-007",
       "title": "Privacy V2 circuit and settlement migration",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "cryptography_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
       "exit_criteria": "The parallel V2 proof and settlement path removes exact amounts, counts, decisions, PHI, and claim ciphertext from public data; differential, inference, known-answer, attack, migration, and rollback tests pass."
     },
@@ -74,11 +74,11 @@
     {
       "id": "LB-009",
       "title": "Provider-neutral PQ KMS/HSM and private-data operations",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "security_operations",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
       "activation_inputs": [
         "provider coordinates",
@@ -90,11 +90,11 @@
     {
       "id": "LB-010",
       "title": "Zero-knowledge witness-hiding proof backend",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "cryptography_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
       "progress": "RISC Zero 3.0.5 verified the exact 12-field commitment envelope as a semantic oracle. R33 freezes the complete nonactivating 16-table relation IR and exact K128/K256/K512 interface dimensions. The selected production path is a theorem-matched sibling Circle-STARK engine with concrete SHA3-512 PCS/FRI ports, internally implemented native hiding, and strict-PQ qualification; the rejected QM31/Blake2s suite remains nonactivatable.",
       "exit_criteria": "The complete claim backend internally implements and qualifies native zero-knowledge witness hiding; leakage tests cover proof and metadata artifacts; the exact suite reaches BUILT_AUDIT_PENDING."

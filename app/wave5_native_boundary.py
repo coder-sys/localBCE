@@ -11,6 +11,7 @@ network, call Ethereum, handle payment authority, or enable activation.
 from __future__ import annotations
 
 from hashlib import sha3_512
+from typing import Final
 
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
@@ -23,6 +24,7 @@ from app.wave5_rollup import (
 )
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
     NativeVerificationReceipt,
+    MAX_ENVELOPE_BYTES,
     ProductionProofEnvelope,
     PUBLIC_FIELD_BYTES,
     PUBLIC_OUTPUT_BYTES,
@@ -36,14 +38,21 @@ _CONTEXT_DOMAIN = b"BL/WAVE5/NATIVE/CLAIM-CONTEXT/V2\x00"
 _PROOF_DOMAIN = b"BL/WAVE5/NATIVE/CLAIM-PROOF/V2\x00"
 _STATEMENT_DOMAIN = b"BL/WAVE5/NATIVE/CLAIM-STATEMENT/V2\x00"
 _SIDECAR_DOMAIN = b"BL/WAVE5/NATIVE/CLAIM-SIDECAR/V2\x00"
+_DEFAULT_DIGEST_PART_BYTES: Final[int] = 2 * 1024 * 1024
 
 
-def _digest(domain: bytes, *parts: bytes) -> bytes:
+def _digest(
+    domain: bytes,
+    *parts: bytes,
+    maximum_part_bytes: int = _DEFAULT_DIGEST_PART_BYTES,
+) -> bytes:
     if type(domain) is not bytes or not domain or len(domain) > 128:
         raise Wave5RollupError("native_claim_digest_domain_invalid")
+    if type(maximum_part_bytes) is not int or maximum_part_bytes <= 0:
+        raise Wave5RollupError("native_claim_digest_bound_invalid")
     digest = sha3_512(domain)
     for part in parts:
-        if type(part) is not bytes or len(part) > 2 * 1024 * 1024:
+        if type(part) is not bytes or len(part) > maximum_part_bytes:
             raise Wave5RollupError("native_claim_digest_part_invalid")
         digest.update(len(part).to_bytes(8, "big"))
         digest.update(part)
@@ -120,6 +129,7 @@ def native_claim_proof_digest(
         context.canonical_bytes(),
         b"".join(public_fields),
         sidecar,
+        maximum_part_bytes=MAX_ENVELOPE_BYTES,
     )
 
 

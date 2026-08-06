@@ -8,12 +8,22 @@ import subprocess
 
 import pytest
 
+from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.production_boundary import (
+    GovernedRootsV2,
+    LocalSettlementV2,
     NativeStarkVerifierConfig,
     NativeStarkVerifierPort,
+    _BATCH_NONCE_BINDING,
+    _SETTLEMENT_DOMAIN_BINDING,
+    _digest,
+    build_v2_public_fields,
 )
+from app.local_stack_candidate import build_local_stack_receipt
 from app.native_public_input_projection import PublicInputProjectionV1
+from app.wave5_native_boundary import NativeRollupClaimVerifier, build_native_claim_envelope
+from app.wave5_rollup import RollupClaimContext, RollupSuiteIdentity
 from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
     HISTORICAL_CIRCLE_GAPS,
     build_active_gkr_hiding_certificate,
@@ -49,7 +59,11 @@ from experiments.bl_pq512_crypto_foundation.pq_signature_adapters import (
     NativeSlhDsaAdapter,
 )
 from experiments.fixed_shape_claim_air.air_binary_ir import encode_air_program
-from experiments.fixed_shape_claim_air.executable_air import PublicInputBinding
+from experiments.fixed_shape_claim_air.executable_air import (
+    PublicInputBinding,
+    TraceTable,
+    freeze_columns,
+)
 from tests.test_wave1a_executable_air import _fixture
 from experiments.bl_pq512_crypto_foundation.software_custody_candidate import (
     build_software_custody_certificate,
@@ -58,6 +72,10 @@ from experiments.bl_pq512_crypto_foundation.software_custody_candidate import (
 
 def _wide(label: str) -> bytes:
     return sha3_512(label.encode("ascii")).digest()
+
+
+def _field(label: str) -> bytes:
+    return (int.from_bytes(_wide(label), "big") % (FIELD_MODULUS - 1) + 1).to_bytes(32, "big")
 
 
 @pytest.fixture(scope="module")
@@ -147,6 +165,36 @@ def _sidecar(suite: bytes, schema: bytes, verifier: bytes) -> bytes:
     ).encode()
 
 
+def _settlement_sidecar(
+    suite: bytes, schema: bytes, verifier: bytes
+) -> tuple[bytes, bytes, bytes, GovernedRootsV2]:
+    settlement_domain = _field("real-native-settlement-domain")
+    batch_nonce = _field("real-native-batch-nonce")
+    roots = GovernedRootsV2(
+        claim_source_root=_field("real-native-claim-source"),
+        oracle_facts_root=_field("real-native-oracle-facts"),
+        policy_root=_field("real-native-policy"),
+        ruleset_root=_field("real-native-ruleset"),
+    )
+    sidecar = CandidateSidecarV1(
+        profile_id=_wide("real-native-profile"),
+        proof_suite_id=suite,
+        schema_id=schema,
+        verifier_artifact_identity=verifier,
+        strong_settlement_domain_id=_digest(_SETTLEMENT_DOMAIN_BINDING, settlement_domain),
+        epoch=1,
+        sequence_before=0,
+        sequence_after=1,
+        strong_nullifier_root_before=_wide("real-native-nullifier-before"),
+        strong_nullifier_root_after=_wide("real-native-nullifier-after"),
+        strong_governance_commitment=roots.commitment_512,
+        strong_payment_state_root_before=_wide("real-native-payment-before"),
+        strong_payment_state_root_after=_wide("real-native-payment-after"),
+        strong_batch_commitment=_digest(_BATCH_NONCE_BINDING, batch_nonce),
+    ).encode()
+    return sidecar, settlement_domain, batch_nonce, roots
+
+
 def test_active_hiding_rebases_old_circle_gaps_without_deleting_them() -> None:
     certificate = build_active_gkr_hiding_certificate()
     assert certificate.coverage_gaps == ()
@@ -232,20 +280,48 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
 ) -> None:
     worker, verifier, slh_service = production_candidate_binaries
     program, traces = _fixture()
-    public_output_bytes = bytes(384)
+    source_table = program.tables[0]
+    public_columns = tuple(f"public_{index}" for index in range(108))
     program = replace(
         program,
+        tables=(
+            replace(source_table, columns=source_table.columns + public_columns),
+            *program.tables[1:],
+        ),
         public_inputs=tuple(
-            PublicInputBinding(f"public_live_{index}", "source", "value", 0)
-            for index in range(108)
+            PublicInputBinding(name, "source", name, 0)
+            for name in public_columns
         ),
     )
+    source_columns = dict(traces["source"].columns)
+    source_columns.update({name: (0, 0, 0, 0) for name in public_columns})
+    traces["source"] = TraceTable("source", freeze_columns(source_columns))
     geometry = derive_selected_proof_geometry(program)
     schedule = build_selected_theorem_round_schedule(geometry)
     suite = schedule.proof_suite_id
     schema = _wide("production-schema")
     verifier_identity = _wide("production-verifier")
-    sidecar = _sidecar(suite, schema, verifier_identity)
+    sidecar, settlement_domain, batch_nonce, roots = _settlement_sidecar(
+        suite, schema, verifier_identity
+    )
+    public_output_bytes = b"".join(
+        build_v2_public_fields(
+            settlement_domain=settlement_domain,
+            batch_nonce=batch_nonce,
+            sidecar=sidecar,
+            governed_roots=roots,
+            suite_id=suite,
+            schema_id=schema,
+            verifier_artifact_identity=verifier_identity,
+        )
+    )
+    projection = PublicInputProjectionV1(schema)
+    projected_public_inputs = projection.project(public_output_bytes)
+    source_columns = dict(traces["source"].columns)
+    source_columns.update(
+        {name: (value, 0, 0, 0) for name, value in zip(public_columns, projected_public_inputs, strict=True)}
+    )
+    traces["source"] = TraceTable("source", freeze_columns(source_columns))
     ml_dsa = MlDsa87PqcryptoAdapter()
     slh_dsa = NativeSlhDsaAdapter(slh_service)
     adapters = {ml_dsa.suite_id: ml_dsa, slh_dsa.suite_id: slh_dsa}
@@ -272,7 +348,7 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         scratch_parent=tmp_path,
         program=program,
         traces=traces,
-        public_inputs=(0,) * 108,
+        public_inputs=projected_public_inputs,
         chunk_values=2,
         secret_mask_seed=_wide("production-mask-seed"),
         session_id=_wide("production-session"),
@@ -287,7 +363,7 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     package_path.unlink()
     transcript = encode_selected_transcript_evidence(result.transcript)
     envelope = build_production_envelope(
-        public_outputs=bytes(384),
+        public_outputs=public_output_bytes,
         sidecar=sidecar,
         proof_package=package,
         transcript_evidence=transcript,
@@ -298,7 +374,6 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     public_inputs_path = tmp_path / "production-public-inputs.bin"
     envelope_path.write_bytes(envelope.encode())
     program_path.write_bytes(encode_air_program(program))
-    projection = PublicInputProjectionV1(schema)
     public_inputs_path.write_bytes(projection.encode_file(public_output_bytes))
     verify_args = [
         str(verifier),
@@ -362,6 +437,86 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     assert selected.status == "BUILT_AUDIT_PENDING"
     assert selected.activation_allowed is False
     assert selected.production_usable is False
+
+    parsed_sidecar = CandidateSidecarV1.decode(sidecar)
+    initial_nullifier_root = (
+        int.from_bytes(parsed_sidecar.strong_nullifier_root_before, "big")
+        % (FIELD_MODULUS - 1)
+        + 1
+    ).to_bytes(32, "big")
+    submitter = _wide("real-native-submitter")
+    settlement = LocalSettlementV2(
+        verifier=NativeStarkVerifierPort(
+            NativeStarkVerifierConfig(
+                executable=verifier,
+                program=program_path,
+                suite_id=suite,
+                schema_id=schema,
+                verifier_artifact_identity=verifier_identity,
+                public_input_projection=projection,
+            )
+        ),
+        settlement_domain=settlement_domain,
+        governed_roots=roots,
+        initial_nullifier_root=initial_nullifier_root,
+        authorized_submitters=(submitter,),
+    )
+    settlement_receipt = settlement.submit(
+        envelope=envelope,
+        batch_nonce=batch_nonce,
+        submitter=submitter,
+    )
+    rollup_identity = RollupSuiteIdentity(
+        profile_id_512=parsed_sidecar.profile_id,
+        candidate_suite_id_512=suite,
+        schema_id_512=schema,
+        verifier_artifact_identity_512=verifier_identity,
+        settlement_domain_id_512=parsed_sidecar.strong_settlement_domain_id,
+        epoch=parsed_sidecar.epoch,
+    )
+    rollup_context = RollupClaimContext(
+        fork_id_512=_wide("real-native-fork"),
+        l1_chain_id=7_531_512,
+        l2_chain_id=7_531_513,
+        state_before_digest_512=_wide("real-native-state-before"),
+        da_commitment_512=_wide("real-native-da"),
+        verifier_artifact_identity_512=verifier_identity,
+        schema_id_512=schema,
+        candidate_suite_id_512=suite,
+        settlement_domain_id_512=parsed_sidecar.strong_settlement_domain_id,
+    )
+    rollup_envelope = build_native_claim_envelope(
+        native_envelope=envelope,
+        context=rollup_context,
+    )
+    rollup_verifier = NativeStarkVerifierPort(
+        NativeStarkVerifierConfig(
+            executable=verifier,
+            program=program_path,
+            suite_id=suite,
+            schema_id=schema,
+            verifier_artifact_identity=verifier_identity,
+            public_input_projection=projection,
+        )
+    )
+    rollup_receipt = NativeRollupClaimVerifier(rollup_verifier).verify(
+        envelope=rollup_envelope,
+        context=rollup_context,
+        identity=rollup_identity,
+    )
+    local_receipt = build_local_stack_receipt(
+        envelope=envelope,
+        native_receipt=receipt,
+        candidate=selected,
+        settlement_receipt=settlement_receipt,
+        rollup_envelope=rollup_envelope,
+        rollup_context=rollup_context,
+        rollup_identity=rollup_identity,
+        rollup_receipt=rollup_receipt,
+    )
+    assert local_receipt.status == "LOCAL_SYNTHETIC_NONACTIVATING"
+    assert local_receipt.as_public_dict()["globalProofSuiteId"] is None
+    assert local_receipt.as_public_dict()["activationAllowed"] is False
 
     encoded = envelope.encode()
     proof_offset = 8 + 2 + 64 * 3 + 384 + 4 + 744 + 8

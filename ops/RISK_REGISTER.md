@@ -7,8 +7,9 @@ Current risk posture:
 
 - Current synthetic demo: permitted only inside the existing synthetic-only boundaries; it is not
   deployment ready.
-- Deployment-ready audit-pending candidate: possible only after all 93 internally finishable
-  packages close, including government/oracle simulators and the R01-R12 rollup path.
+- Deployment-ready audit-pending candidate: the 93 internally finishable packages now close at the
+  local/synthetic boundary, including government/oracle simulators and the R01-R12 rollup path;
+  deployed verifier/state/custody, release identities, and the final audit gate remain required.
 - Controlled pilot without real payments: possible only after the exact release passes the final
   audit and the required pilot activation inputs, verifier, monitoring, and signer drills complete.
 - Real production claims/payments: blocked until the heterogeneous semantic-STARK/shared-bus/hash-

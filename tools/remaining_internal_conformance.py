@@ -379,6 +379,7 @@ def build_receipt(repo_root: Path | None = None) -> dict[str, object]:
             "LB-005",
             "LB-006",
             "LB-007",
+            "LB-008",
             "LB-009",
             "LB-010",
         ),

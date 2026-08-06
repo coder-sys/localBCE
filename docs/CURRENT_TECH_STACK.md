@@ -34,10 +34,11 @@ remain false. The legacy operational registry remains `UNSELECTED` with
 The internal package ledger is closed by `tools/remaining_internal_conformance.py`: every
 S01-S12, A01-A16, Z01-Z12, T01-T14, P01-P12, I01-I08, O01-O06/O12, and R01-R12 identifier has
 a local completion receipt. This closes internal engineering scope only. The standalone Rust candidate
-verifier and transcript replay now exist and pass a fresh local synthetic proof, but production native
-proof verification, exact settlement ABI binding, Privacy V2 production acceptance, HSM/FIPS custody,
-live Ethereum/client deployment, production credentials, release activation, and the independent audit
-remain closed until their separate evidence exists. See
+verifier and transcript replay now exist and pass a fresh local synthetic proof; the exact Privacy V2
+settlement binding and native-to-rollup handoff also pass locally. The remaining boundary is deployed
+production verifier/state/settlement acceptance, HSM/FIPS custody, external anti-rollback authority,
+live Ethereum/client deployment, production credentials, release activation, and the independent audit.
+See
 `docs/PRODUCTION_CANDIDATE_VERIFIER_BOUNDARY.md`.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
@@ -152,7 +153,7 @@ does not authorize activation. HSM/FIPS custody and external anti-rollback autho
 
 ## Wave 2 internal reference boundary (nonactivating)
 
-The narrow remaining local/synthetic Wave 2 seam is now executable in `app/wave2_internal.py`.
+The Wave 2 structural/reference seam is executable in `app/wave2_internal.py`.
 It connects fixed-shape K128/K512 private schedules, the exact ordered twelve-field Privacy V2
 projection, the canonical 744-byte candidate sidecar, the bounded `BLPQPF01` proof-body grammar,
 and a fail-closed public-binding/transcript reference verifier. `tools/wave2_internal_conformance.py`
@@ -169,9 +170,11 @@ constant-time behavior, or a production proof suite. The receipt therefore keeps
 and live credentials false.
 
 The local receipt passes K128 and K512 cover/one-real/all-real shape cases, H6 candidate privacy
-controls, and the software ML-KEM-1024/AES-256-GCM KMS roundtrip. The final native proof/verifier,
-complete hiding/simulator theorem, HSM/FIPS authority, production rollup verifier, release
-qualification, and independent audit remain open.
+controls, and the software ML-KEM-1024/AES-256-GCM KMS roundtrip. That reference receipt is not a
+semantic proof claim; the separately exercised native candidate path supplies the local proof,
+active hiding certificate, exact settlement binding, and rollup handoff. Deployed production
+verifier/state/settlement, HSM/FIPS authority, external anti-rollback, release qualification, and
+independent audit remain open.
 
 The smallest real state boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/state_plane.py`. It owns fixed-shape SHA3-512 roots,

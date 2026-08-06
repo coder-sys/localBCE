@@ -216,11 +216,16 @@ def _worker_line(process: subprocess.Popen[bytes], expected: str) -> tuple[str, 
     assert process.stdout is not None
     encoded = process.stdout.readline(MAX_WORKER_LINE_BYTES + 1)
     if not encoded or len(encoded) > MAX_WORKER_LINE_BYTES or not encoded.endswith(b"\n"):
+        remaining_stdout = b""
         stderr = b""
         if process.poll() is not None and process.stderr is not None:
+            remaining_stdout = process.stdout.read(MAX_WORKER_LINE_BYTES)
             stderr = process.stderr.read(MAX_WORKER_LINE_BYTES)
         raise RuntimeError(
             "selected_prover_worker_response_missing:"
+            + "stdout="
+            + (encoded + remaining_stdout).decode("ascii", errors="replace")
+            + ";stderr="
             + stderr.decode("ascii", errors="replace")
         )
     try:
