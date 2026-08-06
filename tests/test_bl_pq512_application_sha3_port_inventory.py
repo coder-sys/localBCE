@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_scoped_sha3_callsite_is_explicitly_classified() -> None:
     require_inventory_consistent(ROOT)
-    assert len(CALLSITE_DISPOSITIONS) == 87
+    assert len(CALLSITE_DISPOSITIONS) == 89
     assert {
         disposition: sum(
             observed is disposition for observed in CALLSITE_DISPOSITIONS.values()
@@ -28,7 +28,7 @@ def test_every_scoped_sha3_callsite_is_explicitly_classified() -> None:
     } == {
         PortDisposition.AIR_REQUIRED: 39,
         PortDisposition.PUBLIC_PRECOMPUTED: 5,
-        PortDisposition.HOST_EVIDENCE_ONLY: 27,
+        PortDisposition.HOST_EVIDENCE_ONLY: 29,
         PortDisposition.WAVE1C_VERIFIER_STATE: 13,
         PortDisposition.SUPERSEDED_REFERENCE: 3,
     }
@@ -116,6 +116,6 @@ def test_historical_k128_envelope_reconciles_without_activation() -> None:
 
 def test_inventory_identity_is_stable() -> None:
     assert inventory_canonical_sha3_512() == (
-        "476655da9a4200f355ec1d502b36a30235f123119e5c5a2900007b00e9cc63c3"
-        "c20b6f8e43e39cfefda43e0b4e210ce30db8f504f4462af2701dd88ec0859279"
+        "f583d02e68c3de7b7b946b1decb620757f04b1cb0850fa23660f8e8965b611f1"
+        "11b4075c8ad8b6c246fde2c3732ab9c90effd6d17ccaf3d820f261825d1fa992"
     )

@@ -371,6 +371,14 @@ CALLSITE_DISPOSITIONS: Final[Mapping[CallsiteId, PortDisposition]] = MappingProx
             "corpus_sha3_512",
         ): _H,
         _call(
+            "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py",
+            "_digest",
+        ): _H,
+        _call(
+            "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py",
+            "manifest_sha3_512",
+        ): _H,
+        _call(
             "experiments/fixed_shape_claim_air/wave1a_global_sha3_capacity_schedule.py",
             "build_wave1a_global_sha3_capacity_schedule",
         ): _H,
