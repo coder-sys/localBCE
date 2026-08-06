@@ -8754,3 +8754,52 @@ productionUsable=false
 
 This closes a stale receipt/reporting gap; it does not claim an independent theorem audit,
 production activation, HSM/FIPS validation, or a deployed on-chain verifier.
+
+## 2026-08-06 local stack internal blocker closure and real cross-layer proof - VERIFIED, NONACTIVATING
+
+Current Git checkpoint before this state append: `e330d37` on `main`, clean. The local synthetic
+native path now has fresh end-to-end evidence from a real Rust-generated proof through the exact
+108-limb public-input projection, `LocalSettlementV2`, the native rollup claim verifier, and the
+commitment-only local stack receipt. The cross-layer test uses synthetic roots, identities, and
+opaque commitments only; it stores no PHI, exact private amount, claim document, proof artifact, or
+credential and opens no network or live chain.
+
+The machine-readable blocker ledger now reconciles the current boundary: LB-001, LB-006, LB-007,
+LB-008, LB-009, and LB-010 are `closed_internal_nonactivating` with
+`release_candidate_blocker=false`; LB-002 remains the one external independent-audit gate; and
+LB-003/LB-004/LB-005 remain operator activation inputs. Every local closure retains
+`production_activation_blocker=true`. The global operational state remains
+`NOT_DEPLOYMENT_READY`, `UNSELECTED`, `proofSuiteId=null`, `activation_allowed=false`, and
+`production_usable=false`. The commit-bound `ops/` authority was updated for the reviewed manifest
+and risk-register bytes and read back successfully.
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_production_candidate.py tests/test_bl_pq512_wave5_native_boundary.py tests/test_bl_pq512_production_boundary.py tests/test_bl_pq512_public_input_projection.py tests/test_wave5_rollup.py tests/attacks/test_wave5_rollup_attacks.py
+37 passed in 154.33s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_deployment_ready_roadmap_contract.py tests/test_production_readiness.py tests/test_operational_readiness.py tests/test_remaining_internal_conformance.py tests/test_bl_pq512_h6_complete_simulator.py tests/test_wave4_adapters_operations.py
+34 passed in 10.33s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_k512_parallel_campaign_evidence.py tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py tests/test_bl_pq512_wave3_full_internal.py
+25 passed in 145.07s
+
+py -3.14 -B -c "from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority; print(verify_ops_authority())"
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+tools.remaining_internal_conformance
+package_count=31 source_file_count=79 test_file_count=77
+active_certificate_status=ACTIVE_CONSTRUCTION_8_2_GKR_HIDING_REBASED_NONACTIVATING
+coverage_gaps=[] simulator_complete=true productionUsable=false
+production_blockers_preserved=[LB-001,LB-002,LB-003,LB-004,LB-005,LB-006,LB-007,LB-008,LB-009,LB-010]
+```
+
+The direct real-Rust lane in this phase also returned `1 passed, 4 deselected in 134.88s`. During
+fixture convergence, the fail-closed worker rejected an attempted extra public table and the old
+2 MiB rollup digest cap rejected the larger native envelope; the fixture was bound to existing
+source columns and the cap was aligned to the existing fixed 512 MiB envelope bound. No no-swap,
+5,000,000,000-byte resource gate was raised, and the containing rerun passed.
+
+The next boundary is the full bounded Python/Rust regression and final three-archive refresh. This
+section does not claim deployed `INativeStarkVerifier`, on-chain settlement, HSM/FIPS certification,
+external anti-rollback authority, live Ethereum/government/payment activation, or the independent
+audit.
