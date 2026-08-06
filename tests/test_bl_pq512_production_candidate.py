@@ -308,6 +308,7 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         suite.hex(),
         schema.hex(),
         verifier_identity.hex(),
+        schema.hex(),
     ]
     completed = subprocess.run(
         verify_args,

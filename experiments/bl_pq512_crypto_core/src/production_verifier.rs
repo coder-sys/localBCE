@@ -203,7 +203,8 @@ fn public_field_bit(field: &[u8; PUBLIC_FIELD_BYTES], bit: usize) -> u32 {
 ///
 /// Nine 30-bit limbs cover 270 bits, so every canonical 251-bit field is
 /// represented without reduction or aliasing.  The production caller must
-/// pass ``public_input_projection_schema`` to require this relation.
+/// The release verifier always requires this relation through
+/// ``public_input_projection_schema``.
 pub fn projected_public_inputs(
     fields: &[[u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
 ) -> Result<Vec<M31>, ProductionVerifierError> {
