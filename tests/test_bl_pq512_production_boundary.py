@@ -119,6 +119,12 @@ class _ReceiptVerifier:
         )
 
 
+class _ForgedCommitmentVerifier(_ReceiptVerifier):
+    def verify(self, envelope: ProductionProofEnvelope) -> NativeVerificationResult:
+        result = super().verify(envelope)
+        return replace(result, envelope_commitment=_wide("forged-envelope"))
+
+
 def test_production_envelope_decode_round_trips_after_receipt_binding() -> None:
     envelope, _, _, _ = _fixture()
     decoded = ProductionProofEnvelope.decode(
@@ -202,3 +208,23 @@ def test_native_rejection_does_not_publish_state_and_replay_is_blocked() -> None
     settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
     with pytest.raises(ProductionBoundaryError, match="settlement_batch_nonce_replay"):
         settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
+
+
+def test_settlement_recomputes_native_receipt_binding_before_publication() -> None:
+    envelope, nonce, roots, domain = _fixture()
+    submitter = _wide("submitter")
+    verifier = _ForgedCommitmentVerifier()
+    settlement = LocalSettlementV2(
+        verifier=verifier,
+        settlement_domain=domain,
+        governed_roots=roots,
+        initial_nullifier_root=(
+            int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
+        ).to_bytes(32, "big"),
+        authorized_submitters=(submitter,),
+    )
+    with pytest.raises(ProductionBoundaryError, match="settlement_verifier_binding_mismatch"):
+        settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
+    snapshot = settlement.snapshot()
+    assert snapshot.sequence == 0
+    assert snapshot.settled_batch_count == 0

@@ -504,8 +504,32 @@ class LocalSettlementV2:
         if fields[11] in self._settled_commitments:
             raise ProductionBoundaryError("settlement_commitment_replay")
         result = self._verifier.verify(envelope)
-        if result.receipt.proof_suite_id != envelope.suite_id:
-            raise ProductionBoundaryError("settlement_verifier_suite_mismatch")
+        if type(result) is not NativeVerificationResult:
+            raise ProductionBoundaryError("settlement_verifier_result_invalid")
+        receipt = result.receipt
+        if type(receipt) is not NativeVerificationReceipt:
+            raise ProductionBoundaryError("settlement_verifier_receipt_invalid")
+        expected_envelope = hashlib.sha3_512(envelope.encode()).digest()
+        expected_statement = statement_commitment(envelope.public_outputs, envelope.sidecar)
+        expected_package = hashlib.sha3_512(
+            PROOF_PACKAGE_COMMITMENT_DOMAIN + envelope.proof_package
+        ).digest()
+        expected_transcript = hashlib.sha3_512(
+            TRANSCRIPT_COMMITMENT_DOMAIN + envelope.transcript_evidence
+        ).digest()
+        if (
+            result.envelope_commitment != expected_envelope
+            or receipt.envelope_commitment != expected_envelope
+            or result.statement_commitment != expected_statement
+            or receipt.statement_commitment != expected_statement
+            or receipt.evidence_commitment != envelope.evidence_commitment
+            or receipt.proof_package_commitment != expected_package
+            or receipt.transcript_commitment != expected_transcript
+            or receipt.proof_suite_id != envelope.suite_id
+            or receipt.schema_id != envelope.schema_id
+            or receipt.verifier_artifact_identity != envelope.verifier_artifact_identity
+        ):
+            raise ProductionBoundaryError("settlement_verifier_binding_mismatch")
         next_root = _field_alias(parsed_sidecar.strong_nullifier_root_after)
         next_binding = _digest(
             _STATE_BINDING,
@@ -523,7 +547,7 @@ class LocalSettlementV2:
             public_fields_commitment=_digest(_SETTLEMENT_COMMITMENT_BINDING, b"".join(fields)),
             envelope_commitment=result.envelope_commitment,
             native_statement_commitment=result.statement_commitment,
-            proof_suite_id=result.receipt.proof_suite_id,
+            proof_suite_id=receipt.proof_suite_id,
             state_binding=next_binding,
         )
         # No state mutation occurs before every structural and native check
