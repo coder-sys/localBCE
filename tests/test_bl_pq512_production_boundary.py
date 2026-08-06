@@ -127,6 +127,7 @@ class _ForgedCommitmentVerifier(_ReceiptVerifier):
 
 def test_production_envelope_decode_round_trips_after_receipt_binding() -> None:
     envelope, _, _, _ = _fixture()
+    assert ProductionProofEnvelope.public_outputs_from_encoded(envelope.encode()) == envelope.public_outputs
     decoded = ProductionProofEnvelope.decode(
         envelope.encode(), evidence_commitment=envelope.evidence_commitment
     )

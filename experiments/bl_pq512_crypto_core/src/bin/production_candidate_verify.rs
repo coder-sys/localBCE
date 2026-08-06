@@ -96,9 +96,9 @@ fn hex_digest(value: &[u8; 64]) -> String {
 
 fn run() -> Result<(), String> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
-    if arguments.len() != 6 {
+    if arguments.len() != 6 && arguments.len() != 7 {
         return Err(
-            "usage: production_candidate_verify <envelope> <program> <public-inputs> <suite-id-hex> <schema-id-hex> <verifier-id-hex>"
+            "usage: production_candidate_verify <envelope> <program> <public-inputs> <suite-id-hex> <schema-id-hex> <verifier-id-hex> [projection-schema-id-hex]"
                 .into(),
         );
     }
@@ -108,6 +108,11 @@ fn run() -> Result<(), String> {
     let suite_id = decode_identity(&arguments[3])?;
     let schema_id = decode_identity(&arguments[4])?;
     let verifier_artifact_identity = decode_identity(&arguments[5])?;
+    let public_input_projection_schema = if arguments.len() == 7 {
+        Some(decode_identity(&arguments[6])?)
+    } else {
+        None
+    };
     let receipt = verify_production_envelope(
         &envelope,
         ProductionVerificationKey {
@@ -116,6 +121,7 @@ fn run() -> Result<(), String> {
             verifier_artifact_identity,
             expected_program: &program,
             expected_public_inputs: &public_inputs,
+            public_input_projection_schema,
         },
     )
     .map_err(|error| format!("verify_{error:?}"))?;

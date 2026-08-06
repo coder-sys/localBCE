@@ -171,6 +171,25 @@ class ProductionProofEnvelope:
         return encoded
 
     @classmethod
+    def public_outputs_from_encoded(cls, encoded: bytes) -> bytes:
+        """Read only the canonical public projection before native verification."""
+
+        if type(encoded) is not bytes or not encoded:
+            raise ProductionCandidateError("candidate_envelope_bytes_invalid")
+        prefix_length = len(ENVELOPE_MAGIC) + 2 + (64 * 3)
+        if len(encoded) < prefix_length + PUBLIC_OUTPUT_BYTES:
+            raise ProductionCandidateError("candidate_envelope_public_outputs_truncated")
+        if encoded[: len(ENVELOPE_MAGIC)] != ENVELOPE_MAGIC:
+            raise ProductionCandidateError("candidate_envelope_magic_invalid")
+        version_start = len(ENVELOPE_MAGIC)
+        if int.from_bytes(encoded[version_start : version_start + 2], "big") != ENVELOPE_VERSION:
+            raise ProductionCandidateError("candidate_envelope_version_invalid")
+        public_start = prefix_length
+        public_outputs = encoded[public_start : public_start + PUBLIC_OUTPUT_BYTES]
+        _public_fields(public_outputs)
+        return public_outputs
+
+    @classmethod
     def decode(
         cls,
         encoded: bytes,

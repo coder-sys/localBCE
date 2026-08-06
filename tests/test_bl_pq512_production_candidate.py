@@ -13,6 +13,7 @@ from app.production_boundary import (
     NativeStarkVerifierConfig,
     NativeStarkVerifierPort,
 )
+from app.native_public_input_projection import PublicInputProjectionV1
 from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
     HISTORICAL_CIRCLE_GAPS,
     build_active_gkr_hiding_certificate,
@@ -231,9 +232,13 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
 ) -> None:
     worker, verifier, slh_service = production_candidate_binaries
     program, traces = _fixture()
+    public_output_bytes = bytes(384)
     program = replace(
         program,
-        public_inputs=(PublicInputBinding("public_live", "source", "value", 0),),
+        public_inputs=tuple(
+            PublicInputBinding(f"public_live_{index}", "source", "value", 0)
+            for index in range(108)
+        ),
     )
     geometry = derive_selected_proof_geometry(program)
     schedule = build_selected_theorem_round_schedule(geometry)
@@ -267,11 +272,11 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         scratch_parent=tmp_path,
         program=program,
         traces=traces,
-        public_inputs=(0,),
+        public_inputs=(0,) * 108,
         chunk_values=2,
         secret_mask_seed=_wide("production-mask-seed"),
         session_id=_wide("production-session"),
-        public_outputs=bytes(384),
+        public_outputs=public_output_bytes,
         sidecar=sidecar,
         contributors=contributors,
         adapters=adapters,
@@ -293,7 +298,8 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     public_inputs_path = tmp_path / "production-public-inputs.bin"
     envelope_path.write_bytes(envelope.encode())
     program_path.write_bytes(encode_air_program(program))
-    public_inputs_path.write_bytes(b"BLPQPI01" + (1).to_bytes(2, "big") + (1).to_bytes(4, "big") + (0).to_bytes(4, "big"))
+    projection = PublicInputProjectionV1(schema)
+    public_inputs_path.write_bytes(projection.encode_file(public_output_bytes))
     verify_args = [
         str(verifier),
         str(envelope_path),
@@ -312,14 +318,37 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     )
     assert completed.returncode == 0, (completed.stdout, completed.stderr)
     receipt = NativeVerificationReceipt.from_native_line(completed.stdout.strip())
+    tampered_public_inputs_path = tmp_path / "tampered-production-public-inputs.bin"
+    tampered_public_inputs = bytearray(public_inputs_path.read_bytes())
+    tampered_public_inputs[14] = 1
+    tampered_public_inputs_path.write_bytes(bytes(tampered_public_inputs))
+    rejected_projection = subprocess.run(
+        [
+            str(verifier),
+            str(envelope_path),
+            str(program_path),
+            str(tampered_public_inputs_path),
+            suite.hex(),
+            schema.hex(),
+            verifier_identity.hex(),
+            schema.hex(),
+        ],
+        cwd=verifier.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected_projection.returncode != 0
+    assert "PublicInputProjection" in rejected_projection.stderr
     port_result = NativeStarkVerifierPort(
         NativeStarkVerifierConfig(
             executable=verifier,
             program=program_path,
-            public_inputs=public_inputs_path,
+            public_inputs=None,
             suite_id=suite,
             schema_id=schema,
             verifier_artifact_identity=verifier_identity,
+            public_input_projection=projection,
         )
     ).verify(envelope)
     assert port_result.receipt == receipt

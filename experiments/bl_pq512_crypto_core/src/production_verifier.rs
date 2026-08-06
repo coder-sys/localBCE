@@ -29,6 +29,9 @@ pub const PRODUCTION_ENVELOPE_VERSION: u16 = 2;
 pub const PUBLIC_FIELD_COUNT: usize = 12;
 pub const PUBLIC_FIELD_BYTES: usize = 32;
 pub const PUBLIC_FIELDS_BYTES: usize = PUBLIC_FIELD_COUNT * PUBLIC_FIELD_BYTES;
+pub const PUBLIC_INPUT_LIMBS_PER_FIELD: usize = 9;
+pub const PUBLIC_INPUT_LIMB_BITS: usize = 30;
+pub const PUBLIC_INPUT_PROJECTION_COUNT: usize = PUBLIC_FIELD_COUNT * PUBLIC_INPUT_LIMBS_PER_FIELD;
 pub const SIDECAR_BYTES: usize = 744;
 pub const MAX_ENVELOPE_BYTES: usize = 512 * 1024 * 1024;
 pub const STATEMENT_EVIDENCE_DOMAIN: &[u8] = b"BL/PQ512/PRODUCTION-CANDIDATE/EVIDENCE/v1\0";
@@ -60,6 +63,7 @@ pub struct ProductionVerificationKey<'a> {
     pub verifier_artifact_identity: [u8; 64],
     pub expected_program: &'a [u8],
     pub expected_public_inputs: &'a [M31],
+    pub public_input_projection_schema: Option<[u8; 64]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +95,7 @@ pub enum ProductionVerifierError {
     Transcript(SelectedTranscriptError),
     ProofSuiteMismatch,
     StatementBindingMismatch,
+    PublicInputProjection,
 }
 
 impl From<SelectedProofPackageError> for ProductionVerifierError {
@@ -184,6 +189,41 @@ fn public_fields_bytes(fields: &[[u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT]) 
         .iter()
         .flat_map(|field| field.iter().copied())
         .collect()
+}
+
+fn public_field_bit(field: &[u8; PUBLIC_FIELD_BYTES], bit: usize) -> u32 {
+    if bit >= PUBLIC_FIELD_BYTES * 8 {
+        return 0;
+    }
+    let byte = PUBLIC_FIELD_BYTES - 1 - (bit / 8);
+    u32::from((field[byte] >> (bit % 8)) & 1)
+}
+
+/// Convert the exact ordered bytes32 public boundary into lossless M31 limbs.
+///
+/// Nine 30-bit limbs cover 270 bits, so every canonical 251-bit field is
+/// represented without reduction or aliasing.  The production caller must
+/// pass ``public_input_projection_schema`` to require this relation.
+pub fn projected_public_inputs(
+    fields: &[[u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
+) -> Result<Vec<M31>, ProductionVerifierError> {
+    let mut values = Vec::with_capacity(PUBLIC_INPUT_PROJECTION_COUNT);
+    for field in fields {
+        if !canonical_stark_field(field) {
+            return Err(ProductionVerifierError::PublicFieldEncoding);
+        }
+        for limb_index in 0..PUBLIC_INPUT_LIMBS_PER_FIELD {
+            let mut value = 0_u32;
+            for bit in 0..PUBLIC_INPUT_LIMB_BITS {
+                value |= public_field_bit(field, limb_index * PUBLIC_INPUT_LIMB_BITS + bit) << bit;
+            }
+            values.push(
+                M31::from_canonical(value)
+                    .map_err(|_| ProductionVerifierError::PublicInputProjection)?,
+            );
+        }
+    }
+    Ok(values)
 }
 
 fn canonical_stark_field(value: &[u8; PUBLIC_FIELD_BYTES]) -> bool {
@@ -423,6 +463,15 @@ pub fn verify_production_envelope(
         || envelope.verifier_artifact_identity != key.verifier_artifact_identity
     {
         return Err(ProductionVerifierError::IdentityMismatch);
+    }
+    if let Some(projection_schema) = key.public_input_projection_schema {
+        if envelope.schema_id != projection_schema {
+            return Err(ProductionVerifierError::PublicInputProjection);
+        }
+        let expected = projected_public_inputs(&envelope.public_fields)?;
+        if key.expected_public_inputs != expected.as_slice() {
+            return Err(ProductionVerifierError::PublicInputProjection);
+        }
     }
     validate_sidecar(
         &envelope.sidecar,
