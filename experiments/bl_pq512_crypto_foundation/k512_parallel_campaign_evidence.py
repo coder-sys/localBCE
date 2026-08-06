@@ -37,7 +37,9 @@ MAX_MONITOR_BYTES: Final[int] = 2 * 1024 * 1024
 
 _HEX_128 = re.compile(r"^[0-9a-f]{128}$")
 _INTEGER = re.compile(r"^[0-9]+$")
+_SIGNED_INTEGER = re.compile(r"^-?[0-9]+$")
 _NUMBER = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
+_SIGNED_NUMBER = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
 _KEY_VALUE = re.compile(r"^[^=\r\n]+=[^\r\n]*$")
 
 
@@ -73,6 +75,14 @@ def _integer(value: object, label: str, *, minimum: int = 0) -> int:
     raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_integer_invalid")
 
 
+def _signed_integer(value: object, label: str) -> int:
+    if type(value) is int:
+        return value
+    if type(value) is str and _SIGNED_INTEGER.fullmatch(value) is not None:
+        return int(value)
+    raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_integer_invalid")
+
+
 def _number(value: object, label: str, *, minimum: float = 0.0, positive: bool = False) -> float:
     if type(value) is int or type(value) is float:
         if isinstance(value, bool):
@@ -83,6 +93,20 @@ def _number(value: object, label: str, *, minimum: float = 0.0, positive: bool =
     else:
         raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_number_invalid")
     if not math.isfinite(parsed) or parsed < minimum or (positive and parsed <= 0.0):
+        raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_number_invalid")
+    return parsed
+
+
+def _signed_number(value: object, label: str) -> float:
+    if type(value) is int or type(value) is float:
+        if isinstance(value, bool):
+            raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_number_invalid")
+        parsed = float(value)
+    elif type(value) is str and _SIGNED_NUMBER.fullmatch(value) is not None:
+        parsed = float(value)
+    else:
+        raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_number_invalid")
+    if not math.isfinite(parsed):
         raise K512ParallelCampaignEvidenceError(f"k512_parallel_{label}_number_invalid")
     return parsed
 
@@ -401,8 +425,8 @@ def _validate_run(raw: Mapping[str, Any], *, expected_ordinal: int, results_path
         raise K512ParallelCampaignEvidenceError("k512_parallel_driver_event_present")
     page_before = _integer(monitor["pagefile_before_mb"], "pagefile_before_mb")
     page_after = _integer(monitor["pagefile_after_mb"], "pagefile_after_mb")
-    page_growth = _integer(monitor["pagefile_growth_mb"], "pagefile_growth_mb")
-    if page_after - page_before != page_growth or page_growth != 0:
+    page_growth = _signed_integer(monitor["pagefile_growth_mb"], "pagefile_growth_mb")
+    if page_after - page_before != page_growth or page_growth > 0:
         raise K512ParallelCampaignEvidenceError("k512_parallel_pagefile_growth")
     if monitor["stdout_sha256"] != _sha256(stdout_bytes):
         raise K512ParallelCampaignEvidenceError("k512_parallel_stdout_digest_mismatch")
@@ -426,7 +450,7 @@ def _validate_run(raw: Mapping[str, Any], *, expected_ordinal: int, results_path
     _cross_equal(_number(item["device"], "result_device"), device, "result_device")
     _cross_equal(_number(item["scratch"], "result_scratch"), scratch, "result_scratch")
     _cross_equal(_number(item["external_tree"], "result_external_tree"), _number(monitor["external_process_tree_peak_mb"], "external_tree_mb"), "result_external_tree")
-    if _integer(item["external_gpu"], "result_external_gpu") != gpu_peak or _integer(item["page_growth"], "result_page_growth") != page_growth or _integer(item["driver_events"], "result_driver_events") != 0 or _integer(item["stderr_bytes"], "result_stderr_bytes") != 0:
+    if _integer(item["external_gpu"], "result_external_gpu") != gpu_peak or _signed_integer(item["page_growth"], "result_page_growth") != page_growth or _integer(item["driver_events"], "result_driver_events") != 0 or _integer(item["stderr_bytes"], "result_stderr_bytes") != 0:
         raise K512ParallelCampaignEvidenceError("k512_parallel_result_monitor_disagreement")
     return K512ParallelRunEvidence(
         ordinal=expected_ordinal,
@@ -504,7 +528,9 @@ def validate_k512_parallel_campaign(results_path: Path, summary_path: Path | Non
         raise K512ParallelCampaignEvidenceError("k512_parallel_summary_wall_disagreement")
     if _number(summary["p95_measured_wall_seconds"], "summary_p95") != p95 or not math.isclose(_number(summary["mean_measured_wall_seconds"], "summary_mean"), mean, rel_tol=0.0, abs_tol=0.000001):
         raise K512ParallelCampaignEvidenceError("k512_parallel_summary_statistics_disagreement")
-    if _number(summary["max_pagefile_growth_mb"], "summary_pagefile") != 0.0 or _number(summary["max_driver_events"], "summary_driver_events") != 0.0 or _number(summary["max_stderr_bytes"], "summary_stderr") != 0.0:
+    summary_pagefile = _signed_number(summary["max_pagefile_growth_mb"], "summary_pagefile")
+    max_pagefile = max(_signed_integer(item["page_growth"], "summary_pagefile_item") for item in results_value)
+    if summary_pagefile > 0.0 or summary_pagefile != max_pagefile or _number(summary["max_driver_events"], "summary_driver_events") != 0.0 or _number(summary["max_stderr_bytes"], "summary_stderr") != 0.0:
         raise K512ParallelCampaignEvidenceError("k512_parallel_summary_safety_gate_invalid")
     max_rss = max(run.external_process_tree_peak_bytes for run in parsed)
     max_scratch = max(run.scratch_bytes for run in parsed)

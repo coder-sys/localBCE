@@ -152,6 +152,26 @@ def test_exact_two_lane_campaign_is_qualified_without_activation(tmp_path: Path)
     assert evidence.as_public_dict()["status"] == "QUALIFIED_K512_TWO_LANE_NONACTIVATING"
 
 
+def test_pagefile_usage_decrease_is_not_pagefile_growth(tmp_path: Path) -> None:
+    results_path, summary_path = _build_campaign(tmp_path)
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    for item in results:
+        item["page_growth"] = "-1"
+        monitor_path = Path(item["monitor_path"])
+        monitor = monitor_path.read_text(encoding="utf-8")
+        monitor = monitor.replace("pagefile_after_mb=100", "pagefile_after_mb=99")
+        monitor = monitor.replace("pagefile_growth_mb=0", "pagefile_growth_mb=-1")
+        monitor_path.write_text(monitor, encoding="utf-8")
+    results_path.write_text(json.dumps(results), encoding="utf-8")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["max_pagefile_growth_mb"] = -1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    evidence = validate_k512_parallel_campaign(results_path, summary_path)
+
+    assert evidence.p95_seconds == 102.0
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     [
