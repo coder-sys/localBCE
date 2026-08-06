@@ -37,7 +37,7 @@ def test_replay_header_air_hashes_cursor_and_inner_root_exactly() -> None:
     serialized = evaluate_serialized(instance.program.canonical_bytes(), instance.traces)
     assert direct == serialized
     assert direct.maximum_degree == 2
-    assert len(instance.program.tables) == 8
+    assert len(instance.program.tables) == 9
 
 
 def test_replay_header_program_does_not_commit_private_roots() -> None:

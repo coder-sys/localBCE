@@ -60,12 +60,12 @@ def _mutate(instance, table: str, column: str, row: int, value: int):
 def test_replay_registry_reuses_full_ordered_map_paths_and_is_insert_only() -> None:
     instance = _instance()
     report = evaluate_program(instance.program, instance.traces)
-    assert report.identities_evaluated == 278_982
-    assert report.lookup_messages_evaluated == 396_690
+    assert report.identities_evaluated == 279_750
+    assert report.lookup_messages_evaluated == 396_306
     assert report.maximum_degree == 3
     assert report.program_commitment.hex() == (
-        "b1c9cf24ba03eb6e31566605d5668cb1dcb295c47e990a2ca7f7420607fa1196"
-        "77d1542fb8dbc6be0bc9837a1a88ef726ff47aeafb9bdbcdeec1d83420636786"
+        "77b1a15044f8f1de7c39457021c9d5c451999be250050ade79600247451720b06"
+        "ea9298f5ded8c851db61f6bfc7a89a7d61ee8d51e76d940eb4d83f4b10f6653"
     )
     operation = instance.traces["replay_map__ordered_map_operation"].columns
     assert operation["is_insert"] == (1, 1, 1)

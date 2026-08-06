@@ -396,9 +396,9 @@ def test_full_width_maps_update_economics_without_persistent_dummy_bloat(
                 transition.ledger_batch_witness,
             )
         ) == (
-            (128, 3, 64, 132),
-            (128, 3, 64, 132),
-            (256, 5, 63, 134),
+            (128, 4, 64, 134),
+            (128, 4, 64, 134),
+            (256, 6, 63, 136),
         )
         schedules = (
             build_ordered_map_batch_schedule(128),

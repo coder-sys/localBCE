@@ -71,8 +71,8 @@ def test_k128_payment_key_source_sha3_composition_evaluates() -> None:
     assert report.lookup_messages_evaluated == 83_850_786
     assert report.maximum_degree == 2
     assert report.program_commitment.hex() == (
-        "295134938dbf2fec7a868b35dee6f62e349b72b6d98b40245de268081076d58c0"
-        "73146e90546d86ed6882a1af644f06ef04c3ba97fbe79210f1bb07fd75106bd"
+        "1bed93d1baff806f330a19899e61d6735268e007e5c74c0211cd4e71acc04e4a"
+        "5f6aa9cc670a01375b2d86194335ea35cd1d823a25ae86c2cb5ae80401888358"
     )
     assert report.trace_commitment.hex() == (
         "346c8a277b4cf2e30e708ca1401f8496837721495f1b94a69c4d1a1f1923df8a"
