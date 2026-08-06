@@ -13,50 +13,50 @@
   "profiles": [
     {
       "profileId": "K128_CALIBRATION",
-      "programCommitmentSha3_512": "d5df3ac6795e534bb6bb2ae090ff2dc9282a3dcf76c2602997e3b7cd304a95422d9c791dcd36ca5ae635afb3b6a11791d66b4ae3a194999de523247f353dd161",
+      "programCommitmentSha3_512": "0d3544a1038006667f5ab795540c3ecd8ec83991d3e647e2106770d023c6a2f2dda783fb3ac6fc916b261922e6ef10b67c692909fc25e918d8021e5527aa9c81",
       "dimensions": {
         "tables": 16,
         "commitments": 4,
-        "logicalRows": 753164,
-        "paddedRows": 848272,
+        "logicalRows": 294412,
+        "paddedRows": 389520,
         "traceColumnsAcrossTables": 2279,
         "constraints": 4844,
         "maximumConstraintDegree": 3,
         "lookupMessageWidthAcrossTables": 276,
-        "paddedCells": 114853632,
-        "dEffUpperBound": 1427283902464
+        "paddedCells": 44205824,
+        "dEffUpperBound": 713641951232
       }
     },
     {
       "profileId": "K256_DESIGN_POINT",
-      "programCommitmentSha3_512": "2f0029505286c35976c50dcb747605e72c31b34de0463c3093621d6936b8b63de62369302ca84a583bad6e6d365db9460870c6b0c4cb973bcb55f0af4de01860",
+      "programCommitmentSha3_512": "5581a2307e693341b95baeabc87b90943f0775babed6937fb3cae580e59af2164d83d9626b3538ec0076bf5e71fa92fe11e6b4bace14593a21dc4c955b293067",
       "dimensions": {
         "tables": 16,
         "commitments": 4,
-        "logicalRows": 1519500,
-        "paddedRows": 1696528,
+        "logicalRows": 601996,
+        "paddedRows": 779024,
         "traceColumnsAcrossTables": 2279,
         "constraints": 4844,
         "maximumConstraintDegree": 3,
         "lookupMessageWidthAcrossTables": 276,
-        "paddedCells": 229705856,
-        "dEffUpperBound": 2854567804928
+        "paddedCells": 88410240,
+        "dEffUpperBound": 1427283902464
       }
     },
     {
       "profileId": "K512_CALIBRATION",
-      "programCommitmentSha3_512": "60cb58cc01fdb445b83b919cae2f30d00fbe4842cd2b60fea8bff4943cbc83782f878c252f8d4ff1e7950c68fab141ffcb784ec141a7ffd612544929de406e70",
+      "programCommitmentSha3_512": "c6dd66f955a86a3d490311c45338acbc29bee5487ed0dd77a275bd414582668eaa2b75489492ec8ee6c4d6bc1d3415e02025bfc4489d6f315b1b416063ff8b38",
       "dimensions": {
         "tables": 16,
         "commitments": 4,
-        "logicalRows": 3065484,
-        "paddedRows": 3397136,
+        "logicalRows": 1230476,
+        "paddedRows": 1562128,
         "traceColumnsAcrossTables": 2279,
         "constraints": 4844,
         "maximumConstraintDegree": 3,
         "lookupMessageWidthAcrossTables": 276,
-        "paddedCells": 459803520,
-        "dEffUpperBound": 5709135609856
+        "paddedCells": 177212288,
+        "dEffUpperBound": 2854567804928
       }
     }
   ]

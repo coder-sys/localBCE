@@ -33,53 +33,53 @@ EXPECTED_DIMENSIONS = {
     "K128_CALIBRATION": {
         "tables": 16,
         "commitments": 4,
-        "logical_rows": 753_164,
-        "padded_rows": 848_272,
+        "logical_rows": 294_412,
+        "padded_rows": 389_520,
         "trace_columns_across_tables": 2_279,
         "constraints": 4_844,
         "maximum_constraint_degree": 3,
         "lookup_message_width_across_tables": 276,
-        "padded_cells": 114_853_632,
-        "d_eff_upper_bound": 1_427_283_902_464,
+        "padded_cells": 44_205_824,
+        "d_eff_upper_bound": 713_641_951_232,
     },
     "K256_DESIGN_POINT": {
         "tables": 16,
         "commitments": 4,
-        "logical_rows": 1_519_500,
-        "padded_rows": 1_696_528,
+        "logical_rows": 601_996,
+        "padded_rows": 779_024,
         "trace_columns_across_tables": 2_279,
         "constraints": 4_844,
         "maximum_constraint_degree": 3,
         "lookup_message_width_across_tables": 276,
-        "padded_cells": 229_705_856,
-        "d_eff_upper_bound": 2_854_567_804_928,
+        "padded_cells": 88_410_240,
+        "d_eff_upper_bound": 1_427_283_902_464,
     },
     "K512_CALIBRATION": {
         "tables": 16,
         "commitments": 4,
-        "logical_rows": 3_065_484,
-        "padded_rows": 3_397_136,
+        "logical_rows": 1_230_476,
+        "padded_rows": 1_562_128,
         "trace_columns_across_tables": 2_279,
         "constraints": 4_844,
         "maximum_constraint_degree": 3,
         "lookup_message_width_across_tables": 276,
-        "padded_cells": 459_803_520,
-        "d_eff_upper_bound": 5_709_135_609_856,
+        "padded_cells": 177_212_288,
+        "d_eff_upper_bound": 2_854_567_804_928,
     },
 }
 
 EXPECTED_PROGRAM_COMMITMENTS = {
     "K128_CALIBRATION": (
-        "d5df3ac6795e534bb6bb2ae090ff2dc9282a3dcf76c2602997e3b7cd304a9542"
-        "2d9c791dcd36ca5ae635afb3b6a11791d66b4ae3a194999de523247f353dd161"
+        "0d3544a1038006667f5ab795540c3ecd8ec83991d3e647e2106770d023c6a2f2"
+        "dda783fb3ac6fc916b261922e6ef10b67c692909fc25e918d8021e5527aa9c81"
     ),
     "K256_DESIGN_POINT": (
-        "2f0029505286c35976c50dcb747605e72c31b34de0463c3093621d6936b8b63d"
-        "e62369302ca84a583bad6e6d365db9460870c6b0c4cb973bcb55f0af4de01860"
+        "5581a2307e693341b95baeabc87b90943f0775babed6937fb3cae580e59af2164"
+        "d83d9626b3538ec0076bf5e71fa92fe11e6b4bace14593a21dc4c955b293067"
     ),
     "K512_CALIBRATION": (
-        "60cb58cc01fdb445b83b919cae2f30d00fbe4842cd2b60fea8bff4943cbc8378"
-        "2f878c252f8d4ff1e7950c68fab141ffcb784ec141a7ffd612544929de406e70"
+        "c6dd66f955a86a3d490311c45338acbc29bee5487ed0dd77a275bd414582668eaa"
+        "2b75489492ec8ee6c4d6bc1d3415e02025bfc4489d6f315b1b416063ff8b38"
     ),
 }
 
