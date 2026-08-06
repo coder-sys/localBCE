@@ -9,6 +9,10 @@ import subprocess
 import pytest
 
 from app.batch.pq_suite_candidate import CandidateSidecarV1
+from app.production_boundary import (
+    NativeStarkVerifierConfig,
+    NativeStarkVerifierPort,
+)
 from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
     HISTORICAL_CIRCLE_GAPS,
     build_active_gkr_hiding_certificate,
@@ -308,6 +312,17 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     )
     assert completed.returncode == 0, (completed.stdout, completed.stderr)
     receipt = NativeVerificationReceipt.from_native_line(completed.stdout.strip())
+    port_result = NativeStarkVerifierPort(
+        NativeStarkVerifierConfig(
+            executable=verifier,
+            program=program_path,
+            public_inputs=public_inputs_path,
+            suite_id=suite,
+            schema_id=schema,
+            verifier_artifact_identity=verifier_identity,
+        )
+    ).verify(envelope)
+    assert port_result.receipt == receipt
     selected = select_built_audit_pending_suite(
         envelope,
         verification=receipt,

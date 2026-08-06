@@ -23,6 +23,7 @@ from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
     validate_active_gkr_hiding_certificate,
 )
 from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
+    MAX_SELECTED_TRANSCRIPT_BYTES,
     SelectedChallengeBundle,
 )
 from experiments.bl_pq512_crypto_foundation.software_custody_candidate import (
@@ -39,6 +40,7 @@ PUBLIC_FIELD_COUNT: Final[int] = 12
 PUBLIC_FIELD_BYTES: Final[int] = 32
 PUBLIC_OUTPUT_BYTES: Final[int] = PUBLIC_FIELD_COUNT * PUBLIC_FIELD_BYTES
 SIDECAR_BYTES: Final[int] = 744
+MAX_ENVELOPE_BYTES: Final[int] = 512 * 1024 * 1024
 STATUS: Final[str] = "BUILT_AUDIT_PENDING"
 ACTIVATION_ALLOWED: Final[bool] = False
 PRODUCTION_USABLE: Final[bool] = False
@@ -164,9 +166,78 @@ class ProductionProofEnvelope:
                 self.transcript_evidence,
             )
         )
-        if len(encoded) > 512 * 1024 * 1024:
+        if len(encoded) > MAX_ENVELOPE_BYTES:
             raise ProductionCandidateError("candidate_envelope_too_large")
         return encoded
+
+    @classmethod
+    def decode(
+        cls,
+        encoded: bytes,
+        *,
+        evidence_commitment: bytes,
+    ) -> "ProductionProofEnvelope":
+        """Decode the canonical envelope after native verification.
+
+        The evidence commitment is deliberately not duplicated in the wire
+        envelope.  It is recovered from the native verifier receipt, which
+        prevents a caller from supplying an unverified commitment alongside
+        the proof bytes.
+        """
+
+        if type(encoded) is not bytes or not encoded:
+            raise ProductionCandidateError("candidate_envelope_bytes_invalid")
+        if len(encoded) > MAX_ENVELOPE_BYTES:
+            raise ProductionCandidateError("candidate_envelope_too_large")
+        if type(evidence_commitment) is not bytes or len(evidence_commitment) != 64:
+            raise ProductionCandidateError("candidate_evidence_commitment_invalid")
+
+        offset = 0
+
+        def take(length: int, label: str) -> bytes:
+            nonlocal offset
+            if type(length) is not int or length < 0:
+                raise ProductionCandidateError(f"candidate_{label}_length_invalid")
+            end = offset + length
+            if end > len(encoded):
+                raise ProductionCandidateError(f"candidate_{label}_truncated")
+            value = encoded[offset:end]
+            offset = end
+            return value
+
+        if take(len(ENVELOPE_MAGIC), "envelope_magic") != ENVELOPE_MAGIC:
+            raise ProductionCandidateError("candidate_envelope_magic_invalid")
+        if int.from_bytes(take(2, "envelope_version"), "big") != ENVELOPE_VERSION:
+            raise ProductionCandidateError("candidate_envelope_version_invalid")
+        suite_id = take(64, "suite_id")
+        schema_id = take(64, "schema_id")
+        verifier_artifact_identity = take(64, "verifier_artifact_identity")
+        public_outputs = take(PUBLIC_OUTPUT_BYTES, "public_outputs")
+        sidecar_length = int.from_bytes(take(4, "sidecar_length"), "big")
+        if sidecar_length != SIDECAR_BYTES:
+            raise ProductionCandidateError("candidate_sidecar_length_invalid")
+        sidecar = take(sidecar_length, "sidecar")
+        proof_length = int.from_bytes(take(8, "proof_length"), "big")
+        if proof_length <= 0 or proof_length > MAX_ENVELOPE_BYTES:
+            raise ProductionCandidateError("candidate_proof_length_invalid")
+        proof_package = take(proof_length, "proof_package")
+        transcript_length = int.from_bytes(take(8, "transcript_length"), "big")
+        if transcript_length <= 0 or transcript_length > MAX_SELECTED_TRANSCRIPT_BYTES:
+            raise ProductionCandidateError("candidate_transcript_length_invalid")
+        transcript_evidence = take(transcript_length, "transcript")
+        if offset != len(encoded):
+            raise ProductionCandidateError("candidate_envelope_trailing_bytes")
+
+        return cls(
+            suite_id=suite_id,
+            schema_id=schema_id,
+            verifier_artifact_identity=verifier_artifact_identity,
+            public_outputs=public_outputs,
+            sidecar=sidecar,
+            proof_package=proof_package,
+            transcript_evidence=transcript_evidence,
+            evidence_commitment=evidence_commitment,
+        )
 
 
 def build_production_envelope(
