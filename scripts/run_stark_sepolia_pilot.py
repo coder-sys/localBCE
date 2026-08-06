@@ -436,6 +436,36 @@ def require_action(state: dict[str, Any], action: str) -> dict[str, Any]:
     return value
 
 
+def require_safe_action_prerequisites(
+    state: dict[str, Any], operation: str, phase: str
+) -> None:
+    if operation not in {"authorize", "pause", "unpause"}:
+        raise PilotError("operation must be authorize, pause, or unpause")
+    if phase not in {"schedule", "execute"}:
+        raise PilotError("phase must be schedule or execute")
+    if operation == "pause":
+        if phase != "execute":
+            raise PilotError("pause is immediate and supports execute phase only")
+        require_action(state, "reconcile")
+        return
+    if operation == "unpause":
+        require_action(state, "pause")
+    if phase == "execute":
+        require_action(state, f"prepare-{operation}-schedule")
+
+
+def require_governance_verification_prerequisites(
+    state: dict[str, Any], operation: str
+) -> None:
+    if operation == "pause":
+        require_action(state, "reconcile")
+    elif operation == "unpause":
+        require_action(state, "pause")
+    elif operation != "authorize":
+        raise PilotError("operation must be authorize, pause, or unpause")
+    require_action(state, f"prepare-{operation}-execute")
+
+
 def validate_live_release_profile(profile: dict[str, Any]) -> None:
     if profile.get("schema_version") != RELEASE_SCHEMA:
         raise PilotError(f"release profile schema_version must be {RELEASE_SCHEMA}")
@@ -940,12 +970,57 @@ def safe_bundle(config: PilotConfig, operation: str, phase: str) -> dict[str, An
     }
     output = config.artifact_directory / "safe-transactions" / f"{operation}-{phase}.json"
     write_json_atomic(output, bundle)
-    return {
+    evidence = {
         "bundle": str(output.relative_to(ROOT)),
         "bundle_sha256": sha256_file(output),
         "operation": operation,
         "phase": phase,
     }
+    validate_recorded_safe_bundle(config, evidence)
+    return evidence
+
+
+def validate_recorded_safe_bundle(
+    config: PilotConfig, evidence: dict[str, Any]
+) -> dict[str, Any]:
+    if not isinstance(evidence, dict):
+        raise PilotError("recorded Safe bundle evidence must be an object")
+    operation = require_text(evidence.get("operation"), "Safe bundle operation")
+    phase = require_text(evidence.get("phase"), "Safe bundle phase")
+    bundle_path = resolve_repo_path(evidence.get("bundle"), "Safe bundle path")
+    expected_directory = (config.artifact_directory / "safe-transactions").resolve()
+    if bundle_path.parent != expected_directory:
+        raise PilotError("recorded Safe bundle must stay in the pilot safe-transactions directory")
+    if not bundle_path.is_file():
+        raise PilotError(f"recorded Safe bundle is missing: {bundle_path}")
+    expected_sha = require_text(evidence.get("bundle_sha256"), "Safe bundle SHA-256")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha) or sha256_file(bundle_path) != expected_sha:
+        raise PilotError(f"recorded Safe bundle is missing or changed: {bundle_path}")
+    bundle = load_json(bundle_path)
+    if bundle.get("schema_version") != SAFE_BUNDLE_SCHEMA:
+        raise PilotError("recorded Safe bundle schema_version is invalid")
+    if bundle.get("chain_id") != SEPOLIA_CHAIN_ID:
+        raise PilotError("recorded Safe bundle must pin Sepolia")
+    if normalize_hex(str(bundle.get("safe", ""))) != config.governance_safe:
+        raise PilotError("recorded Safe bundle targets the wrong governance Safe")
+    if bundle.get("safe_threshold") != 2 or bundle.get("safe_owner_count") != 3:
+        raise PilotError("recorded Safe bundle must retain the 2-of-3 approval boundary")
+    if bundle.get("operation_name") != operation or bundle.get("phase") != phase:
+        raise PilotError("recorded Safe bundle operation metadata does not match its evidence")
+    if bundle.get("human_approval_required") is not True or bundle.get("automatic_submission") is not False:
+        raise PilotError("recorded Safe bundle must require human approval and prohibit automatic submission")
+    transactions = bundle.get("transactions")
+    expected_transactions = 2 if operation in {"pause", "unpause"} else 1
+    if not isinstance(transactions, list) or len(transactions) != expected_transactions:
+        raise PilotError("recorded Safe bundle has an unexpected transaction count")
+    for transaction in transactions:
+        if not isinstance(transaction, dict):
+            raise PilotError("recorded Safe bundle transaction must be an object")
+        require_address(transaction.get("to"), "Safe transaction target")
+        data = require_text(transaction.get("data"), "Safe transaction calldata")
+        if not data.startswith("0x") or transaction.get("value") != "0" or transaction.get("operation") != 0:
+            raise PilotError("recorded Safe transaction encoding is invalid")
+    return bundle
 
 
 def verify_governance(config: PilotConfig, operation: str) -> dict[str, Any]:
@@ -1009,11 +1084,27 @@ def signer_health(config: PilotConfig) -> dict[str, Any]:
         report = json.loads(result.stdout.strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError) as exc:
         raise PilotError("external signer health command did not return summary JSON") from exc
-    if report.get("status") != "ok" or report.get("key_id") != config.signer_key_id:
-        raise PilotError("external signer health report is not approved")
+    validate_signer_health_report(config, report)
     output = config.artifact_directory / "external_signer_health.json"
     write_json_atomic(output, report)
     return report
+
+
+def validate_signer_health_report(config: PilotConfig, report: dict[str, Any]) -> None:
+    if report.get("schema_version") != "stark-external-attestation-signer-health-v1":
+        raise PilotError("external signer health report schema_version is invalid")
+    if report.get("status") != "ok" or report.get("chain_id") != SEPOLIA_CHAIN_ID:
+        raise PilotError("external signer health report is not approved for Sepolia")
+    if report.get("signer_backend") != "external_command":
+        raise PilotError("external signer health report used an unapproved signer backend")
+    if report.get("key_id") != config.signer_key_id:
+        raise PilotError("external signer health report used an unapproved key ID")
+    if normalize_hex(str(report.get("attestor_address", ""))) != config.attestor:
+        raise PilotError("external signer health report used an unexpected attestor")
+    require_bytes32(report.get("request_id"), "external signer health request_id")
+    for field in ("signature_validated", "low_s_validated", "recovery_validated"):
+        if report.get(field) is not True:
+            raise PilotError(f"external signer health report did not prove {field}")
 
 
 def runtime_config(config: PilotConfig, artifact_dir: Path, deployment: dict[str, Any]) -> dict[str, Any]:
@@ -1096,6 +1187,60 @@ def reconcile_canary(
     }
 
 
+def validate_canary_outputs(
+    config: PilotConfig,
+    deployment: dict[str, Any],
+    *,
+    kind: str,
+    receipt: dict[str, Any],
+    adjudication: dict[str, Any],
+    denied_evidence: dict[str, Any] | None,
+) -> None:
+    if kind not in {"approved", "denied"}:
+        raise PilotError("canary kind must be approved or denied")
+    expected_decision = 1 if kind == "approved" else 0
+    if receipt.get("schema_version") != "stark-production-settlement-receipt-v2":
+        raise PilotError("Sepolia canary did not produce a governed V2 receipt")
+    if receipt.get("decision") != expected_decision or receipt.get("finality_mode") != "finalized":
+        raise PilotError(f"{kind} canary decision or finality is invalid")
+    if receipt.get("finalized_on_chain") is not True or receipt.get("groth16_executed") is True:
+        raise PilotError(f"{kind} canary did not preserve the STARK-only finalized boundary")
+    if (
+        receipt.get("proof_locally_verified") is not True
+        or receipt.get("attestation_locally_validated") is not True
+        or receipt.get("controlled_attestation_verification") is not True
+        or receipt.get("native_on_chain_stark_verification") is not False
+    ):
+        raise PilotError(f"{kind} canary did not preserve the controlled-attestation trust boundary")
+    if receipt.get("signer_backend") != "external_command":
+        raise PilotError(f"{kind} canary did not use the approved external signer")
+    if receipt.get("signer_key_id") != config.signer_key_id:
+        raise PilotError(f"{kind} canary used an unapproved signer key ID")
+    if normalize_hex(str(receipt.get("policy_manifest_hash", ""))) != config.policy_manifest_hash:
+        raise PilotError(f"{kind} canary policy hash does not match the approved manifest")
+    if (
+        normalize_hex(str(receipt.get("verifier_address", "")))
+        != normalize_hex(deployment["starkAttestationVerifierV2"])
+        or normalize_hex(str(receipt.get("registry_address", "")))
+        != normalize_hex(deployment["starkClaimsRegistryV2"])
+    ):
+        raise PilotError(f"{kind} canary settled against unexpected contracts")
+    root_before = receipt.get("nullifier_root_before")
+    root_after = receipt.get("nullifier_root_after")
+    if kind == "denied" and root_before != root_after:
+        raise PilotError("denied canary advanced the nullifier root")
+    if kind == "approved" and root_before == root_after:
+        raise PilotError("approved canary did not advance the nullifier root")
+    if kind == "approved":
+        if not isinstance(denied_evidence, dict):
+            raise PilotError("approved canary lacks denied-canary evidence")
+        if root_before != denied_evidence.get("nullifier_root_after"):
+            raise PilotError("approved canary did not start from the finalized denied-canary root")
+    expected_status = "APPROVED" if kind == "approved" else "DENIED"
+    if adjudication.get("status") != expected_status or adjudication.get("tx_submitted") is not True:
+        raise PilotError(f"{kind} adjudication result is inconsistent with the finalized settlement")
+
+
 def run_canary(config: PilotConfig, state: dict[str, Any], kind: str) -> dict[str, Any]:
     require_action(state, "authorize")
     require_action(state, "signer-health")
@@ -1162,43 +1307,14 @@ def run_canary(config: PilotConfig, state: dict[str, Any], kind: str) -> dict[st
     )
     receipt = load_json(artifacts / "settlement_receipt.json")
     adjudication = load_json(work / "adjudication_result.json")
-    expected_decision = 1 if kind == "approved" else 0
-    if receipt.get("schema_version") != "stark-production-settlement-receipt-v2":
-        raise PilotError("Sepolia canary did not produce a governed V2 receipt")
-    if receipt.get("decision") != expected_decision or receipt.get("finality_mode") != "finalized":
-        raise PilotError(f"{kind} canary decision or finality is invalid")
-    if receipt.get("finalized_on_chain") is not True or receipt.get("groth16_executed") is True:
-        raise PilotError(f"{kind} canary did not preserve the STARK-only finalized boundary")
-    if (
-        receipt.get("proof_locally_verified") is not True
-        or receipt.get("attestation_locally_validated") is not True
-        or receipt.get("controlled_attestation_verification") is not True
-        or receipt.get("native_on_chain_stark_verification") is not False
-    ):
-        raise PilotError(f"{kind} canary did not preserve the controlled-attestation trust boundary")
-    if receipt.get("signer_backend") != "external_command":
-        raise PilotError(f"{kind} canary did not use the approved external signer")
-    if receipt.get("signer_key_id") != config.signer_key_id:
-        raise PilotError(f"{kind} canary used an unapproved signer key ID")
-    if str(receipt.get("policy_manifest_hash", "")).lower() != config.policy_manifest_hash:
-        raise PilotError(f"{kind} canary policy hash does not match the approved manifest")
-    if str(receipt.get("verifier_address", "")).lower() != deployment[
-        "starkAttestationVerifierV2"
-    ].lower() or str(receipt.get("registry_address", "")).lower() != deployment[
-        "starkClaimsRegistryV2"
-    ].lower():
-        raise PilotError(f"{kind} canary settled against unexpected contracts")
-    if kind == "denied" and receipt.get("nullifier_root_before") != receipt.get("nullifier_root_after"):
-        raise PilotError("denied canary advanced the nullifier root")
-    if kind == "approved" and receipt.get("nullifier_root_before") == receipt.get("nullifier_root_after"):
-        raise PilotError("approved canary did not advance the nullifier root")
-    if kind == "approved" and receipt.get("nullifier_root_before") != denied_evidence.get(
-        "nullifier_root_after"
-    ):
-        raise PilotError("approved canary did not start from the finalized denied-canary root")
-    expected_status = "APPROVED" if kind == "approved" else "DENIED"
-    if adjudication.get("status") != expected_status or adjudication.get("tx_submitted") is not True:
-        raise PilotError(f"{kind} adjudication result is inconsistent with the finalized settlement")
+    validate_canary_outputs(
+        config,
+        deployment,
+        kind=kind,
+        receipt=receipt,
+        adjudication=adjudication,
+        denied_evidence=denied_evidence,
+    )
     log = artifacts / "runtime_stdout.log"
     log.write_text(result.stdout + result.stderr, encoding="utf-8")
     reconciliation = reconcile_canary(
@@ -1446,25 +1562,19 @@ def main() -> int:
         elif args.action == "prepare-safe":
             if not args.operation:
                 raise PilotError("prepare-safe requires --operation")
+            require_safe_action_prerequisites(state, args.operation, args.phase)
             action_name = f"prepare-{args.operation}-{args.phase}"
             completed = state.get("completed_actions", {}).get(action_name)
             if isinstance(completed, dict):
                 evidence = completed["evidence"]
-                bundle_path = ROOT / evidence["bundle"]
-                if not bundle_path.is_file() or sha256_file(bundle_path) != evidence.get(
-                    "bundle_sha256"
-                ):
-                    raise PilotError(f"recorded Safe bundle is missing or changed: {bundle_path}")
+                validate_recorded_safe_bundle(config, evidence)
             else:
                 evidence = safe_bundle(config, args.operation, args.phase)
                 record_action(config, state, action_name, evidence)
         elif args.action == "verify-governance":
             if not args.operation:
                 raise PilotError("verify-governance requires --operation")
-            if args.operation == "pause":
-                require_action(state, "reconcile")
-            elif args.operation == "unpause":
-                require_action(state, "pause")
+            require_governance_verification_prerequisites(state, args.operation)
             evidence = verify_governance(config, args.operation)
             record_action(config, state, args.operation, evidence)
         elif args.action == "signer-health":

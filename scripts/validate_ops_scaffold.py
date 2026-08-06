@@ -94,6 +94,7 @@ def validate_launch_blockers(data: dict[str, Any]) -> None:
         raise ValidationError("launch_blockers.json must include at least one blocker")
 
     open_blockers = 0
+    blockers_by_id: dict[str, dict[str, Any]] = {}
     for index, blocker in enumerate(blockers):
         if not isinstance(blocker, dict):
             raise ValidationError(f"launch blocker {index} must be an object")
@@ -104,11 +105,31 @@ def validate_launch_blockers(data: dict[str, Any]) -> None:
         require_nonempty_string(
             blocker.get("exit_criteria"), f"launch blocker {index}.exit_criteria"
         )
+        if blocker["id"] in blockers_by_id:
+            raise ValidationError(f"duplicate launch blocker ID: {blocker['id']}")
+        blockers_by_id[blocker["id"]] = blocker
         if blocker["status"] == "open":
             open_blockers += 1
 
     if open_blockers == 0:
         raise ValidationError("launch_blockers.json must include at least one open blocker")
+
+    attested = blockers_by_id.get("LB-001")
+    native = blockers_by_id.get("LB-008")
+    if not isinstance(attested, dict) or not isinstance(native, dict):
+        raise ValidationError("launch blockers must define both attested and native STARK tracks")
+    if (
+        attested.get("release_track") != "governed_stark_attested"
+        or attested.get("blocks_governed_attested_pilot") is not True
+        or attested.get("status") != "open"
+    ):
+        raise ValidationError("LB-001 must remain the active governed-attestation release blocker")
+    if (
+        native.get("release_track") != "native_evm_winterfell"
+        or native.get("blocks_governed_attested_pilot") is not False
+        or native.get("status") != "future_optional"
+    ):
+        raise ValidationError("LB-008 must remain an optional inactive native-verifier track")
 
 
 def validate_monitoring_events(data: dict[str, Any]) -> None:

@@ -3,11 +3,13 @@
   "blockers": [
     {
       "id": "LB-001",
-      "title": "Production native STARK prover and verifier",
+      "title": "Governed controlled-attestation STARK production approval",
       "status": "open",
       "owner": "cryptography_engineering",
       "external_required": true,
-      "exit_criteria": "Real production STARK proof generation and native verifier verification pass audited acceptance tests."
+      "release_track": "governed_stark_attested",
+      "blocks_governed_attested_pilot": true,
+      "exit_criteria": "Pinned local Winterfell proof generation and verification, governed attestation settlement, finalized reconciliation, and independent audit acceptance all pass."
     },
     {
       "id": "LB-002",
@@ -59,10 +61,12 @@
     },
     {
       "id": "LB-008",
-      "title": "Native Winterfell EVM verifier activation gates",
-      "status": "open",
+      "title": "Optional native Winterfell EVM verifier activation gates",
+      "status": "future_optional",
       "owner": "cryptography_engineering",
       "external_required": true,
+      "release_track": "native_evm_winterfell",
+      "blocks_governed_attested_pilot": false,
       "exit_criteria": "Transcript and FRI parity, EIP-170 bytecode, gas below half the target block limit, adversarial vectors, and independent cryptographic and Solidity audits all pass."
     }
   ]
