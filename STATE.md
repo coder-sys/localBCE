@@ -9,11 +9,11 @@ Gate 2E is sealed as a nonactivating candidate context. H5 passed the exact 22-l
 K128 p95 32.360845 seconds and K512 p95 148.861885 seconds. H6 then closed all twelve bounded
 candidate-evidence records. The production suite is still unselected: `proofSuiteId=null`,
 activation is false, production verifier/state/custody and rollup work remain open, the final audit
-has not started, and real PHI/payments remain forbidden. Wave 3 P01-P12 internal engineering and
-Wave 4 I01-I08/O01-O06/O12 adapter/operations engineering are complete but nonactivating. Progress
-Wave 5 R01-R12 is also complete internally through the local/synthetic based-rollup and recovery
-boundary, and the Wave 2 internal fixed-K/12-field/sidecar reference seam is now executable without
-changing activation. Progress is 45 of 93 packages complete and 48 remain open.
+has not started, and real PHI/payments remain forbidden. Wave 1 remains sealed as a synthetic,
+nonactivating relation. Wave 3 P01-P12, Wave 4 I01-I08/O01-O06/O12, Wave 5 R01-R12, and the
+remaining Wave 2 internal fixed-K/12-field/sidecar reference packages are complete at the
+local/synthetic, nonactivating engineering boundary. The reconciled internal ledger is 93 of 93
+packages complete and 0 open; this is not production activation or production assurance.
 
 The native K512 coordinator now defaults to two independent lanes for the native boundary, including
 suite-bound runs; `BL_SHARD_CONCURRENCY=1` is the explicit serial fallback. The separate exact
@@ -22,6 +22,41 @@ gates with K512 p95 101.798191 seconds, so the execution mode is qualified as no
 evidence only. Four fresh current-checkout refresh attempts were rejected by the unchanged
 pagefile-growth gate and receive no H5/H6 or production credit. The sealed serial H5/H6 evidence
 remains unchanged.
+
+## Current internal completion and closeout receipt (2026-08-05)
+
+The authoritative internal completion check reports `internal_engineering_packages=93`,
+`internal_complete=93`, `internal_open=0`, and `open_package_ids=[]`. The result is
+`INTERNAL_CONFORMANCE_RECONCILED_NONACTIVATING`; `activation_allowed=false`,
+`proofSuiteId=null`, live credentials are false, and network access is false. The remaining
+conformance receipt likewise reports all 31 packages in its scoped ledger as
+`COMPLETE_INTERNAL_NONACTIVATING`, preserves the exact ordered 12-field public boundary, and
+keeps `private_public_payload=false` and `security_ledger_qualifies=true`. Its native hiding
+receipt still records these four candidate coverage gaps rather than claiming theorem closure:
+`FINAL_CIRCLE_SPLIT_LOG_DEGREE_AND_PROVER_INTEGRATION`,
+`FINAL_SHA3_AIR_INTERACTION_ORACLE_DIMENSIONS`,
+`FINAL_MULTI_DOMAIN_FRI_ORACLE_WIDTHS_AFTER_SHA3_AIR_EXPANSION`, and
+`INTERACTIVE_CIRCLE_SIMULATOR_TRANSCRIPT`. The backend remains non-production because
+`production_native_stark_verifier=false`; the preserved production blockers are LB-001,
+LB-002, LB-003, LB-004, LB-005, LB-006, LB-007, LB-009, and LB-010.
+
+The Python suite collected 1,733 tests across 204 test modules. Deterministic bounded file-group
+runs covered all 204 modules: every completed group passed after the stale roadmap expectation was
+corrected, with one intentional skip and only the documented local-development/deprecation
+warnings. The monolithic `pytest -q tests` command timed out after 30 minutes and receives no
+pass credit. The focused reconciliation lane passed 56 tests in 24.49 seconds. The Rust core
+passed formatting, offline locked release checking, Clippy with warnings denied, and its release
+test suite: 303 library tests passed with no failures, alongside the reported binary/doc-test
+groups. The K512 two-lane candidate campaign remains nonactivating evidence (`p95=101.798191`
+seconds, four shards per run, zero scratch/pagefile/driver/stderr signals); fresh refresh attempts
+that tripped the unchanged pagefile gate receive no qualification credit.
+
+The three published Source-Complete ZIP targets were rebuilt from the reviewed 803-file allowlist
+and independently checked as 804-entry archives with no duplicate names, forbidden generated/state
+paths, or payload hash mismatches. All three now have 12,024,082 bytes and SHA-256
+`f38bf1dae26811ab8d08e996d357998236e671b96ba39d0f07bf5248a54ed6ce`. The prior three published
+copies remain preserved under the external closeout backup. Archive refresh does not change the
+nonactivating boundary, and no protected repository paths were edited.
 
 ## Current execution boundary
 
