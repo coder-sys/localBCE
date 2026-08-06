@@ -100,8 +100,8 @@ def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() ->
     planning = payload["planning_model"]
     assert planning == {
         "internal_engineering_packages": 93,
-        "internal_complete": 45,
-        "internal_open": 48,
+        "internal_complete": 93,
+        "internal_open": 0,
         "external_assurance_gates": 1,
         "release_candidate_state": "NOT_DEPLOYMENT_READY",
         "proof_suite_state": "UNSELECTED",
