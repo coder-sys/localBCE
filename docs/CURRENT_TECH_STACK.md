@@ -715,7 +715,7 @@ helpers; name cleanup must never change proof bytes or silently drop an authenti
 
 ## Evidence currently required to remain green
 
-- 264 optimized Rust library tests, zero failures, zero ignored, plus every remaining binary and
+- 307 optimized Rust library tests, zero failures, zero ignored, plus every remaining binary and
   doc-test group;
 - release format check, locked/offline build, no-default/no-std check, and strict all-target Clippy
   with warnings denied;

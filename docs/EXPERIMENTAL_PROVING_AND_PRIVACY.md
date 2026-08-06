@@ -8,8 +8,11 @@ be projected onto that complete proof.
 
 ## Scope
 
-These changes exist only in the separate architecture workspace. The Desktop, Downloads, and
-OneDrive release ZIPs were not modified. Existing production entrypoints remain available.
+At the time of this 2026-07-31 historical record, these application experiments existed only in
+the separate architecture workspace, and the then-published Desktop, Downloads, and OneDrive
+release ZIPs were not modified. The current source-complete release state is recorded separately
+in the newest `STATE.md` section and its later archive receipts; this historical experiment note
+does not override that current record. Existing production entrypoints remain available.
 
 ## Contract-ready encrypted audit data
 

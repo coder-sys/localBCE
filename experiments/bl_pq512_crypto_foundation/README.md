@@ -40,12 +40,12 @@ testable without pretending that a proof suite exists.
   exact FIPS padding, a 1,632-column/1,024-lookup round core, and the full 1,704-column/1,096-first-
   round-lookup sponge envelope.
 - `application_sha3_port_inventory.py` independently enumerates both governed source trees and
-  AST-locks 79/79 SHA3 callsites: 39 `AIR_REQUIRED`, five public-precomputed, 21 host-evidence-only,
-  11 Wave-1C verifier-state, and three superseded-reference sites. H0 dynamically remeasured all five
+  AST-locks 89/89 SHA3 callsites: 39 `AIR_REQUIRED`, five public-precomputed, 29 host-evidence-only,
+  13 Wave-1C verifier-state, and three superseded-reference sites. H0 dynamically remeasured all five
   post-R36 additions, including a separate exact 238-byte cover-v2 helper observation and the four
   K128 physical-trace payment-key observations.
   The current inventory identity is
-  `618c06447efc67bca80ca9bb4c59a89970e7c42a26ea6a45a298c8dc8e1e8b2643f3c51a923d1b89ebb6a2311dc22edfffeea70471a9f97c5378b8a43fb607c2`.
+  `f583d02e68c3de7b7b946b1decb620757f04b1cb0850fa23660f8e8965b611f111b4075c8ad8b6c246fde2c3732ab9c90effd6d17ccaf3d820f261825d1fa992`.
   New governed files plus alias, attribute, `hashlib.new`, dynamic-import, and dynamic-`getattr` forms
   fail closed. The old `51*K` rerun remains superseded audit evidence only; current K128 bus mapping
 and current H5/H6 evidence are recorded in the current Wave 2 documents.
@@ -94,6 +94,14 @@ and current H5/H6 evidence are recorded in the current Wave 2 documents.
 - `h6_qualification_preflight.py` replays the qualified H5/2E context, validates the unselected
   production-suite registry, and records all twelve H6 obligations. The current candidate record
   is `QUALIFIED_H6_NONACTIVATING`; it cannot assign `proofSuiteId` or enable activation.
+- `wave3_nullifier_authority.py`, `wave3_verifier_state_custody.py`, and `wave3_full_internal.py`
+  provide the complete internal, nonactivating P01-P12 state/verifier/custody boundary:
+  dual-root replay, exact 256-slot batch plus hidden salt-use replay, canonical sidecar/proof
+  envelope, full S10 tuple, private payment-root recomputation, durable governed registry,
+  local Rust binding verification, migration/upgrade/rollback/recovery, digest-only custody
+  evidence, dual-PQ rotation/conformance ports, and the software ML-KEM/AES envelope. Production
+  `INativeStarkVerifier`, HSM/FIPS custody, external anti-rollback, suite selection, and activation
+  remain open.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

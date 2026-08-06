@@ -220,8 +220,10 @@ fn build_plan_in_directory(
                 log_size,
                 rows,
                 query,
-                values[column_index],
-                conjugate_values[column_index],
+                DeepColumnClaims {
+                    value: values[column_index],
+                    conjugate_value: conjugate_values[column_index],
+                },
                 directory,
                 column_index,
             )
@@ -269,7 +271,7 @@ where
             .map_or(1, std::num::NonZeroUsize::get)
             .min(8)
             .min(count);
-        return std::thread::scope(|scope| {
+        std::thread::scope(|scope| {
             let handles = (0..worker_count)
                 .map(|worker| {
                     let work = &work;
@@ -297,7 +299,7 @@ where
                 .into_iter()
                 .map(|value| value.ok_or(DiskDeepError::Shape))
                 .collect()
-        });
+        })
     }
     #[cfg(not(feature = "parallel"))]
     {
@@ -336,18 +338,30 @@ fn build_deep_column_claims(
     Ok((value, conjugate_value, maximum_used))
 }
 
+#[derive(Clone, Copy)]
+struct DeepColumnClaims {
+    value: Fp16,
+    conjugate_value: Fp16,
+}
+
 fn build_deep_column_quotient(
     source: DiskOriginalColumn,
     log_size: u8,
     rows: usize,
     query: CirclePoint,
-    value: Fp16,
-    conjugate_value: Fp16,
+    claims: DeepColumnClaims,
     directory: &Path,
     column_index: usize,
 ) -> Result<usize, DiskDeepError> {
     let quotient = directory.join(format!("quotient-l{log_size:02}-c{column_index:08x}.fp16"));
-    write_quotient_evaluations(&source, log_size, query, value, conjugate_value, &quotient)?;
+    write_quotient_evaluations(
+        &source,
+        log_size,
+        query,
+        claims.value,
+        claims.conjugate_value,
+        &quotient,
+    )?;
     interpolate_extension_circle_file_in_place(&quotient, log_size)?;
     let maximum_used = last_nonzero(&quotient, rows)?;
     fs::remove_file(quotient)?;

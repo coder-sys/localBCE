@@ -1,10 +1,12 @@
-# Legacy Hint-MLWE 392-bit feasibility gate
+# Retired Hint-MLWE 392-bit feasibility reference
 
-This isolated experiment records the former 392-bit acceptance profile. The live release criterion
-is now a 256-bit cryptographic security/encryption floor and a 5,000,000,000-byte peak-RAM ceiling.
-The directory name and historical bounds are retained so past results and imports remain
-reproducible. This isolated experiment was the first implementation step for evaluating a
-rejection-free Hint-MLWE commit-and-prove redesign under the frozen BL-PQ512
+This isolated experiment records the former 392-bit acceptance profile. It is retained for
+historical and research reference only; it is not an active Gate 2E control, release gate, proof
+backend, or selected suite. The live release criterion is now a 256-bit cryptographic
+security/encryption floor and a 5,000,000,000-byte peak-RAM ceiling. The directory name and
+historical bounds are retained so past results and imports remain reproducible. This isolated
+experiment was the first implementation step for evaluating a rejection-free Hint-MLWE
+commit-and-prove redesign under the frozen BL-PQ512
 requirements.
 
 It does three deliberately narrow things:
@@ -42,11 +44,10 @@ Run the source audit:
 python -m experiments.bl_pq512_hint_mlwe_392.source_audit <upstream-checkout>
 ```
 
-Run the focused tests:
-
-```powershell
-python -m pytest -q tests/test_bl_pq512_hint_mlwe_392_parameter_gate.py
-```
+The former focused pytest gate was removed from active collection during the 2026-08-05 gate/test
+cleanup because no current Wave 2 module, qualification manifest, or production boundary consumes
+this path. The reference source and its rejection rationale remain available here and in
+`docs/REJECTED_ARCHITECTURES.md`; removing the active test does not admit the construction.
 
 Run the pinned full-attack baseline screen from the lattice-estimator checkout
 with that checkout on `PYTHONPATH`:

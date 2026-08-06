@@ -32,7 +32,7 @@ machinery, not alternate proof backends.
 | --- | ---: | ---: |
 | Live claims | 100 | 500 |
 | Semantic SHA3 calls | 46,858 | 165,762 |
-| Shards | 1 | 4 ordered sequential in the sealed H4/qualified-suite baseline |
+| Shards | 1 | 4 ordered; the native coordinator defaults to at most two independent lanes |
 | Padded permutations/shard | 131,072 | 131,072 |
 | Live input wires/permutation | 1,600 | 1,600 |
 | `BLHBB101` bytes | 52,429,015 | 209,715,415 |
@@ -152,10 +152,11 @@ name alone; trace imports, manifest identity, tests, codecs, and verifier consum
 - Upload immutable topology once per worker.
 - Read the semantic file once and derive same-source aliases.
 - Start Python proof workers with `-S` and manifest-bound local imports only.
-- Keep K512 shards sequential on one GPU with independent challenge streams when a qualified suite
-  identity is present. When no suite identity is present, the native experimental coordinator may
-  select two independent lanes by default; its fresh default launches failed the external pagefile
-  gate and receive no H5/H6 or production credit.
+- Keep K512 shard proofs independent, ordered, and capped at two concurrent native lanes. Set
+  `BL_SHARD_CONCURRENCY=1` to reproduce the sealed serial H4/H5 boundary. The two-lane path is now
+  the native coordinator's active execution mode, including when a suite identity is supplied, but
+  the existing serial H5/H6 evidence receives no retroactive credit and the external no-swap gate
+  remains authoritative.
 
 Before any production CUDA proof, audit the Windows System log and establish a clean reset
 boundary. The 56-layer experiment faulted at layer 54 and produced `nvlddmkm` Event 153; this is a
@@ -202,7 +203,10 @@ seconds for K512. The current candidate record is
 Production work is still open: the authoritative verifier, durable state and custody, release
 identities, and final audit have not been completed. Therefore `proofSuiteId=null`,
 activation is false, and real PHI/payments remain forbidden. The native coordinator's two-lane
-default is an unqualified experiment; it receives no H5/H6 or production credit.
+default is active native execution, but it remains nonactivating; the existing serial H5/H6
+evidence receives no retroactive credit. The separate parallel campaign evidence validator
+qualifies the captured two-lane execution mode only; `proofSuiteId` remains null and production
+activation remains false.
 
 The pre-manifest H5/H6 records below are preserved as historical evidence. They explain the
 earlier blocked boundary and must not be read as the current status.

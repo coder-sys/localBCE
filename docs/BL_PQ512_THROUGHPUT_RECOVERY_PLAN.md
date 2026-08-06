@@ -9,8 +9,11 @@ non-executable and belong in `REJECTED_ARCHITECTURES.md`.
 
 Current status: Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6
 closed the twelve bounded candidate-evidence obligations. The production suite remains unselected,
-`proofSuiteId=null`, and activation is false. The two-lane native K512 experiment is a separate
-nonqualifying optimization candidate.
+`proofSuiteId=null`, and activation is false. The two-lane native K512 coordinator is now the
+active bounded native execution mode; its qualification and production activation boundaries
+remain separate. The captured exact two-lane K512 campaign is now validated by the dedicated
+parallel evidence contract as nonactivating execution-mode evidence; positive pagefile growth,
+swap, and resource violations remain hard rejection conditions.
 
 ## 1. Objective
 
@@ -106,7 +109,8 @@ proof shape by witness class, or moves cost outside the measured boundary.
 - One-pass semantic source consumption.
 - Canonical plan transport and immutable topology upload once per worker.
 - One active plus exactly one future 48-layer worker.
-- Sequential K512 shards on one GPU, each with an independent challenge stream.
+- At most two concurrent K512 shard workers on one GPU, each with an independent challenge stream;
+  `BL_SHARD_CONCURRENCY=1` reproduces the sealed serial evidence boundary.
 - CUDA arithmetic overlapped only where transcript dependencies allow.
 - Rust-owned masks, challenges, commitments, multiproofs, targets, replay, and acceptance.
 
@@ -202,7 +206,7 @@ principles. Do not tune unrelated components.
 - BaseFold, zkDeepFold, Circle-FRI, and incomplete legacy grammars as active PCS paths;
 - B=64, merged characteristic-two layers, and scalar full-source replay;
 - conjecture-dependent query reductions;
-- theorem-free K512 challenge sharing or four-way shard residency;
+- shared-challenge K512 execution, unbounded shard parallelism, or four-way shard residency;
 - a second full semantic source, row table, or codeword owner;
 - host-trusted comparison of independently produced roots;
 - increasing worker lifetime beyond the verified 48-layer bound; and

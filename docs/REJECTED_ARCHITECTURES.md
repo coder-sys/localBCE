@@ -109,6 +109,27 @@ independently verified lifetime architecture that never owns the aggregate oracl
 preserves openings/composition/DEEP verification exactly, beats the complete H4 boundary, and
 passes the unchanged scratch gate. A model or plan alone cannot restore eligibility.
 
+## Retired Hint-MLWE 392-bit gate and hidden-state affine screen
+
+Decision: retained as reference source only; removed from active test collection.
+
+The `experiments/bl_pq512_hint_mlwe_392/` directory records the former 392-bit feasibility
+profile and its hidden-state affine projection. It is not the current 256-bit security ledger,
+the selected Construction 8.2 proof path, a production commitment backend, or a Gate 2E/H5/H6
+qualification input. It lacks the complete reduction/composition theorem, reviewed estimator
+evidence, authenticated interactive transcript proof, and qualified K128/K512 resource evidence.
+Its positive tests therefore supplied no current release or trust-boundary protection and were
+removed from active pytest collection on 2026-08-05. The source, README, historical bounds, and
+rejection rationale remain available for reference; the removal does not promote or activate this
+construction.
+
+The standalone positive `oracle_layout_optimizer` tests were also removed from active collection.
+Their expected optimizer identity and profile minima were stale (the focused run reported 54
+passes and 2 failures), and no current selected producer, verifier, manifest, or qualification
+record imports that optimizer. The source and attack-side hard-boundary rejection tests remain,
+so removing the stale positive gate does not remove the current rejection evidence or admit the
+generic typed-AIR oracle lifetime route.
+
 ## Quadratic all-pairs state-key uniqueness as the H4 relation
 
 Decision: rejected as the selected H4 uniqueness architecture; retained as an executable

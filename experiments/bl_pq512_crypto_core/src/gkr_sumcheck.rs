@@ -2999,7 +2999,12 @@ fn shared_group_round_polynomial(
     let suffix_count = remaining_weights[0].len();
     let compute = |start: usize, end: usize| -> Result<[Fp16; 4], ProductSumcheckError> {
         let mut coefficients = [Fp16::ZERO; 4];
-        for suffix in start..end {
+        for (suffix, _) in remaining_weights[0]
+            .iter()
+            .enumerate()
+            .take(end)
+            .skip(start)
+        {
             let left_zero_group = 2 * suffix * layer.left_width;
             let left_one_group = left_zero_group + layer.left_width;
             let right_zero_group = 2 * suffix * layer.right_width;

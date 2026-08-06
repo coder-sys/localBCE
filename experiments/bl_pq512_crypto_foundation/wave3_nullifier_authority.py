@@ -658,7 +658,28 @@ class Wave3WideNullifierTreeV1:
     def prove_nonmembership(self, record: Wave3DualDerivedRecordV1) -> Wave3WideTransitionWitnessV1:
         if type(record) is not Wave3DualDerivedRecordV1:
             raise TypeError("wave3_dual_record_required")
-        nullifier = record.strong_key_512
+        return self.prove_value_nonmembership(
+            record.strong_key_512,
+            record_type=record.record.record_type,
+        )
+
+    def prove_value_nonmembership(
+        self,
+        value: bytes,
+        *,
+        record_type: int,
+    ) -> Wave3WideTransitionWitnessV1:
+        """Prove insertion of a full-width replay value without a legacy lane.
+
+        The hidden master-salt-use key is intentionally strong-only.  It is
+        part of the authoritative replay root, but it is not an A12 claim or
+        cover record and therefore must not be fabricated into the legacy
+        compatibility tree.
+        """
+
+        nullifier = _bytes("strong_only_value", value, WIDE_BYTES, nonzero=True)
+        if record_type not in {RECORD_ATTEMPT, RECORD_COVER}:
+            raise Wave3NullifierError("wave3_strong_only_record_type_invalid")
         if self.contains(nullifier):
             raise Wave3NullifierError("wave3_strong_nullifier_already_present")
         predecessor, successor = self._predecessor_successor(nullifier)
@@ -680,7 +701,7 @@ class Wave3WideNullifierTreeV1:
             nullifier,
             successor.value,
             successor.index,
-            record.record.record_type,
+            record_type,
         )
         after._value_to_index[nullifier] = inserted_index
         insort(after._sorted_values, nullifier)
@@ -693,7 +714,7 @@ class Wave3WideNullifierTreeV1:
             root_before,
             root_after,
             nullifier,
-            record.record.record_type,
+            record_type,
             predecessor.index,
             predecessor.value,
             predecessor.record_type,
@@ -896,6 +917,39 @@ class Wave3NullifierAuthorityV1:
             self._records[transition.record.strong_key_512] = transition.record
             self._sequence += 1
             return staged
+
+    def prepare_strong_only_transition(
+        self,
+        value: bytes,
+        *,
+        record_type: int = RECORD_COVER,
+    ) -> Wave3WideTransitionWitnessV1:
+        """Stage a replay-root-only insertion such as the hidden salt-use key."""
+
+        with self._lock:
+            return self._wide.prove_value_nonmembership(
+                value,
+                record_type=record_type,
+            )
+
+    def commit_strong_only(
+        self,
+        witness: Wave3WideTransitionWitnessV1,
+    ) -> Wave3StateSnapshotV1:
+        """Commit a strong-only insertion without advancing the legacy lane."""
+
+        if type(witness) is not Wave3WideTransitionWitnessV1:
+            raise TypeError("wave3_strong_only_witness_type_invalid")
+        verify_wave3_wide_transition(witness)
+        with self._lock:
+            if self._wide.root_512 != witness.root_before_512:
+                raise Wave3NullifierError("wave3_strong_only_state_stale_snapshot")
+            staged_wide = self._wide.clone()
+            staged_wide.insert(witness.nullifier_512, record_type=witness.record_type)
+            if staged_wide.root_512 != witness.root_after_512:
+                raise Wave3NullifierError("wave3_strong_only_staged_root_mismatch")
+            self._wide = staged_wide
+            return self._snapshot_unlocked()
 
 
 __all__: tuple[str, ...] = (

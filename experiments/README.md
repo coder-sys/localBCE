@@ -14,7 +14,8 @@ because they are not imported by or compatible with the selected proof boundary.
 - `fixed_shape_claim_air/`: sealed, nonactivating semantic relation and exact hash-call schedule.
 - `bl_pq512_crypto_foundation/`: current cross-language semantic and cryptographic references.
 - `bl_pq512_crypto_core/`: authoritative Rust proof core plus untrusted CUDA workers.
-- `bl_pq512_hint_mlwe_392/`: Gate 2E state/commitment research controls only; not a selected suite.
+- `bl_pq512_hint_mlwe_392/`: Retired Gate 2E state/commitment research reference only; not an
+  active gate or selected suite.
 
 Removed backend evidence is retained in `../docs/REJECTED_ARCHITECTURES.md` and Git history, not as
 buildable alternative stacks.

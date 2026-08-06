@@ -474,6 +474,25 @@ swaps them together. This is useful P01-P03 implementation evidence only: no pro
 selected, no production verifier or durable anti-rollback custody exists, and the candidate is
 not an activation or Gate 2E admission.
 
+### Current Wave 3 verifier/state/custody internal boundary
+
+The P04-P12 internal engineering boundary is implemented in
+`experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py`. It keeps the ordered
+12-field boundary and exact 744-byte sidecar, authenticates manifest-derived governed wide roots
+with an append-only registry and dual ML-DSA/SLH-DSA signatures, derives the existing SHA3-512
+master commitments from the same canonical inputs plus a private fresh-salt use tag, and rejects
+production proof work before an active suite/profile exists. The private state file is bounded and
+canonical, replays all stored raw A12 preimages through P01-P03, publishes the legacy and wide roots
+atomically, binds an accepted proof/sidecar/verifier context in the same state payload, and verifies
+readback after apply, migration, upgrade, and known-checkpoint rollback. Signed recovery anchors,
+dual-PQ authority rotation/conformance, and the ML-KEM-1024/AES-256-GCM envelope bind the custody
+identities without serializing plaintext.
+
+This closes the internal P04-P12 engineering packages while remaining nonactivating: the authority
+ports and KEM are software/reference only, not HSM-backed or FIPS-validated; no production native
+verifier, proof-suite identity, activation profile, external anti-rollback authority, or final
+independent audit is present. The internal boundary does not close those production gates.
+
 ### Governed roots
 
 Each claim-source, oracle-facts, policy, and ruleset root is registered as an immutable tuple:
@@ -601,7 +620,7 @@ prover integration, and complete interactive simulator remain open. A separate b
 SHA3-512 AIR reference executes FIPS KATs in both languages and freezes a 1,632-column/1,024-lookup
 core and 1,704-column/1,096-first-round-lookup sponge envelope at composed degree 3. Historical
 inventory checkpoints classified 52 and later 50 live SHA3 callsites, followed by an interim 55-site
-drift reconciliation. H0 now independently enumerates both governed source trees, reconciles 79/79
+drift reconciliation. H0 now independently enumerates both governed source trees, reconciles 89/89
 callsites, classifies 39 `AIR_REQUIRED`, dynamically measures all five post-R36 additions, and rejects
 new-file and noncanonical SHA3-512 bypasses. H4 later binds that inventory to the exact `BLHBB101`
 source and closes one-run K128/K512 bus-mapping/resource evidence. Both

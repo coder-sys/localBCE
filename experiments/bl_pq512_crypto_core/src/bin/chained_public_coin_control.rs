@@ -9,10 +9,13 @@ use bl_pq512_crypto_core::fp16_relay_free_gkr_schedule::{
     COMBINED_ROUNDS as ARCHITECTURE_ROUNDS, GKR_CLAIM_MIX_ROUNDS, GKR_GROUP_ROUNDS_PER_LAYER,
     GKR_LAYERS, GKR_MASK_BATCH_ROUNDS, GKR_OUTPUT_QUERY_ROUNDS, GKR_ROUNDS,
     GKR_WIRE_ROUNDS_PER_KECCAK_ROUND, KECCAK_ROUNDS, PCS_DOWNSTREAM_ROUNDS as PCS_VECTOR_ROUNDS,
-    STATE_RELATION_ROUNDS, SelectedGkrRoundKind, WIRE_ROUNDS_BY_LAYER, selected_gkr_round_kind,
-    selected_gkr_round_output_count,
+    STATE_MASK_BATCH_ROUNDS, STATE_RELATION_ROUNDS, SelectedGkrRoundKind, WIRE_ROUNDS_BY_LAYER,
+    selected_gkr_round_kind, selected_gkr_round_output_count,
 };
 use sha3::{Digest, Sha3_512};
+
+const STATE_COMPOSED_MASK_BATCH_KIND: u16 = 143;
+const STATE_RELATION_OUTPUT_COUNT: u16 = 19;
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -42,7 +45,8 @@ fn descriptor(round: u32, round_count: u32) -> ChainedRoundDescriptor {
                     .expect("GKR output count is total"),
             };
         }
-        if round < GKR_ROUNDS + STATE_RELATION_ROUNDS {
+        let state_relation_end = GKR_ROUNDS + STATE_RELATION_ROUNDS;
+        if round < state_relation_end {
             let state_round = round - GKR_ROUNDS;
             return ChainedRoundDescriptor {
                 kind: if state_round == 0 {
@@ -53,10 +57,21 @@ fn descriptor(round: u32, round_count: u32) -> ChainedRoundDescriptor {
                     122
                 },
                 ordinal: round,
-                output_count: if state_round == 0 { 18 } else { 1 },
+                output_count: if state_round == 0 {
+                    STATE_RELATION_OUTPUT_COUNT
+                } else {
+                    1
+                },
             };
         }
-        let pcs_round = round - GKR_ROUNDS - STATE_RELATION_ROUNDS;
+        if round < state_relation_end + STATE_MASK_BATCH_ROUNDS {
+            return ChainedRoundDescriptor {
+                kind: STATE_COMPOSED_MASK_BATCH_KIND,
+                ordinal: round,
+                output_count: 1,
+            };
+        }
+        let pcs_round = round - state_relation_end - STATE_MASK_BATCH_ROUNDS;
         return ChainedRoundDescriptor {
             kind: match pcs_round {
                 0 => 799,
@@ -78,6 +93,8 @@ fn descriptor(round: u32, round_count: u32) -> ChainedRoundDescriptor {
 }
 
 fn message(round: u32, round_count: u32) -> Vec<u8> {
+    let state_relation_end = GKR_ROUNDS + STATE_RELATION_ROUNDS;
+    let state_mask_batch_end = state_relation_end + STATE_MASK_BATCH_ROUNDS;
     let length = if round_count == ARCHITECTURE_ROUNDS && round > 0 && round < GKR_ROUNDS {
         match selected_gkr_round_kind(round).expect("GKR round kind is total") {
             SelectedGkrRoundKind::PackedBridge => 46 * 64,
@@ -90,7 +107,7 @@ fn message(round: u32, round_count: u32) -> Vec<u8> {
         }
     } else if round_count == ARCHITECTURE_ROUNDS
         && round >= GKR_ROUNDS
-        && round < GKR_ROUNDS + STATE_RELATION_ROUNDS
+        && round < state_relation_end
     {
         if round == GKR_ROUNDS {
             64 + 64 + 2
@@ -99,8 +116,13 @@ fn message(round: u32, round_count: u32) -> Vec<u8> {
         } else {
             64 + 2 + 3 * 64
         }
-    } else if round_count == ARCHITECTURE_ROUNDS && round >= GKR_ROUNDS + STATE_RELATION_ROUNDS {
-        match round - GKR_ROUNDS - STATE_RELATION_ROUNDS {
+    } else if round_count == ARCHITECTURE_ROUNDS
+        && round >= state_relation_end
+        && round < state_mask_batch_end
+    {
+        64
+    } else if round_count == ARCHITECTURE_ROUNDS && round >= state_mask_batch_end {
+        match round - state_mask_batch_end {
             // The last GKR challenge is reused as the partial bridge's claim batching
             // challenge. The first downstream message fixes those claims and
             // that challenge before the independent coordinate batching
@@ -239,14 +261,29 @@ mod tests {
         assert_eq!(GKR_LAYERS, 168);
         assert_eq!(GKR_ROUNDS, 6_073);
         assert_eq!(PCS_VECTOR_ROUNDS, 13);
-        assert_eq!(STATE_RELATION_ROUNDS, 25);
+        assert_eq!(STATE_RELATION_ROUNDS, 26);
+        assert_eq!(STATE_MASK_BATCH_ROUNDS, 1);
         assert_eq!(ARCHITECTURE_ROUNDS, 6_113);
         assert_eq!(descriptor(0, ARCHITECTURE_ROUNDS).output_count, 27);
+        let mask_batch_round = GKR_ROUNDS + STATE_RELATION_ROUNDS;
+        assert_eq!(
+            descriptor(mask_batch_round, ARCHITECTURE_ROUNDS),
+            ChainedRoundDescriptor {
+                kind: STATE_COMPOSED_MASK_BATCH_KIND,
+                ordinal: mask_batch_round,
+                output_count: 1,
+            }
+        );
+        assert_eq!(
+            descriptor(GKR_ROUNDS, ARCHITECTURE_ROUNDS).output_count,
+            STATE_RELATION_OUTPUT_COUNT
+        );
     }
 
     #[test]
     fn downstream_pcs_descriptors_are_complete_and_ordered() {
-        let kinds = ((GKR_ROUNDS + STATE_RELATION_ROUNDS)..ARCHITECTURE_ROUNDS)
+        let pcs_start = GKR_ROUNDS + STATE_RELATION_ROUNDS + STATE_MASK_BATCH_ROUNDS;
+        let kinds = (pcs_start..ARCHITECTURE_ROUNDS)
             .map(|round| descriptor(round, ARCHITECTURE_ROUNDS).kind)
             .collect::<Vec<_>>();
         assert_eq!(
@@ -275,10 +312,22 @@ mod tests {
         assert_eq!(message(GKR_ROUNDS + 1, ARCHITECTURE_ROUNDS).len(), 322);
         assert_eq!(
             message(GKR_ROUNDS + STATE_RELATION_ROUNDS, ARCHITECTURE_ROUNDS).len(),
+            64
+        );
+        assert_eq!(
+            message(
+                GKR_ROUNDS + STATE_RELATION_ROUNDS + STATE_MASK_BATCH_ROUNDS,
+                ARCHITECTURE_ROUNDS
+            )
+            .len(),
             328
         );
         assert_eq!(
-            message(GKR_ROUNDS + STATE_RELATION_ROUNDS + 2, ARCHITECTURE_ROUNDS).len(),
+            message(
+                GKR_ROUNDS + STATE_RELATION_ROUNDS + STATE_MASK_BATCH_ROUNDS + 2,
+                ARCHITECTURE_ROUNDS
+            )
+            .len(),
             16 + 2_048 * 64
         );
     }

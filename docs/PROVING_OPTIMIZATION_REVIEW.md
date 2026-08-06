@@ -72,8 +72,8 @@ batching theorem; independent shard proofs do not receive that shortcut.
 An August 5, 2026 laptop experiment reconsidered the previously excluded parallel-shard mechanism
 without sharing challenges or changing proof semantics. The coordinator launched at most two
 independently bound shard workers, waited for the complete group, validated and committed outputs in
-canonical shard order, conservatively summed concurrent resource peaks, and rejected any qualified
-suite identity in parallel mode. On the same K512 boundary, state binding, binaries, and Brave-open
+canonical shard order, conservatively summed concurrent resource peaks, and now permits the same
+bounded execution when a suite identity is supplied. On the same K512 boundary, state binding, binaries, and Brave-open
 host, serial execution independently verified in `134.095254` seconds. The corrected two-lane,
 nonqualifying confirmation independently verified in `104.094428` seconds, a `22.37%` wall-time
 reduction, with `596.279` MB conservative host peak, `1,976.484224` MB conservative device peak,
@@ -85,9 +85,10 @@ GPU residency; the latter remains mandatory telemetry. A four-lane run was rejec
 `128.583416` seconds,
 reached `7,890` MiB externally sampled GPU residency, and grew pagefile usage by `126` MB. The
 exploratory coordinator is therefore hard-capped at two lanes; the sealed H4/H5 execution remains
-serial, while the unqualified native coordinator now defaults to two lanes. The sealed H5/H6 evidence
-is unchanged. This default is nonactivating and does not turn the generic Cairo/encrypted-worker
-scheduler into a native K512 scheduler.
+serial for evidence compatibility, while the active native coordinator defaults to two lanes and
+supports an explicit serial fallback. The sealed H5/H6 evidence is unchanged. This default is
+nonactivating and does not turn the generic Cairo/encrypted-worker scheduler into a native K512
+scheduler.
 
 ### Promotion checks completed for the two-lane candidate
 
@@ -107,9 +108,12 @@ Windows `taskkill /T /F`; a fresh rerun of the same binding independently verifi
 in `100.138295` seconds. The production scheduler review also closed the generic timeout gap by
 adding fail-closed process-tree termination and a focused unit test (`19 passed`); failure to
 confirm tree termination is now non-retryable. The native coordinator's default is now two lanes
-without a qualified suite identity and serial with one; explicit parallel mode with a qualified
-suite is rejected. The default remains nonactivating, receives no H5/H6 credit, does not change
-sealed evidence, and does not activate a suite.
+with or without a qualified suite identity; `BL_SHARD_CONCURRENCY=1` is the serial fallback. The
+default remains nonactivating, receives no retroactive H5/H6 credit, does not change sealed
+evidence, and does not activate a suite. The dedicated
+`k512_parallel_campaign_evidence.py` validator now independently validates the captured exact
+11-launch two-lane campaign as nonactivating execution-mode evidence; it does not convert that
+evidence into H5/H6 or production credit.
 
 ### Default decision recorded on 2026-08-05
 
@@ -118,8 +122,9 @@ and encrypted-envelope jobs continue using their existing Cairo/isolated-worker 
 their request schema does not contain the native boundary, state-binding, prototype, worker, and
 execution-manifest inputs required by this coordinator. Routing them through the experimental path
 would be an unverified semantic change, not an optimization. The coordinator therefore selects
-two independent shard lanes automatically only for an unqualified native run; a qualified suite
-selects serial execution, and an explicit qualified parallel request fails closed.
+two independent shard lanes automatically for the native K512 coordinator. Ordinary queued claim
+and encrypted-envelope jobs remain on their existing Cairo/isolated-worker boundary; this change
+does not route them to the native coordinator.
 
 The rebuilt binary was then exercised twice with `BL_SHARD_CONCURRENCY` absent. Both launches
 reported `shard_concurrency=2`, verified all four shards, returned `proof_suite_id=null`, and
@@ -148,8 +153,8 @@ performance patch.
 
 RISC Zero, the removed Stwo/QM31/Blake2s backend, direct monolithic SHA3 AIR/STARK, BaseFold,
 zkDeepFold, WHIR-style preselection controls, B=64, merged characteristic-two layers, scalar
-full-source replay, conjecture-dependent decoding, trusted setup, curves, and theorem-free shard
-parallelism are not current candidates.
+full-source replay, conjecture-dependent decoding, trusted setup, curves, shared-challenge or
+unbounded theorem-free shard parallelism are not current candidates.
 
 Paper mechanisms may be reconsidered only through the rejection discipline: exact theorem mapping,
 security ledger, source/license pin, independent implementation/verifier, complete simulator,

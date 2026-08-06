@@ -11,7 +11,7 @@ differential reference, not the selected proof backend.
 
 ## Plain-English current status
 
-As of 2026-08-05, the Wave 2 candidate evidence is complete without being activated:
+As of 2026-08-06, the Wave 2 candidate evidence is complete without being activated:
 
 - Gate 2E has a sealed, nonactivating state-bound proof context.
 - H5 passed the exact 22-launch campaign: K128 p95 was 32.360845 seconds and K512 p95 was
@@ -30,9 +30,10 @@ validator now qualifies the captured two-lane execution mode as nonactivating ev
 keeping the unchanged no-pagefile-growth gate, `proofSuiteId=null`, H5/H6 separation, and
 production activation false. Current-host refresh attempts that grew the pagefile remain rejected.
 
-The complete product roadmap is internally finishable: **45 of 93 engineering packages are complete
-and 48 are open**. Wave 3 P01-P12, Wave 4 I01-I08/O01-O06/O12, and Wave 5 R01-R12 are now complete
-as internal nonactivating engineering at their local/synthetic boundaries. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
+The complete product roadmap is internally complete at the local/synthetic boundary: **93 of 93
+engineering packages are complete and 0 are open**. Wave 3 P01-P12, Wave 4 I01-I08/O01-O06/O12,
+and Wave 5 R01-R12 are complete as internal nonactivating engineering at their local/synthetic
+boundaries. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
 executable relation. Current Wave 2, historically called Wave 1B, is the strict-PQ proof and
 throughput-recovery wave. The only external assurance dependency is one final independent Security
 Audit Gate after all six internal waves. This repository is not yet a deployment-ready candidate
@@ -96,7 +97,10 @@ Ledger claim proofs verify inside the L2; a rollup validity proof authenticates 
 state transition on Ethereum L1. Patient and claim records remain in government-controlled
 encrypted storage and are represented publicly only by commitments.
 
-This target is not yet implemented. The current repository has no production `INativeStarkVerifier` implementation, and the current Cairo output does not match the settlement contract's caller-supplied public-input schema. See `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md` and `KNOWN_ISSUES.md`.
+The target production L2 is not yet implemented. The repository now contains a local/synthetic
+based-rollup boundary, but it has no production `INativeStarkVerifier` implementation, and the
+current Cairo output does not match the settlement contract's caller-supplied public-input schema.
+See `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md` and `KNOWN_ISSUES.md`.
 
 Government APIs, oracles, KMS/HSMs, governance, and payment systems are integrated through
 versioned provider-neutral adapters. The finished release must include local simulators, sandbox

@@ -663,7 +663,7 @@ verifier, suite selection, HSM/FIPS authority, live rollup, release activation, 
 | T11 | Scan proofs/logs/errors/crashes/artifacts and test unlinkability. | Complete internally, nonactivating: privacy/artifact scans and unlinkability checks pass; production side-channel audit remains open. |
 | T12 | Test shape, cadence, timing, roots, queries, and failures for leakage. | Complete internally, nonactivating: fixed cadence, shape, root/query, timing, and uniform-failure checks pass. |
 | T13 | Measure complete stage time, dimensions, memory, bytes, and attribution. | Complete internally, nonactivating: bounded H4/H5 and K512 two-lane candidate measurements are recorded without relaxing resource/no-swap gates. |
-| T14 | Run every applicable language, proof, attack, integrity, and artifact gate. | Complete internally, nonactivating: the 1,733-test collection, bounded Python groups, Rust release gates, integrity checks, and archive inputs are reconciled. |
+| T14 | Run every applicable language, proof, attack, integrity, and artifact gate. | Complete internally, nonactivating: the current 1,738-test collection, bounded Python groups, Rust release gates, integrity checks, and archive inputs are reconciled. |
 
 ### Operations and release engineering - 7 packages
 

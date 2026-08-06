@@ -1351,6 +1351,14 @@ fn write_gkr_claim(
     Ok(())
 }
 
+fn read_exact<const N: usize>(reader: &mut impl Read) -> Result<[u8; N], String> {
+    let mut value = [0_u8; N];
+    reader
+        .read_exact(&mut value)
+        .map_err(|error| format!("read:{error}"))?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1388,12 +1396,4 @@ mod tests {
             squarefree_claims_payload(root, 128, &changed).unwrap()
         );
     }
-}
-
-fn read_exact<const N: usize>(reader: &mut impl Read) -> Result<[u8; N], String> {
-    let mut value = [0_u8; N];
-    reader
-        .read_exact(&mut value)
-        .map_err(|error| format!("read:{error}"))?;
-    Ok(value)
 }

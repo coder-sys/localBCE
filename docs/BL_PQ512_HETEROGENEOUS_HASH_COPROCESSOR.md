@@ -55,7 +55,7 @@ commitments, parsing, canonical decoding, targets, answer codes, semantic equali
 | Live input wires per permutation | 1,600 | 1,600 |
 | Implicit fixed-zero wires | 448 | 448 |
 | `BLHBB101` bytes | 52,429,015 | 209,715,415 |
-| Execution | one complete shard | four complete ordered shards, sequential on one GPU |
+| Execution | one complete shard | four complete ordered shards; native coordinator permits at most two independent lanes |
 
 Each shard proves 24 Keccak rounds as 168 explicit nonuniform layers under the seven-layer B=16
 relay-free plan. Fixed-zero wires are derived from the format and are never serialized as a second
@@ -287,7 +287,7 @@ seam with no Gate 2E, H5, H6, backend, or `proofSuiteId` credit.
 
 ## 9. Required green evidence
 
-- 264 optimized Rust library tests, zero failures and zero ignored, plus every binary/doc-test group;
+- 307 optimized Rust library tests, zero failures and zero ignored, plus every binary/doc-test group;
 - format check, locked/offline builds, no-default/no-std check, strict all-target Clippy;
 - seven host cryptographic KATs;
 - complete 20/36-tree geometry tests and segment-32 mutation rejection;
@@ -308,8 +308,10 @@ verifier/state/custody integration and the later release/audit gates; no suite i
 is permitted yet.
 
 Do not start another proof-backend bake-off, revive BaseFold/zkDeepFold, run H5 on the state-free
-H4 proof, increase worker lifetime, parallelize K512 shards without a theorem, duplicate source
-state, or trust a GPU-computed equality.
+H4 proof, increase worker lifetime, share K512 challenges, exceed the two-lane resource-capped
+coordinator, duplicate source state, or trust a GPU-computed equality. Independent shard overlap
+is now an active native execution mode; it still requires a fresh parallel campaign for
+qualification credit.
 
 ## 11. Evidence routing
 
