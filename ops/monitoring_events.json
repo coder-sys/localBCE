@@ -2,63 +2,79 @@
   "schema_version": "blind_ledger_monitoring_events_v1",
   "events": [
     {
-      "source": "StarkBatchSettlement",
-      "name": "StarkBatchSubmitted",
+      "source": "Wave4Adapter",
+      "name": "adapter_evidence_accepted",
       "severity": "critical",
       "required_fields": [
-        "batchId",
-        "nullifierRootBefore",
-        "nullifierRootAfter",
-        "dataAvailabilityRoot",
-        "encryptedClaimDataRoot",
-        "approvedAmountCents",
-        "paymentAmountCents"
+        "adapter_identity_digest_sha3_512",
+        "capability",
+        "adapter_version",
+        "schema_version",
+        "normalization_version",
+        "source_epoch",
+        "source_bytes_sha3_512",
+        "capsule_digest_sha3_512",
+        "correlation_digest_sha3_512",
+        "status"
       ]
     },
     {
-      "source": "StarkBatchSettlement",
-      "name": "RootUpdateProposed",
+      "source": "Wave4Adapter",
+      "name": "adapter_evidence_rejected",
       "severity": "critical",
       "required_fields": [
-        "proposalId",
-        "rootId",
-        "oldRoot",
-        "newRoot",
-        "reasonHash",
-        "effectiveTime",
-        "proposer"
+        "adapter_identity_digest_sha3_512",
+        "capability",
+        "adapter_version",
+        "correlation_digest_sha3_512",
+        "error_class",
+        "status"
       ]
     },
     {
-      "source": "StarkBatchSettlement",
-      "name": "RootUpdateApproved",
+      "source": "Wave4Custody",
+      "name": "pq_key_root_rotated",
       "severity": "warning",
       "required_fields": [
-        "proposalId",
-        "signer",
-        "approvalCount"
+        "key_handle_digest_sha3_512",
+        "old_root_digest_sha3_512",
+        "new_root_digest_sha3_512",
+        "epoch",
+        "rotation_digest_sha3_512"
       ]
     },
     {
-      "source": "StarkBatchSettlement",
-      "name": "RootUpdateActivated",
+      "source": "Wave4Queue",
+      "name": "fixed_cadence_batch_emitted",
       "severity": "critical",
       "required_fields": [
-        "proposalId",
-        "rootId",
-        "oldRoot",
-        "newRoot",
-        "reasonHash",
-        "activator"
+        "cadence_tick",
+        "slot_count",
+        "real_slot_commitment_root_sha3_512",
+        "cover_slot_commitment_root_sha3_512",
+        "queue_depth"
       ]
     },
     {
-      "source": "KG",
-      "name": "rule_ratification_invalid",
+      "source": "Wave4Incident",
+      "name": "incident_transition",
       "severity": "critical",
       "required_fields": [
-        "candidate_id",
-        "reason"
+        "status",
+        "reason_code",
+        "checkpoint_digest_sha3_512",
+        "correlation_digest_sha3_512"
+      ]
+    },
+    {
+      "source": "Wave4Release",
+      "name": "release_identity_changed",
+      "severity": "critical",
+      "required_fields": [
+        "manifest_digest_sha3_512",
+        "profile_digest_sha3_512",
+        "source_tree_digest_sha3_512",
+        "approval_state"
       ]
     },
     {
@@ -66,7 +82,9 @@
       "name": "production_readiness_failed",
       "severity": "critical",
       "required_fields": [
-        "blockers"
+        "blocker_digest_sha3_512",
+        "release_identity_digest_sha3_512",
+        "reason_code"
       ]
     }
   ]

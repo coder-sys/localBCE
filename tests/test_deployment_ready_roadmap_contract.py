@@ -54,6 +54,10 @@ def test_whole_product_roadmap_has_exactly_93_internal_packages() -> None:
         "S06",
         "A12",
         "Z01",
+        *(f"P{i:02d}" for i in range(1, 13)),
+        *(f"I{i:02d}" for i in range(1, 9)),
+        *(f"O{i:02d}" for i in range(1, 7)),
+        "O12",
     }
     assert not {f"O{i:02d}" for i in range(7, 12)} & set(rows)
 
@@ -63,7 +67,7 @@ def test_audit_is_one_uncounted_gate_and_every_package_is_internally_finishable(
     contract = _text(CONTRACT)
     rows = _package_rows(roadmap)
 
-    assert "**6 of 93 internal engineering packages are complete and 87 remain open**" in roadmap
+    assert "**33 of 93 internal engineering packages are complete and 60 remain open**" in " ".join(roadmap.split())
     assert "## Final independent Security Audit Gate - not counted" in roadmap
     assert "The five former O07-O11 rows are audit workstreams, not engineering packages" in roadmap
     assert "All **93 counted packages are internal engineering work**" in roadmap
@@ -95,8 +99,8 @@ def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() ->
     planning = payload["planning_model"]
     assert planning == {
         "internal_engineering_packages": 93,
-        "internal_complete": 6,
-        "internal_open": 87,
+        "internal_complete": 33,
+        "internal_open": 60,
         "external_assurance_gates": 1,
         "release_candidate_state": "NOT_DEPLOYMENT_READY",
         "proof_suite_state": "UNSELECTED",

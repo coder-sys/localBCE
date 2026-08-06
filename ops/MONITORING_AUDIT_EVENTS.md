@@ -1,33 +1,27 @@
 # Monitoring And Audit Events
 
-The canonical event inventory is `ops/monitoring_events.json`.
+The canonical machine-readable inventory is `ops/monitoring_events.json`. Wave 4 emits only
+opaque commitments, versions, epochs, status, error class, and correlation digests. It never logs
+PHI, claim documents, exact private amounts, private decisions, ciphertext, raw payloads, or live
+credentials.
 
-This is the current minimum, not the completed O06/I08 audit contract. Before
-`DEPLOYMENT_READY_AUDIT_PENDING`, the machine-readable inventory must cover every proof-suite,
-schema, verifier, governed-root, adapter-version, source-epoch, KMS/HSM, release, deployment,
-rollback, bridge, exit, and incident transition with immutable non-PHI correlation and exact
-artifact identities. Event coverage and retention are internal engineering; the final independent
-audit reviews the completed inventory.
+Minimum alerts:
 
-Minimum production alerts:
-
-- Any failed production readiness check is critical.
-- Any verifier artifact hash change is critical.
-- Any `StarkBatchSubmitted` with payment greater than approved amount must page.
-- Any stale nullifier root submission must page.
-- Any rule ratification failure must block executable rule export.
-- Any root approval or governance role change must create an audit ticket.
-- Any proof-suite, schema, verifier, adapter, source signer/epoch, image, infrastructure, or release
-  identity change must create an immutable audit event and block on an unapproved identity.
-- Any adapter fallback, version downgrade, stale oracle response, replay, circuit-breaker opening,
-  credential failure, or provenance mismatch must alert without logging PHI.
-- Any transition into or out of `BUILT_AUDIT_PENDING`, `AUDIT_ACCEPTED`, or production activation
-  must bind the exact release manifest and approving identities.
+- Any failed production-readiness or release-identity check is critical.
+- Any verifier, proof-suite, schema, adapter, source epoch, key-root, image, infrastructure, or
+  release identity change creates an immutable event and blocks an unapproved identity.
+- Any stale source, provenance mismatch, replay, idempotency conflict, credential failure,
+  circuit-breaker opening, retry exhaustion, or adapter downgrade pages without private detail.
+- Any fixed-cadence queue shape or cover-slot mismatch blocks publication.
+- Any key rotation, destruction, incident pause, recovery, or rollback binds the exact checkpoint
+  and release identity through opaque SHA3-512 digests.
+- Any transition into or out of `BUILT_AUDIT_PENDING`, `AUDIT_ACCEPTED`, or activation binds the
+  exact release manifest and approving identities. Wave 4 itself never performs that transition.
 
 Retention:
 
-- Contract events: retain for the full compliance period.
-- KG fetch and extraction logs: retain source URL, content hash, extractor notes,
-  and ratification record.
-- Key rotations: retain old/new roots, proposal id, signer set, and activation
-  time.
+- Contract and incident events: retain for the applicable compliance period.
+- Adapter evidence: retain the capsule, exact source/stream digest, schema/normalization version,
+  source epoch, and audit-safe error class; retain no raw source payload in the public log.
+- Key rotations: retain old/new roots, successor epoch, PQ authority identities, and activation
+  time as digests and metadata only.

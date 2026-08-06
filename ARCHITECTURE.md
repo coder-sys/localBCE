@@ -20,8 +20,9 @@ masked GKR producer, native masks, Construction 8.2 PCS, and authenticated same-
 pass as the sealed H4 prototype. Gate 2E is sealed nonactivating; H5 passed the exact 22-launch
 campaign; and H6 closed the twelve bounded candidate-evidence records. `proofSuiteId=null`,
 activation is false, and production verifier/state/custody, rollup, and final audit work remain
-open. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline, not the H5 p95
-record.
+open. Wave 4 adapter and operations engineering is now complete internally in a local/synthetic,
+nonactivating boundary. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline,
+not the H5 p95 record.
 
 The selected state-free bounded join does not require multi-gigabyte host state. The five-claim component
 rows plus claim source/relation rows are 7.864320 MB decimal. The simultaneously live GKR-mask row
@@ -83,11 +84,12 @@ specifically requires another directory, such as the Rust crate or `zk-cairo-sha
 | Batch core | `app/batch/` | Nullifiers, leaves, Merkle tree, accumulators, public-input binding, STARK handoff, and Poseidon helper integration. |
 | Rules engine | `rules-engine-rust/` plus Python adapter/fallback | Policy adjudication. Local Python fallback is for tests/benchmarks only, not production adjudication. |
 | Claim-proof references | `zk-cairo-sharp/`, `experiments/fixed_shape_claim_air/`, `experiments/bl_pq512_crypto_core/` | Cairo is historical semantic evidence; the sealed M31 AIR is the semantic module; Wave 2 builds the shared-bus Boolean hash coprocessor, mandatory committed sparse-state/PQ-commitment bake-off, and atomic verifier. |
+| Wave 3 internal verifier/state/custody | `experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`, `wave3_verifier_state_custody.py`, and `wave3_full_internal.py` | Nonactivating internal P01-P12 boundary: A12-derived dual roots, fixed 256-slot batch replay plus hidden salt-use insertion, canonical 744-byte proof envelope, full S10 state tuple, private payment-root recomputation, durable governed registry bound into state creation/reopen/refresh, local Rust-authoritative binding port, recovery/migration/rollback, and digest-only custody evidence. Production verifier, HSM/FIPS, external anti-rollback, and activation remain open. |
 | Solidity contracts | `contracts/` | Verifier and settlement-facing on-chain code. Protected from casual edits. |
 | Operations | `ops/` | Sole commit-bound policy spec, verifier pin manifest, deployment config, and readiness authority. |
 | Tests | `tests/` and `tests/attacks/` | Known-answer, readiness, integration, and attack-regression checks. |
 | Tools | `tools/` | Measurement and utility scripts. |
-| Integration ports | future I01-I08 modules | Provider-neutral government, oracle, KMS/HSM, governance, and payment contracts with local simulators and shared conformance tests. |
+| Integration ports | `app/wave4_adapters.py`, `app/wave4_operations.py` | Provider-neutral government/oracle/payment ports, dual-PQ provenance, local simulators, isolated operations, and shared conformance tests; production activation remains disabled. |
 | Containing rollup | future R01-R12 modules | Based sequencing, L2 verifier/state execution, validity proof, data availability, Ethereum settlement, bridge, exits, upgrades, and recovery. |
 
 ## Data and proof flow
@@ -228,21 +230,24 @@ Final decimal internal host peaks are 288.412 MB for K128 and 296.255 MB for K51
 process-tree peaks are 681.607168 and 706.523136 MB; per-proof tracked device allocation is
 969.999360 MB and K512's externally sampled total GPU residency is 2,770.337792 MB. Both accepted
 attempts used 0.000000 MB scratch and had zero pagefile growth. This sealed H4/qualified-suite
-baseline is serial; the unqualified native experiment now defaults to two lanes, but its fresh
-default launches failed the external pagefile gate and receive no qualification credit.
+baseline is serial; the active native coordinator now defaults to two independent lanes, and its
+captured exact two-lane campaign now passes the dedicated execution-mode evidence validator as
+nonactivating evidence. The validator records 11 launches, p95 `101.798191` seconds, maximum
+external RSS `1467465728` bytes, maximum GPU residency `5314` MiB, zero scratch, and no positive
+pagefile growth. Current-commit refresh attempts remain rejected when the host pagefile grows;
+they receive no qualification or production credit.
 
 The active regression objective is low-hundreds-of-MB internal host use while preserving the
 immutable 5,000 MB host, below-5,000 MB scratch, and no-swap gates.
 
 ### Native K512 default decision (2026-08-05)
 
-The native atomic K512 coordinator now selects two independent shard lanes by default when no
-qualified proof-suite identity is present. A qualified suite keeps serial execution by default,
-and any explicit parallel request with a qualified suite is rejected. Each lane retains its own
-authenticated challenge stream and proof; the coordinator waits for the complete group, verifies
-every shard, and commits the receipt in canonical order. This is a nonactivating optimization
-default for the native experiment only. The generic Cairo/encrypted-worker queue is a separate
-input boundary and is not silently rerouted to this coordinator.
+The native atomic K512 coordinator now selects two independent shard lanes by default for the
+native execution boundary, including suite-bound runs. `BL_SHARD_CONCURRENCY=1` is the explicit
+serial fallback. Each lane retains its own authenticated challenge stream and proof; the
+coordinator waits for the complete group, verifies every shard, and commits the receipt in
+canonical order. This is a nonactivating native execution mode; the generic Cairo/encrypted-worker
+queue is a separate input boundary and is not silently rerouted to this coordinator.
 
 Two fresh no-override launches selected two lanes and independently verified all four shards, but
 the external monitor rejected pagefile growth of `305` MB and `18` MB. This preserves the no-swap
@@ -252,8 +257,9 @@ qualification evidence.
 ## Atomic semantic execution boundary
 
 The active H4 prototype has one acceptance boundary for both profiles. K128 is one canonical B16
-shard; K512 is four ordered canonical B16 shards proven sequentially on one GPU. Each shard has
-its own nonlinear authenticated challenge stream and complete independent verification. An outer
+shard; K512 is four ordered canonical B16 shards. The native coordinator may run at most two
+independent lanes concurrently, while each shard retains its own nonlinear authenticated challenge
+stream and complete independent verification. An outer
 v2 SHA3-512 parent/receipt binds semantic commitments and file digest, selected GKR plan, caller
 statement, shard order and child proof bundles, and an execution manifest covering the exact
 Python/prototype/worker dependency closure, seven native verifier executables, and precompiled

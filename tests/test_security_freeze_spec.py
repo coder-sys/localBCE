@@ -53,8 +53,8 @@ def test_security_freeze_rejects_retired_suite_and_keeps_replacement_nonactivati
     hardening = json.loads(_read(HARDENING_PATH))
     rejection = _read(REJECTION_PATH)
 
-    assert "current S-two parameters rejected" in freeze
-    assert "no\nproduction proof suite selected or activated" in freeze
+    assert "S-two proof configuration does not" in freeze
+    assert "no production proof\nsuite is selected or activated" in freeze
     assert "More FRI queries or more grinding cannot remove the QM31 field-error terms" in freeze
     assert "M31 degree-16" in freeze
     assert "conditional lead" in freeze.lower()
@@ -156,9 +156,9 @@ def test_roadmap_closure_does_not_change_the_twelve_field_boundary() -> None:
 
     roadmap = _read(ROADMAP_PATH)
     assert "Packages `S01`, `S03`, `S05`, `S06`, and `A12` are complete" in roadmap
-    assert "**6 of 93 internal engineering packages are complete and 87 remain open**" in roadmap
+    assert "**33 of 93 internal engineering packages are complete and 60 remain open**" in " ".join(roadmap.split())
     assert "R25 closes only `Z01`" in roadmap
-    assert "This is not a privacy, strict-PQ, full-claim, or production claim" in roadmap
+    assert "This is not a privacy, strict-PQ, full-claim, or production claim" in " ".join(roadmap.split())
     assert "| S07 |" in roadmap and "complete 256-bit security" in roadmap
     assert "| S08 |" in roadmap and "rejected defaults are recorded" in roadmap
     assert "| S09 |" in roadmap and "`proofSuiteId=null`" in roadmap

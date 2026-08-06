@@ -222,12 +222,14 @@ it does not make the roadmap depend on outside help.
 
 ## 8. Current standing reminder
 
-Current recorded position: progress is 6 of 93 packages complete. Wave 1 is sealed and
+Current recorded position: progress is 33 of 93 packages complete internally. Wave 1 is sealed and
 nonactivating; Gate 2E is sealed as a nonactivating candidate context; the exact H5 campaign
-passed; and the bounded H6 candidate-evidence manifest closed all twelve records. Wave 2 remains
-active because the production verifier, durable state/custody, release identities, downstream
-rollup/operations, and final audit are unfinished. `proofSuiteId` is null, activation is false,
-and real PHI/payments remain forbidden. Re-read `STATE.md` and
+passed; the bounded H6 candidate-evidence manifest closed all twelve records; Wave 3 P01-P12
+internal verifier/state/custody engineering is complete nonactivating; and Wave 4 I01-I08/O01-O06/O12
+is complete internally through local/synthetic simulator and conformance gates. Wave 2/production
+work remains active because production verifier/state acceptance, HSM/FIPS authority, release
+identities, the containing rollup, whole-product release evidence, and the final audit are unfinished.
+`proofSuiteId` is null, activation is false, and real PHI/payments remain forbidden. Re-read `STATE.md` and
 `docs/CURRENT_TECH_STACK.md` for current truth because these boundaries may advance while this
 ideology and persistence mandate remain in force.
 

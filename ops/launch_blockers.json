@@ -2,8 +2,8 @@
   "schema_version": "blind_ledger_launch_blockers_v1",
   "planning_model": {
     "internal_engineering_packages": 93,
-    "internal_complete": 6,
-    "internal_open": 87,
+    "internal_complete": 33,
+    "internal_open": 60,
     "external_assurance_gates": 1,
     "release_candidate_state": "NOT_DEPLOYMENT_READY",
     "proof_suite_state": "UNSELECTED",

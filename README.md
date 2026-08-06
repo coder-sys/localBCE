@@ -22,12 +22,14 @@ As of 2026-08-05, the Wave 2 candidate evidence is complete without being activa
   durable state/custody, rollup, and final audit are still unfinished, and real PHI/payments remain
   forbidden.
 
-The native unqualified K512 experiment now defaults to two independent shard lanes. Two fresh
-default-mode checks verified all shards but failed the unchanged external no-pagefile-growth
-gate, so that optimization receives no H5/H6 or production credit.
+The native K512 experiment now defaults to two independent shard lanes. A separate fail-closed
+validator now qualifies the captured two-lane execution mode as nonactivating evidence while
+keeping the unchanged no-pagefile-growth gate, `proofSuiteId=null`, H5/H6 separation, and
+production activation false. Current-host refresh attempts that grew the pagefile remain rejected.
 
-The complete product roadmap is internally finishable: **6 of 93 engineering packages are complete
-and 87 are open**. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
+The complete product roadmap is internally finishable: **33 of 93 engineering packages are complete
+and 60 are open**. Wave 3 P01-P12 and Wave 4 I01-I08/O01-O06/O12 are now complete as internal
+nonactivating engineering. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
 executable relation. Current Wave 2, historically called Wave 1B, is the strict-PQ proof and
 throughput-recovery wave. The only external assurance dependency is one final independent Security
 Audit Gate after all six internal waves. This repository is not yet a deployment-ready candidate

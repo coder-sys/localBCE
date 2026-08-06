@@ -11,7 +11,8 @@ Construction 8.2 PCS, and one/four-shard coordinator through independent verific
 29.974129 seconds for K128 and 120.460733 seconds for K512. Gate 2E is now sealed nonactivating;
 H5 passed the exact 22-launch campaign; and H6 closed the twelve bounded candidate-evidence records.
 Every activation gate remains closed, `proofSuiteId=null`, and production verifier/state/custody
-work is still open.
+work is still open. Wave 4 adapter and operations engineering is complete only at the local,
+synthetic, nonactivating boundary.
 
 The compulsory target protocol is defined in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`: an
 Ethereum-settled based validity rollup with private Blind Ledger claim proofs verified inside the
@@ -55,7 +56,7 @@ Blind Ledger separates operational concerns into six trust boundaries:
 | Policy adjudication | `rules-engine-rust/`, `app/rules_engine_adapter.py`, `app/rules_engine_fallback.py` | Rust engine is the intended engine path. Python fallback is local/test-only and must fail closed in production. |
 | Batch/proof binding | `app/batch/`, `experiments/fixed_shape_claim_air/`, `experiments/bl_pq512_crypto_core/`, `zk-cairo-sharp/` | Produces trust-critical commitments, nullifiers, roots, and public inputs; the sealed semantic AIR and shared-bus hash coprocessor are the target, while Cairo remains a differential reference. |
 | Settlement/verifier | `contracts/`, `ops/verifier_artifact_pin.example.json` | Solidity-facing verifier and pinned artifact metadata. |
-| Government/oracle adapter platform | future I01-I08 modules | Versioned ports, canonical proof-carrying evidence capsules, FHIR/PAS/PDex profiles, local simulators, sandbox fixtures, and conformance tests isolate vendor APIs from proof semantics. |
+| Government/oracle adapter platform | `app/wave4_adapters.py`, `app/wave4_operations.py`, `tools/wave4_conformance.py` | Wave 4's versioned provider-neutral ports, canonical proof-carrying evidence capsules, local simulators, sandbox fixtures, and conformance tests isolate vendor APIs from proof semantics; production credentials, HSM/FIPS custody, and activation remain open. |
 | Containing rollup/deployment | future R01-R12 modules | L2 execution/proof, based ordering, proof/data coupling, data availability, L1 settlement, opaque forced inclusion, bridge/exits, upgrades, recovery, finality, and an optional maturity-gated native-rollup adapter. |
 
 ## Proof hierarchy

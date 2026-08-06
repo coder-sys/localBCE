@@ -21,9 +21,10 @@ R01-R12 package complete.
 
 Blind Ledger is a nonactivating zero-knowledge payment-system prototype. Wave 1 is the sealed
 synthetic semantic relation. Wave 2 is the strict post-quantum proof and throughput-recovery wave.
-Six of 93 engineering packages are complete. Gate 2E now has a sealed nonactivating terminal
-ledger, H5 has a validated exact 22-launch campaign, and the bounded H6 candidate-evidence
-qualification is complete without activation. `proofSuiteId=null`, activation is false, and real
+Thirty-three of 93 engineering packages are complete internally. Gate 2E now has a sealed
+nonactivating terminal ledger, H5 has a validated exact 22-launch campaign, H6 candidate evidence is
+complete, Wave 3 P01-P12 is internally complete, and Wave 4 I01-I08/O01-O06/O12 passes local
+simulator/conformance gates without activation. `proofSuiteId=null`, activation is false, and real
 PHI or payments are forbidden.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
@@ -164,7 +165,7 @@ transcript identity, strict parser, and Python/Rust KAT now exist in
 hash-pad candidate remains rejected for its own public-coin and 512-bit-collision deficiencies.
 No production candidate or suite is selected.
 
-## Wave 3 P01-P03 candidate boundary
+## Wave 3 P01-P03 internal engineering boundary
 
 The first Wave 3 state work is now concrete but nonactivating in
 `experiments/bl_pq512_crypto_foundation/wave3_nullifier_authority.py`. It accepts only the
@@ -177,10 +178,35 @@ the authority stages cloned legacy and wide trees and swaps them together only a
 replay. Focused tests cover type/position binding, cover profile rejection, stale transitions,
 path mutation, three committed transitions, and a 40-record stress chain.
 
-This is candidate state evidence, not a production verifier, a proof-native transition, durable
-anti-rollback custody, a Gate 2E selection, or a package-completion claim. `proofSuiteId` remains
-null, activation remains false, the six-of-93 count is unchanged, and PHI/payments remain
-forbidden. P04-P12 and the production integration gates remain open.
+This closes the internal P01-P03 engineering boundary, but it is not a production verifier, a
+proof-native transition admission path, durable external anti-rollback custody, a Gate 2E
+selection, or activation. `proofSuiteId` remains null, activation remains false, and PHI/payments
+remain forbidden.
+
+## Wave 3 P04-P12 internal verifier/state/custody boundary
+
+The full Wave 3 internal boundary is now concrete but nonactivating across
+`wave3_nullifier_authority.py`, `wave3_verifier_state_custody.py`, and
+`wave3_full_internal.py`. The full module binds governed wide roots from canonical manifests
+through a durable append-only registry and dual PQ authorization, wraps the exact 744-byte
+sidecar in one canonical proof envelope, replays exactly 256 fixed-shape A12 slots plus one
+context-free hidden salt-use key, recomputes the hidden payment-state successor from private
+batch/value commitments, and persists the complete S10 state tuple with atomic readback. The
+authoritative state accepts the durable registry source on create, reopen, recovery, migration,
+upgrade, and rollback, and fails closed if the registry file commitment changes unexpectedly. It
+also exposes a local Rust-authoritative BLSB v2 binding port, dual-PQ signed recovery anchors,
+monotonic migration/upgrade/rollback, and digest-only append-only custody evidence. The earlier
+module remains the provider-neutral PQ/KEM and reference custody port.
+
+This closes P04-P12 as internal engineering packages with synthetic/reference tests; together
+with P01-P03 it is the full internal Wave 3 boundary, not production activation. The signature
+ports and KEM are software-only and not HSM-backed or FIPS-validated, the local Rust port is a
+component verifier rather than a production `INativeStarkVerifier`, and no proof suite is
+selected. External anti-rollback authority, rollup integration, release evidence, and the
+independent audit remain open.
+`PROOF_SUITE_ID` remains `None`, `ACTIVATION_ALLOWED` remains `False`, `proofSuiteId=null`, and
+activation remains false. No PHI, payment authority, live Ethereum, or production credential was
+used.
 
 ## Round 1 diagnostic implementation boundary
 
@@ -474,9 +500,10 @@ subset is forbidden.
    manifest, and caller statement. When `state-file:<path>` is supplied, append the independently
    verified state transition, commitment, verifier, attempt, receipt, exact 12-field projection,
    and executable-AIR identities as one state context.
-4. **Process shards in canonical order.** K512 runs four full shard proofs sequentially. It may
-   reuse bounded worker infrastructure but must not reuse nonlinear challenge streams, masks, proof
-   fragments, or partial receipts between shards.
+4. **Process shards under canonical acceptance order.** K512 always contains four full shard
+   proofs. The native coordinator may run at most two independent lanes concurrently, then validates
+   and commits the complete receipt in canonical shard order. It must not reuse nonlinear challenge
+   streams, masks, proof fragments, or partial receipts between shards.
 5. **Run the real hash coprocessor.** For each shard, prove 24 Keccak rounds as 168 explicit
    nonuniform layers under the seven-layer, B=16 relay-free plan. The hash GKR schedule contains
    exactly 6,073 authenticated challenge rounds.
@@ -537,23 +564,33 @@ per-proof device state, 2,770.337792 MB K512 sampled total device residency, or 
 identify the theorem-required reason and demonstrate a complete-boundary throughput gain. The hard
 host/scratch gates still govern even when a smaller H4 regression threshold is exceeded.
 
-The 2026-08-05 two-lane K512 candidate was measured as a nonactivating experiment. It retains
-independent shard challenges, canonical receipt order, and conservative concurrent resource
-summation. The native coordinator now defaults to two lanes when no qualified proof-suite identity
-is supplied; a qualified suite keeps the default serial and explicit parallel mode remains rejected.
+The 2026-08-05 two-lane K512 candidate is now the active bounded native execution mode, still
+nonactivating. It retains independent shard challenges, canonical receipt order, and conservative
+concurrent resource summation. The native coordinator defaults to two lanes for both unqualified
+and suite-bound native runs; `BL_SHARD_CONCURRENCY=1` is the explicit serial fallback.
 A fresh one-warmup/ten-measured
 campaign recorded p95 `101.798191` seconds, maximum reported host/device peaks
 `605.774000`/`1976.484224` MB, maximum candidate-tree RSS `1467.465728` MB, zero scratch,
 zero pagefile growth, zero driver events, and zero stderr. The generic proving scheduler now
 terminates the complete process tree on timeout and fails closed if that cannot be confirmed, but
 it is a separate Cairo/encrypted-worker path and does not silently route ordinary claim jobs to
-this native coordinator. The two-lane default therefore applies to the unqualified native K512
-path only; it receives no H5/H6 credit, no suite identity, and no activation.
+this native coordinator. The two-lane default applies to the native K512 boundary; it receives no
+retroactive H5/H6 credit and does not select a suite or enable activation.
 
 Two fresh no-override launches of the rebuilt coordinator verified the default (`shard_concurrency=2`)
 and all four shards, but the external no-swap monitor rejected pagefile growth of `305` MB and
 `18` MB. The default selection is therefore implemented and fail-closed under the existing
 monitor; those launches are not qualification or production-admission evidence.
+
+The repository now owns a separate fail-closed validator for this execution mode at
+`experiments/bl_pq512_crypto_foundation/k512_parallel_campaign_evidence.py`. It validates the
+captured `promotion-k512-two-lane-20260805-r2` campaign as
+`QUALIFIED_K512_TWO_LANE_NONACTIVATING`: 11 launches, p95 `101.798191` seconds, maximum external
+RSS `1467465728` bytes, maximum GPU residency `5314` MiB, zero scratch, zero positive pagefile
+growth, zero driver events, and zero stderr. Its `proofSuiteId` is null and activation is false.
+Fresh refresh attempts against the current committed execution manifest were rejected for
+positive pagefile growth (`743`, `177`, `30`, and `303` MB); their proof correctness does not
+override the host resource gate.
 
 ## Privacy and data-placement boundary
 
@@ -600,6 +637,7 @@ proof with fresh randomness; no proof fragment, challenge tail, mask, or partial
 | Current GPU workers | `experiments/bl_pq512_crypto_core/cuda/cuda_hash_bus_b16_gkr_worker.py`, `cuda_fp16_zk_rs_interleaved_k128_prototype.py`, and their manifest-bound local verifier modules | Untrusted acceleration only |
 | Historical semantic reference | `zk-cairo-sharp/` | Protected differential source; not the selected proof backend |
 | Settlement shell | `contracts/` | Protected mock/test settlement boundary; no production `INativeStarkVerifier` exists |
+| Wave 4 adapters/operations | `app/wave4_adapters.py`, `app/wave4_operations.py`, `tools/wave4_conformance.py`, `ops/wave4_*.json` | Local/synthetic provider-neutral ports, dual-PQ evidence, isolated operations, and reproducible Wave 4 conformance; nonactivating |
 | Operations | tracked `ops/` | Sole commit-bound policy/verifier authority with exact file-set, length, and SHA3-512 verification |
 
 ### Proof-core ownership map
@@ -648,7 +686,8 @@ Windows reparse-point mismatch; no outward copy or fallback tree is permitted.
 
 1. Preserve the sealed nonactivating Gate 2E terminal ledger, exact H5 campaign, and bounded H6
    candidate-evidence manifest; these are the fail-closed records of what has passed.
-2. Implement the production verifier/state/custody, adapters, based rollup, operations, and release
+2. Wave 4 adapters and operations are internally complete through the local/synthetic boundary;
+   continue with production verifier/state acceptance, the based rollup, and whole-product release
    work in the later roadmap waves.
 3. Keep `proofSuiteId=null` and activation disabled until the later production gates pass.
 4. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
@@ -707,7 +746,10 @@ superseded historical values remain historical evidence.
 The V1-layer compaction test, exact two-claim GKR/PCS differential, and retired-format rejection KAT
 remain because they prove migration equivalence or fail-closed rejection. They do not expose a
 fallback acceptance path. Any control that ceases to protect a current invariant must be removed
-with its dependency and test evidence.
+with its dependency and test evidence. The retired Hint-MLWE/hidden-state positive suites and the
+stale standalone oracle-layout positive gate were removed from active collection after tracing
+their lack of current producer, verifier, manifest, and qualification consumers; their reference
+source and rejection evidence remain available.
 
 ## Removed executable alternatives
 

@@ -56,7 +56,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Gate 2E | Sealed nonactivating terminal context | Exact state-bound H4 parent/receipt replay, candidate admission evidence, leakage scan, canonical ops, and independent CPU/native replay | Production state-plane selection and downstream activation gates; `proofSuiteId` remains null |
 | H5 | Qualified, nonactivating | Exact 22-launch campaign; p95 32.360845 s K128 and 148.861885 s K512; RSS/scratch/pagefile/driver/stderr gates pass | Production integration and final suite identity |
 | H6 | Qualified candidate evidence, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody, release, final audit, and suite activation |
-| Waves 3-6 | Open downstream work | Reference components and candidate evidence only | Production verifier/state/custody, adapters, rollup, operations, release |
+| Waves 3-4 | Wave 3 and Wave 4 internal engineering complete, nonactivating | P01-P12 plus I01-I08/O01-O06/O12 source, acceptance tests, and local/synthetic reference evidence are complete; no production selection | Production verifier/state/custody, HSM/FIPS custody qualification, rollup, whole-product release, audit |
 
 The live Strawmap compatibility contract was refreshed on 2026-08-05 from 60 underlying links
 (23 EIPs and 37 non-EIP links). It confirms that Wave 5 must bind deployed L1 sequencing, fork,
@@ -74,19 +74,34 @@ Cancellation killed the complete coordinator/worker/bridge tree and a fresh reco
 The generic scheduler now fails closed when Windows/POSIX process-tree termination cannot be
 confirmed, with its focused suite at `19 passed`; it remains a separate Cairo/encrypted-worker
 path and does not silently route ordinary claim jobs to this native coordinator. The native
-coordinator defaults to two lanes for an unqualified nonactivating K512 run and keeps serial as
-the default when a qualified suite identity is present. `proofSuiteId` remains null for this
-candidate, activation remains false, and the sealed H5/H6 evidence receives no credit from this
-experiment. The three published Source-Complete archives were refreshed only to carry the
-substantive source/documentation changes and are not qualification evidence.
+coordinator defaults to two lanes for the native K512 run, including when a suite-bound identity is
+supplied; `BL_SHARD_CONCURRENCY=1` reproduces the sealed serial boundary. `proofSuiteId` remains
+null for this candidate, activation remains false, and the sealed H5/H6 evidence receives no
+retroactive credit from this execution-mode change. The dedicated
+`experiments/bl_pq512_crypto_foundation/k512_parallel_campaign_evidence.py` validator now checks
+the separate exact 11-launch two-lane evidence contract. It independently validates the captured
+campaign as `QUALIFIED_K512_TWO_LANE_NONACTIVATING` with campaign digest
+`be029710c5da9ab74eb1e19925da3c179bea889758619a2c3e43c85ff16753c250d3afb0c12a6856be9e9c151c58c69a78a4d67e40ab92ddacf2d863fca3c7ee`;
+this qualifies the native execution mode only, never H5/H6 or production activation. The three
+published Source-Complete archives were refreshed only to carry the substantive source/documentation
+changes and are not qualification evidence.
 
 The default-path verification itself is fail-closed: two fresh launches with no concurrency
 override selected two lanes and independently verified four shards, but the external monitor
 rejected pagefile growth of `305` MB and `18` MB. The no-swap gate was not relaxed, and these
 launches do not qualify H5/H6 or production admission.
 
-Current progress is 6 of 93 engineering packages complete. `proofSuiteId=null`, activation is
-false, real PHI and payments are forbidden, and the final independent audit has not begun.
+The current committed refresh was attempted in four fresh exact-campaign directories and did not
+receive credit: `r3` warmup grew pagefile usage by `743` MB, `r4` run 1 grew it by `177` MB after
+an initial `-15` MB decrease, `r5` warmup grew it by `30` MB, and `r6` warmup grew it by `303` MB.
+Every failing proof itself returned `status=verified`, four independent shards, empty stderr, and
+zero driver events; the external pagefile gate rejected the campaign. These artifacts remain
+preserved outside the checkout as failed evidence. No resource gate was weakened.
+
+Current progress is 33 of 93 engineering packages complete internally. Wave 4 I01-I08 and O01-O06/O12
+now pass the local/synthetic simulator and conformance boundary described in
+`docs/WAVE4_ADAPTERS_AND_OPERATIONS.md`; they remain nonactivating. `proofSuiteId=null`, activation
+is false, real PHI and payments are forbidden, and the final independent audit has not begun.
 
 The state-composed H4 bridge is an integration shape only: the state lane currently checks operation/
 snapshot field equality, authenticated slot index/order, Boolean presence, and empty-slot zeroing;
@@ -522,18 +537,21 @@ the execution plan.
 | Specification/security freeze | S01-S12 | 12 | S01/S03/S05/S06 complete; eight open |
 | Fixed-shape semantics/AIR | A01-A16 | 16 | A12 complete; remaining packages open or partially evidenced |
 | Heterogeneous proof/native hiding | Z01-Z12 | 12 | Z01 historical validity package complete; Z02-Z12 open/in progress |
-| State/verifier/custody | P01-P12 | 12 | Open; Gate 2E supplies state selection inputs |
+| State/verifier/custody | P01-P12 | 12 | P01-P12 internal engineering packages complete nonactivating; production acceptance remains open |
 | Validation | T01-T14 | 14 | Open convergence gates with current partial KAT evidence |
-| Operations/release | O01-O06, O12 | 7 | Open |
-| Government/oracle adapters | I01-I08 | 8 | Open |
+| Operations/release | O01-O06, O12 | 7 | Complete internally, nonactivating: local PQ custody reference, isolated profile, non-PHI audit, fixed cadence, incident drill, and reproducible release evidence pass |
+| Government/oracle adapters | I01-I08 | 8 | Complete internally, nonactivating: versioned provider-neutral SDK, dual-PQ capsules, local simulators, bounded retry/idempotency/circuit behavior, migration, and conformance pass |
 | Containing based rollup | R01-R12 | 12 | Open |
-| Total |  | 93 | 6 complete, 87 open |
+| Total |  | 93 | 33 complete, 60 open |
 
 The independent Security Audit Gate is not counted. Credentials, live endpoints, accounts,
 signers, and legal authority are activation inputs, not missing engineering packages.
 
 All **93 counted packages are internal engineering work**. Packages `S01`, `S03`, `S05`, `S06`, and `A12` are complete as current specification/application packages. R25 closes only `Z01` as a
-historical validity-baseline package. This is not a privacy, strict-PQ, full-claim, or production claim. Therefore **6 of 93 internal engineering packages are complete and 87 remain open**.
+historical validity-baseline package, the internally complete Wave 3 P01-P12 boundary, and the
+internally complete Wave 4 I01-I08/O01-O06/O12 boundary. This is not a privacy, strict-PQ, full-claim,
+or production claim. Therefore **33 of 93 internal engineering packages are complete and 60 remain
+open**.
 
 ### Specification and security freeze - 12 packages
 
@@ -562,8 +580,8 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 | A04 | Freeze enabled/dummy/cover composition and collision rules. | Open; downstream proof equality remains. |
 | A05 | Prove witness-class-independent trace, query, proof, and operation shape. | Open; H5/H6 remain. |
 | A06 | Prove all adjudication gates and priority in the final proof. | Open; semantic relation is sealed, suite qualification remains. |
-| A07 | Prove canonical claim-source membership and authority. | Open; durable registry and adapters remain. |
-| A08 | Prove oracle facts, authorization, signer, epoch, and membership. | Open; durable authority and adapters remain. |
+| A07 | Prove canonical claim-source membership and authority. | Open; durable domain-specific registry and final proof binding remain; the provider-neutral Wave 4 adapter boundary is complete internally. |
+| A08 | Prove oracle facts, authorization, signer, epoch, and membership. | Open; durable authority and final proof binding remain; the provider-neutral Wave 4 adapter boundary is complete internally. |
 | A09 | Prove ruleset, policy, fee row, versions, and authority. | Open; durable registries remain. |
 | A10 | Prove adjudication and exact first-failure ordering. | Open; final proof qualification remains. |
 | A11 | Prove checked money, conservation, and payment transitions. | Open; selected durable state remains. |
@@ -594,18 +612,18 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| P01 | Freeze canonical SHA3-512 leaf/node/empty/type/position encodings. | Candidate v1 implemented nonactivating in `wave3_nullifier_authority.py`; production freeze/review remains open. |
-| P02 | Derive legacy and wide state independently from identical raw records. | Candidate v1 implemented and tested from A12 raw bytes; production integration remains open. |
-| P03 | Prove authoritative 512-bit nullifier roots and transitions. | Candidate depth-64 predecessor/insertion transition implemented and independently replayed; the current H6 evidence is nonactivating, while production state/custody remains open. |
-| P04 | Implement governed wide-root registry, epochs, identifiers, and PQ authority. | Open. |
-| P05 | Implement wide master/value commitments and fresh 512-bit salts. | Open; durable state and hiding remain. |
-| P06 | Freeze one fixed-length canonical sidecar encoder/parser. | Open; selected suite/state identity remains. |
-| P07 | Implement the production verifier interface for 12 fields plus sidecar. | Open. |
-| P08 | Atomically advance authoritative wide and compatibility state. | Open; Gate 2E/Wave 3 remain. |
-| P09 | Implement genesis, migration, activation, upgrade, rollback, and recovery. | Open. |
-| P10 | Close stale/replay/mixed-profile/parser/partial-update/race attacks. | Open. |
-| P11 | Replace RSA witness wrapping with approved PQ KEM plus AES-256. | Open. |
-| P12 | Implement PQ signatures and provider-neutral HSM interfaces. | Open. |
+| P01 | Freeze canonical SHA3-512 leaf/node/empty/type/position encodings. | Complete internally, nonactivating: canonical depth-64 encodings and independent replay tests pass; production freeze/review remains open. |
+| P02 | Derive legacy and wide state independently from identical raw records. | Complete internally, nonactivating: both derivations consume the exact A12 bytes and differential tests pass; production integration remains open. |
+| P03 | Prove authoritative 512-bit nullifier roots and transitions. | Complete internally, nonactivating: predecessor/insertion transitions recompute both roots and reject stale/mutated witnesses; production custody remains open. |
+| P04 | Implement governed wide-root registry, epochs, identifiers, and PQ authority. | Complete internally, nonactivating: canonical manifest-derived roots, durable append-only registry readback bound into state create/reopen/refresh, dual PQ authorization, and monotonic rotation pass; production governance remains open. |
+| P05 | Implement wide master/value commitments and fresh 512-bit salts. | Complete internally, nonactivating: private batch/value commitments bind a fresh salt-use tag and hidden payment-root successor without serializing the salt or amount; production custody/hiding acceptance remains open. |
+| P06 | Freeze one fixed-length canonical sidecar encoder/parser. | Complete internally, nonactivating: the exact 744-byte sidecar is wrapped by one strict sidecar/proof envelope and bound through the verifier context; selected suite identity remains open. |
+| P07 | Implement the production verifier interface for 12 fields plus sidecar. | Complete internally, nonactivating: typed candidate outputs, exact identity binding, local Rust BLSB v2 component verification, and fail-closed inactive verification pass; no production `INativeStarkVerifier` or selected proof suite exists. |
+| P08 | Atomically advance authoritative wide and compatibility state. | Complete internally, nonactivating: exact 256-slot A12 replay plus hidden salt-use insertion, private payment-root recomputation, full S10 tuple, proof/sidecar/state binding, atomic write/readback, and lock boundary pass; production custody remains open. |
+| P09 | Implement genesis, migration, activation, upgrade, rollback, and recovery. | Complete internally, nonactivating: genesis, monotonic context migration/upgrade, known-checkpoint rollback, dual-PQ signed recovery anchor, and activation fail-closed tests pass; external recovery authority remains open. |
+| P10 | Close stale/replay/mixed-profile/parser/partial-update/race attacks. | Complete internally, nonactivating: stale roots, batch replay, hidden salt reuse, mixed profiles, malformed/versioned state, write failure, lock, forged recovery, registry mutation, Rust binding mutation, and custody anti-rollback tests pass; production attack closure remains open. |
+| P11 | Replace RSA witness wrapping with approved PQ KEM plus AES-256. | Complete internally, nonactivating: locked ML-KEM-1024/AES-256-GCM software/reference envelope keeps plaintext private and rejects key, version, flag, length, and tamper changes; HSM custody remains open. |
+| P12 | Implement PQ signatures and provider-neutral HSM interfaces. | Complete internally, nonactivating: dual ML-DSA/SLH-DSA ports, conformance reporting, authority rotation, and downgrade/forgery rejection pass; HSM/FIPS qualification and production authority remain open. |
 
 ### Cross-language, attack, leakage, and performance validation - 14 packages
 
@@ -630,26 +648,26 @@ historical validity-baseline package. This is not a privacy, strict-PQ, full-cla
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| O01 | Implement provider-neutral PQ/hybrid KMS/HSM support. | Open. |
-| O02 | Enforce entropy health, reuse detection, zeroization, rotation, and destruction. | Open. |
-| O03 | Build hardened constant-work, isolated deployment profiles. | Open. |
-| O04 | Secure swap, dumps, temporary files, logs, backups, and diagnostics. | Open. |
-| O05 | Implement fixed cadence, bounded queues, cover, and uniform failures. | Open. |
-| O06 | Add non-PHI monitoring, incident response, rollback, and drills. | Open. |
-| O12 | Produce reproducible release evidence, deployment automation, and go/no-go. | Open. |
+| O01 | Implement provider-neutral PQ/hybrid KMS/HSM support. | Complete internally, nonactivating: provider port and software ML-KEM-1024/AES-256-GCM reference pass conformance; live HSM/FIPS authority remains an activation/audit boundary. |
+| O02 | Enforce entropy health, reuse detection, zeroization, rotation, and destruction. | Complete internally, nonactivating: root-only lifecycle, entropy sample, nonce guard, zeroization, monotonic rotation, and destruction pass. |
+| O03 | Build hardened constant-work, isolated deployment profiles. | Complete internally, nonactivating: network/live-credential/swap/core-dump rejection and fixed resource profile pass. |
+| O04 | Secure swap, dumps, temporary files, logs, backups, and diagnostics. | Complete internally, nonactivating: non-PHI append-only audit and generated/secret path rejection pass. |
+| O05 | Implement fixed cadence, bounded queues, cover, and uniform failures. | Complete internally, nonactivating: exact-slot cover cadence, bounded queue, and one public rejection class pass. |
+| O06 | Add non-PHI monitoring, incident response, rollback, and drills. | Complete internally, nonactivating: opaque event inventory and pause/recovery/resume drill pass. |
+| O12 | Produce reproducible release evidence, deployment automation, and go/no-go. | Complete internally, nonactivating: offline conformance runner, explicit source allowlist, deterministic manifest, and fail-closed profile pass. |
 
 ### Government API and oracle adapters - 8 packages
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| I01 | Define the versioned provider-neutral adapter SDK and isolation boundary. | Open. |
-| I02 | Implement identity, tenant, authorization, transport, and credential ports with simulators. | Open. |
-| I03 | Implement claim-source and attachment adapters with exact provenance and bounds. | Open. |
-| I04 | Implement eligibility, coverage, enrollment, and provider-status adapters. | Open. |
-| I05 | Implement authorization, diagnosis/procedure, and document-fact adapters privately. | Open. |
-| I06 | Implement fee, policy, ruleset, and governed-root adapters. | Open. |
-| I07 | Implement payment, treasury, remittance, and reconciliation adapters. | Open. |
-| I08 | Build shared conformance, chaos, retry, migration, and sandbox tests. | Open. |
+| I01 | Define the versioned provider-neutral adapter SDK and isolation boundary. | Complete internally, nonactivating: `app/wave4_adapters.py` freezes the versioned identity/request/capsule ports and networkless boundary. |
+| I02 | Implement identity, tenant, authorization, transport, and credential ports with simulators. | Complete internally, nonactivating: synthetic transport and handle-only credential ports pass bounded failure and secret-rejection tests. |
+| I03 | Implement claim-source and attachment adapters with exact provenance and bounds. | Complete internally, nonactivating: source-byte commitments, schema/normalization identity, freshness, completeness, and bounds pass. |
+| I04 | Implement eligibility, coverage, enrollment, and provider-status adapters. | Complete internally, nonactivating: each capability has a versioned synthetic provider and private-fact response path. |
+| I05 | Implement authorization, diagnosis/procedure, and document-fact adapters privately. | Complete internally, nonactivating: private facts remain outside the signed public capsule and absence is authenticated. |
+| I06 | Implement fee, policy, ruleset, and governed-root adapters. | Complete internally, nonactivating: governed capability identity, epoch, provenance, and downgrade rejection pass. |
+| I07 | Implement payment, treasury, remittance, and reconciliation adapters. | Complete internally, nonactivating: payment-related facts are private in memory and public evidence contains only commitments/status. |
+| I08 | Build shared conformance, chaos, retry, migration, and sandbox tests. | Complete internally, nonactivating: 22 capabilities pass authentication, idempotency, privacy, retry/circuit, migration, and sandbox checks. |
 
 ### Containing based rollup and end-to-end deployment - 12 packages
 
@@ -711,7 +729,7 @@ side channels, and operations. Findings return to their owning internal package.
 | 1 | Claim relation and executable AIR | Sealed at synthetic nonactivating boundary |
 | 2 | Strict-PQ proof and throughput | Gate 2E, H5, and H6 all pass |
 | 3 | Verifier, state, custody | Production verifier/state publication/custody/migration/rollback pass |
-| 4 | Adapters and operations | I01-I08 plus applicable O/S packages pass simulator and conformance gates |
+| 4 | Adapters and operations | I01-I08 and O01-O06/O12 pass simulator and conformance gates; Wave 4 is internally complete and nonactivating |
 | 5 | Containing rollup | R01-R12 pass claim-to-Ethereum synthetic finality and recovery |
 | 6 | Release candidate | Reproducible one-command deployment, rollback, evidence, and audit packet pass |
 
