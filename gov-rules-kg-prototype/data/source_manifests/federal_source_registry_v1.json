@@ -1,0 +1,17 @@
+{
+  "schema_version": "localbce-federal-source-registry-v1",
+  "registry_id": "federal-51-programs-v1",
+  "jurisdiction": "federal",
+  "official_sources_only": true,
+  "source_pack_path": "official_source_pack.json",
+  "source_pack_sha256": "9699f5e8c974baff39515d6d3110ea7d2898c76c0d313e77fe50b66b116df532",
+  "source_entrypoints": 104,
+  "programs": 51,
+  "target_unique_grounded_candidates": 600000,
+  "release_milestones": [5100, 51000, 600000],
+  "quota_policy": "balanced_primary_program_assignment_difference_at_most_one",
+  "cross_program_links_count_toward_primary_program_only": true,
+  "source_scarcity_must_be_reported": true,
+  "runtime_activation": false,
+  "proof_binding": false
+}

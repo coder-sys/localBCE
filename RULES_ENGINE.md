@@ -150,6 +150,29 @@ missing corpora. Counts for derivative reports are lineage counts, not
 additive totals. In particular, machine validation or promotion readiness is
 not legal verification and cannot confer runtime eligibility.
 
+## PostgreSQL Grounded-Corpus Scale Lane
+
+The R2-R4 scale lane is documented in
+`gov-rules-kg-prototype/RULES_SCALE.md`. It uses PostgreSQL 16 for immutable
+official-source snapshots, deterministic sections, two-pass Claude inference,
+typed drafts, conflict clusters, separate policy/legal decisions, quality
+samples, and corpus release manifests.
+
+It targets 600,000 deduplicated discovery candidates across all 51 programs
+through 5,100, 51,000, and 600,000 milestones. A count is not a legal or
+runtime status. Source scarcity fails a quota instead of allowing unofficial
+material to fill it.
+
+PostgreSQL is not connected to `rust-engine`. Only deterministic, hash-pinned
+shadow exports may cross that boundary. Every scale release and export keeps:
+
+- `runtime_activation=false`
+- `proof_binding=false`
+- `production_usable=false`
+
+The imported 226-candidate corpus enters PostgreSQL only as a blocked baseline.
+The old SQLite graph and reported 457k corpus remain reference-only.
+
 ## Deliberate Limits
 
 `rust-engine/rules.json` and `rules_v9.json` remain target/reference ASTs. They

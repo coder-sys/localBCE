@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localbce.example/schemas/rules-corpus-release-v1.json",
+  "title": "LocalBCE Rules Corpus Release",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "release_id",
+    "target_count",
+    "candidate_count",
+    "source_manifest_hash",
+    "program_coverage",
+    "program_quotas",
+    "quality",
+    "canonical_release_hash",
+    "runtime_activation",
+    "proof_binding",
+    "production_usable"
+  ],
+  "properties": {
+    "schema_version": {"const": "localbce-rules-corpus-release-v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "target_count": {"enum": [5100, 51000, 600000]},
+    "candidate_count": {"type": "integer", "minimum": 0},
+    "source_manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "program_coverage": {"type": "object", "minProperties": 51, "maxProperties": 51},
+    "program_quotas": {"type": "object", "minProperties": 51, "maxProperties": 51},
+    "quality": {"type": "object"},
+    "canonical_release_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtime_activation": {"const": false},
+    "proof_binding": {"const": false},
+    "production_usable": {"const": false}
+  }
+}

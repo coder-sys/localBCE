@@ -11,10 +11,13 @@ except Exception:  # pragma: no cover
 from .ingestion import parse_837
 from .orchestrator import run_pipeline
 from .shared_context import build_shared_context
+from .rules_review_api import router as rules_review_router
 
 
 if FastAPI:
     app = FastAPI(title="Blind Ledger App Layer", version="0.1.0")
+    if rules_review_router is not None:
+        app.include_router(rules_review_router)
 
     @app.get("/health")
     def health() -> Dict[str, object]:
@@ -40,4 +43,3 @@ if FastAPI:
 
         path = Path("demo_output") / "dashboard_state.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-

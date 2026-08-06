@@ -7,3 +7,4 @@ lxml
 beautifulsoup4
 networkx
 whoosh
+psycopg[binary]>=3.2,<4

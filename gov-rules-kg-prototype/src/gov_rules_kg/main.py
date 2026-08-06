@@ -27,6 +27,17 @@ from .hierarchy_plan import write_ai_hierarchy_plan
 from .reports import build_programmatic_proof_report, build_rule_inventory_from_rules, load_atomic_rules, load_documents, write_json, write_markdown_programmatic_proof, write_verified_rules_by_hierarchy
 from .rules_corpus_audit import write_rules_corpus_audit
 from .scale import write_ecfr_manifest, write_scale_playbook
+from .postgres_corpus import CorpusDatabaseError, PostgresCorpusStore
+from .scale_commands import (
+    claude_infer,
+    corpus_release,
+    migrate_corpus,
+    quality_evaluate,
+    review_export,
+    sections_extract,
+    shadow_bundle_export,
+    sources_sync,
+)
 from .store import Store
 
 
@@ -99,6 +110,38 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("reports/rules_promotion_queue_v1.json"),
     )
+    subparsers.add_parser("rules-db-migrate", help="Apply PostgreSQL 16 grounded-corpus migrations")
+    sources_sync_parser = subparsers.add_parser(
+        "sources-sync",
+        help="Sync the versioned 51-program registry and optionally capture official source snapshots",
+    )
+    sources_sync_parser.add_argument("--fetch", action="store_true")
+    sources_sync_parser.add_argument("--limit", type=int, default=0, help="0 means all registered sources")
+    sources_sync_parser.add_argument("--timeout-seconds", type=float, default=60.0)
+    sections_parser = subparsers.add_parser(
+        "sections-extract",
+        help="Deterministically extract sections from uncatalogued PostgreSQL snapshots",
+    )
+    sections_parser.add_argument("--limit", type=int, default=0, help="0 means all unsectioned retrievals")
+    inference_parser = subparsers.add_parser(
+        "claude-infer",
+        help="Run pinned two-pass Claude extraction and critique with no local fallback",
+    )
+    inference_parser.add_argument("--limit", type=int, default=8)
+    inference_parser.add_argument("--concurrency", type=int, default=8)
+    subparsers.add_parser("quality-evaluate", help="Evaluate release quality gates from reviewer samples")
+    subparsers.add_parser("review-export", help="Export compact review metrics without reviewer credentials")
+    shadow_export_parser = subparsers.add_parser(
+        "shadow-bundle-export",
+        help="Export legally reviewed rules as a non-binding, hash-pinned shadow bundle",
+    )
+    shadow_export_parser.add_argument("--release-manifest", type=Path, required=True)
+    release_parser = subparsers.add_parser(
+        "corpus-release",
+        help="Create an immutable 5.1k, 51k, or 600k corpus release manifest",
+    )
+    release_parser.add_argument("--release-id", required=True)
+    release_parser.add_argument("--target", type=int, choices=[5_100, 51_000, 600_000], required=True)
     claude_scale_parser = subparsers.add_parser("claude-web-scale-plan", help="Plan structured Claude web expansion batches across programs, jurisdictions, and source types")
     claude_scale_parser.add_argument("--target-candidates-per-branch", type=int, default=10)
     claude_scale_parser.add_argument("--batch-size", type=int, default=5)
@@ -364,6 +407,54 @@ def main() -> None:
             print(str(exc))
             raise SystemExit(2) from exc
         print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command in {
+        "rules-db-migrate",
+        "sources-sync",
+        "sections-extract",
+        "claude-infer",
+        "quality-evaluate",
+        "review-export",
+        "shadow-bundle-export",
+        "corpus-release",
+    }:
+        try:
+            store = PostgresCorpusStore()
+            if args.command == "rules-db-migrate":
+                payload = migrate_corpus(workdir, store)
+            elif args.command == "sources-sync":
+                payload = sources_sync(
+                    workdir,
+                    store,
+                    fetch=args.fetch,
+                    limit=args.limit,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            elif args.command == "sections-extract":
+                payload = sections_extract(workdir, store, limit=args.limit)
+            elif args.command == "claude-infer":
+                payload = claude_infer(workdir, store, limit=args.limit, concurrency=args.concurrency)
+            elif args.command == "quality-evaluate":
+                payload = quality_evaluate(workdir, store)
+            elif args.command == "review-export":
+                payload = review_export(workdir, store)
+            elif args.command == "shadow-bundle-export":
+                release_path = args.release_manifest
+                if not release_path.is_absolute():
+                    release_path = workdir / release_path
+                payload = shadow_bundle_export(workdir, store, release_manifest=release_path)
+            else:
+                payload = corpus_release(
+                    workdir,
+                    store,
+                    release_id=args.release_id,
+                    target_count=args.target,
+                )
+        except (CorpusDatabaseError, FileNotFoundError, ValueError) as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
         return
 
     if args.command == "claude-web-scale-plan":

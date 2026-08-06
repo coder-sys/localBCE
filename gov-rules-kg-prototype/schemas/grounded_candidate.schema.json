@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localbce.example/schemas/grounded-candidate-v1.json",
+  "title": "LocalBCE Grounded Atomic Rule Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "program",
+    "authority",
+    "rule_type",
+    "conditions",
+    "outcome",
+    "effective_from",
+    "effective_through",
+    "exceptions",
+    "evidence"
+  ],
+  "properties": {
+    "candidate_id": {"type": "string", "pattern": "^cand_[0-9a-f]{32}$"},
+    "program": {"type": "string", "minLength": 1},
+    "authority": {"type": "object"},
+    "rule_type": {"type": "string", "minLength": 1},
+    "conditions": {"type": "object"},
+    "outcome": {"type": "object"},
+    "effective_from": {"type": ["string", "null"], "format": "date"},
+    "effective_through": {"type": ["string", "null"], "format": "date"},
+    "exceptions": {"type": "array", "items": {"type": "object"}},
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section_id", "snapshot_hash", "char_start", "char_end", "byte_start", "byte_end", "quote", "evidence_hash"],
+      "properties": {
+        "section_id": {"type": "string", "pattern": "^sec_[0-9a-f]{32}$"},
+        "snapshot_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "byte_start": {"type": "integer", "minimum": 0},
+        "byte_end": {"type": "integer", "minimum": 1},
+        "quote": {"type": "string", "minLength": 1},
+        "evidence_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "critique": {
+      "type": "object",
+      "required": ["result", "findings"],
+      "properties": {
+        "result": {"enum": ["accept", "repair", "reject"]},
+        "findings": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
