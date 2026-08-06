@@ -24,4 +24,3 @@ def test_remaining_internal_packages_close_only_at_nonactivating_boundary() -> N
     assert receipt["proofSuiteId"] is None
     assert receipt["activationAllowed"] is False
     assert receipt["productionUsable"] is False
-
