@@ -36,7 +36,6 @@ PUBLIC_OUTPUT_BYTES: Final[int] = PUBLIC_FIELD_COUNT * PUBLIC_FIELD_BYTES
 SIDECAR_BYTES: Final[int] = 744
 MAX_NATIVE_STDOUT_BYTES: Final[int] = 16 * 1024
 MAX_PROGRAM_BYTES: Final[int] = 64 * 1024 * 1024
-MAX_PUBLIC_INPUT_BYTES: Final[int] = 16 * 1024 * 1024
 NATIVE_VERIFIER_TIMEOUT_SECONDS: Final[float] = float(30 * 60)
 V2_PROTOCOL_VERSION: Final[bytes] = (2).to_bytes(PUBLIC_FIELD_BYTES, "big")
 
@@ -113,33 +112,22 @@ class NativeStarkVerifierConfig:
 
     executable: Path
     program: Path
-    public_inputs: Path | None
     suite_id: bytes
     schema_id: bytes
     verifier_artifact_identity: bytes
+    public_input_projection: PublicInputProjectionV1
     timeout_seconds: float = NATIVE_VERIFIER_TIMEOUT_SECONDS
-    public_input_projection: PublicInputProjectionV1 | None = None
 
     def __post_init__(self) -> None:
         _regular_file(self.executable, maximum=256 * 1024 * 1024, label="verifier_executable")
         _regular_file(self.program, maximum=MAX_PROGRAM_BYTES, label="verifier_program")
-        if self.public_inputs is None:
-            if self.public_input_projection is None:
-                raise ProductionBoundaryError("verifier_public_inputs_required")
-        else:
-            _regular_file(
-                self.public_inputs,
-                maximum=MAX_PUBLIC_INPUT_BYTES,
-                label="verifier_public_inputs",
-            )
         _wide("verifier_suite_id", self.suite_id)
         _wide("verifier_schema_id", self.schema_id)
         _wide("verifier_artifact_identity", self.verifier_artifact_identity)
-        if self.public_input_projection is not None:
-            if type(self.public_input_projection) is not PublicInputProjectionV1:
-                raise ProductionBoundaryError("verifier_public_input_projection_invalid")
-            if self.public_input_projection.schema_id != self.schema_id:
-                raise ProductionBoundaryError("verifier_public_input_projection_schema_mismatch")
+        if type(self.public_input_projection) is not PublicInputProjectionV1:
+            raise ProductionBoundaryError("verifier_public_input_projection_invalid")
+        if self.public_input_projection.schema_id != self.schema_id:
+            raise ProductionBoundaryError("verifier_public_input_projection_schema_mismatch")
         if (
             type(self.timeout_seconds) is not float
             or not 0 < self.timeout_seconds <= NATIVE_VERIFIER_TIMEOUT_SECONDS
@@ -185,19 +173,15 @@ class NativeStarkVerifierPort:
             envelope_path = Path(directory) / "envelope.bin"
             with envelope_path.open("xb") as handle:
                 handle.write(encoded)
-            public_inputs_path = self.config.public_inputs
             projection = self.config.public_input_projection
-            if projection is not None:
-                try:
-                    public_outputs = ProductionProofEnvelope.public_outputs_from_encoded(encoded)
-                    projected = projection.encode_file(public_outputs)
-                except ValueError as exc:
-                    raise ProductionBoundaryError("native_verifier_public_projection_invalid") from exc
-                public_inputs_path = Path(directory) / "derived-public-inputs.bin"
-                with public_inputs_path.open("xb") as handle:
-                    handle.write(projected)
-            if public_inputs_path is None:
-                raise ProductionBoundaryError("native_verifier_public_inputs_missing")
+            try:
+                public_outputs = ProductionProofEnvelope.public_outputs_from_encoded(encoded)
+                projected = projection.encode_file(public_outputs)
+            except ValueError as exc:
+                raise ProductionBoundaryError("native_verifier_public_projection_invalid") from exc
+            public_inputs_path = Path(directory) / "derived-public-inputs.bin"
+            with public_inputs_path.open("xb") as handle:
+                handle.write(projected)
             command = [
                 str(self.config.executable),
                 str(envelope_path),
@@ -207,8 +191,7 @@ class NativeStarkVerifierPort:
                 self.config.schema_id.hex(),
                 self.config.verifier_artifact_identity.hex(),
             ]
-            if projection is not None:
-                command.append(projection.schema_id.hex())
+            command.append(projection.schema_id.hex())
             try:
                 completed = subprocess.run(
                     command,

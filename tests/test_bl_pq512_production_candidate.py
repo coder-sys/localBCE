@@ -344,7 +344,6 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         NativeStarkVerifierConfig(
             executable=verifier,
             program=program_path,
-            public_inputs=None,
             suite_id=suite,
             schema_id=schema,
             verifier_artifact_identity=verifier_identity,
