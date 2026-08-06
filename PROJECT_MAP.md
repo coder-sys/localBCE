@@ -5,10 +5,11 @@ recovery evidence and does not define the current proof architecture.
 
 Plain-English status: Gate 2E is sealed as nonactivating evidence, H5 passed the exact 22-launch
 campaign, and H6 closed the twelve bounded candidate-evidence records. The production suite is
-still unselected (`proofSuiteId=null`). Wave 3 P01-P12 verifier/state/custody engineering and Wave 4
-I01-I08/O01-O06/O12 adapters/operations engineering are complete as nonactivating source and
-synthetic evidence; production verifier/state/custody, HSM/FIPS authority, rollup, and whole-product
-release work remain open; real PHI/payments remain forbidden.
+still unselected (`proofSuiteId=null`). Wave 3 P01-P12 verifier/state/custody engineering, Wave 4
+I01-I08/O01-O06/O12 adapters/operations engineering, and Wave 5 R01-R12 containing-rollup
+engineering are complete as nonactivating source and synthetic evidence; production
+verifier/state/custody, HSM/FIPS authority, whole-product release, and final audit work remain open;
+real PHI/payments remain forbidden.
 
 | Path | What it is | Edit risk |
 | --- | --- | --- |
@@ -26,6 +27,8 @@ release work remain open; real PHI/payments remain forbidden.
 | `tools/` | Measurement and utility scripts. | Medium. |
 | `app/wave4_adapters.py` | Versioned provider-neutral adapter SDK, dual-PQ provenance capsules, local transport/credential simulators, bounded retries, idempotency, circuit breaking, and capability registry. | High at the external-data boundary; synthetic-only until activation. |
 | `app/wave4_operations.py` | Nonactivating PQ custody reference, root lifecycle, isolated profile, non-PHI audit, fixed cadence, incident drill, and release manifest. | High at the operations boundary; software/HSM distinction is explicit. |
+| `app/wave5_rollup.py` | Local/synthetic R01-R12 based-validity boundary: fork manifest, EL/CL/L2 fixture, 12-field-plus-sidecar claim binding, L2 transition proof fixture, finalized-only settlement, based ordering, commitment-only DA, bridge, forced inclusion, exits, fork adapters, and rollback. | High at the rollup boundary; the reference verifier and outer-chain model are nonactivating. |
+| `tools/wave5_conformance.py` | Offline Wave 5 receipt runner using local dual-PQ software signers for governance-port conformance. | Medium; creates no artifacts or network access. |
 | `experiments/` | Sealed semantic references and the selected BL-PQ512 proof prototype. Standalone RISC Zero and Stwo backends are retired and removed. | Medium to high. |
 | `experiments/fixed_shape_claim_air/claim_truth_reference.py` | Fixed-length synthetic claim/oracle/policy/ruleset records and fail-closed governed dual-root comparison. Not an AIR or verifier. | High for Wave 1A reference semantics. |
 | `experiments/fixed_shape_claim_air/authenticated_payment_reference.py` | Synthetic aggregate payment state and fixed per-slot operation-log transition. Not the future per-member/provider authenticated maps. | High for money/state semantics. |

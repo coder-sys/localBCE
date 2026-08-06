@@ -4,7 +4,8 @@ Updated: 2026-08-05
 
 Status: current architecture and roadmap contract for the containing Ethereum rollup. This
 document records a source snapshot and engineering consequences; it does not claim that a draft
-EIP will ship, that an estimated date is a commitment, or that R01-R12 are implemented.
+EIP will ship, that an estimated date is a commitment, or that the local R01-R12 fixture is a live
+Ethereum deployment.
 
 ## Non-negotiable product decision
 
@@ -53,6 +54,12 @@ pinned client behavior outrank it. Therefore:
 3. Draft items receive versioned, fail-closed adapter design and tests;
 4. Stagnant items are research or rejection evidence, never current dependencies; and
 5. map dates and throughput labels are projections until a deployed fork and measurements prove them.
+
+The local/synthetic R01-R12 implementation is `app/wave5_rollup.py`. It uses a pinned baseline and
+future-shadow profile, records all 23 EIP maturity entries, rejects unshipped/optional features by
+default, and exercises based ordering, finalized settlement, commitment-only DA, bridge, exits,
+migration, and rollback. It is internal nonactivating evidence, not proof that a live Ethereum
+client or production L2 verifier is present.
 
 ## 2026-08-05 live link audit
 
@@ -378,7 +385,9 @@ schema and source pins; R11 owns activation/migration/rollback; R12 owns end-to-
 | R11 | Versioned adapters, fork activation, migration, rollback, emergency pause, and downgrade prevention cover every supported EIP surface. Unknown or partially supported fork features reject. |
 | R12 | Synthetic claim-to-finalized-Ethereum and rollback tests run against the pinned baseline plus explicit future-fork profiles; raw receipts prove ordering, data reconstruction, proofs, state, and finality. |
 
-These obligations refine the existing 12 packages; they add no package and mark none complete.
+These obligations refine the existing 12 packages; the local/synthetic fixture now satisfies their
+internal engineering boundary, while live-client, production-verifier, deployment, audit, and
+activation claims remain expressly outside this evidence.
 
 ## Release gates and prohibited shortcuts
 

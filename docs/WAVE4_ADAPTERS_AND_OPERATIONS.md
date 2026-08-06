@@ -94,6 +94,7 @@ The command is offline, creates no repository artifact, and must report
 
 Wave 4 is internally complete only in the synthetic/sandbox sense. Live provider URLs, tenant
 credentials, oracle signer enrollment, HSM/FIPS handles, governance identities, payment accounts,
-legal authority, the selected proof suite, production verifier/state acceptance, the based
-rollup, the final release-candidate seal, and the independent Security Audit Gate remain open.
+legal authority, the selected proof suite, production verifier/state acceptance, live deployment
+over the local Wave 5 boundary, the final release-candidate seal, and the independent Security
+Audit Gate remain open.
 They cannot be closed by changing a fixture, a JSON flag, or a test double.

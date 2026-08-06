@@ -4,8 +4,9 @@ Current truth: Gate 2E is sealed as nonactivating evidence; H5 passed the exact 
 and H6 closed all twelve bounded candidate-evidence obligations. Wave 1 is sealed
 synthetic/nonactivating; Wave 2 candidate qualification and internal Wave 3 P01-P12 engineering
 are complete but not activated; Wave 4 adapters/operations are internally complete through local
-conformance; 33 of 93
-packages are complete; `proofSuiteId` is null; real PHI/payments are forbidden. Read
+conformance; Wave 5 R01-R12 is internally complete through the local/synthetic claim-to-finalized-
+L1 and recovery boundary; 45 of 93 packages are complete; `proofSuiteId` is null; real
+PHI/payments are forbidden. Read
 `docs/CURRENT_TECH_STACK.md`, then
 `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` after the throughput and heterogeneous-proof
 contracts. Before any containing-rollup work, also read
@@ -19,7 +20,7 @@ Run commands from this repository root unless a command says otherwise.
 Before treating any successful command as release progress, read
 `docs/IMPLEMENTATION_ROADMAP.md`, `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`, and
 `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md`, then
-`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. The current state is 33 of 93 internal packages
+`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. The current state is 45 of 93 internal packages
 complete, proof suite `UNSELECTED`, and not deployment-ready. Current Wave 1 (historical Wave 1A)
 is the sealed nonactivating relation; current Wave 2 (historical Wave 1B) owns strict-PQ proof and
 throughput recovery. The exact H5 campaign and H6 candidate-evidence manifest are qualification

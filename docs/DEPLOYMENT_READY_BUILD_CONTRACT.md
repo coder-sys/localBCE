@@ -26,10 +26,10 @@ assurance, and operator activation.
 Current proof checkpoint: the H4 prototype passes one fresh K128/K512 attempt through independent
 verification in 29.974129/120.460733 seconds. Gate 2E is sealed nonactivating, H5 passed the exact
 22-launch p95/resource campaign, and H6 closed the twelve bounded candidate-evidence obligations.
-This is still not `BUILT_AUDIT_PENDING`: the production verifier/state/custody, rollup, whole-product
-release evidence, and final audit remain open. Wave 4 adapters and operations are complete only as
-local/synthetic, nonactivating engineering. `proofSuiteId=null`, `production_usable=false`, and the
-ban on real PHI/payments remain authoritative.
+This is still not `BUILT_AUDIT_PENDING`: the production verifier/state/custody, whole-product
+release evidence, and final audit remain open. Wave 4 adapters/operations and Wave 5 R01-R12
+containing-rollup engineering are complete only as local/synthetic, nonactivating boundaries.
+`proofSuiteId=null`, `production_usable=false`, and the ban on real PHI/payments remain authoritative.
 
 ## Product objective
 

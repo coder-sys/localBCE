@@ -8313,3 +8313,69 @@ proof/scratch directory, deleted test, PHI, live Ethereum data, or production cr
 Wave 4 is complete only as an internally qualified local/synthetic nonactivating boundary. Production
 verifier/state acceptance, HSM/FIPS custody, external anti-rollback, proof-suite selection, based
 rollup, whole-product release seal, final independent audit, and operator activation remain open.
+
+## 2026-08-05 Wave 5 R01-R12 based-validity rollup boundary - VERIFIED, NONACTIVATING
+
+Wave 5 R01-R12 is now complete as an internally qualified local/synthetic boundary in
+`app/wave5_rollup.py`, `tools/wave5_conformance.py`, and `docs/WAVE5_BASED_ROLLUP.md`. The boundary
+covers the 23-EIP compatibility manifest, a five-node networkless EL/CL/L2 fixture, exact ordered
+12-field claim binding with the existing fixed-shape sidecar, a deterministic reference claim
+verifier, proof/state/DA bindings, dual-PQ finalized-only settlement, based ordering and forced
+inclusion, commitment-only DA with bounded reconstruction/migration, commitment-shaped bridge
+deposits and delayed exits, unknown-fork pause/recovery, and manifest-bound future-profile rollback.
+The `SyntheticReferenceClaimVerifier` is deliberately not a production ZK verifier, and no live
+Ethereum client, production custody, HSM/FIPS module, real PHI, payment authority, or production
+credential was used.
+
+The roadmap and launch-blocker planning count now read `45` complete and `48` open of `93` internal
+engineering packages. LB-008 is closed only as `closed_internal_nonactivating`; production
+activation remains blocked. `proofSuiteId=null`, `activation_allowed=false`,
+`production_usable=false`, `network_access=false`, and `live_credentials=false` remain fixed.
+
+Exact Wave 5 verification:
+
+```text
+py -3.14 -B -m pytest -q tests/test_wave5_rollup.py tests/attacks/test_wave5_rollup_attacks.py
+20 passed in 2.12s
+
+py -3.14 -B -m pytest -q tests/test_wave5_rollup.py tests/attacks/test_wave5_rollup_attacks.py tests/test_wave4_adapters_operations.py tests/test_deployment_ready_roadmap_contract.py tests/test_production_readiness.py tests/test_operational_readiness.py tests/test_privacy_artifact_scan.py tests/test_privacy_v2_abi.py tests/test_privacy_v2_statement.py
+79 passed, 4 subtests passed in 11.60s
+
+py -3.14 -B -m pytest -q tests/test_bl_pq512_wave3_full_internal.py tests/test_bl_pq512_wave3_verifier_state_custody.py tests/test_bl_pq512_k512_parallel_campaign_evidence.py tests/test_verifier_receipt.py
+25 passed, 3 subtests passed in 87.99s (0:01:27)
+
+py -3.14 -B tools/wave5_conformance.py --repo-root .
+schema=blind_ledger_wave5_rollup_v1
+wave=5
+package_status=R01:R12 complete_internal_nonactivating
+proofSuiteId=null
+production_usable=false
+activation_allowed=false
+network_access=false
+live_credentials=false
+rollback_ok=true
+
+py -3.14 -B -c "from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority; print(verify_ops_authority())"
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+git diff --check
+exit=0
+```
+
+The full Wave 5 conformance JSON receipt was emitted by the command above. Its authoritative
+digests are `manifest=228d28a7408bfbc929408450e7190fc3513c083ed472710aafc74bb86321d1f35ce760213d602bdbdbf19fa741a6d65bb5366a16643256962f2f23f753bea91d`,
+`deployment=2ce945de73dea0fdef8966f3dea8afbe0fcf5ce05b9477cc29ae813974be37be4bcd02885850357824d37b1587d31a31e4468f726350d8a70284e1915e0298f9`,
+`claim_proof=910b2bbef282fb451f1cdc07ef11bac9e0792a2439ecb263867b0f42dcb0a255a709e868a46aebee841c7ea04ddc118a436e76aea3f0ae70e964c72a3e67d029`,
+`l2_proof=4e342613903fe6dac0f3d0f850be29658118a8e6bd65d05eb00db2a66c4e63589a8d560df4b95720b27dfd24dd0a9a1dc6a9a1832ac4e09e614473f2b090247f`,
+`finalized_l1=710be0c4db6834c908219b6ea00e9728c1fc4f312ad81c136474199d2518369ad85933f98ffb1950bc2f8a4ca8d48fedf8ef9d5390477fc66709731a3b888c2d`,
+`da=ead15b84a8ac8923b456e8fafa7eb24108d8f9131ea30783f2bb5822f402bcb9d5726cdb51a9c7cd6afdbc20afa9226b2e1def6cefc9f8e73cb3c4a3cbc49d1c`, and
+`bridge=1b875108836459e9c8ec7df77170b43c831cda51978f8fd4e0ac11ec9fbcbbe74e2a6ee7cf59362aaf8076fd0f0c95bd4eb76f58dcef262489f34f8db77f83d8`.
+
+The Wave 5 boundary did not modify any protected path. The working tree still contains the
+pre-existing Wave 3/reference changes outside this boundary; they remain unstaged and preserved
+for reference. The remaining production boundary is real client integration, a production claim
+verifier and L2 proof path, durable verifier/state/custody and HSM/FIPS qualification, external
+anti-rollback authority, whole-product release sealing, final independent audit, and operator
+activation. The repository-wide aggregate remains unclaimed because the prior bounded aggregate
+run timed out without a result; only the completed boundary-specific suites above are recorded as
+verification.

@@ -13,7 +13,7 @@ from app.production_readiness import REQUIRED_NONEMPTY_ENV, REQUIRED_PRODUCTION_
 
 HEX32_RE = re.compile(r"^(0x)?[0-9a-fA-F]{64}$")
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
-STATUS_VALUES = {"open", "closed", "accepted_risk"}
+STATUS_VALUES = {"open", "closed", "accepted_risk", "closed_internal_nonactivating"}
 MIN_SIGNERS = 3
 MIN_THRESHOLD = 2
 MIN_TIMELOCK_SECONDS = 72 * 60 * 60

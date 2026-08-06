@@ -156,7 +156,7 @@ def test_roadmap_closure_does_not_change_the_twelve_field_boundary() -> None:
 
     roadmap = _read(ROADMAP_PATH)
     assert "Packages `S01`, `S03`, `S05`, `S06`, and `A12` are complete" in roadmap
-    assert "**33 of 93 internal engineering packages are complete and 60 remain open**" in " ".join(roadmap.split())
+    assert "**45 of 93 internal engineering packages are complete and 48 remain open**" in " ".join(roadmap.split())
     assert "R25 closes only `Z01`" in roadmap
     assert "This is not a privacy, strict-PQ, full-claim, or production claim" in " ".join(roadmap.split())
     assert "| S07 |" in roadmap and "complete 256-bit security" in roadmap

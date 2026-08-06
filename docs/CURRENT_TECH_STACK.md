@@ -12,20 +12,21 @@ active read order. `docs/REJECTED_ARCHITECTURES.md` owns rejection decisions.
 
 The compulsory containing design is an Ethereum-settled based validity rollup. The complete live
 Strawmap/EIP compatibility surface and maturity rules are in
-`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. That prospective outer-chain contract
+`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. That outer-chain contract
 classifies every item as INHERIT, L1-COMPAT, L2-PARITY, OPTIONAL, or RESEARCH and supplies the
-lockstep fork lifecycle. It does not change the current H4 proof implementation or mark any
-R01-R12 package complete.
+lockstep fork lifecycle. The local/synthetic R01-R12 boundary is implemented in
+`app/wave5_rollup.py`; it does not select a production suite or authorize live activation.
 
 ## Current product boundary
 
 Blind Ledger is a nonactivating zero-knowledge payment-system prototype. Wave 1 is the sealed
 synthetic semantic relation. Wave 2 is the strict post-quantum proof and throughput-recovery wave.
-Thirty-three of 93 engineering packages are complete internally. Gate 2E now has a sealed
+Forty-five of 93 engineering packages are complete internally. Gate 2E now has a sealed
 nonactivating terminal ledger, H5 has a validated exact 22-launch campaign, H6 candidate evidence is
 complete, Wave 3 P01-P12 is internally complete, and Wave 4 I01-I08/O01-O06/O12 passes local
-simulator/conformance gates without activation. `proofSuiteId=null`, activation is false, and real
-PHI or payments are forbidden.
+simulator/conformance gates without activation. Wave 5 R01-R12 now passes the local/synthetic
+claim-to-finalized-L1, DA, bridge, forced-inclusion, fork-migration, and rollback boundary.
+`proofSuiteId=null`, activation is false, and real PHI or payments are forbidden.
 
 Gate 2E-0/S0 is implemented as a synthetic C0 control fixture plus a separate fresh-process
 measurement module. Gate 2E-1/S1 is implemented as 13 bounded descriptors plus strict
@@ -638,6 +639,7 @@ proof with fresh randomness; no proof fragment, challenge tail, mask, or partial
 | Historical semantic reference | `zk-cairo-sharp/` | Protected differential source; not the selected proof backend |
 | Settlement shell | `contracts/` | Protected mock/test settlement boundary; no production `INativeStarkVerifier` exists |
 | Wave 4 adapters/operations | `app/wave4_adapters.py`, `app/wave4_operations.py`, `tools/wave4_conformance.py`, `ops/wave4_*.json` | Local/synthetic provider-neutral ports, dual-PQ evidence, isolated operations, and reproducible Wave 4 conformance; nonactivating |
+| Wave 5 containing rollup | `app/wave5_rollup.py`, `tools/wave5_conformance.py`, `ops/wave5_*.json`, `docs/WAVE5_BASED_ROLLUP.md` | Local/synthetic based ordering, exact 12-field-plus-sidecar binding, L2 transition proof fixture, DA, finalized-only settlement, bridge, forced inclusion, fork adapters, and rollback; nonactivating |
 | Operations | tracked `ops/` | Sole commit-bound policy/verifier authority with exact file-set, length, and SHA3-512 verification |
 
 ### Proof-core ownership map
@@ -686,9 +688,9 @@ Windows reparse-point mismatch; no outward copy or fallback tree is permitted.
 
 1. Preserve the sealed nonactivating Gate 2E terminal ledger, exact H5 campaign, and bounded H6
    candidate-evidence manifest; these are the fail-closed records of what has passed.
-2. Wave 4 adapters and operations are internally complete through the local/synthetic boundary;
-   continue with production verifier/state acceptance, the based rollup, and whole-product release
-   work in the later roadmap waves.
+2. Wave 4 adapters/operations and Wave 5 containing-rollup packages are internally complete through
+   their local/synthetic boundaries; continue with production verifier/state acceptance, whole-
+   product release, and the final audit gate.
 3. Keep `proofSuiteId=null` and activation disabled until the later production gates pass.
 4. Implement the production native verifier and containing L2/L1 settlement path in later roadmap
   packages.

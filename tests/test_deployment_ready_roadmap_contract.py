@@ -58,6 +58,7 @@ def test_whole_product_roadmap_has_exactly_93_internal_packages() -> None:
         *(f"I{i:02d}" for i in range(1, 9)),
         *(f"O{i:02d}" for i in range(1, 7)),
         "O12",
+        *(f"R{i:02d}" for i in range(1, 13)),
     }
     assert not {f"O{i:02d}" for i in range(7, 12)} & set(rows)
 
@@ -67,7 +68,7 @@ def test_audit_is_one_uncounted_gate_and_every_package_is_internally_finishable(
     contract = _text(CONTRACT)
     rows = _package_rows(roadmap)
 
-    assert "**33 of 93 internal engineering packages are complete and 60 remain open**" in " ".join(roadmap.split())
+    assert "**45 of 93 internal engineering packages are complete and 48 remain open**" in " ".join(roadmap.split())
     assert "## Final independent Security Audit Gate - not counted" in roadmap
     assert "The five former O07-O11 rows are audit workstreams, not engineering packages" in roadmap
     assert "All **93 counted packages are internal engineering work**" in roadmap
@@ -99,8 +100,8 @@ def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() ->
     planning = payload["planning_model"]
     assert planning == {
         "internal_engineering_packages": 93,
-        "internal_complete": 33,
-        "internal_open": 60,
+        "internal_complete": 45,
+        "internal_open": 48,
         "external_assurance_gates": 1,
         "release_candidate_state": "NOT_DEPLOYMENT_READY",
         "proof_suite_state": "UNSELECTED",
@@ -116,7 +117,16 @@ def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() ->
 
     engineering = [item for item in blockers if item["classification"] == "internal_engineering"]
     assert engineering
-    assert all(item["release_candidate_blocker"] for item in engineering)
+    assert all(
+        item["release_candidate_blocker"]
+        for item in engineering
+        if item["status"] == "open"
+    )
+    closed_internal = [
+        item for item in engineering if item["status"] == "closed_internal_nonactivating"
+    ]
+    assert [item["id"] for item in closed_internal] == ["LB-008"]
+    assert all(not item["release_candidate_blocker"] for item in closed_internal)
     assert all(not item["external_required"] for item in engineering)
 
     activation = [item for item in blockers if item["classification"] == "activation_input"]

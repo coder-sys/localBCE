@@ -56,7 +56,7 @@ No benchmark, implementation difficulty, or model limitation can waive an invari
 | Gate 2E | Sealed nonactivating terminal context | Exact state-bound H4 parent/receipt replay, candidate admission evidence, leakage scan, canonical ops, and independent CPU/native replay | Production state-plane selection and downstream activation gates; `proofSuiteId` remains null |
 | H5 | Qualified, nonactivating | Exact 22-launch campaign; p95 32.360845 s K128 and 148.861885 s K512; RSS/scratch/pagefile/driver/stderr gates pass | Production integration and final suite identity |
 | H6 | Qualified candidate evidence, nonactivating | Exact 12-obligation evidence manifest; all twelve records closed; strict-PQ ledger, simulator, grammar/KATs, attack corpus, supply-chain, reproducible-build, privacy, migration, H5, and Wave 3 boundary evidence | Production verifier/state/custody, release, final audit, and suite activation |
-| Waves 3-4 | Wave 3 and Wave 4 internal engineering complete, nonactivating | P01-P12 plus I01-I08/O01-O06/O12 source, acceptance tests, and local/synthetic reference evidence are complete; no production selection | Production verifier/state/custody, HSM/FIPS custody qualification, rollup, whole-product release, audit |
+| Waves 3-5 | Wave 3, Wave 4, and Wave 5 internal engineering complete, nonactivating | P01-P12, I01-I08/O01-O06/O12, and R01-R12 source, acceptance tests, and local/synthetic reference evidence are complete; no production selection | Production verifier/state/custody, HSM/FIPS custody qualification, whole-product release, audit |
 
 The live Strawmap compatibility contract was refreshed on 2026-08-05 from 60 underlying links
 (23 EIPs and 37 non-EIP links). It confirms that Wave 5 must bind deployed L1 sequencing, fork,
@@ -98,10 +98,12 @@ Every failing proof itself returned `status=verified`, four independent shards, 
 zero driver events; the external pagefile gate rejected the campaign. These artifacts remain
 preserved outside the checkout as failed evidence. No resource gate was weakened.
 
-Current progress is 33 of 93 engineering packages complete internally. Wave 4 I01-I08 and O01-O06/O12
-now pass the local/synthetic simulator and conformance boundary described in
-`docs/WAVE4_ADAPTERS_AND_OPERATIONS.md`; they remain nonactivating. `proofSuiteId=null`, activation
-is false, real PHI and payments are forbidden, and the final independent audit has not begun.
+Current progress is 45 of 93 engineering packages complete internally. Wave 4 I01-I08 and O01-O06/O12
+pass the local/synthetic simulator and conformance boundary described in
+`docs/WAVE4_ADAPTERS_AND_OPERATIONS.md`; Wave 5 R01-R12 now pass the local/synthetic based-rollup
+boundary described in `docs/WAVE5_BASED_ROLLUP.md`. Both waves remain nonactivating.
+`proofSuiteId=null`, activation is false, real PHI and payments are forbidden, and the final
+independent audit has not begun.
 
 The state-composed H4 bridge is an integration shape only: the state lane currently checks operation/
 snapshot field equality, authenticated slot index/order, Boolean presence, and empty-slot zeroing;
@@ -541,17 +543,17 @@ the execution plan.
 | Validation | T01-T14 | 14 | Open convergence gates with current partial KAT evidence |
 | Operations/release | O01-O06, O12 | 7 | Complete internally, nonactivating: local PQ custody reference, isolated profile, non-PHI audit, fixed cadence, incident drill, and reproducible release evidence pass |
 | Government/oracle adapters | I01-I08 | 8 | Complete internally, nonactivating: versioned provider-neutral SDK, dual-PQ capsules, local simulators, bounded retry/idempotency/circuit behavior, migration, and conformance pass |
-| Containing based rollup | R01-R12 | 12 | Open |
-| Total |  | 93 | 33 complete, 60 open |
+| Containing based rollup | R01-R12 | 12 | Complete internally, nonactivating: local/synthetic claim-to-finalized-L1, DA, bridge, forced-inclusion, fork-migration, and rollback evidence pass |
+| Total |  | 93 | 45 complete, 48 open |
 
 The independent Security Audit Gate is not counted. Credentials, live endpoints, accounts,
 signers, and legal authority are activation inputs, not missing engineering packages.
 
 All **93 counted packages are internal engineering work**. Packages `S01`, `S03`, `S05`, `S06`, and `A12` are complete as current specification/application packages. R25 closes only `Z01` as a
-historical validity-baseline package, the internally complete Wave 3 P01-P12 boundary, and the
-internally complete Wave 4 I01-I08/O01-O06/O12 boundary. This is not a privacy, strict-PQ, full-claim,
-or production claim. Therefore **33 of 93 internal engineering packages are complete and 60 remain
-open**.
+historical validity-baseline package; the internally complete Wave 3 P01-P12, Wave 4
+I01-I08/O01-O06/O12, and Wave 5 R01-R12 boundaries are recorded separately. This is not a
+privacy, strict-PQ, full-claim, or production claim. Therefore **45 of 93 internal engineering
+packages are complete and 48 remain open**.
 
 ### Specification and security freeze - 12 packages
 
@@ -673,18 +675,18 @@ open**.
 
 | ID | Current deliverable | Status |
 | --- | --- | --- |
-| R01 | Pin the deployed EL/CL fork specs, EVM, and exact EVM-compatible based-validity stack; record Strawmap feature maturity without depending on drafts. | Open. |
-| R02 | Build a reproducible multi-node, multi-fork local deployment with parameterized slots, gas/blob schedules, BAL/data modes, and transaction formats. | Open. |
-| R03 | Integrate the production claim verifier and exact 12-field-plus-sidecar boundary; bind rollup proof, chain/fork, verifier, suite, state, and DA identities. | Open. |
-| R04 | Implement atomic claim/nullifier/root/payment/wide-state transitions including BAL/CBAM separation, keyed nonce/recent-root adapters, migration, and receipt. | Open. |
-| R05 | Implement and qualify the L2 state-transition prover against every supported final fork rule with differential execution vectors. | Open. |
-| R06 | Implement Ethereum verification, settlement, finality, fork-aware timing, and verifier governance; never equate preconfirmation/head with finality. | Open. |
-| R07 | Implement compulsory based ordering without a privileged canonical sequencer; test ePBS/FOCIL withholding, inclusion, reorg, duplicate, nonce, and replay failures. | Open. |
-| R08 | Implement non-PHI proof/data coupling, payload/blob/cell publication, partial fetch, reconstruction, retention, withholding, migration, and corruption tests. | Open. |
-| R09 | Implement bridge/escrow accounting, deposits, finalized withdrawals, replay binding, and conservation. | Open. |
-| R10 | Implement opaque bounded forced inclusion, censorship resistance, exits, reorg-safe recovery, and privacy preservation. | Open. |
-| R11 | Implement versioned EIP/fork adapters, timelocks, downgrade rejection, emergency rollback, and disaster recovery. | Open. |
-| R12 | Verify claim-to-proof-to-L2-to-finalized-Ethereum plus rollback on the pinned baseline and explicit future-fork profiles. | Open. |
+| R01 | Pin the deployed EL/CL fork specs, EVM, and exact EVM-compatible based-validity stack; record Strawmap feature maturity without depending on drafts. | Complete internally, nonactivating: versioned baseline/future-shadow manifest records all 23 EIPs, client/Engine/EVM pins, disabled optional features, and the external-classical boundary. |
+| R02 | Build a reproducible multi-node, multi-fork local deployment with parameterized slots, gas/blob schedules, BAL/data modes, and transaction formats. | Complete internally, nonactivating: five-node EL/CL/L2 deterministic sandbox covers baseline and future-shadow profiles, fixed slots, gas/blob limits, BAL, transaction format, and commitment-only DA modes. |
+| R03 | Integrate the production claim verifier and exact 12-field-plus-sidecar boundary; bind rollup proof, chain/fork, verifier, suite, state, and DA identities. | Complete internally at the synthetic integration boundary: exact ordered 12 fields, 744-byte sidecar, candidate suite, chain/fork/state/DA context, and fail-closed reference verifier binding pass; production ZK verifier selection remains open. |
+| R04 | Implement atomic claim/nullifier/root/payment/wide-state transitions including BAL/CBAM separation, keyed nonce/recent-root adapters, migration, and receipt. | Complete internally, nonactivating: atomic state successor, replay/stale rejection, separate BAL/CBAM commitments, keyed nonce root, disabled recent-root adapter, and settlement binding pass. |
+| R05 | Implement and qualify the L2 state-transition prover against every supported final fork rule with differential execution vectors. | Complete internally, nonactivating: deterministic transition proof and baseline/future-shadow differential vectors share one explicitly bound L2 semantics identity. |
+| R06 | Implement Ethereum verification, settlement, finality, fork-aware timing, and verifier governance; never equate preconfirmation/head with finality. | Complete internally, nonactivating: head/safe/finalized distinction, finalized-only settlement, state/proof root equality, and dual-PQ governance approval pass. |
+| R07 | Implement compulsory based ordering without a privileged canonical sequencer; test ePBS/FOCIL withholding, inclusion, reorg, duplicate, nonce, and replay failures. | Complete internally, nonactivating: L1-origin opaque ordering, inclusion-list withholding, deterministic duplicate/nonce checks, forced inclusion, and execution-validation gate pass without a sequencer input. |
+| R08 | Implement non-PHI proof/data coupling, payload/blob/cell publication, partial fetch, reconstruction, retention, withholding, migration, and corruption tests. | Complete internally, nonactivating: fixed-size commitment cells, partial/reconstruction/retention/corruption checks, commitment-preserving DA migration, and proof/data binding pass. |
+| R09 | Implement bridge/escrow accounting, deposits, finalized withdrawals, replay binding, and conservation. | Complete internally, nonactivating: commitment-shaped finalized deposits, delayed withdrawals, recipient/value binding, replay domains, and one-to-one accounting conservation pass. |
+| R10 | Implement opaque bounded forced inclusion, censorship resistance, exits, reorg-safe recovery, and privacy preservation. | Complete internally, nonactivating: bounded opaque forced queue, inclusion enforcement, delayed safe exit, unknown-fork pause, and governed recovery pass. |
+| R11 | Implement versioned EIP/fork adapters, timelocks, downgrade rejection, emergency rollback, and disaster recovery. | Complete internally, nonactivating: manifest-bound future-shadow activation, dual-PQ approval, timelock, unknown/partial pause, and emergency rollback to the pinned baseline pass. |
+| R12 | Verify claim-to-proof-to-L2-to-finalized-Ethereum plus rollback on the pinned baseline and explicit future-fork profiles. | Complete internally, nonactivating: offline receipt covers synthetic claim, L2 proof, finalized L1 settlement, DA migration, bridge exit, future-shadow activation, unknown-fork pause, and rollback. |
 
 #### R01-R12 L1-lockstep execution order
 
@@ -712,8 +714,9 @@ from an EIP title:
    conservation to the manifest before claiming any inherited benefit.
 
 The 23-EIP impact/trigger matrix in
-`ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` is the input contract for step 1. This sequence
-adds no package and cannot mark an R package complete without its existing acceptance evidence.
+`ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` is the input contract for step 1. The Wave 5
+fixture exercises this sequence locally; it adds no package, does not claim deployed Ethereum
+compatibility, and does not authorize activation.
 
 ## Final independent Security Audit Gate - not counted
 
@@ -730,7 +733,7 @@ side channels, and operations. Findings return to their owning internal package.
 | 2 | Strict-PQ proof and throughput | Gate 2E, H5, and H6 all pass |
 | 3 | Verifier, state, custody | Production verifier/state publication/custody/migration/rollback pass |
 | 4 | Adapters and operations | I01-I08 and O01-O06/O12 pass simulator and conformance gates; Wave 4 is internally complete and nonactivating |
-| 5 | Containing rollup | R01-R12 pass claim-to-Ethereum synthetic finality and recovery |
+| 5 | Containing rollup | R01-R12 pass claim-to-Ethereum synthetic finality and recovery | Complete internally, nonactivating |
 | 6 | Release candidate | Reproducible one-command deployment, rollback, evidence, and audit packet pass |
 
 ## Change and Git discipline

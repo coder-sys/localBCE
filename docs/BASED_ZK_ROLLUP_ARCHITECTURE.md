@@ -11,8 +11,10 @@ real native-masked GKR, Construction 8.2 PCS, atomic one/four-shard coordinator,
 independent verification in 29.974129 seconds for K128 and 120.460733 seconds for K512. This does
 not change the rollup architecture, settlement trust boundary, ordered 12-field public ABI, package
 count, or activation status. Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign,
-and H6 closed the twelve bounded candidate-evidence records. The production L2/L1 verifier path,
-durable state/custody, `proofSuiteId`, and activation remain open/disabled.
+and H6 closed the twelve bounded candidate-evidence records. The local/synthetic R01-R12 boundary
+now exercises the claim-to-finalized-L1, DA, bridge, forced-inclusion, fork-migration, and rollback
+path in `app/wave5_rollup.py`. The production L2/L1 verifier path, durable state/custody,
+`proofSuiteId`, and activation remain open/disabled.
 
 Planning boundary: `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` makes R01-R12 counted internal
 engineering packages. The rollup, bridge, finality, deployment automation, and sandbox end-to-end
@@ -32,6 +34,11 @@ Ethereum-roadmap compatibility and its maturity gates are defined in
 planned through-line. Its 2026-08-05 live-map refresh covers 60 underlying links, including all
 23 EIPs, and records which L1 behavior requires a based-rollup adapter. Draft/Review/Stagnant
 items are versioned compatibility targets, not dependencies of the deployment-ready baseline.
+
+Wave 5's local/synthetic compatibility manifest and conformance fixture are in
+`app/wave5_rollup.py`, `tools/wave5_conformance.py`, and `docs/WAVE5_BASED_ROLLUP.md`. This closes
+the internal engineering boundary only: the fixture is not a live EL/CL client, does not supply a
+production claim verifier, and cannot authorize activation.
 
 ## Decision
 

@@ -18,18 +18,21 @@ As of 2026-08-05, the Wave 2 candidate evidence is complete without being activa
   148.861885 seconds, with the required verification and resource checks passing.
 - H6 closed all twelve candidate-evidence obligations, including the strict-PQ ledger, parser/KAT,
   attack, supply-chain, reproducibility, privacy, migration, and Wave 3-boundary records.
+- Wave 5 R01-R12 now passes the local/synthetic based-rollup boundary: exact 12-field-plus-sidecar
+  binding, L2 transition proof fixture, finalized-only settlement, commitment-only DA, based ordering,
+  bridge, forced inclusion, exit delay, fork migration, and rollback.
 - Production is still disabled: `proofSuiteId=null`, activation is false, the production verifier,
-  durable state/custody, rollup, and final audit are still unfinished, and real PHI/payments remain
-  forbidden.
+  durable state/custody, HSM/FIPS authority, whole-product release, and final audit are still
+  unfinished, and real PHI/payments remain forbidden.
 
 The native K512 experiment now defaults to two independent shard lanes. A separate fail-closed
 validator now qualifies the captured two-lane execution mode as nonactivating evidence while
 keeping the unchanged no-pagefile-growth gate, `proofSuiteId=null`, H5/H6 separation, and
 production activation false. Current-host refresh attempts that grew the pagefile remain rejected.
 
-The complete product roadmap is internally finishable: **33 of 93 engineering packages are complete
-and 60 are open**. Wave 3 P01-P12 and Wave 4 I01-I08/O01-O06/O12 are now complete as internal
-nonactivating engineering. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
+The complete product roadmap is internally finishable: **45 of 93 engineering packages are complete
+and 48 are open**. Wave 3 P01-P12, Wave 4 I01-I08/O01-O06/O12, and Wave 5 R01-R12 are now complete
+as internal nonactivating engineering at their local/synthetic boundaries. Current Wave 1, historically called Wave 1A, is sealed as a nonactivating
 executable relation. Current Wave 2, historically called Wave 1B, is the strict-PQ proof and
 throughput-recovery wave. The only external assurance dependency is one final independent Security
 Audit Gate after all six internal waves. This repository is not yet a deployment-ready candidate

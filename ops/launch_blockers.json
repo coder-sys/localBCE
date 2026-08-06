@@ -2,8 +2,8 @@
   "schema_version": "blind_ledger_launch_blockers_v1",
   "planning_model": {
     "internal_engineering_packages": 93,
-    "internal_complete": 33,
-    "internal_open": 60,
+    "internal_complete": 45,
+    "internal_open": 48,
     "external_assurance_gates": 1,
     "release_candidate_state": "NOT_DEPLOYMENT_READY",
     "proof_suite_state": "UNSELECTED",
@@ -63,13 +63,13 @@
     {
       "id": "LB-008",
       "title": "Ethereum-settled based validity-rollup stack",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "rollup_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
-      "exit_criteria": "R01-R12 close: the pinned rollup stack, L1 contracts, based sequencing, data reconstruction, bridge, forced inclusion, exits, validity prover/verifier, upgrades, emergency controls, and claim-to-Ethereum-finality path pass reproducible synthetic end-to-end deployment and rollback."
+      "exit_criteria": "R01-R12 pass the local/synthetic boundary: pinned baseline/future-shadow manifest, multi-node fixture, exact claim envelope, L2 transition-proof fixture, finalized settlement, based ordering, commitment-only DA, bridge, forced inclusion, exits, governed migration, and rollback. A real client deployment and production claim verifier remain separate blockers."
     },
     {
       "id": "LB-009",

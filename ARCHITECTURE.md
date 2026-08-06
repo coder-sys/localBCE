@@ -19,9 +19,9 @@ multiproof, answer-code, target, public-coin replay, and verification duties. Th
 masked GKR producer, native masks, Construction 8.2 PCS, and authenticated same-chain coordinator
 pass as the sealed H4 prototype. Gate 2E is sealed nonactivating; H5 passed the exact 22-launch
 campaign; and H6 closed the twelve bounded candidate-evidence records. `proofSuiteId=null`,
-activation is false, and production verifier/state/custody, rollup, and final audit work remain
-open. Wave 4 adapter and operations engineering is now complete internally in a local/synthetic,
-nonactivating boundary. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline,
+activation is false, and production verifier/state/custody and final audit work remain open. Wave 4
+adapter/operations engineering and Wave 5 containing-rollup engineering are now complete internally
+at local/synthetic, nonactivating boundaries. The 29.974129/120.460733-second K128/K512 values below are the H4 baseline,
 not the H5 p95 record.
 
 The selected state-free bounded join does not require multi-gigabyte host state. The five-claim component
@@ -90,7 +90,7 @@ specifically requires another directory, such as the Rust crate or `zk-cairo-sha
 | Tests | `tests/` and `tests/attacks/` | Known-answer, readiness, integration, and attack-regression checks. |
 | Tools | `tools/` | Measurement and utility scripts. |
 | Integration ports | `app/wave4_adapters.py`, `app/wave4_operations.py` | Provider-neutral government/oracle/payment ports, dual-PQ provenance, local simulators, isolated operations, and shared conformance tests; production activation remains disabled. |
-| Containing rollup | future R01-R12 modules | Based sequencing, L2 verifier/state execution, validity proof, data availability, Ethereum settlement, bridge, exits, upgrades, and recovery. |
+| Containing rollup | `app/wave5_rollup.py`, `tools/wave5_conformance.py`, `ops/wave5_*.json` | Local/synthetic based sequencing, exact 12-field-plus-sidecar binding, L2 transition proof fixture, DA, finalized-only settlement, bridge, forced inclusion, exits, fork adapters, and rollback; production activation remains disabled. |
 
 ## Data and proof flow
 
