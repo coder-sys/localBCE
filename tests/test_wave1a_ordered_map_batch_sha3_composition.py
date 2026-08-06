@@ -62,13 +62,13 @@ def test_every_fixed_map_hash_row_is_composed_with_exact_sha3() -> None:
     assert instance.schedule.sha3_permutations == 276
     assert instance.traces["sha3_digest_batch"].rows == 136
     assert direct.maximum_degree == 3
-    assert direct.identities_evaluated == 6_191_257
-    assert direct.lookup_messages_evaluated == 13_914_320
+    assert direct.identities_evaluated == 6_191_513
+    assert direct.lookup_messages_evaluated == 13_931_600
     assert direct.program_commitment.hex() == (
-        "8a9cfd72cd0787dc9dd08f757d4e8b16dd7184dca311e60de7cb975388704864"
-        "8c3b4aa816cd7b0c7b5ef3f246cca5276db3e48cfb73c4fd07ddc59ba3e3ed5d"
+        "706314e83f1e3895f76907a4a35fabec81cf289e3f54324464a0ddd0890dba2a"
+        "ba9f8f44ea9eb079e9f97414aded7c88de64f9aa9d2dad8f0aec1bc6eb1b1ab9"
     )
     assert direct.trace_commitment.hex() == (
-        "1223369d19a69858599f6bb62d797fe1ccd0de257c19cf8d00bacc530a458432a"
-        "2d45eeff52b1a7480b2603da06e358f697b24264f539bfc26afd3b076575742"
+        "a34bb76c4c06ec7edf596d9c1a7a6a84ce169c694290e99832f9b50d0c0cdb94"
+        "97f7b57559213ce361acc2747f1adbcd66d9eb24884d22907a4c48204b0cc1a7"
     )

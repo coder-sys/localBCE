@@ -192,7 +192,7 @@ def test_rust_independently_evaluates_direct_boolean_keccak(evaluator: Path) -> 
     assert report == {
         "source_program_commitment": expected.program_commitment.hex(),
         "binary_commitment": air_binary_commitment(encoded).hex(),
-        "identities_evaluated": "86400",
+        "identities_evaluated": "86573",
         "lookup_messages_evaluated": "0",
         "maximum_degree": "11",
     }
