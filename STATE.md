@@ -8413,3 +8413,88 @@ Ethereum data, or production credential. `app/operational_readiness.py` remains 
 and in the Git checkpoint but stays outside this exact release allowlist because the existing
 release builder correctly rejects it under the structural privacy gate; that gate and the source
 file were not weakened or changed for packaging.
+
+## 2026-08-05 Zero-cost internal engineering scope - VERIFIED, NONACTIVATING
+
+The requested zero-cost internal scope was completed and checkpointed in commit `498f023`
+(`Add Wave 2 internal reference boundary`). The scoped implementation adds the local/synthetic
+Wave 2 fixed-K Privacy V2/proof-boundary seam, the offline receipt runner, a machine-readable
+nonactivating profile, focused mutation/attack tests, current-stack/architecture/roadmap entries,
+and the refreshed Source-Complete archives. It composes with the already verified local/synthetic
+Wave 3 verifier/state/custody, Wave 4 adapter/operations, Wave 5 based-rollup, and software PQ-KMS
+reference paths.
+
+The new Wave 2 boundary is deliberately reference-only: K128 and K512 schedules have fixed shape,
+the ordered public boundary has exactly 12 fields, the sidecar is exactly 744 bytes, and the
+bounded `BLPQPF01` reference body is exactly 696 bytes with four 64-byte sections. Its verifier
+checks canonical parsing, candidate identity, public binding, sidecar binding, and transcript
+binding. It does not claim semantic proof soundness, zero-knowledge witness hiding, an audited PCS,
+production constant-time behavior, or a selected production suite.
+
+Exact verification completed:
+
+```text
+py -3.14 -B -m pytest -q tests/test_wave2_internal_completion.py tests/attacks/test_wave2_internal_completion_attacks.py tests/test_wave2_internal_conformance.py
+16 passed in 0.71s
+
+py -3.14 -B -m pytest -q tests/test_privacy_artifact_scan.py tests/test_deployment_ready_roadmap_contract.py tests/test_production_readiness.py tests/test_operational_readiness.py tests/test_privacy_v2_abi.py tests/test_privacy_v2_statement.py tests/test_build_release_archive.py
+68 passed, 58 subtests passed in 2.51s
+
+py -3.14 -B -m pytest -q tests/test_bl_pq512_wave3_nullifier_authority.py tests/test_bl_pq512_wave3_verifier_state_custody.py tests/test_bl_pq512_wave3_full_internal.py tests/test_wave4_adapters_operations.py tests/test_wave5_rollup.py tests/attacks/test_wave5_rollup_attacks.py tests/test_bl_pq512_k512_parallel_campaign_evidence.py
+54 passed in 119.91s
+
+py -3.14 -B tools/wave2_internal_conformance.py --repo-root .
+K128 cases=3 verified=3 private_wire_bytes=23500 proof_body_bytes=696 sidecar_bytes=744
+K512 cases=3 verified=3 private_wire_bytes=93388 proof_body_bytes=696 sidecar_bytes=744
+fixed_shape=true privacy_clean=true h6_candidate_controls_ok=true
+software_kms_roundtrip=true software_only=true hsm_backed=false fips_validated=false
+network_access=false live_credentials=false proofSuiteId=null activation_allowed=false production_usable=false
+
+py -3.14 -B tools/wave4_conformance.py --repo-root .
+adapter.capability_count=22 adapter.passed_count=67 adapter.failure_count=0
+operations.ok=true release.ok=true production_usable=false proofSuiteId=null
+
+py -3.14 -B tools/wave5_conformance.py --repo-root .
+package_status=R01:R12 complete_internal_nonactivating rollback_ok=true
+network_access=false live_credentials=false proofSuiteId=null activation_allowed=false production_usable=false
+
+py -3.14 -B -c "from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority; print(verify_ops_authority())"
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+git diff --check
+exit=0
+```
+
+The repository-wide test command collected 1,706 tests but reached its explicit 900-second
+execution bound without a terminal summary and exited `124` after `904041 ms`; it receives no pass
+credit. The completed boundary-specific suites above are the verified result. No test, benchmark,
+or conformance command used live Ethereum, real government data, PHI, payment authority, live
+credentials, or network access. The software KMS path is not HSM-backed and is not FIPS-validated.
+
+The refreshed Source-Complete archive passed the release builder and independent ZIP readback:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=803
+payload_bytes=11620294
+entry_count=804
+archive_bytes=11914144
+archive_sha256=71f213ed477263fa1711f9531e5437bdc64e2aa8bb257b0b36fe1ec4af201560
+archive_sha3_512=9e0aaa3a13eda3021e9620aec59365a9f445f46e2405cd4c0c09d9d3269095899974a5d8252db9864911c2b8ea883b9a2498830119a34d23699345c9a29aaf5d
+manifest_sha256=904c991f06d98829db41c87510635d32b4c1a7d7d106bbc6ca6d369e2108cf7d
+zip_crc_readback=PASS
+duplicates=0
+three_way_byte_identical=true
+```
+
+All three published targets were replaced with that byte identity. The prior copies were backed up
+and verified at `C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave2-published-backup-20260805`.
+The archive remains an allowlisted source archive and excludes `STATE.md`, generated outputs, and
+private proof artifacts.
+
+The roadmap remains honestly at 45 of 93 internal packages complete and 48 open. `proofSuiteId`
+remains `null`; production activation remains false. The production native verifier/suite,
+complete native hiding theorem and simulator, HSM/FIPS authority, external anti-rollback, live
+Ethereum client deployment, final release qualification, and independent security audit remain
+open. The pre-existing dirty Wave 3/reference worktree changes were preserved and were not staged;
+no protected path was edited.
