@@ -8637,3 +8637,72 @@ complete native hiding theorem and simulator, HSM/FIPS authority, external anti-
 Ethereum client deployment, final release qualification, and independent security audit remain
 open. The pre-existing dirty Wave 3/reference worktree changes were preserved and were not staged;
 no protected path was edited.
+
+## 2026-08-06 local native/V2/rollup boundary and release refresh - VERIFIED, NONACTIVATING
+
+Current Git checkpoint: `ef99879` (`Document local native stack boundary`), on `main`, clean before
+this state-record append. The local engineering scope is now connected across the native Rust
+candidate verifier, exact Privacy V2 settlement model, and based-rollup claim adapter:
+
+- `app/native_public_input_projection.py` and the Rust verifier enforce a lossless projection of the
+  exact ordered 12 `bytes32` outputs into 108 M31 limbs (nine 30-bit limbs per field). The Python
+  port and Rust CLI require the projection schema and reject a caller-supplied static vector path.
+- `app/production_boundary.py` recomputes the V2 fields from the sidecar, governed roots, domain,
+  and nonce; it verifies native receipt identities before publishing local state, and its state
+  writes remain atomic and replay-protected.
+- `app/wave5_native_boundary.py` rechecks the native envelope against the Wave 5 context, sidecar,
+  identity, and receipt. `app/local_stack_candidate.py` independently binds native, settlement,
+  and rollup commitments into a commitment-only `LOCAL_SYNTHETIC_NONACTIVATING` receipt. It stores
+  no PHI, exact private amount, proof bytes, credential, or network state.
+- The protected Solidity paths were not edited. The global operational registry remains
+  `UNSELECTED`, `proofSuiteId=null`, `activation_allowed=false`, and `production_usable=false`.
+
+Verified focused evidence:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_public_input_projection.py tests/test_bl_pq512_production_boundary.py tests/test_bl_pq512_wave5_native_boundary.py tests/test_bl_pq512_production_candidate.py -k 'not real_rust'
+16 passed, 1 deselected
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_production_candidate.py -k real_rust
+1 passed, 4 deselected in 105.67s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_deployment_ready_roadmap_contract.py tests/test_operational_readiness.py tests/test_production_readiness.py
+20 passed
+
+tools.wave2_spec_conformance: exit=0
+tools.wave4_conformance: exit=0, adapters=67 passed/0 failed, capabilities=22
+tools.wave5_conformance: exit=0, R01-R12 complete_internal_nonactivating, rollback_ok=true
+tools.privacy_v2_conformance: exit=0, mutation_cases=34, artifact_findings=0
+tools.remaining_internal_conformance: exit=0, package_count=31, source_files=79, test_files=77
+tools.whole_product_kat: exit=0, case_count=6, private_material_in_manifest=false
+
+cargo +1.96.0 fmt --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --all -- --check
+exit=0
+cargo +1.96.0 clippy --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --all-targets --offline --locked --features std,parallel -- -D warnings
+exit=0
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --features std,parallel
+307 tests passed; 0 failed; 0 ignored; all binary/doc-test groups passed
+```
+
+The three refreshed Source-Complete targets were independently read back as byte-identical:
+
+```text
+payload_file_count=824
+entry_count=825
+archive_bytes=12219823
+archive_sha256=2c2776596267d0760cb6c9f9fa17fe8d047e1e5e696b72bcb4cb44f18d531526
+manifest_sha256=e4bb35d576a72299c47b59e0cc29bdd81cc1f810b99c2026317271b7d2e4c9f0
+new_boundary_files_present=7
+zip_crc_readback=PASS
+duplicates=0
+three_way_byte_identical=true
+state_entries=0
+generated_entries=0
+```
+
+The prior three 12,121,243-byte copies are recoverable under
+`C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave2-published-backup-f7d46d5`.
+The remaining blockers are real deployment/on-chain verifier integration, HSM/FIPS certification,
+external anti-rollback authority, independent audit, and operator-supplied live government/payment
+activation inputs. No contradiction was found; no protected path, live endpoint, real government
+record, PHI, payment authority, or production credential was used.

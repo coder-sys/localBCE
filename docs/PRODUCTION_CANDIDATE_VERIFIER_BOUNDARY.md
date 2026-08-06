@@ -105,11 +105,14 @@ cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml -
 cargo +1.96.0 clippy --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --all-targets --offline --locked --features std,parallel -- -D warnings
 Finished `dev` profile
 
-py -3.14 -m pytest tests/test_bl_pq512_production_candidate.py -k 'not real_rust' -q
-4 passed, 1 deselected
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_public_input_projection.py tests/test_bl_pq512_production_boundary.py tests/test_bl_pq512_wave5_native_boundary.py tests/test_bl_pq512_production_candidate.py -k 'not real_rust'
+16 passed, 1 deselected
 
-py -3.14 -m pytest tests/test_bl_pq512_production_candidate.py -k real_rust -vv -s
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_production_candidate.py -k real_rust
 1 passed, 4 deselected
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_deployment_ready_roadmap_contract.py tests/test_operational_readiness.py tests/test_production_readiness.py
+20 passed
 
 candidate/transcript/Wave-3 containing tests: 28 passed, 1 deselected
 PQ-governance containing tests: 44 passed
