@@ -13,6 +13,10 @@ candidate-evidence obligations. This plan still governs replaceable production s
 no production state layout or suite identity is selected, `proofSuiteId=null`, and real PHI or
 payment credentials remain forbidden.
 
+This selects the Gate 2E candidate; it is not H5 qualification. H5 is separately governed by its
+exact repeated complete-proof campaign, and neither boundary selects a production suite or enables
+activation.
+
 Execution authority: the deterministic continuation contract near the top of
 `IMPLEMENTATION_ROADMAP.md` defines the exact 2E-0 through 2E-7 sequence, finalist measurement
 boundary, H5 separation, terminal handoff, and STOP rules. S0/2E-0 is now frozen with exact
@@ -202,6 +206,11 @@ Select and bind a production state plane only after the later verifier, custody,
 resource-telemetry, and release gates are complete. The v3 component is the native verifier
 boundary needed for that work; the already qualified H4/H5/H6 candidate evidence is nonactivating
 and does not itself authorize production.
+
+The Gate 2E handoff therefore requires:
+   Bind the selected state plane into
+   the actual H4 parent only after the state, proof, verifier, and settlement identities are
+   atomically defined and independently replayable.
 
 ### Current state-bus prerequisite
 

@@ -311,6 +311,30 @@ CALLSITE_DISPOSITIONS: Final[Mapping[CallsiteId, PortDisposition]] = MappingProx
             2,
         ): _A,
         _call(
+            "experiments/fixed_shape_claim_air/hash_bus_snapshot.py",
+            "_encode_snapshot",
+        ): _H,
+        _call(
+            "experiments/fixed_shape_claim_air/hash_bus_snapshot.py",
+            "_port_commitment",
+            0,
+        ): _H,
+        _call(
+            "experiments/fixed_shape_claim_air/hash_bus_snapshot.py",
+            "_port_commitment",
+            1,
+        ): _H,
+        _call(
+            "experiments/fixed_shape_claim_air/hash_bus_snapshot.py",
+            "state_composed_descriptor_commitment",
+            0,
+        ): _H,
+        _call(
+            "experiments/fixed_shape_claim_air/hash_bus_snapshot.py",
+            "state_composed_descriptor_commitment",
+            1,
+        ): _H,
+        _call(
             "experiments/fixed_shape_claim_air/payment_state.py",
             "reference_payment_state_root",
         ): _S,
@@ -351,9 +375,22 @@ CALLSITE_DISPOSITIONS: Final[Mapping[CallsiteId, PortDisposition]] = MappingProx
             "build_wave1a_global_sha3_capacity_schedule",
         ): _H,
         _call(
+            "experiments/fixed_shape_claim_air/wave1a_global_sha3_capacity_schedule.py",
+            "build_wave1a_global_sha3_capacity_schedule",
+            1,
+        ): _H,
+        _call(
             "experiments/fixed_shape_claim_air/wave1a_global_sha3_schedule.py",
             "build_wave1a_global_sha3_schedule",
         ): _H,
+        _call(
+            "experiments/fixed_shape_claim_air/typed_state_relation_executable_air.py",
+            "_authority_columns",
+        ): _V,
+        _call(
+            "experiments/fixed_shape_claim_air/typed_state_relation_executable_air.py",
+            "TypedStateRelationAirInstance.relation_digest_512",
+        ): _V,
         _call(
             "experiments/fixed_shape_claim_air/wave1a_relation_reference.py",
             "_strong_governance_commitment",
