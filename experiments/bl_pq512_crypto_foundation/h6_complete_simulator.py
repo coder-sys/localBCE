@@ -30,6 +30,9 @@ from experiments.bl_pq512_crypto_foundation.proof_body_reference import (
     encode_reference_proof_body,
     parse_proof_body,
 )
+from experiments.bl_pq512_crypto_foundation.native_hiding_simulator import (
+    run_native_hiding_simulator_suite,
+)
 
 
 STATUS: Final[str] = "H6_COMPLETE_SIMULATOR_V1_NONACTIVATING"
@@ -317,6 +320,17 @@ def simulate_crash_recovery(capacity: int) -> dict[str, object]:
 
 
 def run_complete_simulator_suite() -> dict[str, object]:
+    native_hiding = run_native_hiding_simulator_suite()
+    if not all(
+        native_hiding.get(key) is True
+        for key in (
+            "fixed_shape_verified",
+            "private_opening_verified",
+            "simulator_shape_verified",
+            "error_shape_verified",
+        )
+    ):
+        raise H6SimulatorError("h6_simulator_native_hiding_boundary_failed")
     valid: list[SimulationRecord] = []
     for capacity in PROFILES:
         shapes: set[tuple[int, int, int, int, int]] = set()
@@ -365,6 +379,10 @@ def run_complete_simulator_suite() -> dict[str, object]:
         "retry_fresh_randomness": True,
         "crash_recovery_zero_retained_artifacts": True,
         "repeated_proof_shape_fixed": True,
+        "native_hiding_simulated": True,
+        "native_hiding": {
+            key: value for key, value in native_hiding.items() if key != "records"
+        },
         "proofSuiteId": None,
         "activationAllowed": False,
         "grammar_identity_sha3_512": grammar_identity().hex(),

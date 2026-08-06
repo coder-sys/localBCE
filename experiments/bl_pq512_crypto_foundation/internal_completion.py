@@ -548,6 +548,13 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         ),
         "public_boundary": boundary["field_count"] == 12,
         "privacy_v2_simulator": simulator["repeated_proof_shape_fixed"] is True,
+        "native_hiding_reference": (
+            simulator["native_hiding_simulated"] is True
+            and simulator["native_hiding"]["fixed_shape_verified"] is True
+            and simulator["native_hiding"]["private_opening_verified"] is True
+            and simulator["native_hiding"]["simulator_shape_verified"] is True
+            and simulator["native_hiding"]["error_shape_verified"] is True
+        ),
         "privacy_v2_boundary": all(
             privacy.get(key) is True
             for key in (

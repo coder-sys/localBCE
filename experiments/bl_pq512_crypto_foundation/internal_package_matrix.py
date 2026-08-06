@@ -235,8 +235,8 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
     "Z11": _definition(
         "Z11",
         "prove the complete simulator across abort, retry, crash, and artifact paths",
-        ("experiments/bl_pq512_crypto_foundation/h6_complete_simulator.py", "experiments/bl_pq512_crypto_foundation/h6_privacy_boundary.py"),
-        ("tests/test_bl_pq512_h6_complete_simulator.py", "tests/test_bl_pq512_h6_privacy_boundary.py", "tests/attacks/test_bl_pq512_h6_closure_attacks.py"),
+        ("experiments/bl_pq512_crypto_foundation/h6_complete_simulator.py", "experiments/bl_pq512_crypto_foundation/native_hiding_simulator.py", "experiments/bl_pq512_crypto_foundation/h6_privacy_boundary.py"),
+        ("tests/test_bl_pq512_h6_complete_simulator.py", "tests/test_bl_pq512_native_hiding_simulator.py", "tests/test_bl_pq512_h6_privacy_boundary.py", "tests/attacks/test_bl_pq512_native_hiding_simulator_attacks.py", "tests/attacks/test_bl_pq512_h6_closure_attacks.py"),
     ),
     "Z12": _definition(
         "Z12",
