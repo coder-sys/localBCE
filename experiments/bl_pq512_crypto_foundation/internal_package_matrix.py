@@ -175,8 +175,8 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
     "A16": _definition(
         "A16",
         "complete the trace/AIR/composition/prover/verifier and adversarial closure",
-        ("experiments/fixed_shape_claim_air/executable_air.py", "experiments/fixed_shape_claim_air/wave1a_global_executable_air.py", "experiments/bl_pq512_crypto_core/src/bin/k512_atomic_semantic_prototype.rs"),
-        ("tests/test_wave1a_executable_air.py", "tests/test_wave1a_global_executable_air.py", "tests/test_bl_pq512_wave3_full_internal.py", "tests/attacks/test_wave1a_executable_air_attacks.py"),
+        ("experiments/fixed_shape_claim_air/executable_air.py", "experiments/fixed_shape_claim_air/wave1a_global_executable_air.py", "experiments/bl_pq512_crypto_core/src/bin/k512_atomic_semantic_prototype.rs", "tools/remaining_internal_conformance.py"),
+        ("tests/test_wave1a_executable_air.py", "tests/test_wave1a_global_executable_air.py", "tests/test_bl_pq512_wave3_full_internal.py", "tests/attacks/test_wave1a_executable_air_attacks.py", "tests/test_remaining_internal_conformance.py"),
     ),
     "Z02": _definition(
         "Z02",
@@ -187,8 +187,8 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
     "Z03": _definition(
         "Z03",
         "mask private semantic, bus, GKR, and terminal messages",
-        ("experiments/bl_pq512_crypto_core/src/gkr_zk_mask.rs", "experiments/bl_pq512_crypto_foundation/native_hiding_parameters.py", "experiments/bl_pq512_crypto_foundation/h6_complete_simulator.py"),
-        ("tests/test_bl_pq512_native_hiding_parameters.py", "tests/test_bl_pq512_fp16_hiding_simulator.py", "tests/attacks/test_bl_pq512_native_hiding_parameters_attacks.py"),
+        ("experiments/bl_pq512_crypto_core/src/gkr_zk_mask.rs", "experiments/bl_pq512_crypto_foundation/native_hiding_parameters.py", "experiments/bl_pq512_crypto_foundation/h6_complete_simulator.py", "tools/remaining_internal_conformance.py"),
+        ("tests/test_bl_pq512_native_hiding_parameters.py", "tests/test_bl_pq512_fp16_hiding_simulator.py", "tests/attacks/test_bl_pq512_native_hiding_parameters_attacks.py", "tests/test_remaining_internal_conformance.py"),
     ),
     "Z04": _definition(
         "Z04",
@@ -250,7 +250,7 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
     "T04": _definition("T04", "KAT dummy, padding, mixed, and all-denied shapes", ("experiments/fixed_shape_claim_air/physical_air_reference.py", "app/privacy_v2.py", "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py"), ("tests/test_wave1a_physical_air_reference.py", "tests/test_privacy_v2_abi.py", "tests/test_whole_product_vector_corpus.py")),
     "T05": _definition("T05", "KAT zero/minimum/maximum capacity and boundaries", ("experiments/fixed_shape_claim_air/profile.py", "app/money.py", "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py"), ("tests/test_r25_fixed_shape_semantics.py", "tests/test_money_cross_lane_hardening.py", "tests/test_whole_product_vector_corpus.py")),
     "T06": _definition("T06", "KAT duplicate/replay/retry/correction/revision/nullifier cases", ("experiments/fixed_shape_claim_air/a12_replay_composition_executable_air.py", "experiments/bl_pq512_crypto_foundation/state_migration_recovery.py", "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py"), ("tests/test_wave1a_a12_replay_composition_executable_air.py", "tests/test_bl_pq512_state_migration_recovery.py", "tests/attacks/test_wave1a_replay_header_executable_air_attacks.py", "tests/test_whole_product_vector_corpus.py")),
-    "T07": _definition("T07", "attack fabricated/stale policy/oracle/source/signer/epoch inputs", ("experiments/bl_pq512_crypto_foundation/claim_truth_pq_authority.py", "experiments/bl_pq512_crypto_foundation/claim_source_commitment.py", "experiments/bl_pq512_crypto_foundation/state_migration_recovery.py"), ("tests/test_bl_pq512_claim_truth_pq_authority.py", "tests/test_bl_pq512_claim_source_commitment.py", "tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py")),
+    "T07": _definition("T07", "attack fabricated/stale policy/oracle/source/signer/epoch inputs", ("experiments/bl_pq512_crypto_foundation/claim_truth_pq_authority.py", "experiments/bl_pq512_crypto_foundation/claim_source_commitment.py", "experiments/bl_pq512_crypto_foundation/state_migration_recovery.py", "tools/remaining_internal_conformance.py"), ("tests/test_bl_pq512_claim_truth_pq_authority.py", "tests/test_bl_pq512_claim_source_commitment.py", "tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py", "tests/test_remaining_internal_conformance.py")),
     "T08": _definition("T08", "attack money, canonical-field, serialization, and length inputs", ("app/money.py", "app/canonical_encoding.py", "experiments/bl_pq512_crypto_foundation/h6_receipt_grammar.py"), ("tests/test_money_cross_lane_hardening.py", "tests/test_bl_pq512_h6_receipt_grammar_cross_language.py", "tests/attacks/test_privacy_v2_bundle_attacks.py")),
     "T09": _definition("T09", "attack proof/profile/schema/artifact/domain/root rebinding", ("experiments/bl_pq512_crypto_foundation/proof_body_reference.py", "experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py", "app/wave5_rollup.py"), ("tests/attacks/test_bl_pq512_s09_proof_body_reference_attacks.py", "tests/attacks/test_bl_pq512_state_plane_attacks.py", "tests/attacks/test_wave5_rollup_attacks.py")),
     "T10": _definition("T10", "property/fuzz coverage for AIR, parsers, verifiers, and projections", ("experiments/fixed_shape_claim_air/executable_air.py", "experiments/bl_pq512_crypto_foundation/proof_body_reference.py", "app/privacy_v2.py"), ("tests/test_r25_vector_properties.py", "tests/test_verifier_receipt.py", "tests/attacks/test_privacy_v2_bundle_attacks.py")),

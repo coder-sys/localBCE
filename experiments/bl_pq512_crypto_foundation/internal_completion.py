@@ -55,6 +55,7 @@ from tools.wave4_conformance import build_receipt as build_wave4_conformance_rec
 from tools.whole_product_kat import build_receipt as build_whole_product_kat_receipt
 from tools.wave2_spec_conformance import build_receipt as build_wave2_spec_receipt
 from tools.privacy_v2_conformance import build_receipt as build_privacy_v2_receipt
+from tools.remaining_internal_conformance import build_receipt as build_remaining_internal_receipt
 from app.wave4_adapters import (
     DualPqAuthenticator,
     ML_DSA_87,
@@ -95,6 +96,10 @@ CLOSED_PACKAGE_IDS: Final[frozenset[str]] = frozenset(
         "S05",
         "S06",
         "A12",
+        *(f"A{index:02d}" for index in range(1, 12)),
+        *(f"A{index:02d}" for index in range(13, 17)),
+        *(f"Z{index:02d}" for index in range(3, 11)),
+        *(f"T{index:02d}" for index in range(7, 15)),
         "S02",
         "S04",
         *(f"S{index:02d}" for index in range(7, 13)),
@@ -217,6 +222,7 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "experiments/fixed_shape_claim_air/claim_semantics_executable_air.py",
             "experiments/fixed_shape_claim_air/claim_payment_maps_executable_air.py",
             "experiments/fixed_shape_claim_air/master_commitments_executable_air.py",
+            "tools/remaining_internal_conformance.py",
             *_PUBLIC_BOUNDARY_SOURCE,
         ),
         (
@@ -227,6 +233,7 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "tests/test_wave1a_claim_semantics_executable_air.py",
             "tests/test_wave1a_authenticated_payment_maps_executable_air.py",
             "tests/test_wave1a_master_commitments_executable_air.py",
+            "tests/test_remaining_internal_conformance.py",
             *_PUBLIC_BOUNDARY_TESTS,
         ),
     ),
@@ -239,6 +246,7 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "experiments/bl_pq512_crypto_foundation/public_coin_governance.py",
             "experiments/bl_pq512_crypto_foundation/proof_body_reference.py",
             "tools/privacy_v2_conformance.py",
+            "tools/remaining_internal_conformance.py",
         ),
         (
             "tests/test_bl_pq512_native_hiding_parameters.py",
@@ -250,6 +258,7 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "tests/attacks/test_bl_pq512_native_hiding_parameters_attacks.py",
             "tests/attacks/test_bl_pq512_h6_closure_attacks.py",
             "tests/test_privacy_v2_conformance.py",
+            "tests/test_remaining_internal_conformance.py",
         ),
     ),
     "P": (
@@ -276,6 +285,7 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "experiments/bl_pq512_crypto_foundation/h6_migration_theorem.py",
             "experiments/bl_pq512_crypto_foundation/benchmark_evidence.py",
             "tools/privacy_artifact_scan.py",
+            "tools/remaining_internal_conformance.py",
         ),
         (
             "tests/test_foundation_vector_schema.py",
@@ -285,6 +295,7 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "tests/test_bl_pq512_benchmark_evidence.py",
             "tests/test_privacy_artifact_scan.py",
             "tests/attacks/test_bl_pq512_h6_qualification_preflight_attacks.py",
+            "tests/test_remaining_internal_conformance.py",
         ),
     ),
     "O": (
@@ -526,6 +537,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
     whole_product_kat = build_whole_product_kat_receipt(root)
     wave2_spec = build_wave2_spec_receipt(root)
     privacy_v2 = build_privacy_v2_receipt(root)
+    remaining_internal = build_remaining_internal_receipt(root)
 
     with _all_synthetic_environment():
         simulator = run_complete_simulator_suite()
@@ -599,6 +611,22 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
             and privacy_v2["productionUsable"] is False
             and set(privacy_v2["package_status"]) == {"Z02", "Z11", "Z12"}
         ),
+        "remaining_internal_conformance": (
+            remaining_internal["status"]
+            == "REMAINING_INTERNAL_CONFORMANCE_VERIFIED_NONACTIVATING"
+            and remaining_internal["package_count"] == 31
+            and all(
+                status == PACKAGE_STATUS
+                for status in remaining_internal["package_status"].values()
+            )
+            and remaining_internal["profile_and_boundary"]["field_count"] == 12
+            and remaining_internal["native_hiding"]["table_count"] == 16
+            and remaining_internal["security_ledger_qualifies"] is True
+            and remaining_internal["backend"]["production_native_stark_verifier"] is False
+            and remaining_internal["proofSuiteId"] is None
+            and remaining_internal["activationAllowed"] is False
+            and remaining_internal["productionUsable"] is False
+        ),
         "privacy_v2_simulator": simulator["repeated_proof_shape_fixed"] is True,
         "native_hiding_reference": (
             simulator["native_hiding_simulated"] is True
@@ -649,7 +677,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         package_id: PACKAGE_STATUS if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_STATUS
         for package_id in PACKAGE_IDS
     }
-    if len(CLOSED_PACKAGE_IDS) != 62 or len(OPEN_PACKAGE_IDS) != 31:
+    if len(CLOSED_PACKAGE_IDS) != 93 or len(OPEN_PACKAGE_IDS) != 0:
         raise InternalCompletionError("internal_completion_roadmap_count_invalid")
     checks["package_ledger"] = (
         tuple(package_statuses) == PACKAGE_IDS
@@ -691,6 +719,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         "whole_product_kat": whole_product_kat,
         "wave2_spec": wave2_spec,
         "privacy_v2": privacy_v2,
+        "remaining_internal": remaining_internal,
         "migration": migration,
         "privacy": privacy,
         "simulator": {
