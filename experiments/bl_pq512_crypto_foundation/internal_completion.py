@@ -52,6 +52,7 @@ from experiments.bl_pq512_crypto_foundation.internal_package_matrix import (
 from experiments.bl_pq512_crypto_foundation.ops_authority import verify_ops_authority
 from tools.wave2_internal_conformance import build_receipt as build_wave2_conformance_receipt
 from tools.wave4_conformance import build_receipt as build_wave4_conformance_receipt
+from tools.whole_product_kat import build_receipt as build_whole_product_kat_receipt
 from app.wave4_adapters import (
     DualPqAuthenticator,
     ML_DSA_87,
@@ -92,6 +93,7 @@ CLOSED_PACKAGE_IDS: Final[frozenset[str]] = frozenset(
         "S05",
         "S06",
         "A12",
+        *(f"T{index:02d}" for index in range(1, 7)),
         "Z01",
         *(f"P{index:02d}" for index in range(1, 13)),
         *(f"O{index:02d}" for index in range(1, 7)),
@@ -370,7 +372,7 @@ def _evidence(root: Path, package_id: str) -> dict[str, object]:
         for relative in (*sources, *tests)
     )
     status = PACKAGE_STATUS if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_STATUS
-    reason = OPEN_PACKAGE_REASONS.get(package_id)
+    reason = None if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_REASONS.get(package_id)
     if package_id not in CLOSED_PACKAGE_IDS and reason is None:
         raise InternalCompletionError(f"internal_completion_open_reason_missing:{package_id}")
     return {
@@ -509,6 +511,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
     wave2 = build_wave2_conformance_receipt(root)
     wave4 = build_wave4_conformance_receipt(root)
     wave5 = _verify_wave5_conformance()
+    whole_product_kat = build_whole_product_kat_receipt(root)
 
     with _all_synthetic_environment():
         simulator = run_complete_simulator_suite()
@@ -547,6 +550,19 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
             and wave5["proofSuiteId"] is None
         ),
         "public_boundary": boundary["field_count"] == 12,
+        "whole_product_kat": (
+            whole_product_kat["status"]
+            == "WHOLE_PRODUCT_COMMITMENT_KAT_VERIFIED_NONACTIVATING"
+            and whole_product_kat["case_count"] == 6
+            and whole_product_kat["profile_count"] == 2
+            and whole_product_kat["outcome_count"] == 3
+            and whole_product_kat["public_field_count"] == 12
+            and whole_product_kat["sidecar_bytes"] == 744
+            and whole_product_kat["proof_body_bytes"] == 696
+            and whole_product_kat["proofSuiteId"] is None
+            and whole_product_kat["activationAllowed"] is False
+            and whole_product_kat["private_material_in_manifest"] is False
+        ),
         "privacy_v2_simulator": simulator["repeated_proof_shape_fixed"] is True,
         "native_hiding_reference": (
             simulator["native_hiding_simulated"] is True
@@ -597,7 +613,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         package_id: PACKAGE_STATUS if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_STATUS
         for package_id in PACKAGE_IDS
     }
-    if len(CLOSED_PACKAGE_IDS) != 45 or len(OPEN_PACKAGE_IDS) != 48:
+    if len(CLOSED_PACKAGE_IDS) != 51 or len(OPEN_PACKAGE_IDS) != 42:
         raise InternalCompletionError("internal_completion_roadmap_count_invalid")
     checks["package_ledger"] = (
         tuple(package_statuses) == PACKAGE_IDS
@@ -636,6 +652,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         "wave2": wave2,
         "wave4": wave4,
         "wave5": wave5,
+        "whole_product_kat": whole_product_kat,
         "migration": migration,
         "privacy": privacy,
         "simulator": {
