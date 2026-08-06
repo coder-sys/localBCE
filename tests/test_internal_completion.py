@@ -20,8 +20,8 @@ def test_all_internal_packages_reconcile_without_activation() -> None:
     assert receipt["release_candidate_state"] == RELEASE_CANDIDATE_STATE
     assert receipt["proof_suite_state"] == PROOF_SUITE_STATE == "UNSELECTED"
     assert receipt["internal_engineering_packages"] == PACKAGE_COUNT == 93
-    assert receipt["internal_complete"] == len(CLOSED_PACKAGE_IDS) == 59
-    assert receipt["internal_open"] == len(OPEN_PACKAGE_IDS) == 34
+    assert receipt["internal_complete"] == len(CLOSED_PACKAGE_IDS) == 62
+    assert receipt["internal_open"] == len(OPEN_PACKAGE_IDS) == 31
     assert tuple(receipt["open_package_ids"]) == OPEN_PACKAGE_IDS
     assert tuple(receipt["package_statuses"]) == PACKAGE_IDS
     assert {

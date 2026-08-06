@@ -181,8 +181,8 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
     "Z02": _definition(
         "Z02",
         "separate OS entropy from deterministic tests and zeroize owned secrets",
-        ("app/wave2_internal.py", "app/wave4_operations.py", "experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py"),
-        ("tests/test_wave2_internal_completion.py", "tests/test_wave4_adapters_operations.py", "tests/attacks/test_wave2_internal_completion_attacks.py"),
+        ("app/wave2_internal.py", "app/wave4_operations.py", "experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py", "tools/privacy_v2_conformance.py"),
+        ("tests/test_wave2_internal_completion.py", "tests/test_wave4_adapters_operations.py", "tests/attacks/test_wave2_internal_completion_attacks.py", "tests/test_privacy_v2_conformance.py"),
     ),
     "Z03": _definition(
         "Z03",
@@ -235,14 +235,14 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
     "Z11": _definition(
         "Z11",
         "prove the complete simulator across abort, retry, crash, and artifact paths",
-        ("experiments/bl_pq512_crypto_foundation/h6_complete_simulator.py", "experiments/bl_pq512_crypto_foundation/native_hiding_simulator.py", "experiments/bl_pq512_crypto_foundation/h6_privacy_boundary.py"),
-        ("tests/test_bl_pq512_h6_complete_simulator.py", "tests/test_bl_pq512_native_hiding_simulator.py", "tests/test_bl_pq512_h6_privacy_boundary.py", "tests/attacks/test_bl_pq512_native_hiding_simulator_attacks.py", "tests/attacks/test_bl_pq512_h6_closure_attacks.py"),
+        ("experiments/bl_pq512_crypto_foundation/h6_complete_simulator.py", "experiments/bl_pq512_crypto_foundation/native_hiding_simulator.py", "experiments/bl_pq512_crypto_foundation/h6_privacy_boundary.py", "tools/privacy_v2_conformance.py"),
+        ("tests/test_bl_pq512_h6_complete_simulator.py", "tests/test_bl_pq512_native_hiding_simulator.py", "tests/test_bl_pq512_h6_privacy_boundary.py", "tests/attacks/test_bl_pq512_native_hiding_simulator_attacks.py", "tests/attacks/test_bl_pq512_h6_closure_attacks.py", "tests/test_privacy_v2_conformance.py"),
     ),
     "Z12": _definition(
         "Z12",
         "qualify serialization, fail-closed parsing, fuzz/mutation, and unlinkability",
-        ("experiments/bl_pq512_crypto_foundation/h6_receipt_grammar.py", "experiments/bl_pq512_crypto_foundation/proof_body_reference.py", "tools/privacy_artifact_scan.py"),
-        ("tests/test_bl_pq512_h6_receipt_grammar_cross_language.py", "tests/test_privacy_artifact_scan.py", "tests/attacks/test_privacy_v2_bundle_attacks.py"),
+        ("experiments/bl_pq512_crypto_foundation/h6_receipt_grammar.py", "experiments/bl_pq512_crypto_foundation/proof_body_reference.py", "tools/privacy_artifact_scan.py", "tools/privacy_v2_conformance.py"),
+        ("tests/test_bl_pq512_h6_receipt_grammar_cross_language.py", "tests/test_privacy_artifact_scan.py", "tests/attacks/test_privacy_v2_bundle_attacks.py", "tests/test_privacy_v2_conformance.py"),
     ),
     "T01": _definition("T01", "freeze one whole-product vector schema", ("experiments/fixed_shape_claim_air/vector_corpus.py", "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py", "test_data/bl_pq512_whole_product_vectors.json", "tools/whole_product_kat.py", "tests/proving_policy_fixtures.py"), ("tests/test_foundation_vector_schema.py", "tests/test_whole_product_vector_corpus.py")),
     "T02": _definition("T02", "KAT approved claims across authoritative implementations", ("experiments/fixed_shape_claim_air/vector_corpus.py", "experiments/fixed_shape_claim_air/claim_semantics_executable_air.py", "experiments/fixed_shape_claim_air/whole_product_vector_corpus.py"), ("tests/test_r25_vector_corpus.py", "tests/test_wave1a_claim_semantics_executable_air.py", "tests/test_whole_product_vector_corpus.py")),
