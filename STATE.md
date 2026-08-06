@@ -8706,3 +8706,27 @@ The remaining blockers are real deployment/on-chain verifier integration, HSM/FI
 external anti-rollback authority, independent audit, and operator-supplied live government/payment
 activation inputs. No contradiction was found; no protected path, live endpoint, real government
 record, PHI, payment authority, or production credential was used.
+
+## 2026-08-06 final source-archive readback - VERIFIED, NONACTIVATING
+
+The documentation-only verifier-boundary receipt committed in `09c0f8b` was included in a final
+rebuild of all three Source-Complete targets. Each target is byte-identical:
+
+```text
+target_count=3
+three_way_byte_identical=true
+archive_bytes=12220176
+archive_sha256=59b524f5e40da797267da0d2f36b9963f633e98d333ed2662f2678bf178299c8
+manifest_sha256=ac8437fe3bc90e862829a06aeb59fdfe797e81b5c4e62a2db3d113eaf713890e
+payload_file_count=824
+entry_count=825
+zip_crc_readback=PASS
+duplicates=0
+new_boundary_files_present=true
+state_entries=0
+generated_entries=0
+```
+
+The overwritten pre-refresh copies remain recoverable under
+`C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave2-published-backup-f7d46d5`.
+The archive remains source-only and nonactivating; `proofSuiteId=null` and activation remain false.
