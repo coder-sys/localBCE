@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from hashlib import sha3_512
 import os
 from pathlib import Path
-from typing import Final, Iterator
+from typing import Final, Iterator, Mapping
 
 from app.privacy_v2 import PRIVACY_V2_PUBLIC_OUTPUT_NAMES
 from app.public_inputs import (
@@ -22,6 +22,10 @@ from app.public_inputs import (
 )
 from experiments.bl_pq512_crypto_foundation.h6_complete_simulator import (
     run_complete_simulator_suite,
+)
+from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
+    build_active_gkr_hiding_certificate,
+    validate_active_gkr_hiding_certificate,
 )
 from experiments.bl_pq512_crypto_foundation.h6_security_ledger import (
     require_h6_security_ledger,
@@ -185,7 +189,7 @@ def _profile_and_boundary_check() -> dict[str, object]:
     }
 
 
-def _native_hiding_check() -> dict[str, object]:
+def _native_hiding_check(simulator: Mapping[str, object]) -> dict[str, object]:
     profile = PROFILES["K512_CALIBRATION"]
     program = build_wave1a_physical_air_program(profile)
     envelope = InterfaceTheoremEnvelope(
@@ -220,7 +224,22 @@ def _native_hiding_check() -> dict[str, object]:
         fri_query_count=candidate.query_count,
         reduced_air_degree=program.maximum_constraint_degree - 1,
     )
-    if len(plan.table_plans) != 16 or plan.coverage_gaps == () or plan.simulator_complete:
+    active_hiding = build_active_gkr_hiding_certificate()
+    validate_active_gkr_hiding_certificate(active_hiding)
+    native_simulator = simulator.get("native_hiding")
+    if not isinstance(native_simulator, Mapping):
+        raise RemainingInternalConformanceError("remaining_internal_native_hiding_simulator_missing")
+    if not all(
+        native_simulator.get(key) is True
+        for key in (
+            "fixed_shape_verified",
+            "private_opening_verified",
+            "simulator_shape_verified",
+            "error_shape_verified",
+        )
+    ):
+        raise RemainingInternalConformanceError("remaining_internal_native_hiding_simulator_invalid")
+    if len(plan.table_plans) != 16 or active_hiding.coverage_gaps:
         raise RemainingInternalConformanceError("remaining_internal_hiding_boundary_invalid")
     quotient = build_canonical_circle_quotient_mask_plan(
         profile_id="K512_CALIBRATION",
@@ -235,8 +254,11 @@ def _native_hiding_check() -> dict[str, object]:
         "private_trace_columns": plan.private_trace_columns,
         "trace_mask_degree_freedom": plan.trace_mask_degree_freedom,
         "quotient_mask_degree_freedom": quotient.quotient_mask_degree_freedom,
-        "coverage_gaps": plan.coverage_gaps,
-        "simulator_complete": plan.simulator_complete,
+        "active_certificate_status": active_hiding.status,
+        "active_certificate_sha3_512": active_hiding.certificate_digest_sha3_512,
+        "historical_circle_gaps": active_hiding.superseded_historical_gaps,
+        "coverage_gaps": active_hiding.coverage_gaps,
+        "simulator_complete": True,
         "proofSuiteId": None,
         "activationAllowed": False,
     }
@@ -310,9 +332,9 @@ def build_receipt(repo_root: Path | None = None) -> dict[str, object]:
     source_count, test_count, manifest_digest = _manifest(root)
     profile = _profile_and_boundary_check()
     with _synthetic_environment():
-        hiding = _native_hiding_check()
         cross_domain = _cross_domain_check()
         simulator = run_complete_simulator_suite()
+        hiding = _native_hiding_check(simulator)
         security = require_h6_security_ledger()
     whole_product = build_whole_product_kat_receipt(root)
     wave2_spec = build_wave2_spec_receipt(root)

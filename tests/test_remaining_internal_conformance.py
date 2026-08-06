@@ -18,6 +18,9 @@ def test_remaining_internal_packages_close_only_at_nonactivating_boundary() -> N
     assert receipt["package_count"] == 31
     assert receipt["profile_and_boundary"]["field_count"] == 12
     assert receipt["native_hiding"]["table_count"] == 16
+    assert receipt["native_hiding"]["coverage_gaps"] == ()
+    assert receipt["native_hiding"]["simulator_complete"] is True
+    assert receipt["native_hiding"]["historical_circle_gaps"]
     assert receipt["security_ledger_qualifies"] is True
     assert receipt["backend"]["rust_independent_verifier_present"] is True
     assert receipt["backend"]["production_native_stark_verifier"] is False

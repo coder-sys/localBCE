@@ -8730,3 +8730,27 @@ generated_entries=0
 The overwritten pre-refresh copies remain recoverable under
 `C:\Users\neers\Documents\Codex\2026-08-05\you-are-entering-an-existing-blind\work\wave2-published-backup-f7d46d5`.
 The archive remains source-only and nonactivating; `proofSuiteId=null` and activation remain false.
+
+## 2026-08-06 active hiding receipt reconciliation - VERIFIED, NONACTIVATING
+
+The remaining-internal receipt previously consumed the superseded Circle worksheet directly and
+therefore reported its four historical identifiers as current coverage gaps. The active path is
+Construction 8.2 GKR/FRI, whose source-bound certificate already records those identifiers as
+superseded historical evidence with no current gaps. `tools/remaining_internal_conformance.py`
+now validates that active certificate and the complete bounded lifecycle simulator; the historical
+worksheet and its attack tests remain retained and unchanged.
+
+```text
+focused_tests=9 passed, 1 deselected
+active_certificate_status=ACTIVE_CONSTRUCTION_8_2_GKR_HIDING_REBASED_NONACTIVATING
+active_certificate_sha3_512=6dce316edd11d926db778cc76492fa1e22a9e406a667fadf511fd7711b9d49b8d5110f571176b7958d6af2050baf7e47387d79f77b9f9ab064f6ae0c186d2a15
+coverage_gaps=[]
+simulator_complete=true
+historical_circle_gap_count=4
+proofSuiteId=null
+activationAllowed=false
+productionUsable=false
+```
+
+This closes a stale receipt/reporting gap; it does not claim an independent theorem audit,
+production activation, HSM/FIPS validation, or a deployed on-chain verifier.

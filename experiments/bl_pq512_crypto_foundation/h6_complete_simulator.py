@@ -33,6 +33,10 @@ from experiments.bl_pq512_crypto_foundation.proof_body_reference import (
 from experiments.bl_pq512_crypto_foundation.native_hiding_simulator import (
     run_native_hiding_simulator_suite,
 )
+from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
+    build_active_gkr_hiding_certificate,
+    validate_active_gkr_hiding_certificate,
+)
 
 
 STATUS: Final[str] = "H6_COMPLETE_SIMULATOR_V1_NONACTIVATING"
@@ -320,6 +324,10 @@ def simulate_crash_recovery(capacity: int) -> dict[str, object]:
 
 
 def run_complete_simulator_suite() -> dict[str, object]:
+    active_hiding = build_active_gkr_hiding_certificate()
+    validate_active_gkr_hiding_certificate(active_hiding)
+    if active_hiding.coverage_gaps:
+        raise H6SimulatorError("h6_simulator_active_hiding_gap")
     native_hiding = run_native_hiding_simulator_suite()
     if not all(
         native_hiding.get(key) is True
@@ -381,7 +389,14 @@ def run_complete_simulator_suite() -> dict[str, object]:
         "repeated_proof_shape_fixed": True,
         "native_hiding_simulated": True,
         "native_hiding": {
-            key: value for key, value in native_hiding.items() if key != "records"
+            **{
+                key: value for key, value in native_hiding.items() if key != "records"
+            },
+            "active_certificate_status": active_hiding.status,
+            "active_certificate_sha3_512": active_hiding.certificate_digest_sha3_512,
+            "active_historical_circle_gaps": active_hiding.superseded_historical_gaps,
+            "active_coverage_gaps": active_hiding.coverage_gaps,
+            "active_certificate_verified": True,
         },
         "proofSuiteId": None,
         "activationAllowed": False,

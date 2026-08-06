@@ -40,6 +40,9 @@ def test_complete_simulator_covers_all_lifecycle_branches() -> None:
         assert result[key] is True
     assert result["proofSuiteId"] is None
     assert result["activationAllowed"] is False
+    assert result["native_hiding"]["active_certificate_verified"] is True
+    assert result["native_hiding"]["active_coverage_gaps"] == ()
+    assert result["native_hiding"]["active_historical_circle_gaps"]
 
 
 def test_retry_keeps_attempt_identity_and_changes_proof() -> None:
