@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Validate the vendored OpenZeppelin v5.6.1 source aggregate."""
+"""Validate the Git-tracked vendored OpenZeppelin v5.6.1 source aggregate."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,12 +16,29 @@ PIN_PATH = ROOT / "blind-ledger" / "openzeppelin_contracts_pin.json"
 SOURCE = ROOT / "blind-ledger" / "lib" / "openzeppelin-contracts"
 
 
-def aggregate() -> str:
-    digest = hashlib.sha256()
-    files = sorted(path for path in SOURCE.rglob("*") if path.is_file())
+def tracked_source_files() -> list[Path]:
+    source_relative = SOURCE.relative_to(ROOT).as_posix()
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", source_relative],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        detail = result.stderr.decode().strip()
+        raise ValueError(f"could not enumerate tracked OpenZeppelin sources: {detail}")
+    files = sorted(ROOT / value.decode() for value in result.stdout.split(b"\0") if value)
     if not files:
         raise ValueError("vendored OpenZeppelin source is empty")
-    for path in files:
+    missing = [path for path in files if not path.is_file()]
+    if missing:
+        raise ValueError(f"tracked OpenZeppelin sources are missing: {missing}")
+    return files
+
+
+def aggregate() -> str:
+    digest = hashlib.sha256()
+    for path in tracked_source_files():
         relative = path.relative_to(SOURCE).as_posix().encode()
         digest.update(len(relative).to_bytes(4, "big"))
         digest.update(relative)

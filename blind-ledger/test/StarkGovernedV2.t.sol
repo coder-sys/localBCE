@@ -179,6 +179,60 @@ contract StarkGovernedV2Test is Test {
         assertNotEq(digest, changed);
     }
 
+    function test_EnvelopeClaimAmountMismatchFailsClosedWithoutConsumingState() public {
+        IStarkClaimsVerifierV1Candidate.PublicInputs memory inputs = _approvedInputs();
+        bytes memory envelope = _signedEnvelope(inputs, 50_000, ATTESTOR_KEY);
+        uint256 beforeBalance = SUBMITTER.balance;
+
+        vm.prank(SUBMITTER);
+        registry.submitStarkClaim{value: 1 ether}(inputs, envelope, 50_001);
+
+        assertEq(registry.rejectedProofs(), 1);
+        assertEq(SUBMITTER.balance, beforeBalance);
+        assertEq(registry.currentNullifierRoot(), NULLIFIER_ROOT_BEFORE);
+        assertFalse(registry.consumedBatchRoots(BATCH_ROOT));
+        (bool recorded,,,,,,,,) = registry.claims(CLAIM_HASH);
+        assertFalse(recorded);
+    }
+
+    function test_PausedVerifierFailsClosedWithoutRecordingClaim() public {
+        IStarkClaimsVerifierV1Candidate.PublicInputs memory inputs = _approvedInputs();
+        bytes memory envelope = _signedEnvelope(inputs, 50_000, ATTESTOR_KEY);
+        vm.prank(EMERGENCY_SAFE);
+        verifier.pause();
+
+        vm.prank(SUBMITTER);
+        registry.submitStarkClaim{value: 1 ether}(inputs, envelope, 50_000);
+
+        assertEq(registry.rejectedProofs(), 1);
+        assertFalse(registry.consumedBatchRoots(BATCH_ROOT));
+        (bool recorded,,,,,,,,) = registry.claims(CLAIM_HASH);
+        assertFalse(recorded);
+    }
+
+    function test_UnauthorizedRegistryAndDeniedValueFailClosed() public {
+        IStarkClaimsVerifierV1Candidate.PublicInputs memory approved = _approvedInputs();
+        bytes memory approvedEnvelope = _signedEnvelope(approved, 50_000, ATTESTOR_KEY);
+        assertFalse(verifier.verifyStarkClaim(approved, approvedEnvelope));
+
+        IStarkClaimsVerifierV1Candidate.PublicInputs memory denied = _deniedInputs();
+        bytes memory deniedEnvelope = _signedEnvelope(denied, 10_000, ATTESTOR_KEY);
+        vm.prank(SUBMITTER);
+        vm.expectRevert("Denied claim cannot carry value");
+        registry.submitStarkClaim{value: 1}(denied, deniedEnvelope, 10_000);
+    }
+
+    function testFuzz_AttestationDigestBindsClaimAmount(uint96 firstAmount, uint96 secondAmount) public view {
+        if (firstAmount == secondAmount) secondAmount = firstAmount == type(uint96).max ? 0 : firstAmount + 1;
+        IStarkClaimsVerifierV1Candidate.PublicInputs memory inputs = _approvedInputs();
+        bytes32 commitment = keccak256("winterfell-proof-fixture-v2");
+
+        bytes32 first = verifier.attestationDigest(address(registry), inputs, commitment, firstAmount);
+        bytes32 second = verifier.attestationDigest(address(registry), inputs, commitment, secondAmount);
+
+        assertNotEq(first, second);
+    }
+
     function _timelockedCall(address target, bytes memory data) private {
         bytes32 salt = bytes32(++operationNonce);
         vm.prank(GOVERNANCE_SAFE);
