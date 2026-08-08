@@ -8,8 +8,8 @@
 //! verification key; identities are never taken from the submitted bytes.
 //!
 //! This is a release-candidate verifier boundary.  It does not enable live
-//! deployment, replace the protected Solidity settlement shell, or claim an
-//! external audit or HSM/FIPS validation.
+//! deployment, replace an abandoned L2 settlement shell, or claim an external
+//! audit or HSM/FIPS validation.
 
 use alloc::vec::Vec;
 

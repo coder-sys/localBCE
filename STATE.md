@@ -9074,3 +9074,61 @@ proofSuiteId=null
 
 No production proof, PHI, live payment, Ethereum settlement, audit acceptance, or activation is
 claimed.
+
+## 2026-08-08 - post-pivot stale-code and gate audit - VERIFIED, NONACTIVATING
+
+The authoritative Phase 0-2 architecture was re-read before cleanup. A tracked-path and active
+reference audit found no remaining L2, rollup, Solidity, Foundry, sequencer, bridge, or Wave 5
+implementation/test/gate paths. The remaining L2 wording is limited to explicit rejection and
+fail-closed guards; Cairo/Poseidon references are retained semantic or compatibility evidence and
+are not execution-layer dependencies. The empty legacy `contracts` tree was removed, along with
+six ignored compiled Wave 5 bytecode artifacts (`wave5_native_boundary`, `wave5_rollup`, their
+three retired tests, and `wave5_conformance`).
+
+One stale active assertion was corrected: `tests/test_operator_portal.py` expected the retired
+`CAIRO_STARK_NATIVE` readiness label while the canonical readiness code emits `BL_PQ512_NATIVE`.
+The current Rust verifier comment and foundation status were reconciled with the deleted L2 path
+and current unselected runtime. No trust-critical protected source was deleted.
+
+Verification:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+  tests/test_build_release_archive.py tests/test_foundation_spec.py \
+  tests/test_fixed_shape_foundation_spec.py tests/test_security_freeze_spec.py \
+  tests/test_deployment_ready_roadmap_contract.py tests/test_operational_readiness.py \
+  tests/test_production_readiness.py tests/test_operator_portal.py
+91 passed, 4 warnings, 62 subtests passed in 8.40s
+
+py -3.14 -B -m pytest --collect-only -q
+1717 tests collected in 4.74s
+
+cargo +1.96.0 fmt --check --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+exit=0
+
+git diff --check
+exit=0
+
+tracked retired implementation/test/gate paths
+count=0
+published_retired_path_entries=0
+```
+
+The three retained source archives were rebuilt from the verified allowlist and remain exact byte
+copies:
+
+```text
+archive_bytes=12048915
+archive_sha256=2d9162bd185b6f3d3012b3d9e2f2cdb86ee8c87071aa13e7e9dc88cb26504321
+entry_count=847
+directories=0
+zero_byte_files=0
+duplicates=0
+embedded_manifest_entries=1
+three_way_byte_identical=true
+proofSuiteId=null
+production_usable=false
+```
+
+No production proof, PHI, live payment, Ethereum settlement, audit acceptance, or activation is
+claimed.

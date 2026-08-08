@@ -1,6 +1,6 @@
 # BL-PQ512 foundation specification
 
-Updated: 2026-07-18
+Updated: 2026-08-08
 
 Status: **review-ready synthetic-only foundation draft; not an implemented, qualified, audited, or
 production-approved proof profile.**
@@ -18,10 +18,9 @@ that assumes all SHA3 internals remain in one generic Circle-STARK PCS.
 This document is the review artifact for roadmap packages S02-S06 and the provisional S10
 lifecycle draft. It supplements `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`; it does not supersede that
 architecture, authorize real PHI, or authorize settlement. S03, S05, and S06 are complete as
-application-specification packages. S02 remains open because the runtime/readiness configuration
-still identifies the legacy `CAIRO_STARK_NATIVE` lane and requires a coordinated implementation,
-configuration, mirror, and test migration—not a documentation-only rename. S04 and S10 remain
-explicitly provisional.
+application-specification packages. S02 remains open because the candidate runtime and final
+production suite identity remain unselected; the runtime/readiness label now uses `BL_PQ512_NATIVE`
+and does not authorize activation. S04 and S10 remain explicitly provisional.
 
 The later R24 continuation through S12 is recorded in
 `docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md` and

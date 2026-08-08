@@ -157,7 +157,7 @@ class OperatorPortalTests(unittest.TestCase):
         self.assertEqual(readiness.status_code, 200)
         payload = readiness.json()
         self.assertEqual(payload["portal_mode"], "local_operator_pilot")
-        self.assertEqual(payload["proof_lane"], "CAIRO_STARK_NATIVE")
+        self.assertEqual(payload["proof_lane"], "BL_PQ512_NATIVE")
         self.assertFalse(payload["production_ready"])
 
     def test_operator_can_submit_sample_batch(self):
