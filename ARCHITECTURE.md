@@ -18,7 +18,7 @@ atomic database transaction
   - apply payment/state transition
   - append tamper-evident audit record
         |
-optional future hourly Ethereum L1 checkpoint
+optional future periodic Ethereum L1 checkpoint
 ```
 
 ## Authority boundaries

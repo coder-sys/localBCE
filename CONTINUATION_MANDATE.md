@@ -14,6 +14,10 @@ Continue only from the architecture in `docs/DATABASE_ZK_ARCHITECTURE.md`.
 6. No L2 or rollup is being built.
 7. Ethereum is outside Phase 0-2. Any later L1 checkpoint is additive and cannot become the operational database.
 
+The full workspace carries `STATE.md` and the dated `WAVE2_HANDOFF_2026-07-26.md` as continuation
+records. The published source archive intentionally omits those workspace-only files; an archive
+reader must use the current architecture documents and `RELEASE_FILE_MANIFEST.json` instead.
+
 ## Recovery order
 
 After interruption or compaction, read:

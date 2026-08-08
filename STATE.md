@@ -9023,3 +9023,54 @@ current archive sha256=4552a6e96ee49123db53899f342e2e69f2c672de13e32a2d0d8aff04f
 ```
 
 Fifteen unrelated dependency, toolchain, and research ZIPs located inside old Blind Ledger work directories were deliberately preserved because their filenames did not identify them as Blind Ledger archives. The three retained current copies remain the Desktop root, nested Desktop source-backup, and Downloads targets.
+
+## 2026-08-08 - full documentation coherence pass and archive refresh - VERIFIED, NONACTIVATING
+
+The owner requested a character-complete documentation pass. Every Markdown/text document in the
+workspace was decoded and scanned: `75` files and `1,545,245` characters. The active-document
+semantic scan covered `67` non-history/non-continuation documents and found `0` stale architecture
+or contradiction markers after correction. The pass preserved historical evidence and corrected
+only current-facing ambiguity:
+
+- archive readers are told that `STATE.md` and `WAVE2_HANDOFF_2026-07-26.md` are full-workspace-only;
+- the sparse-state plan no longer calls a non-selection a selection;
+- the S02 foundation status now matches the 33-complete/48-open roadmap;
+- obsolete Waves 3-6 wording was removed from the active optimization policy;
+- the legacy Poseidon/SHA-256 batch prototype is explicitly separated from the authoritative
+  SHA3-512 A12 nullifier path;
+- the optional Ethereum checkpoint is periodic, not committed to an hourly cadence; and
+- the nine production-activation blockers are explicitly reconciled as five internal, one audit,
+  and three operator inputs.
+
+Focused verification:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+  tests/test_build_release_archive.py tests/test_foundation_spec.py \
+  tests/test_fixed_shape_foundation_spec.py tests/test_security_freeze_spec.py \
+  tests/test_deployment_ready_roadmap_contract.py tests/test_operational_readiness.py \
+  tests/test_production_readiness.py
+64 passed, 54 subtests passed in 1.45s
+git diff --check
+exit 0
+```
+
+The deterministic source archive was rebuilt and read back. The three retained targets are still
+byte-identical, contain `847` entries and `69` documentation files, and contain no directory
+entries, zero-byte files, duplicate names, or CRC failures:
+
+```text
+archive_bytes=12048968
+archive_sha256=66e11bf80c129878620ea2807f54ee7c3d299d9d4473802a4fe5a3c77bd80c4f
+manifest_sha256=9f8e0e11b933cbba0216c12721c6453399edd5346f78ecd10ca151b7a644220f
+three_way_byte_identical=true
+zip_crc_readback=PASS
+directories=0
+zero_byte_files=0
+duplicates=0
+production_usable=false
+proofSuiteId=null
+```
+
+No production proof, PHI, live payment, Ethereum settlement, audit acceptance, or activation is
+claimed.

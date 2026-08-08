@@ -6,15 +6,19 @@ Status: mandatory Wave 2 research, implementation, and selection gate. This docu
 select or activate a proof suite or state layout. `proofSuiteId` remains null, production use is
 forbidden, and real PHI or payment credentials remain forbidden.
 
-Current evidence boundary: read the newest current-status section of `../STATE.md`; the original
-transfer record is `../WAVE2_HANDOFF_2026-07-26.md`. The H4/GKR/Construction 8.2 candidate context
-is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6 closed the twelve bounded
-candidate-evidence obligations. This plan still governs replaceable production state-plane work:
+Current evidence boundary in the full workspace: read the newest current-status section of
+`../STATE.md`; the original transfer record is `../WAVE2_HANDOFF_2026-07-26.md`. The published
+source archive intentionally omits those workspace-only records; archive readers should use the
+current architecture documents and `RELEASE_FILE_MANIFEST.json` instead. The H4/GKR/Construction
+8.2 candidate context is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6 closed
+the twelve bounded candidate-evidence obligations. This plan still governs replaceable production
+state-plane work:
 no production state layout or suite identity is selected, `proofSuiteId=null`, and real PHI or
 payment credentials remain forbidden.
 
-This selects the Gate 2E candidate; it is not H5 qualification. H5 is separately governed by its
-exact repeated complete-proof campaign, and neither boundary selects a production suite or enables
+This defines the Gate 2E candidate work and selection boundary; it is not itself a production state
+or commitment selection and is not H5 qualification. H5 is separately governed by its exact
+repeated complete-proof campaign, and neither boundary selects a production suite or enables
 activation.
 
 Execution authority: the deterministic continuation contract near the top of

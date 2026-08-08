@@ -23,8 +23,9 @@ residency is 2,770.337792 MB; scratch and pagefile growth are zero.
 
 These measurements are state-free H4 baseline evidence. Gate 2E is sealed nonactivating, H5 is
 qualified for the exact 22-launch campaign, and H6 is qualified for the bounded candidate-evidence
-scope. The current optimization dependencies are production state/verifier integration, resource
-telemetry ownership, and the downstream Waves 3-6 gates; `proofSuiteId` remains null.
+scope. The current optimization dependencies are production state/verifier integration and
+resource-telemetry ownership; later production database/custody, independent-audit, and activation
+gates remain outside this Phase 2 policy. `proofSuiteId` remains null.
 
 ## Decision rule
 

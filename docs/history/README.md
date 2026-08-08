@@ -25,3 +25,7 @@ Never execute a `next`, `current`, `remaining`, `rerun`, or `resume` sentence fo
 Chronological cross-document evidence remains in dated `STATE.md` sections. Architectures that are
 affirmatively rejected are indexed in `../REJECTED_ARCHITECTURES.md`. Exact pre-split bytes remain
 recoverable from Git commit `e640e88` and its parents.
+
+Some preserved files still contain `authoritative`, `current`, or `next` wording that was accurate
+at the time they governed the workspace. The `Archived` title marker and the authority rule above
+override those historical words; they do not authorize present implementation.

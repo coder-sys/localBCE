@@ -9,8 +9,8 @@ Executable status: **the complete synthetic specification/reference matrix is ac
 in `cache/specification-runs/20260715T221859Z-s07-s12-freeze-r24/terminal_manifest.json` with its
 adjacent SHA-256 seal; it generated zero proofs.**
 
-Current planning interpretation: this sealed freeze remains historical evidence and its current
-suite remains rejected. `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` now defines implementation as
+Current planning interpretation: this sealed freeze remains historical evidence and the R24 suite
+remains rejected. `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md` now defines implementation as
 internally finishable and moves independent review to the single final audit gate. That planning
 change does not select a suite, assign `proofSuiteId`, activate a verifier, or alter sealed R24
 evidence.

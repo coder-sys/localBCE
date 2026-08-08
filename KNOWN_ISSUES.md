@@ -4,7 +4,7 @@ Updated: 2026-08-08
 
 | Issue | Current boundary |
 | --- | --- |
-| Internal roadmap | 33 of 81 packages are complete locally; 48 remain open. The five internal launch blockers are release-candidate blockers. |
+| Internal roadmap | 33 of 81 packages are complete locally; 48 remain open. Five internal blockers are release-candidate blockers; one audit gate and three operator activation inputs also block production activation, for nine total production-activation blockers. |
 | Production suite | `proofSuiteId` remains null; selection and activation are forbidden. |
 | Independent audit | Not started. One final external audit gate remains after internal engineering evidence. |
 | Native verifier | The Rust candidate and direct local boundary exist, but the operational verifier-artifact pin is still an example placeholder and the exact release suite is not qualified. |

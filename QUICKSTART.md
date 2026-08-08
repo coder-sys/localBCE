@@ -1,6 +1,11 @@
 # Quickstart
 
-For a new Codex chat, first read `AGENTS.md`, the newest `STATE.md` entry, `CONTINUATION_MANDATE.md`, and then the four architecture files in the mandated recovery order. The current next implementation is the LB-006 transactional database boundary in `docs/IMPLEMENTATION_ROADMAP.md`; do not infer a next action from historical `STATE.md` entries.
+For a new Codex chat in the full workspace, first read `AGENTS.md`, the newest `STATE.md` entry,
+`CONTINUATION_MANDATE.md`, and then the four architecture files in the mandated recovery order.
+The published source archive intentionally omits `STATE.md` and `WAVE2_HANDOFF_2026-07-26.md`; when
+starting from that archive, use the current root documents and `RELEASE_FILE_MANIFEST.json` instead.
+The current next implementation is the LB-006 transactional database boundary in
+`docs/IMPLEMENTATION_ROADMAP.md`; do not infer a next action from historical `STATE.md` entries.
 
 From the repository root:
 

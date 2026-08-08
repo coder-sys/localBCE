@@ -336,7 +336,8 @@ def test_current_stack_and_roadmap_form_a_context_free_execution_contract() -> N
     assert "All **81 counted packages are internal engineering work**" in roadmap
     assert "No L2" in roadmap
     assert "`proofSuiteId=null`" in roadmap
-    assert "This selects the Gate 2E candidate; it is not H5 qualification" in state_plan
+    assert "This defines the Gate 2E candidate work and selection boundary" in state_plan
+    assert "it is not itself a production state" in state_plan
     assert "Bind the selected state plane into\n   the actual H4 parent" in state_plan
 
 

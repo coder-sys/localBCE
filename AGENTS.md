@@ -6,7 +6,10 @@ Blind Ledger is a database-backed, mandatory-zero-knowledge payment system. Trea
 
 1. Work from this repository root.
 2. Read `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/CURRENT_TECH_STACK.md`, `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`, and `docs/IMPLEMENTATION_ROADMAP.md`.
-3. After context loss, re-read this file, `CONTINUATION_MANDATE.md`, and the newest `STATE.md` section.
+3. After context loss, re-read this file, `CONTINUATION_MANDATE.md`, and, when working from the full
+   workspace, the newest `STATE.md` section. The published source archive intentionally omits
+   `STATE.md` and `WAVE2_HANDOFF_2026-07-26.md`; in that archive, use the current root documents and
+   `RELEASE_FILE_MANIFEST.json` instead.
 4. Use existing Python, Rust, Scarb, and CUDA installations. Keep generated outputs outside release archives.
 
 ## Current architecture boundary

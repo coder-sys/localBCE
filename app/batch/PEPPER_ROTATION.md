@@ -1,6 +1,9 @@
 # Duplicate Pepper Rotation
 
-Status: soundness-checked, PENDING CRYPTO AUDIT.
+Status: application-batch compatibility procedure; soundness-checked, PENDING CRYPTO AUDIT.
+It governs the legacy Poseidon duplicate-check path only. The authoritative BL-PQ512 nullifier
+and pepper registry are the SHA3-512 A12 path in `docs/BL_PQ512_A12_NULLIFIER_FREEZE.md` and
+require its atomic migration rules.
 
 The duplicate-check pepper is versioned. A rotation must never silently replace the old pepper because the same claim derives a different nullifier under a different pepper.
 

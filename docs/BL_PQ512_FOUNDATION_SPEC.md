@@ -48,8 +48,9 @@ boundary and review discipline. They are not evidence that the cryptographic con
 
 ## S02: profile label and permitted claims
 
-Status: **open pending synchronized canonical-operations wording.** The label and permitted claims
-below are frozen in application documentation, but the repository is not yet globally coherent.
+Status: **open: the profile label is fixed, but the candidate runtime and production suite identity
+remain unselected.** The label and permitted claims below are frozen in application documentation;
+this package remains open for final runtime/profile selection and qualification.
 
 The selected target profile label is exactly `BL-PQ512-v1`.
 

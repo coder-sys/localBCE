@@ -18,11 +18,16 @@ or PQ credit before its exact implementation independently earns it.
 
 ## Compaction and handoff rule
 
-After reading `AGENTS.md`, `STATE.md`, and `docs/DATABASE_ZK_ARCHITECTURE.md`, every engineer or
-agent working on the claim proof, privacy boundary, nullifier state, proof verifier, cryptographic
-commitments, or proving performance must read this document and then
+After reading `AGENTS.md`, `docs/DATABASE_ZK_ARCHITECTURE.md`, and, in the full workspace, the
+newest `STATE.md` section, every engineer or agent working on the claim proof, privacy boundary,
+nullifier state, proof verifier, cryptographic commitments, or proving performance must read this
+document and then
 `docs/IMPLEMENTATION_ROADMAP.md`, `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md`, and
 `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`.
+
+The published source archive intentionally omits `STATE.md` and `WAVE2_HANDOFF_2026-07-26.md`.
+When working from that archive, use the current architecture documents and
+`RELEASE_FILE_MANIFEST.json` as the continuation record.
 
 If working context is compacted or lost, re-read those files before continuing. Do not reconstruct
 this decision from chat summaries.

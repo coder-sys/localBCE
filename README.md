@@ -14,4 +14,8 @@ Start with:
 - `docs/PQ_ZK_SECURITY_ARCHITECTURE.md` for cryptographic detail.
 - `QUICKSTART.md` for local verification.
 
+The published source-complete archive intentionally omits the full-workspace continuation records
+`STATE.md` and `WAVE2_HANDOFF_2026-07-26.md`; use the current documents and
+`RELEASE_FILE_MANIFEST.json` when working from the archive.
+
 No L2 is part of the design. Ethereum may later receive periodic compact checkpoints directly on L1, but it is not a Phase 0-2 dependency.

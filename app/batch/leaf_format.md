@@ -1,13 +1,15 @@
 # Batch Leaf Format
 
-Status: duplicate-check key uses Stark-field Poseidon through
-`starknet-crypto 0.8.1` with mandatory first-position domain tags;
-soundness-checked, PENDING CRYPTO AUDIT.
+Status: historical application-batch compatibility format. Its duplicate-check key uses
+Stark-field Poseidon through `starknet-crypto 0.8.1` with mandatory first-position domain tags;
+soundness-checked, PENDING CRYPTO AUDIT. This is not the authoritative BL-PQ512 nullifier or
+settlement format; the authoritative product path is the SHA3-512 A12 construction in
+`docs/BL_PQ512_A12_NULLIFIER_FREEZE.md`.
 
-This file freezes the app-layer byte layout used by the batch prototype. It does
-not claim production cryptographic finality. Real batch proof verification is
-still pending and fail-closed, but the nullifier non-membership circuit now uses
-the full Poseidon field duplicate key as the circuit nullifier.
+This file records the app-layer byte layout used by the legacy batch prototype. It does not claim
+production cryptographic finality. Real batch proof verification is still pending and fail-closed;
+the legacy nullifier non-membership circuit uses the full Poseidon field duplicate key only for
+compatibility testing.
 
 ## Canonical Encoding
 
@@ -24,10 +26,10 @@ len(field_n)                  || type_tag(field_n) || encoded_field_n
 Lengths are unsigned 4-byte big-endian integers. Text fields are UTF-8. Type
 tags distinguish null, bool, int, string, bytes, and structured JSON, so `1`,
 `true`, and `"1"` do not collide. Raw floats are rejected before commitment
-encoding. Monetary amounts are integer cents before encoding. Most batch leaf
-records still use SHA-256 over the canonical record bytes. The duplicate-check
-key no longer uses the old SHA-256 stand-in; it is a Poseidon field hash
-described below.
+encoding. Monetary amounts are integer cents before encoding. Most batch leaf records still use
+SHA-256 over the canonical record bytes in this legacy prototype. The duplicate-check key no
+longer uses the old SHA-256 stand-in; it is a Poseidon field hash described below. Neither choice
+is the authoritative BL-PQ512 commitment/nullifier path.
 
 ## Claim Record
 
@@ -118,11 +120,11 @@ pepper (`BL_DUPLICATE_CHECK_PEPPER`) must be deployment-secret and shared only b
 authorized batch builders. If the pepper leaks, deterministic duplicate detection
 also allows dictionary matching. The local default pepper is for tests only.
 
-Circuit note: nullifier membership remains constrained by the sealed M31 semantic AIR. Removed
-legacy proof lanes and the historical Cairo-native STARK lane must not be used for production
-settlement. The current target binds semantic nullifier operations and every SHA3 port through the
-shared committed bus to the Boolean hash coprocessor, then verifies the complete heterogeneous proof
-atomically.
+Circuit note: nullifier membership in this prototype remains constrained by the sealed M31 semantic
+AIR. Removed legacy proof lanes and the historical Cairo-native STARK lane must not be used for
+production settlement. The current BL-PQ512 target binds the authoritative A12 SHA3-512 nullifier
+operations and every SHA3 port through the shared committed bus to the Boolean hash coprocessor,
+then verifies the complete heterogeneous proof atomically.
 
 ## Test Vectors
 
