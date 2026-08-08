@@ -8973,3 +8973,37 @@ exit=0
 The monolithic Python suite was attempted with a 1,800-second bound. It emitted no terminal summary before the bound and is not credited. After orchestration termination, exact surviving pytest processes 26908 and 27756 were confirmed and stopped; no Cargo, rustc, prover, or verifier process remained. No test failure was observed, but silence is not verification.
 
 Global state remains `NOT_DEPLOYMENT_READY`, `UNSELECTED`, `proofSuiteId=null`, `activation_allowed=false`, and `production_usable=false`. Real PHI and payments remain forbidden.
+
+## 2026-08-08 - reconciled Source-Complete publication - VERIFIED, BYTE-IDENTICAL
+
+The source archive was rebuilt from committed handoff `dbbd28a51d1ca56d85122c879b0a1e8dd9d3afb9` with the deterministic `blind-ledger-release-archive-v1` builder. The last reviewed 824-file allowlist was used as provenance: 23 deleted L2-only paths were removed, current successor-required source/tests were added, and every payload remained subject to the unchanged structural privacy gate.
+
+Exactly 17 tracked files were intentionally excluded from publication: nine policy exclusions (`STATE.md`, the obsolete host-specific handoff, generated hardening JSON, five opaque font binaries, and sample claim input) plus eight files rejected by the structural privacy gate (operational-readiness scanner source, the private witness schema, and six privacy/archive measurement scanner tests/tools). No gate was weakened and no rejected file was silently included.
+
+Builder receipt:
+
+```text
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=846
+payload_bytes=11735436
+entry_count=847
+archive_bytes=12046141
+archive_sha256=4552a6e96ee49123db53899f342e2e69f2c672de13e32a2d0d8aff04f86ec772
+manifest_sha256=53cbc65070922796f5dc8d2be648c5e03f6f5116d1e66b8f02b114528a3c23a9
+```
+
+Independent readback of the Desktop root, nested Desktop source-backup, and Downloads targets returned the same result for each:
+
+```text
+target_count=3
+three_way_byte_identical=true
+zip_crc_readback=PASS
+duplicates=0
+payload_hash_or_size_mismatches=0
+unexpected_entries=0
+missing_entries=0
+required_successor_files_present=true
+retired_l2_files_absent=true
+```
+
+The two overwritten stale copies are recoverable at `C:\Users\neers\Documents\Codex\2026-08-08\oka\work\published-backup-before-dbbd28a`; the previously missing Downloads target was recreated. Temporary staging, snapshot, and builder-output artifacts were deleted after readback. The published archive remains source-only and nonactivating: `proofSuiteId=null`, `activation_allowed=false`, and `production_usable=false`.
