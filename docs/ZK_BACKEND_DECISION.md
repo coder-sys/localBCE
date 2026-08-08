@@ -26,13 +26,14 @@ S-two/Circle-STARK remains the algebra/PCS basis for the semantic module, not th
 The H4 bus PCS is Construction 8.2 of ePrint 2026/391 over random-padded interleaved
 Reed--Solomon codewords; zkDeepFold/BaseFold remains a retired differential control.
 
-Current Wave 1 (historical Wave 1A) seals the synthetic nonactivating executable relation. Current
-Wave 2 (historical Wave 1B) owns the theorem-matched proof and throughput recovery; current Wave 3
-(historical Wave 1C) later owns authoritative verifier/state/custody. The active execution plan is
+Historical Wave 1A sealed the synthetic nonactivating executable relation. Phase 2 owns the
+theorem-matched proof, throughput recovery, and local native-verifier/database boundary. Production
+database durability, custody, external anti-rollback, audit, and activation are later gates. The
+active execution plan is
 `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md`.
 
-Frontier candidates in `docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` are conditional bake-offs,
-not a replacement decision. The H4 K128/K512 evidence strengthens the heterogeneous primary path.
+Frontier candidates are conditional bake-offs, not a replacement decision. The H4 K128/K512
+evidence strengthens the heterogeneous primary path.
 An alternative may replace it only after complete evidence under the identical statement,
 security, privacy, state, resource, repeat-campaign, and independent-verification gates proves a
 strictly better feasible point.
@@ -130,8 +131,8 @@ for PHI-bearing witnesses.
 This paragraph records the decision at the time of the isolated qualification. It is not the current
 production recommendation.
 
-This choice does not alter the based-rollup design. The claim receipt is verified inside the L2;
-the separate rollup proof still authenticates the resulting L2 state transition to Ethereum.
+This choice feeds the direct database design. The native claim receipt is verified before the
+corresponding payment and state changes commit atomically.
 
 ## Evidence
 
@@ -168,8 +169,8 @@ are preserved in `REJECTED_ARCHITECTURES.md` and Git history; no RISC Zero sourc
 remains active.
 
 The experiment does not close production blockers. Full adjudication, oracle and policy membership,
-Merkle paths, sequential nullifier updates, fixed-size padding, payment state, Ethereum-compatible
-receipt compression, Solidity verifier pinning, and independent audit remain required.
+Merkle paths, sequential nullifier updates, fixed-size padding, payment state, native verifier
+pinning, atomic database integration, and independent audit remain required.
 
 The later complete-claim RISC Zero attempt was stopped before proof completion. It reported `191`
 segments, at least `199,229,440` guest cycles, and `17` completed intervals totaling `5,464`

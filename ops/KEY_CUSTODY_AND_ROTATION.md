@@ -1,6 +1,6 @@
 # Key Custody And Rotation
 
-Status: Wave 4 internal custody contract. The repository contains a software/reference
+Status: Phase 2 internal custody contract. The repository contains a software/reference
 implementation and local conformance evidence only. It does not claim HSM custody, FIPS-module
 validation, named operator enrollment, or production activation.
 
@@ -11,9 +11,9 @@ validation, named operator enrollment, or production activation.
 - State and key identity: SHA3-512 roots and domain-separated commitments.
 - Stored operational records: opaque handle, root digest, epoch, lifecycle status, and audit digest.
 
-Ethereum's unavoidable classical boundary is external to Blind Ledger authority and must never be
-described as end-to-end PQ protection. RSA, Ed25519, ECDSA, and classical signatures are not
-accepted as Blind Ledger authority or as a fallback in the Wave 4 adapter path.
+A future optional Ethereum checkpoint's classical boundary is external to Blind Ledger authority
+and must never be described as end-to-end PQ protection. RSA, Ed25519, ECDSA, and classical
+signatures are not accepted as Blind Ledger authority or as a fallback in signed-source adapters.
 
 ## Rules
 

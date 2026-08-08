@@ -61,8 +61,8 @@ repository-enforced pins.
 | WSL rustc/cargo | 1.97.0 | Observed only; formatter differs from governed source |
 | WSL nightly rustc | 1.90.0-nightly (2025-07-13) | S-two file requests `nightly-2025-07-14` |
 | Scarb/Cairo | 2.18.0 | Observed; `cairo_execute` manifest range is `>=2.18.0` |
-| Forge | 1.7.1 | Observed only |
-| Solidity compiler | Foundry-configured and build-observed 0.8.24; standalone PATH `solc` 0.8.35 | 0.8.24 is pinned in both Foundry configurations; the unrelated PATH executable is not the accepted build input |
+| Retired Forge observation | 1.7.1 | Historical only; no active Foundry project remains |
+| Retired Solidity observation | Foundry-configured and build-observed 0.8.24; standalone PATH `solc` 0.8.35 | Historical only; the L2 contracts and Foundry configurations were deleted |
 | Node | 24.16.0 | Observed only; no JavaScript package lock is present |
 
 Unsealed R26 stage JSON reports use of the already installed `nightly-2025-07-14-x86_64-pc-windows-msvc` toolchain and the
@@ -133,8 +133,8 @@ drift. `docs/PYTHON_DEPENDENCY_LOCKING.md` defines the review and rotation contr
 | Poseidon helper | Package `0.1.0`; Cargo lock v4; `starknet-crypto 0.8.1` manifest entry; R28 requalified the known-answer test and exact differential | Compiler/toolchain not pinned locally; a local target hash is not reproducible-build evidence |
 | BL-PQ512 crypto core | Package `0.1.0`; Rust 1.96.0 toolchain pin; lock v4; exact `sha3=0.10.9` with default features disabled. The current H4 core attaches the 168-layer masked GKR, Construction 8.2 PCS, dual-PQ public coin, atomic one/four-shard coordinator, canonical parser, and independent verifier. Format, locked/offline checks, `no_default_features`/`no_std`, strict all-target Clippy, and 307 optimized library tests plus every remaining binary/doc-test group pass. | H4 is a one-run prototype boundary; the exact H5 p95 campaign and bounded H6 candidate-evidence records are now closed without activation. Complete transitive Cargo-license reconciliation, independent reproducible release build, constant-time/side-channel qualification, production module identity, and activation remain open. |
 | Cairo statement | Package `0.1.0`; observed Scarb/Cairo 2.18.0; R34 requalified a fresh serialized format/build/10-declaration pass | `cairo_execute >=2.18.0` is unbounded and the packaged Scarb lock does not resolve it |
-| Solidity tests | Foundry configuration pins `solc 0.8.24`; R34 used the 9,398,784-byte cached compiler with SHA-256 `580ee56b61bbcaad953117e1e4a0874d90e6af5cb4ce4359571d7da25f6620e9` and passed 23 tests offline | Forge executable is observed, not source-pinned |
-| `forge-std` | App-layer documentation points to sibling vendored source and license files outside this run's authorized path | License, upstream commit, source-tree hash, and archive provenance are `NOASSERTION` until an authorized provenance check captures them |
+| Retired Solidity tests | Historical R34 evidence used the cached 0.8.24 compiler and passed 23 tests offline | Not part of the current database architecture or release surface |
+| Retired `forge-std` observation | Historical settlement-test dependency | Not part of the current release surface; provenance remains historical `NOASSERTION` |
 
 The first attempt recorded in unsealed R26 stage JSON selected a fresh Poseidon-helper target beneath an overlong
 workspace temporary path and failed during helper compilation, before any cross-language result was
@@ -148,7 +148,7 @@ dependency version, compiler version, or proof parameter changed as part of thos
 
 | Component | Declared or observed license | Evidence boundary |
 | --- | --- | --- |
-| Vendored `forge-std` | `NOASSERTION` in this foundation SBOM | The asserted sibling license files were outside the exact authorized workspace and were not independently read in this run |
+| Retired `forge-std` observation | `NOASSERTION` in this foundation SBOM | Historical only; not part of the current release surface |
 | Portal fonts | SIL Open Font License 1.1 | `portal_shared/FONT_SOURCES.md`; individual font-file license payloads are not embedded |
 | Blind Ledger application source | `NOASSERTION` | No top-level project license is present |
 | Reviewed Python graph | MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, Apache-2.0 OR BSD-2-Clause, Apache-2.0 OR BSD-3-Clause, MPL-2.0, and PSF-2.0 as applicable | Reconciled from exact reviewed wheel METADATA for all 26 logical packages in `docs/SBOM.python.spdx.json`; legal conclusions remain `NOASSERTION` |
@@ -162,7 +162,7 @@ S11 remains open until a reviewed baseline pins or explicitly inventories:
 2. exact compiler, linker, standard library, target triple, and build flags for every language;
 3. continued requalification of the completed Python locks on every supported platform whenever any governed input rotates;
 4. every Cargo and Scarb resolution without generating or changing locks during qualification;
-5. Foundry and Forge upstream/build identity, not only the Solidity compiler;
+5. explicit exclusion of retired Foundry/Solidity artifacts from current release manifests;
 6. vendored dependency commits, source trees, local patches, licenses, and complete tree hashes;
 7. the semantic-STARK sibling commit plus the shared-bus/GKR compiler and reviewed patch series;
 8. verifier source, binary, schema, suite, and full-width artifact identity;

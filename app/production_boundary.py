@@ -1,11 +1,10 @@
-"""Local native-verifier and Privacy V2 settlement boundary.
+"""Local native-verifier and Privacy V2 atomic state boundary.
 
 This module is the contained engineering seam between the Rust-authoritative
 candidate verifier, the exact ordered twelve-field Privacy V2 statement, and
-the local state publication model.  It does not open a network, call
-Ethereum, handle payment authority, or enable activation.  The protected
-Solidity contracts remain the on-chain interface contract; this module makes
-their exact binding executable and fail closed in the local/synthetic stack.
+the local state publication model. It does not open a network, call Ethereum,
+handle payment authority, or enable activation. This module is the direct
+application-proof-to-state seam; there is no containing chain or rollup proof.
 """
 
 from __future__ import annotations

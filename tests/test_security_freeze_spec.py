@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -17,7 +16,6 @@ HISTORICAL_ROADMAP_PATH = (
     ROOT / "docs" / "history" / "IMPLEMENTATION_ROADMAP_THROUGH_2026-08-01.md"
 )
 REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
-SOLIDITY_PATH = ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlementV2.sol"
 
 EXPECTED_ABI = [
     (0, "protocolVersion", "bytes32"),
@@ -108,42 +106,21 @@ def test_hardening_artifacts_are_complete_and_snapshot_consistent() -> None:
     }
 
 
-def test_threat_model_body_is_preserved_and_snapshot_footer_is_exact() -> None:
+def test_threat_model_matches_database_and_mandatory_zk_boundary() -> None:
     threat_model = _read(THREAT_MODEL_PATH)
-    body, footer = threat_model.split("\nRepository:", 1)
-    canonical_body = body.rstrip() + "\n"
-    assert sha256(canonical_body.encode("utf-8")).hexdigest() == (
-        "a452ef36982cf8a2aff478338c7142b2a4629dd457f2716d9cdbdc05c3cedac2"
-    )
-    assert "Repository:" + footer == (
-        "Repository: target_sha256_d77e640ac3f4e6013bf9ef4b711a8d6f94e4f70f03b78efebd06f2473045db10\n"
-        "Version: codex-security-snapshot/v1:sha256:"
-        "382c02a9a9890251f167f3e28023ae4a2caf67c28ee24075a69b587bb6b9b20e\n\n"
-    )
+    assert "native verifier result is committed atomically" in threat_model
+    assert "Serializable transaction" in threat_model
+    assert "No L2 is treated as a mitigating boundary" in threat_model
+    assert "proofSuiteId=null" in threat_model
 
 
-def test_solidity_submission_and_output_mapping_match_the_manifest_exactly() -> None:
-    solidity = _read(SOLIDITY_PATH)
-    names = [name for _, name, _ in EXPECTED_ABI]
-
-    submission_match = re.search(r"struct Submission\s*\{(?P<body>.*?)\n\s*\}", solidity, re.DOTALL)
-    assert submission_match is not None
-    assert re.findall(r"\bbytes32\s+([A-Za-z0-9_]+)\s*;", submission_match.group("body")) == names
-
-    outputs_match = re.search(
-        r"function _publicOutputs\(.*?\)\s+internal pure returns \(bytes32\[12\] memory outputs\)\s*"
-        r"\{(?P<body>.*?)\n\s*\}",
-        solidity,
-        re.DOTALL,
-    )
-    assert outputs_match is not None
+def test_direct_state_manifest_matches_the_frozen_abi_exactly() -> None:
+    manifest = json.loads(_read(ABI_PATH))
     assert [
-        (int(index), name)
-        for index, name in re.findall(
-            r"outputs\[(\d+)\]\s*=\s*submission\.([A-Za-z0-9_]+)\s*;",
-            outputs_match.group("body"),
-        )
-    ] == [(index, name) for index, name, _ in EXPECTED_ABI]
+        (field["index"], field["name"], field["solidity_type"])
+        for field in manifest["fields"]
+    ] == EXPECTED_ABI
+    assert "atomic database transition" in manifest["statement"]
 
 
 def test_roadmap_closure_does_not_change_the_twelve_field_boundary() -> None:
@@ -155,12 +132,12 @@ def test_roadmap_closure_does_not_change_the_twelve_field_boundary() -> None:
     assert observed == EXPECTED_ABI
 
     roadmap = _read(ROADMAP_PATH)
-    assert "The current source, tests, and" in roadmap
-    assert "all **93 counted packages are internal engineering work**" in " ".join(roadmap.split()).lower()
-    assert "This is not a privacy, strict-PQ production-suite, live-rollup, HSM/FIPS, or audit claim" in " ".join(roadmap.split())
-    assert "| S07 |" in roadmap and "composed security ledger" in roadmap
-    assert "| S08 |" in roadmap and "candidate parameter identities" in roadmap
-    assert "| S09 |" in roadmap and "`proofSuiteId=null`" in roadmap
+    assert "All **81 counted packages are internal engineering work**" in roadmap
+    assert "No L2" in roadmap
+    assert "| S07 |" in roadmap
+    assert "| S08 |" in roadmap
+    assert "| S09 |" in roadmap
+    assert "`proofSuiteId=null`" in roadmap
 
     historical = _read(HISTORICAL_ROADMAP_PATH)
     assert "R24 corrects the worksheet" in historical

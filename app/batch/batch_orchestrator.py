@@ -1308,12 +1308,12 @@ def _claim_source_commitment_for_oracle(
 
 def _missing_real_batch_proof_status(claim_count: int, attempt_nullifier_count: int) -> Dict[str, object]:
     return {
-        "mode": "native_stark_settlement_required",
+        "mode": "native_stark_database_transition_required",
         "accepted": False,
         "claim_count": claim_count,
         "attempt_nullifier_count": attempt_nullifier_count,
-        "reason": "no audited native STARK proof supplied by live prover; settlement remains closed",
-        "settlement_contract": "contracts/src/stark/StarkBatchSettlement.sol",
+        "reason": "no audited native STARK proof supplied by live prover; state transition remains closed",
+        "state_transition_boundary": "app/production_boundary.py",
         "label": "NATIVE STARK PROVER PENDING AUDIT",
     }
 

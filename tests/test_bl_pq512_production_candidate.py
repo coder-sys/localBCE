@@ -20,10 +20,7 @@ from app.production_boundary import (
     _digest,
     build_v2_public_fields,
 )
-from app.local_stack_candidate import build_local_stack_receipt
 from app.native_public_input_projection import PublicInputProjectionV1
-from app.wave5_native_boundary import NativeRollupClaimVerifier, build_native_claim_envelope
-from app.wave5_rollup import RollupClaimContext, RollupSuiteIdentity
 from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
     HISTORICAL_CIRCLE_GAPS,
     build_active_gkr_hiding_certificate,
@@ -466,57 +463,12 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         batch_nonce=batch_nonce,
         submitter=submitter,
     )
-    rollup_identity = RollupSuiteIdentity(
-        profile_id_512=parsed_sidecar.profile_id,
-        candidate_suite_id_512=suite,
-        schema_id_512=schema,
-        verifier_artifact_identity_512=verifier_identity,
-        settlement_domain_id_512=parsed_sidecar.strong_settlement_domain_id,
-        epoch=parsed_sidecar.epoch,
-    )
-    rollup_context = RollupClaimContext(
-        fork_id_512=_wide("real-native-fork"),
-        l1_chain_id=7_531_512,
-        l2_chain_id=7_531_513,
-        state_before_digest_512=_wide("real-native-state-before"),
-        da_commitment_512=_wide("real-native-da"),
-        verifier_artifact_identity_512=verifier_identity,
-        schema_id_512=schema,
-        candidate_suite_id_512=suite,
-        settlement_domain_id_512=parsed_sidecar.strong_settlement_domain_id,
-    )
-    rollup_envelope = build_native_claim_envelope(
-        native_envelope=envelope,
-        context=rollup_context,
-    )
-    rollup_verifier = NativeStarkVerifierPort(
-        NativeStarkVerifierConfig(
-            executable=verifier,
-            program=program_path,
-            suite_id=suite,
-            schema_id=schema,
-            verifier_artifact_identity=verifier_identity,
-            public_input_projection=projection,
-        )
-    )
-    rollup_receipt = NativeRollupClaimVerifier(rollup_verifier).verify(
-        envelope=rollup_envelope,
-        context=rollup_context,
-        identity=rollup_identity,
-    )
-    local_receipt = build_local_stack_receipt(
-        envelope=envelope,
-        native_receipt=receipt,
-        candidate=selected,
-        settlement_receipt=settlement_receipt,
-        rollup_envelope=rollup_envelope,
-        rollup_context=rollup_context,
-        rollup_identity=rollup_identity,
-        rollup_receipt=rollup_receipt,
-    )
-    assert local_receipt.status == "LOCAL_SYNTHETIC_NONACTIVATING"
-    assert local_receipt.as_public_dict()["globalProofSuiteId"] is None
-    assert local_receipt.as_public_dict()["activationAllowed"] is False
+    assert settlement_receipt.sequence_before == 0
+    assert settlement_receipt.sequence_after == 1
+    assert settlement_receipt.envelope_commitment == receipt.envelope_commitment
+    assert settlement_receipt.native_statement_commitment == receipt.statement_commitment
+    assert settlement_receipt.proof_suite_id == suite
+    assert settlement.snapshot().state_binding == settlement_receipt.state_binding
 
     encoded = envelope.encode()
     proof_offset = 8 + 2 + 64 * 3 + 384 + 4 + 744 + 8

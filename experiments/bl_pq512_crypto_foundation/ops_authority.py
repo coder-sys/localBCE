@@ -1,10 +1,4 @@
-"""Commit-bound authority for the tracked operational artifact bundle.
-
-The repository is the sole source of truth.  Operational policy is therefore
-read from the tracked ``ops/`` directory and checked against this exact
-SHA3-512 inventory.  No sibling copy, fallback path, or environment override
-is accepted.
-"""
+"""Commit-bound authority for the tracked operational artifact bundle."""
 
 from __future__ import annotations
 
@@ -20,25 +14,22 @@ OPS_AUTHORITY_STATUS: Final[str] = "VERIFIED_TRACKED_SHA3_512_AUTHORITY"
 _WINDOWS_REPARSE_POINT: Final[int] = 0x400
 
 EXPECTED_OPS_FILES: Final[tuple[tuple[str, int, str], ...]] = (
-    ("DEPLOYMENT_RUNBOOK.md", 3101, "0dfff45c5b1645ea265151763e296311c0a19a5406064558cda853bc625ae5b0345381673fd9c9b1da68707f8c002bd773c74ff0c181279fa29162927d28ddf5"),
-    ("KEY_CUSTODY_AND_ROTATION.md", 2358, "e91d4de2e9e405637cb18aa1e99d5582041bfde6dd47e9ffa611191bea92957637e5582f02c7e2d6a0d4759511950a170f1fb16a8463350d726fff3087ea60f0"),
-    ("MONITORING_AUDIT_EVENTS.md", 1630, "50d123764ce426d2732cb09963112cf74cc88d24dc7ce399825df143c0f460c196c3000f24afd6edbf4d3f1c4c5d73a41eb280d2e3c4c9230b0a80b96eaaccff"),
-    ("PRODUCTION_CONFIG_CHECKLIST.md", 2191, "2e16d1f7dcfd861e377831fd42cdaff35aeb362f8adbf30f4e70a8a0f797a45599f48966b2f5834538efc2a969df3004cd1bd9ec242e9a50e891ab87d7489ab9"),
-    ("RISK_REGISTER.md", 2468, "c38aed9b155884870bf2b0eaa07fa6a0875caa6bf831b0e893d8f8ee19e6fce763c9e1c6e5c1417e1b1c58d546473935dbe32b079c33cbc3284b282f4243888f"),
+    ("DEPLOYMENT_RUNBOOK.md", 1207, "45e902ee19516bfebccbddfd041cdaac932eff639d2ca2b7e7c8cfe580e8bb1a803e02763a617420afbab99f81f88befac1f3ad0aa487004f893239eb54c939c"),
+    ("KEY_CUSTODY_AND_ROTATION.md", 2375, "a3bb1283a04a133b0f32cb8d27d1867bb0cf9543c12976fc31f0827ab9235952c06349a35a81d34972c241f32c1793e87f845a3c2668f02d60f8d9111920167c"),
+    ("MONITORING_AUDIT_EVENTS.md", 1643, "d4778636f9f76cc065349c11368aa620cbbf57ab3810677d405e8a8388e5e285c0f9c058b7881f1e12639bec069d0259a77f593d21b8031b77a52dcfc3f38a7f"),
+    ("PRODUCTION_CONFIG_CHECKLIST.md", 1080, "afffeff773a00aec7471f2a8fb15d463244e025f2c8928cd76e56e43ab7d7d93938dd63b8cfd71812b38093f9f780aca593eeaf826db566d96040b8fa9842a3a"),
+    ("RISK_REGISTER.md", 1278, "d5ad6ac4a0812292df5ea3f8cc754181cc40560831a931f493212cdfa77c52a69be6eb51eabc0907ca23e77385493086ae47e93d8c75e35ecf5d4508d4b243d8"),
     ("governance_config.example.json", 668, "82134027600bdf65ee98ee316fedc7b4ba090177087ace31f5b39b10644c6b7df66a08a44acebb4bd74eb43326c0c3fe331428111b4149d08aa91f49b17695eb"),
-    ("launch_blockers.json", 7584, "47e9d7b63cca7be881e9ccf47820bc320492656c8f0d8fde8d67ed50f504093de04cb1941d6b763a3f0b7779cfcd3f3d4dd19b98f36d25a51475d9d36bba8bcb"),
+    ("launch_blockers.json", 8513, "ecd414bc737f0a6b3f437d2250e475ed8790c0fa52c12870afcda1eb7f9333f5de09566c7260c984fa3db7735694d028309fcd05ce41ad3e5462cb86cef1c564"),
     ("monitoring_events.json", 2277, "164929793eed57d5cf30ae953492cb23b1603992ec4c776f0222b30ca462160fd400e3ad2f6fd7ddae0fb7cee45ad2dc44086963aa4f0f15e246a80cf17e3bba"),
-    ("native_stark_public_inputs_v1.json", 3342, "80bc23bb560442f459ca50821e6c23a4aeda82d93848292078e7925a6ca9cfa754a2059ec7612ce11cf0ba5b276782aa4019801b925c4761fefcf5ae23c3aa3a"),
-    ("native_stark_public_inputs_v2.json", 1785, "f85d4b3f8acd4af88966e94c9f6eabf2d1d39a7d9e6bd8ac422b3dad6f01e2395392d9f337d311c0cccff3e1fe8eb516ec55dad2eca39b16f15f056122389cb0"),
+    ("native_stark_public_inputs_v2.json", 1807, "cb9e2c4e248f62832f996f4c2a157985643ffef4ff09ab58002f2265cbc97347862093c77361ead8be7ce68dae9a92f9565a133491899dfb130a2f6c4acc122d"),
     ("oracle_source_manifest.example.json", 1062, "2488a56707935bccc892b7dc78cd57c78adccd2348aff2dc75a48a755bb164e8f2a499d52ac896ced70f30cfbfb99181f7b691596b178c7042fcc449b95c98ff"),
     ("policy_spec_v1.yaml", 2006, "86fbce089c246c5631ff824d08af23b9646e6753470a84c9bd810c05c67c9adee4576917fece90d781ffa47e166b500bab9b14720f8511a2474c957a0bceebda"),
-    ("production.env.example", 2104, "5616bd41a4fbff2983da66f43b009c96c4a6b9db35234910918b179551246396ebf64de8645ce8a408ea940a406012c062fee6f74982a731c068155cfb3f4113"),
-    ("verifier_artifact_pin.example.json", 922, "175b2c2f004a192868bb258bdb1d497c5af079bcd9cb53701a7d29ff2486c749ebe0bb23bfc653e40959dcea6702d6931b78bd8245fbd63652b669168f0c7aa8"),
+    ("production.env.example", 1993, "05d9bf86ef5bfb29660afdcc08f6cf2fb687466a543b169aa34ddbea5d3e6df6e74145bbbb51ecf65a34bc2069c8307fa9357cff86b9fb2238d474be7754f97e"),
+    ("verifier_artifact_pin.example.json", 948, "2ba9e5bfc1edb95e0bfcfd80aa87e5168c0d10e99b47f5a8d457b29e032b8a04bb595aeec7c7e519be06d4fb505572de5349b57273f7de63eb3db8693b77a456"),
     ("wave2_internal_release_profile.json", 1351, "47c3c707402a1449cf29fc4bd7a3615e32d56b85b9865d8063f833cd6e3164e02830f0994560baa68b1fd9579ee26cf60d0f7eadb570712cde95c1afa1cce99e"),
     ("wave4_release_profile.json", 1200, "3e49c004bf91946ebcc2ff72c1852db7aa60c3d7bcd8afd6250c5bc574ceddf7463c563b6e8aa596edf4aa7eba08e88b709d2e0659cb80185d605865a5534010"),
     ("wave4_sandbox_config.json", 804, "61a6c1649c2c92690de377ae09f1e4da98336c8039274fa5e1740c45b3ca6d66634f2d7d4f7085745b1237ad5d33d254e1515b5ea448e9cb1591cca4a9806ff8"),
-    ("wave5_release_profile.json", 999, "ebffe72eeed7733d0d1e084cde6610dc72409a569a444414ebd0b77c3924745ed78b86fceba95b07cbf60d9029e6db23721501c6a194bf9cc8d4e89739bdca5b"),
-    ("wave5_sandbox_config.json", 576, "c9b797fb821febc9d13f47442c852e133b8b5580c8830677c6f921b82620127e2fcc79bb51cca80ba988e46c72268c2938ded4a80bee8d330c34039efd14235f"),
 )
 
 
@@ -66,12 +57,7 @@ def verify_ops_authority(root: Path = CANONICAL_OPS_ROOT) -> str:
     if not S_ISDIR(root_metadata.st_mode):
         raise ValueError("ops_authority_root_invalid")
     expected_names = tuple(item[0] for item in EXPECTED_OPS_FILES)
-    observed_paths = tuple(
-        sorted(
-            root.iterdir(),
-            key=lambda path: path.relative_to(root).as_posix(),
-        )
-    )
+    observed_paths = tuple(sorted(root.iterdir(), key=lambda path: path.relative_to(root).as_posix()))
     observed_names = tuple(path.relative_to(root).as_posix() for path in observed_paths)
     if observed_names != expected_names:
         raise ValueError("ops_authority_file_set_mismatch")

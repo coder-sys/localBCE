@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from hashlib import sha256
@@ -16,7 +17,7 @@ REJECTION_PATH = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
 CURRENT_STACK_PATH = ROOT / "docs" / "CURRENT_TECH_STACK.md"
 ROADMAP_PATH = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
 STATE_PLAN_PATH = ROOT / "docs" / "BL_PQ512_COMMITTED_SPARSE_STATE_PLAN.md"
-STRAWMAP_PATH = ROOT / "docs" / "ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md"
+DATABASE_ARCHITECTURE_PATH = ROOT / "docs" / "DATABASE_ZK_ARCHITECTURE.md"
 ACTIVE_HANDOFF_PATHS = (
     ROADMAP_PATH,
     ROOT / "docs" / "BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md",
@@ -193,7 +194,7 @@ def test_threat_matrix_and_exact_twelve_field_notion_rows_are_present() -> None:
         "Oracle or KMS insider",
         "Relayer and resource abuse",
         "Recovery ambiguity",
-        "Containing-rollup gap",
+        "Direct state-publication gap",
     ):
         assert f"| {threat} |" in spec
 
@@ -309,51 +310,32 @@ def test_current_stack_and_roadmap_form_a_context_free_execution_contract() -> N
     state_plan = _read(STATE_PLAN_PATH)
 
     for heading in (
-        "## How a successor must interpret this repository",
-        "## Frozen system invariants",
-        "## Exact accepted H4 profiles",
-        "## Complete H4 proof flow",
-        "## Current memory and concurrency design",
-        "## Privacy and data-placement boundary",
-        "## Fail-closed verifier order",
-        "### Proof-core ownership map",
-        "## Evidence currently required to remain green",
-        "## Open boundaries and nonclaims",
+        "## Product architecture",
+        "## Application and state",
+        "## Proof system",
+        "## Source and policy trust",
+        "## Operational state",
+        "## Retained research",
     ):
         assert heading in stack
     for invariant in (
-        "6,073 authenticated challenge rounds",
-        "one authenticated 6,086-round schedule",
-        "one output claim and four input claims",
-        "508 native GKR mask constraints per shard",
-        "52,429,015",
-        "209,715,415",
-        "29.974129 s",
-        "120.460733 s",
-        "5,000,000,000 decimal bytes",
+        "12-field Privacy V2 boundary",
+        "SHA3-512",
+        "M31",
+        "Fp16",
+        "32.360845",
+        "148.861885",
         "proofSuiteId=null",
+        "production_usable=false",
     ):
         assert invariant in stack
 
-    required_order = (
-        "## Gate 2E: exact current implementation plan",
-        "### 2E-0 - freeze the C0 control",
-        "### 2E-1 - freeze narrow replaceable interfaces",
-        "### 2E-2 - implement scalar state-relation controls",
-        "### 2E-3 - screen PQ commitment backends",
-        "### 2E-4 - atomically compose the finalist",
-        "### 2E-5 - close migration and failure semantics",
-        "### 2E-6 - measure and select",
-        "### 2E-7 - seal the selection handoff",
-        "## H5: repeated complete-proof qualification campaign",
-        "## H6: proof-candidate qualification and seal",
-    )
+    required_order = ("## Phase 0", "## Phase 1", "## Phase 2")
     positions = [roadmap.index(marker) for marker in required_order]
     assert positions == sorted(positions)
-    assert "Run exactly 22 fresh launches" in roadmap
-    assert "ceil(0.95 * 10) = 10" in roadmap
-    assert "H6 may mark the proof candidate qualified" in roadmap
-    assert "keep `proofSuiteId=null`" in roadmap
+    assert "All **81 counted packages are internal engineering work**" in roadmap
+    assert "No L2" in roadmap
+    assert "`proofSuiteId=null`" in roadmap
     assert "This selects the Gate 2E candidate; it is not H5 qualification" in state_plan
     assert "Bind the selected state plane into\n   the actual H4 parent" in state_plan
 
@@ -387,106 +369,19 @@ def test_active_handoff_is_physically_separated_from_dated_execution_history() -
     assert "Never execute" in history_index
 
 
-def test_strawmap_contract_is_complete_compulsory_and_fail_closed() -> None:
-    strawmap = _read(STRAWMAP_PATH)
+def test_database_zk_architecture_is_direct_mandatory_and_fail_closed() -> None:
+    architecture = _read(DATABASE_ARCHITECTURE_PATH)
     roadmap = _read(ROADMAP_PATH)
-    based = _read(ROOT / "docs" / "BASED_ZK_ROLLUP_ARCHITECTURE.md")
-    frontier = _read(ROOT / "docs" / "FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md")
 
-    expected_eips = {
-        "7503",
-        "7732",
-        "7773",
-        "7805",
-        "7919",
-        "7928",
-        "7938",
-        "7999",
-        "8007",
-        "8025",
-        "8070",
-        "8077",
-        "8079",
-        "8081",
-        "8136",
-        "8141",
-        "8142",
-        "8184",
-        "8198",
-        "8200",
-        "8250",
-        "8272",
-        "8297",
-    }
-    matrix = strawmap.split("## Complete linked-EIP decision matrix", 1)[1].split(
-        "## Planned-upgrade through-lines", 1
-    )[0]
-    observed_eips = set(re.findall(r"^\| (\d{4}) \|", matrix, flags=re.MULTILINE))
-    assert observed_eips == expected_eips
-    assert len(re.findall(r"^\| \d{4} \|", matrix, flags=re.MULTILINE)) == 23
-
-    impact_matrix = strawmap.split("### Exact 23-EIP impact and trigger matrix", 1)[1].split(
-        "### Non-EIP through-line action summary", 1
-    )[0]
-    impact_rows = {
-        match.group(1): match.group(0)
-        for match in re.finditer(r"^\| (\d{4}) \|.*$", impact_matrix, flags=re.MULTILINE)
-    }
-    assert set(impact_rows) == expected_eips
-    assert len(impact_rows) == 23
-    for row in impact_rows.values():
-        assert any(
-            impact_class in row
-            for impact_class in ("INHERIT", "L1-COMPAT", "L2-PARITY", "OPTIONAL", "RESEARCH")
-        )
-        assert re.search(r"R\d{2}", row)
-
-    assert "is an Ethereum-settled, EVM-compatible based validity rollup" in strawmap
-    assert "A permanent privileged" in strawmap
-    assert "Every accepted L2 state transition requires" in strawmap
-    assert "must work against a pinned, deployed Ethereum fork" in strawmap
-    assert "may later provide a versioned execution/verification adapter" in strawmap
-    assert "public ethereum data availability carries only fixed-shape, non-phi" in strawmap.lower()
-
-    for package_id in (f"R{i:02d}" for i in range(1, 13)):
-        assert f"| {package_id} |" in strawmap
-        assert f"| {package_id} |" in roadmap
-
-    for through_line in (
-        "attester–includer separation",
-        "one-round finality",
-        "proofs of custody",
-        "sparse blobpool",
-        "cell deltas",
-        "frame",
-        "keyed nonces",
-        "recent roots",
-        "partitioned binary tree",
-        "leanVM",
-        "PQ key registry",
-        "PQ signature precompiles",
-        "PQ-safe blobs",
-    ):
-        assert through_line.lower() in strawmap.lower()
-
-    assert "compulsory containing architecture" in based
-    assert "How an L1 upgrade propagates into this based L2" in based
-    assert "Being an Ethereum-settled based validity\nrollup is compulsory" in roadmap
-    lockstep_markers = (
-        "**R01 inventory and classify:**",
-        "**R02 reproduce both sides:**",
-        "**R03-R05 bind correctness:**",
-        "**R06-R10 bind containing safety:**",
-        "**R11 activate atomically:**",
-        "**R12 qualify:**",
-        "**Post-fork reconcile:**",
-    )
-    positions = [roadmap.index(marker) for marker in lockstep_markers]
-    assert positions == sorted(positions)
-    assert "Unknown or partial\n   support pauses new batches" in roadmap
-    assert "safe exits from the last supported finalized state" in roadmap
-    assert "EIP-7707, access-list provisioning" not in frontier
-    assert "EIP-7928, block-level access lists" in frontier
+    assert "mandatory zero-knowledge proof" in architecture.lower()
+    assert "native verifier" in architecture.lower()
+    assert "one atomic database transaction" in architecture.lower()
+    assert "Ethereum is not a dependency through Phase 2" in architecture
+    assert "No L2" in architecture
+    assert "No payment state transition occurs" in architecture
+    assert "All **81 counted packages are internal engineering work**" in roadmap
+    assert "No L2" in roadmap
+    assert "| R01 |" not in roadmap and "| R12 |" not in roadmap
 
 
 def test_foundation_sbom_is_valid_internal_spdx_inventory_with_honest_unknowns() -> None:

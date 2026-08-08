@@ -54,13 +54,13 @@ class OperationalReadinessTests(unittest.TestCase):
         self.assertTrue(any("official" in item for item in report.errors))
 
     def test_native_stark_public_input_schema_is_exactly_ordered(self):
-        payload = load_json(OPS / "native_stark_public_inputs_v1.json")
+        payload = load_json(OPS / "native_stark_public_inputs_v2.json")
         self.assertTrue(validate_public_input_schema(payload).ok)
         bad = copy.deepcopy(payload)
         bad["fields"][0]["name"] = "nullifierRootBefore"
         report = validate_public_input_schema(bad)
         self.assertFalse(report.ok)
-        self.assertTrue(any("batchId" in item for item in report.errors))
+        self.assertTrue(any("protocolVersion" in item for item in report.errors))
 
     def test_verifier_pin_manifest_hashes_sources_and_forbids_legacy_wrapper(self):
         payload = load_json(OPS / "verifier_artifact_pin.example.json")

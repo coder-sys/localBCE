@@ -3,8 +3,8 @@
 Updated: 2026-07-22
 
 Current roadmap name: **Wave 1 - claim relation and executable AIR**. `Wave 1A` is retained in this
-filename and in historical evidence identifiers for traceability. Current Wave 2 is the former
-Wave 1B proof work; current Wave 3 is the former Wave 1C verifier/state/custody work.
+filename and in historical evidence identifiers for traceability. All Wave 1A/1B/1C and Wave 3
+labels in this document are historical; current work is bounded by Phase 0-2.
 
 ## 0. Authoritative closure record (2026-07-21)
 
@@ -230,7 +230,8 @@ worst-case frontier. Live selectors and dummy rows are constrained, so key distr
 approval/denial/cover mix, insertion/update mix, and repeated keys cannot change trace dimensions or
 proof size. At K128 the three map lanes have exact fixed maxima of 34,026 node hashes, 2,048
 leaf-hash slots, six state headers, 36,080 SHA3-512 calls, and 74,208 Keccak permutations. Durable
-rollover/migration remains current Wave 3 state work. Full Wave 1 global/Rust composition is sealed
+rollover/migration remains production database lifecycle work outside the local Phase 2 closure.
+The historical Wave 1 global/Rust composition is sealed
 by Section 0; activation is still forbidden because an authoritative durable state, production
 verifier, and production suite identity do not yet exist. The later nonactivating H4/H5/H6 candidate
 evidence does not change that boundary.

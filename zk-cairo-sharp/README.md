@@ -14,7 +14,8 @@ heterogeneous semantic-STARK/shared-bus/Boolean-GKR proof in
 - Policy: fee and TAR membership are merged under governed `policyRoot`.
 - Nullifiers: approved-only indexed-tree transitions with sentinel denied outputs.
 - Generated proof artifacts: not packaged in this source handoff; regenerate locally when needed.
-- Native Ethereum STARK verifier integration: still pending audited artifact and governance pin.
+- Native database-boundary verifier integration: represented by the Rust candidate; production
+  artifact audit, database qualification, and governance pin remain pending.
 - Release role: differential semantics only; it cannot replace the shared bus, SHA3 coprocessor, or
   atomic BL-PQ512 verifier.
 

@@ -100,8 +100,8 @@ and current H5/H6 evidence are recorded in the current Wave 2 documents.
   envelope, full S10 tuple, private payment-root recomputation, durable governed registry,
   local Rust binding verification, migration/upgrade/rollback/recovery, digest-only custody
   evidence, dual-PQ rotation/conformance ports, and the software ML-KEM/AES envelope. Production
-  `INativeStarkVerifier`, HSM/FIPS custody, external anti-rollback, suite selection, and activation
-  remain open.
+  production database integration, HSM/FIPS custody, external anti-rollback, suite selection, and
+  activation remain open.
 
 The sibling `experiments/bl_pq512_crypto_core/` crate is a `no_std` Rust mirror for the frozen Fp16
 tower, OODS and conjugate-pair algebra, scalar Circle-FRI, typed SHA3-512 mixed-domain trees, the

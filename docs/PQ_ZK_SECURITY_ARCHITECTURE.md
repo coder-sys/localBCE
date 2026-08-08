@@ -12,20 +12,13 @@ select or implement them; the completed exact release later enters the single Se
 defined by `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`.
 
 This document is the canonical decision record for the claim proof's witness-hiding and
-post-quantum security profile. It supplements, and does not replace, the containing rollup decision
-in `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`.
-
-The cross-wave throughput/settlement compatibility contract is
-`docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md`. It cannot weaken this document's profile,
-promote a paper benchmark, or count Ethereum's classical settlement boundary as PQ security.
-`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md` further separates Ethereum's leanVM,
-leanXMSS, PQ milestones, optional execution proofs, native rollups, KZG/DA, and transaction
-migrations from the Blind Ledger inner proof. No external roadmap item receives theorem, hiding,
-soundness, or PQ credit before its exact deployed implementation independently earns it.
+post-quantum security profile. The containing system is the direct atomic database architecture in
+`docs/DATABASE_ZK_ARCHITECTURE.md`. No external roadmap item receives theorem, hiding, soundness,
+or PQ credit before its exact implementation independently earns it.
 
 ## Compaction and handoff rule
 
-After reading `AGENTS.md`, `STATE.md`, and `docs/BASED_ZK_ROLLUP_ARCHITECTURE.md`, every engineer or
+After reading `AGENTS.md`, `STATE.md`, and `docs/DATABASE_ZK_ARCHITECTURE.md`, every engineer or
 agent working on the claim proof, privacy boundary, nullifier state, proof verifier, cryptographic
 commitments, or proving performance must read this document and then
 `docs/IMPLEMENTATION_ROADMAP.md`, `docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md`, and
@@ -70,12 +63,12 @@ useful evidence, but the generic RISC-V proof path and its current security para
 selected production architecture. Plonky3's hiding FRI implementation is the independent
 contingency prototype, not an audited shortcut.
 
-## Current Wave 2 proof and resource boundary
+## Current Phase 2 proof and resource boundary
 
-Current Wave 1 (historical Wave 1A) sealed the nonactivating executable relation. Current Wave 2
-(historical Wave 1B) owns the strict-PQ proof, native hiding, proof grammar, resource recovery, and
-complete K128/K512 convergence. Current Wave 3 (historical Wave 1C) later owns authoritative durable
-verifier/state/custody convergence. The final independent audit is outside the six internal waves.
+Historical Wave 1A sealed the nonactivating executable relation. Phase 2 owns the strict-PQ proof,
+native hiding, proof grammar, resource recovery, complete K128/K512 convergence, and the local
+native-verifier/database transition boundary. Production database durability, custody, external
+anti-rollback, audit, and activation are later gates outside Phase 2.
 
 The real regression kernel proof is exactly 28,643,096 bytes at 945 queries and independently
 verifies. Its two 50,070/47,178 ms worker runs and v1 multiproof de-duplication remain historical
@@ -125,18 +118,16 @@ PCS claims, a 64-wire lane at H4 wire offset 1,600, 25 authenticated state-relat
 seven total H4 claims when state is supplied. This seam remains nonactivating. Its current relation
 checks operation/snapshot equality, Boolean presence, and empty-slot zeroing; the exact state-bound
 H5 campaign now passes, and the bounded H6 candidate-evidence manifest is closed. Production
-ordering, uniqueness, membership/absence, money/state conservation, durable custody, and the
-verifier/settlement path remain later-wave work.
+ordering, uniqueness, membership/absence, money/state conservation, durable custody, and production
+database qualification remain outside the local Phase 2 closure.
 
-The current local bridge now covers the verifier/settlement shape without changing the selected
+The current local boundary covers the verifier/database shape without changing the selected
 security claims. `app/native_public_input_projection.py` maps the exact ordered twelve `bytes32`
 outputs to nine 30-bit M31 limbs per field without reduction or aliasing. The Rust candidate
-verifier rederives those 108 inputs, `LocalSettlementV2` recomputes the Privacy V2 statement and
-publishes state only after the native receipt passes, and `NativeRollupClaimVerifier` rechecks the
-same envelope against the based-rollup context. `app/local_stack_candidate.py` binds the three
-receipts using commitments only. This is local synthetic evidence; it does not close the complete
-witness-hiding theorem, production/on-chain verifier deployment, HSM/FIPS custody, audit, or
-activation.
+verifier rederives those 108 inputs, and `LocalSettlementV2` recomputes the Privacy V2 statement
+and publishes state only after the native receipt passes. This is local synthetic evidence; it
+does not close the complete witness-hiding theorem, production database/custody integration,
+independent audit, or activation.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
@@ -193,7 +184,7 @@ disposition and staged measurements.
 
 | Classification | Claim | Evidence or consequence |
 | --- | --- | --- |
-| Observed | The current application manifest defines exactly 12 ordered `bytes32` values, and the Solidity boundary requires each value to be a canonical Stark-field element. | `ops/native_stark_public_inputs_v2.json`; `contracts/src/stark/StarkBatchSettlementV2.sol` |
+| Observed | The current application manifest defines exactly 12 ordered `bytes32` values, and the direct native boundary requires canonical lossless projection. | `ops/native_stark_public_inputs_v2.json`; `app/native_public_input_projection.py`; `app/production_boundary.py` |
 | Observed | Current S-two does not provide zero knowledge and exposes unmasked commitments to witness values. | https://docs.starknet.io/learn/S-two-book/why-stwo |
 | Historical observed | The removed RISC Zero denied path required `nullifierRootAfter == nullifierRootBefore`; the sealed Wave 1 relation instead uses witness-class-independent attempt/cover transitions. | `REJECTED_ARCHITECTURES.md`; Git history; `STATE.md` |
 | Historical observed | The removed RISC Zero settlement commitment hashed version, domain, nonce, and fields 9 and 10; it did not directly bind roots 3 through 8. | `REJECTED_ARCHITECTURES.md`; Git history |
@@ -464,7 +455,7 @@ domain, epoch, batch nonce, slot index, and a fresh private 512-bit nonce. No im
 collapse those two rules into one replay-unsafe formula. S09 still owns proof-system realization and
 physical constraints, not the now-frozen application identity.
 
-No legacy tree is necessary for ABI compatibility: the current contract receives only the proved
+No legacy tree is necessary for ABI compatibility: the current 12-field boundary receives only the proved
 nonzero projection of the authoritative wide root. A felt collision therefore cannot override or
 mutate the authoritative state. The pre-code candidate is a depth-64 append-indexed
 linked ordered tree whose records store the full 512-bit key and full successor key/index. An
@@ -484,9 +475,9 @@ swaps them together. This is useful P01-P03 implementation evidence only: no pro
 selected, no production verifier or durable anti-rollback custody exists, and the candidate is
 not an activation or Gate 2E admission.
 
-### Current Wave 3 verifier/state/custody internal boundary
+### Retained verifier/state/custody prototype boundary
 
-The P04-P12 internal engineering boundary is implemented in
+The historically Wave 3-labelled P04-P12 internal engineering boundary is implemented in
 `experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py`. It keeps the ordered
 12-field boundary and exact 744-byte sidecar, authenticates manifest-derived governed wide roots
 with an append-only registry and dual ML-DSA/SLH-DSA signatures, derives the existing SHA3-512

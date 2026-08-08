@@ -1,10 +1,10 @@
-"""One local, synthetic receipt for all internally finishable packages.
+"""One local, synthetic receipt for the internal package ledger.
 
 This module does not select a production proof suite or enable activation.  It
-reconciles the already implemented local proof, privacy, state, adapter,
-rollup, custody, supply-chain, and release boundaries into one fail-closed
-engineering receipt.  The final independent audit and operator activation
-inputs remain separate gates.
+reconciles implemented local proof, privacy, state, adapter, custody,
+supply-chain, and release evidence without converting partial evidence into
+package closure.  The remaining internal work, final independent audit, and
+operator activation inputs remain separate gates.
 """
 
 from __future__ import annotations
@@ -56,21 +56,12 @@ from tools.whole_product_kat import build_receipt as build_whole_product_kat_rec
 from tools.wave2_spec_conformance import build_receipt as build_wave2_spec_receipt
 from tools.privacy_v2_conformance import build_receipt as build_privacy_v2_receipt
 from tools.remaining_internal_conformance import build_receipt as build_remaining_internal_receipt
-from app.wave4_adapters import (
-    DualPqAuthenticator,
-    ML_DSA_87,
-    PqcryptoSoftwareSigner,
-    SLH_DSA_SHAKE_256F,
-)
-from app.wave5_rollup import PqGovernance, run_wave5_conformance
-
-
 STATUS: Final[str] = "INTERNAL_CONFORMANCE_RECONCILED_NONACTIVATING"
 RELEASE_CANDIDATE_STATE: Final[str] = "NOT_DEPLOYMENT_READY"
 PROOF_SUITE_STATE: Final[str] = "UNSELECTED"
 PACKAGE_STATUS: Final[str] = "COMPLETE_INTERNAL_NONACTIVATING"
 OPEN_PACKAGE_STATUS: Final[str] = "OPEN_INTERNAL_ENGINEERING"
-PACKAGE_COUNT: Final[int] = 93
+PACKAGE_COUNT: Final[int] = 81
 EXTERNAL_AUDIT_ID: Final[str] = "LB-002"
 ACTIVATION_INPUT_IDS: Final[tuple[str, ...]] = ("LB-003", "LB-004", "LB-005")
 
@@ -83,7 +74,6 @@ PACKAGE_IDS: Final[tuple[str, ...]] = (
     *(f"O{index:02d}" for index in range(1, 7)),
     "O12",
     *(f"I{index:02d}" for index in range(1, 9)),
-    *(f"R{index:02d}" for index in range(1, 13)),
 )
 
 # This is the roadmap's current package ledger, not a claim that one shared
@@ -96,23 +86,11 @@ CLOSED_PACKAGE_IDS: Final[frozenset[str]] = frozenset(
         "S05",
         "S06",
         "A12",
-        *(f"A{index:02d}" for index in range(1, 12)),
-        *(f"A{index:02d}" for index in range(13, 17)),
-        *(f"Z{index:02d}" for index in range(3, 11)),
-        *(f"T{index:02d}" for index in range(7, 15)),
-        "S02",
-        "S04",
-        *(f"S{index:02d}" for index in range(7, 13)),
-        *(f"T{index:02d}" for index in range(1, 7)),
-        "Z02",
-        "Z11",
-        "Z12",
         "Z01",
         *(f"P{index:02d}" for index in range(1, 13)),
         *(f"O{index:02d}" for index in range(1, 7)),
         "O12",
         *(f"I{index:02d}" for index in range(1, 9)),
-        *(f"R{index:02d}" for index in range(1, 13)),
     }
 )
 OPEN_PACKAGE_IDS: Final[tuple[str, ...]] = tuple(
@@ -320,17 +298,6 @@ _GROUP_EVIDENCE: Final[dict[str, tuple[tuple[str, ...], tuple[str, ...]]]] = {
             "tests/test_government_reference_adapter.py",
         ),
     ),
-    "R": (
-        (
-            "app/wave5_rollup.py",
-            "ops/wave5_release_profile.json",
-            "docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md",
-        ),
-        (
-            "tests/test_wave5_rollup.py",
-            "tests/attacks/test_wave5_rollup_attacks.py",
-        ),
-    ),
 }
 
 
@@ -439,7 +406,6 @@ def _git_identity(root: Path) -> dict[str, object]:
                 "--porcelain",
                 "--",
                 "zk-cairo-sharp",
-                "contracts",
                 "app/batch/nullifier.py",
                 "app/batch/leaf.py",
                 "app/batch/stark_binding.py",
@@ -503,16 +469,6 @@ def _verify_supply_chain(root: Path) -> dict[str, object]:
     return verified.as_public_dict()
 
 
-def _verify_wave5_conformance() -> dict[str, object]:
-    ml = PqcryptoSoftwareSigner.generate(ML_DSA_87)
-    slh = PqcryptoSoftwareSigner.generate(SLH_DSA_SHAKE_256F)
-    try:
-        return run_wave5_conformance(PqGovernance(DualPqAuthenticator((ml, slh)))).as_dict()
-    finally:
-        ml.destroy()
-        slh.destroy()
-
-
 def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str, object]:
     """Run the local/synthetic gates and return the all-package receipt."""
     root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
@@ -533,7 +489,6 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
     supply_chain = _verify_supply_chain(root)
     wave2 = build_wave2_conformance_receipt(root)
     wave4 = build_wave4_conformance_receipt(root)
-    wave5 = _verify_wave5_conformance()
     whole_product_kat = build_whole_product_kat_receipt(root)
     wave2_spec = build_wave2_spec_receipt(root)
     privacy_v2 = build_privacy_v2_receipt(root)
@@ -566,14 +521,6 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
             and wave4["release"]["ok"] is True
             and wave4["activation_allowed"] is False
             and wave4["proofSuiteId"] is None
-        ),
-        "wave5_conformance": (
-            wave5["rollback_ok"] is True
-            and wave5["network_access"] is False
-            and wave5["live_credentials"] is False
-            and wave5["production_usable"] is False
-            and wave5["activation_allowed"] is False
-            and wave5["proofSuiteId"] is None
         ),
         "public_boundary": boundary["field_count"] == 12,
         "whole_product_kat": (
@@ -677,7 +624,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         package_id: PACKAGE_STATUS if package_id in CLOSED_PACKAGE_IDS else OPEN_PACKAGE_STATUS
         for package_id in PACKAGE_IDS
     }
-    if len(CLOSED_PACKAGE_IDS) != 93 or len(OPEN_PACKAGE_IDS) != 0:
+    if len(CLOSED_PACKAGE_IDS) != 33 or len(OPEN_PACKAGE_IDS) != 48:
         raise InternalCompletionError("internal_completion_roadmap_count_invalid")
     checks["package_ledger"] = (
         tuple(package_statuses) == PACKAGE_IDS
@@ -715,7 +662,6 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
         "supply_chain": supply_chain,
         "wave2": wave2,
         "wave4": wave4,
-        "wave5": wave5,
         "whole_product_kat": whole_product_kat,
         "wave2_spec": wave2_spec,
         "privacy_v2": privacy_v2,

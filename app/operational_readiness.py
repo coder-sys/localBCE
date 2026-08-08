@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
-from app.public_inputs import PUBLIC_INPUT_FIELD_NAMES
+from app.public_inputs import PUBLIC_INPUT_FIELD_NAMES_V2
 from app.production_readiness import REQUIRED_NONEMPTY_ENV, REQUIRED_PRODUCTION_ENV, production_readiness
 
 
@@ -18,7 +18,7 @@ MIN_SIGNERS = 3
 MIN_THRESHOLD = 2
 MIN_TIMELOCK_SECONDS = 72 * 60 * 60
 
-EXPECTED_PUBLIC_INPUTS = PUBLIC_INPUT_FIELD_NAMES
+EXPECTED_PUBLIC_INPUTS = PUBLIC_INPUT_FIELD_NAMES_V2
 FORBIDDEN_PRODUCTION_SOURCE_MARKERS = (".circom", "groth", "groth16")
 DEV_ONLY_PROOF_SOURCE_MARKERS = ("blind-ledger-app-layer/zk-stark/", "blind-ledger-app-layer\\zk-stark\\", "winterfell", "f128")
 
@@ -173,7 +173,7 @@ def validate_source_manifest(payload: Mapping[str, Any]) -> ValidationReport:
 
 def validate_public_input_schema(payload: Mapping[str, Any]) -> ValidationReport:
     errors: list[str] = []
-    if payload.get("schema_version") != "blind_ledger_native_stark_public_inputs_v1":
+    if payload.get("schema_version") != "blind_ledger_private_settlement_public_inputs_v2":
         errors.append("public input schema_version mismatch")
     fields = payload.get("fields")
     if not isinstance(fields, list):
@@ -189,8 +189,8 @@ def validate_public_input_schema(payload: Mapping[str, Any]) -> ValidationReport
             errors.append(f"field {expected_name} has wrong index")
         if field.get("name") != expected_name:
             errors.append(f"field {index} name must be {expected_name}")
-        if field.get("solidity_type") != ("uint256_as_bytes32" if expected_name in {"approvedAmountCents", "paymentAmountCents"} else "bytes32"):
-            errors.append(f"field {expected_name} has wrong solidity_type")
+        if field.get("solidity_type") != "bytes32":
+            errors.append(f"field {expected_name} has wrong encoding")
     return _report(errors)
 
 
@@ -198,8 +198,8 @@ def validate_verifier_pin_manifest(payload: Mapping[str, Any], *, repo_root: Pat
     errors: list[str] = []
     if payload.get("schema_version") != "blind_ledger_native_stark_verifier_pin_v1":
         errors.append("verifier pin schema_version mismatch")
-    if str(payload.get("proof_anchor") or "") != "NATIVE_STARK_DIRECT_ANCHOR":
-        errors.append("proof_anchor must be NATIVE_STARK_DIRECT_ANCHOR")
+    if str(payload.get("state_transition_boundary") or "") != "NATIVE_STARK_DATABASE_TRANSITION":
+        errors.append("state_transition_boundary must be NATIVE_STARK_DATABASE_TRANSITION")
     if payload.get("is_legacy_proof_wrapper") is not False:
         errors.append("legacy proof wrapper flag must be false")
     if not _valid_hex32(payload.get("artifact_hash")):

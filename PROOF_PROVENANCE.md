@@ -27,7 +27,7 @@ monitor records are retained in the local evidence workspace and summarized in t
 
 The CBAM, state-topology alternatives, conflict-DAG scheduler, WHIR/STIR bake-off, three-plane
 Shout-like/Twist-like/GKR memory-proof candidate, VEIL hiding wrapper, Neo/SuperNeo or Hachi
-post-K128 research, and rollup compatibility work have no proof artifact or completed K128
+post-K128 research and later architecture work have no proof artifact or completed K128
 benchmark here. They are roadmap candidates and must not be cited as throughput, proof-size,
 hiding, post-quantum qualification, or production evidence.
 
@@ -126,11 +126,11 @@ proof file before recording success.
 | Proof SHA-256 | `20801b8071e6fead23db5d6c3c2a2e239d33e1475756c104d3c76da9b61b0fb4` |
 | Semantic output match | Yes |
 | Protected Cairo source unchanged | Yes |
-| Settlement-contract verification run | No |
+| Retired settlement-contract verification run | No |
 | Generated artifact location | `../../proof-runs/first3-queue-20260710-2048/` |
 
 The installed standalone `scarb verify` path remains unsuitable for this statement:
 it panics with `ECDSA segment is not empty`. The successful evidence above comes from
 the repository's official simple-bootloader runner, which invokes the upstream prover
-with verification enabled. It is verifier-clean off-chain evidence, not proof that the
-pinned Solidity settlement verifier accepts this proof encoding or output frame.
+with verification enabled. It is historical verifier-clean evidence, not proof that the current
+native verifier/database boundary accepts this proof encoding or output frame.

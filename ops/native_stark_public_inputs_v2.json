@@ -1,7 +1,7 @@
 {
   "schema_version": "blind_ledger_private_settlement_public_inputs_v2",
   "status": "EXPERIMENTAL_NOT_FOR_PRODUCTION",
-  "statement": "Exact ordered Cairo batch_main_v2 output consumed by StarkBatchSettlementV2.",
+  "statement": "Exact ordered application-proof output consumed by the direct atomic database transition boundary.",
   "fields": [
     {"index": 0, "name": "protocolVersion", "solidity_type": "bytes32", "submission_field": "protocolVersion"},
     {"index": 1, "name": "settlementDomain", "solidity_type": "bytes32", "submission_field": "settlementDomain"},

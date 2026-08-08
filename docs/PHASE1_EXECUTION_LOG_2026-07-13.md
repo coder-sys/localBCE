@@ -3,7 +3,9 @@
 Historical-status note (2026-07-22): this log is preserved as execution chronology. Its
 then-selected monolithic application-specific AIR direction has since become the semantic half of
 the heterogeneous proof in `docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`; the shared-bus
-Boolean SHA3 coprocessor is now the active physical implementation path.
+Boolean SHA3 coprocessor is now the active physical implementation path. Solidity, Foundry, and
+on-chain settlement references below describe deleted historical work and are not current
+requirements.
 
 Status: **the first major run completed to an explicit RED/no-go; the complete private proof and
 roadmap are not complete**.
@@ -67,8 +69,8 @@ field boundary were preserved.
   hardening paths.
 - Current remediation state: `8/10` final reportables remediated, `R25-C01` partially hardened but
   still open, and `R23-C02` open. `R02-C03` remains deferred rather than guessed closed.
-- Detailed post-scan evidence:
-  `cache/security-scans/blind-ledger-app-layer/unversioned_20260713T112204Z/artifacts/fix_report.md`.
+- Detailed post-scan evidence was originally written to a generated cache artifact that is not
+  packaged; this log preserves only its recorded conclusions.
 
 Important repairs include strict ASCII/check-digit NPI handling; bounded EDI, segment, service-line,
 claim, envelope, and queue inputs; atomic portal attachments and state; server-owned claim/payment

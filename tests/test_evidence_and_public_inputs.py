@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,13 +13,12 @@ from app.batch.encrypted_da import (
     generate_audit_key_b64,
 )
 from app.batch.leaf import current_duplicate_pepper
-from app.batch.nullifier import IndexedNullifierTree
 from app.batch.poseidon import FIELD_MODULUS
 from app.fact_resolver import resolve_claim_facts
 from app.ingestion import parse_837
 from app.ingestion_boundary import PROTOTYPE_X12_BOUNDARY, Prototype837Ingestion
 from app.oracle_attestation import make_test_attestation
-from app.public_inputs import PUBLIC_INPUT_FIELDS, build_native_stark_public_inputs, manifest_fields
+from app.public_inputs import PUBLIC_INPUT_FIELD_NAMES_V2, build_native_stark_public_inputs
 from app.shared_context import build_shared_context
 
 
@@ -148,29 +146,17 @@ class EvidenceAndPublicInputTests(unittest.TestCase):
         self.assertEqual(plaintext["claims"][0]["claim_id"], "BL-ENCRYPTED-DA")
         self.assertIn("BL-ENCRYPTED-DA", plaintext["claims"][0]["raw_edi"])
 
-    def test_public_input_manifest_matches_single_canonical_module(self):
-        manifest = json.loads((REPO_ROOT / "ops" / "native_stark_public_inputs_v1.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["fields"], manifest_fields())
-
-    def test_public_input_contract_order_matches_canonical_module(self):
-        source = (APP_ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlement.sol").read_text(encoding="utf-8")
-        self.assertIn("publicInputs.length == 21", source)
-        for field in PUBLIC_INPUT_FIELDS:
-            if field.solidity_type == "uint256_as_bytes32":
-                expected = rf"publicInputs\[{field.index}\]\s*==\s*bytes32\(submission\.{field.submission_field}\)"
-            else:
-                expected = rf"publicInputs\[{field.index}\]\s*==\s*submission\.{field.submission_field}"
-            self.assertRegex(source, re.compile(expected))
-
-    def test_stark_settlement_genesis_matches_indexed_nullifier_empty_root(self):
-        source = (APP_ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlement.sol").read_text(encoding="utf-8")
-        match = re.search(
-            r"CANONICAL_NULLIFIER_GENESIS\s*=\s*0x([0-9a-fA-F]{64})",
-            source,
-            re.MULTILINE,
+    def test_v2_manifest_matches_direct_state_boundary(self):
+        manifest = json.loads(
+            (REPO_ROOT / "ops" / "native_stark_public_inputs_v2.json").read_text(
+                encoding="utf-8"
+            )
         )
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1).lower(), f"{IndexedNullifierTree().root:064x}")
+        self.assertEqual(
+            tuple(field["name"] for field in manifest["fields"]),
+            PUBLIC_INPUT_FIELD_NAMES_V2,
+        )
+        self.assertIn("atomic database transition", manifest["statement"])
 
     def test_batch_public_inputs_are_exactly_21_contract_ready_values(self):
         batch = submit_batches(

@@ -1,6 +1,6 @@
 # Monitoring And Audit Events
 
-The canonical machine-readable inventory is `ops/monitoring_events.json`. Wave 4 emits only
+The canonical machine-readable inventory is `ops/monitoring_events.json`. Phase 2 services emit only
 opaque commitments, versions, epochs, status, error class, and correlation digests. It never logs
 PHI, claim documents, exact private amounts, private decisions, ciphertext, raw payloads, or live
 credentials.
@@ -16,7 +16,7 @@ Minimum alerts:
 - Any key rotation, destruction, incident pause, recovery, or rollback binds the exact checkpoint
   and release identity through opaque SHA3-512 digests.
 - Any transition into or out of `BUILT_AUDIT_PENDING`, `AUDIT_ACCEPTED`, or activation binds the
-  exact release manifest and approving identities. Wave 4 itself never performs that transition.
+  exact release manifest and approving identities. Monitoring itself never performs that transition.
 
 Retention:
 

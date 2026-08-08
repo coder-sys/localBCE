@@ -2,11 +2,10 @@
 
 Updated: 2026-07-22
 
-Current-roadmap note: this document is a historical foundation input to current Wave 1 (claim
-relation and executable AIR), which is now sealed at its synthetic nonactivating boundary in
-`docs/WAVE1A_EXECUTABLE_AIR_SPEC.md`. Current Wave 2 is the former Wave 1B proof work; current Wave 3
-is the former Wave 1C verifier/state/custody work. Later closure records supersede this draft's old
-forward-looking status statements but do not erase its evidence chronology.
+Current-roadmap note: this document is a historical foundation input to the Phase 1 claim relation
+and Phase 2 proof qualification. The executable AIR is sealed at its synthetic nonactivating
+boundary in `docs/WAVE1A_EXECUTABLE_AIR_SPEC.md`. Wave 1A/1B/1C and Wave 3 names below are
+historical identifiers only; they assign no work beyond the current Phase 0-2 roadmap.
 
 Physical-topology note: the sealed SHA3 AIR remains the independent differential specification.
 Wave 2's release priority is the shared-bus Boolean GKR coprocessor in
@@ -16,10 +15,10 @@ schedule, bytes, digests, state semantics, fixed shape, or external 12-field ABI
 Status: **SYNTHETIC-ONLY REVIEW DRAFT -- NOT A PRODUCTION FREEZE**
 
 This draft is an internally finishable input under `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`.
-Independent audit occurs after the exact AIR, proof suite, verifier, state, rollup, and release are
+Independent audit occurs after the exact AIR, proof suite, verifier, database state, and release are
 implemented and internally qualified; no outside reviewer is required to write this AIR.
 
-This document is the review artifact for roadmap packages `A01-A06`. R33 implements its bounded
+This document is the review artifact for roadmap packages `A01-A06`. Historical R33 implemented its bounded
 host semantics and a nonactivating relation-inventory estimator, but not an executable AIR. It does
 not close the package-specific constraint, backend, review, or capacity gates, authorize real PHI,
 or establish zero knowledge or post-quantum proof security. The exact external Privacy V2 ABI remains the ordered 12 fields already defined in
@@ -27,8 +26,9 @@ or establish zero knowledge or post-quantum proof security. The exact external P
 
 The cryptographic feasibility gates `S07-S09` remain upstream hard blockers. In particular, this
 draft does not select a field-extension security budget, FRI query count, blow-up factor, grinding
-factor, PCS, transcript, tree hash, or proof size. R33 declares a 16-table relation-interface
-inventory behind abstract ports; its counts are estimates, not frozen theorem inputs. R35
+factor, PCS, transcript, tree hash, or proof size. Historical R33 declared a 16-table
+relation-interface inventory behind abstract ports; its counts are estimates, not frozen theorem
+inputs. Historical R35
 provides a reusable byte-oriented SHA3-512 witness/lookup shape with a 1,632-column/1,024-lookup core and complete
 1,704-column/1,096-first-round-lookup sponge envelope. The R35 static-inventory checkpoint contained
 52 scoped callsites, 25 AIR-required; its first conservative K128 host-verifier envelope recorded

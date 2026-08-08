@@ -135,11 +135,11 @@ class HarderAttackSurfaceHuntTests(unittest.TestCase):
 
     def test_native_stark_public_input_schema_binds_settlement_context_blocked(self):
         """ASSUMPTION ATTACKED: settlement public inputs bind every batch context root."""
-        source = (ROOT / "ops" / "native_stark_public_inputs_v1.json").read_text(encoding="utf-8")
+        source = (ROOT / "ops" / "native_stark_public_inputs_v2.json").read_text(encoding="utf-8")
 
         self.assertIn("nullifierRootBefore", source)
         self.assertIn("nullifierRootAfter", source)
-        self.assertIn("dataAvailabilityRoot", source)
+        self.assertIn("claimSourceRoot", source)
         self.assertIn("valueConservationCommitment", source)
 
     def test_provider_payment_alias_is_keyed_and_not_reproducible_without_key_blocked(self):

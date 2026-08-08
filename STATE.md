@@ -8803,3 +8803,124 @@ The next boundary is the full bounded Python/Rust regression and final three-arc
 section does not claim deployed `INativeStarkVerifier`, on-chain settlement, HSM/FIPS certification,
 external anti-rollback authority, live Ethereum/government/payment activation, or the independent
 audit.
+
+## 2026-08-08 - owner-authorized Phase 0-2 database + mandatory-ZK reset
+
+Repository: `C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26`
+Baseline: branch `main`, HEAD `de4e6b33e1100209750844108ed80e616ebbb217`
+
+The owner explicitly retired the L2 design and authorized the protected architecture changes
+required to remove it. The active architecture is now:
+
+1. state-owned database as the operational authority;
+2. mandatory application ZK whenever private evidence can authorize payment;
+3. native proof verification followed by one atomic nullifier/payment/state database transition;
+4. signed government/oracle evidence as authenticated inputs, without claiming that signatures or
+   ZK prove source honesty or policy correctness;
+5. no L2, rollup, sequencer, bridge, Solidity settlement, or public DA dependency through Phase 2;
+6. optional future compact checkpoints directly to Ethereum L1, outside current implementation.
+
+The fixed 12-field Privacy V2 ABI, SHA3-512 authority, M31/Fp16/GKR/Construction-8.2 candidate,
+authenticated interactive public coin, dual-PQ signing boundaries, fixed-shape privacy, exact
+proof/state/source/policy bindings, and nonactivation controls survive. Provider-app preflight
+remains local and nonauthoritative; it does not generate the payment-authorizing proof.
+
+Deleted L2-only source includes `app/wave5_rollup.py`, `app/wave5_native_boundary.py`,
+`app/local_stack_candidate.py`, the Wave 5 conformance tool/tests/config, both Stark settlement
+contracts and their interfaces/tests, both Foundry manifests, the V1 on-chain public-input
+manifest, and the active based-rollup/Strawmap/frontier/Wave 5 architecture documents. Historical
+evidence in `STATE.md`, `docs/history/`, and the rejection ledger remains.
+
+The roadmap count changed from 93 to 81 by deleting R01-R12. LB-008 was removed. Global state
+remains `NOT_DEPLOYMENT_READY`, `UNSELECTED`, `proofSuiteId=null`,
+`activation_allowed=false`, and `production_usable=false`. Real PHI/payments remain forbidden.
+
+Verification evidence:
+
+```text
+py -3.14 -B -m compileall -q app experiments/bl_pq512_crypto_foundation tests tools
+COMPILEALL_OK
+
+py -3.14 -B -m pytest -q -p no:cacheprovider [focused architecture/state/adversarial set]
+76 passed, 2 skipped, 22 warnings, 30 subtests passed in 15.93s
+
+Skip reason (2): internal completion requires a committed protected boundary; the
+owner-authorized batch/Cairo architecture migration is still in the worktree.
+
+Warnings (22): RuntimeWarning: LOCAL DEV ONLY RULES ENGINE FALLBACK ACTIVE:
+forced_python_rules_engine
+
+py -3.14 -B -m pytest -q -p no:cacheprovider
+exit 124 after 1204.1s; no pytest summary or failure output was emitted before timeout
+
+cargo test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --lib --tests
+exit 1: std-gated imports unavailable
+
+cargo test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --features std --lib --tests
+exit 1: parallel-gated fixture unavailable
+
+cargo test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --features parallel --lib --tests
+exit 124 after 604s; no Cargo summary or failure output before timeout
+
+cargo test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --features parallel --lib
+exit 124 after 304s; no Cargo summary or failure output before timeout
+
+cargo check --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --features parallel --lib
+Finished dev profile in 13.17s; exit 0
+
+verify_ops_authority()
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+git diff --check
+exit 0
+```
+
+No production proof, deployment, audit acceptance, Ethereum settlement, or complete whole-suite
+pass is claimed.
+
+## 2026-08-08 - complete active-document coherence pass
+
+The owner requested reconciliation of every active architecture-related Markdown file after the
+database + mandatory-ZK reset. The pass corrected stale requirements and phase assignments in the
+experimental proving note, fixed-shape AIR draft, PQ-ZK architecture, backend decision, Wave 1A
+specification, hash-coprocessor contract, foundation threat row, custody/monitoring documents,
+Cairo README, proof provenance, supply-chain baseline, and dated Phase 1 log.
+
+Current documents now uniformly use this boundary:
+
+- Phase 0-2 only;
+- mandatory payment-relevant application ZK;
+- pinned native verification followed by one atomic database transition;
+- production database durability/custody, external anti-rollback, audit, and activation are later
+  gates, not a current Wave 3/4/5;
+- no L2, settlement contract, Foundry/Solidity release surface, or on-chain verifier requirement;
+- Ethereum is only an optional future direct-L1 checkpoint.
+
+Wave/R-number references that remain in active evidence documents are explicitly labelled
+historical identifiers. Deleted Foundry/Solidity observations in the supply-chain baseline are
+explicitly retired and excluded from the current release surface. Historical L2 material remains
+only in `STATE.md`, `docs/history/`, the dated handoff/log, and
+`docs/REJECTED_ARCHITECTURES.md`, where it is labelled nonauthoritative.
+
+```text
+active contradiction scan
+NO_ACTIVE_ARCHITECTURE_CONTRADICTIONS
+
+active Markdown reference check
+MISSING_MD_REFS 0
+
+py -3.14 -B -m pytest -q -p no:cacheprovider
+  tests/test_foundation_spec.py
+  tests/test_fixed_shape_foundation_spec.py
+  tests/test_security_freeze_spec.py
+  tests/test_deployment_ready_roadmap_contract.py
+  tests/test_operational_readiness.py
+  tests/test_production_readiness.py
+46 passed in 0.70s
+
+verify_ops_authority()
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+git diff --check
+exit 0
+```

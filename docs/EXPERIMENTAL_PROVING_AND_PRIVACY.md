@@ -12,14 +12,14 @@ At the time of this 2026-07-31 historical record, these application experiments 
 the separate architecture workspace, and the then-published Desktop, Downloads, and OneDrive
 release ZIPs were not modified. The current source-complete release state is recorded separately
 in the newest `STATE.md` section and its later archive receipts; this historical experiment note
-does not override that current record. Existing production entrypoints remain available.
+does not override that current record. Existing application entrypoints remained available.
 
-## Contract-ready encrypted audit data
+## Historical encrypted audit-data experiment
 
 The opt-in `aes_gcm` batch mode now creates a canonical encrypted audit bundle with AES-256-GCM,
-stores the exact serialized ciphertext bytes on the submitted batch, and uses the raw SHA-256 of
-those bytes as `encryptedClaimDataRoot`. This matches the existing settlement contract check:
-`sha256(encryptedPayload) == encryptedClaimDataRoot`.
+stored the exact serialized ciphertext bytes on the submitted batch, and used the raw SHA-256 of
+those bytes as `encryptedClaimDataRoot`. The retired settlement prototype checked
+`sha256(encryptedPayload) == encryptedClaimDataRoot`; no current contract consumes this field.
 
 Because the root is also a Cairo field element, encryption uses a fresh random nonce until the raw
 SHA-256 digest is below the Cairo field modulus. No modulo reduction is used. The legacy commitment
@@ -105,7 +105,7 @@ following. The current H0-H6 contract supersedes this list for active implementa
 1. Bind every production root and amount in the custom AIR's public statement.
 2. Reproduce nullifier, policy, oracle, encrypted-data, and accumulator constraints.
 3. Add differential known-answer tests against the Cairo circuit for valid and adversarial batches.
-4. Add a pinned verifier artifact and on-chain verifier path for this exact AIR.
+4. Add a pinned native verifier artifact and bind acceptance to the atomic database transition.
 5. Complete independent cryptographic and application-security audits.
 
 ## Validation record

@@ -25,7 +25,11 @@ from app.batch.access_control import ADMIN, AUDITOR, OPERATOR, AccessDenied, Rol
 from app.batch.batch_orchestrator import BatchConfig, LocalBatchRecorder, SubmittedBatch, submit_batches
 from app.batch.proof_status import REAL_PROOF_REQUIRED_STATUS
 from app.operational_readiness import load_json, validate_launch_blockers, validate_verifier_pin_manifest
-from app.production_readiness import CANONICAL_ONCHAIN_ANCHOR, CANONICAL_PROOF_LANE, production_readiness
+from app.production_readiness import (
+    CANONICAL_PROOF_LANE,
+    CANONICAL_STATE_TRANSITION_BOUNDARY,
+    production_readiness,
+)
 from app.service_line_canonical import cents
 
 
@@ -657,7 +661,7 @@ def _readiness_payload() -> dict[str, Any]:
         "verifier_pin_ok": verifier_report.ok,
         "open_launch_blockers": open_blockers,
         "proof_lane": CANONICAL_PROOF_LANE,
-        "onchain_anchor": CANONICAL_ONCHAIN_ANCHOR,
+        "state_transition_boundary": CANONICAL_STATE_TRANSITION_BOUNDARY,
         "proof_status": REAL_PROOF_REQUIRED_STATUS,
     }
 

@@ -2,23 +2,23 @@
   "schema_version": "blind_ledger_native_stark_verifier_pin_v1",
   "environment": "example_non_production",
   "production_usable": false,
-  "proof_anchor": "NATIVE_STARK_DIRECT_ANCHOR",
-  "verifier_interface": "INativeStarkVerifier",
+  "state_transition_boundary": "NATIVE_STARK_DATABASE_TRANSITION",
+  "verifier_interface": "NativeVerifierPort",
   "artifact_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "is_legacy_proof_wrapper": false,
-  "public_input_schema": "ops/native_stark_public_inputs_v1.json",
+  "public_input_schema": "ops/native_stark_public_inputs_v2.json",
   "source_hashes": [
     {
-      "path": "contracts/src/stark/INativeStarkVerifier.sol",
-      "sha256": "f7cbd15fffcbc5c7ed6f78d6d7cbad40b0428a7b361726048fbffe37ec6d33f1"
+      "path": "experiments/bl_pq512_crypto_core/src/bin/production_candidate_verify.rs",
+      "sha256": "0397a4178bb5bac7b7223dc4e4adad51f3141140ff2f93218d0de4795dcf88b8"
     },
     {
-      "path": "contracts/src/stark/StarkBatchSettlement.sol",
-      "sha256": "cdb238d0b9b7798a02d1f3eb669f249cd104e48a55f72a049979c8a5353ed2d2"
+      "path": "app/production_boundary.py",
+      "sha256": "00fe57478d0f60b22355fefe9092672b3d3a5be75fa881a7156177dfdbd2bf4a"
     },
     {
-      "path": "ops/native_stark_public_inputs_v1.json",
-      "sha256": "fd75b6d63fb93f4d0d4388ff9b4157e317213db9eec23819760917295b8cb6a2"
+      "path": "ops/native_stark_public_inputs_v2.json",
+      "sha256": "a9fb39f1f17ce50d2873dfad176b6c27cc32c1737c3c8874e9c83ef790b34301"
     }
   ]
 }

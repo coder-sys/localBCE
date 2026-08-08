@@ -9,7 +9,8 @@ governed by `REJECTED_ARCHITECTURES.md` and cannot be used as fallbacks.
 
 Current status: Gate 2E is sealed nonactivating, H5 passed the exact 22-launch campaign, and H6
 closed the twelve bounded candidate-evidence records. This architecture still has no production
-suite identity or activation; `proofSuiteId=null`, and Wave 3 verifier/state/custody work remains.
+suite identity or activation; `proofSuiteId=null`. Production database durability, custody,
+external anti-rollback, audit, and activation remain outside the local Phase 2 closure.
 
 ## 1. Decision
 

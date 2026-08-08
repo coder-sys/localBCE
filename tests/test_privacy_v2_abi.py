@@ -170,11 +170,11 @@ class PrivacyV2AbiTests(unittest.TestCase):
                 )
             )
 
-    def test_contract_has_no_amount_count_or_claim_payload_submission_fields(self) -> None:
-        source = (ROOT / "contracts" / "src" / "stark" / "StarkBatchSettlementV2.sol").read_text(
-            encoding="utf-8"
+    def test_direct_state_manifest_has_no_amount_count_or_claim_payload_fields(self) -> None:
+        manifest = json.loads(
+            (ROOT / "ops" / "native_stark_public_inputs_v2.json").read_text(encoding="utf-8")
         )
-        submission = source[source.index("struct Submission"):source.index("struct StoredBatch")]
+        encoded = json.dumps(manifest["fields"], sort_keys=True)
         for forbidden in (
             "approvedAmountCents",
             "paymentAmountCents",
@@ -183,8 +183,8 @@ class PrivacyV2AbiTests(unittest.TestCase):
             "deniedCount",
             "encryptedPayload",
         ):
-            self.assertNotIn(forbidden, submission)
-        self.assertIn("bytes32[12] memory outputs", source)
+            self.assertNotIn(forbidden, encoded)
+        self.assertEqual(len(manifest["fields"]), 12)
 
     def test_operating_system_csprng_generates_distinct_nonzero_salts(self) -> None:
         with mock.patch.object(privacy_v2.secrets, "randbelow", side_effect=[10, 10, 20]):

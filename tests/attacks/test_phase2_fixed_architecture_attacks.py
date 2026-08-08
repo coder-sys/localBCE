@@ -825,7 +825,10 @@ class Phase2FixedArchitectureAttackTests(unittest.TestCase):
 
         self.assertEqual(batch.claim_count, 3)
         self.assertEqual(len(batch.nullifier_proofs), 1)
-        self.assertEqual(batch.nullifier_proofs[0]["mode"], "native_stark_settlement_required")
+        self.assertEqual(
+            batch.nullifier_proofs[0]["mode"],
+            "native_stark_database_transition_required",
+        )
         self.assertFalse(batch.nullifier_proofs[0]["accepted"])
         self.assertEqual(batch.nullifier_proofs[0]["attempt_nullifier_count"], 3)
         self.assertFalse(batch.accepted_by_real_verifier)

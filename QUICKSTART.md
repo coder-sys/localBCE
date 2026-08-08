@@ -1,196 +1,20 @@
 # Quickstart
 
-Current truth: Gate 2E is sealed as nonactivating evidence; H5 passed the exact 22-launch campaign;
-and H6 closed all twelve bounded candidate-evidence obligations. Wave 1 is sealed
-synthetic/nonactivating; Wave 2 candidate qualification and internal Wave 3 P01-P12 engineering
-are complete but not activated; Wave 4 adapters/operations are internally complete through local
-conformance; Wave 5 R01-R12 is internally complete through the local/synthetic claim-to-finalized-
-L1 and recovery boundary; all 93 of 93 internal packages are complete at the local/nonactivating
-boundary; `proofSuiteId` is null; real
-PHI/payments are forbidden. Read
-`docs/CURRENT_TECH_STACK.md`, then
-`docs/FRONTIER_THROUGHPUT_AND_ETHEREUM_ALIGNMENT.md` after the throughput and heterogeneous-proof
-contracts. Before any containing-rollup work, also read
-`docs/ETHEREUM_STRAWMAP_BASED_ROLLUP_COMPATIBILITY.md`. Its compulsory based-validity invariants
-and the frontier projections must not be confused with implemented or measured evidence. For each
-fork/EIP, read its impact class, activation trigger, package owners and required tests; never infer
-that “inherited from L1” means no compatibility work or that “available” means enabled.
+For a new Codex chat, first read `AGENTS.md`, the newest `STATE.md` entry, `CONTINUATION_MANDATE.md`, and then the four architecture files in the mandated recovery order. The current next implementation is the LB-006 transactional database boundary in `docs/IMPLEMENTATION_ROADMAP.md`; do not infer a next action from historical `STATE.md` entries.
 
-Run commands from this repository root unless a command says otherwise.
-
-Before treating any successful command as release progress, read
-`docs/IMPLEMENTATION_ROADMAP.md`, `docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`, and
-`docs/BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md`, then
-`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`. The current state is 93 of 93 internal packages
-complete locally, proof suite `UNSELECTED`, and not deployment-ready. Current Wave 1 (historical Wave 1A)
-is the sealed nonactivating relation; current Wave 2 (historical Wave 1B) owns strict-PQ proof and
-throughput recovery. The exact H5 campaign and H6 candidate-evidence manifest are qualification
-records, not production activation. Local test success is not the final independent audit and
-never authorizes real PHI or payments.
-
-## Do not reinstall tools blindly
-
-An agent does not need to install Python, Rust, Scarb, Foundry, or CUDA if they are already installed and working. Check first:
+From the repository root:
 
 ```powershell
-python --version
-python -m pip --version
-cargo --version
-scarb --version
-forge --version
+py -3.14 -B -m pytest -q -p no:cacheprovider
+cargo test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --lib --tests
+cargo test --manifest-path rules-engine-rust/Cargo.toml --lib --tests
 ```
 
-Python dependencies are supported only on the reviewed CPython 3.14.4 targets: Windows x86-64 and
-Linux x86-64 with glibc 2.28 or newer. Obtain the exact pre-provisioned wheelhouse through the
-reviewed release-artifact channel; routine installation never resolves or downloads packages.
-Use a fresh local virtual environment instead of changing global Python:
+Useful focused checks:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-$wheelhouse = "C:\reviewed-artifacts\cp314-win_amd64-development"
-$auditDir = "..\proof-runs\python-install-audit"
-New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
-python -m tools.locked_python_dependencies install `
-  --profile development `
-  --wheelhouse $wheelhouse `
-  --attestation-out "$auditDir\development-install.json"
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_production_boundary.py tests/test_production_readiness.py tests/test_operational_readiness.py
+py -3.14 -B -m experiments.bl_pq512_crypto_foundation.internal_completion
 ```
 
-The installer fails before pip on a wrong interpreter, platform, pip version, lock or manifest
-drift, missing/extra/renamed/symlinked/tampered wheels, an sdist, a non-fresh environment, or any
-SHA-256/SHA3-512 mismatch. Pip is then forced to use the verified local wheels with `--no-index`,
-`--require-hashes`, `--only-binary=:all:`, and `--no-deps`. See
-`docs/PYTHON_DEPENDENCY_LOCKING.md` for the review and rotation contract.
-
-If a tool is missing, report the exact missing tool and stop unless the owner asks you to install it.
-
-## Python tests
-
-```powershell
-py -3.14 -m pytest -q --ignore=tests/attacks
-py -3.14 -m pytest -q tests/attacks
-```
-
-R30 remains the reviewed offline Python supply-chain baseline. R34 counts are historical and include
-the now-removed RISC Zero/Stwo suites; they are not current collection totals. Run focused affected
-tests during development and both complete Python lanes at a convergence milestone. Any current
-Python/Rust/Cairo semantic mismatch is a hard stop.
-
-The historical Wave 1A structural/authenticated-reference slice can still be checked independently.
-It does not substitute for the selected executable-relation seal:
-
-```powershell
-python -m pytest -q `
-  tests/test_poseidon_bulk_chunking.py `
-  tests/test_pq_tree_reference.py `
-  tests/test_pq_sparse_tree_reference.py `
-  tests/test_pq_membership_reference.py `
-  tests/test_pq_strong_nullifier_reference.py `
-  tests/test_a12_nullifier_derivation.py `
-  tests/test_governed_attempt_nullifier.py `
-  tests/test_r25_claim_truth_reference.py `
-  tests/test_r25_witness_schema_reference.py `
-  tests/test_wave1a_authenticated_payment_reference.py `
-  tests/test_wave1a_authenticated_payment_maps_reference.py `
-  tests/test_wave1a_relation_reference.py `
-  tests/test_wave1a_physical_air_reference.py `
-  tests/test_privacy_v2_abi.py
-```
-
-These historical tests use synthetic data. A passing result validates the parser, independently recomputed
-dense/sparse paths, uniform reference replay transitions, scoped authenticated payment state, and
-the composed host plus historical metadata-inventory KAT and A12-derived attempt/cover keys. It does
-not by itself validate the sealed executable polynomial constraints. The current relation requires
-`nullifier_derivations_authenticated=true`; current Wave 1 still does not
-instantiate the concrete theorem-matched proof backend, select a qualified PQ suite, or authorize
-activation.
-
-The current focused Wave 1A closure gates additionally cover the executable application components,
-global boundary composition, master-input adapter, exact global SHA3 schedule, and Rust parity. See
-`docs/WAVE1A_EXECUTABLE_AIR_SPEC.md` for the authoritative test inventory and commitments; do not
-replace a failed gate with a smaller historical subset.
-
-The local/synthetic Wave 2 fixed-shape, exact-ABI, sidecar, proof-grammar, privacy, H6-control, and
-software-PQ-KMS reference receipt is:
-
-```powershell
-py -3.14 -B tools/wave2_internal_conformance.py --repo-root .
-```
-
-It is structural/reference evidence only. It intentionally reports `proofSuiteId=null`,
-`activation_allowed=false`, `production_usable=false`, and `zero_knowledge_proof_verified=false`.
-
-The local native-to-settlement-to-rollup boundary is covered by the focused receipt tests:
-
-```powershell
-py -3.14 -B -m pytest -q -p no:cacheprovider `
-  tests/test_bl_pq512_public_input_projection.py `
-  tests/test_bl_pq512_production_boundary.py `
-  tests/test_bl_pq512_wave5_native_boundary.py
-```
-
-This path requires the lossless 108-limb public-input projection, recomputes the exact ordered
-Privacy V2 fields before local state publication, and reports only commitment/lifecycle metadata.
-It is synthetic/nonactivating; the global registry remains `proofSuiteId=null`.
-
-## Rust rules engine
-
-```powershell
-cargo test --manifest-path rules-engine-rust/Cargo.toml --lib --tests -q
-```
-
-## Solidity tests
-
-The checkout does not include the external `forge-std` dependency expected by the Foundry
-configuration. Do not count a Forge run as release evidence unless that reviewed dependency is
-explicitly provisioned and its source identity is recorded.
-
-```powershell
-forge test
-```
-
-## Cairo circuit checks
-
-```powershell
-cd zk-cairo-sharp
-scarb build
-scarb test
-```
-
-## Local proof measurement
-
-The measurement script builds synthetic batch witness inputs and then calls the installed prover toolchain. It does not package proof artifacts.
-
-```powershell
-python -m tools.measure_proving --claim-count 1
-python -m tools.measure_proving --claim-count 100 --witness-only
-python -m tools.measure_poseidon --rows 256 --iterations 20
-```
-
-The standalone Stwo and RISC Zero experiments are retired and absent from the active tree. The H4
-shared-bus Boolean GKR/Construction-8.2 prototype is complete, the exact H5 p95 campaign passed,
-and the bounded H6 candidate-evidence manifest closed all twelve records. Use synthetic data only:
-these records do not select a production suite, create a production verifier, or authorize real
-PHI/payments.
-
-If `scarb`, CUDA, or an external prover is missing, report the exact tool output. Do not guess flags or rewrite trust-critical code to force a pass.
-
-## Serialized verifier-clean proof jobs
-
-Use the job runner when proof attempts need immutable requests, exclusive execution,
-heartbeats, bounded timeout retries, and machine-readable terminal status. Keep the
-queue and generated artifacts outside this app-layer source tree.
-
-```powershell
-$queue = "..\..\proof-runs\local-prover-queue"
-python -m tools.proving_job_runner enqueue --queue-root $queue --job-id batch-0001 --claim-count 1
-python -m tools.proving_job_runner run-next --queue-root $queue
-python -m tools.proving_job_runner status --queue-root $queue --job-id batch-0001
-```
-
-The runner invokes the supported simple-bootloader proof path and accepts success
-only when verification, semantic output matching, proof-file hashing, and protected
-Cairo source-manifest checks all pass. This local synthetic-claim path is not a
-production adjudication input service, and it does not establish compatibility with
-the pinned Solidity settlement verifier.
+The internal receipt must report `internal_complete=33`, `internal_open=48`, `proofSuiteId=null`, and `production_usable=false`. These commands verify local source behavior. They do not authorize production, PHI, payments, or Ethereum settlement.

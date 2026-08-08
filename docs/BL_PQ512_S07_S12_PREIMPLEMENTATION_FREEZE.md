@@ -540,7 +540,7 @@ Activation remains impossible until all of these are true:
 7. Sidecar, downgrade, stale-state, replay, malformed-proof, competing-before-state, and atomicity
    attacks pass.
 8. S11 reproducibility and supply-chain gates pass.
-9. All fixed-shape, privacy-artifact, leakage, cadence, resource, Rust, Cairo, Solidity, and release
+9. All fixed-shape, privacy-artifact, leakage, cadence, resource, Rust, Cairo, database-boundary, and release
    gates pass using synthetic data.
 10. Independent cryptographic, implementation, privacy, and operations reviews approve release.
 
@@ -557,11 +557,11 @@ Activation remains impossible until all of these are true:
 
 The local work is substantial, but package status follows evidence rather than wording.
 
-The accepted regression inventory is 674 unique Python nodes (572 non-attack, one exact
+The historical R24 regression inventory was 674 unique Python nodes (572 non-attack, one exact
 differential, and 101 attack) plus 198 Python subtests. With 48 rules-Rust tests, 48 RISC-model
-tests, four custom-AIR tests, ten Cairo declarations, and 23 Forge tests, the observed top-level
-total is 807. Nine Cairo declarations remain empty-bodied. These counts measure software and
-cross-language qualification coverage, not proof throughput.
+tests, four custom-AIR tests, ten Cairo declarations, and 23 now-retired Forge tests, the observed
+top-level total was 807. Nine Cairo declarations remained empty-bodied. These are historical
+coverage counts, not the current test inventory or proof throughput.
 
 ### R33 Wave 1A semantic handoff and R36 executable-AIR correction
 

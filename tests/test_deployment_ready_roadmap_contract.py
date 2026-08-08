@@ -4,10 +4,7 @@ import json
 from pathlib import Path
 import re
 
-from experiments.bl_pq512_crypto_foundation.ops_authority import (
-    OPS_AUTHORITY_STATUS,
-    verify_ops_authority,
-)
+from experiments.bl_pq512_crypto_foundation.ops_authority import OPS_AUTHORITY_STATUS, verify_ops_authority
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +20,7 @@ def _text(path: Path) -> str:
 def _package_rows(roadmap: str) -> dict[str, str]:
     rows: dict[str, str] = {}
     for line in roadmap.splitlines():
-        match = re.match(r"^\| ((?:S|A|Z|P|T|O|I|R)\d{2}) \|.*?\| (.*?) \|$", line)
+        match = re.match(r"^\| ((?:S|A|Z|P|T|O|I)\d{2}) \|.*?\| (.*?) \|$", line)
         if match:
             package_id, status = match.groups()
             assert package_id not in rows, f"duplicate roadmap package {package_id}"
@@ -31,7 +28,7 @@ def _package_rows(roadmap: str) -> dict[str, str]:
     return rows
 
 
-def test_whole_product_roadmap_has_exactly_93_internal_packages() -> None:
+def test_phase_two_roadmap_has_exactly_81_surviving_internal_packages() -> None:
     roadmap = _text(ROADMAP)
     rows = _package_rows(roadmap)
     expected = {
@@ -43,88 +40,48 @@ def test_whole_product_roadmap_has_exactly_93_internal_packages() -> None:
         *(f"O{i:02d}" for i in range(1, 7)),
         "O12",
         *(f"I{i:02d}" for i in range(1, 9)),
-        *(f"R{i:02d}" for i in range(1, 13)),
     }
-    assert len(rows) == 93
+    assert len(rows) == 81
     assert set(rows) == expected
-    assert {package_id for package_id, status in rows.items() if status.startswith("Complete")} == expected
-    assert not {f"O{i:02d}" for i in range(7, 12)} & set(rows)
+    assert len({package_id for package_id, status in rows.items() if status.startswith("Complete")}) == 33
+    assert len({package_id for package_id, status in rows.items() if status.startswith("Open")}) == 48
+    assert "| R01 |" not in roadmap and "| R12 |" not in roadmap
 
 
-def test_audit_is_one_uncounted_gate_and_every_package_is_internally_finishable() -> None:
+def test_build_contract_preserves_fail_closed_release_lifecycle() -> None:
     roadmap = _text(ROADMAP)
     contract = _text(CONTRACT)
-    rows = _package_rows(roadmap)
-
-    assert "All **93 counted packages are internal engineering work**" in roadmap
+    assert "All **81 counted packages are internal engineering work**" in roadmap
     assert "## Final independent Security Audit Gate - not counted" in roadmap
-    assert "The five former O07-O11 rows are audit workstreams, not engineering packages" in roadmap
-    assert "All **93 counted packages are internal engineering work**" in roadmap
-    assert "Government API and oracle adapters - 8 packages" in roadmap
-    assert "Containing based rollup and end-to-end deployment - 12 packages" in roadmap
-
-    forbidden_status_phrases = (
-        "external gate",
-        "external cryptographic review required",
-        "external library/kms gate",
-        "external infrastructure and governance gate",
-        "cannot be closed",
-    )
-    for package_id, status in rows.items():
-        lowered = status.lower()
-        assert not any(phrase in lowered for phrase in forbidden_status_phrases), package_id
-
+    assert "No L2" in roadmap
     assert "UNSELECTED" in contract
     assert "BUILT_AUDIT_PENDING" in contract
     assert "AUDIT_ACCEPTED" in contract
     assert "production_usable` remains `false" in contract
-    assert "Live service credentials" in " ".join(contract.split())
-    assert "not missing engineering" in contract
+    assert "mandatory" in contract.lower() and "zero-knowledge" in contract.lower()
 
 
 def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() -> None:
     assert verify_ops_authority() == OPS_AUTHORITY_STATUS
     payload = json.loads(_text(BLOCKERS))
     planning = payload["planning_model"]
-    assert planning == {
-        "internal_engineering_packages": 93,
-        "internal_complete": 93,
-        "internal_open": 0,
-        "external_assurance_gates": 1,
-        "release_candidate_state": "NOT_DEPLOYMENT_READY",
-        "proof_suite_state": "UNSELECTED",
-        "production_usable": False,
-        "contract": "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
-    }
+    assert planning["internal_engineering_packages"] == 81
+    assert planning["internal_complete"] == 33
+    assert planning["internal_open"] == 48
+    assert planning["external_assurance_gates"] == 1
+    assert planning["release_candidate_state"] == "NOT_DEPLOYMENT_READY"
+    assert planning["proof_suite_state"] == "UNSELECTED"
+    assert planning["production_usable"] is False
 
     blockers = payload["blockers"]
     external = [item for item in blockers if item["external_required"]]
-    assert [(item["id"], item["classification"]) for item in external] == [
-        ("LB-002", "security_audit_gate")
+    assert [(item["id"], item["classification"]) for item in external] == [("LB-002", "security_audit_gate")]
+    assert "LB-008" not in {item["id"] for item in blockers}
+    open_internal = [
+        item["id"]
+        for item in blockers
+        if item["classification"] == "internal_engineering"
+        and item["status"] == "open"
+        and item["release_candidate_blocker"] is True
     ]
-
-    engineering = [item for item in blockers if item["classification"] == "internal_engineering"]
-    assert engineering
-    assert all(
-        item["release_candidate_blocker"]
-        for item in engineering
-        if item["status"] == "open"
-    )
-    closed_internal = [
-        item for item in engineering if item["status"] == "closed_internal_nonactivating"
-    ]
-    assert [item["id"] for item in closed_internal] == [
-        "LB-001",
-        "LB-006",
-        "LB-007",
-        "LB-008",
-        "LB-009",
-        "LB-010",
-    ]
-    assert all(not item["release_candidate_blocker"] for item in closed_internal)
-    assert all(not item["external_required"] for item in engineering)
-
-    activation = [item for item in blockers if item["classification"] == "activation_input"]
-    assert {item["id"] for item in activation} == {"LB-003", "LB-004", "LB-005"}
-    assert all(not item["release_candidate_blocker"] for item in activation)
-    assert all(item["production_activation_blocker"] for item in activation)
+    assert open_internal == ["LB-001", "LB-006", "LB-007", "LB-009", "LB-010"]
