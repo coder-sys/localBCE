@@ -9007,3 +9007,19 @@ retired_l2_files_absent=true
 ```
 
 The two overwritten stale copies are recoverable at `C:\Users\neers\Documents\Codex\2026-08-08\oka\work\published-backup-before-dbbd28a`; the previously missing Downloads target was recreated. Temporary staging, snapshot, and builder-output artifacts were deleted after readback. The published archive remains source-only and nonactivating: `proofSuiteId=null`, `activation_allowed=false`, and `production_usable=false`.
+
+## 2026-08-08 - stale Blind Ledger ZIP cleanup - VERIFIED
+
+At the owner's request, every ZIP under `C:\Users\neers` whose filename identified it as a Blind Ledger archive and whose SHA-256 differed from the current published identity was permanently deleted. This supersedes the recoverability statement immediately above: the two stale pre-publication backups were among the deleted files and are no longer recoverable from that directory.
+
+```text
+filename-matched candidates=40
+stale ZIPs deleted=37
+delete failures=0
+current ZIPs retained=3
+post-delete stale count=0
+current archive bytes=12046141
+current archive sha256=4552a6e96ee49123db53899f342e2e69f2c672de13e32a2d0d8aff04f86ec772
+```
+
+Fifteen unrelated dependency, toolchain, and research ZIPs located inside old Blind Ledger work directories were deliberately preserved because their filenames did not identify them as Blind Ledger archives. The three retained current copies remain the Desktop root, nested Desktop source-backup, and Downloads targets.
