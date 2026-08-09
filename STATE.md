@@ -9246,3 +9246,31 @@ LB-007. The ledger remains 81 total, 33 complete, and 48 open; `proofSuiteId=nul
 `production_usable=false`, and every production activation blocker remains enforced. The published
 source archives must be rebuilt and verified byte-identical after the LB-006 commit before this run
 is considered packaged.
+
+Packaging is now complete. The deterministic allowlist advanced from 846 to 848 payload files by
+adding only `app/transactional_database_boundary.py` and
+`tests/test_bl_pq512_transactional_database_boundary.py`. Builder tests passed 18 tests and 54
+subtests. The builder and three-target readback produced:
+
+```text
+implementation_commit=5d173c23969ac3c939d4730759ea1518c49a7b9c
+archive_bytes=12207288
+archive_sha256=00e0316f99b72ae667dc8a546a4d48409afa2bf6fab5edf871c2465bcd875def
+manifest_sha256=438881587a7b81e86591fc10aff04b2b9fd3170222880bc611847e25ea45c439
+payload_bytes=11867019
+payload_file_count=848
+entry_count=849
+directories=0
+zero_byte_files=0
+duplicates=0
+embedded_manifest_entries=1
+crc_failure=None
+new_lb006_paths_present=2
+retired_execution_paths=0
+three_way_byte_identical=true
+temporary_recovery_copies_removed=true
+```
+
+The three retained publication targets are the Downloads copy, the Desktop copy, and the Desktop
+backup-folder copy previously designated by the owner. No additional published Blind Ledger ZIP is
+part of this receipt.
