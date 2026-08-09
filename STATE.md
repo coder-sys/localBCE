@@ -9372,4 +9372,54 @@ aggregate correction, and the reconciled 81/33/48 roadmap. The proof-composition
 confirmed that LB-001/LB-010 is not closeable without the three precursor protocols above. No
 protected path changed. The global state remains `UNSELECTED`, `proofSuiteId=null`,
 `production_usable=false`, activation false, independent audit not started, and real PHI/payments
-forbidden. The three published archives still require refresh from the final committed source.
+forbidden. The three published archives were refreshed from the implementation commit as recorded
+below.
+
+### Final source-archive receipt
+
+The reviewed implementation and documentation were committed on `main` as
+`3575cd2e6e218b3f782ee969476134b80b504c14`. The prior 848-file release allowlist was refreshed for
+25 existing payloads and extended by exactly the 11 new LB-007, aggregate-fail-closed, entropy, and
+test paths approved by the independent release-manifest audit. `STATE.md` and
+`WAVE2_HANDOFF_2026-07-26.md` remain workspace-only and absent. Two fresh independent stages built
+the same byte stream, and the deterministic builder plus separate per-entry readback reported:
+
+```text
+implementation_commit=3575cd2e6e218b3f782ee969476134b80b504c14
+builder_version=blind-ledger-release-archive-v1
+payload_file_count=859
+payload_bytes=12155058
+entry_count=860
+archive_bytes=12572138
+archive_sha256=4f411e3bbe8fd2068be0d8a97bb1d2c300ff08fa4572003df120a817f1b081bd
+manifest_sha256=cdc59dd448f9cf59984d74c04f6e96cb8d4a7212ff545304b9e3513ba8827dfa
+independent_build_byte_identical=true
+payload_hash_or_size_mismatches=0
+directory_entries=0
+zero_byte_entries=0
+duplicate_names=0
+new_paths_present=11
+state_present=false
+handoff_present=false
+proofSuiteId_null_text=true
+production_usable_false_text=true
+aggregate_unqualified_text=true
+three_way_byte_identical=true
+three_way_crc_readback=PASS
+replacement_temps_remaining=0
+old_backup_temps_remaining=0
+```
+
+The first clean-staging helper reached file copy and manifest generation but its final reporting
+expression failed because PowerShell could not measure an ordered-dictionary `size` property. It
+created no ZIP; the exact staging root was resolved under the bounded work directory, deleted, and
+rebuilt from scratch with an explicit integer accumulator. The first publication API attempt then
+failed before replacing any target because Windows rejected a null backup path. All three old
+targets and all three verified replacement files remained intact. The retry used concrete
+same-directory backups, verified each new target and each old backup byte-for-byte, then deleted
+only those three temporary backups after all replacements succeeded.
+
+The retained Downloads, Desktop, and nested Desktop backup-folder ZIPs are now exact byte copies at
+the identity above. The prior published ZIP bytes were replaced and their verified temporary
+backups were deleted as requested. Packaging changes no lifecycle state: LB-001, LB-009, and LB-010
+remain open release blockers; the global suite remains unselected and nonactivating.
