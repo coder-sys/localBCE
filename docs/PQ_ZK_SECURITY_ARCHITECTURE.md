@@ -129,10 +129,17 @@ database qualification remain outside the local Phase 2 closure.
 The current local boundary covers the verifier/database shape without changing the selected
 security claims. `app/native_public_input_projection.py` maps the exact ordered twelve `bytes32`
 outputs to nine 30-bit M31 limbs per field without reduction or aliasing. The Rust candidate
-verifier rederives those 108 inputs, and `LocalSettlementV2` recomputes the Privacy V2 statement
-and publishes state only after the native receipt passes. This is local synthetic evidence; it
-does not close the complete witness-hiding theorem, production database/custody integration,
-independent audit, or activation.
+verifier rederives those 108 inputs. `LocalSettlementV2` remains the deterministic in-memory model;
+`TransactionalSettlementV2` sends the same recomputed statement and native receipt into a
+serializable SQLite reference that atomically persists nullifier/payment roots, replay keys, and
+the audit head. A per-store keyed MAC prevents deterministic verifier-operation fabrication on the
+supported request path; the state binds the authorized submitter while audit exposes only its
+commitment. A write-ahead external-anchor reservation makes pre/post-commit failures exactly
+replayable without double state advance, including delayed finalization after later progress. The
+executable-plus-program artifact
+identity is rechecked before native invocation. This closes LB-006 only as local synthetic evidence;
+it does not close the complete
+witness-hiding theorem, production database/custody integration, independent audit, or activation.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,

@@ -84,4 +84,8 @@ def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() ->
         and item["status"] == "open"
         and item["release_candidate_blocker"] is True
     ]
-    assert open_internal == ["LB-001", "LB-006", "LB-007", "LB-009", "LB-010"]
+    assert open_internal == ["LB-001", "LB-007", "LB-009", "LB-010"]
+    lb006 = next(item for item in blockers if item["id"] == "LB-006")
+    assert lb006["status"] == "closed_internal_nonactivating"
+    assert lb006["release_candidate_blocker"] is False
+    assert lb006["production_activation_blocker"] is True

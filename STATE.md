@@ -9075,6 +9075,105 @@ proofSuiteId=null
 No production proof, PHI, live payment, Ethereum settlement, audit acceptance, or activation is
 claimed.
 
+## 2026-08-08 - LB-006 local transactional database boundary - VERIFIED, NONACTIVATING
+
+LB-006 is closed only at the local, synthetic, nonactivating Phase 2 boundary. The implementation
+adds `app/transactional_database_boundary.py` as a qualification-only SQLite storage reference and
+extends `app/production_boundary.py` with a verifier-authorized storage-operation seam. The native
+verifier must accept the exact fixed 12-field statement, authenticated sidecar, proof package,
+transcript, schema, suite-candidate, verifier, executable, and AIR-program identities before a
+storage operation can exist. The executable-plus-program artifact identity is rechecked before
+each invocation.
+
+The SQLite reference uses one `BEGIN IMMEDIATE` transaction for replay identity, nullifier and
+payment-state roots, sequence, submitter-bound state authentication, and a chained commitment-only
+audit event. Exact retries return the original durable receipt. Conflicting retries, stale roots,
+duplicate roots, configuration drift, forged receipts, post-verification mutation, cross-store
+operation reuse, partial writes, audit/request/state tampering, and older restored databases fail
+closed. Audit stores only a domain-separated submitter commitment and verifier-authorized operation
+digest, not the raw submitter, proof, transcript, PHI, amount, count, or decision.
+
+The external anti-rollback port write-ahead reserves the exact expected/next anchor state and
+operation commitment before SQLite commit. Exact replay can recover a pre-commit reservation;
+post-commit finalization failure returns an explicit indeterminate result and exact retry finalizes
+the one committed transition without a second state advance. Competing transitions and altered
+pending digests reject. Retained finalized-transition history makes delayed duplicate finalization
+idempotent after later progress. The included in-memory anchor is process-local qualification
+scaffolding, not independently durable custody.
+
+Independent review first reproduced two high-severity candidate failures: a deterministic direct
+operation-construction bypass and an unhealable database-COMMIT/anchor-finalize crash window. Both
+were corrected before closure. Final independent authorization, anti-rollback, and documentation
+reviews matched these frozen SHA-256 identities and reported no remaining finding:
+
+```text
+app/production_boundary.py
+3c99d172f5c3bc8a5fb1ac718a7a62a8d6b17c1695568a4ede8b44a451e0e69f
+app/transactional_database_boundary.py
+e1f0906c365be3f57032647f7e3f62153a49ece9b988c5fc29126db1ec5d37a4
+tests/test_bl_pq512_transactional_database_boundary.py
+d056588df8ba0b18d7809840e0b34b3df19d36992adea762bc4a0bf21405af62
+```
+
+Final decisive verification on the reviewed worktree:
+
+```text
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+  tests/test_bl_pq512_transactional_database_boundary.py \
+  tests/test_bl_pq512_production_boundary.py
+23 passed in 1.97s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+  tests/test_bl_pq512_transactional_database_boundary.py \
+  tests/test_bl_pq512_production_boundary.py \
+  tests/test_bl_pq512_production_candidate.py
+28 passed in 129.71s (0:02:09)
+
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+  tests/test_deployment_ready_roadmap_contract.py tests/test_production_readiness.py \
+  tests/test_operational_readiness.py tests/test_internal_completion.py \
+  tests/test_foundation_spec.py tests/test_security_freeze_spec.py
+34 passed in 19.33s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider \
+  tests/test_bl_pq512_state_relation_executable_air.py \
+  tests/test_bl_pq512_state_migration_recovery.py \
+  tests/test_bl_pq512_wave3_verifier_state_custody.py \
+  tests/attacks/test_bl_pq512_atomic_state_composition_attacks.py \
+  tests/attacks/test_bl_pq512_state_migration_recovery_attacks.py \
+  tests/attacks/test_bl_pq512_state_plane_attacks.py \
+  tests/attacks/test_bl_pq512_state_interface_attacks.py
+34 passed in 14.97s
+
+py -3.14 -B -m pytest --collect-only -q -p no:cacheprovider
+1735 tests collected in 3.95s
+warning: StarletteDeprecationWarning for the installed httpx/testclient compatibility layer
+
+py -3.14 -B -m compileall -q app experiments/bl_pq512_crypto_foundation tests
+exit=0
+
+cargo +1.96.0 fmt --check --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+exit=0
+
+verify_ops_authority()
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+git diff --check
+exit=0
+```
+
+One broader eight-module command received no pass credit because its 304.1-second command bound
+expired while executing the unchanged five-test typed-state module; that module's recorded runtime
+is longer than the command cap. Removing only that unchanged long-running module produced the
+34/34 surrounding result above. Ruff was unavailable (`No module named ruff`), so no Ruff result
+is claimed.
+
+The reconciled internal package ledger is 81 total, 33 complete, and 48 open. LB-006 is no longer a
+release-candidate blocker, while all production activation blockers remain enforced. The next
+bounded run is LB-007. `proofSuiteId=null`, `production_usable=false`, and real PHI, real payments,
+production database/custody, durable external anti-rollback, independent audit acceptance,
+Ethereum settlement, and activation remain forbidden or unqualified.
+
 ## 2026-08-08 - post-pivot stale-code and gate audit - VERIFIED, NONACTIVATING
 
 The authoritative Phase 0-2 architecture was re-read before cleanup. A tracked-path and active
@@ -9132,3 +9231,18 @@ production_usable=false
 
 No production proof, PHI, live payment, Ethereum settlement, audit acceptance, or activation is
 claimed.
+
+## 2026-08-08 - LB-006 final handoff - VERIFIED, NONACTIVATING
+
+The immediately preceding detailed LB-006 record is the current implementation and verification
+handoff. Its frozen source/test hashes match all three final independent reviews. The real Rust
+proof-to-native-verifier-to-transactional-database lane passed 28/28, the focused boundary passed
+23/23, readiness passed 34/34, and the isolated surrounding state/migration/attack lane passed
+34/34. The timed-out eight-module aggregate receives no pass credit for its unchanged five-test
+typed-state component.
+
+LB-006 is closed only for local, synthetic, nonactivating Phase 2 evidence. The next bounded run is
+LB-007. The ledger remains 81 total, 33 complete, and 48 open; `proofSuiteId=null`,
+`production_usable=false`, and every production activation blocker remains enforced. The published
+source archives must be rebuilt and verified byte-identical after the LB-006 commit before this run
+is considered packaged.

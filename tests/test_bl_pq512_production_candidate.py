@@ -12,13 +12,17 @@ from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.production_boundary import (
     GovernedRootsV2,
-    LocalSettlementV2,
     NativeStarkVerifierConfig,
     NativeStarkVerifierPort,
     _BATCH_NONCE_BINDING,
     _SETTLEMENT_DOMAIN_BINDING,
     _digest,
     build_v2_public_fields,
+    native_verifier_artifact_identity,
+)
+from app.transactional_database_boundary import (
+    SQLiteSettlementStoreV2,
+    TransactionalSettlementV2,
 )
 from app.native_public_input_projection import PublicInputProjectionV1
 from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
@@ -293,11 +297,13 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     source_columns = dict(traces["source"].columns)
     source_columns.update({name: (0, 0, 0, 0) for name in public_columns})
     traces["source"] = TraceTable("source", freeze_columns(source_columns))
+    program_path = tmp_path / "production-program.bin"
+    program_path.write_bytes(encode_air_program(program))
     geometry = derive_selected_proof_geometry(program)
     schedule = build_selected_theorem_round_schedule(geometry)
     suite = schedule.proof_suite_id
     schema = _wide("production-schema")
-    verifier_identity = _wide("production-verifier")
+    verifier_identity = native_verifier_artifact_identity(verifier, program_path)
     sidecar, settlement_domain, batch_nonce, roots = _settlement_sidecar(
         suite, schema, verifier_identity
     )
@@ -367,10 +373,8 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         challenge_bundle=result.challenge_bundle,
     )
     envelope_path = tmp_path / "production-envelope.bin"
-    program_path = tmp_path / "production-program.bin"
     public_inputs_path = tmp_path / "production-public-inputs.bin"
     envelope_path.write_bytes(envelope.encode())
-    program_path.write_bytes(encode_air_program(program))
     public_inputs_path.write_bytes(projection.encode_file(public_output_bytes))
     verify_args = [
         str(verifier),
@@ -436,13 +440,20 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     assert selected.production_usable is False
 
     parsed_sidecar = CandidateSidecarV1.decode(sidecar)
-    initial_nullifier_root = (
-        int.from_bytes(parsed_sidecar.strong_nullifier_root_before, "big")
-        % (FIELD_MODULUS - 1)
-        + 1
-    ).to_bytes(32, "big")
     submitter = _wide("real-native-submitter")
-    settlement = LocalSettlementV2(
+    storage = SQLiteSettlementStoreV2(
+        path=tmp_path / "real-native-settlement.sqlite3",
+        settlement_domain=settlement_domain,
+        governed_roots=roots,
+        initial_strong_nullifier_root=parsed_sidecar.strong_nullifier_root_before,
+        initial_strong_payment_state_root=parsed_sidecar.strong_payment_state_root_before,
+        epoch=parsed_sidecar.epoch,
+        profile_id=parsed_sidecar.profile_id,
+        suite_id=suite,
+        schema_id=schema,
+        verifier_artifact_identity=verifier_identity,
+    )
+    settlement = TransactionalSettlementV2(
         verifier=NativeStarkVerifierPort(
             NativeStarkVerifierConfig(
                 executable=verifier,
@@ -453,10 +464,10 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
                 public_input_projection=projection,
             )
         ),
+        storage=storage,
         settlement_domain=settlement_domain,
         governed_roots=roots,
-        initial_nullifier_root=initial_nullifier_root,
-        authorized_submitters=(submitter,),
+        authorized_submitters=[submitter],
     )
     settlement_receipt = settlement.submit(
         envelope=envelope,
@@ -469,6 +480,9 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
     assert settlement_receipt.native_statement_commitment == receipt.statement_commitment
     assert settlement_receipt.proof_suite_id == suite
     assert settlement.snapshot().state_binding == settlement_receipt.state_binding
+    assert settlement.snapshot().strong_nullifier_root == parsed_sidecar.strong_nullifier_root_after
+    assert settlement.snapshot().strong_payment_state_root == parsed_sidecar.strong_payment_state_root_after
+    settlement.verify_integrity()
 
     encoded = envelope.encode()
     proof_offset = 8 + 2 + 64 * 3 + 384 + 4 + 744 + 8

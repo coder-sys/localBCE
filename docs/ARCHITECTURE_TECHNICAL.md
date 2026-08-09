@@ -6,9 +6,9 @@ The execution path is intentionally small:
 canonical signed inputs
   -> fixed-shape witness/proof generation
   -> native BL-PQ512 verification
-  -> LocalSettlementV2 / production database port
+  -> TransactionalSettlementV2 / storage port
   -> atomic nullifier + state + payment commitment update
-  -> append-only signed audit commitment
+  -> append-only chained audit commitment
 ```
 
 ## Invariants
@@ -24,7 +24,16 @@ canonical signed inputs
 
 ## Component seams
 
-`NativeVerifierPort` owns proof verification. `LocalSettlementV2` demonstrates the atomic transition contract. Production adapters must preserve the same input and receipt semantics against a serializable database and external custody.
+`NativeVerifierPort` owns proof verification. `LocalSettlementV2` remains the deterministic in-memory
+model. `TransactionalSettlementV2` and `SQLiteSettlementStoreV2` supply the durable Phase 2
+reference, including per-store keyed verifier authorization, serializable writes, exact retry
+receipts, submitter-bound state with commitment-only audit provenance, backup/restore, audit-chain
+readback, and a write-ahead external anti-rollback interface.
+Pre-commit reservation and post-commit finalization failures are recovered only through the exact
+reverified transition, without a second database advance; delayed duplicate finalization remains
+idempotent after later progress. SQLite and the in-memory anchor are local
+qualification tools, not production selections. Production adapters must preserve the same input
+and receipt semantics against a qualified database and external custody.
 
 The detailed proof design remains in `PQ_ZK_SECURITY_ARCHITECTURE.md`. The exact public fields remain in `ops/native_stark_public_inputs_v2.json`.
 

@@ -14,7 +14,7 @@
     },
     {
       "path": "app/production_boundary.py",
-      "sha256": "00fe57478d0f60b22355fefe9092672b3d3a5be75fa881a7156177dfdbd2bf4a"
+      "sha256": "3c99d172f5c3bc8a5fb1ac718a7a62a8d6b17c1695568a4ede8b44a451e0e69f"
     },
     {
       "path": "ops/native_stark_public_inputs_v2.json",

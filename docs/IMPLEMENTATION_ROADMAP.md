@@ -31,20 +31,31 @@ H4 fresh prototype evidence recorded 29.974129 seconds for K128 and 120.460733 s
 
 - Prove and verify fixed K128/K512 workloads reproducibly.
 - Test parser limits, forged receipts, stale roots, replay, duplicate nullifiers, conflicting retries, concurrency, rollback, and recovery.
-- Qualify transaction isolation, idempotency, append-only audit commitments, backup/restore, and external anti-rollback interfaces.
+- Qualify transaction isolation, idempotency, append-only audit commitments, backup/restore, and
+  write-ahead external anti-rollback reservation/finalization recovery.
 - Produce an audit-pending evidence packet while `proofSuiteId=null`, `production_usable=false`, and real PHI/payments remain forbidden.
 
 ## Start here next
 
-The next bounded implementation is **LB-006: the real transactional database boundary**.
+**LB-006 is complete at the local, synthetic, nonactivating boundary.** The storage port, SQLite
+reference, exact native artifact pin, real Rust verifier-to-database lane, concurrency and replay
+tests, rollback/restart recovery, verified backup/restore, append-only audit chain, per-store keyed
+verifier authorization, submitter-bound state/audit provenance, and a write-ahead external
+anti-rollback state machine with delayed-finalization idempotency are implemented. This is not a
+production database, durable custody, or activation claim.
 
-1. Define a storage port beneath `app/production_boundary.py` without weakening the existing native-verifier receipt checks.
-2. Add a local transactional database reference that commits the nullifier, state root, payment commitment, sequence, and audit event in one transaction.
-3. Prove fail-closed behavior for concurrent submissions, stale roots, duplicate nullifiers, idempotent retries, partial failure, process restart, rollback, and recovery.
-4. Keep the current in-memory `LocalSettlementV2` as a deterministic test model, not as database-completion evidence.
-5. Do not select a production database, real credentials, `proofSuiteId`, PHI, payments, or Ethereum integration in this package.
+The next bounded implementation is **LB-007: Privacy V2 proof and state migration**.
 
-After LB-006, execute LB-007 privacy migration, LB-001/LB-010 proof-suite qualification, LB-009 custody operations, and then T01-T14 whole-product convergence. Exact source/test ownership and package acceptance statements are canonical in `experiments/bl_pq512_crypto_foundation/internal_package_matrix.py`.
+1. Freeze the exact old-state/new-state migration input and the mixed-version rejection contract.
+2. Route the migration through the LB-006 storage port without exposing amounts, counts, decisions,
+   PHI, or claim ciphertext.
+3. Add proof-bound differential and inference tests plus migration, rollback, restart, recovery, and
+   stale-version attacks.
+4. Keep `proofSuiteId=null`, `production_usable=false`, and real PHI/payments forbidden.
+
+After LB-007, execute LB-001/LB-010 proof-suite qualification, LB-009 custody operations, and then
+T01-T14 whole-product convergence. Exact source/test ownership and package acceptance statements
+are canonical in `experiments/bl_pq512_crypto_foundation/internal_package_matrix.py`.
 
 ## Package ledger
 
@@ -72,12 +83,12 @@ After LB-006, execute LB-007 privacy migration, LB-001/LB-010 proof-suite qualif
 | A08 | Durable oracle binding | Open - authority registry and proof binding remain incomplete |
 | A09 | Durable policy/ruleset registries | Open - database registries remain incomplete |
 | A10 | Adjudication ordering | Open - final proof qualification remains incomplete |
-| A11 | Durable payment/state plane | Open - transactional state plane is not implemented |
+| A11 | Durable payment/state plane | Open - local transactional reference passes; production topology, migration, and qualification remain incomplete |
 | A12 | Executable claim and state AIR 12 | Complete - local, synthetic, nonactivating |
-| A13 | State-operation proof binding | Open - durable operation binding remains incomplete |
+| A13 | State-operation proof binding | Open - local native-proof-to-database binding passes; final selected release binding remains incomplete |
 | A14 | Wide-value public projection | Open - whole-boundary convergence remains incomplete |
 | A15 | Durable authoritative roots | Open - root/master selection remains incomplete |
-| A16 | Claim prover/verifier integration | Open - complete integration remains incomplete |
+| A16 | Claim prover/verifier integration | Open - real candidate proof reaches the local database reference; final suite/release integration remains incomplete |
 | Z01 | Proof, hiding, and verifier 01 | Complete - local, synthetic, nonactivating |
 | Z02 | Entropy and zeroization | Open - production boundary remains incomplete |
 | Z03 | Semantic witness masking | Open - complete composition remains incomplete |

@@ -15,6 +15,9 @@ No L2, rollup, sequencer, bridge, Solidity settlement, or public data-availabili
 - Fixed-shape K128/K512 batches.
 - SHA3-512 nullifier, accumulator, policy, ruleset, source, payment, and settlement bindings.
 - `app/production_boundary.py` direct native-verifier-to-state transition seam.
+- `app/transactional_database_boundary.py` qualification-only SQLite transaction, per-store keyed
+  verifier authorization, submitter-bound state/provenance audit, replay, backup/restore, and
+  write-ahead anti-rollback state machine; it is not a production database or custody selection.
 - Fail-closed readiness, operator, oracle, audit, retry, and recovery checks.
 
 ## Proof system
@@ -42,7 +45,8 @@ Government and oracle adapters authenticate exact source bytes, signer authority
 - activation forbidden
 - real PHI and payments forbidden
 - independent audit not started
-- production database, HSM/FIPS custody, external anti-rollback, backup/restore, and live adapter credentials not qualified
+- production database, HSM/FIPS custody, durable external anti-rollback, production backup/restore,
+  and live adapter credentials not qualified
 
 ## Retained research
 

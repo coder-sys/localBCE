@@ -20,9 +20,47 @@ For each batch, the service:
 5. rechecks the batch nonce, state-before roots, governance roots, and anti-rollback epoch;
 6. rejects consumed nullifiers, stale roots, duplicates, or conflicting retries;
 7. writes the state-after roots, payment commitments, and audit event;
-8. commits once, or changes nothing.
+8. commits the database transition exactly once, or rolls it back; an uncertain response is resolved
+   only by exact idempotent retry.
 
 Verifier acceptance alone never authorizes a payment. A database write without verifier acceptance is forbidden.
+
+## LB-006 local transactional reference
+
+`app/production_boundary.py` defines the verifier-to-storage operation shape, while
+`app/transactional_database_boundary.py` implements the Phase 2 SQLite reference. The reference
+persists the exact verifier identities, sequence, strong nullifier root, strong payment-state root,
+authenticated submitter, state binding, replay keys, and chained audit event in one
+`BEGIN IMMEDIATE` transaction. The state binding authenticates the exact submitter; the audit event
+stores only its domain-separated commitment and the verifier-authorized operation digest. Exact
+retries return the original durable receipt; conflicting retries, stale roots, reused nullifier
+roots, partial writes, configuration drift, and post-verification mutation fail closed.
+
+After native receipt verification, `TransactionalSettlementV2` MAC-authenticates the operation with
+a fresh per-settlement key bound once to that store. There is no deterministic public factory or
+public storage-commit method. This closes the supported request-path bypass and mutation boundary;
+it is not a claim that Python-private objects isolate malicious code already executing inside the
+trusted application process.
+
+When an external anti-rollback port is configured, it write-ahead reserves the exact expected and
+next anchor states plus transition commitment before SQLite commit, then finalizes after commit. A
+pre-commit failure leaves only that exact transition replayable. A post-commit finalization failure
+returns an explicit indeterminate error; exact retry finalizes the reservation and returns the one
+durable receipt without advancing state again. A competing transition or older database remains
+fail closed. Delayed duplicate finalization remains idempotent even after a later transition. The
+external port must make its snapshot, prepare, and finalize operations atomic, retain enough
+finalized-transition history for idempotency, and be independently durable for this property to
+carry into production.
+
+The reference also exercises online backup, restore into a new database file, process restart,
+append-only audit verification, and an external anti-rollback port. The native artifact identity is
+the SHA3-512-domain-separated commitment to the exact verifier executable and AIR program bytes and
+is rechecked before every invocation. A real Rust candidate proof reaches this database path in the
+bounded end-to-end test.
+
+This closes LB-006 only as local, synthetic, nonactivating Phase 2 evidence. SQLite is not selected
+as the production database, the in-memory anti-rollback state machine is not durable custody, and no
+production proof suite, PHI, payment rail, credential, audit acceptance, or activation is implied.
 
 ## What the proof establishes
 
@@ -54,4 +92,3 @@ A later phase may post one compact signed checkpoint or aggregate proof directly
 - Phase 1: preserve and reconcile the proof core, ABI, signed-source model, and direct state boundary.
 - Phase 2: qualify the mandatory proof and atomic database transition locally with adversarial tests and reproducible evidence.
 - Later: production database/custody integration, independent audit, operator activation, and optional L1 checkpoint design.
-

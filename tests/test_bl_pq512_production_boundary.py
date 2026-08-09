@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha3_512
+from pathlib import Path
 
 import pytest
 
 from app.batch.pq_suite_candidate import CandidateSidecarV1
+from app.native_public_input_projection import PublicInputProjectionV1
 from app.production_boundary import (
     GovernedRootsV2,
     LocalSettlementV2,
+    NativeStarkVerifierConfig,
+    NativeStarkVerifierPort,
     NativeVerificationResult,
     ProductionBoundaryError,
     SettlementSnapshotV2,
@@ -16,6 +20,7 @@ from app.production_boundary import (
     _SETTLEMENT_DOMAIN_BINDING,
     _digest,
     build_v2_public_fields,
+    native_verifier_artifact_identity,
 )
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
     NativeVerificationReceipt,
@@ -123,6 +128,36 @@ class _ForgedCommitmentVerifier(_ReceiptVerifier):
     def verify(self, envelope: ProductionProofEnvelope) -> NativeVerificationResult:
         result = super().verify(envelope)
         return replace(result, envelope_commitment=_wide("forged-envelope"))
+
+
+def test_native_verifier_config_pins_executable_and_program_bytes(tmp_path: Path) -> None:
+    executable = tmp_path / "verifier.bin"
+    program = tmp_path / "program.bin"
+    executable.write_bytes(b"synthetic-native-verifier-binary")
+    program.write_bytes(b"synthetic-air-program")
+    projection = PublicInputProjectionV1(_wide("schema"))
+    identity = native_verifier_artifact_identity(executable, program)
+    config = NativeStarkVerifierConfig(
+        executable=executable,
+        program=program,
+        suite_id=_wide("suite"),
+        schema_id=_wide("schema"),
+        verifier_artifact_identity=identity,
+        public_input_projection=projection,
+    )
+    with pytest.raises(ProductionBoundaryError, match="verifier_artifact_identity_mismatch"):
+        NativeStarkVerifierConfig(
+            executable=executable,
+            program=program,
+            suite_id=_wide("suite"),
+            schema_id=_wide("schema"),
+            verifier_artifact_identity=_wide("wrong-verifier-artifact"),
+            public_input_projection=projection,
+        )
+
+    program.write_bytes(b"mutated-air-program")
+    with pytest.raises(ProductionBoundaryError, match="native_verifier_artifact_changed"):
+        NativeStarkVerifierPort(config).verify_encoded(b"nonempty-envelope")
 
 
 def test_production_envelope_decode_round_trips_after_receipt_binding() -> None:

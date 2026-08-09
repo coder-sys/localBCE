@@ -98,7 +98,6 @@ OPEN_PACKAGE_IDS: Final[tuple[str, ...]] = tuple(
 )
 RELEASE_CANDIDATE_BLOCKERS: Final[tuple[str, ...]] = (
     "LB-001",
-    "LB-006",
     "LB-007",
     "LB-009",
     "LB-010",
@@ -633,7 +632,7 @@ def build_internal_completion_receipt(repo_root: Path | None = None) -> dict[str
     )
     checks["release_blockers_preserved"] = (
         RELEASE_CANDIDATE_STATE == "NOT_DEPLOYMENT_READY"
-        and len(RELEASE_CANDIDATE_BLOCKERS) == 5
+        and len(RELEASE_CANDIDATE_BLOCKERS) == 4
         and PROOF_SUITE_STATE == "UNSELECTED"
     )
     if not all(checks.values()):

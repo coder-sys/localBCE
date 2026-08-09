@@ -25,8 +25,8 @@
       "external_required": false,
       "release_candidate_blocker": true,
       "production_activation_blocker": true,
-      "current_evidence": "A real Rust candidate proof can be generated and independently parsed by the native verifier executable; the exact envelope can reach per-proof BUILT_AUDIT_PENDING while activation remains false.",
-      "remaining_work": "Replace the placeholder verifier-artifact pin with a reproducible binary identity and close the selected suite, composed security, parser, supply-chain, and exact release qualification gaps.",
+      "current_evidence": "A real Rust candidate proof can be generated and independently parsed by the native verifier executable; the exact executable plus AIR program bytes are SHA3-512-domain-separated into the enforced artifact identity, and the envelope can reach per-proof BUILT_AUDIT_PENDING while activation remains false.",
+      "remaining_work": "Close the selected suite, composed security, parser, supply-chain, reproducible release, and exact production-verifier qualification gaps.",
       "exit_criteria": "The complete native STARK prover and independent verifier lane is internally implemented, reproducible, pinned, and qualified for the exact statement, suite, sidecar, and public-input schema, with a per-proof candidate identity in BUILT_AUDIT_PENDING; the global operational proofSuiteId remains unset until deployed acceptance and audit."
     },
     {
@@ -43,14 +43,14 @@
     {
       "id": "LB-006",
       "title": "Exact claim-proof output and database-transition binding",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "cryptography_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
-      "current_evidence": "The exact 12-field projection, authenticated sidecar, real native receipt, tamper rejection, replay checks, and in-memory LocalSettlementV2 transition pass focused tests.",
-      "remaining_work": "Implement the same fail-closed transition through an actual transactional database port and qualify isolation, concurrency, retries, rollback, crash recovery, and a real verifier-artifact pin.",
+      "current_evidence": "The exact 12-field projection and full sidecar pass through the real Rust candidate verifier into a serializable SQLite reference. The executable-plus-program identity and a per-store keyed verifier-to-storage authorization channel are enforced. The state and audit bind the authenticated submitter without exposing its raw identifier in audit output. Focused tests cover atomic nullifier/payment/state/audit publication, concurrency, exact and conflicting retry, stale roots, duplicate nullifier roots, pre-commit anchor reservation replay, post-commit anchor-finalization recovery without double advance, delayed finalization after a later transition, pending-operation tampering, rollback detection, restart, backup/restore, audit tampering, and configuration drift.",
+      "remaining_work": "The LB-006 internal exit criteria are met only for local, synthetic, nonactivating evidence. Production database selection/qualification, durable custody, final proof-suite selection, independent audit, real PHI/payments, and activation remain governed by other open packages and blockers.",
       "exit_criteria": "One real verifier authenticates the exact versioned 12-field output and full sidecar consumed by the atomic database transition; length, order, encoding, proof format, suite, schema, and verifier identities are reproducibly pinned, and no caller-supplied unproven value can advance state."
     },
     {
