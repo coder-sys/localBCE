@@ -22,6 +22,7 @@ dependencies = [
  "ml-dsa",
  "sha3 0.10.9",
  "slh-dsa",
+ "zeroize",
 ]
 
 [[package]]

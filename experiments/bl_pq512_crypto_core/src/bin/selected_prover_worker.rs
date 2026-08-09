@@ -31,8 +31,93 @@ use bl_pq512_crypto_core::selected_challenge::{
     decode_selected_challenge_bundle, fri_batch_derivation_commitment,
     verify_selected_fri_pipeline_v2,
 };
+use zeroize::Zeroize;
 
-const WORKER_MAGIC: &[u8; 8] = b"BLPQSPW1";
+const WORKER_MAGIC: &[u8; 8] = b"BLPQSPW2";
+#[cfg(any(test, feature = "test_entropy_injection"))]
+const TEST_WORKER_MAGIC: &[u8; 8] = b"BLPQSPT2";
+
+const ENTROPY_BYTES: usize = 64;
+const MAX_ZERO_ENTROPY_RETRIES: usize = 8;
+#[cfg(test)]
+static WORKER_ENTROPY_DROP_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Per-attempt masking entropy owned exclusively by this worker process.
+///
+/// This type is intentionally neither `Clone` nor `Copy`. The public-coin
+/// session identifier is not entropy: it remains an authenticated public
+/// transcript field, while this private attempt nonce prevents a caller from
+/// selecting or reusing the mask-derivation context.
+struct WorkerEntropy {
+    mask_seed: [u8; ENTROPY_BYTES],
+    attempt_nonce: [u8; ENTROPY_BYTES],
+}
+
+impl WorkerEntropy {
+    fn from_os() -> Result<Self, String> {
+        let mut value = Self {
+            mask_seed: [0_u8; ENTROPY_BYTES],
+            attempt_nonce: [0_u8; ENTROPY_BYTES],
+        };
+        fill_nonzero_os_entropy(&mut value.mask_seed)?;
+        fill_nonzero_os_entropy(&mut value.attempt_nonce)?;
+        Ok(value)
+    }
+
+    #[cfg(any(test, feature = "test_entropy_injection"))]
+    fn from_test_reader(reader: &mut impl Read) -> Result<Self, String> {
+        let mut value = Self {
+            mask_seed: [0_u8; ENTROPY_BYTES],
+            attempt_nonce: [0_u8; ENTROPY_BYTES],
+        };
+        reader
+            .read_exact(&mut value.mask_seed)
+            .map_err(|_| "test_entropy_frame_truncated".to_string())?;
+        reader
+            .read_exact(&mut value.attempt_nonce)
+            .map_err(|_| "test_entropy_frame_truncated".to_string())?;
+        if !value.mask_seed.iter().any(|byte| *byte != 0)
+            || !value.attempt_nonce.iter().any(|byte| *byte != 0)
+        {
+            return Err("test_entropy_zero".into());
+        }
+        Ok(value)
+    }
+
+    fn mask_seed(&self) -> &[u8; ENTROPY_BYTES] {
+        &self.mask_seed
+    }
+
+    fn attempt_nonce(&self) -> &[u8; ENTROPY_BYTES] {
+        &self.attempt_nonce
+    }
+}
+
+impl Zeroize for WorkerEntropy {
+    fn zeroize(&mut self) {
+        self.mask_seed.zeroize();
+        self.attempt_nonce.zeroize();
+    }
+}
+
+impl Drop for WorkerEntropy {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        WORKER_ENTROPY_DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn fill_nonzero_os_entropy(destination: &mut [u8; ENTROPY_BYTES]) -> Result<(), String> {
+    for _ in 0..MAX_ZERO_ENTROPY_RETRIES {
+        getrandom::fill(destination).map_err(|_| "os_entropy_unavailable".to_string())?;
+        if destination.iter().any(|byte| *byte != 0) {
+            return Ok(());
+        }
+    }
+    Err("os_entropy_repeated_zero".into())
+}
 
 fn decode_hex<const N: usize>(encoded: &str) -> Result<[u8; N], String> {
     if encoded.len() != N * 2 || !encoded.is_ascii() {
@@ -128,22 +213,32 @@ fn run() -> Result<(), String> {
     reader
         .read_exact(&mut magic)
         .map_err(|_| "initial_frame_truncated".to_string())?;
-    if &magic != WORKER_MAGIC {
+    #[cfg(any(test, feature = "test_entropy_injection"))]
+    let test_entropy_injection = &magic == TEST_WORKER_MAGIC;
+    #[cfg(not(any(test, feature = "test_entropy_injection")))]
+    let test_entropy_injection = false;
+    if &magic != WORKER_MAGIC && !test_entropy_injection {
         return Err("initial_magic".into());
     }
     let program = read_bounded(&mut reader)?;
     let execution = read_bounded(&mut reader)?;
-    let mut secret_seed = [0_u8; 64];
     let mut session_id = [0_u8; 64];
-    reader
-        .read_exact(&mut secret_seed)
-        .map_err(|_| "initial_frame_truncated".to_string())?;
     reader
         .read_exact(&mut session_id)
         .map_err(|_| "initial_frame_truncated".to_string())?;
-    if !secret_seed.iter().any(|byte| *byte != 0) || !session_id.iter().any(|byte| *byte != 0) {
+    if !session_id.iter().any(|byte| *byte != 0) {
         return Err("initial_entropy".into());
     }
+    let entropy = if test_entropy_injection {
+        #[cfg(any(test, feature = "test_entropy_injection"))]
+        {
+            WorkerEntropy::from_test_reader(&mut reader)?
+        }
+        #[cfg(not(any(test, feature = "test_entropy_injection")))]
+        unreachable!("test entropy injection is absent from default builds")
+    } else {
+        WorkerEntropy::from_os()?
+    };
 
     let main_started = Instant::now();
     evaluate_air_execution(&execution).map_err(|error| format!("execution_{error:?}"))?;
@@ -163,8 +258,8 @@ fn run() -> Result<(), String> {
     let main = build_air_main_trace_oracle(
         &program,
         &execution,
-        &secret_seed,
-        &session_id,
+        entropy.mask_seed(),
+        entropy.attempt_nonce(),
         TRACE_MASK_COEFFICIENT_COUNT,
         LOG_BLOWUP,
     )
@@ -191,8 +286,8 @@ fn run() -> Result<(), String> {
         &execution,
         beta,
         gamma,
-        &secret_seed,
-        &session_id,
+        entropy.mask_seed(),
+        entropy.attempt_nonce(),
         TRACE_MASK_COEFFICIENT_COUNT,
         LOG_BLOWUP,
         &table_evaluation_log_sizes,
@@ -202,8 +297,8 @@ fn run() -> Result<(), String> {
         &program,
         &main,
         &mut logup,
-        &secret_seed,
-        &session_id,
+        entropy.mask_seed(),
+        entropy.attempt_nonce(),
         TRACE_MASK_COEFFICIENT_COUNT,
     )
     .map_err(|error| format!("logup_prepare_{error:?}"))?;
@@ -233,15 +328,15 @@ fn run() -> Result<(), String> {
         beta,
         gamma,
         alpha,
-        &secret_seed,
-        &session_id,
+        entropy.mask_seed(),
+        entropy.attempt_nonce(),
         TRACE_MASK_COEFFICIENT_COUNT,
     )
     .map_err(|error| format!("composition_logup_{error:?}"))?;
     mask_composition_components(
         &mut composition,
-        &secret_seed,
-        &session_id,
+        entropy.mask_seed(),
+        entropy.attempt_nonce(),
         QUOTIENT_MASK_COEFFICIENT_COUNT,
     )
     .map_err(|error| format!("quotient_mask_{error:?}"))?;
@@ -280,8 +375,13 @@ fn run() -> Result<(), String> {
         &composition_root,
     )
     .map_err(|error| format!("claims_{error:?}"))?;
-    let fri_mask = build_fri_mask_oracle(&deep, claims_commitment, &secret_seed, &session_id)
-        .map_err(|error| format!("fri_mask_{error:?}"))?;
+    let fri_mask = build_fri_mask_oracle(
+        &deep,
+        claims_commitment,
+        entropy.mask_seed(),
+        entropy.attempt_nonce(),
+    )
+    .map_err(|error| format!("fri_mask_{error:?}"))?;
     let fri_mask_root = fri_mask.mask_tree.root().into_bytes();
     let deep_ms = deep_started.elapsed().as_millis();
     emit(
@@ -450,5 +550,41 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("ERR:{error}");
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn worker_entropy_is_fresh_across_attempts() {
+        let first = WorkerEntropy::from_os().unwrap();
+        let second = WorkerEntropy::from_os().unwrap();
+        assert_ne!(first.mask_seed(), second.mask_seed());
+        assert_ne!(first.attempt_nonce(), second.attempt_nonce());
+    }
+
+    #[test]
+    fn worker_entropy_zeroizes_both_owned_buffers() {
+        let mut encoded = [0_u8; ENTROPY_BYTES * 2];
+        encoded[..ENTROPY_BYTES].fill(0x5a);
+        encoded[ENTROPY_BYTES..].fill(0xa5);
+        let mut entropy = WorkerEntropy::from_test_reader(&mut Cursor::new(encoded)).unwrap();
+        entropy.zeroize();
+        assert_eq!(entropy.mask_seed(), &[0_u8; ENTROPY_BYTES]);
+        assert_eq!(entropy.attempt_nonce(), &[0_u8; ENTROPY_BYTES]);
+    }
+
+    #[test]
+    fn worker_entropy_drop_runs_during_panic_unwind() {
+        let before = WORKER_ENTROPY_DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst);
+        let unwound = std::panic::catch_unwind(|| {
+            let _entropy = WorkerEntropy::from_os().unwrap();
+            panic!("bounded entropy drop test");
+        });
+        assert!(unwound.is_err());
+        assert!(WORKER_ENTROPY_DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst) > before);
     }
 }

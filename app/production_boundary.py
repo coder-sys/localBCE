@@ -693,6 +693,9 @@ class TransactionalSettlementStoragePort(Protocol):
     def snapshot(self) -> DatabaseSettlementSnapshotV2:
         """Read the committed state and audit head."""
 
+    def identity_snapshot(self) -> object:
+        """Read the active versioned verifier/database identity."""
+
     def verify_integrity(self) -> None:
         """Fail closed if the durable reference is internally inconsistent."""
 

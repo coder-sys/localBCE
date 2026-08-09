@@ -17,8 +17,8 @@ use sha3::{Digest, Sha3_512};
 
 use crate::field::M31;
 use crate::selected_proof_package::{
-    SelectedProofPackage, SelectedProofPackageError, private_proof_package_commitment,
-    verify_selected_proof_package,
+    PRIVATE_PROOF_PACKAGE_BYTES, SelectedProofPackage, SelectedProofPackageError,
+    private_proof_package_commitment, verify_selected_proof_package,
 };
 use crate::selected_public_coin::{
     MAX_SELECTED_TRANSCRIPT_BYTES, SelectedTranscriptError, verify_selected_public_coin_transcript,
@@ -34,6 +34,8 @@ pub const PUBLIC_INPUT_LIMB_BITS: usize = 30;
 pub const PUBLIC_INPUT_PROJECTION_COUNT: usize = PUBLIC_FIELD_COUNT * PUBLIC_INPUT_LIMBS_PER_FIELD;
 pub const SIDECAR_BYTES: usize = 744;
 pub const MAX_ENVELOPE_BYTES: usize = 512 * 1024 * 1024;
+pub const PRODUCTION_ENVELOPE_PREFIX_BYTES: usize =
+    8 + 2 + (64 * 3) + PUBLIC_FIELDS_BYTES + 4 + SIDECAR_BYTES + 8;
 pub const STATEMENT_EVIDENCE_DOMAIN: &[u8] = b"BL/PQ512/PRODUCTION-CANDIDATE/EVIDENCE/v1\0";
 pub const STATEMENT_COMMITMENT_DOMAIN: &[u8] = b"BL/PQ512/PRODUCTION-CANDIDATE/STATEMENT/v1\0";
 
@@ -54,6 +56,16 @@ pub struct ProductionProofEnvelope {
     pub sidecar: Vec<u8>,
     pub proof_package: Vec<u8>,
     pub transcript_evidence: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionEnvelopeHeader {
+    pub suite_id: [u8; 64],
+    pub schema_id: [u8; 64],
+    pub verifier_artifact_identity: [u8; 64],
+    pub public_fields: [[u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
+    pub sidecar: Vec<u8>,
+    pub proof_length: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -348,6 +360,59 @@ pub fn statement_commitment(
 pub fn decode_production_envelope(
     encoded: &[u8],
 ) -> Result<ProductionProofEnvelope, ProductionVerifierError> {
+    if encoded.is_empty() {
+        return Err(ProductionVerifierError::Empty);
+    }
+    if encoded.len() > MAX_ENVELOPE_BYTES {
+        return Err(ProductionVerifierError::Length);
+    }
+    let prefix = encoded
+        .get(..PRODUCTION_ENVELOPE_PREFIX_BYTES)
+        .ok_or(ProductionVerifierError::Truncated)?;
+    let header = decode_production_envelope_prefix(prefix)?;
+    let proof_start = PRODUCTION_ENVELOPE_PREFIX_BYTES;
+    let proof_end = proof_start
+        .checked_add(header.proof_length)
+        .ok_or(ProductionVerifierError::Length)?;
+    let transcript_length_end = proof_end
+        .checked_add(8)
+        .ok_or(ProductionVerifierError::Length)?;
+    let transcript_length_bytes = encoded
+        .get(proof_end..transcript_length_end)
+        .ok_or(ProductionVerifierError::Truncated)?;
+    let transcript_length = usize::try_from(u64::from_be_bytes(
+        transcript_length_bytes
+            .try_into()
+            .map_err(|_| ProductionVerifierError::Truncated)?,
+    ))
+    .map_err(|_| ProductionVerifierError::Length)?;
+    validate_production_envelope_lengths(header.proof_length, transcript_length, encoded.len())?;
+    let transcript_end = transcript_length_end
+        .checked_add(transcript_length)
+        .ok_or(ProductionVerifierError::Length)?;
+    Ok(ProductionProofEnvelope {
+        suite_id: header.suite_id,
+        schema_id: header.schema_id,
+        verifier_artifact_identity: header.verifier_artifact_identity,
+        public_fields: header.public_fields,
+        sidecar: header.sidecar,
+        proof_package: encoded[proof_start..proof_end].to_vec(),
+        transcript_evidence: encoded[transcript_length_end..transcript_end].to_vec(),
+    })
+}
+
+/// Parse the exact fixed v2 prefix before any attacker-sized section is allocated.
+///
+/// File-oriented callers must read exactly [`PRODUCTION_ENVELOPE_PREFIX_BYTES`],
+/// compare the returned identities with their pinned release contract, seek over
+/// `proof_length`, parse the transcript length, and call
+/// [`validate_production_envelope_lengths`] before allocating either body.
+pub fn decode_production_envelope_prefix(
+    encoded: &[u8],
+) -> Result<ProductionEnvelopeHeader, ProductionVerifierError> {
+    if encoded.len() != PRODUCTION_ENVELOPE_PREFIX_BYTES {
+        return Err(ProductionVerifierError::Length);
+    }
     let mut reader = Reader::new(encoded)?;
     if reader.take(8)? != PRODUCTION_ENVELOPE_MAGIC.as_slice() {
         return Err(ProductionVerifierError::Magic);
@@ -374,27 +439,49 @@ pub fn decode_production_envelope(
     }
     let sidecar = reader.take(sidecar_length)?.to_vec();
     let proof_length = reader.u64()?;
-    if proof_length == 0 || proof_length > MAX_ENVELOPE_BYTES {
+    if proof_length != PRIVATE_PROOF_PACKAGE_BYTES {
         return Err(ProductionVerifierError::Length);
     }
-    let proof_package = reader.take(proof_length)?.to_vec();
-    let transcript_length = reader.u64()?;
-    if transcript_length == 0 || transcript_length > MAX_SELECTED_TRANSCRIPT_BYTES {
+    if reader.offset != PRODUCTION_ENVELOPE_PREFIX_BYTES {
         return Err(ProductionVerifierError::Length);
     }
-    let transcript_evidence = reader.take(transcript_length)?.to_vec();
-    if reader.offset != encoded.len() {
-        return Err(ProductionVerifierError::Trailing);
-    }
-    Ok(ProductionProofEnvelope {
+    validate_sidecar(&sidecar, &suite_id, &schema_id, &verifier_artifact_identity)?;
+    Ok(ProductionEnvelopeHeader {
         suite_id,
         schema_id,
         verifier_artifact_identity,
         public_fields,
         sidecar,
-        proof_package,
-        transcript_evidence,
+        proof_length,
     })
+}
+
+pub fn validate_production_envelope_lengths(
+    proof_length: usize,
+    transcript_length: usize,
+    file_length: usize,
+) -> Result<(), ProductionVerifierError> {
+    if proof_length != PRIVATE_PROOF_PACKAGE_BYTES || transcript_length == 0 {
+        return Err(ProductionVerifierError::Length);
+    }
+    if transcript_length == 0 || transcript_length > MAX_SELECTED_TRANSCRIPT_BYTES {
+        return Err(ProductionVerifierError::Length);
+    }
+    let expected = PRODUCTION_ENVELOPE_PREFIX_BYTES
+        .checked_add(proof_length)
+        .and_then(|value| value.checked_add(8))
+        .and_then(|value| value.checked_add(transcript_length))
+        .ok_or(ProductionVerifierError::Length)?;
+    if expected > MAX_ENVELOPE_BYTES {
+        return Err(ProductionVerifierError::Length);
+    }
+    if file_length < expected {
+        return Err(ProductionVerifierError::Truncated);
+    }
+    if file_length > expected {
+        return Err(ProductionVerifierError::Trailing);
+    }
+    Ok(())
 }
 
 pub fn encode_production_envelope(
@@ -404,11 +491,18 @@ pub fn encode_production_envelope(
     validate_identity(&envelope.schema_id)?;
     validate_identity(&envelope.verifier_artifact_identity)?;
     if envelope.sidecar.len() != SIDECAR_BYTES
-        || envelope.proof_package.is_empty()
-        || envelope.proof_package.len() > MAX_ENVELOPE_BYTES
+        || envelope.proof_package.len() != PRIVATE_PROOF_PACKAGE_BYTES
         || envelope.transcript_evidence.is_empty()
         || envelope.transcript_evidence.len() > MAX_SELECTED_TRANSCRIPT_BYTES
     {
+        return Err(ProductionVerifierError::Length);
+    }
+    let encoded_length = PRODUCTION_ENVELOPE_PREFIX_BYTES
+        .checked_add(envelope.proof_package.len())
+        .and_then(|value| value.checked_add(8))
+        .and_then(|value| value.checked_add(envelope.transcript_evidence.len()))
+        .ok_or(ProductionVerifierError::Length)?;
+    if encoded_length > MAX_ENVELOPE_BYTES {
         return Err(ProductionVerifierError::Length);
     }
     for field in &envelope.public_fields {
@@ -459,11 +553,30 @@ pub fn verify_production_envelope(
         return Err(ProductionVerifierError::Identity);
     }
     let envelope = decode_production_envelope(encoded)?;
+    verify_production_envelope_parts(&envelope, key)
+}
+
+/// Verify independently parsed v2 sections without constructing a second
+/// full-envelope allocation. The verifier still parses the proof package and
+/// transcript itself and never trusts a prover self-check result.
+pub fn verify_production_envelope_parts(
+    envelope: &ProductionProofEnvelope,
+    key: ProductionVerificationKey<'_>,
+) -> Result<ProductionVerificationReceipt, ProductionVerifierError> {
+    validate_identity(&key.suite_id)?;
+    validate_identity(&key.schema_id)?;
+    validate_identity(&key.verifier_artifact_identity)?;
+    if key.expected_program.is_empty() || key.expected_public_inputs.is_empty() {
+        return Err(ProductionVerifierError::Identity);
+    }
     if envelope.suite_id != key.suite_id
         || envelope.schema_id != key.schema_id
         || envelope.verifier_artifact_identity != key.verifier_artifact_identity
     {
         return Err(ProductionVerifierError::IdentityMismatch);
+    }
+    if envelope.proof_package.len() != PRIVATE_PROOF_PACKAGE_BYTES {
+        return Err(ProductionVerifierError::Length);
     }
     if let Some(projection_schema) = key.public_input_projection_schema {
         if envelope.schema_id != projection_schema {
@@ -535,6 +648,10 @@ mod tests {
         [byte; 64]
     }
 
+    fn fixed_proof_package() -> Vec<u8> {
+        vec![0_u8; PRIVATE_PROOF_PACKAGE_BYTES]
+    }
+
     fn sidecar(suite: [u8; 64], schema: [u8; 64], verifier: [u8; 64]) -> Vec<u8> {
         let mut value = vec![0_u8; SIDECAR_BYTES];
         value[..8].copy_from_slice(SIDECAR_MAGIC);
@@ -568,7 +685,7 @@ mod tests {
             verifier_artifact_identity: verifier,
             public_fields: [[0_u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
             sidecar: sidecar(suite, schema, verifier),
-            proof_package: vec![1, 2, 3],
+            proof_package: fixed_proof_package(),
             transcript_evidence: vec![4, 5, 6],
         };
         let encoded = encode_production_envelope(&value).unwrap();
@@ -588,7 +705,7 @@ mod tests {
             verifier_artifact_identity: verifier,
             public_fields: [[0_u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
             sidecar: sidecar(suite, schema, verifier),
-            proof_package: vec![1],
+            proof_package: fixed_proof_package(),
             transcript_evidence: vec![2],
         };
         let mut encoded = encode_production_envelope(&value).unwrap();
@@ -611,13 +728,61 @@ mod tests {
             verifier_artifact_identity: verifier,
             public_fields: [[0_u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
             sidecar: sidecar(suite, schema, verifier),
-            proof_package: vec![1],
+            proof_package: fixed_proof_package(),
             transcript_evidence: vec![2],
         };
         value.sidecar[352..360].copy_from_slice(&3_u64.to_be_bytes());
         assert_eq!(
             encode_production_envelope(&value),
             Err(ProductionVerifierError::Sidecar)
+        );
+    }
+
+    #[test]
+    fn fixed_prefix_rejects_identity_substitution_before_body() {
+        let suite = identity(1);
+        let schema = identity(2);
+        let verifier = identity(3);
+        let value = ProductionProofEnvelope {
+            suite_id: suite,
+            schema_id: schema,
+            verifier_artifact_identity: verifier,
+            public_fields: [[0_u8; PUBLIC_FIELD_BYTES]; PUBLIC_FIELD_COUNT],
+            sidecar: sidecar(suite, schema, verifier),
+            proof_package: fixed_proof_package(),
+            transcript_evidence: vec![2],
+        };
+        let mut encoded = encode_production_envelope(&value).unwrap();
+        let sidecar_suite_offset = 590 + 80;
+        encoded[sidecar_suite_offset] ^= 1;
+        assert_eq!(
+            decode_production_envelope_prefix(&encoded[..PRODUCTION_ENVELOPE_PREFIX_BYTES]),
+            Err(ProductionVerifierError::IdentityMismatch)
+        );
+    }
+
+    #[test]
+    fn exact_lengths_reject_truncation_trailing_and_oversize_before_allocation() {
+        assert_eq!(
+            validate_production_envelope_lengths(
+                PRIVATE_PROOF_PACKAGE_BYTES,
+                1,
+                PRODUCTION_ENVELOPE_PREFIX_BYTES + PRIVATE_PROOF_PACKAGE_BYTES + 8,
+            ),
+            Err(ProductionVerifierError::Truncated)
+        );
+        let exact = PRODUCTION_ENVELOPE_PREFIX_BYTES + PRIVATE_PROOF_PACKAGE_BYTES + 8 + 1;
+        assert_eq!(
+            validate_production_envelope_lengths(PRIVATE_PROOF_PACKAGE_BYTES, 1, exact + 1),
+            Err(ProductionVerifierError::Trailing)
+        );
+        assert_eq!(
+            validate_production_envelope_lengths(PRIVATE_PROOF_PACKAGE_BYTES - 1, 1, exact - 1,),
+            Err(ProductionVerifierError::Length)
+        );
+        assert_eq!(
+            validate_production_envelope_lengths(MAX_ENVELOPE_BYTES, 1, MAX_ENVELOPE_BYTES),
+            Err(ProductionVerifierError::Length)
         );
     }
 }

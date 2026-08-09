@@ -19,8 +19,9 @@ use crate::selected_challenge::{
 };
 
 pub const PRIVATE_PROOF_PACKAGE_MAGIC: &[u8; 8] = b"BLPQSPK1";
-pub const PRIVATE_PROOF_PACKAGE_VERSION: u16 = 1;
-pub const PRIVATE_PROOF_PACKAGE_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v1\0";
+pub const PRIVATE_PROOF_PACKAGE_VERSION: u16 = 2;
+pub const PRIVATE_PROOF_PACKAGE_BYTES: usize = 64 * 1024 * 1024;
+pub const PRIVATE_PROOF_PACKAGE_DOMAIN: &[u8] = b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v2\0";
 const MAX_CLAIMS: usize = 1_000;
 const MAX_CLAIM_VALUES: usize = 1 << 20;
 
@@ -70,8 +71,7 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(encoded: &'a [u8]) -> Result<Self, SelectedProofPackageError> {
-        if encoded.len() < PRIVATE_PROOF_PACKAGE_MAGIC.len() + 2 || encoded.len() > MAX_PROOF_BYTES
-        {
+        if encoded.len() != PRIVATE_PROOF_PACKAGE_BYTES || encoded.len() > MAX_PROOF_BYTES {
             return Err(SelectedProofPackageError::Empty);
         }
         Ok(Self { encoded, offset: 0 })
@@ -200,7 +200,8 @@ pub fn decode_selected_proof_package(
         }
         reader.take(length)?.to_vec()
     };
-    if reader.offset != encoded.len() {
+    let padding = reader.take(encoded.len() - reader.offset)?;
+    if padding.is_empty() || padding.iter().any(|byte| *byte != 0) {
         return Err(SelectedProofPackageError::Trailing);
     }
     Ok(SelectedProofPackage {

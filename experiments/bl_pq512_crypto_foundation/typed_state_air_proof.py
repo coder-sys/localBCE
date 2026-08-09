@@ -16,6 +16,7 @@ from experiments.bl_pq512_crypto_foundation.selected_prover_orchestrator import 
 )
 from experiments.bl_pq512_crypto_foundation.state_air_proof import (
     MAX_PROOF_PACKAGE_BYTES,
+    PROOF_PACKAGE_BYTES,
     PROOF_PACKAGE_MAGIC,
     PROOF_PACKAGE_VERSION,
     _attribution_digest,
@@ -160,7 +161,7 @@ class TypedStateAirProofEvidence:
             raise StructuralError("typed_state_air_state_commitment_invalid")
         if (
             type(self.proof_package_bytes) is not bytes
-            or not 10 <= len(self.proof_package_bytes) <= MAX_PROOF_PACKAGE_BYTES
+            or len(self.proof_package_bytes) != PROOF_PACKAGE_BYTES
             or self.proof_package_bytes[:8] != PROOF_PACKAGE_MAGIC
             or int.from_bytes(self.proof_package_bytes[8:10], "big") != PROOF_PACKAGE_VERSION
             or proof_package_commitment(self.proof_package_bytes)

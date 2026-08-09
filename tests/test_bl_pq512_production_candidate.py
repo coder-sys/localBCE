@@ -66,9 +66,6 @@ from experiments.fixed_shape_claim_air.executable_air import (
     freeze_columns,
 )
 from tests.test_wave1a_executable_air import _fixture
-from experiments.bl_pq512_crypto_foundation.software_custody_candidate import (
-    build_software_custody_certificate,
-)
 
 
 def _wide(label: str) -> bytes:
@@ -204,7 +201,7 @@ def test_active_hiding_rebases_old_circle_gaps_without_deleting_them() -> None:
     assert certificate.production_usable is False
 
 
-def test_candidate_envelope_binds_statement_and_selects_nonactivating_suite() -> None:
+def test_candidate_envelope_binds_statement_but_remains_aggregate_unqualified() -> None:
     suite = _wide("suite")
     schema = _wide("schema")
     verifier = _wide("verifier")
@@ -234,17 +231,13 @@ def test_candidate_envelope_binds_statement_and_selects_nonactivating_suite() ->
             TRANSCRIPT_COMMITMENT_DOMAIN + envelope.transcript_evidence
         ).digest(),
     )
-    selected = select_built_audit_pending_suite(
-        envelope,
-        verification=verification,
-        hiding=build_active_gkr_hiding_certificate(),
-        custody=build_software_custody_certificate(),
-    )
-    assert selected.proof_suite_id == suite
-    assert selected.status == "BUILT_AUDIT_PENDING"
-    assert selected.activation_allowed is False
-    assert selected.production_usable is False
-    assert selected.as_public_dict()["proofSuiteId"] == suite.hex()
+    with pytest.raises(
+        ProductionCandidateError, match="candidate_aggregate_qualification_required"
+    ):
+        select_built_audit_pending_suite(
+            envelope,
+            verification=verification,
+        )
 
 
 def test_native_fips205_slh_adapter_round_trips_and_rejects_message_mutation(
@@ -276,7 +269,7 @@ def test_candidate_rejects_bundle_statement_swap() -> None:
         )
 
 
-def test_real_rust_verifier_issues_only_built_audit_pending_suite(
+def test_real_rust_verifier_remains_aggregate_unqualified(
     production_candidate_binaries: tuple[Path, Path, Path], tmp_path: Path
 ) -> None:
     worker, verifier, slh_service = production_candidate_binaries
@@ -428,16 +421,13 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
         )
     ).verify(envelope)
     assert port_result.receipt == receipt
-    selected = select_built_audit_pending_suite(
-        envelope,
-        verification=receipt,
-        hiding=build_active_gkr_hiding_certificate(),
-        custody=build_software_custody_certificate(),
-    )
-    assert selected.proof_suite_id == suite
-    assert selected.status == "BUILT_AUDIT_PENDING"
-    assert selected.activation_allowed is False
-    assert selected.production_usable is False
+    with pytest.raises(
+        ProductionCandidateError, match="candidate_aggregate_qualification_required"
+    ):
+        select_built_audit_pending_suite(
+            envelope,
+            verification=receipt,
+        )
 
     parsed_sidecar = CandidateSidecarV1.decode(sidecar)
     submitter = _wide("real-native-submitter")
@@ -486,7 +476,11 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
 
     encoded = envelope.encode()
     proof_offset = 8 + 2 + 64 * 3 + 384 + 4 + 744 + 8
-    for offset in (10, proof_offset, len(encoded) - 1):
+    for offset, expected_error in (
+        (10, "ERR:envelope_prefix_IdentityMismatch\n"),
+        (proof_offset, "ERR:verify_Proof(Magic)\n"),
+        (len(encoded) - 1, "ERR:verify_Transcript(Root)\n"),
+    ):
         mutated = bytearray(encoded)
         mutated[offset] ^= 1
         envelope_path.write_bytes(mutated)
@@ -498,5 +492,5 @@ def test_real_rust_verifier_issues_only_built_audit_pending_suite(
             text=True,
         )
         assert rejected.returncode != 0
-        assert rejected.stderr.startswith("ERR:verify_")
+        assert rejected.stderr == expected_error
     envelope_path.write_bytes(encoded)

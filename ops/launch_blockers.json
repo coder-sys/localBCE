@@ -25,8 +25,8 @@
       "external_required": false,
       "release_candidate_blocker": true,
       "production_activation_blocker": true,
-      "current_evidence": "A real Rust candidate proof can be generated and independently parsed by the native verifier executable; the exact executable plus AIR program bytes are SHA3-512-domain-separated into the enforced artifact identity, and the envelope can reach per-proof BUILT_AUDIT_PENDING while activation remains false.",
-      "remaining_work": "Close the selected suite, composed security, parser, supply-chain, reproducible release, and exact production-verifier qualification gaps.",
+      "current_evidence": "A real Rust selected-AIR proof can be generated and independently replayed by the native verifier executable; the exact executable plus AIR program bytes are SHA3-512-domain-separated into the enforced artifact identity, the version-2 proof package is an exact 64 MiB container, and its authenticated transcript is independently checked. Independent composition review established that this is a narrow selected-AIR component, not the complete Wave1A semantic-bus, typed-state, H4 claim/payment/replay/state theorem. Aggregate qualification is fail closed and no current path reaches BUILT_AUDIT_PENDING.",
+      "remaining_work": "Implement and independently verify a verifier-safe H4 proof grammar, the complete semantic-bus trace producer and proof-native M31/Fp16 equality, a verifier-safe typed-state component, and then one fixed-shape version-3 composite grammar and standalone verifier. Close the selected suite, parser, supply-chain, reproducible release, and exact production-verifier qualification gaps without treating version-2 component evidence as the complete theorem.",
       "exit_criteria": "The complete native STARK prover and independent verifier lane is internally implemented, reproducible, pinned, and qualified for the exact statement, suite, sidecar, and public-input schema, with a per-proof candidate identity in BUILT_AUDIT_PENDING; the global operational proofSuiteId remains unset until deployed acceptance and audit."
     },
     {
@@ -56,14 +56,14 @@
     {
       "id": "LB-007",
       "title": "Privacy V2 proof and state migration",
-      "status": "open",
+      "status": "closed_internal_nonactivating",
       "owner": "cryptography_engineering",
       "classification": "internal_engineering",
       "external_required": false,
-      "release_candidate_blocker": true,
+      "release_candidate_blocker": false,
       "production_activation_blocker": true,
-      "current_evidence": "The ordered public ABI contains exactly twelve fields and excludes exact amounts, counts, decisions, PHI, and claim ciphertext; fixed-shape and mutation tests pass locally.",
-      "remaining_work": "Close the proof-bound differential and inference suite plus database migration, mixed-version, rollback, and recovery qualification for the selected V2 state path.",
+      "current_evidence": "The ordered public ABI remains exactly twelve fields. The local schema-v2 SQLite path atomically migrates profile, suite-candidate, schema, verifier, epoch/domain, roots, state binding, immutable history, and audit after pinned native verification. Fresh evidence requires bounded OS randomness and a private freshness seal; exact durable retry survives a new Python process; old-profile races, conflicting retries, reused rollback/recovery domains, anti-rollback failures, and partial writes fail closed. Two real dual-PQ Rust proofs from different private witnesses independently verified with identical public/proof/transcript/envelope shapes; one migration committed and the conflicting second was rejected without another sequence advance. Public artifacts exclude tested amount, decision, PHI, claim, and replacement literals.",
+      "remaining_work": "The LB-007 exit criteria are met only for local, synthetic, nonactivating Phase 2 evidence. Production proof composition, database and durable anti-rollback selection, entropy/custody operations, independent audit, real PHI/payments, and activation remain governed by other open packages and blockers.",
       "exit_criteria": "The parallel V2 proof and settlement path removes exact amounts, counts, decisions, PHI, and claim ciphertext from public data; differential, inference, known-answer, attack, migration, and rollback tests pass."
     },
     {
@@ -93,8 +93,8 @@
       "external_required": false,
       "release_candidate_blocker": true,
       "production_activation_blocker": true,
-      "current_evidence": "The active Construction-8.2 GKR hiding candidate has a bounded simulator certificate, and the real Rust candidate proof path can reach per-proof BUILT_AUDIT_PENDING without activation.",
-      "remaining_work": "Close Z02-Z12: entropy and zeroization, complete semantic and auxiliary masking, quotient randomization, domain separation, PCS folding entropy, transcript custody, strict-PQ qualification, abort/retry/crash simulation, and whole-product unlinkability.",
+      "current_evidence": "The active Construction-8.2 GKR hiding candidate and bounded simulator records remain nonactivating component evidence. Both selected worker binaries now own fresh OS entropy and zeroize mask/attempt state, and the fixed 64 MiB version-2 package closes one observable-size defect. Independent review found that H4 receipts retain child-output digests rather than a verifier-safe proof, typed state lacks a public replayable transcript and exposes execution material, and the aggregate receipt was self-attestable. The caller-paired receipt/digest path is removed and aggregate status remains AGGREGATE_UNQUALIFIED.",
+      "remaining_work": "Close Z03-Z12 with raw machine-derived evidence: complete exposure inventories, proof-level masking and entropy qualification, durable transcript custody, a closed strict-PQ union ledger, real abort/retry/crash behavior, and actual parser fuzz/unlinkability campaigns. Compose those results only after the verifier-safe H4, semantic-bus equality, typed-state, and version-3 standalone verifier prerequisites exist.",
       "exit_criteria": "The complete claim backend internally implements and qualifies native zero-knowledge witness hiding; leakage tests cover proof and metadata artifacts; the exact suite reaches BUILT_AUDIT_PENDING."
     },
     {

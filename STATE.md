@@ -1,30 +1,36 @@
 # Blind Ledger state
 
-Updated: 2026-08-06
+Updated: 2026-08-08
 
 ## Current status in plain English
 
-This is the current status as of 2026-08-06; the dated sections below preserve the full run history.
-Gate 2E is sealed as a nonactivating candidate context. H5 passed the exact 22-launch campaign with
-K128 p95 32.360845 seconds and K512 p95 148.861885 seconds. H6 then closed all twelve bounded
-candidate-evidence records. The new standalone Rust candidate verifier accepts a fresh synthetic
-proof and the Python selector can issue a nonzero per-proof `BUILT_AUDIT_PENDING` identity only
-after the exact native `OK` receipt and commitment checks pass. The legacy production planning
-state remains `UNSELECTED` with `proofSuiteId=null`; activation is false, production
-verifier/state/custody and rollup work remain open, the final audit has not started, and real
-PHI/payments remain forbidden. Wave 1 remains sealed as a synthetic, nonactivating relation. Wave 3
-P01-P12, Wave 4 I01-I08/O01-O06/O12, Wave 5 R01-R12, and the remaining Wave 2 internal fixed-K/
-12-field/sidecar reference packages are complete at the local/synthetic, nonactivating engineering
-boundary. The reconciled internal ledger is 93 of 93 packages complete and 0 open; this is not
-production activation or production assurance.
+This is the current status as of 2026-08-08; the dated sections below preserve the full run history
+and do not override this section. Blind Ledger is a database-backed mandatory-ZK system through
+Phase 2; no L2, rollup, sequencer, bridge, Solidity settlement, or Ethereum dependency is being
+built. LB-006 and LB-007 are closed only at the local, synthetic, nonactivating boundary: the pinned
+native verifier can authorize one atomic SQLite settlement or Privacy V2 migration, exact restart
+retry and anti-rollback recovery are exercised, and fixed-shape privacy/migration attacks pass.
+SQLite and the included anti-rollback port are qualification references, not production selections.
 
-The native K512 coordinator now defaults to two independent lanes for the native boundary, including
-suite-bound runs; `BL_SHARD_CONCURRENCY=1` is the explicit serial fallback. The separate exact
-one-warmup/ten-measured two-lane campaign passed unchanged verification, resource, and no-swap
-gates with K512 p95 101.798191 seconds, so the execution mode is qualified as nonactivating
-evidence only. Four fresh current-checkout refresh attempts were rejected by the unchanged
-pagefile-growth gate and receive no H5/H6 or production credit. The sealed serial H5/H6 evidence
-remains unchanged.
+The current `BLPQENV1` version-2 lane independently verifies one pinned selected AIR/FRI package in
+an exact 64 MiB container plus its dual-PQ authenticated transcript. It is narrow component and
+LB-007 migration evidence, not the complete Wave1A semantic-bus, typed-state, H4/GKR/
+Construction-8.2 claim/payment/replay/state theorem. The caller-paired LB-010 receipt/digest route
+is removed, the Python selector has no success path, and aggregate status remains
+`AGGREGATE_UNQUALIFIED`.
+
+The reconciled internal ledger is 81 packages: 33 complete and 48 open. LB-001, LB-009, and LB-010
+remain open release-candidate blockers; LB-002 remains the final independent audit gate; LB-003,
+LB-004, and LB-005 remain operator activation inputs. All nine listed launch blockers remain
+production-activation blockers. The next proof run must first implement a verifier-safe H4 grammar,
+the complete semantic-bus producer and proof-native M31/Fp16 equality, and a verifier-safe
+typed-state component, then compose them in a fixed-shape version-3 standalone-verifier lane and
+close Z03-Z12 from raw evidence. The global state remains `UNSELECTED` with `proofSuiteId=null`,
+`production_usable=false`, activation false, the final audit not started, and real PHI/payments
+forbidden.
+
+The following 2026-08-06 entries are historical evidence from the superseded pre-pivot lifecycle.
+Their former package counts and per-proof `BUILT_AUDIT_PENDING` result are not current authority.
 
 ## 2026-08-06 manual cleanup, containing verification, and archive refresh - VERIFIED, NONACTIVATING
 
@@ -9274,3 +9280,96 @@ temporary_recovery_copies_removed=true
 The three retained publication targets are the Downloads copy, the Desktop copy, and the Desktop
 backup-folder copy previously designated by the owner. No additional published Blind Ledger ZIP is
 part of this receipt.
+
+## 2026-08-08 - LB-007 completion and LB-001/LB-010 composition stop - VERIFIED, NONACTIVATING
+
+LB-007 is complete only at the local, synthetic, nonactivating Phase 2 boundary. The SQLite
+schema-v2 authority now admits a Privacy V2 migration only from sealed fresh evidence produced
+after the pinned native verifier accepts the exact migration statement. Fresh evidence uses
+bounded OS randomness and a private per-process freshness seal on the supported request path; only
+an exact durable retry may reconstruct evidence after process restart. One `BEGIN IMMEDIATE`
+transaction rechecks the source
+configuration and atomically records the target configuration, profile/schema/verifier identity,
+new epoch and never-before-used settlement domain, roots, state binding, immutable migration and
+configuration history, and chained audit event. Rollback/recovery rotates the domain, old-profile
+races fail inside the transaction, and write-ahead anti-rollback reservations reconcile before an
+exact retry.
+
+The selected workers now own fresh OS entropy and zeroize it on every exit path. Deterministic
+entropy remains test-feature-only. `BLPQSPK1` version 2 is an exact 67,108,864-byte component
+container: its compact core is length-delimited, the remainder is authenticated all-zero padding,
+and the shared Rust/Python verifier path rejects the old version, truncation, extension, nonzero
+padding, or overflow. This closes the observed component-length leak without claiming that the
+component is the complete Blind Ledger proof.
+
+The attempted combined LB-001/LB-010 run reached a mandatory architecture stop. Independent source
+tracing established that the current `BLPQENV1` version-2 verifier independently checks only one
+pinned selected AIR/FRI package and its authenticated transcript. The demonstrated end-to-end AIR
+is a small fixture with the 108 public-input projection columns, not the complete Wave1A
+claim/payment/replay/state relation. The H4 coordinator retains resource fields and child-output
+digests rather than verifier-safe GKR/Construction-8.2 proof messages and openings. The typed-state
+binding retains private AIR execution and a commitment mask while omitting replayable authenticated
+transcript evidence. Those artifacts cannot be truthfully relabeled as a complete portable proof.
+
+The unsafe substitute was removed. Caller-supplied LB-010 receipt bytes plus a caller-supplied
+matching digest can no longer qualify a release. The aggregate qualifier always remains
+`AGGREGATE_UNQUALIFIED`; the selector has no success path, and attack coverage proves a requester
+cannot manufacture an audit-pending result. LB-001, LB-009, and LB-010 remain the exact open
+release-candidate blockers. Before a future version-3 composite can exist, the repository must
+implement: (1) a verifier-safe H4 proof grammar and pure verifier, (2) the complete semantic-bus
+trace producer plus proof-native M31/Fp16 equality, and (3) a verifier-safe typed-state proof with
+authenticated transcript and public bindings only. Raw machine-derived Z03-Z12 qualification,
+including the complete strict-PQ union ledger, follows those prerequisites.
+
+Credited verification before final packaging:
+
+```text
+focused Python boundary/attack/readiness/archive-builder lane
+113 passed, 2 deselected, 54 subtests passed in 33.30s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_production_candidate.py -k real_rust
+1 passed, 4 deselected in 145.26s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_privacy_v2_proof_differential.py -k real_native
+1 passed, 6 deselected in 263.77s
+
+py -3.14 -B -m pytest -q -p no:cacheprovider tests/test_bl_pq512_selected_prover_integration.py::test_real_dual_pq_selected_proof_roundtrip
+1 passed in 70.15s
+
+cargo +1.96.0 fmt --check --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml
+exit=0
+
+cargo +1.96.0 check --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --features std,parallel
+exit=0
+
+cargo +1.96.0 clippy --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --all-targets --offline --locked --features std,parallel -- -D warnings
+exit=0
+
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --features std,parallel production_verifier
+5 passed; 0 failed; 304 filtered out
+
+cargo +1.96.0 test --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --features std,parallel
+309 library tests passed; every binary/doc-test group passed; 0 failed
+
+cargo +1.96.0 check --manifest-path experiments/bl_pq512_crypto_core/Cargo.toml --release --offline --locked --no-default-features --lib
+exit=0
+
+py -3.14 -B -m compileall -q app experiments/bl_pq512_crypto_foundation tests
+exit=0
+
+py -3.14 -B -m pytest --collect-only -q -p no:cacheprovider
+1787 tests collected in 3.98s; one StarletteDeprecationWarning
+
+verify_ops_authority()
+VERIFIED_TRACKED_SHA3_512_AUTHORITY
+
+git diff --check
+exit=0
+```
+
+Three independent frozen read-only reviews approved the LB-007 local closure, the fail-closed
+aggregate correction, and the reconciled 81/33/48 roadmap. The proof-composition review separately
+confirmed that LB-001/LB-010 is not closeable without the three precursor protocols above. No
+protected path changed. The global state remains `UNSELECTED`, `proofSuiteId=null`,
+`production_usable=false`, activation false, independent audit not started, and real PHI/payments
+forbidden. The three published archives still require refresh from the final committed source.

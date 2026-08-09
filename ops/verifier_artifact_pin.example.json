@@ -10,11 +10,11 @@
   "source_hashes": [
     {
       "path": "experiments/bl_pq512_crypto_core/src/bin/production_candidate_verify.rs",
-      "sha256": "0397a4178bb5bac7b7223dc4e4adad51f3141140ff2f93218d0de4795dcf88b8"
+      "sha256": "7ff6e0c3f0a52570e0476f3dc516a77c9777d5ed6565b6dbd4a047ac249d8237"
     },
     {
       "path": "app/production_boundary.py",
-      "sha256": "3c99d172f5c3bc8a5fb1ac718a7a62a8d6b17c1695568a4ede8b44a451e0e69f"
+      "sha256": "85bd2f97d859456fe87f8dd3bc75541b17c1444c61a4392c26b9f0e5ee95d08b"
     },
     {
       "path": "ops/native_stark_public_inputs_v2.json",

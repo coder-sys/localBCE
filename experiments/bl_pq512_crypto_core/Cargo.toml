@@ -11,12 +11,14 @@ std = []
 parallel = ["std"]
 bench_fixture_coin = ["parallel"]
 control_reference = []
+test_entropy_injection = []
 
 [dependencies]
 getrandom = { version = "=0.3.4" }
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
 sha3 = { version = "=0.10.9", default-features = false }
 slh-dsa = { version = "=0.2.0-rc.5" }
+zeroize = { version = "=1.9.0" }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -24,6 +24,7 @@ from app.production_boundary import (
 )
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
     NativeVerificationReceipt,
+    PROOF_PACKAGE_BYTES,
     PROOF_PACKAGE_COMMITMENT_DOMAIN,
     ProductionProofEnvelope,
     TRANSCRIPT_COMMITMENT_DOMAIN,
@@ -162,6 +163,11 @@ def test_native_verifier_config_pins_executable_and_program_bytes(tmp_path: Path
 
 def test_production_envelope_decode_round_trips_after_receipt_binding() -> None:
     envelope, _, _, _ = _fixture()
+    envelope = replace(
+        envelope,
+        proof_package=b"BLPQSPK1\x00\x02"
+        + bytes(PROOF_PACKAGE_BYTES - len(b"BLPQSPK1\x00\x02")),
+    )
     assert ProductionProofEnvelope.public_outputs_from_encoded(envelope.encode()) == envelope.public_outputs
     decoded = ProductionProofEnvelope.decode(
         envelope.encode(), evidence_commitment=envelope.evidence_commitment

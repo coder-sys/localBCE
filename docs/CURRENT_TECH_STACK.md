@@ -18,6 +18,9 @@ No L2, rollup, sequencer, bridge, Solidity settlement, or public data-availabili
 - `app/transactional_database_boundary.py` qualification-only SQLite transaction, per-store keyed
   verifier authorization, submitter-bound state/provenance audit, replay, backup/restore, and
   write-ahead anti-rollback state machine; it is not a production database or custody selection.
+- `app/privacy_v2_migration.py` plus the SQLite schema-v2 migration ledger: OS-random sealed fresh
+  evidence, exact restart retry, in-transaction cutover compare-and-swap, immutable
+  profile/domain history, rollback/recovery rotation, and atomic root/configuration publication.
 - Fail-closed readiness, operator, oracle, audit, retry, and recovery checks.
 
 ## Proof system
@@ -31,8 +34,15 @@ No L2, rollup, sequencer, bridge, Solidity settlement, or public data-availabili
 - FRI and verifier/parser/resource checks.
 - Strict-PQ signing boundaries using ML-DSA-87 and SLH-DSA-SHAKE-256f.
 - The ordered public schema is `ops/native_stark_public_inputs_v2.json`.
+- The current selected-AIR package grammar is version 2 with an exact 64 MiB container and
+  authenticated all-zero padding; selected workers own fresh OS entropy and zeroize it on exit.
 
 H5 evidence recorded p95 32.360845 seconds for K128 and 148.861885 seconds for K512. These measurements do not select a production suite.
+
+The current Rust `BLPQENV1` version-2 lane independently replays one selected AIR/FRI proof and its
+dual-PQ authenticated transcript. It is not the complete Wave1A semantic-bus plus typed-state plus
+H4 proof. The aggregate evidence verifier is intentionally unimplemented and caller-paired
+receipt/digest input is rejected, so no current code path reaches `BUILT_AUDIT_PENDING`.
 
 ## Source and policy trust
 
@@ -43,6 +53,7 @@ Government and oracle adapters authenticate exact source bytes, signer authority
 - `proofSuiteId=null`
 - `production_usable=false`
 - activation forbidden
+- aggregate release status `AGGREGATE_UNQUALIFIED`
 - real PHI and payments forbidden
 - independent audit not started
 - production database, HSM/FIPS custody, durable external anti-rollback, production backup/restore,

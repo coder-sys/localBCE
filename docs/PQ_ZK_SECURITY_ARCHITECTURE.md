@@ -1,10 +1,11 @@
 # Blind Ledger PQ-ZK claim-proof security architecture
 
-Updated: 2026-08-05
+Updated: 2026-08-08
 
 Status: selected target architecture with a sealed nonactivating Gate 2E context, a validated exact
-H5 K128/K512 p95/resource campaign, and a closed twelve-record H6 candidate-evidence manifest.
-Production suite identity, the final independent audit, and approval for real PHI remain open.
+H5 K128/K512 p95/resource campaign, and a bounded twelve-record H6 candidate-evidence manifest.
+Those records are not a complete verifier-safe proof or LB-010 aggregate qualification. Production
+composition, suite identity, the final independent audit, and approval for real PHI remain open.
 
 Build boundary: the proof system, native hiding, strict-PQ suite, verifier, state, custody ports,
 tests, and qualification evidence are internal engineering packages. Independent reviewers do not
@@ -107,8 +108,11 @@ The next state-proof slice is materially stronger but remains a component bounda
 state relation packs 64-byte key/value fields into 22 three-byte M31 chunks, leaves the two SHA3
 roots on H4's authenticated state-root bus, and now links every ordered operation row to the
 corresponding before/after fixed-capacity snapshot row through two 46-wide multiset lookups. The
-versioned program identity is `BL-PQ512-STATE-RELATION-AIR-v2`. It exports a private `BLPQSPK1`
-package containing the canonical FRI proof, challenge bundle, DEEP claims, and final constant.
+versioned program identity is `BL-PQ512-STATE-RELATION-AIR-v2`. It exports a private
+`BLPQSPK1` version-2 package with a canonical fixed 64 MiB container; the verifier rejects old,
+short, oversized, or nonzero-padded packages. The fixed container prevents public-coin query
+de-duplication from changing the externally observable proof-package length. It contains the
+canonical FRI proof, challenge bundle, DEEP claims, and final constant.
 The native v3 state verifier evaluates the lookup-bearing execution, compares every packed
 operation/snapshot column with the exact parsed witness, and independently verifies the selected
 v2 FRI package. A fresh capacity-8 streamed fixture completed with 11,616,597 proof bytes and
@@ -140,6 +144,32 @@ executable-plus-program artifact
 identity is rechecked before native invocation. This closes LB-006 only as local synthetic evidence;
 it does not close the complete
 witness-hiding theorem, production database/custody integration, independent audit, or activation.
+
+LB-007 extends that local boundary with a versioned Privacy V2 migration operation and SQLite
+schema-v2 migration/configuration/transition ledgers. Fresh evidence is authorized only after
+bounded OS randomness and a private freshness seal; the exact recorded retry may be reconstructed
+after process restart. An in-transaction source-configuration comparison prevents proofs verified
+before cutover from crossing it, rollback/recovery must rotate to a never-used domain, and the
+write-ahead anti-rollback transition is reconciled before retry. A real dual-PQ Rust differential
+test verified two fixed-shape private proofs, committed one migration, and rejected the conflicting
+second without another state advance. This closes LB-007 only as local, synthetic, nonactivating
+migration evidence.
+
+The combined LB-001/LB-010 composition review established a separate hard boundary. The current
+`BLPQENV1` version-2 native verifier independently replays one selected AIR/FRI package and its
+authenticated transcript. The demonstrated end-to-end AIR is a small fixture with the 108 public
+projection columns, not the complete Wave1A semantic-bus program. The H4/K512 coordinator retains
+resource fields and child-output/bundle digests rather than portable GKR/Construction-8.2 proof
+messages and openings. The typed-state export includes private AIR execution and a commitment mask
+but does not retain independently replayable transcript evidence. Therefore those three components
+cannot yet be composed into the complete claim/payment/replay/state theorem.
+
+The minimum correct successor is not extra fields silently appended to version 2. It requires a
+verifier-safe H4 proof grammar and pure verifier, a complete semantic-bus trace producer with
+proof-native M31/Fp16 bus equality, and a verifier-safe typed-state proof. Only after those exist may
+a fixed-shape version-3 composite envelope bind and independently verify every component under one
+ordered authenticated public-coin chain. Until then, aggregate qualification must remain fail
+closed.
 
 The direct Boolean and byte-lookup SHA3 AIRs remain executable differential specifications. The
 release proof may remove their internal tables from the semantic PCS only after exact FIPS 202 KATs,
@@ -690,9 +720,12 @@ selected architecture now has a delivered H4 prototype plus qualified H5/H6 cand
 but not a production suite or activation.
 
 The suite lifecycle is `UNSELECTED` -> `BUILT_AUDIT_PENDING` -> `AUDIT_ACCEPTED`. The repository is
-currently `UNSELECTED` with `proofSuiteId=null`; internal engineering may advance it only through
-the exact S07-S09 evidence and implementation gates. `BUILT_AUDIT_PENDING` remains
-`production_usable=false`.
+currently `UNSELECTED` with `proofSuiteId=null` and aggregate status
+`AGGREGATE_UNQUALIFIED`. Caller-supplied LB-010 receipt bytes plus a caller-supplied matching digest
+are explicitly rejected; the complete aggregate-evidence verifier is not implemented. Internal
+engineering may advance the lifecycle only after the exact complete version-3 theorem and S07-S12
+evidence gates close. `BUILT_AUDIT_PENDING` remains `production_usable=false` even when it becomes
+reachable.
 
 ## Migration, activation, and rollback
 

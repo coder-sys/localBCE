@@ -37,25 +37,39 @@ H4 fresh prototype evidence recorded 29.974129 seconds for K128 and 120.460733 s
 
 ## Start here next
 
-**LB-006 is complete at the local, synthetic, nonactivating boundary.** The storage port, SQLite
-reference, exact native artifact pin, real Rust verifier-to-database lane, concurrency and replay
-tests, rollback/restart recovery, verified backup/restore, append-only audit chain, per-store keyed
-verifier authorization, submitter-bound state/audit provenance, and a write-ahead external
-anti-rollback state machine with delayed-finalization idempotency are implemented. This is not a
-production database, durable custody, or activation claim.
+**LB-006 and LB-007 are complete only at the local, synthetic, nonactivating boundary.** LB-007 now
+adds the proof-authorized Privacy V2 migration/rollback/recovery transaction, exact subprocess
+restart retry, sealed OS-random fresh evidence, mixed-version race rejection, immutable domain
+history, fixed-shape differential/privacy checks, and a real dual-PQ Rust proof-to-native-verifier-
+to-SQLite lane. Neither closure selects a production database, custody system, proof suite, or
+activation profile.
 
-The next bounded implementation is **LB-007: Privacy V2 proof and state migration**.
+The attempted combined **LB-001/LB-010** run reached a mandatory architecture STOP. The current
+`BLPQENV1` version-2 envelope independently verifies one pinned selected AIR/FRI package and its
+authenticated transcript, but the only end-to-end fixture is not the complete Wave1A
+claim/payment/replay/state theorem. The H4 coordinator retains resource data and child-output
+digests rather than a verifier-safe proof, and the typed-state binding retains private execution
+material while omitting replayable authenticated transcript evidence. A caller-paired LB-010
+receipt/digest path was removed; aggregate status is now always `AGGREGATE_UNQUALIFIED`.
 
-1. Freeze the exact old-state/new-state migration input and the mixed-version rejection contract.
-2. Route the migration through the LB-006 storage port without exposing amounts, counts, decisions,
-   PHI, or claim ciphertext.
-3. Add proof-bound differential and inference tests plus migration, rollback, restart, recovery, and
-   stale-version attacks.
-4. Keep `proofSuiteId=null`, `production_usable=false`, and real PHI/payments forbidden.
+The next bounded major run is to freeze and implement the missing complete-proof composition in
+this order:
 
-After LB-007, execute LB-001/LB-010 proof-suite qualification, LB-009 custody operations, and then
-T01-T14 whole-product convergence. Exact source/test ownership and package acceptance statements
-are canonical in `experiments/bl_pq512_crypto_foundation/internal_package_matrix.py`.
+1. A verifier-safe H4 proof grammar and pure verifier that retain commitments, claims, round
+   messages, masked terminals, Construction-8.2 openings/frontiers, and exact authenticated
+   transcript evidence without coefficients or witness material.
+2. A complete `build_wave1a_global_semantic_bus_program_only` trace producer and proof-native
+   equality tying its committed M31 port table to the Fp16 H4 source commitment.
+3. A verifier-safe typed-state component containing only the selected proof package,
+   authenticated transcript, and public root/payment/replay bindings.
+4. A fixed-shape version-3 composite envelope and standalone verifier, followed by raw
+   machine-derived Z03-Z12 qualification, including the complete strict-PQ union ledger.
+
+No version-2 receipt, H4 stdout assertion, host comparison, or synthetic manifest may substitute
+for those components. `proofSuiteId=null`, `production_usable=false`, and real PHI/payments remain
+forbidden. LB-009 and T01-T14 remain after this proof boundary. Exact source/test ownership and
+package acceptance statements are canonical in
+`experiments/bl_pq512_crypto_foundation/internal_package_matrix.py`.
 
 ## Package ledger
 
@@ -90,7 +104,7 @@ are canonical in `experiments/bl_pq512_crypto_foundation/internal_package_matrix
 | A15 | Durable authoritative roots | Open - root/master selection remains incomplete |
 | A16 | Claim prover/verifier integration | Open - real candidate proof reaches the local database reference; final suite/release integration remains incomplete |
 | Z01 | Proof, hiding, and verifier 01 | Complete - local, synthetic, nonactivating |
-| Z02 | Entropy and zeroization | Open - production boundary remains incomplete |
+| Z02 | Entropy and zeroization | Open - worker-owned OS entropy and zeroization pass locally; complete production boundary remains incomplete |
 | Z03 | Semantic witness masking | Open - complete composition remains incomplete |
 | Z04 | Auxiliary/lookup masking | Open - complete inventory remains incomplete |
 | Z05 | Quotient/composition randomization | Open - production qualification remains incomplete |
@@ -100,7 +114,7 @@ are canonical in `experiments/bl_pq512_crypto_foundation/internal_package_matrix
 | Z09 | Transcript custody and statement binding | Open - durable custody remains incomplete |
 | Z10 | Strict-PQ parameter qualification | Open - hard gate remains unresolved |
 | Z11 | Abort/retry/crash simulator | Open - complete simulator qualification remains incomplete |
-| Z12 | Parser/fuzz/unlinkability | Open - whole-product qualification remains incomplete |
+| Z12 | Parser/fuzz/unlinkability | Open - fixed 64 MiB component grammar passes; whole-product qualification remains incomplete |
 | P01 | Performance and qualification 01 | Complete - local, synthetic, nonactivating |
 | P02 | Performance and qualification 02 | Complete - local, synthetic, nonactivating |
 | P03 | Performance and qualification 03 | Complete - local, synthetic, nonactivating |

@@ -33,6 +33,7 @@ EXPECTED_DIRECT_REQUIREMENTS: Final[dict[str, str]] = {
     "ml-dsa": "=0.1.1",
     "sha3": "=0.10.9",
     "slh-dsa": "=0.2.0-rc.5",
+    "zeroize": "=1.9.0",
 }
 
 PIN_GROUPS: Final[dict[str, tuple[str, ...]]] = {

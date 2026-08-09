@@ -1,26 +1,25 @@
-"""Exact candidate envelope and ``proofSuiteId`` selection boundary.
+"""Exact narrow candidate envelope and native-verification boundary.
 
-The legacy candidate registry remains unqualified and keeps
-``proofSuiteId=null``.  This module is the successor path: it can issue a
-nonzero suite identity only from an actual selected Rust proof bundle, an
-exact 12-field/744-byte envelope, the active GKR hiding certificate, and the
-software custody certificate.  The resulting state is
-``BUILT_AUDIT_PENDING`` only; activation and production use stay false.
+The envelope and native receipt bind one selected Rust AIR proof, the exact
+12-field/744-byte statement, and the authenticated transcript.  They do not
+establish the complete heterogeneous Blind Ledger theorem.  Aggregate
+qualification therefore remains unreachable, ``proofSuiteId`` stays null,
+and activation and production use remain false.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
 from pathlib import Path
+import stat
 from typing import Final
 
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
     ActiveGkrHidingCertificate,
-    build_active_gkr_hiding_certificate,
-    validate_active_gkr_hiding_certificate,
 )
 from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
     MAX_SELECTED_TRANSCRIPT_BYTES,
@@ -28,8 +27,6 @@ from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
 )
 from experiments.bl_pq512_crypto_foundation.software_custody_candidate import (
     SoftwareCustodyCertificate,
-    build_software_custody_certificate,
-    validate_software_custody_certificate,
 )
 
 
@@ -41,9 +38,8 @@ PUBLIC_FIELD_BYTES: Final[int] = 32
 PUBLIC_OUTPUT_BYTES: Final[int] = PUBLIC_FIELD_COUNT * PUBLIC_FIELD_BYTES
 SIDECAR_BYTES: Final[int] = 744
 MAX_ENVELOPE_BYTES: Final[int] = 512 * 1024 * 1024
-STATUS: Final[str] = "BUILT_AUDIT_PENDING"
-ACTIVATION_ALLOWED: Final[bool] = False
-PRODUCTION_USABLE: Final[bool] = False
+PROOF_PACKAGE_BYTES: Final[int] = 64 * 1024 * 1024
+ENVELOPE_PREFIX_BYTES: Final[int] = 8 + 2 + (64 * 3) + PUBLIC_OUTPUT_BYTES + 4 + SIDECAR_BYTES + 8
 STATEMENT_EVIDENCE_DOMAIN: Final[bytes] = (
     b"BL/PQ512/PRODUCTION-CANDIDATE/EVIDENCE/v1\x00"
 )
@@ -54,12 +50,82 @@ TRANSCRIPT_COMMITMENT_DOMAIN: Final[bytes] = (
     b"BL/PQ512/PRODUCTION-CANDIDATE/TRANSCRIPT/v1\x00"
 )
 PROOF_PACKAGE_COMMITMENT_DOMAIN: Final[bytes] = (
-    b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v1\x00"
+    b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v2\x00"
 )
 
 
 class ProductionCandidateError(ValueError):
     """Fail-closed error for candidate proof/statement identity drift."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionEnvelopeHeader:
+    suite_id: bytes
+    schema_id: bytes
+    verifier_artifact_identity: bytes
+    public_outputs: bytes
+    sidecar: bytes
+    proof_length: int
+
+
+def _parse_envelope_prefix(encoded: bytes) -> ProductionEnvelopeHeader:
+    if type(encoded) is not bytes or len(encoded) != ENVELOPE_PREFIX_BYTES:
+        raise ProductionCandidateError("candidate_envelope_prefix_shape_invalid")
+    offset = 0
+
+    def take(length: int) -> bytes:
+        nonlocal offset
+        end = offset + length
+        value = encoded[offset:end]
+        if len(value) != length:
+            raise ProductionCandidateError("candidate_envelope_prefix_truncated")
+        offset = end
+        return value
+
+    if take(8) != ENVELOPE_MAGIC:
+        raise ProductionCandidateError("candidate_envelope_magic_invalid")
+    if int.from_bytes(take(2), "big") != ENVELOPE_VERSION:
+        raise ProductionCandidateError("candidate_envelope_version_invalid")
+    suite_id = _wide("suite_id", take(64))
+    schema_id = _wide("schema_id", take(64))
+    verifier_artifact_identity = _wide("verifier_artifact_identity", take(64))
+    public_outputs = take(PUBLIC_OUTPUT_BYTES)
+    _public_fields(public_outputs)
+    if int.from_bytes(take(4), "big") != SIDECAR_BYTES:
+        raise ProductionCandidateError("candidate_sidecar_length_invalid")
+    sidecar = take(SIDECAR_BYTES)
+    parsed_sidecar = CandidateSidecarV1.decode(sidecar)
+    if (
+        parsed_sidecar.proof_suite_id != suite_id
+        or parsed_sidecar.schema_id != schema_id
+        or parsed_sidecar.verifier_artifact_identity != verifier_artifact_identity
+    ):
+        raise ProductionCandidateError("candidate_sidecar_identity_mismatch")
+    proof_length = int.from_bytes(take(8), "big")
+    if proof_length != PROOF_PACKAGE_BYTES:
+        raise ProductionCandidateError("candidate_proof_length_invalid")
+    return ProductionEnvelopeHeader(
+        suite_id=suite_id,
+        schema_id=schema_id,
+        verifier_artifact_identity=verifier_artifact_identity,
+        public_outputs=public_outputs,
+        sidecar=sidecar,
+        proof_length=proof_length,
+    )
+
+
+def _validate_envelope_lengths(proof_length: int, transcript_length: int, file_length: int) -> None:
+    if type(proof_length) is not int or proof_length != PROOF_PACKAGE_BYTES:
+        raise ProductionCandidateError("candidate_proof_length_invalid")
+    if type(transcript_length) is not int or not 0 < transcript_length <= MAX_SELECTED_TRANSCRIPT_BYTES:
+        raise ProductionCandidateError("candidate_transcript_length_invalid")
+    expected = ENVELOPE_PREFIX_BYTES + proof_length + 8 + transcript_length
+    if expected > MAX_ENVELOPE_BYTES:
+        raise ProductionCandidateError("candidate_envelope_too_large")
+    if file_length < expected:
+        raise ProductionCandidateError("candidate_envelope_truncated")
+    if file_length > expected:
+        raise ProductionCandidateError("candidate_envelope_trailing_bytes")
 
 
 def _wide(label: str, value: object) -> bytes:
@@ -138,8 +204,14 @@ class ProductionProofEnvelope:
             raise ProductionCandidateError("candidate_sidecar_shape_invalid")
         if type(self.proof_package) is not bytes or not self.proof_package:
             raise ProductionCandidateError("candidate_proof_package_invalid")
-        if type(self.transcript_evidence) is not bytes or not self.transcript_evidence:
+        if (
+            type(self.transcript_evidence) is not bytes
+            or not self.transcript_evidence
+            or len(self.transcript_evidence) > MAX_SELECTED_TRANSCRIPT_BYTES
+        ):
             raise ProductionCandidateError("candidate_transcript_evidence_invalid")
+        if ENVELOPE_PREFIX_BYTES + len(self.proof_package) + 8 + len(self.transcript_evidence) > MAX_ENVELOPE_BYTES:
+            raise ProductionCandidateError("candidate_envelope_too_large")
         _wide("evidence_commitment", self.evidence_commitment)
         parsed = CandidateSidecarV1.decode(self.sidecar)
         if (
@@ -150,6 +222,14 @@ class ProductionProofEnvelope:
             raise ProductionCandidateError("candidate_sidecar_identity_mismatch")
 
     def encode(self) -> bytes:
+        encoded_length = (
+            ENVELOPE_PREFIX_BYTES
+            + len(self.proof_package)
+            + 8
+            + len(self.transcript_evidence)
+        )
+        if encoded_length > MAX_ENVELOPE_BYTES:
+            raise ProductionCandidateError("candidate_envelope_too_large")
         encoded = b"".join(
             (
                 ENVELOPE_MAGIC,
@@ -190,6 +270,104 @@ class ProductionProofEnvelope:
         return public_outputs
 
     @classmethod
+    def read_file(
+        cls,
+        path: Path,
+        *,
+        evidence_commitment: bytes,
+        expected_suite_id: bytes | None = None,
+        expected_schema_id: bytes | None = None,
+        expected_verifier_artifact_identity: bytes | None = None,
+    ) -> "ProductionProofEnvelope":
+        """Parse one v2 file without reading the whole envelope into memory.
+
+        The fixed prefix, identities, sidecar, both section lengths, and exact
+        file length are checked before either variable body is allocated.
+        """
+
+        if not isinstance(path, Path) or not path.is_absolute():
+            raise ProductionCandidateError("candidate_envelope_path_invalid")
+        _wide("evidence_commitment", evidence_commitment)
+        try:
+            with path.open("rb") as handle:
+                metadata = os.fstat(handle.fileno())
+                if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_ENVELOPE_BYTES:
+                    raise ProductionCandidateError("candidate_envelope_file_bounds_invalid")
+                prefix = handle.read(ENVELOPE_PREFIX_BYTES)
+                header = _parse_envelope_prefix(prefix)
+                for label, expected, observed in (
+                    ("suite_id", expected_suite_id, header.suite_id),
+                    ("schema_id", expected_schema_id, header.schema_id),
+                    (
+                        "verifier_artifact_identity",
+                        expected_verifier_artifact_identity,
+                        header.verifier_artifact_identity,
+                    ),
+                ):
+                    if expected is not None and _wide(label, expected) != observed:
+                        raise ProductionCandidateError("candidate_envelope_identity_mismatch")
+                transcript_length_offset = ENVELOPE_PREFIX_BYTES + header.proof_length
+                if transcript_length_offset + 8 > metadata.st_size:
+                    raise ProductionCandidateError("candidate_envelope_truncated")
+                handle.seek(transcript_length_offset)
+                transcript_length_bytes = handle.read(8)
+                if len(transcript_length_bytes) != 8:
+                    raise ProductionCandidateError("candidate_transcript_length_truncated")
+                transcript_length = int.from_bytes(transcript_length_bytes, "big")
+                _validate_envelope_lengths(
+                    header.proof_length,
+                    transcript_length,
+                    metadata.st_size,
+                )
+                handle.seek(ENVELOPE_PREFIX_BYTES)
+                proof_package = handle.read(header.proof_length)
+                if len(proof_package) != header.proof_length:
+                    raise ProductionCandidateError("candidate_proof_package_truncated")
+                if handle.read(8) != transcript_length_bytes:
+                    raise ProductionCandidateError("candidate_envelope_changed_during_read")
+                transcript_evidence = handle.read(transcript_length)
+                if len(transcript_evidence) != transcript_length:
+                    raise ProductionCandidateError("candidate_transcript_truncated")
+                if handle.read(1):
+                    raise ProductionCandidateError("candidate_envelope_trailing_bytes")
+                observed_hash = hashlib.sha3_512()
+                observed_hash.update(prefix)
+                observed_hash.update(proof_package)
+                observed_hash.update(transcript_length_bytes)
+                observed_hash.update(transcript_evidence)
+                handle.seek(0)
+                stable_hash = hashlib.sha3_512()
+                stable_length = 0
+                while chunk := handle.read(1024 * 1024):
+                    stable_hash.update(chunk)
+                    stable_length += len(chunk)
+                after = os.fstat(handle.fileno())
+                if (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                ) != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                ) or stable_length != metadata.st_size or stable_hash.digest() != observed_hash.digest():
+                    raise ProductionCandidateError("candidate_envelope_changed_during_read")
+        except (OSError, MemoryError) as exc:
+            raise ProductionCandidateError("candidate_envelope_file_read_failed") from exc
+        return cls(
+            suite_id=header.suite_id,
+            schema_id=header.schema_id,
+            verifier_artifact_identity=header.verifier_artifact_identity,
+            public_outputs=header.public_outputs,
+            sidecar=header.sidecar,
+            proof_package=proof_package,
+            transcript_evidence=transcript_evidence,
+            evidence_commitment=evidence_commitment,
+        )
+
+    @classmethod
     def decode(
         cls,
         encoded: bytes,
@@ -211,48 +389,25 @@ class ProductionProofEnvelope:
         if type(evidence_commitment) is not bytes or len(evidence_commitment) != 64:
             raise ProductionCandidateError("candidate_evidence_commitment_invalid")
 
-        offset = 0
-
-        def take(length: int, label: str) -> bytes:
-            nonlocal offset
-            if type(length) is not int or length < 0:
-                raise ProductionCandidateError(f"candidate_{label}_length_invalid")
-            end = offset + length
-            if end > len(encoded):
-                raise ProductionCandidateError(f"candidate_{label}_truncated")
-            value = encoded[offset:end]
-            offset = end
-            return value
-
-        if take(len(ENVELOPE_MAGIC), "envelope_magic") != ENVELOPE_MAGIC:
-            raise ProductionCandidateError("candidate_envelope_magic_invalid")
-        if int.from_bytes(take(2, "envelope_version"), "big") != ENVELOPE_VERSION:
-            raise ProductionCandidateError("candidate_envelope_version_invalid")
-        suite_id = take(64, "suite_id")
-        schema_id = take(64, "schema_id")
-        verifier_artifact_identity = take(64, "verifier_artifact_identity")
-        public_outputs = take(PUBLIC_OUTPUT_BYTES, "public_outputs")
-        sidecar_length = int.from_bytes(take(4, "sidecar_length"), "big")
-        if sidecar_length != SIDECAR_BYTES:
-            raise ProductionCandidateError("candidate_sidecar_length_invalid")
-        sidecar = take(sidecar_length, "sidecar")
-        proof_length = int.from_bytes(take(8, "proof_length"), "big")
-        if proof_length <= 0 or proof_length > MAX_ENVELOPE_BYTES:
-            raise ProductionCandidateError("candidate_proof_length_invalid")
-        proof_package = take(proof_length, "proof_package")
-        transcript_length = int.from_bytes(take(8, "transcript_length"), "big")
-        if transcript_length <= 0 or transcript_length > MAX_SELECTED_TRANSCRIPT_BYTES:
-            raise ProductionCandidateError("candidate_transcript_length_invalid")
-        transcript_evidence = take(transcript_length, "transcript")
-        if offset != len(encoded):
-            raise ProductionCandidateError("candidate_envelope_trailing_bytes")
+        prefix = encoded[:ENVELOPE_PREFIX_BYTES]
+        header = _parse_envelope_prefix(prefix)
+        transcript_length_offset = ENVELOPE_PREFIX_BYTES + header.proof_length
+        transcript_length_end = transcript_length_offset + 8
+        if transcript_length_end > len(encoded):
+            raise ProductionCandidateError("candidate_transcript_length_truncated")
+        transcript_length = int.from_bytes(
+            encoded[transcript_length_offset:transcript_length_end], "big"
+        )
+        _validate_envelope_lengths(header.proof_length, transcript_length, len(encoded))
+        proof_package = encoded[ENVELOPE_PREFIX_BYTES:transcript_length_offset]
+        transcript_evidence = encoded[transcript_length_end:]
 
         return cls(
-            suite_id=suite_id,
-            schema_id=schema_id,
-            verifier_artifact_identity=verifier_artifact_identity,
-            public_outputs=public_outputs,
-            sidecar=sidecar,
+            suite_id=header.suite_id,
+            schema_id=header.schema_id,
+            verifier_artifact_identity=header.verifier_artifact_identity,
+            public_outputs=header.public_outputs,
+            sidecar=header.sidecar,
             proof_package=proof_package,
             transcript_evidence=transcript_evidence,
             evidence_commitment=evidence_commitment,
@@ -340,129 +495,36 @@ class NativeVerificationReceipt:
         return cls(**values)
 
 
-@dataclass(frozen=True, slots=True)
-class BuiltAuditPendingSuite:
-    proof_suite_id: bytes
-    schema_id: bytes
-    verifier_artifact_identity: bytes
-    active_hiding_certificate_sha3_512: str
-    software_custody_certificate_sha3_512: str
-    proof_package_sha3_512: str
-    transcript_evidence_sha3_512: str
-    statement_commitment_sha3_512: str
-    evidence_commitment_sha3_512: str
-    status: str = STATUS
-    activation_allowed: bool = False
-    production_usable: bool = False
-
-    def __post_init__(self) -> None:
-        _wide("proof_suite_id", self.proof_suite_id)
-        _wide("schema_id", self.schema_id)
-        _wide("verifier_artifact_identity", self.verifier_artifact_identity)
-        for label, value in (
-            ("active_hiding_certificate", self.active_hiding_certificate_sha3_512),
-            ("software_custody_certificate", self.software_custody_certificate_sha3_512),
-            ("proof_package", self.proof_package_sha3_512),
-            ("transcript_evidence", self.transcript_evidence_sha3_512),
-            ("statement_commitment", self.statement_commitment_sha3_512),
-            ("evidence_commitment", self.evidence_commitment_sha3_512),
-        ):
-            if type(value) is not str or len(value) != 128 or value == "0" * 128:
-                raise ProductionCandidateError(f"candidate_{label}_digest_invalid")
-        if self.status != STATUS or self.activation_allowed or self.production_usable:
-            raise ProductionCandidateError("candidate_suite_lifecycle_invalid")
-
-    @property
-    def release_identity_sha3_512(self) -> str:
-        payload = b"".join(
-            (
-                self.proof_suite_id,
-                self.schema_id,
-                self.verifier_artifact_identity,
-                bytes.fromhex(self.active_hiding_certificate_sha3_512),
-                bytes.fromhex(self.software_custody_certificate_sha3_512),
-                bytes.fromhex(self.proof_package_sha3_512),
-                bytes.fromhex(self.transcript_evidence_sha3_512),
-                bytes.fromhex(self.statement_commitment_sha3_512),
-                bytes.fromhex(self.evidence_commitment_sha3_512),
-            )
-        )
-        return hashlib.sha3_512(b"BL/PQ512/BUILT-AUDIT-PENDING-RELEASE/v1\0" + payload).hexdigest()
-
-    def as_public_dict(self) -> dict[str, object]:
-        return {
-            "status": self.status,
-            "proofSuiteId": self.proof_suite_id.hex(),
-            "schemaId": self.schema_id.hex(),
-            "verifierArtifactIdentity": self.verifier_artifact_identity.hex(),
-            "activeHidingCertificateSha3_512": self.active_hiding_certificate_sha3_512,
-            "softwareCustodyCertificateSha3_512": self.software_custody_certificate_sha3_512,
-            "proofPackageSha3_512": self.proof_package_sha3_512,
-            "transcriptEvidenceSha3_512": self.transcript_evidence_sha3_512,
-            "statementCommitmentSha3_512": self.statement_commitment_sha3_512,
-            "evidenceCommitmentSha3_512": self.evidence_commitment_sha3_512,
-            "releaseIdentitySha3_512": self.release_identity_sha3_512,
-            "activationAllowed": self.activation_allowed,
-            "productionUsable": self.production_usable,
-        }
-
-
 def select_built_audit_pending_suite(
     envelope: ProductionProofEnvelope,
     *,
     verification: NativeVerificationReceipt,
     hiding: ActiveGkrHidingCertificate | None = None,
     custody: SoftwareCustodyCertificate | None = None,
+    aggregate_release: object | None = None,
     root: Path = ROOT,
-) -> BuiltAuditPendingSuite:
+) -> None:
     if not isinstance(envelope, ProductionProofEnvelope):
         raise TypeError("candidate_envelope_required")
     if not isinstance(verification, NativeVerificationReceipt):
         raise TypeError("candidate_native_verification_receipt_required")
-    hiding = build_active_gkr_hiding_certificate(root) if hiding is None else hiding
-    custody = build_software_custody_certificate(root) if custody is None else custody
-    validate_active_gkr_hiding_certificate(hiding, root)
-    validate_software_custody_certificate(custody, root)
-    if (
-        verification.proof_suite_id != envelope.suite_id
-        or verification.schema_id != envelope.schema_id
-        or verification.verifier_artifact_identity != envelope.verifier_artifact_identity
-        or verification.envelope_commitment != hashlib.sha3_512(envelope.encode()).digest()
-        or verification.statement_commitment
-        != statement_commitment(envelope.public_outputs, envelope.sidecar)
-        or verification.evidence_commitment != envelope.evidence_commitment
-        or verification.proof_package_commitment
-        != hashlib.sha3_512(PROOF_PACKAGE_COMMITMENT_DOMAIN + envelope.proof_package).digest()
-        or verification.transcript_commitment
-        != hashlib.sha3_512(TRANSCRIPT_COMMITMENT_DOMAIN + envelope.transcript_evidence).digest()
-    ):
-        raise ProductionCandidateError("candidate_native_verification_binding_mismatch")
-    return BuiltAuditPendingSuite(
-        proof_suite_id=envelope.suite_id,
-        schema_id=envelope.schema_id,
-        verifier_artifact_identity=envelope.verifier_artifact_identity,
-        active_hiding_certificate_sha3_512=hiding.certificate_digest_sha3_512,
-        software_custody_certificate_sha3_512=custody.certificate_digest_sha3_512,
-        proof_package_sha3_512=verification.proof_package_commitment.hex(),
-        transcript_evidence_sha3_512=verification.transcript_commitment.hex(),
-        statement_commitment_sha3_512=statement_commitment(
-            envelope.public_outputs, envelope.sidecar
-        ).hex(),
-        evidence_commitment_sha3_512=envelope.evidence_commitment.hex(),
+    if aggregate_release is None:
+        raise ProductionCandidateError("candidate_aggregate_qualification_required")
+    raise ProductionCandidateError(
+        "candidate_complete_aggregate_qualification_unimplemented"
     )
 
 
 __all__ = (
-    "ACTIVATION_ALLOWED",
-    "BuiltAuditPendingSuite",
     "ENVELOPE_MAGIC",
+    "ENVELOPE_PREFIX_BYTES",
     "NativeVerificationReceipt",
     "PROOF_PACKAGE_COMMITMENT_DOMAIN",
-    "PRODUCTION_USABLE",
+    "PROOF_PACKAGE_BYTES",
     "ProductionCandidateError",
+    "ProductionEnvelopeHeader",
     "ProductionProofEnvelope",
     "SIDECAR_BYTES",
-    "STATUS",
     "TRANSCRIPT_COMMITMENT_DOMAIN",
     "build_production_envelope",
     "select_built_audit_pending_suite",

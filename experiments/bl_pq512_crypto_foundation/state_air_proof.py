@@ -55,11 +55,12 @@ STATE_AIR_COMPOSED_BINDING_VERSION: Final[int] = 3
 TRANSPARENT_STATE_AIR_COMPOSED_BINDING_VERSION: Final[int] = 6
 STATE_AIR_COMPOSED_FRAGMENT_MAGIC: Final[bytes] = b"BLSA02"
 PROOF_PACKAGE_MAGIC: Final[bytes] = b"BLPQSPK1"
-PROOF_PACKAGE_VERSION: Final[int] = 1
+PROOF_PACKAGE_VERSION: Final[int] = 2
+PROOF_PACKAGE_BYTES: Final[int] = 64 * 1024 * 1024
 MAX_PROOF_PACKAGE_BYTES: Final[int] = 512 * 1024 * 1024
 _DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-PROOF/v1\x00"
 _SIDECAR_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-SIDECAR/v1\x00"
-_PROOF_PACKAGE_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v1\x00"
+_PROOF_PACKAGE_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v2\x00"
 _COMPOSED_FRAGMENT_DOMAIN: Final[bytes] = (
     b"BL/PQ512/STATE-PLANE/AIR-FRAGMENT/v2\x00"
 )
@@ -103,7 +104,7 @@ def _hash(*parts: bytes) -> bytes:
 
 
 def proof_package_commitment(package: bytes) -> bytes:
-    if type(package) is not bytes or not 0 < len(package) <= MAX_PROOF_PACKAGE_BYTES:
+    if type(package) is not bytes or len(package) != PROOF_PACKAGE_BYTES:
         raise StructuralError("state_air_proof_package_shape_invalid")
     return sha3_512(_PROOF_PACKAGE_DOMAIN + package).digest()
 
@@ -111,7 +112,7 @@ def proof_package_commitment(package: bytes) -> bytes:
 def _validate_proof_package(package: bytes, proof_bytes: int) -> None:
     if (
         type(package) is not bytes
-        or not 10 <= len(package) <= MAX_PROOF_PACKAGE_BYTES
+        or len(package) != PROOF_PACKAGE_BYTES
         or package[:8] != PROOF_PACKAGE_MAGIC
         or int.from_bytes(package[8:10], "big") != PROOF_PACKAGE_VERSION
     ):
@@ -155,7 +156,8 @@ def _validate_proof_package(package: bytes, proof_bytes: int) -> None:
     if supplied_proof_bytes != proof_bytes or supplied_proof_bytes == 0:
         raise StructuralError("state_air_proof_package_proof_size_mismatch")
     take(supplied_proof_bytes)
-    if cursor != len(package):
+    padding = take(len(package) - cursor)
+    if not padding or any(padding):
         raise StructuralError("state_air_proof_package_trailing_bytes")
 
 
@@ -651,6 +653,7 @@ __all__ = (
     "MAX_PROOF_PACKAGE_BYTES",
     "PUBLIC_OUTPUT_BYTES",
     "PROOF_PACKAGE_MAGIC",
+    "PROOF_PACKAGE_BYTES",
     "PROOF_PACKAGE_VERSION",
     "STATE_AIR_COMPOSED_BINDING_VERSION",
     "TRANSPARENT_STATE_AIR_COMPOSED_BINDING_VERSION",

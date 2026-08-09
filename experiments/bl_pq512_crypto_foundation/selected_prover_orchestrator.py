@@ -51,8 +51,8 @@ from experiments.fixed_shape_claim_air.executable_air import TraceTable
 from experiments.fixed_shape_claim_air.semantics import StructuralError
 
 
-WORKER_MAGIC: Final[bytes] = b"BLPQSPW1"
-STREAMING_WORKER_MAGIC: Final[bytes] = b"BLPQSDW2"
+WORKER_MAGIC: Final[bytes] = b"BLPQSPW2"
+STREAMING_WORKER_MAGIC: Final[bytes] = b"BLPQSDW3"
 MAX_WORKER_LINE_BYTES: Final[int] = 1 << 20
 
 _ATTRIBUTION_BYTE_FIELDS: Final[tuple[str, ...]] = (
@@ -212,6 +212,40 @@ def _exact_bytes(name: str, value: bytes, length: int, *, nonzero: bool = False)
     return value
 
 
+def _discard_obsolete_entropy(values: dict[str, object]) -> None:
+    """Accept, but never consume, the scoped migration's former seed keyword.
+
+    Higher-level callers live outside this change's exact edit scope. Keeping
+    their obsolete keyword in a variadic compatibility sink avoids breaking
+    them while ensuring it cannot control, enter, or be logged by the worker.
+    This is not the deterministic test-injection boundary; that boundary is a
+    non-default Rust feature with a distinct worker magic.
+    """
+
+    unexpected = frozenset(values).difference({"secret_mask_seed"})
+    if unexpected:
+        raise TypeError("selected_prover_unexpected_entropy_keyword")
+    values.clear()
+
+
+def _cancel_worker(process: subprocess.Popen[bytes]) -> None:
+    """Prefer EOF-driven unwind so the worker drops and zeroizes its secrets."""
+
+    if process.poll() is not None:
+        process.wait()
+        return
+    if process.stdin is not None and not process.stdin.closed:
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 def _worker_line(process: subprocess.Popen[bytes], expected: str) -> tuple[str, ...]:
     assert process.stdout is not None
     encoded = process.stdout.readline(MAX_WORKER_LINE_BYTES + 1)
@@ -308,7 +342,6 @@ def prove_selected_air(
     worker_executable: Path,
     program: AirProgram,
     execution_encoded: bytes,
-    secret_mask_seed: bytes,
     session_id: bytes,
     public_outputs: bytes,
     sidecar: bytes,
@@ -320,11 +353,14 @@ def prove_selected_air(
     _streaming_chunk_values: int = MAX_STREAMING_CHUNK_VALUES,
     _scratch_parent: Path | None = None,
     _proof_export_path: Path | None = None,
+    **_obsolete_entropy: object,
 ) -> SelectedProofResult:
     """Build and independently verify one exact selected-suite proof.
 
-    Key generation and custody stay outside this function.  The caller supplies
-    one contributor per locked PQ suite and the matching signing adapters.
+    Key generation and custody stay outside this function. The caller supplies
+    one contributor per locked PQ suite and the matching signing adapters. The
+    session identifier is authenticated public transcript context; the worker
+    owns all private masking entropy and its private retry/attempt nonce.
     """
 
     if not isinstance(worker_executable, Path) or not worker_executable.is_file():
@@ -332,7 +368,7 @@ def prove_selected_air(
     program_encoded = encode_air_program(program)
     geometry = derive_selected_proof_geometry(program)
     schedule = build_selected_theorem_round_schedule(geometry)
-    _exact_bytes("secret_mask_seed", secret_mask_seed, 64, nonzero=True)
+    _discard_obsolete_entropy(_obsolete_entropy)
     _exact_bytes("session_id", session_id, 64, nonzero=True)
     streaming = _streaming_manifest is not None
     if (
@@ -417,7 +453,6 @@ def prove_selected_air(
                         program_encoded,
                         len(_streaming_manifest.encoded).to_bytes(4, "big"),
                         _streaming_manifest.encoded,
-                        secret_mask_seed,
                         session_id,
                         available_scratch_bytes.to_bytes(8, "big"),
                         chunk_count.to_bytes(4, "big"),
@@ -440,7 +475,6 @@ def prove_selected_air(
                         program_encoded,
                         len(execution_encoded).to_bytes(4, "big"),
                         execution_encoded,
-                        secret_mask_seed,
                         session_id,
                     )
                 )
@@ -639,8 +673,7 @@ def prove_selected_air(
             transcript, bundle, proof_bytes, proof_attribution, worker_report
         )
     except BaseException:
-        process.kill()
-        process.wait()
+        _cancel_worker(process)
         raise
 
 
@@ -652,7 +685,6 @@ def prove_selected_air_streaming(
     traces: Mapping[str, TraceTable],
     public_inputs: tuple[int, ...] = (),
     chunk_values: int = MAX_STREAMING_CHUNK_VALUES,
-    secret_mask_seed: bytes,
     session_id: bytes,
     public_outputs: bytes,
     sidecar: bytes,
@@ -660,6 +692,7 @@ def prove_selected_air_streaming(
     adapters: Mapping[str, object],
     secret_keys: Mapping[bytes, bytes],
     proof_export_path: Path | None = None,
+    **_obsolete_entropy: object,
 ) -> SelectedProofResult:
     """Build and independently verify the same proof through bounded storage."""
 
@@ -670,7 +703,6 @@ def prove_selected_air_streaming(
         worker_executable=worker_executable,
         program=program,
         execution_encoded=b"streaming-execution",
-        secret_mask_seed=secret_mask_seed,
         session_id=session_id,
         public_outputs=public_outputs,
         sidecar=sidecar,
@@ -682,6 +714,7 @@ def prove_selected_air_streaming(
         _streaming_chunk_values=chunk_values,
         _scratch_parent=scratch_parent,
         _proof_export_path=proof_export_path,
+        **_obsolete_entropy,
     )
 
 

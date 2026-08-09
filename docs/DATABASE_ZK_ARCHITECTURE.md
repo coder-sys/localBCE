@@ -62,9 +62,40 @@ This closes LB-006 only as local, synthetic, nonactivating Phase 2 evidence. SQL
 as the production database, the in-memory anti-rollback state machine is not durable custody, and no
 production proof suite, PHI, payment rail, credential, audit acceptance, or activation is implied.
 
-## What the proof establishes
+## LB-007 Privacy V2 migration reference
 
-The proof establishes that a hidden, fixed-shape witness satisfies the pinned claim program: source/signature checks included by the relation, policy and ruleset evaluation, replay protection, state transition, value conservation, and settlement commitment. It reveals only the frozen public fields and authenticated sidecar.
+`app/privacy_v2_migration.py` and the schema-v2 extension of
+`app/transactional_database_boundary.py` implement the local Privacy V2 migration boundary. A
+fresh migration requires sealed OS-random evidence and acceptance by the pinned native verifier.
+The database then rechecks the exact source configuration inside `BEGIN IMMEDIATE` and atomically
+records the new profile, schema, verifier, epoch/domain, roots, state binding, migration ledger,
+configuration history, and audit event. Old-profile races, conflicting retries, manually constructed
+fresh evidence, reused rollback/recovery domains, partial writes, and restored older state fail
+closed. An exact recorded retry may reconstruct its evidence after process restart and cannot
+advance state twice.
+
+The qualification lane uses a fixed 64 MiB version-2 proof package so public-coin query
+de-duplication cannot expose a variable external proof length. Two real dual-PQ authenticated Rust
+proofs from different private witnesses independently verified with identical public shape; one
+committed through SQLite and the conflicting transition was rejected without a second state
+advance. Public artifacts were scanned for the private amount, decision, PHI, claim, and replacement
+values.
+
+This closes LB-007 only for local, synthetic, nonactivating Phase 2 migration evidence. It does not
+select a production proof suite, database, entropy authority, anti-rollback service, or custody
+system, and it does not authorize real PHI or payments.
+
+## What the selected proof must establish
+
+The complete selected proof must establish that a hidden, fixed-shape witness satisfies the pinned
+claim program: source/signature checks included by the relation, policy and ruleset evaluation,
+replay protection, state transition, value conservation, and settlement commitment. It may reveal
+only the frozen public fields and authenticated sidecar.
+
+The current `BLPQENV1` version-2 native lane independently verifies one pinned selected AIR/FRI
+package and its authenticated transcript. It does not yet contain the complete semantic-bus,
+typed-state, H4/GKR/Construction-8.2, and proof-native equality composition. It is component and
+LB-007 migration evidence, not the complete claim-proof theorem or an audit-pending release.
 
 It cannot establish that an authorized source told the truth, that the policy was wise or lawful, or that database operators preserved availability. Those are governance and operational trust boundaries.
 
