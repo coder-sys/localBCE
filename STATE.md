@@ -9234,7 +9234,7 @@ claimed.
 
 ## 2026-08-08 - LB-006 final handoff - VERIFIED, NONACTIVATING
 
-The immediately preceding detailed LB-006 record is the current implementation and verification
+The detailed LB-006 record above is the current implementation and verification
 handoff. Its frozen source/test hashes match all three final independent reviews. The real Rust
 proof-to-native-verifier-to-transactional-database lane passed 28/28, the focused boundary passed
 23/23, readiness passed 34/34, and the isolated surrounding state/migration/attack lane passed
