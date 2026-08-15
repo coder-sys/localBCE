@@ -17,7 +17,7 @@ py -3.14 -B -m experiments.native_v3_trust_boundary.session challenge $sessionDi
 py -3.14 -B -m experiments.native_v3_trust_boundary.session respond $sessionDir
 cargo run --manifest-path experiments/native_v3_trust_boundary_rust/Cargo.toml --locked --offline -- verify $sessionDir
 
-py -3.14 -B -m pytest -q tests/test_foundation_spec.py tests/test_security_freeze_spec.py
+py -3.14 -B -m pytest -q tests/test_active_core_contract.py tests/test_security_freeze_spec.py
 git diff --check
 ```
 
