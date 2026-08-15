@@ -1,46 +1,30 @@
-# Proof provenance
+# Proof and evidence provenance index
 
-Updated: 2026-08-14
+Updated: 2026-08-15
 
-This repository has no production proof and no selected proof suite.
+This is a concise compatibility index retained because the protected `zk-cairo-sharp/README.md`
+references it. It is not architecture authority; `STATE.md`, `CURRENT_TASK.md`, and the active
+architecture documents control qualification and nonactivation.
 
-## Native-v3 Phase 0
+## Current evidence
 
-The Python known-answer fixture and independent Rust reconstruction fix the five directives and
-eleven statement identity fields. Fourteen negative classes cover directive, exception, economic,
-chronology, retry, ordering, and after-state mutations. This is canonical business-semantics
-evidence, not zero knowledge.
-
-## Trust-boundary profile
-
-The synthetic profile implements an injective byte grammar, a real
-prover-commitment -> authenticated verifier-fresh challenge -> prover-response exchange, and an
-independent Rust parser/verifier. Replay, abort, domain, order, root, and mutation negatives pass.
-Its symbolic ledger deliberately reports `complete_bound_available=false` and
-`production_usable=false`.
-
-## Plaintext provider continuity
-
-The verifier-owned deterministic path covers eight synthetic continuity cases and all five
-directives. It binds canonical fact/completeness evidence, policy and effective results, one
-decision row, ordered access rows, all four times, replay/exception identity, and SHA3-512
-before/after roots. Focused tests report 10/10 passing; the independent parser accepts the eight
-intended bundles. This path is read-only, nonactivating, and not a proof.
-
-## DP24 ideal-vector oracle
-
-The retained trust-boundary security ledger records a 56-instance ideal-model margin of
-128.664794844 bits. That number excludes concrete
-SHA3-512 Merkle/BCS binding, salted commitment hiding, collapse-position binding,
-malicious-verifier ZK, semantic/state proof composition, atomic product proof, and complete
-abort/retry accounting. It cannot be promoted to a production security claim.
+- Native-v3 Phase 0 fixes the five directives and eleven statement identities. Python and
+  independent Rust KATs cover fourteen negative classes; this is semantic evidence, not zero
+  knowledge or deployed formal verification.
+- The trust-boundary profile has an injective grammar, verifier-fresh challenge, independent Rust
+  parsing, and replay/mutation negatives. It reports `complete_bound_available=false` and
+  `production_usable=false`.
+- Plaintext provider continuity is an internal, synthetic, read-only conformance harness. The
+  current focused continuity evidence is 21/21 and binds completeness/nonmembership, result
+  separation, four times, roots/order, replay, and governed exceptions.
+- Mirror/Provider Trust Graph, operational continuity, restore, withdrawal, and lifecycle-head
+  evidence is synthetic local/current-Windows candidate evidence only; it has no payment, PHI,
+  production persistence, source-authentication, or activation authority.
 
 ## Retired evidence
 
-BL-PQ512, H4/CUDA, Privacy V2, binary-field K128, Binius64, Cairo, and decisive-composition code
-and archived results may be used only as differential or negative evidence. Their former Markdown
-claims have been retired. They do not select the native-v3 backend, qualify a suite, or authorize
-PHI, payments, or activation.
-
-Global flags remain `proofSuiteId=null`, `production_usable=false`, activation false,
-synthetic-only, and no real PHI/payments.
+BL-PQ512, H4/CUDA, Privacy V2, binary-field/K128, Binius64, Cairo, and decisive-composition
+material remain historical or migration evidence only. They do not select a backend, establish a
+complete `<=2^-128` bound, authorize PHI or payments, or enable activation. The ideal-vector DP24
+margin is not a concrete proof-security claim. The current private-proof blocker and exact
+nonactivation flags are recorded in `STATE.md` and `CURRENT_TASK.md`.
