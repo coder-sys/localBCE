@@ -1,61 +1,14 @@
-# BL-PQ512 SHA3 hash-pad commitment security review
+# Retired architecture evidence
 
-Updated: 2026-08-02
+The superseded contents of this document were removed on 2026-08-14.
+This path remains only as a compatibility marker for retained regression code.
+It is not architecture, execution, security, or release authority.
 
-Decision: **rejected for Gate 2E admission**. This is a component-specific rejection record; the
-later H4/H5/H6 candidate-evidence context is nonactivating and does not admit this hash-pad route.
-`proofSuiteId` remains null and activation remains disabled.
+Current authority:
 
-## What was actually reviewed
+- `ARCHITECTURE.md`
+- `docs/NATIVE_V3_ARCHITECTURE.md`
+- `docs/DATABASE_ZK_ARCHITECTURE.md`
+- `CURRENT_TASK.md`
 
-The nonactivating reference in
-`experiments/bl_pq512_crypto_foundation/state_plane.py` commits a 512-bit
-statement digest with a 512-bit mask:
-
-```text
-ciphertext = statement XOR mask
-tag        = SHA3-512(parameter, public_coin, ciphertext, statement, mask)
-commitment = SHA3-512(parameter, public_coin, ciphertext, tag)
-```
-
-The Python reference verifier and the Rust state-envelope verifier recompute
-the same fixed-width relation. The review record is emitted by
-`hash_pad_security_review.py` and is itself digest-bound.
-
-## Positive evidence
-
-- The ciphertext is hidden by a 512-bit XOR pad only under the exact
-  one-time/uniform-mask condition. Mask reuse is not safe.
-- The opening verifier checks the statement, mask, public coin, ciphertext,
-  tag, and commitment digest.
-- The state relation, opening, receipt, and native parser have mutation tests
-  and a Python/Rust KAT.
-
-## Why admission is rejected
-
-The current constructor receives the authenticated public coin before it emits
-the commitment, so a commit-before-coin security game is not frozen. The full
-tag-hiding and binding composition therefore has no reviewed theorem under the
-required protocol order.
-
-If binding is reduced to a generic collision argument for a 512-bit SHA3
-output, the conservative quantum collision model is `2^(512/3)`, below the
-required 256-bit per-term floor. No Fiat-Shamir, QROM, grinding, or optimistic
-collision claim receives credit.
-
-At the time of this review, the current construction was not yet composed into the actual H4 AIR.
-Accordingly `TRANSPARENT_HASH_CODE` remains rejected with an explicit
-`hash_pad_security_review_rejected` reason; this record does not select a backend or authorize
-H5. The newer clean-room `TRANSPARENT_SHAKE256_1024` candidate is tracked in the S3 registry
-separately. Its later bounded H4/H5/H6 evidence is nonactivating candidate evidence; it does not
-make this rejected hash-pad route a production suite.
-
-## Required next closure
-
-Production admission still needs a reviewed construction with a frozen public-coin lifecycle,
-an exact 256-bit post-quantum hiding/binding/composition theorem, complete state constraints inside
-the H4 AIR, and independent cross-language evidence.
-The tracked `ops/` authority is now the sole verified canonical tree; the former
-sibling-layout blocker is closed. The remaining blockers are cryptographic
-composition, complete state proof coverage, simulator/leakage closure, and H4
-admission evidence.
+Git history and retained source archives preserve the retired evidence.

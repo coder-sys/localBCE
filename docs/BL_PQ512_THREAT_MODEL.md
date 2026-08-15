@@ -1,34 +1,28 @@
-# Blind Ledger threat model
+# Native-v3 threat model
 
-Updated: 2026-08-08
+Updated: 2026-08-14
 
-## Security objective
+The filename is retained for compatibility; this document now describes the current Blind Ledger
+boundary.
 
-A payment-relevant state transition may occur only when the exact pinned private relation accepts authenticated inputs and the native verifier result is committed atomically with the corresponding database update. No PHI may enter public fields, logs, release artifacts, or optional future L1 checkpoints.
-
-## Governing boundaries
-
-| Boundary | Primary threats | Required controls |
+| Boundary | Adversarial condition | Required response |
 | --- | --- | --- |
-| Provider/API input | Forged, malformed, cross-tenant, oversized, replayed data | Authentication, tenant isolation, canonical parsing, size/rate limits |
-| Government/oracle source | Compromised signer, stale epoch, omitted record, semantic ambiguity | Dual-PQ signatures, source/version/freshness binding, completeness/absence evidence |
-| Policy and rules | Unauthorized or stale policy, normalization mismatch | Governed roots, deterministic canonicalization, version pinning, review/timelock |
-| Prover | Invalid witness, omitted constraint, cross-proof substitution, leakage | Complete fixed-shape relation, hiding, exact transcript/session binding, adversarial tests |
-| Native verifier | Parser differential, resource exhaustion, mock/fallback verdict | Canonical bounded grammar, pinned artifact, independent verification, fail closed |
-| Database transition | TOCTOU, stale state, double spend, conflicting retry, partial write | Serializable transaction, locked roots, unique nullifiers, idempotency, one commit |
-| Custody | Key theft, mixed authority, rollback | HSM/FIPS boundary, separated roles, rotation, external anti-rollback |
-| Operations | Data loss, unavailable database, unsafe recovery, PHI logs | Replication, backup/restore drills, signed append-only audit commitments, redaction |
-| Build/release | Dependency or artifact substitution | Locked offline builds, SBOM, exact hashes, reproducibility, independent audit |
+| Control selection | Caller selects mode, evaluator, rule order, scope, interval, or fallback | Reject; only the exact verifier-owned control set is admissible |
+| Source ingestion | Forged, stale, ambiguous, omitted, or reordered facts | Verify canonical bytes, signer authority, freshness, ordering, and completeness; fail closed |
+| Absence | Missing record is treated as proof of nonexistence | Require authoritative completeness plus exact nonmembership |
+| Private proof | Corrupt proof, wrong statement/root/control set, replay, omission, duplicate, or mutation | Independent verification and exact transcript reconstruction; no directive on failure |
+| Direct evaluator | Conflicting facts, stale rule interval, or caller-supplied result | Deterministic conflict policy or human review; never trust caller output |
+| Exception | Missing, expired, out-of-scope, or prover-selected authorization | Reject or preserve underlying directive; require stable governed signed identity |
+| State | Stale before-root, concurrent retry, duplicate request, partial write, recovery replay | One atomic transaction with exact replay identity and before/after verification |
+| Chronology | Event, observation, rule-effective, and decision times are conflated | Bind and validate all four independently |
+| Economics | Proof/session acceptance is treated as CLEAR or amount is mutated | Keep typed directive separate; verify exact economic fields; official system moves money |
+| Resources | Prover exceeds memory/scratch/pagefile limits | Abort safely; never weaken the 5,000,000,000-byte process-tree cap |
+| Operations | Stale docs or retained prototypes are treated as authority | Use current architecture and executable evidence; legacy material gives no activation credit |
 
-## Explicit limitations
+Signatures establish provenance and authority, not real-world truth. Dual Category-5 signatures are
+required only when an approved custody threat model says so; algorithm agility and the current
+approved profile govern otherwise.
 
-A valid proof establishes that the encoded program accepted the authenticated inputs. It does not establish that an authorized source was honest, that the governing policy was correct or lawful, or that the database will remain available.
-
-The repository is synthetic and nonactivating. `proofSuiteId=null`, `production_usable=false`, and real PHI/payments are forbidden.
-
-No L2 is treated as a mitigating boundary. A future Ethereum L1 checkpoint can add public timestamping or tamper evidence, but cannot replace source governance, mandatory application ZK, database atomicity, availability, or recovery.
-
-## Required adversarial stories
-
-Tests must reject forged verifier receipts, proof/schema/suite mismatch, stale roots, duplicate nullifiers, cross-batch replay, conflicting retries, transaction races, crash-before-commit, rollback to an old governance epoch, unauthorized signer rotation, malformed or oversized proofs, PHI-bearing logs, and incomplete recovery.
+The repository remains synthetic and nonactivating: `proofSuiteId=null`,
+`production_usable=false`, activation false, and real PHI/payments forbidden.
 

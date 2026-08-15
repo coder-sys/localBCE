@@ -1,19 +1,19 @@
 # Known issues
 
-Updated: 2026-08-08
+Updated: 2026-08-14
 
-| Issue | Current boundary |
+| Area | Current issue and consequence |
 | --- | --- |
-| Internal roadmap | 33 of 81 packages are complete locally; 48 remain open. Five internal blockers are release-candidate blockers; one audit gate and three operator activation inputs also block production activation, for nine total production-activation blockers. |
-| Production suite | `proofSuiteId` remains null; selection and activation are forbidden. |
-| Independent audit | Not started. One final external audit gate remains after internal engineering evidence. |
-| Native verifier | The Rust candidate and direct local boundary exist, but the operational verifier-artifact pin is still an example placeholder and the exact release suite is not qualified. |
-| Database transition | `LocalSettlementV2` is an in-memory atomic model. A transactional database port plus concurrency, retry, rollback, crash-recovery, and durable audit tests remain internal Phase 2 work. |
-| Database deployment | Selecting and operating the production database engine, backup/restore service, external anti-rollback authority, and live custody remain later activation work. |
-| Privacy migration | The 12-field public ABI and local mutation tests pass, but proof-bound differential/inference and database migration/rollback qualification remain open. |
-| Custody operations | Software references exist; legal hold, backup/restore, crypto-erasure, provider conformance, HSM/FIPS, and external anti-rollback remain unqualified. |
-| Source truth | A valid proof establishes satisfaction of encoded rules over authenticated inputs; it cannot guarantee an authorized source was honest or that policy was correct. |
-| Availability | The application database remains an availability dependency. Backups, replicas, recovery, and signed append-only evidence must be operationally qualified. |
-| Performance | H5 measured p95 32.360845 seconds for K128 and 148.861885 seconds for K512 on the qualified campaign. These are evidence, not production SLAs. |
-| Ethereum | No Ethereum dependency exists through Phase 2. A future direct-L1 checkpoint design has not been implemented or costed from measured gas. |
-| Production use | `production_usable=false`; real PHI and real payments remain forbidden. |
+| Private-proof backend | No backend is selected and no complete native-v3 proof exists. Production, activation, K128/K512, and private-proof performance claims are blocked. |
+| Security composition | Concrete SHA3-512 commitment binding/hiding, collapse-position binding, malicious-verifier ZK, semantic/state composition, abort/retry composition, and authenticated-challenge accounting do not yet have one complete finite `<=2^-128` proof. |
+| Plaintext wedge | The provider continuity slice is synthetic and read-only. It is not a selected production evaluator, does not move money, and has no PHI authorization. |
+| Product/API separation | The synthetic continuity harness exercises future Blind Ledger directives, but the first commercial provider-continuity wedge is a read-only Mirror/Provider Trust Graph capability. A distinct external finding/remediation contract is not implemented yet. |
+| Formal kernel | The Lean semantic/state-transition kernel, canonical decoder, theorem manifest, native artifact, Rust adapter, and deployed-code correspondence are not implemented. No formal-verification production claim is allowed. |
+| Continuity naming | The current narrow continuity state is an audit/assessment fixture, not the full operational `Continuity State` required for vendor handoff. Source names must be reconciled in a bounded versioned change. |
+| Resource evidence | Direct-path telemetry is small, but complete proof process-tree memory, scratch, pagefile, throughput, and latency are unmeasured because no complete proof backend exists. |
+| Corporate data plane | The zero-PHI target includes support, logs, crash dumps, monitoring, analytics, AI tools, contractors, and persistent linkable fingerprints. A production state-side sanitizer and enforceable corporate egress schema are not implemented. |
+| Neutral metering | The commercial covered-flow meter and State Value Ledger remain architectural requirements only. They must be downstream, read-only, and unable to influence rules, directives, exceptions, or payment outcomes. |
+| Production infrastructure | Production database, key custody, source governance, monitoring, independent audit, and activation review remain unselected or incomplete. |
+| Frozen operations prose | Some canonical `ops/` documents still describe retired payment-transition or dual-signature assumptions. Their bytes are frozen by operational authority and require explicit governance authorization before reconciliation; they are not native-v3 architecture authority. |
+| Retained code | Legacy Privacy V2, BL-PQ512/H4/CUDA, binary-field, Binius64, and Cairo code remains only for regression, differential evidence, and staged deletion. It must not be treated as the active design. |
+| Archive | The current cleanup and continuity source archive has been rebuilt and independently read back at all three retained targets. Any later publishable source change requires another fresh candidate and three-way verification. |

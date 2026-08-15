@@ -1,36 +1,63 @@
-# Continuation mandate
+# Blind Ledger continuation mandate
 
-Updated: 2026-08-08
+Updated: 2026-08-14
 
-Continue only from the architecture in `docs/DATABASE_ZK_ARCHITECTURE.md`.
+## Re-anchor before work
 
-## Non-negotiable decisions
-
-1. The state-owned database is authoritative for workflow and payment state.
-2. ZK is mandatory whenever private evidence drives an automated payment decision.
-3. The native verifier result and the resulting state mutation are one fail-closed atomic operation.
-4. Exact policy, ruleset, oracle, claim-source, state-before, state-after, value-conservation, and settlement commitments remain bound.
-5. The fixed 12-field Privacy V2 ABI, fixed-shape privacy, SHA3-512 authority, M31/Fp16 proof core, interactive public coin, and dual-PQ signatures remain.
-6. No L2 or rollup is being built.
-7. Ethereum is outside Phase 0-2. Any later L1 checkpoint is additive and cannot become the operational database.
-
-The full workspace carries `STATE.md` and the dated `WAVE2_HANDOFF_2026-07-26.md` as continuation
-records. The published source archive intentionally omits those workspace-only files; an archive
-reader must use the current architecture documents and `RELEASE_FILE_MANIFEST.json` instead.
-
-## Recovery order
-
-After interruption or compaction, read:
+Read, in order:
 
 1. `AGENTS.md`
-2. the newest `STATE.md` entry
-3. `docs/DATABASE_ZK_ARCHITECTURE.md`
-4. `docs/CURRENT_TECH_STACK.md`
-5. `docs/IMPLEMENTATION_ROADMAP.md`
-6. `docs/PQ_ZK_SECURITY_ARCHITECTURE.md`
+2. `CURRENT_TASK.md`
+3. `ARCHITECTURE.md`
+4. `STATE.md`
+5. `docs/NATIVE_V3_ARCHITECTURE.md`
+6. `docs/DATABASE_ZK_ARCHITECTURE.md`
+7. `docs/LEAN_FORMAL_KERNEL.md` when semantics, canonical decoding, state transition, or formal
+   verification is implicated
+8. the smallest implicated source and tests
 
-Historical documents describe evidence and rejected paths; they are not current architecture authority.
+Repository bytes and executable behavior outrank summaries and archives. Preserve the dirty
+worktree. Never reset, clean, revert, overwrite unrelated changes, weaken a gate to pass, or edit
+protected paths without exact owner authorization.
 
-## Stop conditions
+## Active boundary
 
-Stop rather than guess if proof-to-state atomicity, authoritative roots, retry/idempotency behavior, anti-rollback, signer authority, proof-suite identity, or production activation state cannot be established from repository evidence.
+Blind Ledger is the state-side clearance layer only. The incumbent adjudicates and the official
+payment system moves money. The first wedge is synthetic, read-only provider credential/enrollment
+continuity using the exact verifier-owned `DIRECT_STATE_OWNED` control set.
+
+Private ZK is mandatory only when an undisclosed payment-relevant assertion crosses the clearance
+boundary and affects automation. A caller cannot choose the evidence mode, downgrade a failed
+private path, or turn proof/session acceptance into `CLEAR`.
+
+Keep `policyResult` distinct from `effectiveDirective`; preserve the five directives, governed
+exception identity, authoritative absence evidence, four times, exact decision/access join,
+before/after roots, replay identity, and fail-closed mutation behavior.
+
+The approved formal-methods target is an executable Lean semantic/state-transition kernel behind a
+narrow Rust boundary. It is not implemented yet. Rust owns cryptographic verification, the database
+owns concurrency and durability, and no deployed-formal-verification claim exists until the exact
+Lean correspondence and build gates in `docs/LEAN_FORMAL_KERNEL.md` pass.
+
+## Evidence discipline
+
+Claim only what raw output supports. A parser, profile, component KAT, or ideal-model calculator is
+not a production proof. No full private-proof performance or memory claim exists until a complete
+backend runs from admitted input through independent verification and atomic database application.
+
+Do not start K128, K512, a production-proof campaign, GPU scale work, or backend selection while the
+theorem/composition prerequisites in `CURRENT_TASK.md` remain open. Keep
+`proofSuiteId=null`, `production_usable=false`, activation false, synthetic-only, and real
+PHI/payments forbidden.
+
+For each bounded stage: take one repository snapshot, inspect decisive evidence, correct drift at
+most once, verify the affected boundary, and stop at a safe phase boundary. Continue through routine
+recoverable failures; stop for a trust-critical ambiguity, protected-path conflict, unsafe resource
+condition, failed correction, or required new authority.
+
+## Publication
+
+After successful source-changing work, rebuild the reviewed source archive candidate and verify its
+manifest, canonical ZIP/CRC readback, entry count, byte length, and SHA-256. Publish only to exactly
+three discovered retained targets and only without privilege escalation. All three targets must be
+byte-identical after readback. A blocked or non-source-changing stage does not refresh archives.
