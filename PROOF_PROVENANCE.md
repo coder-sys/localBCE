@@ -29,7 +29,8 @@ intended bundles. This path is read-only, nonactivating, and not a proof.
 
 ## DP24 ideal-vector oracle
 
-The 56-instance calculator reports 128.664794844 ideal-model bits. That number excludes concrete
+The retained trust-boundary security ledger records a 56-instance ideal-model margin of
+128.664794844 bits. That number excludes concrete
 SHA3-512 Merkle/BCS binding, salted commitment hiding, collapse-position binding,
 malicious-verifier ZK, semantic/state proof composition, atomic product proof, and complete
 abort/retry accounting. It cannot be promoted to a production security claim.

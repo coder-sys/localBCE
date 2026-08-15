@@ -1,9 +1,0 @@
-[package]
-name = "native_v3_dp_nucleus"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-getrandom = { version = "=0.3.3", default-features = false }
-sha3 = { version = "=0.10.9", default-features = false }

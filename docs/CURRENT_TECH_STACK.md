@@ -20,8 +20,8 @@ setup-free, non-ECC, natively witness-hiding, fixed-shape, independently verifia
 under the 5,000,000,000-byte complete process-tree memory cap. It must close one honest finite
 `<=2^-128` false-acceptance bound after all composition and union terms.
 
-The DP24 nucleus is an ideal-vector oracle only. The trust-boundary profile supplies protocol
-framing and authentication evidence only. Neither is a proof backend.
+The trust-boundary profile supplies protocol framing and authentication evidence only. Its retained
+DP24 ideal-vector-oracle calculation is nonproduction caveat evidence, not a proof backend.
 
 ## Approved formal kernel target
 
