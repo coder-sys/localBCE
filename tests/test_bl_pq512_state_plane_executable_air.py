@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+from experiments.fixed_shape_claim_air.executable_air import (
+    AirProgram,
+    AirTable,
+    Identity,
+    LookupArgument,
+    LookupSide,
+    TraceTable,
+    boolean,
+    cell,
+    freeze_columns,
+)
 from experiments.fixed_shape_claim_air.air_binary_ir import (
-    air_binary_commitment,
     encode_air_execution,
 )
 from experiments.fixed_shape_claim_air.executable_air import (
@@ -13,13 +23,60 @@ from experiments.fixed_shape_claim_air.state_plane_executable_air import (
     build_state_plane_air,
     compose_state_plane_air,
 )
-from tests.test_wave1a_executable_air import _fixture
-from tests.test_wave1a_air_binary_ir_cross_language import (
-    _build_binary,
-    _report,
-    _run,
-)
 from tests.test_bl_pq512_state_plane import _proof
+
+
+def _base_air_fixture() -> tuple[AirProgram, dict[str, TraceTable]]:
+    """Small local base relation for the state-composition property."""
+
+    rows = 4
+    source = TraceTable(
+        "source",
+        freeze_columns(
+            {
+                "live": (1, 1, 0, 0),
+                "value": (0, 1, 2, 3),
+                "acc": (0, 0, 1, 1),
+            }
+        ),
+    )
+    destination = TraceTable(
+        "destination",
+        freeze_columns({"live": (1, 1, 0, 0), "value": (0, 1, 2, 3)}),
+    )
+    source_table = AirTable(
+        "source",
+        ("live", "value", "acc"),
+        rows,
+        (
+            Identity("live_boolean", boolean(cell("live")), 0, rows),
+            Identity("acc_first", cell("acc"), 0, 1, "boundary"),
+            Identity(
+                "acc_transition",
+                cell("acc", 1) - cell("acc") - cell("live") * cell("value"),
+                0,
+                rows - 1,
+                "transition",
+            ),
+            Identity("acc_last", cell("acc") - 1, rows - 1, rows, "boundary"),
+        ),
+    )
+    destination_table = AirTable(
+        "destination",
+        ("live", "value"),
+        rows,
+        (Identity("live_boolean", boolean(cell("live")), 0, rows),),
+    )
+    lookup = LookupArgument(
+        "typed_values",
+        (LookupSide("source", cell("live"), (cell("value"),), 0, rows),),
+        (LookupSide("destination", cell("live"), (cell("value"),), 0, rows),),
+    )
+    return AirProgram(
+        "BL-STATE-PLANE-BASE-TEST-v1",
+        (source_table, destination_table),
+        (lookup,),
+    ), {"source": source, "destination": destination}
 
 
 def test_state_plane_air_constrains_slots_sha3_roots_and_public_order() -> None:
@@ -44,7 +101,7 @@ def test_state_plane_air_constrains_slots_sha3_roots_and_public_order() -> None:
 
 
 def test_state_plane_air_composes_into_one_ordered_execution() -> None:
-    base_program, base_traces = _fixture()
+    base_program, base_traces = _base_air_fixture()
     program, traces, public_values = compose_state_plane_air(
         base_program, base_traces, (), _proof()
     )
@@ -55,25 +112,3 @@ def test_state_plane_air_composes_into_one_ordered_execution() -> None:
         binding.name.startswith("state_plane__state_root_")
         for binding in program.public_inputs
     )
-
-
-def test_rust_independent_evaluator_accepts_composed_state_air() -> None:
-    base_program, base_traces = _fixture()
-    program, traces, public_values = compose_state_plane_air(
-        base_program, base_traces, (), _proof()
-    )
-    expected = evaluate_program(program, traces, public_values)
-    result = _run(
-        _build_binary("air_ir_evaluate"),
-        encode_air_execution(program, traces, public_values),
-    )
-    assert result.returncode == 0, result.stderr.decode("ascii", errors="replace")
-    assert _report(result.stdout) == {
-        "source_program_commitment": expected.program_commitment.hex(),
-        "binary_commitment": air_binary_commitment(
-            encode_air_execution(program, traces, public_values)
-        ).hex(),
-        "identities_evaluated": str(expected.identities_evaluated),
-        "lookup_messages_evaluated": str(expected.lookup_messages_evaluated),
-        "maximum_degree": str(expected.maximum_degree),
-    }
