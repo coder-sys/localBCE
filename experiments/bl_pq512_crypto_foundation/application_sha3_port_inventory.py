@@ -367,6 +367,14 @@ CALLSITE_DISPOSITIONS: Final[Mapping[CallsiteId, PortDisposition]] = MappingProx
             "sha3_512_trace_rows_commitment",
         ): _H,
         _call(
+            "experiments/fixed_shape_claim_air/semantic_bus_binding_air.py",
+            "SemanticBusBridgeProgram.commitment_512",
+        ): _S,
+        _call(
+            "experiments/fixed_shape_claim_air/semantic_bus_binding_air.py",
+            "build_synthetic_semantic_h4_bridge",
+        ): _S,
+        _call(
             "experiments/fixed_shape_claim_air/vector_corpus.py",
             "corpus_sha3_512",
         ): _H,

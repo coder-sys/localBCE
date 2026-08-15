@@ -198,10 +198,10 @@ def measure_reconciled_additions(
 ) -> tuple[RuntimeObservation, ...]:
     """Exercise every H0 addition once and return its exact SHA3 observation.
 
-    This is deliberately an isolated classification measurement.  The full K128
-    phase-separated driver remains ``measure_application_sha3_k128``; this
-    function prevents a helper that is absent from one mixed fixture from being
-    classified by analogy alone.
+    This is deliberately an isolated classification measurement.  It prevents
+    a helper that is absent from one mixed fixture from being classified by
+    analogy alone.  The retired exact-K128 phase driver is not part of the
+    active repository.
     """
 
     from app.batch.pq_nullifier_derivation import (  # noqa: PLC0415

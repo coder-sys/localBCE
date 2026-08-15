@@ -69,3 +69,14 @@ def test_current_authority_keeps_the_nonpayment_nonproof_boundary() -> None:
     assert "No payment state transition occurs inside Blind Ledger" in database
     assert "does not expose a Blind Ledger clearance receipt" in architecture
     assert "internal Blind Ledger conformance harness" in continuity
+
+
+def test_current_authority_keeps_private_run_and_resource_claims_closed() -> None:
+    state = (ROOT / "STATE.md").read_text(encoding="utf-8")
+    native = (ROOT / "docs" / "NATIVE_V3_ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    assert "No production proof backend is selected." in state
+    assert "`proofSuiteId=null`" in state
+    assert "`production_usable=false`" in state
+    assert "Complete prover process-tree peak resident memory is at most 5,000,000,000" in native
+    assert "Do not begin another synthetic exact-K128 hash bakeoff" in native
