@@ -25,10 +25,6 @@ from app.transactional_database_boundary import (
     TransactionalSettlementV2,
 )
 from app.native_public_input_projection import PublicInputProjectionV1
-from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
-    HISTORICAL_CIRCLE_GAPS,
-    build_active_gkr_hiding_certificate,
-)
 from experiments.bl_pq512_crypto_foundation.field16_reference import Fp16
 from experiments.bl_pq512_crypto_foundation.oods_reference import CirclePoint
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
@@ -195,14 +191,6 @@ def _settlement_sidecar(
         strong_batch_commitment=_digest(_BATCH_NONCE_BINDING, batch_nonce),
     ).encode()
     return sidecar, settlement_domain, batch_nonce, roots
-
-
-def test_active_hiding_rebases_old_circle_gaps_without_deleting_them() -> None:
-    certificate = build_active_gkr_hiding_certificate()
-    assert certificate.coverage_gaps == ()
-    assert certificate.superseded_historical_gaps == HISTORICAL_CIRCLE_GAPS
-    assert certificate.activation_allowed is False
-    assert certificate.production_usable is False
 
 
 def test_candidate_envelope_binds_statement_but_remains_aggregate_unqualified() -> None:

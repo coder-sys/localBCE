@@ -18,9 +18,6 @@ from typing import Final
 
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
-from experiments.bl_pq512_crypto_foundation.active_gkr_hiding import (
-    ActiveGkrHidingCertificate,
-)
 from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
     MAX_SELECTED_TRANSCRIPT_BYTES,
     SelectedChallengeBundle,
@@ -499,7 +496,6 @@ def select_built_audit_pending_suite(
     envelope: ProductionProofEnvelope,
     *,
     verification: NativeVerificationReceipt,
-    hiding: ActiveGkrHidingCertificate | None = None,
     custody: SoftwareCustodyCertificate | None = None,
     aggregate_release: object | None = None,
     root: Path = ROOT,
