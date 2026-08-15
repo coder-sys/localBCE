@@ -218,6 +218,22 @@ EXCLUDED_SUFFIXES = frozenset(
         ".zst",
     }
 )
+# These source files intentionally remain in Git and are exercised by tests, but their
+# synthetic privacy/security fixtures or scanner vocabulary cannot be serialized into the
+# source archive under the builder's structural privacy gate.  Keep this release boundary
+# explicit and finite; do not turn it into a content-based omission rule.
+RELEASE_EXCLUDED_PATHS = frozenset(
+    {
+        "docs/security-freeze/BL-PQ512-v1/hardening.json",
+        "sample_claim_input.json",
+        "tests/attacks/test_proving_evidence_policy_attacks.py",
+        "tests/test_build_release_archive.py",
+        "tests/test_measure_proving.py",
+        "tests/test_privacy_artifact_scan.py",
+        "tools/measure_proving.py",
+        "tools/privacy_artifact_scan.py",
+    }
+)
 _WINDOWS_RESERVED = re.compile(r"(?i)(?:con|prn|aux|nul|com[1-9]|lpt[1-9])")
 
 
@@ -256,6 +272,8 @@ def _fold_path(value: str) -> str:
 
 
 def _is_excluded(path: str) -> tuple[bool, str]:
+    if path in RELEASE_EXCLUDED_PATHS:
+        return True, "source-only privacy fixture or scanner tool"
     parts = path.casefold().split("/")
     if any(part in EXCLUDED_SEGMENTS for part in parts):
         return True, "generated/cache/private/proof-output path segment"

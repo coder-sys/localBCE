@@ -303,6 +303,19 @@ class ReleaseManifestGateTests(unittest.TestCase):
             gate.validate_release_paths(["portal_shared/assets/font.woff2"])
         with self.assertRaisesRegex(gate.ManifestGateError, "duplicate or case"):
             gate.classify_paths(["tools/A.py", "tools/a.py"])
+        for path in sorted(gate.RELEASE_EXCLUDED_PATHS):
+            with self.subTest(release_excluded=path):
+                classification = gate.classify_path(path)
+                self.assertEqual(
+                    gate.PathLane.EXCLUDED_GENERATED_PRIVATE,
+                    classification.lane,
+                )
+                self.assertEqual(
+                    "source-only privacy fixture or scanner tool",
+                    classification.reason,
+                )
+                with self.assertRaisesRegex(gate.ManifestGateError, "forbidden paths"):
+                    gate.validate_release_paths([path])
 
     def test_current_commit_tracked_tree_has_no_unknown_or_retired_paths(self) -> None:
         tracked = subprocess.run(
