@@ -16,6 +16,7 @@ from .executable_air import (
     AirProgram,
     LookupArgument,
     LookupSide,
+    PublicInputBinding,
     TraceTable,
     cell,
     const,
@@ -31,7 +32,13 @@ from .wide_public_executable_air import (
 )
 
 
-PROGRAM_ID: Final[str] = "BL-WAVE1A-MASTER-PUBLIC-COMPOSITION-AIR-v2"
+PROGRAM_ID: Final[str] = "BL-WAVE1A-MASTER-PUBLIC-COMPOSITION-AIR-v3"
+V3_SIDECAR_BYTES: Final[int] = 744
+V3_GOVERNANCE_OFFSET: Final[int] = 488
+V3_GOVERNANCE_BYTES: Final[int] = 64
+V3_PUBLIC_FIELD_COUNT: Final[int] = 12
+V3_PUBLIC_FIELD_BYTES: Final[int] = 32
+_GOVERNANCE_PUBLIC_PREFIX: Final[str] = "sidecar.strongGovernanceCommitment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,15 +47,85 @@ class MasterPublicAirInstance:
     traces: Mapping[str, TraceTable]
     master: MasterCommitmentsAirInstance
     public: WidePublicAirInstance
+    public_input_bytes: tuple[int, ...]
     master_public_links_constrained: bool = True
+    governance_public_binding_constrained: bool = True
 
     def __post_init__(self) -> None:
         if (
             not self.master_public_links_constrained
+            or not self.governance_public_binding_constrained
             or "master_public_wide_value_links"
             not in {lookup.name for lookup in self.program.lookups}
+            or self.public_input_bytes
+            != (
+                *self.public.public_input_bytes,
+                *self.master.commitments.governance_512,
+            )
+            or tuple(
+                binding.name
+                for binding in self.program.public_inputs[-V3_GOVERNANCE_BYTES:]
+            )
+            != tuple(
+                f"{_GOVERNANCE_PUBLIC_PREFIX}.byte{index:02d}"
+                for index in range(V3_GOVERNANCE_BYTES)
+            )
         ):
             raise StructuralError("master_public_false_completion_claim")
+
+
+def semantic_public_inputs_from_v3_sidecar(
+    public_fields: tuple[bytes, ...],
+    sidecar: bytes,
+) -> tuple[int, ...]:
+    """Return semantic public cells derived only from the v3 outer statement.
+
+    The first 384 bytes are the frozen twelve-field application ABI.  The only
+    added semantic public value is the existing 64-byte governance field at
+    sidecar offsets 488..552.  The global v3 suite remains deliberately null.
+    """
+
+    if (
+        type(public_fields) is not tuple
+        or len(public_fields) != V3_PUBLIC_FIELD_COUNT
+        or any(
+            type(value) is not bytes or len(value) != V3_PUBLIC_FIELD_BYTES
+            for value in public_fields
+        )
+    ):
+        raise StructuralError("master_public_v3_public_fields_invalid")
+    if (
+        type(sidecar) is not bytes
+        or len(sidecar) != V3_SIDECAR_BYTES
+        or sidecar[:8] != b"BLPQSC01"
+        or sidecar[8:10] != (1).to_bytes(2, "big")
+        or sidecar[10:12] != bytes(2)
+        or sidecar[12:16] != V3_SIDECAR_BYTES.to_bytes(4, "big")
+        or not any(sidecar[16:80])
+        or any(sidecar[80:144])
+    ):
+        raise StructuralError("master_public_v3_sidecar_header_invalid")
+    for start in (144, 208, 272, 360, 424, 488, 552, 616, 680):
+        if not any(sidecar[start : start + 64]):
+            raise StructuralError("master_public_v3_sidecar_value_zero")
+    sequence_before = int.from_bytes(sidecar[344:352], "big")
+    if (
+        int.from_bytes(sidecar[336:344], "big") == 0
+        or sequence_before == 0xFFFFFFFFFFFFFFFF
+        or int.from_bytes(sidecar[352:360], "big") != sequence_before + 1
+        or sidecar[360:424] == sidecar[424:488]
+        or sidecar[552:616] == sidecar[616:680]
+    ):
+        raise StructuralError("master_public_v3_sidecar_transition_invalid")
+    return tuple(
+        byte
+        for field in public_fields
+        for byte in field
+    ) + tuple(
+        sidecar[
+            V3_GOVERNANCE_OFFSET : V3_GOVERNANCE_OFFSET + V3_GOVERNANCE_BYTES
+        ]
+    )
 
 
 def _range_start(
@@ -168,6 +245,16 @@ def build_master_public_composition(
         tuple(sources),
         tuple(destinations),
     )
+    governance_start = _range_start(output_trace, "output_id", 0, 64)
+    governance_public_bindings = tuple(
+        PublicInputBinding(
+            f"{_GOVERNANCE_PUBLIC_PREFIX}.byte{byte_index:02d}",
+            output_trace.name,
+            "value",
+            governance_start + byte_index,
+        )
+        for byte_index in range(V3_GOVERNANCE_BYTES)
+    )
     merged = merge_air_fragments(
         PROGRAM_ID,
         (
@@ -175,15 +262,21 @@ def build_master_public_composition(
             AirFragment(public.program, public.traces),
         ),
         extra_lookups=(links,),
+        extra_public_inputs=governance_public_bindings,
     )
     return MasterPublicAirInstance(
         merged.program,
         MappingProxyType(dict(merged.traces)),
         master,
         public,
+        (
+            *public.public_input_bytes,
+            *commitments.governance_512,
+        ),
     )
 
 __all__ = (
     "MasterPublicAirInstance",
     "build_master_public_composition",
+    "semantic_public_inputs_from_v3_sidecar",
 )

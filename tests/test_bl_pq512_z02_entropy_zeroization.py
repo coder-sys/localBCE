@@ -178,10 +178,13 @@ def test_real_worker_unit_lifecycle_proves_retry_freshness_and_zeroization(
         target=TARGET / "default",
     )
     output = completed.stdout + completed.stderr
-    assert b"3 passed" in output
+    expected_count = 4 if name == "selected_streaming_prover_worker" else 3
+    assert f"{expected_count} passed".encode("ascii") in output
     assert b"worker_entropy_is_fresh_across_attempts" in output
     assert b"worker_entropy_zeroizes_both_owned_buffers" in output
     assert b"worker_entropy_drop_runs_during_panic_unwind" in output
+    if name == "selected_streaming_prover_worker":
+        assert b"scratch_owner_nonce_is_public_deterministic_and_domain_separated" in output
     assert b"mask_seed=" not in output
     assert b"attempt_nonce=" not in output
 

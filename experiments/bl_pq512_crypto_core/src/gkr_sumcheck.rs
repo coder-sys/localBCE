@@ -3087,6 +3087,157 @@ fn shared_group_round_polynomial(
     compute(0, suffix_count)
 }
 
+/// Tiny table-free reference for the compact-source group-round algorithm.
+///
+/// This deliberately caps the domain at sixteen groups. It is the executable
+/// specification for accelerator implementations: accepted low-variable
+/// challenges are folded directly from original rows, and the resulting next
+/// pair is passed through the native group polynomial implementation.
+pub(crate) fn streaming_shared_group_round_polynomial_reference(
+    layer: &KeccakDagLayer,
+    group_count: usize,
+    claims: &[LayerOutputClaim],
+    round_index: usize,
+    accepted_prefix: &[Fp16],
+    mut left_value: impl FnMut(usize, usize) -> Result<Fp16, ProductSumcheckError>,
+    mut right_value: impl FnMut(usize, usize) -> Result<Fp16, ProductSumcheckError>,
+) -> Result<[Fp16; 4], ProductSumcheckError> {
+    if group_count < 2
+        || group_count > 16
+        || !group_count.is_power_of_two()
+        || accepted_prefix.len() != round_index
+        || round_index >= group_count.trailing_zeros() as usize
+    {
+        return Err(ProductSumcheckError::Shape);
+    }
+    let output_variables = layer.padded_width.trailing_zeros() as usize;
+    let group_variables = group_count.trailing_zeros() as usize;
+    if claims.is_empty()
+        || claims
+            .iter()
+            .any(|claim| claim.point.len() != output_variables + group_variables)
+    {
+        return Err(ProductSumcheckError::Shape);
+    }
+    let prefix_weights = equality_table(accepted_prefix)?;
+    let compressed_groups = group_count >> round_index;
+    let mut left_folded = vec![Fp16::ZERO; compressed_groups * layer.left_width];
+    let mut right_folded = vec![Fp16::ZERO; compressed_groups * layer.right_width];
+    for compressed in 0..compressed_groups {
+        let original_base = compressed << round_index;
+        for (low, weight) in prefix_weights.iter().copied().enumerate() {
+            let original_group = original_base + low;
+            for wire in 0..layer.left_width {
+                let index = compressed * layer.left_width + wire;
+                left_folded[index] =
+                    left_folded[index] + weight * left_value(wire, original_group)?;
+            }
+            for wire in 0..layer.right_width {
+                let index = compressed * layer.right_width + wire;
+                right_folded[index] =
+                    right_folded[index] + weight * right_value(wire, original_group)?;
+            }
+        }
+    }
+    let output_weights = claims
+        .iter()
+        .map(|claim| equality_table(&claim.point[..output_variables]))
+        .collect::<Result<Vec<_>, _>>()?;
+    let claim_prefixes = claims
+        .iter()
+        .map(|claim| {
+            equality_evaluate(
+                &claim.point[output_variables..output_variables + round_index],
+                accepted_prefix,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    shared_group_round_polynomial(
+        layer,
+        &left_folded,
+        &right_folded,
+        claims,
+        &output_weights,
+        &claim_prefixes,
+        output_variables,
+        round_index,
+    )
+}
+
+#[cfg(test)]
+mod streaming_group_reference_tests {
+    use super::*;
+    use crate::{
+        field::M31,
+        keccak_gkr_dag::{KeccakDagGate, KeccakDagGateKind, KeccakDagSource},
+    };
+
+    fn fp(value: u32) -> Fp16 {
+        Fp16::from_m31(M31::from_canonical(value).unwrap())
+    }
+
+    #[test]
+    fn two_group_product_matches_hand_computed_cubic() {
+        // left=(2,4), right=(3,5), and group equality point y=7.
+        // (1-y+(2y-1)t)(2+2t)(3+2t)
+        //   = -36 + 18t + 106t^2 + 52t^3.
+        let layer = KeccakDagLayer {
+            left_source: KeccakDagSource::RoundInput,
+            right_source: KeccakDagSource::RoundInput,
+            left_width: 1,
+            right_width: 1,
+            raw_width: 1,
+            padded_width: 2,
+            gates: vec![
+                KeccakDagGate {
+                    left: 0,
+                    right: 0,
+                    kind: KeccakDagGateKind::Multiply,
+                },
+                KeccakDagGate {
+                    left: 0,
+                    right: 0,
+                    kind: KeccakDagGateKind::Zero,
+                },
+            ],
+        };
+        let claims = [LayerOutputClaim {
+            point: vec![Fp16::ZERO, fp(7)],
+            value: fp(104),
+            coefficient: Fp16::ONE,
+        }];
+        let left = [fp(2), fp(4)];
+        let right = [fp(3), fp(5)];
+        let cubic = streaming_shared_group_round_polynomial_reference(
+            &layer,
+            2,
+            &claims,
+            0,
+            &[],
+            |wire, group| {
+                if wire == 0 {
+                    Ok(left[group])
+                } else {
+                    Err(ProductSumcheckError::Wiring)
+                }
+            },
+            |wire, group| {
+                if wire == 0 {
+                    Ok(right[group])
+                } else {
+                    Err(ProductSumcheckError::Wiring)
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(cubic, [Fp16::ZERO - fp(36), fp(18), fp(106), fp(52)]);
+        assert_eq!(
+            cubic[0] + cubic[0] + cubic[1] + cubic[2] + cubic[3],
+            claims[0].value
+        );
+    }
+}
+
 /// Nonactivating reference prover for a relay-free DAG layer repeated over a
 /// shared group axis.
 ///
@@ -3841,7 +3992,7 @@ impl<'a> LibraMaskRoundAccumulator<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prove_masked_shared_group_dag_layer_interactive_internal(
+pub(crate) fn prove_masked_shared_group_dag_layer_interactive_internal(
     layer: &KeccakDagLayer,
     group_count: usize,
     left_wire_values: &[Fp16],

@@ -21,6 +21,10 @@ use core::fmt;
 
 use crate::{
     field::{Fp16, M31, M31_MODULUS},
+    fp16_relay_free_gkr_schedule::{
+        GKR_LAYERS, selected_state_composed_mask_layout,
+        selected_state_composed_mask_variable_degrees,
+    },
     fp16_relay_free_gkr_uniform::{UniformGkrMaskConstraint, UniformGkrMaskFunctional},
     gkr_sumcheck::{
         LayerOutputClaim, MaskedUniformSharedGroupDagLayerProof, ProductSumcheckError,
@@ -43,6 +47,8 @@ use crate::{
 pub const STATE_SQUAREFREE_MAX_CAPACITY: usize = 512;
 pub const STATE_SQUAREFREE_PHASES: usize = 2;
 pub const STATE_SQUAREFREE_STATE_GROUP_VARIABLES: usize = 12;
+pub const STATE_SQUAREFREE_TRANSCRIPT_DOMAIN: &[u8] =
+    b"BL/PQ512/WAVE2/STATE-SQUAREFREE-TRANSCRIPT/v2\0";
 
 const BEFORE_PRESENT_WIRE: usize = 1;
 const BEFORE_KEY_WIRE: usize = 2;
@@ -205,6 +211,100 @@ pub enum MaskedStateSquarefreeRoundKind {
     ClaimMix,
 }
 
+/// Verifier-derived shape of one square-free masked GKR layer.  The phase,
+/// topology, source-axis round counts, and polynomial degrees are all fixed by
+/// the governed capacity; none are accepted from transcript bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedStateSquarefreeLayerPlan {
+    pub phase: u8,
+    pub kind: MaskedStateSquarefreeLayerKind,
+    pub topology_index: usize,
+    pub group_rounds: usize,
+    pub left_rounds: usize,
+    pub right_rounds: usize,
+    pub expected_degrees: Vec<usize>,
+}
+
+pub fn state_squarefree_layer_ordinal(
+    kind: MaskedStateSquarefreeLayerKind,
+    topology: usize,
+) -> Result<usize, StateSquarefreeGkrError> {
+    let prefix = match kind {
+        MaskedStateSquarefreeLayerKind::Identity => 0_usize,
+        MaskedStateSquarefreeLayerKind::ProductTree => 1,
+        MaskedStateSquarefreeLayerKind::CoefficientAdapter => 2,
+        MaskedStateSquarefreeLayerKind::CoefficientTree => 3,
+    };
+    prefix
+        .checked_shl(16)
+        .and_then(|value| value.checked_add(topology))
+        .ok_or(StateSquarefreeGkrError::Shape)
+}
+
+pub fn state_squarefree_beta_message(
+    source_digest: [u8; 64],
+    initial_root: [u8; 64],
+    capacity: usize,
+) -> Result<Vec<u8>, StateSquarefreeGkrError> {
+    let mut message = Vec::with_capacity(STATE_SQUAREFREE_TRANSCRIPT_DOMAIN.len() + 2 * 64 + 8);
+    message.extend_from_slice(STATE_SQUAREFREE_TRANSCRIPT_DOMAIN);
+    message.extend_from_slice(b"BETA\0");
+    message.extend_from_slice(&source_digest);
+    message.extend_from_slice(&initial_root);
+    message.extend_from_slice(
+        &u32::try_from(capacity)
+            .map_err(|_| StateSquarefreeGkrError::Shape)?
+            .to_be_bytes(),
+    );
+    Ok(message)
+}
+
+pub fn state_squarefree_point_message(
+    source_digest: [u8; 64],
+    initial_root: [u8; 64],
+    coefficient_root: [u8; 64],
+    beta: Fp16,
+) -> Vec<u8> {
+    let mut message = Vec::with_capacity(STATE_SQUAREFREE_TRANSCRIPT_DOMAIN.len() + 3 * 64);
+    message.extend_from_slice(STATE_SQUAREFREE_TRANSCRIPT_DOMAIN);
+    message.extend_from_slice(b"POINT\0");
+    message.extend_from_slice(&source_digest);
+    message.extend_from_slice(&initial_root);
+    message.extend_from_slice(&coefficient_root);
+    message.extend_from_slice(&beta.encode());
+    message
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn state_squarefree_round_message(
+    source_digest: [u8; 64],
+    coefficient_root: [u8; 64],
+    kind: u16,
+    phase: usize,
+    layer: usize,
+    round: usize,
+    published: &[Fp16],
+) -> Result<Vec<u8>, StateSquarefreeGkrError> {
+    let mut message = Vec::with_capacity(
+        STATE_SQUAREFREE_TRANSCRIPT_DOMAIN.len() + 2 * 64 + 2 + 4 * 4 + published.len() * 64,
+    );
+    message.extend_from_slice(STATE_SQUAREFREE_TRANSCRIPT_DOMAIN);
+    message.extend_from_slice(&source_digest);
+    message.extend_from_slice(&coefficient_root);
+    message.extend_from_slice(&kind.to_be_bytes());
+    for value in [phase, layer, round, published.len()] {
+        message.extend_from_slice(
+            &u32::try_from(value)
+                .map_err(|_| StateSquarefreeGkrError::Shape)?
+                .to_be_bytes(),
+        );
+    }
+    for value in published {
+        message.extend_from_slice(&value.encode());
+    }
+    Ok(message)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateSquarefreeCommittedLayerMask {
     pub sumcheck: LibraVariableDegreeSumcheckMask,
@@ -233,6 +333,125 @@ pub struct MaskedStateSquarefreeGkrProof {
     pub layers: Vec<MaskedStateSquarefreeLayerProof>,
     pub state_leaf_claims: [Vec<LayerOutputClaim>; STATE_SQUAREFREE_PHASES],
     pub coefficient_claims: [Vec<LayerOutputClaim>; STATE_SQUAREFREE_PHASES],
+}
+
+/// Raw-free public view of one masked square-free GKR layer.
+///
+/// Incoming claims and mask ordinals are intentionally not serialized.  They
+/// are fixed by the profile and reconstructed from the two masked terminals
+/// of the preceding layer.  The private base polynomials, raw terminals, and
+/// committed mask coefficients are absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedStateSquarefreeLayerProof {
+    pub phase: u8,
+    pub kind: MaskedStateSquarefreeLayerKind,
+    pub topology_index: usize,
+    pub sumcheck_rho: Fp16,
+    pub published_rounds: Vec<Vec<Fp16>>,
+    pub group_challenges: Vec<Fp16>,
+    pub wire_challenges: Vec<Fp16>,
+    pub masked_terminal_left: Fp16,
+    pub masked_terminal_right: Fp16,
+    pub w_challenge: Fp16,
+    pub terminal_coefficients: [Fp16; 2],
+}
+
+/// Verifier-safe square-free proof.  This is only transcript-visible data;
+/// it contains no state rows, Bezout coefficients, raw intermediate values,
+/// raw coefficient opening, or masking polynomial.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedStateSquarefreeGkrProof {
+    pub layout: StateSquarefreeLayout,
+    pub beta: Fp16,
+    pub evaluation_point: Fp16,
+    pub layers: Vec<PublicMaskedStateSquarefreeLayerProof>,
+}
+
+impl PublicMaskedStateSquarefreeGkrProof {
+    /// Validate the prover-internal proof before discarding every raw/private
+    /// field.  The returned object is safe to place in the public package.
+    pub fn from_private(
+        proof: &MaskedStateSquarefreeGkrProof,
+    ) -> Result<Self, StateSquarefreeGkrError> {
+        verify_masked_state_squarefree_composed(proof)?;
+        let all_degrees = selected_state_composed_mask_variable_degrees(proof.layout.capacity)?;
+        let squarefree_start = GKR_LAYERS as usize + 1;
+        let squarefree_end = squarefree_start
+            .checked_add(proof.layers.len())
+            .ok_or(StateSquarefreeGkrError::Shape)?;
+        let expected_degrees = all_degrees
+            .get(squarefree_start..squarefree_end)
+            .filter(|degrees| degrees.len() == proof.layers.len())
+            .ok_or(StateSquarefreeGkrError::Shape)?;
+        Ok(Self {
+            layout: proof.layout,
+            beta: proof.beta,
+            evaluation_point: proof.evaluation_point,
+            layers: proof
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(mask_ordinal, layer)| {
+                    let degrees = expected_degrees
+                        .get(mask_ordinal)
+                        .ok_or(StateSquarefreeGkrError::Shape)?;
+                    if layer.reduction.published_rounds.len() != degrees.len()
+                        || layer
+                            .reduction
+                            .published_rounds
+                            .iter()
+                            .zip(degrees)
+                            .any(|(polynomial, degree)| polynomial.len() > degree + 1)
+                    {
+                        return Err(StateSquarefreeGkrError::Shape);
+                    }
+                    let published_rounds = layer
+                        .reduction
+                        .published_rounds
+                        .iter()
+                        .zip(degrees)
+                        .map(|(polynomial, degree)| {
+                            let mut padded = polynomial.clone();
+                            padded.resize(degree + 1, Fp16::ZERO);
+                            padded
+                        })
+                        .collect();
+                    Ok(PublicMaskedStateSquarefreeLayerProof {
+                        phase: layer.phase,
+                        kind: layer.kind,
+                        topology_index: layer.topology_index,
+                        sumcheck_rho: layer.sumcheck_rho,
+                        published_rounds,
+                        group_challenges: layer.reduction.group_challenges.clone(),
+                        wire_challenges: layer.reduction.wire_challenges.clone(),
+                        masked_terminal_left: layer.reduction.masked_terminal_left,
+                        masked_terminal_right: layer.reduction.masked_terminal_right,
+                        w_challenge: layer.reduction.w_challenge,
+                        terminal_coefficients: layer.terminal_coefficients,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+/// One verifier-derived masked boundary claim.  The mask ordinal is never
+/// accepted from package bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedStateSquarefreeBoundaryClaim {
+    pub point: Vec<Fp16>,
+    pub masked_value: Fp16,
+    pub coefficient: Fp16,
+    pub mask_ordinal: usize,
+}
+
+/// Exact public outputs of the square-free verifier.  State-leaf values are
+/// later bound to the twelve H4 source openings; coefficient values are bound
+/// by the combined coefficient-source plus GKR-mask answer functional.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedPublicMaskedStateSquarefreeBoundary {
+    pub state_leaf_claims: [[PublicMaskedStateSquarefreeBoundaryClaim; 2]; STATE_SQUAREFREE_PHASES],
+    pub coefficient_claims: [PublicMaskedStateSquarefreeBoundaryClaim; STATE_SQUAREFREE_PHASES],
 }
 
 fn phase_entry(row: StateRelationRow, phase: usize) -> StateRelationEntry {
@@ -579,6 +798,104 @@ fn coefficient_output_adapter_layer() -> Result<KeccakDagLayer, StateSquarefreeG
             gate(2, 3, KeccakDagGateKind::Add),
         ],
     )
+}
+
+/// Return the complete verifier-owned square-free layer order and round shape.
+pub fn public_masked_state_squarefree_layer_plan(
+    capacity: usize,
+) -> Result<Vec<PublicMaskedStateSquarefreeLayerPlan>, StateSquarefreeGkrError> {
+    let layout = StateSquarefreeLayout::new(capacity)?;
+    let product_topologies = dual_product_layers(layout)?;
+    let coefficient_topologies = coefficient_evaluation_layers(layout)?;
+    let identity_topologies = identity_tail_layers()?;
+    let coefficient_adapter = coefficient_output_adapter_layer()?;
+    let mut shapes = Vec::new();
+    for phase in 0..STATE_SQUAREFREE_PHASES {
+        for topology_index in (0..identity_topologies.len()).rev() {
+            let topology = &identity_topologies[topology_index];
+            shapes.push((
+                phase as u8,
+                MaskedStateSquarefreeLayerKind::Identity,
+                topology_index,
+                0_usize,
+                topology.left_width.ilog2() as usize,
+                topology.right_width.ilog2() as usize,
+            ));
+        }
+        for topology_index in (0..product_topologies.len()).rev() {
+            let topology = &product_topologies[topology_index];
+            shapes.push((
+                phase as u8,
+                MaskedStateSquarefreeLayerKind::ProductTree,
+                topology_index,
+                0_usize,
+                topology.left_width.ilog2() as usize,
+                topology.right_width.ilog2() as usize,
+            ));
+        }
+        shapes.push((
+            phase as u8,
+            MaskedStateSquarefreeLayerKind::CoefficientAdapter,
+            0,
+            0,
+            coefficient_adapter.left_width.ilog2() as usize,
+            coefficient_adapter.right_width.ilog2() as usize,
+        ));
+        for topology_index in (0..coefficient_topologies.len()).rev() {
+            let topology = &coefficient_topologies[topology_index];
+            shapes.push((
+                phase as u8,
+                MaskedStateSquarefreeLayerKind::CoefficientTree,
+                topology_index,
+                1_usize,
+                topology.left_width.ilog2() as usize,
+                topology.right_width.ilog2() as usize,
+            ));
+        }
+    }
+    let degrees = selected_state_composed_mask_variable_degrees(capacity)?;
+    let squarefree_start = GKR_LAYERS as usize + 1;
+    let squarefree_end = squarefree_start
+        .checked_add(shapes.len())
+        .ok_or(StateSquarefreeGkrError::Shape)?;
+    let squarefree_degrees = degrees
+        .get(squarefree_start..squarefree_end)
+        .ok_or(StateSquarefreeGkrError::Shape)?;
+    // The global layout deliberately keeps the Booleanity and padding H4
+    // layers after the squarefree state slice. They are owned by H4, not by
+    // this planner; require that boundary explicitly so a future schedule
+    // drift cannot silently reassign either authority.
+    if degrees
+        .get(squarefree_end..)
+        .map_or(true, |tail| tail.len() != 2)
+    {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    let mut plans = Vec::with_capacity(shapes.len());
+    for (shape, expected_degrees) in shapes.into_iter().zip(squarefree_degrees) {
+        let (phase, kind, topology_index, group_rounds, left_rounds, right_rounds) = shape;
+        if expected_degrees.len() != group_rounds + left_rounds + right_rounds + 1 {
+            return Err(StateSquarefreeGkrError::Shape);
+        }
+        plans.push(PublicMaskedStateSquarefreeLayerPlan {
+            phase,
+            kind,
+            topology_index,
+            group_rounds,
+            left_rounds,
+            right_rounds,
+            expected_degrees: expected_degrees.clone(),
+        });
+    }
+    let transcript_rounds = 2_usize
+        + plans
+            .iter()
+            .map(|plan| plan.group_rounds + plan.left_rounds + plan.right_rounds + 3)
+            .sum::<usize>();
+    if state_squarefree_authenticated_rounds(capacity) != u32::try_from(transcript_rounds).ok() {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    Ok(plans)
 }
 
 fn evaluate_group_layer(
@@ -1265,6 +1582,591 @@ pub fn verify_masked_state_squarefree_composed(
         return Err(StateSquarefreeGkrError::Shape);
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PublicMaskedPendingClaim {
+    point: Vec<Fp16>,
+    masked_value: Fp16,
+    coefficient: Fp16,
+    mask_origin: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PublicPowerBinding {
+    claim: PublicMaskedStateSquarefreeBoundaryClaim,
+    raw_value: Fp16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VerifiedPublicMaskedStateSquarefreeTrace {
+    boundary: VerifiedPublicMaskedStateSquarefreeBoundary,
+    incoming_claims: Vec<Vec<PublicMaskedPendingClaim>>,
+    public_power_bindings: [PublicPowerBinding; STATE_SQUAREFREE_PHASES],
+}
+
+fn pending_layer_claims(claims: &[PublicMaskedPendingClaim]) -> Vec<LayerOutputClaim> {
+    claims
+        .iter()
+        .map(|claim| LayerOutputClaim {
+            point: claim.point.clone(),
+            value: claim.masked_value,
+            coefficient: claim.coefficient,
+        })
+        .collect()
+}
+
+fn verify_public_masked_composed_layer(
+    layer: &PublicMaskedStateSquarefreeLayerProof,
+    topology: &KeccakDagLayer,
+    group_count: usize,
+    mask_ordinal: usize,
+    expected_degrees: &[usize],
+    incoming: &[PublicMaskedPendingClaim],
+) -> Result<[PublicMaskedPendingClaim; 2], StateSquarefreeGkrError> {
+    let group_variables = group_count.ilog2() as usize;
+    let left_variables = topology.left_width.ilog2() as usize;
+    let right_variables = topology.right_width.ilog2() as usize;
+    let ordinary_rounds = group_variables + left_variables + right_variables;
+    if incoming.is_empty()
+        || incoming.iter().all(|claim| claim.coefficient.is_zero())
+        || incoming.iter().any(|claim| {
+            claim.point.len() != topology.padded_width.ilog2() as usize + group_variables
+                || claim
+                    .mask_origin
+                    .is_some_and(|origin| origin >= mask_ordinal)
+        })
+        || layer.sumcheck_rho.is_zero()
+        || layer
+            .terminal_coefficients
+            .iter()
+            .any(|coefficient| coefficient.is_zero())
+        || layer.group_challenges.len() != group_variables
+        || layer.wire_challenges.len() != left_variables + right_variables
+        || expected_degrees.len() != ordinary_rounds + 1
+        || layer.published_rounds.len() != expected_degrees.len()
+        || layer
+            .published_rounds
+            .iter()
+            .zip(expected_degrees)
+            .any(|(polynomial, degree)| polynomial.len() != degree + 1)
+    {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    for round in 1..layer.published_rounds.len() {
+        let previous_challenge = if round <= group_variables {
+            layer.group_challenges[round - 1]
+        } else {
+            layer.wire_challenges[round - 1 - group_variables]
+        };
+        let previous = &layer.published_rounds[round - 1];
+        let current = &layer.published_rounds[round];
+        if polynomial_evaluation(current, Fp16::ZERO) + polynomial_evaluation(current, Fp16::ONE)
+            != polynomial_evaluation(previous, previous_challenge)
+        {
+            return Err(StateSquarefreeGkrError::Claim);
+        }
+    }
+    let claims = pending_layer_claims(incoming);
+    shared_group_terminal_gate_claim(
+        topology,
+        group_count,
+        &claims,
+        &layer.group_challenges,
+        &layer.wire_challenges,
+        layer.masked_terminal_left,
+        layer.masked_terminal_right,
+    )?;
+    let mut left_point = layer.wire_challenges[..left_variables].to_vec();
+    left_point.extend_from_slice(&layer.group_challenges);
+    let mut right_point = layer.wire_challenges[left_variables..].to_vec();
+    right_point.extend_from_slice(&layer.group_challenges);
+    Ok([
+        PublicMaskedPendingClaim {
+            point: left_point,
+            masked_value: layer.masked_terminal_left,
+            coefficient: layer.terminal_coefficients[0],
+            mask_origin: Some(mask_ordinal),
+        },
+        PublicMaskedPendingClaim {
+            point: right_point,
+            masked_value: layer.masked_terminal_right,
+            coefficient: layer.terminal_coefficients[1],
+            mask_origin: Some(mask_ordinal),
+        },
+    ])
+}
+
+fn public_boundary_claim(
+    claim: PublicMaskedPendingClaim,
+) -> Result<PublicMaskedStateSquarefreeBoundaryClaim, StateSquarefreeGkrError> {
+    Ok(PublicMaskedStateSquarefreeBoundaryClaim {
+        point: claim.point,
+        masked_value: claim.masked_value,
+        coefficient: claim.coefficient,
+        mask_ordinal: claim.mask_origin.ok_or(StateSquarefreeGkrError::Shape)?,
+    })
+}
+
+fn verify_public_masked_state_squarefree_trace(
+    proof: &PublicMaskedStateSquarefreeGkrProof,
+) -> Result<VerifiedPublicMaskedStateSquarefreeTrace, StateSquarefreeGkrError> {
+    let canonical_layout = StateSquarefreeLayout::new(proof.layout.capacity)?;
+    if proof.layout != canonical_layout
+        || state_squarefree_authenticated_rounds(proof.layout.capacity).is_none()
+        || proof.beta.is_zero()
+        || proof.evaluation_point.is_zero()
+    {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    let product_topologies = dual_product_layers(proof.layout)?;
+    let coefficient_topologies = coefficient_evaluation_layers(proof.layout)?;
+    let identity_topologies = identity_tail_layers()?;
+    let coefficient_adapter = coefficient_output_adapter_layer()?;
+    let layers_per_phase = 3 + product_topologies.len() + 1 + coefficient_topologies.len();
+    if proof.layers.len() != STATE_SQUAREFREE_PHASES * layers_per_phase {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    let all_degrees = selected_state_composed_mask_variable_degrees(proof.layout.capacity)?;
+    let degree_offset = GKR_LAYERS as usize + 1;
+    let squarefree_end = degree_offset
+        .checked_add(proof.layers.len())
+        .ok_or(StateSquarefreeGkrError::Shape)?;
+    let squarefree_degrees = all_degrees
+        .get(degree_offset..squarefree_end)
+        .filter(|degrees| degrees.len() == proof.layers.len())
+        .ok_or(StateSquarefreeGkrError::Shape)?;
+    let mut cursor = 0_usize;
+    let mut incoming_claims = Vec::with_capacity(proof.layers.len());
+    let mut state_leaf_claims = Vec::with_capacity(STATE_SQUAREFREE_PHASES);
+    let mut coefficient_claims = Vec::with_capacity(STATE_SQUAREFREE_PHASES);
+    let mut public_power_bindings = Vec::with_capacity(STATE_SQUAREFREE_PHASES);
+
+    for phase in 0..STATE_SQUAREFREE_PHASES {
+        let subtract = &proof.layers[cursor];
+        let incoming = vec![PublicMaskedPendingClaim {
+            point: vec![Fp16::ZERO],
+            masked_value: Fp16::ZERO,
+            coefficient: Fp16::ONE,
+            mask_origin: None,
+        }];
+        if subtract.phase as usize != phase
+            || subtract.kind != MaskedStateSquarefreeLayerKind::Identity
+            || subtract.topology_index != 2
+        {
+            return Err(StateSquarefreeGkrError::Shape);
+        }
+        incoming_claims.push(incoming.clone());
+        let subtract_pending = verify_public_masked_composed_layer(
+            subtract,
+            &identity_topologies[2],
+            1,
+            cursor,
+            &squarefree_degrees[cursor],
+            &incoming,
+        )?;
+        cursor += 1;
+
+        let sum = &proof.layers[cursor];
+        let incoming = vec![subtract_pending[0].clone()];
+        if sum.phase as usize != phase
+            || sum.kind != MaskedStateSquarefreeLayerKind::Identity
+            || sum.topology_index != 1
+        {
+            return Err(StateSquarefreeGkrError::Shape);
+        }
+        incoming_claims.push(incoming.clone());
+        let sum_pending = verify_public_masked_composed_layer(
+            sum,
+            &identity_topologies[1],
+            1,
+            cursor,
+            &squarefree_degrees[cursor],
+            &incoming,
+        )?;
+        cursor += 1;
+
+        let multiply = &proof.layers[cursor];
+        let incoming = sum_pending.into_iter().collect::<Vec<_>>();
+        if multiply.phase as usize != phase
+            || multiply.kind != MaskedStateSquarefreeLayerKind::Identity
+            || multiply.topology_index != 0
+        {
+            return Err(StateSquarefreeGkrError::Shape);
+        }
+        incoming_claims.push(incoming.clone());
+        let multiply_pending = verify_public_masked_composed_layer(
+            multiply,
+            &identity_topologies[0],
+            1,
+            cursor,
+            &squarefree_degrees[cursor],
+            &incoming,
+        )?;
+        cursor += 1;
+
+        let mut pending = vec![multiply_pending[0].clone()];
+        for topology_index in (0..product_topologies.len()).rev() {
+            let layer = &proof.layers[cursor];
+            if layer.phase as usize != phase
+                || layer.kind != MaskedStateSquarefreeLayerKind::ProductTree
+                || layer.topology_index != topology_index
+            {
+                return Err(StateSquarefreeGkrError::Shape);
+            }
+            incoming_claims.push(pending.clone());
+            pending = verify_public_masked_composed_layer(
+                layer,
+                &product_topologies[topology_index],
+                1,
+                cursor,
+                &squarefree_degrees[cursor],
+                &pending,
+            )?
+            .into_iter()
+            .collect();
+            cursor += 1;
+        }
+        state_leaf_claims.push([
+            public_boundary_claim(pending[0].clone())?,
+            public_boundary_claim(pending[1].clone())?,
+        ]);
+
+        let adapter = &proof.layers[cursor];
+        let incoming = vec![multiply_pending[1].clone()];
+        if adapter.phase as usize != phase
+            || adapter.kind != MaskedStateSquarefreeLayerKind::CoefficientAdapter
+            || adapter.topology_index != 0
+        {
+            return Err(StateSquarefreeGkrError::Shape);
+        }
+        incoming_claims.push(incoming.clone());
+        pending = verify_public_masked_composed_layer(
+            adapter,
+            &coefficient_adapter,
+            1,
+            cursor,
+            &squarefree_degrees[cursor],
+            &incoming,
+        )?
+        .into_iter()
+        .collect();
+        cursor += 1;
+        for topology_index in (0..coefficient_topologies.len()).rev() {
+            let layer = &proof.layers[cursor];
+            if layer.phase as usize != phase
+                || layer.kind != MaskedStateSquarefreeLayerKind::CoefficientTree
+                || layer.topology_index != topology_index
+            {
+                return Err(StateSquarefreeGkrError::Shape);
+            }
+            incoming_claims.push(pending.clone());
+            pending = verify_public_masked_composed_layer(
+                layer,
+                &coefficient_topologies[topology_index],
+                2,
+                cursor,
+                &squarefree_degrees[cursor],
+                &pending,
+            )?
+            .into_iter()
+            .collect();
+            cursor += 1;
+        }
+        let coefficient_claim = public_boundary_claim(pending[0].clone())?;
+        let public_power_claim = public_boundary_claim(pending[1].clone())?;
+        let mut public_powers = powers(proof.evaluation_point, proof.layout.capacity);
+        public_powers.extend_from_within(..);
+        let raw_value = evaluate_multilinear(&public_powers, &public_power_claim.point)
+            .map_err(|_| StateSquarefreeGkrError::Shape)?;
+        coefficient_claims.push(coefficient_claim);
+        public_power_bindings.push(PublicPowerBinding {
+            claim: public_power_claim,
+            raw_value,
+        });
+    }
+    if cursor != proof.layers.len() || incoming_claims.len() != proof.layers.len() {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    Ok(VerifiedPublicMaskedStateSquarefreeTrace {
+        boundary: VerifiedPublicMaskedStateSquarefreeBoundary {
+            state_leaf_claims: state_leaf_claims
+                .try_into()
+                .map_err(|_| StateSquarefreeGkrError::Shape)?,
+            coefficient_claims: coefficient_claims
+                .try_into()
+                .map_err(|_| StateSquarefreeGkrError::Shape)?,
+        },
+        incoming_claims,
+        public_power_bindings: public_power_bindings
+            .try_into()
+            .map_err(|_| StateSquarefreeGkrError::Shape)?,
+    })
+}
+
+/// Verify every transcript-visible square-free recurrence and derive the
+/// exact masked state/coefficient boundary.  No caller-supplied branch or
+/// mask ordinal participates in verification.
+pub fn verify_public_masked_state_squarefree_composed(
+    proof: &PublicMaskedStateSquarefreeGkrProof,
+) -> Result<VerifiedPublicMaskedStateSquarefreeBoundary, StateSquarefreeGkrError> {
+    Ok(verify_public_masked_state_squarefree_trace(proof)?.boundary)
+}
+
+/// Reconstruct the public-canonical square-free portion of the final GKR-mask
+/// opening.  The four state-leaf raw values must already be authenticated by
+/// the fixed H4 PCS claims.  The two private coefficient-leaf residuals are
+/// deliberately absent here: the final answer binds them without publishing
+/// a delta by opening the coefficient-source and GKR-mask functionals together.
+pub fn public_masked_state_squarefree_constraints(
+    proof: &PublicMaskedStateSquarefreeGkrProof,
+    raw_state_leaf_values: [[Fp16; 2]; STATE_SQUAREFREE_PHASES],
+) -> Result<Vec<UniformGkrMaskConstraint>, StateSquarefreeGkrError> {
+    let trace = verify_public_masked_state_squarefree_trace(proof)?;
+    let product_topologies = dual_product_layers(proof.layout)?;
+    let coefficient_topologies = coefficient_evaluation_layers(proof.layout)?;
+    let identity_topologies = identity_tail_layers()?;
+    let coefficient_adapter = coefficient_output_adapter_layer()?;
+    let mask_layer_offset = GKR_LAYERS as usize + 1;
+    let mut constraints = Vec::with_capacity(2 * proof.layers.len() + 6);
+    for (mask_ordinal, (layer, incoming)) in
+        proof.layers.iter().zip(&trace.incoming_claims).enumerate()
+    {
+        let (topology, group_count) = match layer.kind {
+            MaskedStateSquarefreeLayerKind::Identity => (
+                identity_topologies
+                    .get(layer.topology_index)
+                    .ok_or(StateSquarefreeGkrError::Shape)?,
+                1,
+            ),
+            MaskedStateSquarefreeLayerKind::ProductTree => (
+                product_topologies
+                    .get(layer.topology_index)
+                    .ok_or(StateSquarefreeGkrError::Shape)?,
+                1,
+            ),
+            MaskedStateSquarefreeLayerKind::CoefficientAdapter => (&coefficient_adapter, 1),
+            MaskedStateSquarefreeLayerKind::CoefficientTree => (
+                coefficient_topologies
+                    .get(layer.topology_index)
+                    .ok_or(StateSquarefreeGkrError::Shape)?,
+                2,
+            ),
+        };
+        let current_mask_layer = mask_layer_offset + mask_ordinal;
+        let first = layer
+            .published_rounds
+            .first()
+            .ok_or(StateSquarefreeGkrError::Shape)?;
+        let first_sum =
+            polynomial_evaluation(first, Fp16::ZERO) + polynomial_evaluation(first, Fp16::ONE);
+        let masked_initial = incoming.iter().fold(Fp16::ZERO, |sum, claim| {
+            sum + claim.coefficient * claim.masked_value
+        });
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: vec![UniformGkrMaskFunctional::SumcheckBooleanSum {
+                layer: current_mask_layer,
+                scale: layer.sumcheck_rho,
+            }],
+            residual: first_sum - masked_initial,
+        });
+
+        let mut xy_point = layer.group_challenges.clone();
+        xy_point.extend_from_slice(&layer.wire_challenges);
+        let equality_zero = xy_point.iter().fold(Fp16::ONE, |value, coordinate| {
+            value * (Fp16::ONE - *coordinate)
+        });
+        let mut full_point = xy_point;
+        full_point.push(layer.w_challenge);
+        let mut final_functionals = vec![UniformGkrMaskFunctional::SumcheckEvaluation {
+            layer: current_mask_layer,
+            point: full_point,
+            scale: layer.sumcheck_rho,
+        }];
+        for claim in incoming {
+            if let Some(origin) = claim.mask_origin {
+                final_functionals.push(UniformGkrMaskFunctional::LayerEvaluation {
+                    layer: mask_layer_offset + origin,
+                    z_first: claim.point[0],
+                    w: layer.w_challenge,
+                    scale: equality_zero * claim.coefficient * boolean_vanishing(&claim.point),
+                });
+            }
+        }
+        let claims = pending_layer_claims(incoming);
+        let terminal_gate = shared_group_terminal_gate_claim(
+            topology,
+            group_count,
+            &claims,
+            &layer.group_challenges,
+            &layer.wire_challenges,
+            layer.masked_terminal_left,
+            layer.masked_terminal_right,
+        )?;
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: final_functionals,
+            residual: polynomial_evaluation(
+                layer
+                    .published_rounds
+                    .last()
+                    .ok_or(StateSquarefreeGkrError::Shape)?,
+                layer.w_challenge,
+            ) - (Fp16::ONE - layer.w_challenge) * terminal_gate,
+        });
+    }
+    for (phase, claims) in trace.boundary.state_leaf_claims.iter().enumerate() {
+        for (claim, raw_value) in claims.iter().zip(raw_state_leaf_values[phase]) {
+            constraints.push(UniformGkrMaskConstraint {
+                functionals: vec![UniformGkrMaskFunctional::LayerBooleanSum {
+                    layer: mask_layer_offset + claim.mask_ordinal,
+                    z_first: claim.point[0],
+                    scale: boolean_vanishing(&claim.point),
+                }],
+                residual: claim.masked_value - raw_value,
+            });
+        }
+    }
+    for binding in &trace.public_power_bindings {
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: vec![UniformGkrMaskFunctional::LayerBooleanSum {
+                layer: mask_layer_offset + binding.claim.mask_ordinal,
+                z_first: binding.claim.point[0],
+                scale: boolean_vanishing(&binding.claim.point),
+            }],
+            residual: binding.claim.masked_value - binding.raw_value,
+        });
+    }
+    if constraints.len() != 2 * proof.layers.len() + 6 {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    Ok(constraints)
+}
+
+/// Attach verifier-supplied raw state-leaf values to the exact points and
+/// affine reductions derived by the public square-free verifier.
+pub fn public_masked_state_squarefree_state_reductions(
+    proof: &PublicMaskedStateSquarefreeGkrProof,
+    raw_state_leaf_values: [[Fp16; 2]; STATE_SQUAREFREE_PHASES],
+) -> Result<[[StateSquarefreeStateReduction; 2]; STATE_SQUAREFREE_PHASES], StateSquarefreeGkrError>
+{
+    let boundary = verify_public_masked_state_squarefree_composed(proof)?;
+    let row_variables = proof.layout.capacity.ilog2() as usize;
+    let mut phases = Vec::with_capacity(STATE_SQUAREFREE_PHASES);
+    for (phase, claims) in boundary.state_leaf_claims.iter().enumerate() {
+        let wires = if phase == 0 {
+            [BEFORE_PRESENT_WIRE, BEFORE_KEY_WIRE, BEFORE_KEY_WIRE + 1]
+        } else {
+            [AFTER_PRESENT_WIRE, AFTER_KEY_WIRE, AFTER_KEY_WIRE + 1]
+        };
+        let mut reductions = Vec::with_capacity(2);
+        for (claim, raw_value) in claims.iter().zip(raw_state_leaf_values[phase]) {
+            if claim.point.len() != row_variables + 1 {
+                return Err(StateSquarefreeGkrError::Shape);
+            }
+            let wire = claim.point[0];
+            let factor_weight = Fp16::ONE - wire;
+            let mut row_point = claim.point[1..].to_vec();
+            row_point.resize(STATE_SQUAREFREE_STATE_GROUP_VARIABLES, Fp16::ZERO);
+            reductions.push(StateSquarefreeStateReduction {
+                phase: phase as u8,
+                row_point,
+                state_wires: wires,
+                affine_coefficients: [
+                    factor_weight,
+                    factor_weight * (proof.evaluation_point - Fp16::ONE) + wire,
+                    -factor_weight,
+                    -(factor_weight * proof.beta),
+                ],
+                expected_value: raw_value,
+                gkr_coefficient: claim.coefficient,
+            });
+        }
+        phases.push(
+            reductions
+                .try_into()
+                .map_err(|_| StateSquarefreeGkrError::Shape)?,
+        );
+    }
+    phases
+        .try_into()
+        .map_err(|_| StateSquarefreeGkrError::Shape)
+}
+
+/// Exact global committed-mask layer ordinals for the two private coefficient
+/// leaves.  They are a function of the fixed profile, never package input.
+pub fn state_squarefree_coefficient_mask_ordinals(
+    capacity: usize,
+) -> Result<[usize; STATE_SQUAREFREE_PHASES], StateSquarefreeGkrError> {
+    let state_variables = match capacity {
+        128 => 7_usize,
+        512 => 9_usize,
+        _ => return Err(StateSquarefreeGkrError::Capacity),
+    };
+    let layers_per_phase = 3_usize
+        .checked_mul(state_variables)
+        .and_then(|value| value.checked_add(5))
+        .ok_or(StateSquarefreeGkrError::Shape)?;
+    let offset = GKR_LAYERS as usize + 1;
+    let ordinals = [
+        offset + layers_per_phase - 1,
+        offset + 2 * layers_per_phase - 1,
+    ];
+    let layout = selected_state_composed_mask_layout(capacity)?;
+    // The two square-free coefficient masks are followed by the verifier-
+    // pinned Booleanity and global-padding masks in the state-composed layout.
+    if ordinals[1] + 3 != layout.layers.len() {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    Ok(ordinals)
+}
+
+/// Build the GKR-mask half of the final square-free answer relation from the
+/// two lifted public masked coefficient claims.  The returned target is
+/// `sum(mix_i * masked_i)`; the raw coefficient-source functional is built by
+/// `state_squarefree_coefficient_functional` and added to these weights by the
+/// Construction-8.2 verifier.
+pub fn public_masked_state_squarefree_gkr_mask_functional(
+    capacity: usize,
+    claims: &[MultilinearOpeningClaim],
+    mixing: &[Fp16],
+) -> Result<(Vec<Fp16>, Fp16), StateSquarefreeGkrError> {
+    const COEFFICIENT_BLOCK_VARIABLES: usize = 9;
+    const LIFTED_COEFFICIENT_VARIABLES: usize = 11;
+    if claims.len() != STATE_SQUAREFREE_PHASES
+        || mixing.len() != STATE_SQUAREFREE_PHASES
+        || mixing.iter().any(|value| value.is_zero())
+    {
+        return Err(StateSquarefreeGkrError::Shape);
+    }
+    let row_variables = match capacity {
+        128 => 7_usize,
+        512 => 9_usize,
+        _ => return Err(StateSquarefreeGkrError::Capacity),
+    };
+    let layout = selected_state_composed_mask_layout(capacity)?;
+    let mask_ordinals = state_squarefree_coefficient_mask_ordinals(capacity)?;
+    let mut weights = vec![Fp16::ZERO; layout.padded_coefficients];
+    let mut target = Fp16::ZERO;
+    for (phase, (claim, mix)) in claims.iter().zip(mixing).enumerate() {
+        if claim.point.len() != LIFTED_COEFFICIENT_VARIABLES
+            || claim.point[row_variables..COEFFICIENT_BLOCK_VARIABLES]
+                .iter()
+                .any(|value| !value.is_zero())
+            || claim.point[10] != if phase == 0 { Fp16::ZERO } else { Fp16::ONE }
+        {
+            return Err(StateSquarefreeGkrError::Shape);
+        }
+        let mut original_point = claim.point[..row_variables].to_vec();
+        original_point.push(claim.point[COEFFICIENT_BLOCK_VARIABLES]);
+        layout.accumulate_layer_boolean_w_sum(
+            &mut weights,
+            mask_ordinals[phase],
+            original_point[0],
+            *mix * boolean_vanishing(&original_point),
+        )?;
+        target = target + *mix * claim.value;
+    }
+    Ok((weights, target))
 }
 
 /// Return the two phase coefficient claims with their public values replaced
@@ -2277,6 +3179,66 @@ mod tests {
     }
 
     #[test]
+    fn public_layer_plan_and_messages_pin_the_complete_profile_geometry() {
+        for (capacity, layers, rounds) in [(128, 52, 614), (512, 64, 882)] {
+            let plan = public_masked_state_squarefree_layer_plan(capacity).unwrap();
+            assert_eq!(plan.len(), layers);
+            assert_eq!(
+                2 + plan
+                    .iter()
+                    .map(|layer| {
+                        layer.group_rounds + layer.left_rounds + layer.right_rounds + 3
+                    })
+                    .sum::<usize>(),
+                rounds
+            );
+            assert_eq!(plan[0].phase, 0);
+            assert_eq!(plan[0].kind, MaskedStateSquarefreeLayerKind::Identity);
+            assert_eq!(plan[0].topology_index, 2);
+            assert_eq!(plan[layers / 2].phase, 1);
+        }
+
+        let source = [3_u8; 64];
+        let initial = [5_u8; 64];
+        let coefficient = [7_u8; 64];
+        let beta = fp(11);
+        let beta_message = state_squarefree_beta_message(source, initial, 128).unwrap();
+        assert_ne!(
+            beta_message,
+            state_squarefree_beta_message([4_u8; 64], initial, 128).unwrap()
+        );
+        let point_message = state_squarefree_point_message(source, initial, coefficient, beta);
+        assert_ne!(
+            point_message,
+            state_squarefree_point_message(source, initial, [8_u8; 64], beta)
+        );
+        let round = state_squarefree_round_message(
+            source,
+            coefficient,
+            138,
+            0,
+            state_squarefree_layer_ordinal(MaskedStateSquarefreeLayerKind::Identity, 2).unwrap(),
+            0,
+            &[fp(13), fp(17)],
+        )
+        .unwrap();
+        assert_ne!(
+            round,
+            state_squarefree_round_message(
+                source,
+                coefficient,
+                138,
+                1,
+                state_squarefree_layer_ordinal(MaskedStateSquarefreeLayerKind::Identity, 2)
+                    .unwrap(),
+                0,
+                &[fp(13), fp(17)],
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn squarefree_control_proves_and_exposes_four_reduced_claims_per_phase() {
         let layout = StateSquarefreeLayout::new(8).unwrap();
         let rows = rows(8);
@@ -2388,7 +3350,11 @@ mod tests {
             crate::fp16_relay_free_gkr_schedule::selected_state_composed_mask_variable_degrees(128)
                 .unwrap();
         let state_mask_start = crate::fp16_relay_free_gkr_schedule::GKR_LAYERS as usize + 1;
-        let masks = degrees[state_mask_start..]
+        let state_mask_end = state_mask_start
+            + public_masked_state_squarefree_layer_plan(128)
+                .unwrap()
+                .len();
+        let masks = degrees[state_mask_start..state_mask_end]
             .iter()
             .enumerate()
             .map(|(layer, degrees)| StateSquarefreeCommittedLayerMask {
@@ -2482,12 +3448,32 @@ mod tests {
         );
         assert_eq!(proof.layers[0].incoming_claims[0].value, Fp16::ZERO);
         verify_masked_state_squarefree_composed(&proof).unwrap();
+        let public = PublicMaskedStateSquarefreeGkrProof::from_private(&proof).unwrap();
+        let public_boundary = verify_public_masked_state_squarefree_composed(&public).unwrap();
+        let raw_state_leaf_values = core::array::from_fn(|phase| {
+            core::array::from_fn(|claim| proof.state_leaf_claims[phase][claim].value)
+        });
+        let public_reductions =
+            public_masked_state_squarefree_state_reductions(&public, raw_state_leaf_values)
+                .unwrap();
+        let private_reductions = masked_state_squarefree_state_reductions(&proof).unwrap();
+        assert_eq!(public_reductions, private_reductions);
+        for phase in 0..STATE_SQUAREFREE_PHASES {
+            assert_eq!(
+                public_boundary.coefficient_claims[phase].point,
+                proof.coefficient_claims[phase][0].point
+            );
+            assert_ne!(
+                public_boundary.coefficient_claims[phase].masked_value,
+                proof.coefficient_claims[phase][0].value
+            );
+        }
         let layout =
             crate::fp16_relay_free_gkr_schedule::selected_state_composed_mask_layout(128).unwrap();
         let mut all_sumcheck_masks = Vec::with_capacity(degrees.len());
         let mut all_layer_masks = Vec::with_capacity(degrees.len());
         for (global_layer, global_degrees) in degrees.iter().enumerate() {
-            if global_layer >= state_mask_start {
+            if (state_mask_start..state_mask_end).contains(&global_layer) {
                 let state = &masks[global_layer - state_mask_start];
                 all_sumcheck_masks.push(state.sumcheck.clone());
                 all_layer_masks.push(state.layer.clone());
@@ -2542,10 +3528,69 @@ mod tests {
             crate::gkr_zk_mask::inner_product(&encoded, &weights).unwrap(),
             opening
         );
+        let public_constraints =
+            public_masked_state_squarefree_constraints(&public, raw_state_leaf_values).unwrap();
+        assert_eq!(public_constraints.len(), 2 * masks.len() + 6);
+        let (public_weights, public_opening) =
+            crate::fp16_relay_free_gkr_uniform::aggregate_gkr_mask_constraints(
+                &layout,
+                &public_constraints,
+                fp(99_003),
+            )
+            .unwrap();
+        assert_eq!(
+            crate::gkr_zk_mask::inner_product(&encoded, &public_weights).unwrap(),
+            public_opening
+        );
+
+        let public_coefficient_claims =
+            crate::state_squarefree_pcs::masked_state_squarefree_public_pcs_coefficient_claims(
+                &proof,
+            )
+            .unwrap();
+        let mixing = [fp(99_101), fp(99_103)];
+        let (raw_functional, raw_target) =
+            crate::state_squarefree_pcs::state_squarefree_coefficient_functional(
+                128,
+                &coefficient_claims,
+                &mixing,
+            )
+            .unwrap();
+        let (mask_functional, masked_target) = public_masked_state_squarefree_gkr_mask_functional(
+            128,
+            &public_coefficient_claims,
+            &mixing,
+        )
+        .unwrap();
+        let raw_opening = crate::gkr_zk_mask::inner_product(
+            &auxiliary_source
+                [..crate::state_squarefree_pcs::STATE_SQUAREFREE_AUXILIARY_MESSAGE_VALUES],
+            &raw_functional,
+        )
+        .unwrap();
+        let mask_opening = crate::gkr_zk_mask::inner_product(&encoded, &mask_functional).unwrap();
+        assert_eq!(raw_opening, raw_target);
+        assert_eq!(raw_opening + mask_opening, masked_target);
+        let mut forged_public_coefficient_claims = public_coefficient_claims;
+        forged_public_coefficient_claims[0].value =
+            forged_public_coefficient_claims[0].value + Fp16::ONE;
+        let (forged_mask_functional, forged_target) =
+            public_masked_state_squarefree_gkr_mask_functional(
+                128,
+                &forged_public_coefficient_claims,
+                &mixing,
+            )
+            .unwrap();
+        assert_eq!(forged_mask_functional, mask_functional);
+        assert_ne!(raw_opening + mask_opening, forged_target);
         let mut forged = proof;
         forged.layers[0].reduction.published_rounds[1][0] =
             forged.layers[0].reduction.published_rounds[1][0] + Fp16::ONE;
         assert!(verify_masked_state_squarefree_composed(&forged).is_err());
+        let mut forged_public = public;
+        forged_public.layers[0].published_rounds[1][0] =
+            forged_public.layers[0].published_rounds[1][0] + Fp16::ONE;
+        assert!(verify_public_masked_state_squarefree_composed(&forged_public).is_err());
     }
 
     #[test]

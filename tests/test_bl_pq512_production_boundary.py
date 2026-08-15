@@ -9,7 +9,7 @@ import pytest
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.native_public_input_projection import PublicInputProjectionV1
 from app.production_boundary import (
-    GovernedRootsV2,
+    GovernanceAuthorityV2,
     LocalSettlementV2,
     NativeStarkVerifierConfig,
     NativeStarkVerifierPort,
@@ -30,6 +30,11 @@ from experiments.bl_pq512_crypto_foundation.production_candidate import (
     TRANSCRIPT_COMMITMENT_DOMAIN,
     statement_commitment,
 )
+from experiments.bl_pq512_crypto_foundation.master_commitments_v2 import (
+    build_master_commitments_v2,
+    governance_preimage,
+)
+from tests.test_bl_pq512_master_commitments_v2 import _inputs as _master_inputs
 from app.batch.poseidon import FIELD_MODULUS
 
 
@@ -41,18 +46,24 @@ def _field(label: str) -> bytes:
     return (int.from_bytes(_wide(label), "big") % (FIELD_MODULUS - 1) + 1).to_bytes(32, "big")
 
 
-def _fixture() -> tuple[ProductionProofEnvelope, bytes, GovernedRootsV2, bytes]:
+def _authority(label: str, *, epoch: int = 1, profile_code: int = 1) -> GovernanceAuthorityV2:
+    return GovernanceAuthorityV2(
+        profile_code=profile_code,
+        epoch=epoch,
+        claim_truth_roots_512=tuple(_wide(f"{label}-truth-{index}") for index in range(6)),
+        claim_truth_authority_digest_512=_wide(f"{label}-truth-authority"),
+        nullifier_authority_id_512=_wide(f"{label}-nullifier-authority"),
+        pepper_commitment_512=_wide(f"{label}-pepper"),
+    )
+
+
+def _fixture() -> tuple[ProductionProofEnvelope, bytes, GovernanceAuthorityV2, bytes]:
     suite = _wide("suite")
     schema = _wide("schema")
     verifier = _wide("verifier")
     domain = _field("domain")
     nonce = _field("nonce")
-    roots = GovernedRootsV2(
-        claim_source_root=_field("claim-source"),
-        oracle_facts_root=_field("oracle-facts"),
-        policy_root=_field("policy"),
-        ruleset_root=_field("ruleset"),
-    )
+    roots = _authority("governance")
     sidecar = CandidateSidecarV1(
         profile_id=_wide("profile"),
         proof_suite_id=suite,
@@ -73,7 +84,7 @@ def _fixture() -> tuple[ProductionProofEnvelope, bytes, GovernedRootsV2, bytes]:
         settlement_domain=domain,
         batch_nonce=nonce,
         sidecar=sidecar,
-        governed_roots=roots,
+        governance_authority=roots,
         suite_id=suite,
         schema_id=schema,
         verifier_artifact_identity=verifier,
@@ -155,11 +166,71 @@ def test_native_verifier_config_pins_executable_and_program_bytes(tmp_path: Path
             verifier_artifact_identity=_wide("wrong-verifier-artifact"),
             public_input_projection=projection,
         )
-
     program.write_bytes(b"mutated-air-program")
     with pytest.raises(ProductionBoundaryError, match="native_verifier_artifact_changed"):
         NativeStarkVerifierPort(config).verify_encoded(b"nonempty-envelope")
 
+
+def test_governance_authority_exactly_matches_master_v2_formula_and_alias_order() -> None:
+    master = _master_inputs()
+    authority = GovernanceAuthorityV2(
+        profile_code=1,
+        epoch=master.epoch,
+        claim_truth_roots_512=master.claim_truth_roots_512,  # type: ignore[arg-type]
+        claim_truth_authority_digest_512=master.claim_truth_authority_digest_512,
+        nullifier_authority_id_512=master.nullifier_authority_id_512,
+        pepper_commitment_512=master.pepper_commitment_512,
+    )
+    assert authority.canonical_bytes == governance_preimage(master)
+    assert authority.commitment_512 == build_master_commitments_v2(master).governance_512
+    assert authority.public_aliases == tuple(
+        (
+            int.from_bytes(master.claim_truth_roots_512[index], "big")
+            % (FIELD_MODULUS - 1)
+            + 1
+        ).to_bytes(32, "big")
+        for index in (0, 1, 3, 5)
+    )
+
+
+def test_obsolete_four_alias_governance_digest_is_rejected() -> None:
+    envelope, nonce, authority, domain = _fixture()
+    old_digest = _digest(
+        b"BL/PQ512/V2/GOVERNED-ROOTS/v1\x00",
+        *authority.public_aliases,
+    )
+    assert old_digest != authority.commitment_512
+    parsed = CandidateSidecarV1.decode(envelope.sidecar)
+    obsolete = replace(parsed, strong_governance_commitment=old_digest).encode()
+    with pytest.raises(ProductionBoundaryError, match="governance_authority_mismatch"):
+        build_v2_public_fields(
+            settlement_domain=domain,
+            batch_nonce=nonce,
+            sidecar=obsolete,
+            governance_authority=authority,
+            suite_id=envelope.suite_id,
+            schema_id=envelope.schema_id,
+            verifier_artifact_identity=envelope.verifier_artifact_identity,
+        )
+
+
+def test_unprojected_full_root_substitution_cannot_hide_behind_same_alias_fields() -> None:
+    envelope, nonce, authority, domain = _fixture()
+    roots = list(authority.claim_truth_roots_512)
+    roots[2] = _wide("substituted-unprojected-truth-root")
+    substituted = replace(authority, claim_truth_roots_512=tuple(roots))
+    assert substituted.public_aliases == authority.public_aliases
+    assert substituted.commitment_512 != authority.commitment_512
+    with pytest.raises(ProductionBoundaryError, match="governance_authority_mismatch"):
+        build_v2_public_fields(
+            settlement_domain=domain,
+            batch_nonce=nonce,
+            sidecar=envelope.sidecar,
+            governance_authority=substituted,
+            suite_id=envelope.suite_id,
+            schema_id=envelope.schema_id,
+            verifier_artifact_identity=envelope.verifier_artifact_identity,
+        )
 
 def test_production_envelope_decode_round_trips_after_receipt_binding() -> None:
     envelope, _, _, _ = _fixture()
@@ -183,7 +254,7 @@ def test_local_settlement_binds_projection_and_publishes_atomically() -> None:
     settlement = LocalSettlementV2(
         verifier=verifier,
         settlement_domain=domain,
-        governed_roots=roots,
+        governance_authority=roots,
         initial_nullifier_root=(
             int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
         ).to_bytes(32, "big"),
@@ -214,7 +285,7 @@ def test_projection_mutation_is_rejected_before_native_verifier_or_state_change(
     settlement = LocalSettlementV2(
         verifier=verifier,
         settlement_domain=domain,
-        governed_roots=roots,
+        governance_authority=roots,
         initial_nullifier_root=(
             int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
         ).to_bytes(32, "big"),
@@ -236,7 +307,7 @@ def test_native_rejection_does_not_publish_state_and_replay_is_blocked() -> None
     settlement = LocalSettlementV2(
         verifier=verifier,
         settlement_domain=domain,
-        governed_roots=roots,
+        governance_authority=roots,
         initial_nullifier_root=(
             int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
         ).to_bytes(32, "big"),
@@ -259,7 +330,7 @@ def test_settlement_recomputes_native_receipt_binding_before_publication() -> No
     settlement = LocalSettlementV2(
         verifier=verifier,
         settlement_domain=domain,
-        governed_roots=roots,
+        governance_authority=roots,
         initial_nullifier_root=(
             int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
         ).to_bytes(32, "big"),

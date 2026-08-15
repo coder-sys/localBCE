@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use bl_pq512_crypto_core::air_ir::MAX_AIR_BINARY_BYTES;
-use bl_pq512_crypto_core::deep_quotient::{DomainOodsClaims, deep_claims_commitment};
+use bl_pq512_crypto_core::deep_quotient::{
+    DomainOodsClaims, deep_claims_commitment, deep_claims_commitment_binding_v2,
+};
 use bl_pq512_crypto_core::disk_air::build_disk_air_main_trace_oracle;
 use bl_pq512_crypto_core::disk_composition::build_disk_air_composition_oracle;
 use bl_pq512_crypto_core::disk_deep::build_disk_deep_quotient_plan;
@@ -12,6 +14,8 @@ use bl_pq512_crypto_core::disk_fri::{
 };
 use bl_pq512_crypto_core::disk_logup::build_disk_air_logup_oracle_from_streaming;
 use bl_pq512_crypto_core::field::{Fp16, M31};
+use bl_pq512_crypto_core::fri_pipeline::fri_mask_layout_binding_v2;
+use bl_pq512_crypto_core::oracle_commitment::derive_binding_oracle_commitment_layouts_v2;
 use bl_pq512_crypto_core::proof_format::{
     decode_fri_pipeline_proof_v2, encode_fri_pipeline_proof_v2_with_attribution,
 };
@@ -24,10 +28,21 @@ use bl_pq512_crypto_core::selected_challenge::{
     decode_selected_challenge_bundle, fri_batch_derivation_commitment,
     verify_selected_fri_pipeline_v2,
 };
+use bl_pq512_crypto_core::selected_public_coin_v3::{
+    SEMANTIC_V3_PARENT_ANCHOR_COMMAND, SemanticV3ParentAnchorFrame,
+    semantic_v3_native_batch_derivation_message, semantic_v3_native_batch_message,
+    semantic_v3_native_composition_root_message, semantic_v3_native_fri_layer_message,
+    semantic_v3_native_interaction_root_message, semantic_v3_native_main_root_message,
+};
+use bl_pq512_crypto_core::semantic_fri_v3_producer::produce_semantic_fri_v3_from_disk;
 use bl_pq512_crypto_core::streaming_ir::{
     MAX_STREAMING_MANIFEST_BYTES, StreamingExecutionVerifier, decode_streaming_air_manifest,
 };
 use bl_pq512_crypto_core::streaming_store::StreamingScratchStore;
+use bl_pq512_crypto_core::v3_real_authority::{
+    SEMANTIC_FRI_PARAMETERS_FILE, SEMANTIC_FRI_PROOF_FILE, decode_semantic_fri_parameters_v3,
+    publish_new_files,
+};
 use sha3::{Digest, Sha3_512};
 use zeroize::Zeroize;
 
@@ -120,6 +135,25 @@ fn fill_nonzero_os_entropy(destination: &mut [u8; ENTROPY_BYTES]) -> Result<(), 
     Err("os_entropy_repeated_zero".into())
 }
 
+fn maybe_inject_test_fault(phase: &str) -> Result<(), String> {
+    #[cfg(feature = "test_entropy_injection")]
+    if let Ok(request) = std::env::var("BL_PQ512_TEST_WORKER_FAULT") {
+        if request == format!("error:{phase}") {
+            return Err(format!("test_fault_{phase}"));
+        }
+        if request == format!("abort:{phase}") {
+            std::process::abort();
+        }
+        if request == format!("stall:{phase}") {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+    }
+    let _ = phase;
+    Ok(())
+}
+
 fn stage_nonce(session_id: &[u8; 64], program_commitment: &[u8; 64], stage: &[u8]) -> [u8; 32] {
     let mut hash = Sha3_512::new();
     hash.update(b"BL/PQ512/WAVE1B/STREAMING-WORKER-STAGE/v1\0");
@@ -197,7 +231,7 @@ fn read_bounded(reader: &mut impl Read, maximum: usize) -> Result<Vec<u8>, Strin
     Ok(value)
 }
 
-fn command(reader: &mut impl BufRead, expected: &str) -> Result<Vec<String>, String> {
+fn read_command(reader: &mut impl BufRead) -> Result<Vec<String>, String> {
     let mut line = String::new();
     let count = reader
         .read_line(&mut line)
@@ -209,6 +243,11 @@ fn command(reader: &mut impl BufRead, expected: &str) -> Result<Vec<String>, Str
         .split_ascii_whitespace()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    Ok(fields)
+}
+
+fn command(reader: &mut impl BufRead, expected: &str) -> Result<Vec<String>, String> {
+    let fields = read_command(reader)?;
     if fields.first().map(String::as_str) != Some(expected) {
         return Err(format!("command_order_expected_{expected}"));
     }
@@ -319,14 +358,35 @@ fn run() -> Result<(), String> {
     if !scratch_parent.is_absolute() || !scratch_parent.is_dir() {
         return Err("scratch_parent_invalid".into());
     }
-    let proof_export_path = arguments.next().map(PathBuf::from);
-    if arguments.next().is_some() {
-        return Err("worker_argument_shape".into());
+    let mut proof_export_path = None;
+    let mut native_v3_export_directory = None;
+    while let Some(argument) = arguments.next() {
+        if argument == "--native-v3-export" {
+            if native_v3_export_directory.is_some() {
+                return Err("native_v3_export_duplicate".into());
+            }
+            native_v3_export_directory =
+                Some(PathBuf::from(arguments.next().ok_or_else(|| {
+                    "native_v3_export_directory_missing".to_string()
+                })?));
+        } else if proof_export_path.is_none() {
+            proof_export_path = Some(PathBuf::from(argument));
+        } else {
+            return Err("worker_argument_shape".into());
+        }
     }
     if let Some(path) = proof_export_path.as_ref()
         && (!path.is_absolute() || path.parent() != Some(scratch_parent.as_path()) || path.exists())
     {
         return Err("private_proof_package_path_invalid".into());
+    }
+    if let Some(directory) = native_v3_export_directory.as_ref()
+        && (!directory.is_absolute()
+            || !directory.is_dir()
+            || directory.join(SEMANTIC_FRI_PROOF_FILE).exists()
+            || directory.join(SEMANTIC_FRI_PARAMETERS_FILE).exists())
+    {
+        return Err("native_v3_export_directory_invalid".into());
     }
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -388,7 +448,10 @@ fn run() -> Result<(), String> {
         return Err("chunk_count".into());
     }
     let program_commitment = manifest.program_binary_commitment;
-    let store_nonce = stage_nonce(entropy.attempt_nonce(), &program_commitment, b"store");
+    // Scratch ownership is public operational state, not proof-mask entropy.
+    // Deriving it from the authenticated session lets the orchestrator remove
+    // only this exact owned directory after a forced worker kill.
+    let store_nonce = stage_nonce(&session_id, &program_commitment, b"store");
     let mut verifier = StreamingExecutionVerifier::new(&manifest);
     let mut store = StreamingScratchStore::create(&scratch_parent, &store_nonce, &manifest)
         .map_err(|error| format!("store_{error:?}"))?;
@@ -405,9 +468,21 @@ fn run() -> Result<(), String> {
         .finish()
         .map_err(|error| format!("stream_{error:?}"))?;
     let execution = store.finish().map_err(|error| format!("store_{error:?}"))?;
+    maybe_inject_test_fault("after_store")?;
     let public_inputs = manifest.public_inputs.clone();
     let geometry =
         selected_proof_geometry(&program).map_err(|error| format!("geometry_{error:?}"))?;
+    let native_layouts = native_v3_export_directory
+        .as_ref()
+        .map(|_| {
+            derive_binding_oracle_commitment_layouts_v2(
+                &program,
+                TRACE_MASK_COEFFICIENT_COUNT,
+                LOG_BLOWUP,
+            )
+            .map_err(|error| format!("native_v3_layouts_{error:?}"))
+        })
+        .transpose()?;
 
     let main_started = Instant::now();
     let main = build_disk_air_main_trace_oracle(
@@ -422,8 +497,29 @@ fn run() -> Result<(), String> {
     )
     .map_err(|error| format!("main_{error:?}"))?;
     let main_root = main.tree.root().into_bytes();
+    let native_main_root = native_layouts
+        .as_ref()
+        .map(|layouts| {
+            main.tree
+                .binding_v2_tree(layouts.main_trace.clone())
+                .map(|tree| tree.root())
+                .map_err(|error| format!("native_v3_main_{error:?}"))
+        })
+        .transpose()?;
     let main_ms = main_started.elapsed().as_millis();
-    emit(&mut writer, &format!("MAIN {}", encode_hex(&main_root)))?;
+    if let Some(root) = native_main_root.as_ref() {
+        emit(
+            &mut writer,
+            &format!(
+                "MAIN {} {}",
+                encode_hex(&semantic_v3_native_main_root_message(root)),
+                encode_hex(&main_root)
+            ),
+        )?;
+    } else {
+        emit(&mut writer, &format!("MAIN {}", encode_hex(&main_root)))?;
+    }
+    maybe_inject_test_fault("after_main")?;
 
     let interaction = command(&mut reader, "INTERACTION")?;
     if interaction.len() != 3 {
@@ -452,11 +548,36 @@ fn run() -> Result<(), String> {
     )
     .map_err(|error| format!("logup_{error:?}"))?;
     let interaction_root = logup.tree.root().into_bytes();
+    let native_interaction_root = native_layouts
+        .as_ref()
+        .map(|layouts| {
+            let layout = layouts
+                .interaction_trace
+                .clone()
+                .ok_or_else(|| "native_v3_interaction_layout_missing".to_string())?;
+            logup
+                .tree
+                .binding_v2_tree(layout)
+                .map(|tree| tree.root())
+                .map_err(|error| format!("native_v3_interaction_{error:?}"))
+        })
+        .transpose()?;
     let interaction_ms = interaction_started.elapsed().as_millis();
-    emit(
-        &mut writer,
-        &format!("INTERACTION_ROOT {}", encode_hex(&interaction_root)),
-    )?;
+    if let Some(root) = native_interaction_root.as_ref() {
+        emit(
+            &mut writer,
+            &format!(
+                "INTERACTION_ROOT {} {}",
+                encode_hex(&semantic_v3_native_interaction_root_message(root)),
+                encode_hex(&interaction_root)
+            ),
+        )?;
+    } else {
+        emit(
+            &mut writer,
+            &format!("INTERACTION_ROOT {}", encode_hex(&interaction_root)),
+        )?;
+    }
 
     let composition_command = command(&mut reader, "COMPOSITION")?;
     if composition_command.len() != 2 {
@@ -482,20 +603,59 @@ fn run() -> Result<(), String> {
     )
     .map_err(|error| format!("composition_{error:?}"))?;
     let composition_root = composition.tree.root().into_bytes();
+    let native_composition_root = native_layouts
+        .as_ref()
+        .map(|layouts| {
+            composition
+                .tree
+                .binding_v2_tree(layouts.composition.clone())
+                .map(|tree| tree.root())
+                .map_err(|error| format!("native_v3_composition_{error:?}"))
+        })
+        .transpose()?;
     let composition_ms = composition_started.elapsed().as_millis();
-    emit(
-        &mut writer,
-        &format!("COMPOSITION_ROOT {}", encode_hex(&composition_root)),
-    )?;
-
-    let oods = command(&mut reader, "OODS")?;
-    if oods.len() != 3 {
-        return Err("oods_shape".into());
+    if let Some(root) = native_composition_root.as_ref() {
+        emit(
+            &mut writer,
+            &format!(
+                "COMPOSITION_ROOT {} {}",
+                encode_hex(&semantic_v3_native_composition_root_message(root)),
+                encode_hex(&composition_root)
+            ),
+        )?;
+    } else {
+        emit(
+            &mut writer,
+            &format!("COMPOSITION_ROOT {}", encode_hex(&composition_root)),
+        )?;
     }
-    let query = bl_pq512_crypto_core::oods::CirclePoint {
-        x: field(&oods[1])?,
-        y: field(&oods[2])?,
+    maybe_inject_test_fault("after_composition")?;
+
+    let oods = read_command(&mut reader)?;
+    let (query, v3_parent_anchor_commitment) = match oods.first().map(String::as_str) {
+        Some("OODS") => {
+            if oods.len() != 3 {
+                return Err("oods_shape".into());
+            }
+            (
+                bl_pq512_crypto_core::oods::CirclePoint {
+                    x: field(&oods[1])?,
+                    y: field(&oods[2])?,
+                },
+                None,
+            )
+        }
+        Some(command) if command == SEMANTIC_V3_PARENT_ANCHOR_COMMAND => {
+            let tokens = oods[1..].iter().map(String::as_str).collect::<Vec<_>>();
+            let frame = SemanticV3ParentAnchorFrame::decode_command_tokens(&tokens)
+                .map_err(|error| format!("v3_parent_anchor_{error:?}"))?;
+            (frame.oods_point(), Some(frame.commitment()))
+        }
+        _ => return Err("command_order_expected_OODS_or_V3_PARENT_ANCHOR".into()),
     };
+    if native_v3_export_directory.is_some() && v3_parent_anchor_commitment.is_none() {
+        return Err("native_v3_parent_anchor_required".into());
+    }
     let deep_started = Instant::now();
     let deep = build_disk_deep_quotient_plan(
         &main,
@@ -515,6 +675,26 @@ fn run() -> Result<(), String> {
         &composition_root,
     )
     .map_err(|error| format!("claims_{error:?}"))?;
+    let native_claims_commitment = match (
+        native_layouts.as_ref(),
+        native_main_root.as_ref(),
+        native_interaction_root.as_ref(),
+        native_composition_root.as_ref(),
+    ) {
+        (Some(layouts), Some(main), Some(interaction), Some(composition)) => Some(
+            deep_claims_commitment_binding_v2(
+                &layouts.program_binary_commitment,
+                deep.query,
+                &deep.claims,
+                main,
+                Some(interaction),
+                composition,
+            )
+            .map_err(|error| format!("native_v3_claims_{error:?}"))?,
+        ),
+        (None, None, None, None) => None,
+        _ => return Err("native_v3_oracle_root_shape".into()),
+    };
     let fri_mask = build_disk_fri_mask_oracle(
         &deep,
         claims_commitment,
@@ -525,15 +705,46 @@ fn run() -> Result<(), String> {
     )
     .map_err(|error| format!("fri_mask_{error:?}"))?;
     let fri_mask_root = fri_mask.tree.root().into_bytes();
+    let native_fri_mask_root = native_claims_commitment
+        .as_ref()
+        .map(|claims| {
+            let layout = fri_mask_layout_binding_v2(claims, &deep.claims)
+                .map_err(|error| format!("native_v3_mask_layout_{error:?}"))?;
+            fri_mask
+                .tree
+                .binding_v2_tree(layout)
+                .map(|tree| tree.root())
+                .map_err(|error| format!("native_v3_mask_{error:?}"))
+        })
+        .transpose()?;
     let deep_ms = deep_started.elapsed().as_millis();
-    emit(
-        &mut writer,
-        &format!(
+    let oods_roots = if let (Some(anchor_commitment), Some(native_claims), Some(native_mask)) = (
+        v3_parent_anchor_commitment,
+        native_claims_commitment.as_ref(),
+        native_fri_mask_root.as_ref(),
+    ) {
+        let message = semantic_v3_native_batch_message(native_claims, native_mask);
+        format!(
+            "OODS_ROOTS {} {} {} {} {}",
+            encode_hex(&message[..64]),
+            encode_hex(&message[64..]),
+            encode_hex(&anchor_commitment),
+            encode_hex(&claims_commitment),
+            encode_hex(&fri_mask_root)
+        )
+    } else if let Some(anchor_commitment) = v3_parent_anchor_commitment {
+        return Err(format!(
+            "native_v3_oods_root_shape:{}",
+            encode_hex(&anchor_commitment)
+        ));
+    } else {
+        format!(
             "OODS_ROOTS {} {}",
             encode_hex(&claims_commitment),
             encode_hex(&fri_mask_root)
-        ),
-    )?;
+        )
+    };
+    emit(&mut writer, &oods_roots)?;
 
     let batch = command(&mut reader, "BATCH")?;
     if batch.len() != 2 {
@@ -550,18 +761,50 @@ fn run() -> Result<(), String> {
         &fri_mask_root,
         batch_coefficient,
     );
+    let native_batch_derivation = match (
+        native_main_root.as_ref(),
+        native_interaction_root.as_ref(),
+        native_composition_root.as_ref(),
+        native_claims_commitment.as_ref(),
+        native_fri_mask_root.as_ref(),
+    ) {
+        (Some(main), Some(interaction), Some(composition), Some(claims), Some(mask)) => {
+            Some(semantic_v3_native_batch_derivation_message(
+                main,
+                interaction,
+                composition,
+                claims,
+                mask,
+                batch_coefficient,
+            ))
+        }
+        (None, None, None, None, None) => None,
+        _ => return Err("native_v3_batch_derivation_shape".into()),
+    };
     let mut fri_builder = start_disk_interactive_fri(deep, fri_mask, batch_coefficient)
         .map_err(|error| format!("fri_start_{error:?}"))?;
     if fri_builder.fold_round_count() != geometry.fold_round_count {
         return Err("fri_geometry".into());
     }
     let fri_start_ms = fri_started.elapsed().as_millis();
-    emit(
-        &mut writer,
-        &format!("BATCH_DERIVATION {}", encode_hex(&batch_derivation)),
-    )?;
+    if let Some(native) = native_batch_derivation {
+        emit(
+            &mut writer,
+            &format!(
+                "BATCH_DERIVATION {} {}",
+                encode_hex(&native),
+                encode_hex(&batch_derivation)
+            ),
+        )?;
+    } else {
+        emit(
+            &mut writer,
+            &format!("BATCH_DERIVATION {}", encode_hex(&batch_derivation)),
+        )?;
+    }
 
     let mut fold_ms = 0_u128;
+    let mut native_layer_roots = Vec::with_capacity(geometry.fold_round_count);
     for ordinal in 0..geometry.fold_round_count {
         let fold = command(&mut reader, "FOLD")?;
         if fold.len() != 2 {
@@ -572,10 +815,27 @@ fn run() -> Result<(), String> {
             .fold_next(field(&fold[1])?)
             .map_err(|error| format!("fri_fold_{ordinal}_{error:?}"))?;
         fold_ms += fold_started.elapsed().as_millis();
-        emit(
-            &mut writer,
-            &format!("LAYER {ordinal} {}", encode_hex(&root.into_bytes())),
-        )?;
+        if native_v3_export_directory.is_some() {
+            let native_root = fri_builder
+                .last_binding_v2_root()
+                .map_err(|error| format!("native_v3_layer_{ordinal}_{error:?}"))?;
+            let message = semantic_v3_native_fri_layer_message(ordinal, &native_root)
+                .map_err(|error| format!("native_v3_layer_message_{ordinal}_{error:?}"))?;
+            emit(
+                &mut writer,
+                &format!(
+                    "LAYER {ordinal} {} {}",
+                    encode_hex(&message),
+                    encode_hex(&root.into_bytes())
+                ),
+            )?;
+            native_layer_roots.push(native_root);
+        } else {
+            emit(
+                &mut writer,
+                &format!("LAYER {ordinal} {}", encode_hex(&root.into_bytes())),
+            )?;
+        }
     }
     let fri = fri_builder
         .finish()
@@ -605,6 +865,43 @@ fn run() -> Result<(), String> {
     let encoded_proof = encode_fri_pipeline_proof_v2_with_attribution(&proof)
         .map_err(|error| format!("proof_encoding_{error:?}"))?;
     drop(proof);
+    let native_v3 = native_v3_export_directory
+        .as_ref()
+        .map(|_| {
+            produce_semantic_fri_v3_from_disk(
+                &program,
+                TRACE_MASK_COEFFICIENT_COUNT,
+                LOG_BLOWUP,
+                &fri,
+                &main,
+                &logup,
+                &composition,
+                &query_positions,
+                &public_inputs,
+                alpha,
+                beta,
+                gamma,
+            )
+            .map_err(|error| format!("native_v3_produce_{error:?}"))
+        })
+        .transpose()?;
+    if let Some(native) = native_v3.as_ref() {
+        let parameters = decode_semantic_fri_parameters_v3(&native.encoded_parameters)
+            .map_err(|error| format!("native_v3_parameters_{error:?}"))?;
+        if parameters.mask_coefficient_count != TRACE_MASK_COEFFICIENT_COUNT
+            || parameters.log_blowup != LOG_BLOWUP
+            || parameters.public_inputs != public_inputs
+            || Some(parameters.oracle_roots.main_trace) != native_main_root
+            || parameters.oracle_roots.interaction_trace != native_interaction_root
+            || Some(parameters.oracle_roots.composition) != native_composition_root
+            || Some(parameters.mask_root) != native_fri_mask_root
+            || parameters.layer_roots != native_layer_roots
+            || parameters.claims != fri.plan.claims
+            || parameters.final_constant != fri.final_constant
+        {
+            return Err("native_v3_transcript_source_mismatch".into());
+        }
+    }
     let claims = fri.plan.claims.clone();
     let final_constant = fri.final_constant;
     drop(fri);
@@ -619,6 +916,27 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| "proof_attribution_overflow".to_string())?;
     if attribution_total != proof_bytes {
         return Err("proof_attribution_mismatch".into());
+    }
+    // Native-v3 bytes are independently replayed by
+    // `produce_semantic_fri_v3_from_disk` before they reach this point.  Stage
+    // them now so the paused semantic coordinator can derive the post-Z H4
+    // work and the receipt-bound parent-902 template.  The enclosing witness
+    // producer owns this directory as a private partial transaction and must
+    // discard it if the later strict-parent completion fails.
+    if let (Some(directory), Some(native)) =
+        (native_v3_export_directory.as_ref(), native_v3.as_ref())
+    {
+        publish_new_files(
+            directory,
+            &[
+                (SEMANTIC_FRI_PROOF_FILE, native.encoded_proof.as_slice()),
+                (
+                    SEMANTIC_FRI_PARAMETERS_FILE,
+                    native.encoded_parameters.as_slice(),
+                ),
+            ],
+        )
+        .map_err(|error| format!("native_v3_stage_{error}"))?;
     }
     let openings_ms = openings_started.elapsed().as_millis();
     emit(
@@ -644,6 +962,7 @@ fn run() -> Result<(), String> {
             attribution.fri_path_digest_count,
         ),
     )?;
+    maybe_inject_test_fault("after_proof_ready")?;
 
     let bundle_command = command(&mut reader, "BUNDLE")?;
     if bundle_command.len() != 2 {
@@ -740,5 +1059,33 @@ mod tests {
         });
         assert!(unwound.is_err());
         assert!(WORKER_ENTROPY_DROP_COUNT.load(std::sync::atomic::Ordering::SeqCst) > before);
+    }
+
+    #[test]
+    fn scratch_owner_nonce_is_public_deterministic_and_domain_separated() {
+        let session = [0x41_u8; 64];
+        let program = [0x72_u8; 64];
+        let store = stage_nonce(&session, &program, b"store");
+
+        assert_eq!(store, stage_nonce(&session, &program, b"store"));
+        assert_ne!(store, stage_nonce(&session, &program, b"main"));
+        assert_ne!(store, stage_nonce(&[0x42_u8; 64], &program, b"store"));
+        assert_ne!(store, stage_nonce(&session, &[0x73_u8; 64], b"store"));
+        assert!(store.iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn native_v3_files_are_staged_before_parent_bundle_command() {
+        let source = include_str!("selected_streaming_prover_worker.rs");
+        let stage = source
+            .find("native_v3_stage_")
+            .expect("native v3 staging must exist");
+        let proof_ready = source
+            .find("PROOF_READY {proof_bytes}")
+            .expect("proof-ready boundary must exist");
+        let bundle = source
+            .find("command(&mut reader, \"BUNDLE\")")
+            .expect("parent-dependent bundle boundary must exist");
+        assert!(stage < proof_ready && proof_ready < bundle);
     }
 }

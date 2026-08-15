@@ -8,6 +8,9 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
+use crate::binding_root_v2::{
+    BindingMerkleMultiProofV2, BindingMerkleTreeV2, BindingRootV2, BindingRootV2Error,
+};
 use crate::field::Fp16;
 use crate::fri_pipeline::{FriPipeline, layer_payload};
 use crate::merkle::RootHash;
@@ -38,11 +41,18 @@ pub struct FriPipelineCanonicalMultiproofs {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FriLayerMultiproofError {
+    Binding(BindingRootV2Error),
     Merkle(CanonicalMerkleMultiProofError),
     Shape,
     Query,
     Authentication,
     Encoding,
+}
+
+impl From<BindingRootV2Error> for FriLayerMultiproofError {
+    fn from(value: BindingRootV2Error) -> Self {
+        Self::Binding(value)
+    }
 }
 
 impl FriPipelineCanonicalMultiproofs {
@@ -266,7 +276,7 @@ fn checked_layer_leaf_count(log_size: u8) -> Result<usize, FriLayerMultiproofErr
         .ok_or(FriLayerMultiproofError::Shape)
 }
 
-fn selected_indices_for_layer(
+pub(crate) fn selected_indices_for_layer(
     query_indices: &[usize],
     round: usize,
     leaf_count: usize,
@@ -496,6 +506,284 @@ pub fn verify_fri_pipeline_layer_multiproofs(
         }
     }
     Ok(true)
+}
+
+pub const FRI_LAYER_BINDING_MULTIPROOF_V2_MAGIC: &[u8; 8] = b"BLB2FM02";
+pub const FRI_LAYER_BINDING_MULTIPROOF_V2_VERSION: u16 = 2;
+
+/// One native BindingRootV2 FRI-layer opening set.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FriLayerBindingMultiproofV2 {
+    pub log_size: u8,
+    pub selected_indices: Vec<usize>,
+    pub opened_values: Vec<Fp16>,
+    pub proof: BindingMerkleMultiProofV2,
+}
+
+/// Native BindingRootV2 FRI openings for every fold layer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FriPipelineBindingMultiproofsV2 {
+    pub query_indices: Vec<usize>,
+    pub layers: Vec<FriLayerBindingMultiproofV2>,
+}
+
+impl FriPipelineBindingMultiproofsV2 {
+    pub fn opened_pair(
+        &self,
+        round: usize,
+        pair_start: usize,
+    ) -> Result<[Fp16; 2], FriLayerMultiproofError> {
+        if pair_start & 1 != 0 {
+            return Err(FriLayerMultiproofError::Query);
+        }
+        let layer = self
+            .layers
+            .get(round)
+            .ok_or(FriLayerMultiproofError::Shape)?;
+        let right = pair_start
+            .checked_add(1)
+            .ok_or(FriLayerMultiproofError::Query)?;
+        let left_position = layer
+            .selected_indices
+            .binary_search(&pair_start)
+            .map_err(|_| FriLayerMultiproofError::Query)?;
+        let right_position = layer
+            .selected_indices
+            .binary_search(&right)
+            .map_err(|_| FriLayerMultiproofError::Query)?;
+        Ok([
+            *layer
+                .opened_values
+                .get(left_position)
+                .ok_or(FriLayerMultiproofError::Shape)?,
+            *layer
+                .opened_values
+                .get(right_position)
+                .ok_or(FriLayerMultiproofError::Shape)?,
+        ])
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, FriLayerMultiproofError> {
+        if self.layers.is_empty() || self.layers.len() > 29 {
+            return Err(FriLayerMultiproofError::Shape);
+        }
+        let mut output = Vec::new();
+        output.extend_from_slice(FRI_LAYER_BINDING_MULTIPROOF_V2_MAGIC);
+        output.extend_from_slice(&FRI_LAYER_BINDING_MULTIPROOF_V2_VERSION.to_be_bytes());
+        output.extend_from_slice(
+            &u16::try_from(self.layers.len())
+                .map_err(|_| FriLayerMultiproofError::Encoding)?
+                .to_be_bytes(),
+        );
+        for (round, layer) in self.layers.iter().enumerate() {
+            let leaf_count = checked_layer_leaf_count(layer.log_size)?;
+            let expected_indices =
+                selected_indices_for_layer(&self.query_indices, round, leaf_count)?;
+            if layer.selected_indices != expected_indices
+                || layer.opened_values.len() != expected_indices.len()
+                || layer.proof.leaf_count()
+                    != u64::try_from(leaf_count).map_err(|_| FriLayerMultiproofError::Shape)?
+                || layer.proof.selected_indices()
+                    != expected_indices
+                        .iter()
+                        .copied()
+                        .map(|index| {
+                            u64::try_from(index).map_err(|_| FriLayerMultiproofError::Shape)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+            {
+                return Err(FriLayerMultiproofError::Shape);
+            }
+            let proof = layer.proof.encode()?;
+            output.push(layer.log_size);
+            output.extend_from_slice(&[0_u8; 3]);
+            output.extend_from_slice(
+                &u32::try_from(proof.len())
+                    .map_err(|_| FriLayerMultiproofError::Encoding)?
+                    .to_be_bytes(),
+            );
+            output.extend_from_slice(&proof);
+            for value in &layer.opened_values {
+                output.extend_from_slice(&value.encode());
+            }
+            if output.len() > MAX_FRI_LAYER_MULTIPROOF_BYTES {
+                return Err(FriLayerMultiproofError::Encoding);
+            }
+        }
+        Ok(output)
+    }
+
+    /// Decode using only verifier-derived query coordinates and fold geometry.
+    /// The exact proof length and BindingRootV2 caps are checked before values
+    /// or frontier vectors are allocated.
+    pub fn decode(
+        encoded: &[u8],
+        expected_query_indices: &[usize],
+        expected_layer_log_sizes: &[u8],
+    ) -> Result<Self, FriLayerMultiproofError> {
+        if expected_query_indices.is_empty()
+            || expected_query_indices.len() > MAX_FRI_MULTIPROOF_QUERIES
+            || expected_layer_log_sizes.is_empty()
+            || expected_layer_log_sizes.len() > 29
+            || encoded.len() > MAX_FRI_LAYER_MULTIPROOF_BYTES
+        {
+            return Err(FriLayerMultiproofError::Shape);
+        }
+        let mut reader = Reader::new(encoded)?;
+        if reader.take(8)? != FRI_LAYER_BINDING_MULTIPROOF_V2_MAGIC
+            || reader.u16()? != FRI_LAYER_BINDING_MULTIPROOF_V2_VERSION
+            || usize::from(reader.u16()?) != expected_layer_log_sizes.len()
+        {
+            return Err(FriLayerMultiproofError::Encoding);
+        }
+        let mut layers = Vec::with_capacity(expected_layer_log_sizes.len());
+        for (round, expected_log_size) in expected_layer_log_sizes.iter().copied().enumerate() {
+            if reader.take(1)?[0] != expected_log_size || reader.take(3)? != [0_u8; 3] {
+                return Err(FriLayerMultiproofError::Shape);
+            }
+            let leaf_count = checked_layer_leaf_count(expected_log_size)?;
+            let selected_indices =
+                selected_indices_for_layer(expected_query_indices, round, leaf_count)?;
+            let proof_length = reader.u32()?;
+            let minimum = crate::binding_root_v2::BINDING_MERKLE_MULTIPROOF_V2_HEADER_BYTES;
+            if proof_length < minimum
+                || proof_length > crate::binding_root_v2::MAX_BINDING_MERKLE_MULTIPROOF_V2_BYTES
+            {
+                return Err(FriLayerMultiproofError::Encoding);
+            }
+            let proof = BindingMerkleMultiProofV2::decode(reader.take(proof_length)?)?;
+            let expected_u64 = selected_indices
+                .iter()
+                .copied()
+                .map(|index| u64::try_from(index).map_err(|_| FriLayerMultiproofError::Shape))
+                .collect::<Result<Vec<_>, _>>()?;
+            if proof.leaf_count()
+                != u64::try_from(leaf_count).map_err(|_| FriLayerMultiproofError::Shape)?
+                || proof.selected_indices() != expected_u64
+            {
+                return Err(FriLayerMultiproofError::Query);
+            }
+            let value_bytes = selected_indices
+                .len()
+                .checked_mul(64)
+                .ok_or(FriLayerMultiproofError::Encoding)?;
+            let encoded_values = reader.take(value_bytes)?;
+            let opened_values = encoded_values
+                .chunks_exact(64)
+                .map(|value| Fp16::decode(value).map_err(|_| FriLayerMultiproofError::Encoding))
+                .collect::<Result<Vec<_>, _>>()?;
+            layers.push(FriLayerBindingMultiproofV2 {
+                log_size: expected_log_size,
+                selected_indices,
+                opened_values,
+                proof,
+            });
+        }
+        reader.finish()?;
+        Ok(Self {
+            query_indices: expected_query_indices.to_vec(),
+            layers,
+        })
+    }
+}
+
+pub fn binding_fri_layer_tree_v2(
+    log_size: u8,
+    values: &[Fp16],
+) -> Result<BindingMerkleTreeV2, FriLayerMultiproofError> {
+    if values.len() != checked_layer_leaf_count(log_size)? {
+        return Err(FriLayerMultiproofError::Shape);
+    }
+    let payloads = values
+        .iter()
+        .copied()
+        .map(|value| layer_payload(log_size, value))
+        .collect::<Vec<_>>();
+    Ok(BindingMerkleTreeV2::from_payloads(&payloads)?)
+}
+
+pub fn binding_fri_layer_root_v2(
+    log_size: u8,
+    values: &[Fp16],
+) -> Result<BindingRootV2, FriLayerMultiproofError> {
+    Ok(binding_fri_layer_tree_v2(log_size, values)?.root())
+}
+
+pub fn build_fri_layer_binding_multiproofs_v2(
+    fold_log_sizes: &[u8],
+    folded_layers: &[Vec<Fp16>],
+    expected_roots: &[BindingRootV2],
+    query_indices: &[usize],
+) -> Result<FriPipelineBindingMultiproofsV2, FriLayerMultiproofError> {
+    if fold_log_sizes.len() != folded_layers.len()
+        || expected_roots.len() != folded_layers.len()
+        || folded_layers.is_empty()
+    {
+        return Err(FriLayerMultiproofError::Shape);
+    }
+    let mut layers = Vec::with_capacity(folded_layers.len());
+    for (round, ((log_size, values), expected_root)) in fold_log_sizes
+        .iter()
+        .copied()
+        .zip(folded_layers)
+        .zip(expected_roots)
+        .enumerate()
+    {
+        let tree = binding_fri_layer_tree_v2(log_size, values)?;
+        if tree.root() != *expected_root {
+            return Err(FriLayerMultiproofError::Authentication);
+        }
+        let leaf_count = values.len();
+        let selected_indices = selected_indices_for_layer(query_indices, round, leaf_count)?;
+        let selected_u64 = selected_indices
+            .iter()
+            .copied()
+            .map(|index| u64::try_from(index).map_err(|_| FriLayerMultiproofError::Shape))
+            .collect::<Result<Vec<_>, _>>()?;
+        let proof = tree.prove(&selected_u64)?;
+        let opened_values = selected_indices
+            .iter()
+            .map(|index| values[*index])
+            .collect();
+        layers.push(FriLayerBindingMultiproofV2 {
+            log_size,
+            selected_indices,
+            opened_values,
+            proof,
+        });
+    }
+    Ok(FriPipelineBindingMultiproofsV2 {
+        query_indices: query_indices.to_vec(),
+        layers,
+    })
+}
+
+pub fn verify_fri_layer_binding_multiproofs_v2(
+    proof: &FriPipelineBindingMultiproofsV2,
+    expected_query_indices: &[usize],
+    expected_roots: &[BindingRootV2],
+) -> Result<(), FriLayerMultiproofError> {
+    if proof.query_indices != expected_query_indices || proof.layers.len() != expected_roots.len() {
+        return Err(FriLayerMultiproofError::Shape);
+    }
+    for (round, (layer, root)) in proof.layers.iter().zip(expected_roots).enumerate() {
+        let leaf_count = checked_layer_leaf_count(layer.log_size)?;
+        let expected_indices =
+            selected_indices_for_layer(expected_query_indices, round, leaf_count)?;
+        if layer.selected_indices != expected_indices
+            || layer.opened_values.len() != expected_indices.len()
+        {
+            return Err(FriLayerMultiproofError::Query);
+        }
+        let payloads = layer
+            .opened_values
+            .iter()
+            .copied()
+            .map(|value| layer_payload(layer.log_size, value))
+            .collect::<Vec<_>>();
+        layer.proof.verify_payloads(&payloads, root)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

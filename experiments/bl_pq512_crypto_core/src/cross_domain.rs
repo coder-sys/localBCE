@@ -12,6 +12,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use sha3::{Digest, Sha3_512};
 
+use crate::binding_root_v2::{
+    BINDING_V2_BYTES, BindingDigestV2, BindingMerkleLeafV2, BindingMerkleMultiProofV2,
+    BindingMerkleNodeV2, BindingMerkleTreeV2, BindingRootV2, BindingRootV2Error,
+    canonical_binding_frontier_positions_v2,
+};
 use crate::circle_fri::FriDomainBatch;
 use crate::field::{Fp16, M31_MODULUS};
 
@@ -43,6 +48,10 @@ const CROSS_DOMAIN_MAGIC: &[u8; 8] = b"BLPQXDM1";
 const CROSS_DOMAIN_VERSION: u16 = 1;
 const DIGEST_LENGTH: usize = 64;
 const MAX_DOMAIN_LOG_SIZE: u8 = 30;
+pub const BINDING_CROSS_DOMAIN_ROW_V2_MAGIC: &[u8; 8] = b"BLB2XD01";
+pub const BINDING_CROSS_DOMAIN_ROW_V2_VERSION: u16 = 2;
+const BINDING_LAYOUT_ID_PINNED_SHA3_512: u8 = 1;
+const BINDING_LAYOUT_ID_NATIVE_V2: u8 = 2;
 /// At most this many bytes of cross-domain Merkle levels are retained per
 /// oracle. Larger public geometries deterministically recompute levels after
 /// challenges instead of exceeding the bounded-scratch design.
@@ -197,6 +206,7 @@ struct CrossDomainHash([u8; DIGEST_LENGTH]);
 pub struct CrossDomainLayout {
     stage: CommitmentStage,
     commitment_id: [u8; DIGEST_LENGTH],
+    binding_commitment_id: Option<BindingDigestV2>,
     specs: Vec<DomainSpec>,
     identity: LayoutHash,
 }
@@ -226,6 +236,44 @@ impl CrossDomainLayout {
         Ok(Self {
             stage,
             commitment_id,
+            binding_commitment_id: None,
+            specs,
+            identity,
+        })
+    }
+
+    /// Constructs a native-v2 layout whose acceptance-critical descriptor is
+    /// the complete 128-byte BindingDigestV2. The 64-byte compatibility slot
+    /// is deliberately zero and is never serialized by the native row codec.
+    pub fn new_binding_v2(
+        stage: CommitmentStage,
+        commitment_id: BindingDigestV2,
+        specs: Vec<DomainSpec>,
+    ) -> Result<Self, CrossDomainError> {
+        if commitment_id.as_bytes()[..64].iter().all(|byte| *byte == 0)
+            || commitment_id.as_bytes()[64..].iter().all(|byte| *byte == 0)
+        {
+            return Err(CrossDomainError::ZeroCommitmentId);
+        }
+        if specs.is_empty() {
+            return Err(CrossDomainError::NoDomains);
+        }
+        let mut previous = 0;
+        for (index, spec) in specs.iter().enumerate() {
+            DomainSpec::new(spec.log_size, spec.field, spec.column_count)?;
+            if index != 0 && spec.log_size <= previous {
+                return Err(CrossDomainError::DomainsNotStrictlyIncreasing);
+            }
+            previous = spec.log_size;
+        }
+        // Native-v2 rows carry the complete 128-byte commitment descriptor
+        // directly.  The legacy 64-byte layout identity is deliberately not
+        // an acceptance authority for this layout.
+        let identity = LayoutHash([0_u8; DIGEST_LENGTH]);
+        Ok(Self {
+            stage,
+            commitment_id: [0_u8; DIGEST_LENGTH],
+            binding_commitment_id: Some(commitment_id),
             specs,
             identity,
         })
@@ -239,6 +287,12 @@ impl CrossDomainLayout {
     /// Returns the bound nonzero commitment descriptor identity.
     pub const fn commitment_id(&self) -> &[u8; DIGEST_LENGTH] {
         &self.commitment_id
+    }
+
+    /// Returns the native acceptance-critical descriptor when this layout was
+    /// derived from a BindingDigestV2 rather than a verifier-pinned SHA3-512 ID.
+    pub const fn binding_commitment_id(&self) -> Option<&BindingDigestV2> {
+        self.binding_commitment_id.as_ref()
     }
 
     /// Returns the ordered domain specifications.
@@ -657,6 +711,462 @@ impl CrossDomainTree {
             openings,
         })
     }
+
+    /// Recommit the exact multi-domain rows as native BindingRootV2 leaves.
+    ///
+    /// This is a parallel v3 construction. It never hashes or embeds the
+    /// legacy cross-domain root or any legacy authentication-path digest.
+    pub fn binding_v2_tree(
+        &self,
+        binding_layout: CrossDomainLayout,
+    ) -> Result<BindingCrossDomainTreeV2, CrossDomainError> {
+        if binding_layout.binding_commitment_id().is_none()
+            || binding_layout.stage() != self.layout.stage()
+            || binding_layout.specs() != self.layout.specs()
+        {
+            return Err(CrossDomainError::BindingRowEncoding);
+        }
+        BindingCrossDomainTreeV2::build(binding_layout, self.batches.clone())
+    }
+}
+
+/// One complete projected multi-domain row authenticated by BindingRootV2.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BindingCrossDomainRowV2 {
+    query_fft_index: usize,
+    openings: Vec<DomainOpening>,
+}
+
+impl BindingCrossDomainRowV2 {
+    pub const fn query_fft_index(&self) -> usize {
+        self.query_fft_index
+    }
+
+    pub fn openings(&self) -> &[DomainOpening] {
+        &self.openings
+    }
+
+    /// Encode the canonical leaf payload. The complete expected layout is
+    /// carried directly; no 64-byte layout/root digest is wrapped as authority.
+    pub fn encode_payload(&self, layout: &CrossDomainLayout) -> Result<Vec<u8>, CrossDomainError> {
+        validate_binding_row_v2(layout, self)?;
+        let expected_length = binding_cross_domain_row_v2_payload_len(layout)?;
+        let mut output = Vec::with_capacity(expected_length);
+        output.extend_from_slice(BINDING_CROSS_DOMAIN_ROW_V2_MAGIC);
+        output.extend_from_slice(&BINDING_CROSS_DOMAIN_ROW_V2_VERSION.to_be_bytes());
+        output.extend_from_slice(&0_u16.to_be_bytes());
+        output.extend_from_slice(&(layout.stage as u16).to_be_bytes());
+        output.extend_from_slice(
+            &u16::try_from(layout.specs.len())
+                .map_err(|_| CrossDomainError::LengthOverflow)?
+                .to_be_bytes(),
+        );
+        output.extend_from_slice(
+            layout
+                .binding_commitment_id
+                .as_ref()
+                .ok_or(CrossDomainError::BindingRowEncoding)?
+                .as_bytes(),
+        );
+        output.extend_from_slice(
+            &u64::try_from(self.query_fft_index)
+                .map_err(|_| CrossDomainError::LengthOverflow)?
+                .to_be_bytes(),
+        );
+        for opening in &self.openings {
+            output.push(opening.spec.log_size);
+            output.push(opening.spec.field as u8);
+            output.extend_from_slice(&0_u16.to_be_bytes());
+            output.extend_from_slice(&opening.spec.column_count.to_be_bytes());
+            output.extend_from_slice(
+                &u64::try_from(opening.fft_index)
+                    .map_err(|_| CrossDomainError::LengthOverflow)?
+                    .to_be_bytes(),
+            );
+            output.extend_from_slice(
+                &u32::try_from(opening.payload.len())
+                    .map_err(|_| CrossDomainError::LengthOverflow)?
+                    .to_be_bytes(),
+            );
+            output.extend_from_slice(&opening.payload);
+        }
+        if output.len() != expected_length {
+            return Err(CrossDomainError::LengthOverflow);
+        }
+        Ok(output)
+    }
+
+    /// Parse one exact row payload against verifier-owned layout and index.
+    /// All lengths are derived and checked before any row vector is allocated.
+    pub fn decode_payload(
+        encoded: &[u8],
+        layout: &CrossDomainLayout,
+        expected_query_fft_index: usize,
+    ) -> Result<Self, CrossDomainError> {
+        if encoded.len() != binding_cross_domain_row_v2_payload_len(layout)? {
+            return Err(CrossDomainError::BindingRowEncoding);
+        }
+        let mut offset = 0_usize;
+        let mut take = |length: usize| -> Result<&[u8], CrossDomainError> {
+            let end = offset
+                .checked_add(length)
+                .ok_or(CrossDomainError::LengthOverflow)?;
+            let value = encoded
+                .get(offset..end)
+                .ok_or(CrossDomainError::BindingRowEncoding)?;
+            offset = end;
+            Ok(value)
+        };
+        if take(8)? != BINDING_CROSS_DOMAIN_ROW_V2_MAGIC
+            || u16::from_be_bytes(
+                take(2)?
+                    .try_into()
+                    .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+            ) != BINDING_CROSS_DOMAIN_ROW_V2_VERSION
+            || take(2)? != [0_u8; 2]
+            || u16::from_be_bytes(
+                take(2)?
+                    .try_into()
+                    .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+            ) != layout.stage as u16
+            || usize::from(u16::from_be_bytes(
+                take(2)?
+                    .try_into()
+                    .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+            )) != layout.specs.len()
+            || take(BINDING_V2_BYTES)?
+                != layout
+                    .binding_commitment_id
+                    .as_ref()
+                    .ok_or(CrossDomainError::BindingRowEncoding)?
+                    .as_bytes()
+        {
+            return Err(CrossDomainError::BindingRowEncoding);
+        }
+        let query_fft_index = usize::try_from(u64::from_be_bytes(
+            take(8)?
+                .try_into()
+                .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+        ))
+        .map_err(|_| CrossDomainError::BindingRowEncoding)?;
+        if query_fft_index != expected_query_fft_index {
+            return Err(CrossDomainError::OpeningIndexMismatch {
+                log_size: layout.maximum_log_size(),
+                expected: expected_query_fft_index,
+                actual: query_fft_index,
+            });
+        }
+        let maximum_log = layout.maximum_log_size();
+        let maximum_transposed = transpose_circle_fft_index(query_fft_index, maximum_log)?;
+        let mut openings = Vec::with_capacity(layout.specs.len());
+        for spec in &layout.specs {
+            let log_size = take(1)?[0];
+            let field = take(1)?[0];
+            if take(2)? != [0_u8; 2]
+                || log_size != spec.log_size
+                || field != spec.field as u8
+                || u32::from_be_bytes(
+                    take(4)?
+                        .try_into()
+                        .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+                ) != spec.column_count
+            {
+                return Err(CrossDomainError::BindingRowEncoding);
+            }
+            let fft_index = usize::try_from(u64::from_be_bytes(
+                take(8)?
+                    .try_into()
+                    .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+            ))
+            .map_err(|_| CrossDomainError::BindingRowEncoding)?;
+            let expected_index = inverse_transpose_circle_fft_index(
+                maximum_transposed >> (maximum_log - spec.log_size),
+                spec.log_size,
+            )?;
+            if fft_index != expected_index {
+                return Err(CrossDomainError::OpeningIndexMismatch {
+                    log_size: spec.log_size,
+                    expected: expected_index,
+                    actual: fft_index,
+                });
+            }
+            let payload_length = usize::try_from(u32::from_be_bytes(
+                take(4)?
+                    .try_into()
+                    .map_err(|_| CrossDomainError::BindingRowEncoding)?,
+            ))
+            .map_err(|_| CrossDomainError::BindingRowEncoding)?;
+            if payload_length != spec.payload_length()? {
+                return Err(CrossDomainError::BindingRowEncoding);
+            }
+            let payload = take(payload_length)?.to_vec();
+            validate_row(*spec, &payload, fft_index)?;
+            openings.push(DomainOpening {
+                spec: *spec,
+                fft_index,
+                payload,
+            });
+        }
+        if offset != encoded.len() {
+            return Err(CrossDomainError::BindingRowEncoding);
+        }
+        let row = Self {
+            query_fft_index,
+            openings,
+        };
+        validate_binding_row_v2(layout, &row)?;
+        Ok(row)
+    }
+
+    /// Internal value-only adapter for the existing AIR arithmetic. It carries
+    /// no legacy siblings, so accidental legacy authentication fails closed.
+    pub(crate) fn arithmetic_view(&self) -> CrossDomainProof {
+        CrossDomainProof {
+            query_fft_index: self.query_fft_index,
+            siblings: Vec::new(),
+            openings: self.openings.clone(),
+        }
+    }
+}
+
+pub fn binding_cross_domain_row_v2_payload_len(
+    layout: &CrossDomainLayout,
+) -> Result<usize, CrossDomainError> {
+    let mut length = 8_usize + 2 + 2 + 2 + 2 + BINDING_V2_BYTES + 8;
+    for spec in &layout.specs {
+        length = length
+            .checked_add(1 + 1 + 2 + 4 + 8 + 4)
+            .and_then(|value| value.checked_add(spec.payload_length().ok()?))
+            .ok_or(CrossDomainError::LengthOverflow)?;
+    }
+    Ok(length)
+}
+
+fn validate_binding_row_v2(
+    layout: &CrossDomainLayout,
+    row: &BindingCrossDomainRowV2,
+) -> Result<(), CrossDomainError> {
+    let maximum_log = layout.maximum_log_size();
+    let maximum_size = 1_usize
+        .checked_shl(u32::from(maximum_log))
+        .ok_or(CrossDomainError::LengthOverflow)?;
+    if row.query_fft_index >= maximum_size {
+        return Err(CrossDomainError::QueryIndexOutOfBounds {
+            index: row.query_fft_index,
+            domain_size: maximum_size,
+        });
+    }
+    if row.openings.len() != layout.specs.len() {
+        return Err(CrossDomainError::OpeningCountMismatch {
+            expected: layout.specs.len(),
+            actual: row.openings.len(),
+        });
+    }
+    let maximum_transposed = transpose_circle_fft_index(row.query_fft_index, maximum_log)?;
+    for (opening, spec) in row.openings.iter().zip(&layout.specs) {
+        if opening.spec != *spec {
+            return Err(CrossDomainError::OpeningSpecMismatch {
+                log_size: spec.log_size,
+            });
+        }
+        let expected_index = inverse_transpose_circle_fft_index(
+            maximum_transposed >> (maximum_log - spec.log_size),
+            spec.log_size,
+        )?;
+        if opening.fft_index != expected_index {
+            return Err(CrossDomainError::OpeningIndexMismatch {
+                log_size: spec.log_size,
+                expected: expected_index,
+                actual: opening.fft_index,
+            });
+        }
+        if opening.payload.len() != spec.payload_length()? {
+            return Err(CrossDomainError::RowLengthMismatch {
+                log_size: spec.log_size,
+                row_index: opening.fft_index,
+                expected: spec.payload_length()?,
+                actual: opening.payload.len(),
+            });
+        }
+        validate_row(*spec, &opening.payload, opening.fft_index)?;
+    }
+    Ok(())
+}
+
+/// Canonical native-v2 multiproof and its exact opened row packets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BindingCrossDomainMultiProofV2 {
+    rows: Vec<BindingCrossDomainRowV2>,
+    proof: BindingMerkleMultiProofV2,
+}
+
+impl BindingCrossDomainMultiProofV2 {
+    pub fn from_parts(
+        layout: &CrossDomainLayout,
+        rows: Vec<BindingCrossDomainRowV2>,
+        proof: BindingMerkleMultiProofV2,
+    ) -> Result<Self, CrossDomainError> {
+        if rows.len() != proof.selected_indices().len()
+            || rows
+                .iter()
+                .zip(proof.selected_indices())
+                .any(|(row, index)| u64::try_from(row.query_fft_index).ok() != Some(*index))
+        {
+            return Err(CrossDomainError::BindingRowEncoding);
+        }
+        let expected_leaf_count = 1_u64
+            .checked_shl(u32::from(layout.maximum_log_size()))
+            .ok_or(CrossDomainError::LengthOverflow)?;
+        if proof.leaf_count() != expected_leaf_count {
+            return Err(CrossDomainError::BindingRowEncoding);
+        }
+        for row in &rows {
+            validate_binding_row_v2(layout, row)?;
+        }
+        Ok(Self { rows, proof })
+    }
+
+    pub fn rows(&self) -> &[BindingCrossDomainRowV2] {
+        &self.rows
+    }
+
+    pub const fn proof(&self) -> &BindingMerkleMultiProofV2 {
+        &self.proof
+    }
+
+    pub fn row(
+        &self,
+        query_fft_index: usize,
+    ) -> Result<&BindingCrossDomainRowV2, CrossDomainError> {
+        self.rows
+            .binary_search_by_key(&query_fft_index, |row| row.query_fft_index)
+            .ok()
+            .and_then(|position| self.rows.get(position))
+            .ok_or(CrossDomainError::QueryIndexOutOfBounds {
+                index: query_fft_index,
+                domain_size: usize::try_from(self.proof.leaf_count()).unwrap_or(usize::MAX),
+            })
+    }
+
+    pub fn verify(
+        &self,
+        layout: &CrossDomainLayout,
+        expected_root: &BindingRootV2,
+    ) -> Result<(), CrossDomainError> {
+        let payloads = self
+            .rows
+            .iter()
+            .map(|row| row.encode_payload(layout))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.proof.verify_payloads(&payloads, expected_root)?;
+        Ok(())
+    }
+}
+
+/// Materialized prover tree for the native BindingRootV2 cross-domain format.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BindingCrossDomainTreeV2 {
+    layout: CrossDomainLayout,
+    batches: Vec<DomainEvaluationBatch>,
+    tree: BindingMerkleTreeV2,
+}
+
+impl BindingCrossDomainTreeV2 {
+    pub fn build(
+        layout: CrossDomainLayout,
+        batches: Vec<DomainEvaluationBatch>,
+    ) -> Result<Self, CrossDomainError> {
+        if batches.len() != layout.specs.len() {
+            return Err(CrossDomainError::BatchCountMismatch {
+                expected: layout.specs.len(),
+                actual: batches.len(),
+            });
+        }
+        for (batch, spec) in batches.iter().zip(&layout.specs) {
+            if batch.spec != *spec {
+                return Err(CrossDomainError::BatchSpecMismatch {
+                    log_size: spec.log_size,
+                });
+            }
+        }
+        let leaf_count = 1_usize
+            .checked_shl(u32::from(layout.maximum_log_size()))
+            .ok_or(CrossDomainError::LengthOverflow)?;
+        let payloads = (0..leaf_count)
+            .map(|query_fft_index| {
+                binding_row_v2_from_batches(&layout, &batches, query_fft_index)?
+                    .encode_payload(&layout)
+            })
+            .collect::<Result<Vec<_>, CrossDomainError>>()?;
+        let tree = BindingMerkleTreeV2::from_payloads(&payloads)?;
+        Ok(Self {
+            layout,
+            batches,
+            tree,
+        })
+    }
+
+    pub const fn layout(&self) -> &CrossDomainLayout {
+        &self.layout
+    }
+
+    pub const fn root(&self) -> BindingRootV2 {
+        self.tree.root()
+    }
+
+    pub fn proof(
+        &self,
+        selected_query_fft_indices: &[usize],
+    ) -> Result<BindingCrossDomainMultiProofV2, CrossDomainError> {
+        let selected = selected_query_fft_indices
+            .iter()
+            .copied()
+            .map(|index| u64::try_from(index).map_err(|_| CrossDomainError::LengthOverflow))
+            .collect::<Result<Vec<_>, _>>()?;
+        let proof = self.tree.prove(&selected)?;
+        let rows = selected_query_fft_indices
+            .iter()
+            .copied()
+            .map(|index| binding_row_v2_from_batches(&self.layout, &self.batches, index))
+            .collect::<Result<Vec<_>, _>>()?;
+        BindingCrossDomainMultiProofV2::from_parts(&self.layout, rows, proof)
+    }
+}
+
+fn binding_row_v2_from_batches(
+    layout: &CrossDomainLayout,
+    batches: &[DomainEvaluationBatch],
+    query_fft_index: usize,
+) -> Result<BindingCrossDomainRowV2, CrossDomainError> {
+    let maximum_log = layout.maximum_log_size();
+    let maximum_size = 1_usize
+        .checked_shl(u32::from(maximum_log))
+        .ok_or(CrossDomainError::LengthOverflow)?;
+    if query_fft_index >= maximum_size {
+        return Err(CrossDomainError::QueryIndexOutOfBounds {
+            index: query_fft_index,
+            domain_size: maximum_size,
+        });
+    }
+    let maximum_transposed = transpose_circle_fft_index(query_fft_index, maximum_log)?;
+    let openings = batches
+        .iter()
+        .map(|batch| {
+            let level_index = maximum_transposed >> (maximum_log - batch.spec.log_size);
+            let fft_index = inverse_transpose_circle_fft_index(level_index, batch.spec.log_size)?;
+            Ok(DomainOpening {
+                spec: batch.spec,
+                fft_index,
+                payload: batch.rows[fft_index].clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, CrossDomainError>>()?;
+    let row = BindingCrossDomainRowV2 {
+        query_fft_index,
+        openings,
+    };
+    validate_binding_row_v2(layout, &row)?;
+    Ok(row)
 }
 
 #[cfg(feature = "std")]
@@ -1196,6 +1706,338 @@ impl DiskBatchSequentialReader {
     }
 }
 
+/// Native BindingRootV2 commitment over one disk-backed cross-domain source.
+///
+/// Only the canonical source files and the final 128-byte root are retained.
+/// Tree construction uses one half-leaf transient file because circle-index
+/// transposition emits all even native leaves before all odd native leaves.
+/// Authentication frontiers are recomputed after the public queries exist,
+/// keeping both host memory and persistent scratch bounded independently of
+/// the domain size.
+#[cfg(feature = "std")]
+pub struct DiskBindingCrossDomainTreeV2<'a> {
+    source: &'a DiskCrossDomainTree,
+    layout: CrossDomainLayout,
+    root: BindingRootV2,
+}
+
+#[cfg(feature = "std")]
+impl DiskCrossDomainTree {
+    pub fn binding_v2_tree(
+        &self,
+        binding_layout: CrossDomainLayout,
+    ) -> Result<DiskBindingCrossDomainTreeV2<'_>, DiskCrossDomainError> {
+        if binding_layout.binding_commitment_id().is_none()
+            || binding_layout.stage() != self.layout.stage()
+            || binding_layout.specs() != self.layout.specs()
+        {
+            return Err(DiskCrossDomainError::Shape);
+        }
+        let (top, frontier, rows) =
+            recompute_disk_binding_v2(self, &binding_layout, &BTreeSet::new(), &BTreeSet::new())?;
+        if !frontier.is_empty() || !rows.is_empty() {
+            return Err(DiskCrossDomainError::Shape);
+        }
+        let leaf_count = 1_u64
+            .checked_shl(u32::from(binding_layout.maximum_log_size()))
+            .ok_or(DiskCrossDomainError::Overflow)?;
+        let root = BindingRootV2::from_top(leaf_count, top).map_err(CrossDomainError::from)?;
+        Ok(DiskBindingCrossDomainTreeV2 {
+            source: self,
+            layout: binding_layout,
+            root,
+        })
+    }
+}
+
+#[cfg(feature = "std")]
+impl DiskBindingCrossDomainTreeV2<'_> {
+    pub const fn layout(&self) -> &CrossDomainLayout {
+        &self.layout
+    }
+
+    pub const fn root(&self) -> BindingRootV2 {
+        self.root
+    }
+
+    pub fn proof(
+        &self,
+        selected_query_fft_indices: &[usize],
+    ) -> Result<BindingCrossDomainMultiProofV2, DiskCrossDomainError> {
+        let selected_indices = selected_query_fft_indices
+            .iter()
+            .copied()
+            .map(|index| u64::try_from(index).map_err(|_| DiskCrossDomainError::Overflow))
+            .collect::<Result<Vec<_>, _>>()?;
+        let leaf_count = 1_u64
+            .checked_shl(u32::from(self.layout.maximum_log_size()))
+            .ok_or(DiskCrossDomainError::Overflow)?;
+        let positions = canonical_binding_frontier_positions_v2(leaf_count, &selected_indices)
+            .map_err(CrossDomainError::from)?;
+        let targets = positions
+            .iter()
+            .map(|position| (position.level, position.index))
+            .collect::<BTreeSet<_>>();
+        let selected = selected_query_fft_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if selected.len() != selected_query_fft_indices.len() {
+            return Err(DiskCrossDomainError::Shape);
+        }
+        let (top, frontier, mut rows) =
+            recompute_disk_binding_v2(self.source, &self.layout, &targets, &selected)?;
+        let recomputed_root =
+            BindingRootV2::from_top(leaf_count, top).map_err(CrossDomainError::from)?;
+        if recomputed_root != self.root || frontier.len() != positions.len() {
+            return Err(DiskCrossDomainError::Shape);
+        }
+        let frontier_digests = positions
+            .iter()
+            .map(|position| {
+                frontier
+                    .get(&(position.level, position.index))
+                    .copied()
+                    .ok_or(DiskCrossDomainError::Shape)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let proof = BindingMerkleMultiProofV2::from_canonical_frontier(
+            leaf_count,
+            selected_indices,
+            frontier_digests,
+        )
+        .map_err(CrossDomainError::from)?;
+        let ordered_rows = selected_query_fft_indices
+            .iter()
+            .map(|index| rows.remove(index).ok_or(DiskCrossDomainError::Shape))
+            .collect::<Result<Vec<_>, _>>()?;
+        if !rows.is_empty() {
+            return Err(DiskCrossDomainError::Shape);
+        }
+        BindingCrossDomainMultiProofV2::from_parts(&self.layout, ordered_rows, proof)
+            .map_err(DiskCrossDomainError::from)
+    }
+}
+
+#[cfg(feature = "std")]
+struct DiskBindingBatchReader {
+    reader: DiskBatchSequentialReader,
+    current_node_index: Option<usize>,
+    current_fft_index: usize,
+    current_payload: Vec<u8>,
+}
+
+#[cfg(feature = "std")]
+impl DiskBindingBatchReader {
+    fn new(batch: &DiskDomainEvaluationBatch) -> Result<Self, DiskCrossDomainError> {
+        Ok(Self {
+            reader: DiskBatchSequentialReader::new(batch)?,
+            current_node_index: None,
+            current_fft_index: 0,
+            current_payload: Vec::new(),
+        })
+    }
+
+    fn opening(
+        &mut self,
+        maximum_transposed_index: usize,
+        maximum_log_size: u8,
+    ) -> Result<DomainOpening, DiskCrossDomainError> {
+        let node_index = maximum_transposed_index >> (maximum_log_size - self.reader.spec.log_size);
+        if self.current_node_index != Some(node_index) {
+            let (fft_index, payload) = self.reader.read_payload(node_index)?;
+            self.current_node_index = Some(node_index);
+            self.current_fft_index = fft_index;
+            self.current_payload = payload;
+        }
+        Ok(DomainOpening {
+            spec: self.reader.spec,
+            fft_index: self.current_fft_index,
+            payload: self.current_payload.clone(),
+        })
+    }
+}
+
+#[cfg(feature = "std")]
+fn next_disk_binding_row(
+    layout: &CrossDomainLayout,
+    readers: &mut [DiskBindingBatchReader],
+    maximum_transposed_index: usize,
+) -> Result<BindingCrossDomainRowV2, DiskCrossDomainError> {
+    let query_fft_index =
+        inverse_transpose_circle_fft_index(maximum_transposed_index, layout.maximum_log_size())?;
+    let openings = readers
+        .iter_mut()
+        .map(|reader| reader.opening(maximum_transposed_index, layout.maximum_log_size()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let row = BindingCrossDomainRowV2 {
+        query_fft_index,
+        openings,
+    };
+    validate_binding_row_v2(layout, &row)?;
+    Ok(row)
+}
+
+#[cfg(feature = "std")]
+fn retain_binding_target(
+    targets: &BTreeSet<(u32, u64)>,
+    retained: &mut BTreeMap<(u32, u64), BindingDigestV2>,
+    level: u32,
+    index: u64,
+    digest: BindingDigestV2,
+) -> Result<(), DiskCrossDomainError> {
+    if targets.contains(&(level, index)) && retained.insert((level, index), digest).is_some() {
+        return Err(DiskCrossDomainError::Shape);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "std")]
+type RecomputedDiskBindingV2 = (
+    BindingDigestV2,
+    BTreeMap<(u32, u64), BindingDigestV2>,
+    BTreeMap<usize, BindingCrossDomainRowV2>,
+);
+
+#[cfg(feature = "std")]
+fn recompute_disk_binding_v2(
+    source: &DiskCrossDomainTree,
+    layout: &CrossDomainLayout,
+    targets: &BTreeSet<(u32, u64)>,
+    selected_queries: &BTreeSet<usize>,
+) -> Result<RecomputedDiskBindingV2, DiskCrossDomainError> {
+    let maximum_log = layout.maximum_log_size();
+    let leaf_count = 1_usize
+        .checked_shl(u32::from(maximum_log))
+        .ok_or(DiskCrossDomainError::Overflow)?;
+    let half = leaf_count >> 1;
+    let even_path = source.directory.join("binding-v2-even-leaves.tmp");
+    let even_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&even_path)?;
+    let result = (|| {
+        let mut readers = source
+            .batches
+            .iter()
+            .map(DiskBindingBatchReader::new)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut retained = BTreeMap::new();
+        let mut selected_rows = BTreeMap::new();
+        let mut even = BufWriter::new(even_file);
+        for maximum_transposed_index in 0..half {
+            let row = next_disk_binding_row(layout, &mut readers, maximum_transposed_index)?;
+            let query_index = row.query_fft_index;
+            if query_index != maximum_transposed_index << 1 {
+                return Err(DiskCrossDomainError::Shape);
+            }
+            let payload = row.encode_payload(layout)?;
+            let digest = BindingMerkleLeafV2::hash(
+                u64::try_from(query_index).map_err(|_| DiskCrossDomainError::Overflow)?,
+                &payload,
+            )
+            .map_err(CrossDomainError::from)?
+            .digest();
+            retain_binding_target(
+                targets,
+                &mut retained,
+                0,
+                u64::try_from(query_index).map_err(|_| DiskCrossDomainError::Overflow)?,
+                digest,
+            )?;
+            if selected_queries.contains(&query_index)
+                && selected_rows.insert(query_index, row).is_some()
+            {
+                return Err(DiskCrossDomainError::Shape);
+            }
+            even.write_all(digest.as_bytes())?;
+        }
+        even.flush()?;
+        drop(even);
+
+        let mut even = BufReader::new(File::open(&even_path)?);
+        let mut stack = vec![None; usize::from(maximum_log) + 1];
+        for pair_index in 0..half {
+            let maximum_transposed_index = half + pair_index;
+            let row = next_disk_binding_row(layout, &mut readers, maximum_transposed_index)?;
+            let query_index = row.query_fft_index;
+            if query_index != (pair_index << 1) + 1 {
+                return Err(DiskCrossDomainError::Shape);
+            }
+            let payload = row.encode_payload(layout)?;
+            let odd = BindingMerkleLeafV2::hash(
+                u64::try_from(query_index).map_err(|_| DiskCrossDomainError::Overflow)?,
+                &payload,
+            )
+            .map_err(CrossDomainError::from)?
+            .digest();
+            retain_binding_target(
+                targets,
+                &mut retained,
+                0,
+                u64::try_from(query_index).map_err(|_| DiskCrossDomainError::Overflow)?,
+                odd,
+            )?;
+            if selected_queries.contains(&query_index)
+                && selected_rows.insert(query_index, row).is_some()
+            {
+                return Err(DiskCrossDomainError::Shape);
+            }
+
+            let mut even_encoded = [0_u8; BINDING_V2_BYTES];
+            even.read_exact(&mut even_encoded)?;
+            let left = BindingDigestV2::decode(&even_encoded).map_err(CrossDomainError::from)?;
+            let mut level = 1_u32;
+            let mut node_index =
+                u64::try_from(pair_index).map_err(|_| DiskCrossDomainError::Overflow)?;
+            let mut current = BindingMerkleNodeV2::hash(level, node_index, left, odd)
+                .map_err(CrossDomainError::from)?
+                .digest();
+            retain_binding_target(targets, &mut retained, level, node_index, current)?;
+            while node_index & 1 == 1 {
+                let left = stack
+                    [usize::try_from(level).map_err(|_| DiskCrossDomainError::Overflow)?]
+                .take()
+                .ok_or(DiskCrossDomainError::Shape)?;
+                node_index >>= 1;
+                level = level.checked_add(1).ok_or(DiskCrossDomainError::Overflow)?;
+                current = BindingMerkleNodeV2::hash(level, node_index, left, current)
+                    .map_err(CrossDomainError::from)?
+                    .digest();
+                retain_binding_target(targets, &mut retained, level, node_index, current)?;
+            }
+            let slot = stack
+                .get_mut(usize::try_from(level).map_err(|_| DiskCrossDomainError::Overflow)?)
+                .ok_or(DiskCrossDomainError::Shape)?;
+            if slot.replace(current).is_some() {
+                return Err(DiskCrossDomainError::Shape);
+            }
+        }
+        let mut trailing = [0_u8; 1];
+        if even.read(&mut trailing)? != 0
+            || readers.iter().any(|reader| {
+                reader.reader.next_node_index != 1_usize << reader.reader.spec.log_size
+            })
+            || stack[..usize::from(maximum_log)]
+                .iter()
+                .any(Option::is_some)
+            || retained.len() != targets.len()
+            || selected_rows.len() != selected_queries.len()
+        {
+            return Err(DiskCrossDomainError::Shape);
+        }
+        let top = stack[usize::from(maximum_log)]
+            .take()
+            .ok_or(DiskCrossDomainError::Shape)?;
+        Ok((top, retained, selected_rows))
+    })();
+    match fs::remove_file(&even_path) {
+        Ok(()) => result,
+        Err(cleanup_error) if result.is_ok() => Err(cleanup_error.into()),
+        Err(_) => result,
+    }
+}
+
 #[cfg(feature = "std")]
 type DiskTreeFrontier = BTreeMap<(u8, usize), CrossDomainHash>;
 
@@ -1525,6 +2367,10 @@ pub fn project_circle_fft_index(index: usize, log_size: u8) -> Result<usize, Cro
 /// Strict cross-domain construction or proof-validation failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CrossDomainError {
+    /// The native BindingRootV2 substrate rejected a tree or proof.
+    Binding(BindingRootV2Error),
+    /// A native cross-domain row packet was not byte-exact for its layout.
+    BindingRowEncoding,
     /// A domain log size is outside `1..=30`.
     DomainLogSizeInvalid { log_size: u8 },
     /// A projection requires a domain of size at least four.
@@ -1591,6 +2437,12 @@ pub enum CrossDomainError {
     },
     /// An expected domain opening was absent.
     MissingOpening { log_size: u8 },
+}
+
+impl From<BindingRootV2Error> for CrossDomainError {
+    fn from(value: BindingRootV2Error) -> Self {
+        Self::Binding(value)
+    }
 }
 
 impl fmt::Display for CrossDomainError {
@@ -1715,9 +2567,40 @@ fn begin_hash(domain: u16) -> Sha3_512 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binding_root_v2::{BindingRoleV2, BindingRootV2Error};
 
     fn fp16(value: u32) -> Fp16 {
         Fp16::from_coefficients([value, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap()
+    }
+
+    #[test]
+    fn native_v2_rows_bind_the_complete_128_byte_descriptor() {
+        let spec = DomainSpec::new(2, EvaluationField::M31, 1).unwrap();
+        let descriptor = BindingDigestV2::hash(BindingRoleV2::Payload, b"native-layout").unwrap();
+        let layout =
+            CrossDomainLayout::new_binding_v2(CommitmentStage::MainTrace, descriptor, vec![spec])
+                .unwrap();
+        let batch = DomainEvaluationBatch::new(spec, m31_rows(2, 1, 7)).unwrap();
+        let tree = BindingCrossDomainTreeV2::build(layout.clone(), vec![batch]).unwrap();
+        let proof = tree.proof(&[1]).unwrap();
+        proof.verify(&layout, &tree.root()).unwrap();
+
+        let changed_descriptor =
+            BindingDigestV2::hash(BindingRoleV2::Payload, b"changed-layout").unwrap();
+        let changed_layout = CrossDomainLayout::new_binding_v2(
+            CommitmentStage::MainTrace,
+            changed_descriptor,
+            vec![spec],
+        )
+        .unwrap();
+        assert!(matches!(
+            proof.verify(&changed_layout, &tree.root()),
+            Err(CrossDomainError::Binding(BindingRootV2Error::RootMismatch))
+        ));
+        assert_eq!(
+            binding_cross_domain_row_v2_payload_len(&layout).unwrap(),
+            176
+        );
     }
 
     fn m31_rows(log_size: u8, columns: u32, offset: u32) -> Vec<Vec<u8>> {
@@ -1908,6 +2791,65 @@ mod tests {
         for query in 0..16 {
             assert_eq!(disk.proof(query).unwrap(), memory.proof(query).unwrap());
         }
+        drop(disk);
+        for path in small_columns.into_iter().chain(large_columns) {
+            fs::remove_file(path).unwrap();
+        }
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn disk_binding_v2_root_and_multiproof_match_native_memory_tree() {
+        let legacy = fixture();
+        let parent =
+            std::env::temp_dir().join(format!("blpq-disk-binding-v2-test-{}", std::process::id()));
+        fs::create_dir(&parent).unwrap();
+        let small_rows = m31_rows(2, 2, 100);
+        let large_rows = m31_rows(4, 1, 200);
+        let small_columns = write_m31_columns(&parent, "small", &small_rows, 2);
+        let large_columns = write_m31_columns(&parent, "large", &large_rows, 1);
+        let specs = legacy.layout().specs();
+        let disk = DiskCrossDomainTree::build_with_level_budget(
+            legacy.layout().clone(),
+            vec![
+                DiskDomainEvaluationBatch::new_from_columns(specs[0], small_columns.clone())
+                    .unwrap(),
+                DiskDomainEvaluationBatch::new_from_columns(specs[1], large_columns.clone())
+                    .unwrap(),
+            ],
+            &parent,
+            &[0x86; 32],
+            0,
+        )
+        .unwrap();
+        let descriptor =
+            BindingDigestV2::hash(BindingRoleV2::Payload, b"disk-native-layout").unwrap();
+        let native_layout = CrossDomainLayout::new_binding_v2(
+            CommitmentStage::MainTrace,
+            descriptor,
+            specs.to_vec(),
+        )
+        .unwrap();
+        let memory = BindingCrossDomainTreeV2::build(
+            native_layout.clone(),
+            vec![
+                DomainEvaluationBatch::new(specs[0], small_rows).unwrap(),
+                DomainEvaluationBatch::new(specs[1], large_rows).unwrap(),
+            ],
+        )
+        .unwrap();
+        let native_disk = disk.binding_v2_tree(native_layout.clone()).unwrap();
+        assert_eq!(native_disk.root(), memory.root());
+        assert!(!disk.directory.join("binding-v2-even-leaves.tmp").exists());
+        let selected = [0, 3, 7, 8, 15];
+        let observed = native_disk.proof(&selected).unwrap();
+        assert_eq!(observed, memory.proof(&selected).unwrap());
+        observed
+            .verify(&native_layout, &native_disk.root())
+            .unwrap();
+        assert!(!disk.directory.join("binding-v2-even-leaves.tmp").exists());
+        drop(native_disk);
         drop(disk);
         for path in small_columns.into_iter().chain(large_columns) {
             fs::remove_file(path).unwrap();

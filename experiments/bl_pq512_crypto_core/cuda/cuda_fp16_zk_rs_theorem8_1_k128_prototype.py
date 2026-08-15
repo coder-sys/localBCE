@@ -19,6 +19,7 @@ credit until a complete fresh proof and the containing security gates pass.
 import array
 import ctypes
 import hashlib
+import json
 import os
 import struct
 import subprocess
@@ -29,6 +30,7 @@ import time
 from pathlib import Path
 
 import cuda_fp16_zk_rs_interleaved_k128_prototype as core
+import cuda_binding_merkle_v2 as binding_merkle
 from cuda_fp16_tower_kat import add, mul16, sub
 from cuda_m31_brakedown_factor_benchmark import arguments, function, launch
 
@@ -46,16 +48,26 @@ INITIAL_SEGMENT_COUNT = (
 THEOREM_SEGMENT_COUNT = INITIAL_SEGMENT_COUNT + 5
 SUMCHECK_MASK_KIND = 64
 BASE_MAIN_MASK_KIND = 65
-BASE_AUX_MASK_KIND = 66
+BASE_GKR_MASK_KIND = 66
 GKR_MASK_KIND = 67
+GKR_MASK_ANSWER_KIND = 69
 STATE_SQUAREFREE_COEFFICIENT_KIND = 68
 STATE_SQUAREFREE_COEFFICIENT_CLAIMS = 2
 STATE_SQUAREFREE_COEFFICIENT_VARIABLES = 11
 GKR_MASK_DIMENSION = 32_768
+GKR_MASK_MESSAGE_VALUES = 512
+GKR_MASK_INNER_LOG = AUX_CODE_LOG
+GKR_MASK_OUTER_LOG = 7
+GKR_MASK_OUTER_VALUES = 1 << GKR_MASK_OUTER_LOG
+GKR_MASK_TREE_LEAVES = AUX_CODE_VALUES * GKR_MASK_OUTER_VALUES
+GKR_MASK_OUTER_QUERY_DOMAIN = 526
+GKR_MASK_OUTER_QUERY_LABEL = b"gkr_mask_outer_queries/v1"
 MAIN_LEAF_SIZE = core.FP16_BYTES
 MAIN_QUERY_COUNT = 1_600
 AUX_QUERY_COUNT = 1_218
 QUERY_DOMAIN = 524
+QUERY_MAX_DRAWS = 1 << 20
+QUERY_MAX_RETRIES_PER_DRAW = 1 << 20
 ZERO = (0,) * 16
 ONE = (1,) + (0,) * 15
 GKR_CLAIM_COUNT = 19
@@ -69,10 +81,11 @@ GKR_MASK_STATES = GKR_MASK_DIMENSION // GLOBAL_WORDS
 GKR_ROW_STATES = GKR_CLAIM_COUNT * 16
 ROW_STATES = GKR_ROW_STATES + GKR_MASK_STATES
 AUXILIARY_WORDS = SUMCHECK_ROUNDS + GKR_MASK_STATES + 1
-SUMCHECK_LEAF_SIZE = SUMCHECK_ROUNDS * core.FP16_BYTES
-GKR_MASK_LEAF_SIZE = GKR_MASK_STATES * core.FP16_BYTES
+NON_GKR_AUXILIARY_WORDS = SUMCHECK_ROUNDS + 1
+SUMCHECK_BASE_WORDS = SUMCHECK_ROUNDS + NON_GKR_AUXILIARY_WORDS
+SUMCHECK_BASE_LEAF_SIZE = SUMCHECK_BASE_WORDS * core.FP16_BYTES
+GKR_MASK_LEAF_SIZE = core.FP16_BYTES
 STATE_SQUAREFREE_COEFFICIENT_LEAF_SIZE = core.FP16_BYTES
-AUXILIARY_LEAF_SIZE = AUXILIARY_WORDS * core.FP16_BYTES
 WORDS_PER_BOUNDARY = 256
 HASH_BUS_B16_HEADER_BYTES = 215
 HASH_BUS_B16_SHARD_BYTES = 2 * 1_600 * 8_192 * 2
@@ -84,6 +97,152 @@ GKR_PRELUDE_ROUNDS = (
     + STATE_COMPOSED_MASK_BATCH_ROUNDS
 )
 STATE_SQUAREFREE_ROUNDS = {1: 614, 3: 882}
+H4_SOURCE_RELATION_ROUNDS = 64
+H4_MASKED_SOURCE_FUNCTIONAL_BINDING_BYTES = 4_560
+H4_MASKED_SOURCE_FUNCTIONAL_BINDING_DOMAIN = (
+    b"BL/PQ512/WAVE2/H4-MASKED-SOURCE-FUNCTIONAL-BINDING/v1\0"
+)
+H4_GLOBAL_ROUND_FRAME_MAGIC = b"BLH4GR02"
+POST_Z_PROJECTION_REQUEST_MAGIC = b"BLH4PZQ1"
+POST_Z_PROJECTION_RESPONSE_MAGIC = b"BLH4PZR1"
+POST_Z_PROJECTION_COORDINATES = 9
+POST_Z_PROJECTION_TIMEOUT_SECONDS = 21_600
+POST_Z_OPENING_REQUEST_MAGIC = b"BLH4OQ01"
+POST_Z_OPENING_RESPONSE_MAGIC = b"BLH4OR01"
+
+
+def capture_write_once(capture_dir, name, payload):
+    """Persist one live producer byte stream without permitting replacement."""
+
+    if not name or Path(name).name != name:
+        raise SystemExit("h4_capture_name")
+    path = capture_dir / name
+    if path.exists() or path.is_symlink():
+        raise SystemExit(f"h4_capture_exists={path}")
+    try:
+        with path.open("xb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+    except FileExistsError as error:
+        raise SystemExit(f"h4_capture_exists={path}") from error
+
+
+def read_post_z_projection_request():
+    """Wait for one atomic, fixed-shape round-902 projection request."""
+
+    value = os.environ.get("BL_H4_POST_Z_PROJECTION_REQUEST_PATH")
+    if value is None:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        raise SystemExit("post_z_projection_request_not_absolute")
+    expected = len(POST_Z_PROJECTION_REQUEST_MAGIC) + (
+        POST_Z_PROJECTION_COORDINATES * core.FP16_BYTES
+    )
+    deadline = time.monotonic() + POST_Z_PROJECTION_TIMEOUT_SECONDS
+    while True:
+        try:
+            payload = path.read_bytes()
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                raise SystemExit("post_z_projection_request_timeout")
+            time.sleep(0.01)
+            continue
+        if len(payload) != expected or not payload.startswith(
+            POST_Z_PROJECTION_REQUEST_MAGIC
+        ):
+            raise SystemExit("post_z_projection_request_shape")
+        return tuple(
+            decode_canonical_fp16(
+                payload[len(POST_Z_PROJECTION_REQUEST_MAGIC) :], index
+            )
+            for index in range(POST_Z_PROJECTION_COORDINATES)
+        )
+
+
+def publish_post_z_projection_response(source_payload, base_payload):
+    """Atomically publish the two fixed-size vectors and never overwrite."""
+
+    value = os.environ.get("BL_H4_POST_Z_PROJECTION_RESPONSE_PATH")
+    if value is None:
+        raise SystemExit("post_z_projection_response_path_missing")
+    path = Path(value)
+    if not path.is_absolute():
+        raise SystemExit("post_z_projection_response_not_absolute")
+    expected = MAIN_DIMENSION * core.FP16_BYTES
+    if len(source_payload) != expected or len(base_payload) != expected:
+        raise SystemExit("post_z_projection_response_shape")
+    partial = Path(str(path) + ".partial")
+    if path.exists() or path.is_symlink() or partial.exists() or partial.is_symlink():
+        raise SystemExit("post_z_projection_response_exists")
+    payload = POST_Z_PROJECTION_RESPONSE_MAGIC + source_payload + base_payload
+    try:
+        with partial.open("xb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(partial, path)
+    except BaseException:
+        try:
+            partial.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def read_post_z_opening_request():
+    value = os.environ.get("BL_H4_POST_Z_OPENING_REQUEST_PATH")
+    if value is None:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        raise SystemExit("post_z_opening_request_not_absolute")
+    expected = len(POST_Z_OPENING_REQUEST_MAGIC) + core.OPENING_ROW_FIXTURE_COUNT * 4
+    deadline = time.monotonic() + POST_Z_PROJECTION_TIMEOUT_SECONDS
+    while True:
+        try:
+            payload = path.read_bytes()
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                raise SystemExit("post_z_opening_request_timeout")
+            time.sleep(0.01)
+            continue
+        if len(payload) != expected or not payload.startswith(POST_Z_OPENING_REQUEST_MAGIC):
+            raise SystemExit("post_z_opening_request_shape")
+        positions = tuple(
+            int.from_bytes(payload[offset:offset + 4], "big")
+            for offset in range(8, len(payload), 4)
+        )
+        if tuple(sorted(set(positions))) != positions or positions[-1] >= core.BASE_CODE_VALUES:
+            raise SystemExit("post_z_opening_request_positions")
+        return positions
+
+
+def publish_post_z_opening_response(source_segment, base_segment):
+    value = os.environ.get("BL_H4_POST_Z_OPENING_RESPONSE_PATH")
+    if value is None:
+        raise SystemExit("post_z_opening_response_path_missing")
+    path = Path(value)
+    partial = Path(str(path) + ".partial")
+    if not path.is_absolute() or path.exists() or partial.exists():
+        raise SystemExit("post_z_opening_response_path")
+    payload = (
+        POST_Z_OPENING_RESPONSE_MAGIC
+        + len(source_segment).to_bytes(8, "big")
+        + len(base_segment).to_bytes(8, "big")
+        + source_segment
+        + base_segment
+    )
+    try:
+        with partial.open("xb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(partial, path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 IOPP_KERNEL = r"""
@@ -1218,8 +1377,12 @@ def exact_queries(state, label, bound, count):
     draw = 0
     threshold = ((1 << 64) - bound) % bound
     while len(queries) < count:
+        if draw >= QUERY_MAX_DRAWS:
+            raise SystemExit("query_draw_limit")
         retry = 0
         while True:
+            if retry >= QUERY_MAX_RETRIES_PER_DRAW:
+                raise SystemExit("query_retry_limit")
             digest = core.sha3_parts(
                 QUERY_DOMAIN,
                 (
@@ -1244,6 +1407,82 @@ def exact_queries(state, label, bound, count):
     return tuple(sorted(queries))
 
 
+def gkr_mask_tensor_queries(state, inner_queries):
+    queries = []
+    for ordinal, inner_query in enumerate(inner_queries):
+        digest = core.sha3_parts(
+            GKR_MASK_OUTER_QUERY_DOMAIN,
+            (
+                state,
+                GKR_MASK_OUTER_QUERY_LABEL,
+                ordinal.to_bytes(8, "big"),
+                inner_query.to_bytes(4, "big"),
+            ),
+        )
+        random_word = int.from_bytes(digest[:8], "little")
+        outer_query = (
+            random_word * GKR_MASK_OUTER_VALUES
+        ) >> 64
+        queries.append(
+            inner_query * GKR_MASK_OUTER_VALUES + outer_query
+        )
+    if (
+        len(queries) != len(inner_queries)
+        or len(set(queries)) != len(queries)
+        or queries != sorted(queries)
+        or any(query >= GKR_MASK_TREE_LEAVES for query in queries)
+    ):
+        raise SystemExit("gkr_mask_tensor_query_shape")
+    return tuple(queries)
+
+
+def encode_gkr_mask_tensor(
+    runtime,
+    allocator,
+    kernel_functions,
+    inner_root_powers,
+    inner_coset_powers,
+    outer_root_powers,
+    outer_coset_powers,
+    coefficients,
+):
+    inner_rows, inner_timings = encode_random_batch(
+        runtime,
+        allocator,
+        kernel_functions,
+        inner_root_powers,
+        inner_coset_powers,
+        coefficients,
+        GKR_MASK_INNER_LOG,
+        GLOBAL_WORDS,
+        GKR_MASK_STATES,
+        canonical_bytes=False,
+    )
+    try:
+        tensor_rows, outer_timings = encode_random_batch(
+            runtime,
+            allocator,
+            kernel_functions,
+            outer_root_powers,
+            outer_coset_powers,
+            inner_rows,
+            GKR_MASK_OUTER_LOG,
+            GKR_MASK_STATES,
+            AUX_CODE_VALUES,
+            transpose_rows=False,
+        )
+    finally:
+        allocator.free(inner_rows)
+    if tensor_rows.size != GKR_MASK_TREE_LEAVES * core.FP16_BYTES:
+        allocator.free(tensor_rows)
+        raise SystemExit("gkr_mask_tensor_code_shape")
+    return tensor_rows, {
+        "inner": inner_timings,
+        "outer": outer_timings,
+        "total": inner_timings["total"] + outer_timings["total"],
+    }
+
+
 def encode_random_batch(
     runtime,
     allocator,
@@ -1254,6 +1493,8 @@ def encode_random_batch(
     log_code,
     dimension,
     batch,
+    transpose_rows=True,
+    canonical_bytes=True,
 ):
     return core.encode_segment(
         runtime,
@@ -1268,6 +1509,8 @@ def encode_random_batch(
         message_values=0,
         mask_coefficients=dimension,
         batch=batch,
+        transpose_rows=transpose_rows,
+        canonical_bytes=canonical_bytes,
     )
 
 
@@ -1451,6 +1694,37 @@ def read_exact_pipe(stream, length, label):
     return bytes(payload)
 
 
+def validate_h4_masked_source_functional_binding(
+    payload,
+    *,
+    expected_profile=None,
+    expected_source_root=None,
+    expected_mask_root=None,
+):
+    if (
+        len(payload) != H4_MASKED_SOURCE_FUNCTIONAL_BINDING_BYTES
+        or payload[:8] != b"BLH4SF01"
+        or int.from_bytes(payload[8:10], "big") != 1
+        or payload[10] not in (1, 3)
+        or payload[11] != 2
+        or payload[12:16] != b"\0" * 4
+        or payload[16:80] == b"\0" * 64
+        or payload[80:144] == b"\0" * 64
+        or hashlib.sha3_512(
+            H4_MASKED_SOURCE_FUNCTIONAL_BINDING_DOMAIN + payload[:-64]
+        ).digest()
+        != payload[-64:]
+    ):
+        raise SystemExit("h4_masked_source_functional_binding")
+    if expected_profile is not None and payload[10] != expected_profile:
+        raise SystemExit("h4_masked_source_functional_profile")
+    if expected_source_root is not None and payload[16:80] != expected_source_root:
+        raise SystemExit("h4_masked_source_functional_source_root")
+    if expected_mask_root is not None and payload[80:144] != expected_mask_root:
+        raise SystemExit("h4_masked_source_functional_mask_root")
+    return payload
+
+
 def state_squarefree_claims_payload(root, capacity, claims, payload):
     if capacity == 0 and root == b"\0" * 64 and not claims:
         if payload != b"BLSQCL00" + root + b"\0" * 4:
@@ -1470,29 +1744,43 @@ def state_squarefree_claims_payload(root, capacity, claims, payload):
     for point, value in claims:
         if len(point) != STATE_SQUAREFREE_COEFFICIENT_VARIABLES:
             raise SystemExit("state_squarefree_claim_point")
+    digest_preimage = bytearray(
+        b"BL/PQ512/WAVE2/STATE-SQUAREFREE-CLAIMS/v2\0"
+        + root
+        + capacity.to_bytes(2, "big")
+        + len(claims).to_bytes(2, "big")
+    )
+    for point, value in claims:
+        digest_preimage.extend(len(point).to_bytes(2, "big"))
+        for coordinate in point:
+            digest_preimage.extend(fp16_bytes(coordinate))
+        digest_preimage.extend(fp16_bytes(value))
+    if hashlib.sha3_512(digest_preimage).digest() != payload[76:140]:
+        raise SystemExit("state_squarefree_claim_payload_digest")
     return payload
 
 
-def state_squarefree_answer_binding(capacity, claims, mixing):
+def state_squarefree_answer_binding(capacity, claims, claims_payload, mixing):
     if capacity == 0 and not claims:
-        encoded = bytearray(b"BLSQAB01" + b"\0" * 8)
+        if claims_payload != b"BLSQCL00" + b"\0" * 68:
+            raise SystemExit("state_squarefree_answer_zero_payload")
+        encoded = bytearray(b"BLSQAB02" + claims_payload)
         for scalar in mixing:
             encoded.extend(fp16_bytes(scalar))
         return bytes(encoded), ZERO
     if (
         len(claims) != STATE_SQUAREFREE_COEFFICIENT_CLAIMS
         or len(mixing) != STATE_SQUAREFREE_COEFFICIENT_CLAIMS
-        or any(
-        value == ZERO for value in mixing
-        )
+        or any(value == ZERO for value in mixing)
     ):
         raise SystemExit("state_squarefree_functional_shape")
-    encoded = bytearray(
-        b"BLSQAB01"
-        + capacity.to_bytes(2, "big")
-        + len(claims).to_bytes(2, "big")
-        + b"\0" * 4
+    claims_payload = state_squarefree_claims_payload(
+        claims_payload[8:72],
+        capacity,
+        claims,
+        claims_payload,
     )
+    encoded = bytearray(b"BLSQAB02" + claims_payload)
     target = ZERO
     for point, value in claims:
         if len(point) != STATE_SQUAREFREE_COEFFICIENT_VARIABLES:
@@ -1513,6 +1801,57 @@ def copy_device(runtime, destination, source, size, label):
         runtime.cuda.cuMemcpyDtoD_v2(destination, source, size),
         label,
     )
+
+
+def concatenate_sumcheck_and_base_auxiliary(
+    runtime,
+    allocator,
+    sumcheck_source,
+    base_auxiliary,
+):
+    word_bytes = AUX_DIMENSION * core.FP16_BYTES
+    output = allocator.allocate_count(
+        SUMCHECK_BASE_WORDS * AUX_DIMENSION,
+        core.FP16_BYTES,
+    )
+    copy_device(
+        runtime,
+        output.pointer,
+        sumcheck_source.pointer,
+        SUMCHECK_ROUNDS * word_bytes,
+        "copy_sumcheck_source_to_combined_root",
+    )
+    copy_device(
+        runtime,
+        output.pointer + SUMCHECK_ROUNDS * word_bytes,
+        base_auxiliary.pointer,
+        NON_GKR_AUXILIARY_WORDS * word_bytes,
+        "copy_base_auxiliary_to_combined_root",
+    )
+    return output
+
+
+def extract_non_gkr_auxiliary_source(runtime, allocator, complete_source):
+    word_bytes = AUX_DIMENSION * core.FP16_BYTES
+    output = allocator.allocate_count(
+        NON_GKR_AUXILIARY_WORDS * AUX_DIMENSION,
+        core.FP16_BYTES,
+    )
+    copy_device(
+        runtime,
+        output.pointer,
+        complete_source.pointer,
+        SUMCHECK_ROUNDS * word_bytes,
+        "copy_sumcheck_answer_sources",
+    )
+    copy_device(
+        runtime,
+        output.pointer + SUMCHECK_ROUNDS * word_bytes,
+        complete_source.pointer + (AUXILIARY_WORDS - 1) * word_bytes,
+        word_bytes,
+        "copy_squarefree_answer_source",
+    )
+    return output
 
 
 class NativePublicCoinBridge:
@@ -1654,7 +1993,18 @@ class NativePublicCoinBridge:
         self.closed = False
         self.round = 0
         self.round_count = round_count
+        self.strict_mode = os.environ.get("BL_CURRENT_STRICT_H4") == "1"
+        self.strict_profile_code = (
+            1 if round_count == 6_791 else 3 if round_count == 7_059 else None
+        )
+        if self.strict_mode and self.strict_profile_code is None:
+            self.abort()
+            raise SystemExit("strict_public_coin_profile")
+        self.strict_frames = []
         self.gkr_prelude = gkr_prelude
+        self.gkr_mask_commitment = (
+            bytes(gkr_mask_commitment) if gkr_prelude else b""
+        )
         self.prelude_complete = False
         self.head_seconds = None
         self.gkr_mask_opening = None
@@ -1666,6 +2016,8 @@ class NativePublicCoinBridge:
         self.state_squarefree_coefficient_claims = ()
         self.state_squarefree_public_claims_payload = b""
         self.state_squarefree_capacity = 0
+        self.h4_source_root = b"\0" * 64
+        self.h4_masked_source_functional_binding = b""
         try:
             self.process.stdin.write(
                 b"BLPCCN01"
@@ -1709,6 +2061,7 @@ class NativePublicCoinBridge:
             if initial_root is None or len(initial_root) != 64:
                 self.abort()
                 raise SystemExit("public_coin_squarefree_initial_root")
+            self.h4_source_root = bytes(initial_root)
             self.process.stdin.write(b"BLPCCB02" + initial_root)
             self.process.stdin.flush()
             witness_header = read_exact_pipe(
@@ -1921,10 +2274,28 @@ class NativePublicCoinBridge:
                 "public_coin_squarefree_public_claims_payload",
             )
             if self.state_squarefree_capacity:
+                self.h4_masked_source_functional_binding = (
+                    validate_h4_masked_source_functional_binding(
+                        read_exact_pipe(
+                            self.process.stdout,
+                            H4_MASKED_SOURCE_FUNCTIONAL_BINDING_BYTES,
+                            "public_coin_h4_masked_source_functional_binding",
+                        ),
+                        expected_profile=(
+                            1 if self.state_squarefree_capacity == 128 else 3
+                        ),
+                        expected_source_root=self.h4_source_root,
+                        expected_mask_root=self.gkr_mask_commitment,
+                    )
+                )
                 expected = STATE_SQUAREFREE_ROUNDS[
                     1 if self.state_squarefree_capacity == 128 else 3
                 ]
-                self.round = GKR_PRELUDE_ROUNDS + expected
+                self.round = (
+                    GKR_PRELUDE_ROUNDS
+                    + expected
+                    + H4_SOURCE_RELATION_ROUNDS
+                )
             else:
                 self.round = GKR_PRELUDE_ROUNDS
         self.prelude_complete = True
@@ -1941,20 +2312,48 @@ class NativePublicCoinBridge:
         ):
             raise SystemExit("public_coin_challenge_shape")
         ordinal = self.round
+        coin_message = message
+        if self.strict_mode:
+            if self.strict_profile_code != 1:
+                raise SystemExit("strict_k512_global_coordinator_required")
+            coin_message = (
+                H4_GLOBAL_ROUND_FRAME_MAGIC
+                + bytes((self.strict_profile_code, 1))
+                + kind.to_bytes(2, "big")
+                + ordinal.to_bytes(4, "big")
+                + b"\0"
+                + len(message).to_bytes(4, "big")
+                + message
+            )
+            self.strict_frames.append(coin_message)
         self.process.stdin.write(
             b"BLPCCRQ1"
             + kind.to_bytes(2, "big")
             + ordinal.to_bytes(4, "big")
             + output_count.to_bytes(2, "big")
-            + len(message).to_bytes(4, "big")
-            + message
+            + len(coin_message).to_bytes(4, "big")
+            + coin_message
         )
         self.process.stdin.flush()
-        response = read_exact_pipe(
-            self.process.stdout,
-            14 + output_count * core.FP16_BYTES,
-            "public_coin_round",
-        )
+        try:
+            response = read_exact_pipe(
+                self.process.stdout,
+                14 + output_count * core.FP16_BYTES,
+                "public_coin_round",
+            )
+        except SystemExit as error:
+            # Preserve the native bridge's failed-closed diagnostic when it
+            # exits before a response.  Without this readback, a verifier
+            # error is misleadingly reduced to an empty-pipe short read and
+            # the exact rejected descriptor/message boundary is lost.
+            if self.process.poll() is None:
+                self.process.kill()
+            status = self.process.wait(timeout=10)
+            stderr = self.process.stderr.read()
+            self.closed = True
+            raise SystemExit(
+                f"{error};status={status};stderr={stderr!r}"
+            ) from error
         if (
             response[:8] != b"BLPCCRS1"
             or int.from_bytes(response[8:12], "big") != ordinal
@@ -1977,20 +2376,78 @@ class NativePublicCoinBridge:
                 f"public_coin_finish_rounds={self.round}/{self.round_count}"
             )
         self.process.stdin.close()
-        header = read_exact_pipe(
-            self.process.stdout,
-            12,
-            "public_coin_finish",
-        )
-        if header[:8] != b"BLPCCFN1":
+        magic = read_exact_pipe(self.process.stdout, 8, "public_coin_finish")
+        governed_key = None
+        native_raw_frames = None
+        if magic == b"BLPCF2S2":
+            lengths = read_exact_pipe(
+                self.process.stdout,
+                12,
+                "strict_public_coin_full_finish_lengths",
+            )
+            governed_key_length = int.from_bytes(lengths[:4], "big")
+            bundle_length = int.from_bytes(lengths[4:8], "big")
+            raw_frames_length = int.from_bytes(lengths[8:], "big")
+            if (
+                governed_key_length <= 0
+                or bundle_length <= 0
+                or raw_frames_length <= 0
+            ):
+                self.abort()
+                raise SystemExit("strict_public_coin_full_finish_shape")
+            governed_key = read_exact_pipe(
+                self.process.stdout,
+                governed_key_length,
+                "strict_public_coin_governed_key",
+            )
+            bundle = read_exact_pipe(
+                self.process.stdout,
+                bundle_length,
+                "strict_public_coin_bundle",
+            )
+            native_raw_frames = read_exact_pipe(
+                self.process.stdout,
+                raw_frames_length,
+                "strict_public_coin_raw_frames",
+            )
+        elif magic == b"BLPCF2S1":
+            lengths = read_exact_pipe(
+                self.process.stdout,
+                8,
+                "strict_public_coin_finish_lengths",
+            )
+            governed_key_length = int.from_bytes(lengths[:4], "big")
+            bundle_length = int.from_bytes(lengths[4:], "big")
+            if governed_key_length <= 0 or bundle_length <= 0:
+                self.abort()
+                raise SystemExit("strict_public_coin_finish_shape")
+            governed_key = read_exact_pipe(
+                self.process.stdout,
+                governed_key_length,
+                "strict_public_coin_governed_key",
+            )
+            bundle = read_exact_pipe(
+                self.process.stdout,
+                bundle_length,
+                "strict_public_coin_bundle",
+            )
+        elif magic == b"BLPCCFN1":
+            bundle_length = int.from_bytes(
+                read_exact_pipe(
+                    self.process.stdout,
+                    4,
+                    "public_coin_finish_length",
+                ),
+                "big",
+            )
+            bundle = read_exact_pipe(
+                self.process.stdout,
+                bundle_length,
+                "public_coin_bundle",
+            )
+        else:
             self.abort()
-            raise SystemExit(f"public_coin_finish_header={header!r}")
-        bundle_length = int.from_bytes(header[8:], "big")
-        bundle = read_exact_pipe(
-            self.process.stdout,
-            bundle_length,
-            "public_coin_bundle",
-        )
+            raise SystemExit(f"public_coin_finish_header={magic!r}")
         finish_seconds = struct.unpack(
             ">d",
             read_exact_pipe(
@@ -2014,6 +2471,18 @@ class NativePublicCoinBridge:
             "head_seconds": self.head_seconds,
             "finish_seconds": finish_seconds,
             "wall_seconds": time.perf_counter() - self.started,
+            "governed_key": governed_key,
+            "strict_bundle": bundle if governed_key is not None else None,
+            "raw_frames": (
+                native_raw_frames
+                if native_raw_frames is not None
+                else b"".join(
+                    len(frame).to_bytes(4, "big") + frame
+                    for frame in self.strict_frames
+                )
+                if self.strict_mode
+                else None
+            ),
         }
 
     def abort(self):
@@ -2792,33 +3261,63 @@ class NativeAnswerCodeVerifier:
         executable,
         main_queries,
         auxiliary_queries,
+        query_seed,
         claim_challenge,
         coordinate_challenge,
         gkr_claims,
         challenges,
         gkr_relation_terminals,
         main_scale,
+        state_squarefree_claims_payload,
         state_squarefree_answer_binding,
+        h4_masked_source_functional_binding,
+        combination,
+        base_auxiliary_coefficients,
+        base_gkr_mask_coefficients,
         expected_target,
         main_coefficients,
-        auxiliary_coefficients,
+        ordinary_auxiliary_coefficients,
+        gkr_mask_coefficients,
     ):
         expected_main_size = MAIN_DIMENSION * core.FP16_BYTES
-        expected_auxiliary_size = (
-            AUXILIARY_WORDS * AUX_DIMENSION * core.FP16_BYTES
+        expected_ordinary_auxiliary_size = (
+            NON_GKR_AUXILIARY_WORDS
+            * AUX_DIMENSION
+            * core.FP16_BYTES
         )
+        expected_gkr_mask_size = GKR_MASK_DIMENSION * core.FP16_BYTES
         if (
             len(main_queries) != MAIN_QUERY_COUNT
             or len(auxiliary_queries) != AUX_QUERY_COUNT
             or tuple(sorted(set(main_queries))) != tuple(main_queries)
             or tuple(sorted(set(auxiliary_queries)))
             != tuple(auxiliary_queries)
+            or len(query_seed) != core.FP16_BYTES
             or len(main_coefficients) != expected_main_size
-            or len(auxiliary_coefficients) != expected_auxiliary_size
+            or len(ordinary_auxiliary_coefficients)
+            != expected_ordinary_auxiliary_size
+            or len(gkr_mask_coefficients) != expected_gkr_mask_size
+            or len(base_auxiliary_coefficients)
+            != expected_ordinary_auxiliary_size
+            or len(base_gkr_mask_coefficients) != expected_gkr_mask_size
             or len(gkr_relation_terminals) != GKR_MASK_STATES
             or not state_squarefree_answer_binding
+            or state_squarefree_answer_binding[
+                8 : 8 + len(state_squarefree_claims_payload)
+            ] != state_squarefree_claims_payload
         ):
             raise SystemExit("native_answer_code_input_shape")
+        state_squarefree_capacity = int.from_bytes(
+            state_squarefree_claims_payload[72:74], "big"
+        )
+        if state_squarefree_capacity not in (128, 512):
+            raise SystemExit("native_answer_code_state_capacity")
+        validate_h4_masked_source_functional_binding(
+            h4_masked_source_functional_binding,
+            expected_profile=(
+                1 if state_squarefree_capacity == 128 else 3
+            ),
+        )
         self.process = subprocess.Popen(
             [str(executable)],
             stdin=subprocess.PIPE,
@@ -2835,7 +3334,7 @@ class NativeAnswerCodeVerifier:
         self.collection_error = None
         self.collector = None
         try:
-            self.process.stdin.write(b"BLRSCV04")
+            self.process.stdin.write(b"BLRSCV07")
             self.process.stdin.write(
                 struct.pack(
                     ">7I",
@@ -2843,7 +3342,7 @@ class NativeAnswerCodeVerifier:
                     MAIN_DIMENSION,
                     AUX_CODE_LOG,
                     AUX_DIMENSION,
-                    AUXILIARY_WORDS,
+                    NON_GKR_AUXILIARY_WORDS,
                     MAIN_QUERY_COUNT,
                     AUX_QUERY_COUNT,
                 )
@@ -2860,6 +3359,7 @@ class NativeAnswerCodeVerifier:
                     *auxiliary_queries,
                 )
             )
+            self.process.stdin.write(query_seed)
             self.process.stdin.write(fp16_bytes(claim_challenge))
             self.process.stdin.write(fp16_bytes(coordinate_challenge))
             for claim in gkr_claims:
@@ -2869,10 +3369,18 @@ class NativeAnswerCodeVerifier:
             for terminal in gkr_relation_terminals:
                 self.process.stdin.write(fp16_bytes(terminal))
             self.process.stdin.write(fp16_bytes(main_scale))
+            self.process.stdin.write(
+                state_squarefree_claims_payload
+            )
             self.process.stdin.write(state_squarefree_answer_binding)
+            self.process.stdin.write(h4_masked_source_functional_binding)
+            self.process.stdin.write(fp16_bytes(combination))
+            self.process.stdin.write(base_auxiliary_coefficients)
+            self.process.stdin.write(base_gkr_mask_coefficients)
             self.process.stdin.write(fp16_bytes(expected_target))
             self.process.stdin.write(main_coefficients)
-            self.process.stdin.write(auxiliary_coefficients)
+            self.process.stdin.write(ordinary_auxiliary_coefficients)
+            self.process.stdin.write(gkr_mask_coefficients)
             self.process.stdin.close()
             self.process.stdin = None
             self.collector = threading.Thread(
@@ -2906,17 +3414,17 @@ class NativeAnswerCodeVerifier:
             raise self.collection_error
         wall_seconds = self.ended - self.started
         expected_output_size = (
-            20
+            84
             + MAIN_QUERY_COUNT * core.FP16_BYTES
             + AUX_QUERY_COUNT
-            * AUXILIARY_WORDS
+            * (NON_GKR_AUXILIARY_WORDS + 1)
             * core.FP16_BYTES
         )
         if (
             self.status != 0
             or self.stderr
             or len(self.output) != expected_output_size
-            or self.output[:8] != b"BLRSCO01"
+            or self.output[:8] != b"BLRSCO02"
         ):
             raise SystemExit(
                 "native_answer_code_failed="
@@ -2926,10 +3434,21 @@ class NativeAnswerCodeVerifier:
             )
         compute_seconds = struct.unpack(">d", self.output[8:16])[0]
         workers = int.from_bytes(self.output[16:20], "big")
-        main_end = 20 + MAIN_QUERY_COUNT * core.FP16_BYTES
+        answer_tensor_root = self.output[20:84]
+        if not any(answer_tensor_root):
+            raise SystemExit("native_answer_tensor_root_zero")
+        main_end = 84 + MAIN_QUERY_COUNT * core.FP16_BYTES
+        ordinary_end = (
+            main_end
+            + AUX_QUERY_COUNT
+            * NON_GKR_AUXILIARY_WORDS
+            * core.FP16_BYTES
+        )
         return (
-            self.output[20:main_end],
-            self.output[main_end:],
+            self.output[84:main_end],
+            self.output[main_end:ordinary_end],
+            self.output[ordinary_end:],
+            answer_tensor_root,
             compute_seconds,
             wall_seconds,
             workers,
@@ -2955,24 +3474,44 @@ def run_native_answer_target(
     challenges,
     gkr_relation_terminals,
     main_scale,
+    state_squarefree_claims_payload,
     state_squarefree_answer_binding,
+    h4_masked_source_functional_binding,
     main_coefficients,
-    auxiliary_coefficients,
+    ordinary_auxiliary_coefficients,
+    gkr_mask_coefficients,
     memory,
 ):
     expected_main_size = MAIN_DIMENSION * core.FP16_BYTES
-    expected_auxiliary_size = (
-        AUXILIARY_WORDS * AUX_DIMENSION * core.FP16_BYTES
+    expected_ordinary_auxiliary_size = (
+        NON_GKR_AUXILIARY_WORDS
+        * AUX_DIMENSION
+        * core.FP16_BYTES
     )
+    expected_gkr_mask_size = GKR_MASK_DIMENSION * core.FP16_BYTES
     if (
         len(gkr_claims) != GKR_CLAIM_COUNT
         or len(challenges) != SUMCHECK_ROUNDS
         or len(gkr_relation_terminals) != GKR_MASK_STATES
         or len(main_coefficients) != expected_main_size
-        or len(auxiliary_coefficients) != expected_auxiliary_size
+        or len(ordinary_auxiliary_coefficients)
+        != expected_ordinary_auxiliary_size
+        or len(gkr_mask_coefficients) != expected_gkr_mask_size
         or not state_squarefree_answer_binding
+        or state_squarefree_answer_binding[
+            8 : 8 + len(state_squarefree_claims_payload)
+        ] != state_squarefree_claims_payload
     ):
         raise SystemExit("native_answer_target_input_shape")
+    state_squarefree_capacity = int.from_bytes(
+        state_squarefree_claims_payload[72:74], "big"
+    )
+    if state_squarefree_capacity not in (128, 512):
+        raise SystemExit("native_answer_target_state_capacity")
+    validate_h4_masked_source_functional_binding(
+        h4_masked_source_functional_binding,
+        expected_profile=1 if state_squarefree_capacity == 128 else 3,
+    )
     process = subprocess.Popen(
         [str(executable)],
         stdin=subprocess.PIPE,
@@ -2983,7 +3522,7 @@ def run_native_answer_target(
     memory.child_process_id = process.pid
     started = time.perf_counter()
     try:
-        process.stdin.write(b"BLRSTA02")
+        process.stdin.write(b"BLRSTA05")
         process.stdin.write(fp16_bytes(claim_challenge))
         process.stdin.write(fp16_bytes(coordinate_challenge))
         for claim in gkr_claims:
@@ -2993,9 +3532,12 @@ def run_native_answer_target(
         for terminal in gkr_relation_terminals:
             process.stdin.write(fp16_bytes(terminal))
         process.stdin.write(fp16_bytes(main_scale))
+        process.stdin.write(state_squarefree_claims_payload)
         process.stdin.write(state_squarefree_answer_binding)
+        process.stdin.write(h4_masked_source_functional_binding)
         process.stdin.write(main_coefficients)
-        process.stdin.write(auxiliary_coefficients)
+        process.stdin.write(ordinary_auxiliary_coefficients)
+        process.stdin.write(gkr_mask_coefficients)
         process.stdin.close()
         output = process.stdout.read()
         stderr = process.stderr.read()
@@ -3011,24 +3553,82 @@ def run_native_answer_target(
     if (
         status != 0
         or stderr
-        or len(output) != 84
-        or output[:8] != b"BLRSTO01"
+        or len(output) != 148
+        or output[:8] != b"BLRSTO02"
     ):
         raise SystemExit(
             "native_answer_target_failed="
-            f"status={status};size={len(output)}/84;"
+            f"status={status};size={len(output)}/148;"
             f"magic={output[:8]!r};stderr={stderr!r}"
         )
     return (
         decode_canonical_fp16(output[8:72], 0),
-        struct.unpack(">d", output[72:80])[0],
+        decode_canonical_fp16(output[72:136], 0),
+        struct.unpack(">d", output[136:144])[0],
         wall_seconds,
-        int.from_bytes(output[80:84], "big"),
+        int.from_bytes(output[144:148], "big"),
+    )
+
+
+def run_native_gkr_answer_commit(executable, coefficients, memory):
+    expected_size = GKR_MASK_DIMENSION * core.FP16_BYTES
+    if len(coefficients) != expected_size:
+        raise SystemExit(
+            "native_gkr_answer_commit_input_size="
+            f"{len(coefficients)}/{expected_size}"
+        )
+    process = subprocess.Popen(
+        [str(executable), "--gkr-answer-commit"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    memory.child_process_id = process.pid
+    started = time.perf_counter()
+    try:
+        process.stdin.write(b"BLRSAC01")
+        process.stdin.write(coefficients)
+        process.stdin.close()
+        output = process.stdout.read()
+        status = process.wait(timeout=120)
+        stderr = process.stderr.read()
+    finally:
+        memory.child_process_id = None
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+    wall_seconds = time.perf_counter() - started
+    if (
+        status != 0
+        or stderr
+        or len(output) != 84
+        or output[:8] != b"BLRSAO01"
+        or not any(output[20:84])
+    ):
+        raise SystemExit(
+            "native_gkr_answer_commit_failed="
+            f"status={status};size={len(output)}/84;"
+            f"magic={output[:8]!r};stderr={stderr!r}"
+        )
+    return (
+        output[20:84],
+        struct.unpack(">d", output[8:16])[0],
+        wall_seconds,
+        int.from_bytes(output[16:20], "big"),
     )
 
 
 class NativeSpotcheckVerifier:
-    def __init__(self, executable, weights, combination):
+    def __init__(
+        self,
+        executable,
+        query_seed,
+        weights,
+        combination,
+    ):
+        if len(query_seed) != core.FP16_BYTES:
+            raise SystemExit("native_spotcheck_query_seed_shape")
         self.process = subprocess.Popen(
             [str(executable)],
             stdin=subprocess.PIPE,
@@ -3040,12 +3640,13 @@ class NativeSpotcheckVerifier:
         self.initial_segments = 0
         self.started = time.perf_counter()
         self.process.stdin.write(
-            b"BLSPOT03"
+            b"BLSPOT05"
             + struct.pack(
                 ">2I",
                 INITIAL_SEGMENT_COUNT,
                 core.INTERLEAVINGS_PER_SEGMENT,
             )
+            + query_seed
         )
         for weight in weights:
             self.process.stdin.write(fp16_bytes(weight))
@@ -3066,13 +3667,14 @@ class NativeSpotcheckVerifier:
 
     def finish(
         self,
-        sumcheck,
+        sumcheck_and_base,
         gkr_mask,
         state_squarefree_coefficients,
         base_main,
-        base_auxiliary,
+        base_gkr_mask,
         answer_main,
-        answer_auxiliary,
+        answer_ordinary_auxiliary,
+        answer_gkr_mask,
     ):
         finish_started = time.perf_counter()
         if self.initial_segments != INITIAL_SEGMENT_COUNT:
@@ -3081,13 +3683,14 @@ class NativeSpotcheckVerifier:
                 f"{self.initial_segments}"
             )
         for payload in (
-            sumcheck,
+            sumcheck_and_base,
             gkr_mask,
             state_squarefree_coefficients,
             base_main,
-            base_auxiliary,
+            base_gkr_mask,
             answer_main,
-            answer_auxiliary,
+            answer_ordinary_auxiliary,
+            answer_gkr_mask,
         ):
             self.process.stdin.write(payload)
         self.process.stdin.close()
@@ -3267,6 +3870,7 @@ def compile_child(nvrtc, output, module_format):
         + core.SHA3_KERNEL
         + core.SEGMENT_MERKLE_KERNEL
         + core.RS_KERNEL
+        + binding_merkle.KERNEL
         + IOPP_KERNEL,
         output,
     )
@@ -3593,6 +4197,16 @@ def main():
         return
     if len(sys.argv) != 1:
         raise SystemExit("usage: cuda_fp16_zk_rs_theorem8_1_k128_prototype.py")
+    capture_dir = None
+    capture_dir_value = os.environ.get("BL_CURRENT_H4_CAPTURE_DIR")
+    if capture_dir_value is not None:
+        if os.environ.get("BL_CURRENT_STRICT_H4") != "1":
+            raise SystemExit("h4_capture_requires_strict_mode")
+        capture_dir = Path(capture_dir_value)
+        if not capture_dir.is_absolute():
+            raise SystemExit("h4_capture_directory_not_absolute")
+        if capture_dir.is_symlink() or not capture_dir.is_dir():
+            raise SystemExit("h4_capture_directory_invalid")
     proof_process_started = time.perf_counter()
     state_binding = atomic_state_binding()
     state_relation_source = load_state_relation_source()
@@ -3747,11 +4361,41 @@ def main():
             public_coin_rounds += STATE_SQUAREFREE_ROUNDS[
                 semantic_source["profile"]
             ]
+            public_coin_rounds += H4_SOURCE_RELATION_ROUNDS
         public_coin_session, public_coin_schedule = public_coin_identity(
             gkr_mask_cpu_root,
             state_binding,
             public_coin_rounds,
         )
+        if capture_dir is not None:
+            capture_write_once(capture_dir, "session-id.bin", public_coin_session)
+            capture_write_once(
+                capture_dir,
+                "schedule-commitment.bin",
+                public_coin_schedule,
+            )
+            capture_write_once(
+                capture_dir,
+                "gkr-mask-commitment-legacy.bin",
+                gkr_mask_cpu_root,
+            )
+            capture_write_once(
+                capture_dir,
+                "producer-profile.json",
+                json.dumps(
+                    {
+                        "round_count": public_coin_rounds,
+                        "interleavings_per_segment": core.INTERLEAVINGS_PER_SEGMENT,
+                        "segments_per_boundary": core.SEGMENTS_PER_BOUNDARY,
+                        "boundary_count": core.BOUNDARY_COUNT,
+                        "semantic_shard": (
+                            None if semantic_source is None else semantic_source["shard"]
+                        ),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+            )
         if semantic_source is None:
             public_coin = NativePublicCoinBridge(
                 public_coin_path,
@@ -3795,6 +4439,8 @@ def main():
     state_relation_source_buffer = None
     state_squarefree_coefficient_source = None
     state_squarefree_coefficient_tree = None
+    combined_source_tree = None
+    bridge_base_tree_v2 = None
     try:
         core.bind_driver(runtime)
         runtime.cuda.cuMemcpyDtoD_v2.argtypes = [
@@ -3806,6 +4452,22 @@ def main():
         memory = core.ProofPhaseMemorySampler()
         memory.start()
         memory.child_process_id = public_coin.process.pid
+
+        def capture_replay(name, buffer, canonical):
+            if capture_dir is None:
+                return
+            payload = (
+                core.copy_to_host(runtime, buffer, f"capture_{name}")
+                if canonical
+                else copy_canonical_fp16_payload(
+                    runtime,
+                    buffer,
+                    f"capture_{name}",
+                )
+            )
+            capture_write_once(capture_dir, name, payload)
+            del payload
+
         kernel_lookup_started = time.perf_counter()
         kernels = {
             "initialize": function(
@@ -3827,6 +4489,14 @@ def main():
                 runtime,
                 "transpose_rs_rows_big_endian",
             ),
+            "transpose_native": function(
+                runtime,
+                "transpose_rs_rows_native",
+            ),
+            "canonicalize_codewords": function(
+                runtime,
+                "canonicalize_rs_codewords_big_endian",
+            ),
             "gather_nodes": function(runtime, "gather_rs_nodes"),
             "canonicalize_masks": function(
                 runtime,
@@ -3835,6 +4505,7 @@ def main():
         }
         expand = function(runtime, "expand_rs_powers")
         merkle = core.segment_merkle_functions(runtime)
+        binding_merkle_functions = binding_merkle.functions(core, runtime)
         fixture_weights = function(
             runtime,
             "multilinear_coefficient_weights",
@@ -3949,6 +4620,22 @@ def main():
             core.COSET,
             "theorem8_aux_coset_powers",
         )
+        gkr_mask_outer_root_powers = core.power_table(
+            runtime,
+            allocator,
+            expand,
+            GKR_MASK_OUTER_VALUES // 2,
+            core.root_for_log(GKR_MASK_OUTER_LOG),
+            "theorem8_gkr_mask_outer_root_powers",
+        )
+        gkr_mask_outer_coset_powers = core.power_table(
+            runtime,
+            allocator,
+            expand,
+            GKR_MASK_OUTER_VALUES,
+            core.COSET,
+            "theorem8_gkr_mask_outer_coset_powers",
+        )
         power_table_seconds = time.perf_counter() - power_table_started
         if gkr_mask_cpu_root is None or gkr_mask_cpu_words is None:
             raise SystemExit("gkr_mask_cpu_commit_state")
@@ -3963,16 +4650,15 @@ def main():
         gkr_mask_cpu_words = None
         random_host = (ctypes.c_ubyte * 65_536)()
         sampling_attempts = gkr_mask_sampling_attempts
-        gkr_mask_rows, _ = encode_random_batch(
+        gkr_mask_rows, _ = encode_gkr_mask_tensor(
             runtime,
             allocator,
             kernels,
             aux_root_powers,
             aux_coset_powers,
+            gkr_mask_outer_root_powers,
+            gkr_mask_outer_coset_powers,
             gkr_mask,
-            AUX_CODE_LOG,
-            GLOBAL_WORDS,
-            GKR_MASK_STATES,
         )
         gkr_mask_segment = core.OracleSegment(
             2,
@@ -4037,9 +4723,19 @@ def main():
             runtime,
             allocator,
             kernels["canonicalize_masks"],
-            AUXILIARY_WORDS,
+            NON_GKR_AUXILIARY_WORDS,
             AUX_DIMENSION,
             "theorem8_base_aux_masks",
+            random_host,
+        )
+        sampling_attempts += attempts
+        base_gkr_mask, attempts = core.exact_uniform_mask_buffer(
+            runtime,
+            allocator,
+            kernels["canonicalize_masks"],
+            GKR_MASK_STATES,
+            GLOBAL_WORDS,
+            "theorem8_base_gkr_mask",
             random_host,
         )
         sampling_attempts += attempts
@@ -4055,6 +4751,16 @@ def main():
 
         started = time.perf_counter()
         initial_trees = []
+        combined_source = binding_merkle.IncrementalSourceCommitmentV2(
+            core,
+            runtime,
+            allocator,
+            binding_merkle_functions,
+            core.BASE_CODE_VALUES,
+            core.BOUNDARY_COUNT * core.INTERLEAVINGS_PER_BOUNDARY * core.FP16_BYTES,
+            3,
+            32,
+        )
         seed = 0
         global_word_base = 0
         for boundary in range(core.BOUNDARY_COUNT):
@@ -4129,33 +4835,41 @@ def main():
                         segment,
                     )
                 )
+                combined_source.absorb(row_major, core.ROW_BYTES)
                 allocator.free(row_major)
                 seed += 1
                 global_word_base += (
                     core.INTERLEAVINGS_PER_SEGMENT
                 )
         initial_commit_seconds = time.perf_counter() - started
+        combined_source_tree = combined_source.finish()
         initial_set_root = core.segment_set_root(
             tuple(tree.segment for tree in initial_trees),
             tuple(tree.root for tree in initial_trees),
         )
         started = time.perf_counter()
+        sumcheck_and_base = concatenate_sumcheck_and_base_auxiliary(
+            runtime,
+            allocator,
+            sumcheck_randomness,
+            base_aux,
+        )
         sumcheck_rows, _ = encode_random_batch(
             runtime,
             allocator,
             kernels,
             aux_root_powers,
             aux_coset_powers,
-            sumcheck_randomness,
+            sumcheck_and_base,
             AUX_CODE_LOG,
             AUX_DIMENSION,
-            SUMCHECK_ROUNDS,
+            SUMCHECK_BASE_WORDS,
         )
         sumcheck_segment = core.OracleSegment(
             2,
             SUMCHECK_MASK_KIND,
             sumcheck_rows,
-            SUMCHECK_LEAF_SIZE,
+            SUMCHECK_BASE_LEAF_SIZE,
         )
         sumcheck_tree = core.retain_tree(
             runtime,
@@ -4190,31 +4904,42 @@ def main():
             merkle,
             base_main_segment,
         )
+        bridge_base_commitment = binding_merkle.IncrementalSourceCommitmentV2(
+            core,
+            runtime,
+            allocator,
+            binding_merkle_functions,
+            core.BASE_CODE_VALUES,
+            MAIN_LEAF_SIZE,
+            2,
+            BASE_MAIN_MASK_KIND,
+        )
+        bridge_base_commitment.absorb(base_main_rows, MAIN_LEAF_SIZE)
+        bridge_base_tree_v2 = bridge_base_commitment.finish()
         allocator.free(base_main_rows)
-        base_aux_rows, _ = encode_random_batch(
+        base_gkr_mask_rows, _ = encode_gkr_mask_tensor(
             runtime,
             allocator,
             kernels,
             aux_root_powers,
             aux_coset_powers,
-            base_aux,
-            AUX_CODE_LOG,
-            AUX_DIMENSION,
-            AUXILIARY_WORDS,
+            gkr_mask_outer_root_powers,
+            gkr_mask_outer_coset_powers,
+            base_gkr_mask,
         )
-        base_aux_segment = core.OracleSegment(
+        base_gkr_mask_segment = core.OracleSegment(
             2,
-            BASE_AUX_MASK_KIND,
-            base_aux_rows,
-            AUXILIARY_LEAF_SIZE,
+            BASE_GKR_MASK_KIND,
+            base_gkr_mask_rows,
+            GKR_MASK_LEAF_SIZE,
         )
-        base_aux_tree = core.retain_tree(
+        base_gkr_mask_tree = core.retain_tree(
             runtime,
             allocator,
             merkle,
-            base_aux_segment,
+            base_gkr_mask_segment,
         )
-        allocator.free(base_aux_rows)
+        allocator.free(base_gkr_mask_rows)
         base_commit_seconds = time.perf_counter() - base_commit_started
 
         if not public_coin.prelude_complete:
@@ -4575,10 +5300,19 @@ def main():
         coordinate_challenge = sumcheck[
             "coordinate_challenge"
         ]
+        state_squarefree_claims_payload = (
+            public_coin.state_squarefree_public_claims_payload
+        )
+        h4_masked_source_functional_binding = (
+            public_coin.h4_masked_source_functional_binding
+        )
+        if not h4_masked_source_functional_binding:
+            raise SystemExit("h4_masked_source_functional_binding_missing")
         state_squarefree_answer_binding_payload, state_squarefree_coefficient_target = (
             state_squarefree_answer_binding(
                 public_coin.state_squarefree_capacity,
                 public_coin.state_squarefree_coefficient_claims,
+                state_squarefree_claims_payload,
                 sumcheck["coefficient_mixing"],
             )
         )
@@ -4590,6 +5324,37 @@ def main():
         gkr_relation_terminals = sumcheck[
             "gkr_relation_terminals"
         ]
+        if capture_dir is not None:
+            capture_write_once(
+                capture_dir,
+                "packed-claims.bin",
+                b"".join(encode_gkr_claim(claim) for claim in gkr_claims),
+            )
+            capture_write_once(
+                capture_dir,
+                "relation-terminals.bin",
+                b"".join(fp16_bytes(value) for value in gkr_relation_terminals),
+            )
+            capture_write_once(
+                capture_dir,
+                "squarefree-claims.bin",
+                state_squarefree_claims_payload,
+            )
+            capture_write_once(
+                capture_dir,
+                "squarefree-answer.bin",
+                state_squarefree_answer_binding_payload,
+            )
+            capture_write_once(
+                capture_dir,
+                "h4-functional-binding.bin",
+                h4_masked_source_functional_binding,
+            )
+            capture_write_once(
+                capture_dir,
+                "state-relation-digest.bin",
+                public_coin.gkr_state_relation_digest,
+            )
         terminal_target = sumcheck["terminal_target"]
         source_terminal = sumcheck["source_terminal"]
         mask_terminal = sumcheck["mask_terminal"]
@@ -4733,13 +5498,25 @@ def main():
             base_main,
             "copy_theorem8_base_main_coefficients",
         )
+        if capture_dir is not None:
+            capture_write_once(
+                capture_dir,
+                "h4-answer-base-main-payload.raw",
+                base_main_payload,
+            )
         base_aux_payload = copy_canonical_fp16_payload(
             runtime,
             base_aux,
             "copy_theorem8_base_aux_coefficients",
         )
+        base_gkr_mask_payload = copy_canonical_fp16_payload(
+            runtime,
+            base_gkr_mask,
+            "copy_theorem8_base_gkr_mask_coefficients",
+        )
         (
             base_target,
+            h4_masked_source_target,
             base_target_compute_seconds,
             base_target_wall_seconds,
             base_target_workers,
@@ -4751,19 +5528,21 @@ def main():
             challenges,
             gkr_relation_terminals,
             epsilon,
+            public_coin.state_squarefree_public_claims_payload,
             state_squarefree_answer_binding_payload,
+            h4_masked_source_functional_binding,
             base_main_payload,
             base_aux_payload,
+            base_gkr_mask_payload,
             memory,
         )
         del base_main_payload
-        del base_aux_payload
         base_coin_started = time.perf_counter()
         combination = public_coin.challenge(
             802,
-            b"BL/PQ512/FP16-ZK-RS/BASE-MASKS/v2"
+            b"BL/PQ512/FP16-ZK-RS/BASE-MASKS/v3"
             + base_main_tree.root
-            + base_aux_tree.root
+            + base_gkr_mask_tree.root
             + gkr_mask_tree.root
             + public_coin.state_squarefree_coefficient_root
             + hashlib.sha3_512(
@@ -4774,13 +5553,28 @@ def main():
             ).digest()
             + fp16_bytes(base_target),
         )
+        if capture_dir is not None:
+            capture_write_once(
+                capture_dir,
+                "h4-construction-mix.bin",
+                fp16_bytes(combination),
+            )
         base_coin_seconds = time.perf_counter() - base_coin_started
         main_answer = allocator.allocate_count(
             MAIN_DIMENSION,
             core.FP16_BYTES,
         )
+        non_gkr_aux_source = extract_non_gkr_auxiliary_source(
+            runtime,
+            allocator,
+            complete_aux_source,
+        )
         aux_answer = allocator.allocate_count(
-            AUXILIARY_WORDS * AUX_DIMENSION,
+            NON_GKR_AUXILIARY_WORDS * AUX_DIMENSION,
+            core.FP16_BYTES,
+        )
+        gkr_mask_answer = allocator.allocate_count(
+            GKR_MASK_DIMENSION,
             core.FP16_BYTES,
         )
         answer_started = time.perf_counter()
@@ -4800,29 +5594,144 @@ def main():
         launch(
             runtime,
             linear_combine,
-            AUXILIARY_WORDS * AUX_DIMENSION,
+            NON_GKR_AUXILIARY_WORDS * AUX_DIMENSION,
             arguments(
                 ctypes.c_uint64(aux_answer.pointer),
                 ctypes.c_uint64(base_aux.pointer),
-                ctypes.c_uint64(complete_aux_source.pointer),
+                ctypes.c_uint64(non_gkr_aux_source.pointer),
                 (ctypes.c_uint32 * 16)(*combination),
                 ctypes.c_uint64(
-                    AUXILIARY_WORDS * AUX_DIMENSION
+                    NON_GKR_AUXILIARY_WORDS
+                    * AUX_DIMENSION
                 ),
             ),
             "theorem8_aux_answer",
+        )
+        launch(
+            runtime,
+            linear_combine,
+            GKR_MASK_DIMENSION,
+            arguments(
+                ctypes.c_uint64(gkr_mask_answer.pointer),
+                ctypes.c_uint64(base_gkr_mask.pointer),
+                ctypes.c_uint64(gkr_mask.pointer),
+                (ctypes.c_uint32 * 16)(*combination),
+                ctypes.c_uint64(GKR_MASK_DIMENSION),
+            ),
+            "theorem8_gkr_mask_answer",
         )
         core.ck(
             runtime.cuda.cuCtxSynchronize(),
             "theorem8_answers_sync",
         )
         answer_seconds = time.perf_counter() - answer_started
-        allocator.free(complete_aux_source)
-        allocator.free(folded)
-        complete_terminal_target = add(
-            terminal_target,
-            state_squarefree_coefficient_target,
+        source_main_payload = copy_canonical_fp16_payload(
+            runtime,
+            folded,
+            "copy_theorem8_source_main_coefficients",
         )
+        if capture_dir is not None:
+            capture_write_once(
+                capture_dir,
+                "h4-answer-source-main-payload.raw",
+                source_main_payload,
+            )
+        source_aux_payload = copy_canonical_fp16_payload(
+            runtime,
+            non_gkr_aux_source,
+            "copy_theorem8_source_aux_coefficients",
+        )
+        source_gkr_mask_payload = copy_canonical_fp16_payload(
+            runtime,
+            gkr_mask,
+            "copy_theorem8_source_gkr_mask_coefficients",
+        )
+        source_aux_values = [
+            decode_canonical_fp16(source_aux_payload, index)
+            for index in range(len(source_aux_payload) // core.FP16_BYTES)
+        ]
+        # The authenticated transcript separates the unmasked compact-row
+        # terminal from the nine auxiliary mask evaluations.  The former is
+        # already checked against the GPU compact-row reduction above; the
+        # latter is the value carried as `mask_terminal` in BLT8SF04.  The
+        # source auxiliary codeword contains those nine mask polynomials, so
+        # its ordinary source functional must be compared with mask_terminal,
+        # not with the unmasked row terminal.
+        source_mask_terminal = ZERO
+        for round_ordinal, challenge in enumerate(challenges):
+            coefficients = source_aux_values[
+                round_ordinal * AUX_DIMENSION : round_ordinal * AUX_DIMENSION
+                + AUX_MESSAGE_VALUES
+            ]
+            value = ZERO
+            for coefficient in reversed(coefficients):
+                value = add(mul16(value, challenge), coefficient)
+            source_mask_terminal = add(source_mask_terminal, value)
+        if source_mask_terminal != mask_terminal:
+            raise SystemExit(
+                "production_sumcheck_mask_terminal="
+                f"native={fp16_bytes(source_mask_terminal).hex()};"
+                f"expected={fp16_bytes(mask_terminal).hex()}"
+            )
+        allocator.free(complete_aux_source)
+        complete_terminal_target = add(
+            add(
+                terminal_target,
+                state_squarefree_coefficient_target,
+            ),
+            scale(h4_masked_source_target, epsilon),
+        )
+        (
+            source_target,
+            source_h4_masked_target,
+            _source_target_compute_seconds,
+            _source_target_wall_seconds,
+            _source_target_workers,
+        ) = run_native_answer_target(
+            answer_target_path,
+            claim_challenge,
+            coordinate_challenge,
+            gkr_claims,
+            challenges,
+            gkr_relation_terminals,
+            epsilon,
+            public_coin.state_squarefree_public_claims_payload,
+            state_squarefree_answer_binding_payload,
+            h4_masked_source_functional_binding,
+            source_main_payload,
+            source_aux_payload,
+            source_gkr_mask_payload,
+            memory,
+        )
+        if source_target != complete_terminal_target:
+            expected_no_h4 = sub(
+                complete_terminal_target,
+                scale(h4_masked_source_target, epsilon),
+            )
+            expected_h4_answer_contribution = sub(
+                complete_terminal_target,
+                expected_no_h4,
+            )
+            raise SystemExit(
+                "production_source_target_decomposition="
+                f"native={fp16_bytes(source_target).hex()};"
+                f"expected={fp16_bytes(complete_terminal_target).hex()};"
+                f"expected_no_h4={fp16_bytes(expected_no_h4).hex()};"
+                f"sumcheck_terminal={fp16_bytes(terminal_target).hex()};"
+                "state_squarefree="
+                f"{fp16_bytes(state_squarefree_coefficient_target).hex()};"
+                f"source_terminal={fp16_bytes(source_terminal).hex()};"
+                f"mask_terminal={fp16_bytes(mask_terminal).hex()};"
+                f"h4_native={fp16_bytes(source_h4_masked_target).hex()};"
+                f"h4_expected={fp16_bytes(h4_masked_source_target).hex()};"
+                "h4_answer_contribution_expected="
+                f"{fp16_bytes(expected_h4_answer_contribution).hex()};"
+            )
+        del source_main_payload
+        del source_aux_payload
+        del source_gkr_mask_payload
+        del source_aux_values
+        allocator.free(non_gkr_aux_source)
         answer_target = add(
             base_target,
             scale(complete_terminal_target, combination),
@@ -4842,36 +5751,165 @@ def main():
             aux_answer,
             "copy_theorem8_aux_answer",
         )
+        gkr_mask_answer_payload = copy_canonical_fp16_payload(
+            runtime,
+            gkr_mask_answer,
+            "copy_theorem8_gkr_mask_answer",
+        )
+        if capture_dir is not None:
+            capture_write_once(
+                capture_dir,
+                "answer-coefficients.bin",
+                main_answer_payload + aux_answer_payload + gkr_mask_answer_payload,
+            )
         allocator.free(main_answer)
         allocator.free(aux_answer)
+        allocator.free(gkr_mask_answer)
         answer_message_mb = (
-            len(main_answer_payload) + len(aux_answer_payload)
+            len(main_answer_payload)
+            + len(aux_answer_payload)
+            + len(gkr_mask_answer_payload)
         ) / 1_000_000
-        query_coin_started = time.perf_counter()
-        query_seed = public_coin.challenge(
-            803,
-            b"BL/PQ512/FP16-ZK-RS/ANSWERS/v1"
+        (
+            answer_gkr_mask_root,
+            answer_gkr_mask_commit_compute_seconds,
+            answer_gkr_mask_commit_wall_seconds,
+            answer_gkr_mask_commit_workers,
+        ) = run_native_gkr_answer_commit(
+            answer_code_path,
+            gkr_mask_answer_payload,
+            memory,
+        )
+        answer_message = (
+            b"BL/PQ512/FP16-ZK-RS/ANSWERS/v2"
             + len(main_answer_payload).to_bytes(8, "big")
             + hashlib.sha3_512(main_answer_payload).digest()
             + len(aux_answer_payload).to_bytes(8, "big")
-            + hashlib.sha3_512(aux_answer_payload).digest(),
+            + hashlib.sha3_512(aux_answer_payload).digest()
+            + len(gkr_mask_answer_payload).to_bytes(8, "big")
+            + hashlib.sha3_512(gkr_mask_answer_payload).digest()
+            + answer_gkr_mask_root
         )
+        query_coin_started = time.perf_counter()
+        query_seed = public_coin.challenge(
+            803,
+            answer_message,
+        )
+        query_seed_bytes = fp16_bytes(query_seed)
+        if capture_dir is not None:
+            capture_write_once(capture_dir, "query-seed.bin", query_seed_bytes)
         main_queries = exact_queries(
-            fp16_bytes(query_seed),
+            query_seed_bytes,
             b"main_queries",
             core.BASE_CODE_VALUES,
             MAIN_QUERY_COUNT,
         )
         aux_queries = exact_queries(
-            fp16_bytes(query_seed),
+            query_seed_bytes,
             b"aux_queries",
             AUX_CODE_VALUES,
             AUX_QUERY_COUNT,
+        )
+        gkr_mask_queries = gkr_mask_tensor_queries(
+            query_seed_bytes,
+            aux_queries,
         )
         state_squarefree_coefficient_root = (
             public_coin.state_squarefree_coefficient_root
         )
         public_coin_summary = public_coin.finish()
+        if capture_dir is not None:
+            governed_key = public_coin_summary["governed_key"]
+            strict_bundle = public_coin_summary["strict_bundle"]
+            raw_frames = public_coin_summary["raw_frames"]
+            if governed_key is None or strict_bundle is None or raw_frames is None:
+                raise SystemExit("h4_capture_strict_finish_missing")
+            capture_write_once(capture_dir, "governed-key.bin", governed_key)
+            capture_write_once(capture_dir, "strict-bundle.bin", strict_bundle)
+            capture_write_once(capture_dir, "raw-frames.bin", raw_frames)
+        # Parent rounds 900-901 bind the completed H4 answer and strict roots.
+        # Wait for their post-Z projection only after those roots are durable;
+        # the algebra and retained in-place fold are unchanged.
+        post_z_projection = read_post_z_projection_request()
+        if post_z_projection is not None:
+            if any(value == ZERO or value == ONE for value in post_z_projection):
+                raise SystemExit("post_z_projection_challenge_policy")
+            projection_point_buffer = upload_fp16_values(
+                runtime,
+                allocator,
+                post_z_projection,
+                "upload_post_z_projection_point",
+            )
+            projection_weights = allocator.allocate_count(GLOBAL_WORDS, core.FP16_BYTES)
+            launch_2d_256(
+                runtime,
+                fixture_weights,
+                GLOBAL_WORDS,
+                arguments(
+                    ctypes.c_uint64(projection_point_buffer.pointer),
+                    ctypes.c_uint64(projection_weights.pointer),
+                    ctypes.c_uint32(POST_Z_PROJECTION_COORDINATES),
+                    ctypes.c_uint32(GLOBAL_WORDS),
+                    ctypes.c_uint32(1),
+                ),
+                "post_z_projection_weights",
+                1,
+            )
+            core.ck(
+                runtime.cuda.cuMemsetD8_v2(folded.pointer, 0, folded.size),
+                "zero_post_z_projection",
+            )
+            seed = 0
+            global_word = 0
+            for boundary in range(core.BOUNDARY_COUNT):
+                for segment_index in range(core.SEGMENTS_PER_BOUNDARY):
+                    projection_arguments = [
+                        ctypes.c_uint64(folded.pointer),
+                        ctypes.c_uint64(initial_randomness[seed].pointer),
+                        ctypes.c_uint64(projection_weights.pointer),
+                        ctypes.c_uint32(global_word),
+                        ctypes.c_uint32(boundary),
+                        ctypes.c_uint32(segment_index),
+                        ctypes.c_uint32(core.INTERLEAVINGS_PER_SEGMENT),
+                        ctypes.c_uint32(core.BASE_MESSAGE_VALUES),
+                        ctypes.c_uint32(core.MASK_COEFFICIENTS),
+                    ]
+                    if semantic_source_buffer is not None:
+                        projection_arguments.extend(
+                            [
+                                ctypes.c_uint64(semantic_source_buffer.pointer),
+                                ctypes.c_uint64(
+                                    state_relation_source_buffer.pointer
+                                    if state_relation_source_buffer is not None
+                                    else 0
+                                ),
+                            ]
+                        )
+                    launch(
+                        runtime,
+                        (
+                            accumulate_folded_semantic
+                            if semantic_source_buffer is not None
+                            else accumulate_folded
+                        ),
+                        MAIN_DIMENSION,
+                        arguments(*projection_arguments),
+                        "accumulate_post_z_projection",
+                    )
+                    seed += 1
+                    global_word += core.INTERLEAVINGS_PER_SEGMENT
+            core.ck(runtime.cuda.cuCtxSynchronize(), "post_z_projection_sync")
+            allocator.free(projection_point_buffer)
+            allocator.free(projection_weights)
+            publish_post_z_projection_response(
+                copy_canonical_fp16_payload(
+                    runtime, folded, "copy_post_z_source_projection"
+                ),
+                copy_canonical_fp16_payload(
+                    runtime, base_main, "copy_post_z_base_projection"
+                ),
+            )
+        allocator.free(folded)
         gkr_state_relation_digest = public_coin.gkr_state_relation_digest
         public_coin = None
         memory.child_process_id = None
@@ -4884,27 +5922,39 @@ def main():
             answer_code_path,
             main_queries,
             aux_queries,
+            query_seed_bytes,
             claim_challenge,
             coordinate_challenge,
             gkr_claims,
             challenges,
             gkr_relation_terminals,
             epsilon,
+            state_squarefree_claims_payload,
             state_squarefree_answer_binding_payload,
+            h4_masked_source_functional_binding,
+            combination,
+            base_aux_payload,
+            base_gkr_mask_payload,
             answer_target,
             main_answer_payload,
             aux_answer_payload,
+            gkr_mask_answer_payload,
         )
         del main_answer_payload
         del aux_answer_payload
+        del gkr_mask_answer_payload
+        del base_aux_payload
+        del base_gkr_mask_payload
 
         verifier = core.NativeMultiproofVerifier(
             verifier_path,
             THEOREM_SEGMENT_COUNT,
+            query_seed_bytes,
             deferred=True,
         )
         spotcheck_verifier = NativeSpotcheckVerifier(
             spotcheck_path,
+            query_seed_bytes,
             weights,
             combination,
         )
@@ -4917,11 +5967,14 @@ def main():
         opening_started = time.perf_counter()
         opening_mb = 0.0
         native_seconds = 0.0
-        sumcheck_openings = None
+        sumcheck_and_base_openings = None
         gkr_mask_openings = None
         base_main_openings = None
-        base_aux_openings = None
+        base_gkr_mask_openings = None
         state_squarefree_coefficient_openings = None
+        post_z_positions = read_post_z_opening_request()
+        post_z_source_slices = []
+        primary_source_slices = []
         seed = 0
         for tree in initial_trees:
             replay, _ = core.encode_segment(
@@ -4968,25 +6021,90 @@ def main():
             opening_mb += result[0]
             native_seconds += result[3]
             spotcheck_verifier.write_initial_segment(result[7])
+            primary_source_slices.append(result[7])
+            if post_z_positions is not None:
+                post_z_source_slices.append(
+                    binding_merkle.gather_rows(
+                        core,
+                        runtime,
+                        allocator,
+                        merkle["gather_leaves"],
+                        replay,
+                        post_z_positions,
+                        core.ROW_BYTES,
+                    )
+                )
+            capture_replay(
+                f"source-segment-{seed:02d}.raw",
+                replay,
+                True,
+            )
             allocator.free(replay)
             seed += 1
+        replay, _ = encode_random_batch(
+            runtime,
+            allocator,
+            kernels,
+            aux_root_powers,
+            aux_coset_powers,
+            sumcheck_and_base,
+            AUX_CODE_LOG,
+            AUX_DIMENSION,
+            SUMCHECK_BASE_WORDS,
+        )
+        result = core.open_retained_tree(
+            runtime,
+            allocator,
+            kernels["gather_nodes"],
+            merkle,
+            verifier,
+            sumcheck_tree,
+            core.OracleSegment(
+                sumcheck_tree.segment.boundary,
+                sumcheck_tree.segment.kind,
+                replay,
+                SUMCHECK_BASE_LEAF_SIZE,
+            ),
+            aux_queries,
+            return_leaves=True,
+        )
+        opening_mb += result[0]
+        native_seconds += result[3]
+        sumcheck_and_base_openings = result[7]
+        capture_replay("sumcheck.raw", replay, True)
+        allocator.free(replay)
+        replay, _ = encode_gkr_mask_tensor(
+            runtime,
+            allocator,
+            kernels,
+            aux_root_powers,
+            aux_coset_powers,
+            gkr_mask_outer_root_powers,
+            gkr_mask_outer_coset_powers,
+            gkr_mask,
+        )
+        result = core.open_retained_tree(
+            runtime,
+            allocator,
+            kernels["gather_nodes"],
+            merkle,
+            verifier,
+            gkr_mask_tree,
+            core.OracleSegment(
+                gkr_mask_tree.segment.boundary,
+                gkr_mask_tree.segment.kind,
+                replay,
+                GKR_MASK_LEAF_SIZE,
+            ),
+            gkr_mask_queries,
+            return_leaves=True,
+        )
+        opening_mb += result[0]
+        native_seconds += result[3]
+        gkr_mask_openings = result[7]
+        capture_replay("mask-tensor.raw", replay, False)
+        allocator.free(replay)
         for tree, coefficients, log_code, dimension, batch, queries in (
-            (
-                sumcheck_tree,
-                sumcheck_randomness,
-                AUX_CODE_LOG,
-                AUX_DIMENSION,
-                SUMCHECK_ROUNDS,
-                aux_queries,
-            ),
-            (
-                gkr_mask_tree,
-                gkr_mask,
-                AUX_CODE_LOG,
-                GLOBAL_WORDS,
-                GKR_MASK_STATES,
-                aux_queries,
-            ),
             (
                 base_main_tree,
                 base_main,
@@ -4994,22 +6112,6 @@ def main():
                 MAIN_DIMENSION,
                 1,
                 main_queries,
-            ),
-            (
-                base_aux_tree,
-                base_aux,
-                AUX_CODE_LOG,
-                AUX_DIMENSION,
-                AUXILIARY_WORDS,
-                aux_queries,
-            ),
-            (
-                state_squarefree_coefficient_tree,
-                state_squarefree_coefficient_source,
-                AUX_CODE_LOG,
-                AUX_DIMENSION,
-                1,
-                aux_queries,
             ),
         ):
             roots = (
@@ -5052,17 +6154,149 @@ def main():
             )
             opening_mb += result[0]
             native_seconds += result[3]
-            if tree.segment.kind == SUMCHECK_MASK_KIND:
-                sumcheck_openings = result[7]
-            elif tree.segment.kind == GKR_MASK_KIND:
-                gkr_mask_openings = result[7]
-            elif tree.segment.kind == BASE_MAIN_MASK_KIND:
+            if tree.segment.kind == BASE_MAIN_MASK_KIND:
                 base_main_openings = result[7]
-            elif tree.segment.kind == BASE_AUX_MASK_KIND:
-                base_aux_openings = result[7]
-            elif tree.segment.kind == STATE_SQUAREFREE_COEFFICIENT_KIND:
-                state_squarefree_coefficient_openings = result[7]
+                if post_z_positions is not None:
+                    post_z_base_payload = binding_merkle.gather_rows(
+                        core,
+                        runtime,
+                        allocator,
+                        merkle["gather_leaves"],
+                        replay,
+                        post_z_positions,
+                        MAIN_LEAF_SIZE,
+                    )
+            capture_replay("main-base.raw", replay, True)
             allocator.free(replay)
+
+        primary_source_payload = binding_merkle.interleave_opened_slices(
+            primary_source_slices, core.ROW_BYTES, len(main_queries)
+        )
+        primary_source_frontier = binding_merkle.frontier_payload(
+            core,
+            runtime,
+            allocator,
+            binding_merkle_functions["gather_nodes"],
+            combined_source_tree,
+            main_queries,
+        )
+        primary_base_frontier = binding_merkle.frontier_payload(
+            core,
+            runtime,
+            allocator,
+            binding_merkle_functions["gather_nodes"],
+            bridge_base_tree_v2,
+            main_queries,
+        )
+        primary_source_segment = binding_merkle.encode_segment(
+            combined_source_tree, 3, 32,
+            len(primary_source_slices) * core.ROW_BYTES,
+            main_queries, primary_source_payload, primary_source_frontier,
+        )
+        primary_base_segment = binding_merkle.encode_segment(
+            bridge_base_tree_v2, 2, BASE_MAIN_MASK_KIND, MAIN_LEAF_SIZE,
+            main_queries, base_main_openings, primary_base_frontier,
+        )
+        if capture_dir is not None:
+            capture_write_once(capture_dir, "source-segment-v2.bin", primary_source_segment)
+            capture_write_once(capture_dir, "bridge-base-segment-v2.bin", primary_base_segment)
+
+        if post_z_positions is not None:
+            if len(post_z_source_slices) != core.BOUNDARY_COUNT * core.SEGMENTS_PER_BOUNDARY:
+                raise SystemExit("post_z_opening_source_slice_count")
+            source_payload = binding_merkle.interleave_opened_slices(
+                post_z_source_slices, core.ROW_BYTES, len(post_z_positions)
+            )
+            source_frontier = binding_merkle.frontier_payload(
+                core,
+                runtime,
+                allocator,
+                binding_merkle_functions["gather_nodes"],
+                combined_source_tree,
+                post_z_positions,
+            )
+            base_frontier = binding_merkle.frontier_payload(
+                core,
+                runtime,
+                allocator,
+                binding_merkle_functions["gather_nodes"],
+                bridge_base_tree_v2,
+                post_z_positions,
+            )
+            source_segment = binding_merkle.encode_segment(
+                combined_source_tree, 3, 32, len(post_z_source_slices) * core.ROW_BYTES,
+                post_z_positions, source_payload, source_frontier
+            )
+            base_segment = binding_merkle.encode_segment(
+                bridge_base_tree_v2, 2, BASE_MAIN_MASK_KIND, MAIN_LEAF_SIZE,
+                post_z_positions, post_z_base_payload, base_frontier
+            )
+            publish_post_z_opening_response(source_segment, base_segment)
+
+        replay, _ = encode_gkr_mask_tensor(
+            runtime,
+            allocator,
+            kernels,
+            aux_root_powers,
+            aux_coset_powers,
+            gkr_mask_outer_root_powers,
+            gkr_mask_outer_coset_powers,
+            base_gkr_mask,
+        )
+        result = core.open_retained_tree(
+            runtime,
+            allocator,
+            kernels["gather_nodes"],
+            merkle,
+            verifier,
+            base_gkr_mask_tree,
+            core.OracleSegment(
+                base_gkr_mask_tree.segment.boundary,
+                base_gkr_mask_tree.segment.kind,
+                replay,
+                GKR_MASK_LEAF_SIZE,
+            ),
+            gkr_mask_queries,
+            return_leaves=True,
+        )
+        opening_mb += result[0]
+        native_seconds += result[3]
+        base_gkr_mask_openings = result[7]
+        capture_replay("base-tensor.raw", replay, False)
+        allocator.free(replay)
+
+        replay, _ = encode_random_batch(
+            runtime,
+            allocator,
+            kernels,
+            aux_root_powers,
+            aux_coset_powers,
+            state_squarefree_coefficient_source,
+            AUX_CODE_LOG,
+            AUX_DIMENSION,
+            1,
+        )
+        result = core.open_retained_tree(
+            runtime,
+            allocator,
+            kernels["gather_nodes"],
+            merkle,
+            verifier,
+            state_squarefree_coefficient_tree,
+            core.OracleSegment(
+                state_squarefree_coefficient_tree.segment.boundary,
+                state_squarefree_coefficient_tree.segment.kind,
+                replay,
+                STATE_SQUAREFREE_COEFFICIENT_LEAF_SIZE,
+            ),
+            aux_queries,
+            return_leaves=True,
+        )
+        opening_mb += result[0]
+        native_seconds += result[3]
+        state_squarefree_coefficient_openings = result[7]
+        capture_replay("squarefree.raw", replay, True)
+        allocator.free(replay)
         verifier_summary = verifier.finish()
         native_verify_compute_seconds = verifier_summary[
             "verify_compute_seconds"
@@ -5071,16 +6305,20 @@ def main():
         (
             main_answer_openings,
             aux_answer_openings,
+            gkr_mask_answer_openings,
+            verified_answer_gkr_mask_root,
             answer_code_compute_seconds,
             answer_code_wall_seconds,
             answer_code_workers,
         ) = answer_code_verifier.finish()
         answer_code_verifier = None
+        if verified_answer_gkr_mask_root != answer_gkr_mask_root:
+            raise SystemExit("answer_gkr_mask_root_mismatch")
         if (
-            sumcheck_openings is None
+            sumcheck_and_base_openings is None
             or gkr_mask_openings is None
             or base_main_openings is None
-            or base_aux_openings is None
+            or base_gkr_mask_openings is None
             or state_squarefree_coefficient_openings is None
         ):
             raise SystemExit("production_spotcheck_openings_missing")
@@ -5089,13 +6327,14 @@ def main():
             spotcheck_wall_seconds,
             spotcheck_tail_seconds,
         ) = spotcheck_verifier.finish(
-            sumcheck_openings,
+            sumcheck_and_base_openings,
             gkr_mask_openings,
             state_squarefree_coefficient_openings,
             base_main_openings,
-            base_aux_openings,
+            base_gkr_mask_openings,
             main_answer_openings,
             aux_answer_openings,
+            gkr_mask_answer_openings,
         )
         answer_opening_joined_seconds = (
             time.perf_counter() - answer_opening_started
@@ -5114,6 +6353,7 @@ def main():
             + base_coin_seconds
             + base_target_wall_seconds
             + answer_seconds
+            + answer_gkr_mask_commit_wall_seconds
             + query_coin_seconds
             + answer_opening_joined_seconds
         )
@@ -5285,6 +6525,18 @@ def main():
         )
         print(f"answer_seconds={answer_seconds:.6f}")
         print(
+            "answer_gkr_mask_commit_compute_seconds="
+            f"{answer_gkr_mask_commit_compute_seconds:.6f}"
+        )
+        print(
+            "answer_gkr_mask_commit_wall_seconds="
+            f"{answer_gkr_mask_commit_wall_seconds:.6f}"
+        )
+        print(
+            "answer_gkr_mask_commit_workers="
+            f"{answer_gkr_mask_commit_workers}"
+        )
+        print(
             "independent_answer_code_compute_seconds="
             f"{answer_code_compute_seconds:.6f}"
         )
@@ -5334,7 +6586,9 @@ def main():
         print("gkr_mask_row_state_mb=4.194304")
         print("compact_row_gpu_state_mb=12.058624")
         print("gkr_mask_coefficients_mb=2.097152")
-        print("gkr_mask_codewords_mb=33.554432")
+        print("gkr_mask_tensor_codeword_mb=67.108864")
+        print("gkr_mask_tensor_inner_rate=0.0625")
+        print("gkr_mask_tensor_outer_rate=0.5")
         print("complete_auxiliary_coefficients_mb=15.467776")
         print("complete_auxiliary_codewords_mb=38.797312")
         print("sumcheck_chain_verified=true")
@@ -5450,6 +6704,11 @@ def main():
     finally:
         if memory is not None:
             memory.stop()
+        for retained_tree in (combined_source_tree, bridge_base_tree_v2):
+            if retained_tree is not None:
+                for level in retained_tree.levels:
+                    if level.pointer in allocator.sizes:
+                        allocator.free(level)
         if state_relation_source_buffer is not None:
             allocator.free(state_relation_source_buffer)
         if (

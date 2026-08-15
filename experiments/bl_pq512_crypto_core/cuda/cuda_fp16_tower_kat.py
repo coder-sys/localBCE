@@ -161,6 +161,8 @@ class Runtime:
         n, c = self.nvrtc, self.cuda
         n.nvrtcCreateProgram.argtypes = [ctypes.POINTER(ctypes.c_void_p),ctypes.c_char_p,ctypes.c_char_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p]
         n.nvrtcCompileProgram.argtypes = [ctypes.c_void_p,ctypes.c_int,ctypes.POINTER(ctypes.c_char_p)]
+        n.nvrtcGetProgramLogSize.argtypes = [ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t)]
+        n.nvrtcGetProgramLog.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         n.nvrtcGetPTXSize.argtypes = [ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t)]
         n.nvrtcGetPTX.argtypes = [ctypes.c_void_p,ctypes.c_char_p]
         n.nvrtcDestroyProgram.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
@@ -182,7 +184,13 @@ class Runtime:
         prog = ctypes.c_void_p()
         ck(self.nvrtc.nvrtcCreateProgram(ctypes.byref(prog),source.encode(),b"fp16.cu",0,None,None),"create")
         opts=(ctypes.c_char_p*2)(b"--gpu-architecture=compute_89",b"--std=c++17")
-        ck(self.nvrtc.nvrtcCompileProgram(prog,2,opts),"compile")
+        compile_code = self.nvrtc.nvrtcCompileProgram(prog,2,opts)
+        if compile_code:
+            log_size=ctypes.c_size_t()
+            ck(self.nvrtc.nvrtcGetProgramLogSize(prog,ctypes.byref(log_size)),"compile_log_size")
+            log=ctypes.create_string_buffer(log_size.value)
+            ck(self.nvrtc.nvrtcGetProgramLog(prog,log),"compile_log")
+            raise RuntimeError(f"compile:{compile_code}:\n{log.value.decode(errors='replace')}")
         size=ctypes.c_size_t()
         ck(self.nvrtc.nvrtcGetPTXSize(prog,ctypes.byref(size)),"ptx_size")
         ptx=ctypes.create_string_buffer(size.value)

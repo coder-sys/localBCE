@@ -25,6 +25,12 @@ from experiments.bl_pq512_crypto_foundation.selected_prover_orchestrator import 
     SelectedProofResult,
     prove_selected_air_streaming,
 )
+from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
+    MAX_SELECTED_TRANSCRIPT_BYTES,
+    SELECTED_TRANSCRIPT_MAGIC,
+    SELECTED_TRANSCRIPT_VERSION,
+    encode_selected_transcript_evidence,
+)
 from experiments.bl_pq512_crypto_foundation.state_plane import (
     SHA3_512_LENGTH,
     StateTransitionProof,
@@ -51,6 +57,15 @@ STATUS: Final[str] = "STATE_AIR_PROOF_COMPONENT_VERIFIED_NONACTIVATING"
 COMPONENT_ID: Final[str] = "BL-PQ512-STATE-AIR-PROOF-V1"
 PUBLIC_OUTPUT_BYTES: Final[int] = 384
 SIDECAR_BYTES: Final[int] = 744
+PORTABLE_PACKAGE_MAGIC: Final[bytes] = b"BLCSPK01"
+PORTABLE_PACKAGE_VERSION: Final[int] = 1
+PORTABLE_PACKAGE_FLAGS: Final[int] = 0
+PORTABLE_PACKAGE_PREFIX_BYTES: Final[int] = (
+    8 + 2 + 2 + PUBLIC_OUTPUT_BYTES + SIDECAR_BYTES + 8 + 8
+)
+PORTABLE_SIDECAR_MAGIC: Final[bytes] = b"BLCSSC01"
+PORTABLE_SIDECAR_VERSION: Final[int] = 1
+PORTABLE_SIDECAR_FLAGS: Final[int] = 0
 STATE_AIR_COMPOSED_BINDING_VERSION: Final[int] = 3
 TRANSPARENT_STATE_AIR_COMPOSED_BINDING_VERSION: Final[int] = 6
 STATE_AIR_COMPOSED_FRAGMENT_MAGIC: Final[bytes] = b"BLSA02"
@@ -58,6 +73,9 @@ PROOF_PACKAGE_MAGIC: Final[bytes] = b"BLPQSPK1"
 PROOF_PACKAGE_VERSION: Final[int] = 2
 PROOF_PACKAGE_BYTES: Final[int] = 64 * 1024 * 1024
 MAX_PROOF_PACKAGE_BYTES: Final[int] = 512 * 1024 * 1024
+PORTABLE_PACKAGE_BYTES: Final[int] = (
+    PORTABLE_PACKAGE_PREFIX_BYTES + PROOF_PACKAGE_BYTES + MAX_SELECTED_TRANSCRIPT_BYTES
+)
 _DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-PROOF/v1\x00"
 _SIDECAR_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-SIDECAR/v1\x00"
 _PROOF_PACKAGE_DOMAIN: Final[bytes] = b"BL/PQ512/STATE-AIR-PROOF-PACKAGE/v2\x00"
@@ -82,6 +100,21 @@ _TRANSPARENT_COMPOSED_H4_DOMAIN: Final[bytes] = (
 )
 _TRANSPARENT_COMPOSED_BINDING_DOMAIN: Final[bytes] = (
     b"BL/PQ512/STATE-PLANE/H4-BINDING-INPUT/v3\x00"
+)
+_PORTABLE_PROFILE_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/COMPACT-STATE/PROFILE/v1\x00"
+)
+_PORTABLE_PROGRAM_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/COMPACT-STATE/PROGRAM/v1\x00"
+)
+_PORTABLE_PROJECTION_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/COMPACT-STATE/PROJECTION/v1\x00"
+)
+_PORTABLE_PROJECTION_DIGEST_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/COMPACT-STATE/PROJECTION-DIGEST/v1\x00"
+)
+_PORTABLE_STATEMENT_DOMAIN: Final[bytes] = (
+    b"BL/PQ512/COMPACT-STATE/STATEMENT/v1\x00"
 )
 
 
@@ -169,6 +202,224 @@ def _state_hash(domain: bytes, *parts: bytes) -> bytes:
         digest.update(len(part).to_bytes(4, "big"))
         digest.update(part)
     return digest.digest()
+
+
+def _portable_profile(proof: StateTransitionProof) -> tuple[int, bytes]:
+    """Return the governed compact-state profile code and label.
+
+    The compact AIR program shape is capacity-dependent.  Binding the profile
+    label and exact capacity here prevents a K128/K512 program commitment from
+    being replayed under the other governed profile.
+    """
+
+    profile = proof.before.profile_id.encode("ascii")
+    expected = {
+        b"K128_CALIBRATION": (1, 128),
+        b"K512_CALIBRATION": (3, 512),
+    }
+    entry = expected.get(profile)
+    if entry is None or proof.before.capacity != entry[1]:
+        raise StructuralError("compact_state_portable_profile_invalid")
+    return entry[0], profile
+
+
+def _portable_public_outputs(public_values: tuple[int, ...]) -> bytes:
+    if (
+        type(public_values) is not tuple
+        or len(public_values) != 2 * SHA3_512_LENGTH
+        or any(type(value) is not int or not 0 <= value < 256 for value in public_values)
+    ):
+        raise StructuralError("compact_state_portable_public_values_invalid")
+    public_bytes = b"".join(value.to_bytes(4, "big") for value in public_values)
+    outputs = b"".join(
+        _state_hash(
+            _PORTABLE_PROJECTION_DOMAIN,
+            bytes((index,)),
+            public_bytes,
+        )[:32]
+        for index in range(12)
+    )
+    if len(outputs) != PUBLIC_OUTPUT_BYTES:
+        raise AssertionError("compact_state_portable_projection_shape_mismatch")
+    return outputs
+
+
+def _portable_sidecar(
+    proof: StateTransitionProof,
+    program_commitment: bytes,
+    public_outputs: bytes,
+) -> bytes:
+    profile_code, profile = _portable_profile(proof)
+    return _portable_sidecar_from_public(
+        profile_code,
+        profile,
+        proof.before.capacity,
+        program_commitment,
+        tuple((*proof.before.root_512, *proof.after.root_512)),
+        public_outputs,
+    )
+
+
+def _portable_sidecar_from_public(
+    profile_code: int,
+    profile: bytes,
+    capacity_value: int,
+    program_commitment: bytes,
+    public_values: tuple[int, ...],
+    public_outputs: bytes,
+) -> bytes:
+    _bytes("portable_program_commitment", program_commitment, SHA3_512_LENGTH, nonzero=True)
+    _bytes("portable_public_outputs", public_outputs, PUBLIC_OUTPUT_BYTES)
+    if (
+        type(public_values) is not tuple
+        or len(public_values) != 2 * SHA3_512_LENGTH
+        or any(type(value) is not int or not 0 <= value < 256 for value in public_values)
+    ):
+        raise StructuralError("compact_state_portable_public_values_invalid")
+    capacity = capacity_value.to_bytes(8, "big")
+    root_before = bytes(public_values[:SHA3_512_LENGTH])
+    root_after = bytes(public_values[SHA3_512_LENGTH:])
+    if not any(root_before) or not any(root_after) or root_before == root_after:
+        raise StructuralError("compact_state_portable_root_transition_invalid")
+    projection_digest = _state_hash(
+        _PORTABLE_PROJECTION_DIGEST_DOMAIN,
+        *(public_outputs[index : index + 32] for index in range(0, len(public_outputs), 32)),
+    )
+    profile_identity = _state_hash(
+        _PORTABLE_PROFILE_DOMAIN,
+        bytes((profile_code,)),
+        profile,
+        capacity,
+    )
+    program_identity = _state_hash(
+        _PORTABLE_PROGRAM_DOMAIN,
+        PROGRAM_ID.encode("ascii"),
+    )
+    statement = _state_hash(
+        _PORTABLE_STATEMENT_DOMAIN,
+        bytes((profile_code,)),
+        profile,
+        capacity,
+        program_identity,
+        program_commitment,
+        root_before,
+        root_after,
+        projection_digest,
+    )
+    fields = (
+        profile_identity,
+        program_identity,
+        program_commitment,
+        root_before,
+        root_after,
+        projection_digest,
+        statement,
+    )
+    if any(len(field) != SHA3_512_LENGTH or not any(field) for field in fields):
+        raise StructuralError("compact_state_portable_sidecar_field_invalid")
+    encoded = b"".join(
+        (
+            PORTABLE_SIDECAR_MAGIC,
+            PORTABLE_SIDECAR_VERSION.to_bytes(2, "big"),
+            PORTABLE_SIDECAR_FLAGS.to_bytes(2, "big"),
+            SIDECAR_BYTES.to_bytes(4, "big"),
+            bytes((profile_code,)),
+            bytes(7),
+            capacity,
+            *fields,
+        )
+    )
+    if len(encoded) > SIDECAR_BYTES:
+        raise AssertionError("compact_state_portable_sidecar_overflow")
+    return encoded + bytes(SIDECAR_BYTES - len(encoded))
+
+
+def validate_compact_state_portable_statement(
+    profile_label: str,
+    expected_program_commitment: bytes,
+    public_values: tuple[int, ...],
+    public_outputs: bytes,
+    sidecar: bytes,
+) -> tuple[bytes, bytes]:
+    """Rebuild the complete public statement without private state material."""
+
+    expected = {
+        "K128_CALIBRATION": (1, 128),
+        "K512_CALIBRATION": (3, 512),
+    }
+    governed = expected.get(profile_label)
+    if governed is None:
+        raise StructuralError("compact_state_portable_profile_invalid")
+    profile = profile_label.encode("ascii")
+    expected_outputs = _portable_public_outputs(public_values)
+    if public_outputs != expected_outputs:
+        raise StructuralError("compact_state_portable_projection_mismatch")
+    expected_sidecar = _portable_sidecar_from_public(
+        governed[0],
+        profile,
+        governed[1],
+        expected_program_commitment,
+        public_values,
+        public_outputs,
+    )
+    if sidecar != expected_sidecar:
+        raise StructuralError("compact_state_portable_sidecar_binding_mismatch")
+    return (
+        bytes(public_values[:SHA3_512_LENGTH]),
+        bytes(public_values[SHA3_512_LENGTH:]),
+    )
+
+
+def _validate_portable_sidecar(encoded: bytes) -> None:
+    fixed = 8 + 2 + 2 + 4 + 1 + 7 + 8 + 7 * SHA3_512_LENGTH
+    if (
+        type(encoded) is not bytes
+        or len(encoded) != SIDECAR_BYTES
+        or encoded[:8] != PORTABLE_SIDECAR_MAGIC
+        or int.from_bytes(encoded[8:10], "big") != PORTABLE_SIDECAR_VERSION
+        or int.from_bytes(encoded[10:12], "big") != PORTABLE_SIDECAR_FLAGS
+        or int.from_bytes(encoded[12:16], "big") != SIDECAR_BYTES
+        or encoded[17:24] != bytes(7)
+        or any(encoded[fixed:])
+    ):
+        raise StructuralError("compact_state_portable_sidecar_invalid")
+    profile_code = encoded[16]
+    capacity = int.from_bytes(encoded[24:32], "big")
+    if (profile_code, capacity) not in ((1, 128), (3, 512)):
+        raise StructuralError("compact_state_portable_sidecar_profile_invalid")
+    fields = tuple(encoded[offset : offset + 64] for offset in range(32, fixed, 64))
+    if len(fields) != 7 or any(not any(field) for field in fields):
+        raise StructuralError("compact_state_portable_sidecar_field_invalid")
+
+
+def _validate_portable_transcript(
+    encoded: bytes,
+    public_outputs: bytes,
+    sidecar: bytes,
+    proof_suite_id: bytes,
+    schedule_commitment: bytes,
+    final_transcript_root: bytes,
+) -> None:
+    minimum = 8 + 2 + 64 + PUBLIC_OUTPUT_BYTES + SIDECAR_BYTES + 64 + 64 + 64
+    if (
+        type(encoded) is not bytes
+        or not minimum <= len(encoded) <= MAX_SELECTED_TRANSCRIPT_BYTES
+        or encoded[:8] != SELECTED_TRANSCRIPT_MAGIC
+        or int.from_bytes(encoded[8:10], "big") != SELECTED_TRANSCRIPT_VERSION
+    ):
+        raise StructuralError("compact_state_portable_transcript_invalid")
+    public_start = 8 + 2 + 64
+    sidecar_start = public_start + PUBLIC_OUTPUT_BYTES
+    suite_start = sidecar_start + SIDECAR_BYTES
+    schedule_start = suite_start + 64
+    if (
+        encoded[public_start:sidecar_start] != public_outputs
+        or encoded[sidecar_start:suite_start] != sidecar
+        or encoded[suite_start:schedule_start] != proof_suite_id
+        or encoded[schedule_start : schedule_start + 64] != schedule_commitment
+        or encoded[-64:] != final_transcript_root
+    ):
+        raise StructuralError("compact_state_portable_transcript_binding_mismatch")
 
 
 def _component_binding_digest(proof: StateTransitionProof) -> bytes:
@@ -293,6 +544,9 @@ class StateAirProofEvidence:
     proof_bytes: int
     worker_report_digest_512: bytes
     proof_package_bytes: bytes = field(default=b"", repr=False, compare=False)
+    public_outputs: bytes = field(default=b"", repr=False, compare=False)
+    public_sidecar: bytes = field(default=b"", repr=False, compare=False)
+    transcript_evidence_bytes: bytes = field(default=b"", repr=False, compare=False)
     status: str = STATUS
     state_air_program_bytes: bytes = field(default=b"", repr=False, compare=False)
     state_air_execution_bytes: bytes = field(default=b"", repr=False, compare=False)
@@ -317,8 +571,22 @@ class StateAirProofEvidence:
         if type(self.proof_bytes) is not int or self.proof_bytes <= 0:
             raise StructuralError("state_air_proof_size_invalid")
         _validate_proof_package(self.proof_package_bytes, self.proof_bytes)
-        if proof_package_commitment(self.proof_package_bytes) != self.proof_package_commitment_512:
+        if (
+            proof_package_commitment(self.proof_package_bytes)
+            != self.proof_package_commitment_512
+        ):
             raise StructuralError("state_air_proof_package_commitment_mismatch")
+        if type(self.public_outputs) is not bytes or len(self.public_outputs) != PUBLIC_OUTPUT_BYTES:
+            raise StructuralError("compact_state_portable_public_outputs_invalid")
+        _validate_portable_sidecar(self.public_sidecar)
+        _validate_portable_transcript(
+            self.transcript_evidence_bytes,
+            self.public_outputs,
+            self.public_sidecar,
+            self.proof_suite_id_512,
+            self.schedule_commitment_512,
+            self.transcript_root_512,
+        )
         if type(self.state_air_program_bytes) is not bytes or not self.state_air_program_bytes:
             raise StructuralError("state_air_proof_program_bytes_missing")
         if type(self.state_air_execution_bytes) is not bytes or not self.state_air_execution_bytes:
@@ -363,9 +631,14 @@ def _evidence(
     execution_bytes: bytes,
     result: SelectedProofResult,
     proof_package_bytes: bytes,
+    public_outputs: bytes,
+    public_sidecar: bytes,
 ) -> StateAirProofEvidence:
     transcript = result.transcript
     bundle = result.challenge_bundle
+    if transcript.public_outputs != public_outputs or transcript.sidecar != public_sidecar:
+        raise StructuralError("compact_state_portable_transcript_statement_mismatch")
+    transcript_evidence = encode_selected_transcript_evidence(transcript)
     evidence = StateAirProofEvidence(
         component_id=COMPONENT_ID,
         program_id=PROGRAM_ID,
@@ -394,12 +667,15 @@ def _evidence(
         public_input_digest_512=_hash(
             b"public-inputs",
             b"".join(value.to_bytes(4, "big") for value in instance_public_values),
-            _component_public_outputs(proof),
+            b"".join(proof.projection_12),
         ),
         attribution_digest_512=_attribution_digest(result),
         proof_bytes=result.proof_bytes,
         worker_report_digest_512=_hash(b"worker-report", result.worker_report.encode("ascii")),
         proof_package_bytes=proof_package_bytes,
+        public_outputs=public_outputs,
+        public_sidecar=public_sidecar,
+        transcript_evidence_bytes=transcript_evidence,
         state_air_program_bytes=program_bytes,
         state_air_execution_bytes=execution_bytes,
     )
@@ -419,6 +695,9 @@ def _evidence(
         proof_bytes=evidence.proof_bytes,
         worker_report_digest_512=evidence.worker_report_digest_512,
         proof_package_bytes=proof_package_bytes,
+        public_outputs=public_outputs,
+        public_sidecar=public_sidecar,
+        transcript_evidence_bytes=transcript_evidence,
         state_air_program_bytes=program_bytes,
         state_air_execution_bytes=execution_bytes,
     )
@@ -458,6 +737,8 @@ def prove_state_air(
     )
     program_commitment = air_program_commitment(program_bytes)
     execution_commitment = air_binary_commitment(execution_bytes)
+    public_outputs = _portable_public_outputs(instance.public_values)
+    public_sidecar = _portable_sidecar(proof, program_commitment, public_outputs)
     # State AIR is intentionally streamed: the exact K128/K512 state traces
     # are large enough that a monolithic worker would violate the repository's
     # measured laptop resource discipline before it reaches proof generation.
@@ -473,8 +754,8 @@ def prove_state_air(
             scratch_parent=scratch_parent,
             secret_mask_seed=secret_mask_seed,
             session_id=session_id,
-            public_outputs=_component_public_outputs(proof),
-            sidecar=_component_sidecar(proof),
+            public_outputs=public_outputs,
+            sidecar=public_sidecar,
             contributors=contributors,
             adapters=adapters,
             secret_keys=secret_keys,
@@ -493,7 +774,57 @@ def prove_state_air(
         execution_bytes,
         result,
         proof_package_bytes,
+        public_outputs,
+        public_sidecar,
     )
+
+
+def build_compact_state_proof_package_v1(evidence: StateAirProofEvidence) -> bytes:
+    """Serialize only verifier-safe compact-state proof material.
+
+    The private snapshots, operation rows, AIR execution, commitment masks,
+    and raw worker state are deliberately absent.  The selected proof and its
+    complete authenticated transcript occupy fixed-size, zero-padded slots.
+    """
+
+    if type(evidence) is not StateAirProofEvidence:
+        raise StructuralError("compact_state_portable_evidence_required")
+    _validate_portable_sidecar(evidence.public_sidecar)
+    _validate_portable_transcript(
+        evidence.transcript_evidence_bytes,
+        evidence.public_outputs,
+        evidence.public_sidecar,
+        evidence.proof_suite_id_512,
+        evidence.schedule_commitment_512,
+        evidence.transcript_root_512,
+    )
+    transcript_length = len(evidence.transcript_evidence_bytes)
+    if not 0 < transcript_length <= MAX_SELECTED_TRANSCRIPT_BYTES:
+        raise StructuralError("compact_state_portable_transcript_length_invalid")
+    prefix = b"".join(
+        (
+            PORTABLE_PACKAGE_MAGIC,
+            PORTABLE_PACKAGE_VERSION.to_bytes(2, "big"),
+            PORTABLE_PACKAGE_FLAGS.to_bytes(2, "big"),
+            evidence.public_outputs,
+            evidence.public_sidecar,
+            PROOF_PACKAGE_BYTES.to_bytes(8, "big"),
+            transcript_length.to_bytes(8, "big"),
+        )
+    )
+    if len(prefix) != PORTABLE_PACKAGE_PREFIX_BYTES:
+        raise AssertionError("compact_state_portable_prefix_length_mismatch")
+    encoded = b"".join(
+        (
+            prefix,
+            evidence.proof_package_bytes,
+            evidence.transcript_evidence_bytes,
+            bytes(MAX_SELECTED_TRANSCRIPT_BYTES - transcript_length),
+        )
+    )
+    if len(encoded) != PORTABLE_PACKAGE_BYTES:
+        raise AssertionError("compact_state_portable_package_length_mismatch")
+    return encoded
 
 
 def build_state_air_binding_bytes(
@@ -651,6 +982,12 @@ def build_state_air_binding_bytes(
 __all__ = (
     "COMPONENT_ID",
     "MAX_PROOF_PACKAGE_BYTES",
+    "PORTABLE_PACKAGE_BYTES",
+    "PORTABLE_PACKAGE_FLAGS",
+    "PORTABLE_PACKAGE_MAGIC",
+    "PORTABLE_PACKAGE_PREFIX_BYTES",
+    "PORTABLE_PACKAGE_VERSION",
+    "PORTABLE_SIDECAR_MAGIC",
     "PUBLIC_OUTPUT_BYTES",
     "PROOF_PACKAGE_MAGIC",
     "PROOF_PACKAGE_BYTES",
@@ -661,7 +998,9 @@ __all__ = (
     "SIDECAR_BYTES",
     "STATUS",
     "StateAirProofEvidence",
+    "build_compact_state_proof_package_v1",
     "proof_package_commitment",
     "build_state_air_binding_bytes",
     "prove_state_air",
+    "validate_compact_state_portable_statement",
 )

@@ -6,12 +6,17 @@ from dataclasses import dataclass
 from typing import Final, Mapping
 
 from .a12_nullifier_executable_air import A12NullifierAirInstance
+from .application_sha3_executable_air import (
+    ApplicationSha3AirInstance,
+    INTERFACE_PROGRAM_ID,
+)
 from .air_composition import (
     AirFragment,
     Sha3ComposedComponent,
     Sha3ProgramFragment,
     compose_boolean_sha3_air_components,
     compose_boolean_sha3_program_fragments,
+    compose_sha3_interface_components,
     compose_sha3_interface_program_fragments,
     merge_air_fragments,
 )
@@ -20,8 +25,10 @@ from .claim_source_claim_executable_air import ClaimSourceClaimAirInstance
 from .claim_truth_global_executable_air import ClaimTruthGlobalAirInstance
 from .executable_air import (
     AirProgram,
+    AirTable,
     LookupArgument,
     LookupSide,
+    PublicInputBinding,
     TraceTable,
     cell,
     const,
@@ -38,6 +45,25 @@ from .wave1a_global_sha3_capacity_schedule import (
 
 PROGRAM_ID: Final[str] = "BL-WAVE1A-GLOBAL-EXECUTABLE-AIR-v1"
 _SHA_PROGRAM_ID: Final[str] = "BL-WAVE1A-GLOBAL-SHA3-COMPOSITION-v1"
+_REQUIRED_GLOBAL_LINK_NAMES: Final[tuple[str, ...]] = (
+    "wave1a_master_truth_links",
+    "wave1a_master_authority_links",
+    "wave1a_master_cover_domain_link",
+    "wave1a_master_cover_nonce_link",
+    "wave1a_master_cover_epoch_link",
+    "wave1a_master_payment_domain_link",
+    "wave1a_master_payment_epoch_link",
+    "wave1a_master_claim_slot_links",
+    "wave1a_master_a12_nullifier_links",
+    "wave1a_master_salt_use_link",
+    "wave1a_master_replay_root_links",
+    "wave1a_master_payment_root_links",
+)
+_SHA3_INTERFACE_TABLE_NAMES: Final[tuple[str, ...]] = (
+    "sha3_message_batch",
+    "sha3_digest_batch",
+    "sha3_digest_byte_batch",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +115,64 @@ class Wave1AGlobalAirInstance:
             or not required.issubset(lookup.name for lookup in self.program.lookups)
         ):
             raise StructuralError("wave1a_global_false_completion_claim")
+
+
+@dataclass(frozen=True, slots=True)
+class Wave1AGlobalSemanticBusAirInstance:
+    """Complete private Wave 1A witness with SHA3 represented by bus ports."""
+
+    program: AirProgram
+    traces: Mapping[str, TraceTable]
+    sha3: ApplicationSha3AirInstance
+    profile: CalibrationProfile
+    claim_truth: ClaimTruthGlobalAirInstance
+    source_claim: ClaimSourceClaimAirInstance
+    a12: A12NullifierAirInstance
+    salt_use: SaltUseTagAirInstance
+    replay: ReplayOrderedMapAirInstance
+    payment: ClaimPaymentMapsAirInstance
+    master_public: MasterPublicAirInstance
+    global_links: tuple[LookupArgument, ...]
+    one_sha3_interface: bool = True
+    all_global_links_constrained: bool = True
+
+    def __post_init__(self) -> None:
+        table_names = tuple(table.name for table in self.program.tables)
+        interface_names = set(_SHA3_INTERFACE_TABLE_NAMES)
+        boolean_names = {
+            "sha3_boolean_round",
+            "sha3_boolean_absorb",
+            "sha3_boolean_digest",
+            "sha3_round_batch",
+            "sha3_truth_shared",
+            "sha3_byte_range_shared",
+        }
+        if (
+            not isinstance(self.profile, CalibrationProfile)
+            or not isinstance(self.sha3, ApplicationSha3AirInstance)
+            or self.sha3.program.program_id != INTERFACE_PROGRAM_ID
+            or not self.one_sha3_interface
+            or not self.all_global_links_constrained
+            or any(table_names.count(name) != 1 for name in interface_names)
+            or boolean_names.intersection(table_names)
+            or set(self.traces) != set(table_names)
+            or any(
+                self.traces[name].columns != self.sha3.traces[name].columns
+                for name in interface_names
+            )
+            or tuple(lookup.name for lookup in self.global_links)
+            != _REQUIRED_GLOBAL_LINK_NAMES
+            or not set(_REQUIRED_GLOBAL_LINK_NAMES).issubset(
+                lookup.name for lookup in self.program.lookups
+            )
+            or any(
+                binding.table in interface_names
+                for binding in self.program.public_inputs
+            )
+            or tuple(call.capacity for call in self.sha3.calls)
+            != build_wave1a_global_sha3_capacity_schedule(self.profile).capacities
+        ):
+            raise StructuralError("wave1a_global_semantic_bus_false_completion_claim")
 
 
 def _field_bytes(instance: MasterPublicAirInstance, name: str) -> bytes:
@@ -430,7 +514,7 @@ def _global_links(
     )
 
 
-def build_wave1a_global_executable_air(
+def _wave1a_sha3_components(
     claim_truth: ClaimTruthGlobalAirInstance,
     source_claim: ClaimSourceClaimAirInstance,
     a12: A12NullifierAirInstance,
@@ -438,7 +522,7 @@ def build_wave1a_global_executable_air(
     replay: ReplayOrderedMapAirInstance,
     payment: ClaimPaymentMapsAirInstance,
     master_public: MasterPublicAirInstance,
-) -> Wave1AGlobalAirInstance:
+) -> tuple[Sha3ComposedComponent, ...]:
     if (
         not isinstance(claim_truth, ClaimTruthGlobalAirInstance)
         or not (
@@ -491,7 +575,7 @@ def build_wave1a_global_executable_air(
         or master_public.master.call_index_offset != offsets[5]
     ):
         raise StructuralError("wave1a_global_call_offsets_invalid")
-    components = (
+    return (
         Sha3ComposedComponent(
             claim_truth.composed.program,
             claim_truth.composed.traces,
@@ -523,6 +607,99 @@ def build_wave1a_global_executable_air(
             master_public.master.sha3,
             offsets[5],
         ),
+    )
+
+
+def _source_claim_composition_extras(
+    components: tuple[Sha3ComposedComponent, ...],
+    source_claim: ClaimSourceClaimAirInstance,
+) -> tuple[
+    tuple[AirTable, ...],
+    Mapping[str, TraceTable],
+    tuple[LookupArgument, ...],
+    tuple[PublicInputBinding, ...],
+]:
+    component_tables: dict[str, list[tuple[AirTable, TraceTable]]] = {}
+    component_lookups: dict[str, list[LookupArgument]] = {}
+    component_public_inputs: dict[str, list[PublicInputBinding]] = {}
+    for component in components:
+        sha_table_names = {table.name for table in component.sha3.program.tables}
+        sha_lookup_names = {lookup.name for lookup in component.sha3.program.lookups}
+        for table in component.program.tables:
+            if table.name not in sha_table_names:
+                component_tables.setdefault(table.name, []).append(
+                    (table, component.traces[table.name])
+                )
+        for lookup in component.program.lookups:
+            if lookup.name not in sha_lookup_names:
+                component_lookups.setdefault(lookup.name, []).append(lookup)
+        for binding in component.program.public_inputs:
+            component_public_inputs.setdefault(binding.name, []).append(binding)
+
+    extra_tables: list[AirTable] = []
+    extra_traces: dict[str, TraceTable] = {}
+    for table in source_claim.program.tables:
+        trace = source_claim.traces[table.name]
+        observed = component_tables.get(table.name, ())
+        if observed and any(
+            candidate.canonical() != table.canonical()
+            or candidate_trace.name != trace.name
+            or candidate_trace.columns != trace.columns
+            for candidate, candidate_trace in observed
+        ):
+            raise StructuralError(
+                f"wave1a_global_source_claim_table_conflict:{table.name}"
+            )
+        if not observed:
+            extra_tables.append(table)
+            extra_traces[table.name] = trace
+
+    extra_lookups: list[LookupArgument] = []
+    for lookup in source_claim.program.lookups:
+        observed = component_lookups.get(lookup.name, ())
+        if observed and any(
+            candidate.canonical() != lookup.canonical() for candidate in observed
+        ):
+            raise StructuralError(
+                f"wave1a_global_source_claim_lookup_conflict:{lookup.name}"
+            )
+        if not observed:
+            extra_lookups.append(lookup)
+
+    extra_public_inputs: list[PublicInputBinding] = []
+    for binding in source_claim.program.public_inputs:
+        observed = component_public_inputs.get(binding.name, ())
+        if observed and any(candidate != binding for candidate in observed):
+            raise StructuralError(
+                f"wave1a_global_source_claim_public_conflict:{binding.name}"
+            )
+        if not observed:
+            extra_public_inputs.append(binding)
+    return (
+        tuple(extra_tables),
+        extra_traces,
+        tuple(extra_lookups),
+        tuple(extra_public_inputs),
+    )
+
+
+def build_wave1a_global_executable_air(
+    claim_truth: ClaimTruthGlobalAirInstance,
+    source_claim: ClaimSourceClaimAirInstance,
+    a12: A12NullifierAirInstance,
+    salt_use: SaltUseTagAirInstance,
+    replay: ReplayOrderedMapAirInstance,
+    payment: ClaimPaymentMapsAirInstance,
+    master_public: MasterPublicAirInstance,
+) -> Wave1AGlobalAirInstance:
+    components = _wave1a_sha3_components(
+        claim_truth,
+        source_claim,
+        a12,
+        salt_use,
+        replay,
+        payment,
+        master_public,
     )
     sha_composed = compose_boolean_sha3_air_components(_SHA_PROGRAM_ID, components)
     links = _global_links(
@@ -646,9 +823,99 @@ def build_wave1a_global_semantic_bus_program_only(
     )
 
 
+def build_wave1a_global_semantic_bus_executable_air(
+    profile: CalibrationProfile,
+    claim_truth: ClaimTruthGlobalAirInstance,
+    source_claim: ClaimSourceClaimAirInstance,
+    a12: A12NullifierAirInstance,
+    salt_use: SaltUseTagAirInstance,
+    replay: ReplayOrderedMapAirInstance,
+    payment: ClaimPaymentMapsAirInstance,
+    master_public: MasterPublicAirInstance,
+) -> Wave1AGlobalSemanticBusAirInstance:
+    """Compose the complete private Wave 1A witness over external SHA3 ports.
+
+    The returned traces and ``sha3.calls`` are prover-private inputs.  This
+    constructor does not serialize either into a proof or public statement.
+    """
+
+    if not isinstance(profile, CalibrationProfile):
+        raise StructuralError("wave1a_global_program_inputs_invalid")
+    components = _wave1a_sha3_components(
+        claim_truth,
+        source_claim,
+        a12,
+        salt_use,
+        replay,
+        payment,
+        master_public,
+    )
+    capacities = tuple(
+        call.capacity for component in components for call in component.sha3.calls
+    )
+    if capacities != build_wave1a_global_sha3_capacity_schedule(profile).capacities:
+        raise StructuralError("wave1a_global_program_sha3_schedule_mismatch")
+    links = _global_links(
+        source_claim,
+        a12,
+        salt_use,
+        replay,
+        payment,
+        master_public,
+    )
+    if tuple(lookup.name for lookup in links) != _REQUIRED_GLOBAL_LINK_NAMES:
+        raise StructuralError("wave1a_global_program_links_incomplete")
+    fragments = tuple(
+        Sha3ProgramFragment(
+            component.program,
+            tuple(call.capacity for call in component.sha3.calls),
+            component.call_index_offset,
+        )
+        for component in components
+    )
+    expected_program = build_wave1a_global_semantic_bus_program_only(
+        profile,
+        fragments,
+        source_claim.program,
+        links,
+    )
+    (
+        source_tables,
+        source_traces,
+        source_lookups,
+        source_public_inputs,
+    ) = _source_claim_composition_extras(components, source_claim)
+    composed = compose_sha3_interface_components(
+        PROGRAM_ID,
+        components,
+        extra_tables=source_tables,
+        extra_traces=source_traces,
+        extra_lookups=(*source_lookups, *links),
+        extra_public_inputs=source_public_inputs,
+    )
+    if composed.program.canonical_bytes() != expected_program.canonical_bytes():
+        raise StructuralError("wave1a_global_semantic_bus_program_mismatch")
+    return Wave1AGlobalSemanticBusAirInstance(
+        composed.program,
+        composed.traces,
+        composed.sha3,
+        profile,
+        claim_truth,
+        source_claim,
+        a12,
+        salt_use,
+        replay,
+        payment,
+        master_public,
+        links,
+    )
+
+
 __all__ = (
     "Wave1AGlobalAirInstance",
+    "Wave1AGlobalSemanticBusAirInstance",
     "build_wave1a_global_executable_air",
     "build_wave1a_global_program_only",
+    "build_wave1a_global_semantic_bus_executable_air",
     "build_wave1a_global_semantic_bus_program_only",
 )

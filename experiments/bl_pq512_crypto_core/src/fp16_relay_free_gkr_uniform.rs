@@ -16,8 +16,9 @@ use sha3::{Digest, Sha3_512};
 use crate::{
     field::{Fp16, M31},
     fp16_relay_free_gkr_schedule::{
-        GKR_TRANSCRIPT_ROUNDS, SelectedGkrRoundKind, selected_gkr_mask_layout,
+        GKR_ROUNDS, GKR_TRANSCRIPT_ROUNDS, SelectedGkrRoundKind, selected_gkr_mask_layout,
         selected_gkr_round_kind, selected_gkr_round_output_count,
+        selected_sumcheck_mask_variable_degrees,
     },
     fp16_relay_free_gkr_source::{GROUP_COUNT, KECCAK_F_ZERO},
     gkr_packed_binary_bridge_fp16::{
@@ -157,6 +158,386 @@ pub struct MaskedUniformRelayFreeGkrProof {
     pub input_mask_layers: Vec<usize>,
     pub layers: Vec<MaskedUniformRelayFreeGkrLayerProof>,
     pub rounds: Vec<UniformRelayFreeGkrRound>,
+}
+
+/// One public claim carried between masked GKR layers.
+///
+/// The unmasked intermediate value is deliberately absent.  The point,
+/// packed-shard query, coefficient, masked value, and originating mask layer
+/// are sufficient to replay the public recurrence and reconstruct the one
+/// aggregate committed-mask functional.  Only the four final PCS input
+/// claims retain unmasked values, because those values are independently
+/// authenticated by the H4 PCS boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedRelayFreeClaim {
+    pub shard_query: Fp16,
+    pub point: Vec<Fp16>,
+    pub coefficient: Fp16,
+    pub masked_value: Fp16,
+    pub mask_layer: Option<usize>,
+}
+
+/// Raw-free public view of one selected masked Keccak GKR layer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedUniformRelayFreeGkrLayerProof {
+    pub keccak_round: usize,
+    pub layer: usize,
+    pub incoming_claims: Vec<PublicMaskedRelayFreeClaim>,
+    pub bridge_rho: Fp16,
+    pub sumcheck_rho: Fp16,
+    pub public_bridge: [Fp16; PACKED_BINARY_MESSAGE_COEFFICIENTS],
+    pub bridge_challenge: Fp16,
+    pub published_rounds: Vec<Vec<Fp16>>,
+    pub group_challenges: Vec<Fp16>,
+    pub wire_challenges: Vec<Fp16>,
+    pub masked_terminal_left: Fp16,
+    pub masked_terminal_right: Fp16,
+    pub w_challenge: Fp16,
+}
+
+/// Verifier-safe selected H4 GKR proof view.
+///
+/// `output_claim` and `input_claims` are public PCS claims.  No raw bridge,
+/// raw intermediate terminal, witness row, or mask coefficient is present.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicMaskedUniformRelayFreeGkrProof {
+    pub mask_commitment: [u8; 64],
+    pub output_claim: UniformRelayFreeClaim,
+    pub input_claims: Vec<UniformRelayFreeClaim>,
+    pub masked_input_values: Vec<Fp16>,
+    pub input_mask_layers: Vec<usize>,
+    pub layers: Vec<PublicMaskedUniformRelayFreeGkrLayerProof>,
+    pub rounds: Vec<UniformRelayFreeGkrRound>,
+}
+
+impl PublicMaskedUniformRelayFreeGkrProof {
+    /// Drop every private/raw intermediate from a prover-internal proof.
+    pub fn from_private(proof: &MaskedUniformRelayFreeGkrProof) -> Self {
+        Self {
+            mask_commitment: proof.mask_commitment,
+            output_claim: proof.raw_output_claim.clone(),
+            input_claims: proof.raw_input_claims.clone(),
+            masked_input_values: proof.masked_input_values.clone(),
+            input_mask_layers: proof.input_mask_layers.clone(),
+            layers: proof
+                .layers
+                .iter()
+                .map(|layer| PublicMaskedUniformRelayFreeGkrLayerProof {
+                    keccak_round: layer.keccak_round,
+                    layer: layer.layer,
+                    incoming_claims: layer
+                        .incoming_raw_claims
+                        .iter()
+                        .zip(&layer.incoming_masked_values)
+                        .zip(&layer.incoming_mask_layers)
+                        .map(
+                            |((claim, masked_value), mask_layer)| PublicMaskedRelayFreeClaim {
+                                shard_query: claim.shard_query,
+                                point: claim.point.clone(),
+                                coefficient: claim.coefficient,
+                                masked_value: *masked_value,
+                                mask_layer: *mask_layer,
+                            },
+                        )
+                        .collect(),
+                    bridge_rho: layer.bridge_rho,
+                    sumcheck_rho: layer.sumcheck_rho,
+                    public_bridge: layer.public_bridge,
+                    bridge_challenge: layer.bridge_challenge,
+                    published_rounds: layer.reduction.published_rounds.clone(),
+                    group_challenges: layer.reduction.group_challenges.clone(),
+                    wire_challenges: layer.reduction.wire_challenges.clone(),
+                    masked_terminal_left: layer.reduction.masked_terminal_left,
+                    masked_terminal_right: layer.reduction.masked_terminal_right,
+                    w_challenge: layer.reduction.w_challenge,
+                })
+                .collect(),
+            rounds: proof.rounds.clone(),
+        }
+    }
+}
+
+fn decode_public_polynomial_message(
+    message: &[u8],
+    domain: &[u8],
+    trailing_values: usize,
+) -> Result<(Vec<Fp16>, Vec<Fp16>), UniformRelayFreeGkrError> {
+    if !message.starts_with(domain) {
+        return Err(UniformRelayFreeGkrError::Schedule);
+    }
+    let count_offset = domain.len();
+    let count = usize::from(u16::from_be_bytes(
+        message
+            .get(count_offset..count_offset + 2)
+            .ok_or(UniformRelayFreeGkrError::Schedule)?
+            .try_into()
+            .map_err(|_| UniformRelayFreeGkrError::Schedule)?,
+    ));
+    let value_count = count
+        .checked_add(trailing_values)
+        .ok_or(UniformRelayFreeGkrError::Shape)?;
+    let expected_length = count_offset
+        .checked_add(2)
+        .and_then(|length| length.checked_add(value_count.checked_mul(64)?))
+        .ok_or(UniformRelayFreeGkrError::Shape)?;
+    if count == 0 || message.len() != expected_length {
+        return Err(UniformRelayFreeGkrError::Schedule);
+    }
+    let mut values = Vec::with_capacity(value_count);
+    for encoded in message[count_offset + 2..].chunks_exact(64) {
+        values.push(
+            Fp16::decode(
+                encoded
+                    .try_into()
+                    .map_err(|_| UniformRelayFreeGkrError::Schedule)?,
+            )
+            .map_err(|_| UniformRelayFreeGkrError::Algebra)?,
+        );
+    }
+    let trailing = values.split_off(count);
+    Ok((values, trailing))
+}
+
+/// Reconstruct the selected raw-free nonuniform GKR proof exclusively from
+/// authenticated round messages/challenges and the PCS boundary claims.
+///
+/// No prover-supplied raw intermediate or mask coefficient enters this
+/// adapter.  The returned batch has already passed the ordinary public GKR
+/// verifier; a complete H4 verifier must still combine its constraints with
+/// the state/square-free constraints and authenticate the resulting committed
+/// mask opening in Construction 8.2.
+pub fn reconstruct_and_verify_public_masked_nonuniform_trace(
+    mask_commitment: [u8; 64],
+    output_claim: UniformRelayFreeClaim,
+    input_claims: Vec<UniformRelayFreeClaim>,
+    rounds: Vec<UniformRelayFreeGkrRound>,
+    expected_statement_binding: [u8; 64],
+) -> Result<(PublicMaskedUniformRelayFreeGkrProof, UniformGkrMaskBatch), UniformRelayFreeGkrError> {
+    if rounds.len() != GKR_ROUNDS as usize
+        || input_claims.len() != 4
+        || output_claim.point.len() != 24
+    {
+        return Err(UniformRelayFreeGkrError::Shape);
+    }
+    for (ordinal, round) in rounds.iter().enumerate() {
+        if selected_gkr_round_kind(ordinal as u32) != Some(round.kind)
+            || selected_gkr_round_output_count(ordinal as u32)
+                != u16::try_from(round.outputs.len()).ok()
+        {
+            return Err(UniformRelayFreeGkrError::Schedule);
+        }
+    }
+    let output_record = rounds.first().ok_or(UniformRelayFreeGkrError::Schedule)?;
+    if output_record.outputs.len() != 27 {
+        return Err(UniformRelayFreeGkrError::Coin);
+    }
+
+    let topologies = (0..24)
+        .map(|round| build_keccak_gkr_dag_round(round).map_err(|_| UniformRelayFreeGkrError::Trace))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut carried_rhos = [output_record.outputs[25], output_record.outputs[26]];
+    let mut pending = vec![vec![Vec::<PublicMaskedRelayFreeClaim>::new(); 8]; 24];
+    pending[23][7].push(PublicMaskedRelayFreeClaim {
+        shard_query: output_claim.shard_query,
+        point: output_claim.point.clone(),
+        coefficient: Fp16::ONE,
+        masked_value: output_claim.value,
+        mask_layer: None,
+    });
+    let mut reconstructed_inputs = Vec::with_capacity(4);
+    let mut layers = Vec::with_capacity(168);
+    let mut transcript_ordinal = 1_usize;
+
+    for round in (0..24).rev() {
+        for layer_index in (0..7).rev() {
+            let proof_index = layers.len();
+            let topology = &topologies[round][layer_index];
+            let mut incoming = core::mem::take(&mut pending[round][layer_index + 1]);
+            if incoming.is_empty() || incoming.len() > 4 {
+                return Err(UniformRelayFreeGkrError::Shape);
+            }
+            let needs_mix = matches!(layer_index, 0 | 2 | 4) || (layer_index == 6 && round != 23);
+            let rhos = if needs_mix {
+                let record = rounds
+                    .get(transcript_ordinal)
+                    .ok_or(UniformRelayFreeGkrError::Schedule)?;
+                transcript_ordinal += 1;
+                if record.kind != SelectedGkrRoundKind::ClaimMix
+                    || record.outputs.len() != 3
+                    || record.outputs.iter().any(|value| value.is_zero())
+                {
+                    return Err(UniformRelayFreeGkrError::Coin);
+                }
+                let mut power = Fp16::ONE;
+                for claim in &mut incoming {
+                    claim.coefficient = power;
+                    power = power * record.outputs[0];
+                }
+                [record.outputs[1], record.outputs[2]]
+            } else {
+                if incoming.len() != 1 {
+                    return Err(UniformRelayFreeGkrError::Shape);
+                }
+                incoming[0].coefficient = Fp16::ONE;
+                carried_rhos
+            };
+
+            let bridge_record = rounds
+                .get(transcript_ordinal)
+                .ok_or(UniformRelayFreeGkrError::Schedule)?;
+            transcript_ordinal += 1;
+            if bridge_record.kind != SelectedGkrRoundKind::PackedBridge
+                || bridge_record.outputs.len() != 1
+            {
+                return Err(UniformRelayFreeGkrError::Schedule);
+            }
+            let (public_bridge, trailing) = decode_public_polynomial_message(
+                &bridge_record.message,
+                b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-BRIDGE/v1\0",
+                0,
+            )?;
+            if !trailing.is_empty() {
+                return Err(UniformRelayFreeGkrError::Schedule);
+            }
+            let public_bridge: [Fp16; PACKED_BINARY_MESSAGE_COEFFICIENTS] = public_bridge
+                .try_into()
+                .map_err(|_| UniformRelayFreeGkrError::Shape)?;
+
+            let group_variables = GROUP_COUNT.trailing_zeros() as usize;
+            let left_variables = topology.left_width.trailing_zeros() as usize;
+            let right_variables = topology.right_width.trailing_zeros() as usize;
+            let ordinary_rounds = group_variables + left_variables + right_variables;
+            let mut published_rounds = Vec::with_capacity(ordinary_rounds + 1);
+            let mut group_challenges = Vec::with_capacity(group_variables);
+            let mut wire_challenges = Vec::with_capacity(left_variables + right_variables);
+            for round_index in 0..ordinary_rounds {
+                let record = rounds
+                    .get(transcript_ordinal)
+                    .ok_or(UniformRelayFreeGkrError::Schedule)?;
+                transcript_ordinal += 1;
+                let expected_kind = if round_index < group_variables {
+                    SelectedGkrRoundKind::SharedGroup
+                } else {
+                    SelectedGkrRoundKind::Wire
+                };
+                if record.kind != expected_kind || record.outputs.len() != 1 {
+                    return Err(UniformRelayFreeGkrError::Schedule);
+                }
+                let (published, trailing) = decode_public_polynomial_message(
+                    &record.message,
+                    b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-SUMCHECK/v1\0",
+                    0,
+                )?;
+                if !trailing.is_empty() {
+                    return Err(UniformRelayFreeGkrError::Schedule);
+                }
+                published_rounds.push(published);
+                if expected_kind == SelectedGkrRoundKind::SharedGroup {
+                    group_challenges.push(record.outputs[0]);
+                } else {
+                    wire_challenges.push(record.outputs[0]);
+                }
+            }
+
+            let terminal_record = rounds
+                .get(transcript_ordinal)
+                .ok_or(UniformRelayFreeGkrError::Schedule)?;
+            transcript_ordinal += 1;
+            if terminal_record.kind != SelectedGkrRoundKind::Terminal
+                || !matches!(terminal_record.outputs.len(), 1 | 3)
+            {
+                return Err(UniformRelayFreeGkrError::Schedule);
+            }
+            let (w_published, terminal_values) = decode_public_polynomial_message(
+                &terminal_record.message,
+                b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-TERMINAL/v1\0",
+                2,
+            )?;
+            let [masked_terminal_left, masked_terminal_right]: [Fp16; 2] = terminal_values
+                .try_into()
+                .map_err(|_| UniformRelayFreeGkrError::Shape)?;
+            published_rounds.push(w_published);
+            if terminal_record.outputs.len() == 3 {
+                if terminal_record.outputs[1].is_zero() || terminal_record.outputs[2].is_zero() {
+                    return Err(UniformRelayFreeGkrError::Coin);
+                }
+                carried_rhos = [terminal_record.outputs[1], terminal_record.outputs[2]];
+            }
+
+            let left_point = wire_challenges[..left_variables]
+                .iter()
+                .chain(&group_challenges)
+                .copied()
+                .collect::<Vec<_>>();
+            let right_point = wire_challenges[left_variables..]
+                .iter()
+                .chain(&group_challenges)
+                .copied()
+                .collect::<Vec<_>>();
+            for (source, masked_value, point) in [
+                (topology.left_source, masked_terminal_left, left_point),
+                (topology.right_source, masked_terminal_right, right_point),
+            ] {
+                let claim = PublicMaskedRelayFreeClaim {
+                    shard_query: bridge_record.outputs[0],
+                    point,
+                    coefficient: Fp16::ONE,
+                    masked_value,
+                    mask_layer: Some(proof_index),
+                };
+                match source {
+                    KeccakDagSource::Layer(index) => pending[round][index + 1].push(claim),
+                    KeccakDagSource::RoundInput if round > 0 => {
+                        pending[round - 1][7].push(claim);
+                    }
+                    KeccakDagSource::RoundInput => reconstructed_inputs.push(claim),
+                }
+            }
+            layers.push(PublicMaskedUniformRelayFreeGkrLayerProof {
+                keccak_round: round,
+                layer: layer_index,
+                incoming_claims: incoming,
+                bridge_rho: rhos[0],
+                sumcheck_rho: rhos[1],
+                public_bridge,
+                bridge_challenge: bridge_record.outputs[0],
+                published_rounds,
+                group_challenges,
+                wire_challenges,
+                masked_terminal_left,
+                masked_terminal_right,
+                w_challenge: terminal_record.outputs[0],
+            });
+        }
+    }
+    if transcript_ordinal != GKR_TRANSCRIPT_ROUNDS as usize
+        || reconstructed_inputs.len() != 4
+        || pending
+            .iter()
+            .flat_map(|proof_round| proof_round.iter())
+            .any(|claims| !claims.is_empty())
+    {
+        return Err(UniformRelayFreeGkrError::Schedule);
+    }
+    let masked_input_values = reconstructed_inputs
+        .iter()
+        .map(|claim| claim.masked_value)
+        .collect::<Vec<_>>();
+    let input_mask_layers = reconstructed_inputs
+        .iter()
+        .map(|claim| claim.mask_layer.ok_or(UniformRelayFreeGkrError::Shape))
+        .collect::<Result<Vec<_>, _>>()?;
+    let proof = PublicMaskedUniformRelayFreeGkrProof {
+        mask_commitment,
+        output_claim,
+        input_claims,
+        masked_input_values,
+        input_mask_layers,
+        layers,
+        rounds,
+    };
+    let batch = verify_public_masked_nonuniform_trace(&proof, expected_statement_binding)?;
+    Ok((proof, batch))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -528,6 +909,26 @@ fn masked_claim_mix_message(
         append_field(&mut message, claim.raw.shard_query);
         message.extend_from_slice(&(claim.raw.point.len() as u16).to_be_bytes());
         for coordinate in &claim.raw.point {
+            append_field(&mut message, *coordinate);
+        }
+        append_field(&mut message, claim.masked_value);
+    }
+    message
+}
+
+fn public_masked_claim_mix_message(
+    keccak_round: usize,
+    layer: usize,
+    claims: &[PublicMaskedRelayFreeClaim],
+) -> Vec<u8> {
+    let mut message = b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-CLAIM-MIX/v1\0".to_vec();
+    message.extend_from_slice(&(keccak_round as u16).to_be_bytes());
+    message.push(layer as u8);
+    message.push(claims.len() as u8);
+    for claim in claims {
+        append_field(&mut message, claim.shard_query);
+        message.extend_from_slice(&(claim.point.len() as u16).to_be_bytes());
+        for coordinate in &claim.point {
             append_field(&mut message, *coordinate);
         }
         append_field(&mut message, claim.masked_value);
@@ -1659,6 +2060,156 @@ fn reconstruct_mask_constraints(
     Ok(constraints)
 }
 
+fn reconstruct_public_terminal_gate(
+    layer: &PublicMaskedUniformRelayFreeGkrLayerProof,
+    topology: &KeccakDagLayer,
+) -> Result<Fp16, UniformRelayFreeGkrError> {
+    let effective = layer
+        .incoming_claims
+        .iter()
+        .map(|claim| LayerOutputClaim {
+            point: claim.point.clone(),
+            value: Fp16::ZERO,
+            coefficient: claim.coefficient
+                * selector_evaluation(claim.shard_query, layer.bridge_challenge),
+        })
+        .collect::<Vec<_>>();
+    shared_group_terminal_gate_claim(
+        topology,
+        GROUP_COUNT,
+        &effective,
+        &layer.group_challenges,
+        &layer.wire_challenges,
+        layer.masked_terminal_left,
+        layer.masked_terminal_right,
+    )
+    .map_err(|_| UniformRelayFreeGkrError::Algebra)
+}
+
+/// Reconstruct the exact committed-mask equations from the raw-free public
+/// view.  The only unmasked values used here are the four independently
+/// authenticated PCS input claims.
+pub fn reconstruct_public_gkr_mask_constraints(
+    proof: &PublicMaskedUniformRelayFreeGkrProof,
+) -> Result<Vec<UniformGkrMaskConstraint>, UniformRelayFreeGkrError> {
+    if proof.layers.len() != 168
+        || proof.input_claims.len() != 4
+        || proof.masked_input_values.len() != 4
+        || proof.input_mask_layers.len() != 4
+    {
+        return Err(UniformRelayFreeGkrError::Shape);
+    }
+    let nodes = (0..16)
+        .map(|node| {
+            Ok(Fp16::from_m31(
+                M31::from_canonical(node).map_err(|_| UniformRelayFreeGkrError::Shape)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, UniformRelayFreeGkrError>>()?;
+    let topologies = (0..24)
+        .map(|round| build_keccak_gkr_dag_round(round).map_err(|_| UniformRelayFreeGkrError::Trace))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut constraints = Vec::with_capacity(3 * proof.layers.len() + 4);
+    for (proof_index, layer) in proof.layers.iter().enumerate() {
+        let topology = topologies
+            .get(layer.keccak_round)
+            .and_then(|round| round.get(layer.layer))
+            .ok_or(UniformRelayFreeGkrError::Shape)?;
+        let masked_initial = layer.incoming_claims.iter().fold(Fp16::ZERO, |sum, claim| {
+            sum + claim.coefficient * claim.masked_value
+        });
+        let public_node_sum = nodes.iter().copied().fold(Fp16::ZERO, |sum, node| {
+            sum + polynomial_evaluation(&layer.public_bridge, node)
+        });
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: nodes
+                .iter()
+                .copied()
+                .map(|point| UniformGkrMaskFunctional::BridgeEvaluation {
+                    layer: proof_index,
+                    point,
+                    scale: layer.bridge_rho,
+                })
+                .collect(),
+            residual: public_node_sum - masked_initial,
+        });
+
+        let first = layer
+            .published_rounds
+            .first()
+            .ok_or(UniformRelayFreeGkrError::Shape)?;
+        let first_sum =
+            polynomial_evaluation(first, Fp16::ZERO) + polynomial_evaluation(first, Fp16::ONE);
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: vec![
+                UniformGkrMaskFunctional::SumcheckBooleanSum {
+                    layer: proof_index,
+                    scale: layer.sumcheck_rho,
+                },
+                UniformGkrMaskFunctional::BridgeEvaluation {
+                    layer: proof_index,
+                    point: layer.bridge_challenge,
+                    scale: -layer.bridge_rho,
+                },
+            ],
+            residual: first_sum
+                - polynomial_evaluation(&layer.public_bridge, layer.bridge_challenge),
+        });
+
+        let mut xy_point = layer.group_challenges.clone();
+        xy_point.extend_from_slice(&layer.wire_challenges);
+        let equality_zero = xy_point.iter().fold(Fp16::ONE, |value, coordinate| {
+            value * (Fp16::ONE - *coordinate)
+        });
+        let mut full_point = xy_point;
+        full_point.push(layer.w_challenge);
+        let mut functionals = vec![UniformGkrMaskFunctional::SumcheckEvaluation {
+            layer: proof_index,
+            point: full_point,
+            scale: layer.sumcheck_rho,
+        }];
+        for claim in &layer.incoming_claims {
+            if let Some(origin) = claim.mask_layer {
+                functionals.push(UniformGkrMaskFunctional::LayerEvaluation {
+                    layer: origin,
+                    z_first: claim.point[0],
+                    w: layer.w_challenge,
+                    scale: equality_zero
+                        * claim.coefficient
+                        * selector_evaluation(claim.shard_query, layer.bridge_challenge)
+                        * boolean_vanishing(&claim.point),
+                });
+            }
+        }
+        let terminal_gate = reconstruct_public_terminal_gate(layer, topology)?;
+        let last = layer
+            .published_rounds
+            .last()
+            .ok_or(UniformRelayFreeGkrError::Shape)?;
+        constraints.push(UniformGkrMaskConstraint {
+            functionals,
+            residual: polynomial_evaluation(last, layer.w_challenge)
+                - (Fp16::ONE - layer.w_challenge) * terminal_gate,
+        });
+    }
+    for ((raw, masked), origin) in proof
+        .input_claims
+        .iter()
+        .zip(&proof.masked_input_values)
+        .zip(&proof.input_mask_layers)
+    {
+        constraints.push(UniformGkrMaskConstraint {
+            functionals: vec![UniformGkrMaskFunctional::LayerBooleanSum {
+                layer: *origin,
+                z_first: raw.point[0],
+                scale: boolean_vanishing(&raw.point),
+            }],
+            residual: *masked - raw.value,
+        });
+    }
+    Ok(constraints)
+}
+
 pub fn gkr_mask_batch_message(constraints: &[UniformGkrMaskConstraint]) -> Vec<u8> {
     let mut preimage = b"BL/PQ512/WAVE2/GKR-MASK-BATCH-PREIMAGE/v2\0".to_vec();
     preimage.extend_from_slice(&(constraints.len() as u32).to_be_bytes());
@@ -1911,6 +2462,360 @@ pub fn verify_masked_nonuniform_trace(
         ),
         false,
     )
+}
+
+/// Verify the raw-free public view for the selected all-zero fixture.
+///
+/// The returned aggregate opening is not an acceptance result by itself.  A
+/// complete H4 verifier must combine the returned constraints with the state
+/// constraints and verify the final committed-mask PCS opening.
+pub fn verify_public_masked_uniform_zero_trace(
+    proof: &PublicMaskedUniformRelayFreeGkrProof,
+) -> Result<UniformGkrMaskBatch, UniformRelayFreeGkrError> {
+    verify_public_masked_trace_internal(
+        proof,
+        &masked_output_query_message(&proof.mask_commitment),
+        true,
+    )
+}
+
+/// Verify the raw-free public view for a real, statement-bound H4 shard.
+///
+/// `proof.rounds` must have been reconstructed from a successfully replayed
+/// authenticated public-coin bundle.  This function verifies the exact GKR
+/// schedule/messages and reconstructs the committed-mask equations without
+/// reading raw intermediate terminals or mask coefficients.
+pub fn verify_public_masked_nonuniform_trace(
+    proof: &PublicMaskedUniformRelayFreeGkrProof,
+    expected_statement_binding: [u8; 64],
+) -> Result<UniformGkrMaskBatch, UniformRelayFreeGkrError> {
+    verify_public_masked_trace_internal(
+        proof,
+        &masked_nonuniform_output_query_message(
+            &proof.mask_commitment,
+            &expected_statement_binding,
+        ),
+        false,
+    )
+}
+
+fn verify_public_masked_trace_internal(
+    proof: &PublicMaskedUniformRelayFreeGkrProof,
+    expected_output_message: &[u8],
+    verify_uniform_source: bool,
+) -> Result<UniformGkrMaskBatch, UniformRelayFreeGkrError> {
+    if proof.layers.len() != 168
+        || proof.rounds.len() != GKR_TRANSCRIPT_ROUNDS as usize + 1
+        || proof.input_claims.len() != 4
+        || proof.masked_input_values.len() != 4
+        || proof.input_mask_layers.len() != 4
+        || proof.output_claim.point.len() != 24
+        || proof.output_claim.coefficient != Fp16::ONE
+        || proof.input_claims.iter().any(|claim| {
+            claim.coefficient != Fp16::ONE
+                || claim.point.len() != 24
+                || (verify_uniform_source && claim.value != Fp16::ZERO)
+        })
+    {
+        return Err(UniformRelayFreeGkrError::Shape);
+    }
+    for (ordinal, round) in proof.rounds.iter().enumerate() {
+        if selected_gkr_round_kind(ordinal as u32) != Some(round.kind)
+            || selected_gkr_round_output_count(ordinal as u32)
+                != u16::try_from(round.outputs.len()).ok()
+        {
+            return Err(UniformRelayFreeGkrError::Schedule);
+        }
+    }
+
+    let trace = if verify_uniform_source {
+        Some(build_zero_trace()?)
+    } else {
+        None
+    };
+    let topologies = (0..24)
+        .map(|round| build_keccak_gkr_dag_round(round).map_err(|_| UniformRelayFreeGkrError::Trace))
+        .collect::<Result<Vec<_>, _>>()?;
+    let variable_degrees = selected_sumcheck_mask_variable_degrees();
+    if variable_degrees.len() != proof.layers.len() {
+        return Err(UniformRelayFreeGkrError::Shape);
+    }
+    let output_record = &proof.rounds[0];
+    if output_record.message != expected_output_message
+        || output_record.outputs[25].is_zero()
+        || output_record.outputs[26].is_zero()
+        || proof.output_claim.shard_query != output_record.outputs[0]
+        || proof.output_claim.point != output_record.outputs[1..25]
+        || (verify_uniform_source
+            && proof.output_claim.value
+                != multilinear_evaluate(
+                    &trace.as_ref().ok_or(UniformRelayFreeGkrError::Trace)?[23].boundaries[6],
+                    &proof.output_claim.point[..11],
+                )?)
+    {
+        return Err(UniformRelayFreeGkrError::Trace);
+    }
+
+    let mut carried_rhos = [output_record.outputs[25], output_record.outputs[26]];
+    let mut pending = vec![vec![Vec::<PublicMaskedRelayFreeClaim>::new(); 8]; 24];
+    pending[23][7].push(PublicMaskedRelayFreeClaim {
+        shard_query: proof.output_claim.shard_query,
+        point: proof.output_claim.point.clone(),
+        coefficient: Fp16::ONE,
+        masked_value: proof.output_claim.value,
+        mask_layer: None,
+    });
+    let mut reconstructed_inputs = Vec::with_capacity(4);
+    let mut transcript_ordinal = 1_usize;
+    let mut proof_index = 0_usize;
+
+    for round in (0..24).rev() {
+        for layer_index in (0..7).rev() {
+            let layer_proof = proof
+                .layers
+                .get(proof_index)
+                .ok_or(UniformRelayFreeGkrError::Shape)?;
+            if layer_proof.keccak_round != round || layer_proof.layer != layer_index {
+                return Err(UniformRelayFreeGkrError::Schedule);
+            }
+            let topology = &topologies[round][layer_index];
+            let mut incoming = core::mem::take(&mut pending[round][layer_index + 1]);
+            if incoming.is_empty() || incoming.len() > 4 {
+                return Err(UniformRelayFreeGkrError::Shape);
+            }
+            let needs_mix = matches!(layer_index, 0 | 2 | 4) || (layer_index == 6 && round != 23);
+            let rhos = if needs_mix {
+                let record = proof
+                    .rounds
+                    .get(transcript_ordinal)
+                    .ok_or(UniformRelayFreeGkrError::Schedule)?;
+                transcript_ordinal += 1;
+                if record.kind != SelectedGkrRoundKind::ClaimMix
+                    || record.message
+                        != public_masked_claim_mix_message(round, layer_index, &incoming)
+                    || record.outputs.iter().any(|value| value.is_zero())
+                {
+                    return Err(UniformRelayFreeGkrError::Schedule);
+                }
+                let mut power = Fp16::ONE;
+                for claim in &mut incoming {
+                    claim.coefficient = power;
+                    power = power * record.outputs[0];
+                }
+                [record.outputs[1], record.outputs[2]]
+            } else {
+                if incoming.len() != 1 {
+                    return Err(UniformRelayFreeGkrError::Shape);
+                }
+                incoming[0].coefficient = Fp16::ONE;
+                carried_rhos
+            };
+            if layer_proof.incoming_claims != incoming
+                || layer_proof.bridge_rho != rhos[0]
+                || layer_proof.sumcheck_rho != rhos[1]
+            {
+                return Err(UniformRelayFreeGkrError::Algebra);
+            }
+
+            let bridge_record = proof
+                .rounds
+                .get(transcript_ordinal)
+                .ok_or(UniformRelayFreeGkrError::Schedule)?;
+            transcript_ordinal += 1;
+            if bridge_record.kind != SelectedGkrRoundKind::PackedBridge
+                || bridge_record.message
+                    != polynomial_message(
+                        b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-BRIDGE/v1\0",
+                        &layer_proof.public_bridge,
+                    )
+                || bridge_record.outputs[0] != layer_proof.bridge_challenge
+            {
+                return Err(UniformRelayFreeGkrError::Schedule);
+            }
+
+            let group_variables = GROUP_COUNT.trailing_zeros() as usize;
+            let left_variables = topology.left_width.trailing_zeros() as usize;
+            let right_variables = topology.right_width.trailing_zeros() as usize;
+            let ordinary_rounds = group_variables + left_variables + right_variables;
+            let degrees = variable_degrees
+                .get(proof_index)
+                .ok_or(UniformRelayFreeGkrError::Shape)?;
+            if degrees.len() != ordinary_rounds + 1
+                || layer_proof.published_rounds.len() != degrees.len()
+                || layer_proof.group_challenges.len() != group_variables
+                || layer_proof.wire_challenges.len() != left_variables + right_variables
+                || layer_proof
+                    .published_rounds
+                    .iter()
+                    .zip(degrees)
+                    .any(|(published, degree)| published.len() != degree + 1)
+            {
+                return Err(UniformRelayFreeGkrError::Shape);
+            }
+            for round_index in 0..ordinary_rounds {
+                let published = &layer_proof.published_rounds[round_index];
+                let (kind, challenge) = if round_index < group_variables {
+                    (
+                        SelectedGkrRoundKind::SharedGroup,
+                        layer_proof.group_challenges[round_index],
+                    )
+                } else {
+                    (
+                        SelectedGkrRoundKind::Wire,
+                        layer_proof.wire_challenges[round_index - group_variables],
+                    )
+                };
+                let record = proof
+                    .rounds
+                    .get(transcript_ordinal)
+                    .ok_or(UniformRelayFreeGkrError::Schedule)?;
+                transcript_ordinal += 1;
+                if record.kind != kind
+                    || record.message
+                        != polynomial_message(
+                            b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-SUMCHECK/v1\0",
+                            published,
+                        )
+                    || record.outputs[0] != challenge
+                {
+                    return Err(UniformRelayFreeGkrError::Schedule);
+                }
+                if round_index > 0 {
+                    let previous = &layer_proof.published_rounds[round_index - 1];
+                    let previous_challenge = if round_index - 1 < group_variables {
+                        layer_proof.group_challenges[round_index - 1]
+                    } else {
+                        layer_proof.wire_challenges[round_index - 1 - group_variables]
+                    };
+                    if polynomial_evaluation(published, Fp16::ZERO)
+                        + polynomial_evaluation(published, Fp16::ONE)
+                        != polynomial_evaluation(previous, previous_challenge)
+                    {
+                        return Err(UniformRelayFreeGkrError::Algebra);
+                    }
+                }
+            }
+            let w_published = &layer_proof.published_rounds[ordinary_rounds];
+            let previous = &layer_proof.published_rounds[ordinary_rounds - 1];
+            let previous_challenge =
+                layer_proof.wire_challenges[left_variables + right_variables - 1];
+            if polynomial_evaluation(w_published, Fp16::ZERO)
+                + polynomial_evaluation(w_published, Fp16::ONE)
+                != polynomial_evaluation(previous, previous_challenge)
+            {
+                return Err(UniformRelayFreeGkrError::Algebra);
+            }
+            let mut terminal_message = polynomial_message(
+                b"BL/PQ512/WAVE2/UNIFORM-REAL-GKR/MASKED-TERMINAL/v1\0",
+                w_published,
+            );
+            append_field(&mut terminal_message, layer_proof.masked_terminal_left);
+            append_field(&mut terminal_message, layer_proof.masked_terminal_right);
+            let terminal_record = proof
+                .rounds
+                .get(transcript_ordinal)
+                .ok_or(UniformRelayFreeGkrError::Schedule)?;
+            transcript_ordinal += 1;
+            if terminal_record.kind != SelectedGkrRoundKind::Terminal
+                || terminal_record.message != terminal_message
+                || terminal_record.outputs[0] != layer_proof.w_challenge
+            {
+                return Err(UniformRelayFreeGkrError::Schedule);
+            }
+            if terminal_record.outputs.len() == 3 {
+                if terminal_record.outputs[1].is_zero() || terminal_record.outputs[2].is_zero() {
+                    return Err(UniformRelayFreeGkrError::Coin);
+                }
+                carried_rhos = [terminal_record.outputs[1], terminal_record.outputs[2]];
+            }
+
+            let left_point = layer_proof.wire_challenges[..left_variables]
+                .iter()
+                .chain(&layer_proof.group_challenges)
+                .copied()
+                .collect::<Vec<_>>();
+            let right_point = layer_proof.wire_challenges[left_variables..]
+                .iter()
+                .chain(&layer_proof.group_challenges)
+                .copied()
+                .collect::<Vec<_>>();
+            for (source, masked_value, point) in [
+                (
+                    topology.left_source,
+                    layer_proof.masked_terminal_left,
+                    left_point,
+                ),
+                (
+                    topology.right_source,
+                    layer_proof.masked_terminal_right,
+                    right_point,
+                ),
+            ] {
+                let claim = PublicMaskedRelayFreeClaim {
+                    shard_query: layer_proof.bridge_challenge,
+                    point,
+                    coefficient: Fp16::ONE,
+                    masked_value,
+                    mask_layer: Some(proof_index),
+                };
+                match source {
+                    KeccakDagSource::Layer(index) => pending[round][index + 1].push(claim),
+                    KeccakDagSource::RoundInput if round > 0 => {
+                        pending[round - 1][7].push(claim);
+                    }
+                    KeccakDagSource::RoundInput => reconstructed_inputs.push(claim),
+                }
+            }
+            proof_index += 1;
+        }
+    }
+    if proof_index != proof.layers.len()
+        || transcript_ordinal != GKR_TRANSCRIPT_ROUNDS as usize
+        || reconstructed_inputs.len() != 4
+        || pending
+            .iter()
+            .flat_map(|round| round.iter())
+            .any(|claims| !claims.is_empty())
+    {
+        return Err(UniformRelayFreeGkrError::Schedule);
+    }
+    for (ordinal, (reconstructed, raw)) in reconstructed_inputs
+        .iter()
+        .zip(&proof.input_claims)
+        .enumerate()
+    {
+        if reconstructed.shard_query != raw.shard_query
+            || reconstructed.point != raw.point
+            || raw.coefficient != Fp16::ONE
+            || reconstructed.masked_value != proof.masked_input_values[ordinal]
+            || reconstructed.mask_layer != Some(proof.input_mask_layers[ordinal])
+        {
+            return Err(UniformRelayFreeGkrError::Algebra);
+        }
+    }
+
+    let constraints = reconstruct_public_gkr_mask_constraints(proof)?;
+    let mask_record = proof
+        .rounds
+        .get(GKR_TRANSCRIPT_ROUNDS as usize)
+        .ok_or(UniformRelayFreeGkrError::Schedule)?;
+    if mask_record.kind != SelectedGkrRoundKind::MaskBatch
+        || mask_record.message != gkr_mask_batch_message(&constraints)
+        || mask_record.outputs.len() != 1
+        || mask_record.outputs[0].is_zero()
+    {
+        return Err(UniformRelayFreeGkrError::Schedule);
+    }
+    let challenge = mask_record.outputs[0];
+    let layout = selected_gkr_mask_layout().map_err(|_| UniformRelayFreeGkrError::Shape)?;
+    let (coefficient_weights, opening) =
+        aggregate_gkr_mask_constraints(&layout, &constraints, challenge)?;
+    Ok(UniformGkrMaskBatch {
+        challenge,
+        opening,
+        coefficient_weights,
+        constraints,
+    })
 }
 
 fn verify_masked_trace_internal(
@@ -2642,6 +3547,55 @@ mod tests {
         .unwrap();
         verify_uniform_gkr_mask_batch(&proof, &batch).unwrap();
         verify_masked_uniform_zero_trace(&proof, &batch).unwrap();
+        let public = PublicMaskedUniformRelayFreeGkrProof::from_private(&proof);
+        assert_eq!(
+            reconstruct_public_gkr_mask_constraints(&public).unwrap(),
+            batch.constraints
+        );
+        let public_batch = verify_public_masked_uniform_zero_trace(&public).unwrap();
+        assert_eq!(public_batch.constraints, batch.constraints);
+        assert_eq!(public_batch.coefficient_weights, batch.coefficient_weights);
+        assert_eq!(public_batch.opening, batch.opening);
+        let statement_binding = [0x71; 64];
+        let mut authenticated_rounds = proof.rounds.clone();
+        authenticated_rounds[0].message =
+            masked_nonuniform_output_query_message(&proof.mask_commitment, &statement_binding);
+        let (reconstructed, reconstructed_batch) =
+            reconstruct_and_verify_public_masked_nonuniform_trace(
+                proof.mask_commitment,
+                proof.raw_output_claim.clone(),
+                proof.raw_input_claims.clone(),
+                authenticated_rounds.clone(),
+                statement_binding,
+            )
+            .unwrap();
+        assert_eq!(reconstructed.layers, public.layers);
+        assert_eq!(
+            reconstructed.masked_input_values,
+            public.masked_input_values
+        );
+        assert_eq!(reconstructed.input_mask_layers, public.input_mask_layers);
+        assert_eq!(reconstructed_batch, public_batch);
+        let terminal = authenticated_rounds
+            .iter_mut()
+            .find(|round| round.kind == SelectedGkrRoundKind::Terminal)
+            .unwrap();
+        let terminal_last = terminal.message.len() - 1;
+        terminal.message[terminal_last] ^= 1;
+        assert!(
+            reconstruct_and_verify_public_masked_nonuniform_trace(
+                proof.mask_commitment,
+                proof.raw_output_claim.clone(),
+                proof.raw_input_claims.clone(),
+                authenticated_rounds,
+                statement_binding,
+            )
+            .is_err()
+        );
+        let mut forged_public = public.clone();
+        forged_public.layers[0].incoming_claims[0].masked_value =
+            forged_public.layers[0].incoming_claims[0].masked_value + Fp16::ONE;
+        assert!(verify_public_masked_uniform_zero_trace(&forged_public).is_err());
         assert_eq!(
             verify_masked_nonuniform_trace(&proof, &batch, [0x71; 64]),
             Err(UniformRelayFreeGkrError::Trace)

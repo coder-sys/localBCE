@@ -119,7 +119,8 @@ const K512_FILE_BYTES: u64 = 209_715_415;
 const MAX_IDENTITY_FILE_BYTES: u64 = 16_000_000;
 const MAX_CHILD_STDOUT: usize = 1 << 20;
 const MAX_CHILD_STDERR: usize = 1 << 16;
-const CUDA_DEPENDENCIES: [&str; 12] = [
+const CUDA_DEPENDENCIES: [&str; 13] = [
+    "cuda_binding_merkle_v2.py",
     "cuda_fp16_zk_rs_interleaved_k128_prototype.py",
     "cuda_dag_packed_accumulator_benchmark.py",
     "cuda_fp16_tower_kat.py",
@@ -243,6 +244,40 @@ fn run() -> Result<(), String> {
             String::from_utf8_lossy(&verification.state_profile)
         );
         println!("state_capacity={}", verification.state_capacity);
+        return Ok(());
+    }
+    if let [flag, state_path, output_path] = arguments.as_slice()
+        && flag == "--export-state-relation-source"
+    {
+        let verification = verify_state_binding(Path::new(state_path))?;
+        if verification.typed_state {
+            return Err("state_relation_source_typed_state".to_string());
+        }
+        let rows = verification
+            .state_relation_rows
+            .as_deref()
+            .ok_or_else(|| "state_relation_rows_missing".to_string())?;
+        let encoded = build_state_relation_wire_source(rows)
+            .map_err(|error| format!("state_relation_source_build:{error:?}"))?;
+        let digest = state_relation_source_digest(&encoded);
+        if digest != verification.state_relation_source_digest {
+            return Err("state_relation_source_digest_mismatch".to_string());
+        }
+        let output_path = PathBuf::from(output_path);
+        if !output_path.is_absolute() {
+            return Err("state_relation_source_output_not_absolute".to_string());
+        }
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output_path)
+            .map_err(|error| format!("state_relation_source_output_open:{error}"))?;
+        output
+            .write_all(&encoded)
+            .and_then(|_| output.sync_all())
+            .map_err(|error| format!("state_relation_source_output_write:{error}"))?;
+        println!("state_relation_source_bytes={}", encoded.len());
+        println!("state_relation_source_sha3_512={}", hex(&digest));
         return Ok(());
     }
     if let [flag, python, prototype, worker, cuda_module] = arguments.as_slice()
@@ -429,6 +464,18 @@ fn run() -> Result<(), String> {
             Vec::with_capacity(usize::from(shard_end - shard_start));
         for shard in shard_start..shard_end {
             let shard_started = Instant::now();
+            let raw_h4_statement = header
+                .gkr_statement_binding(shard, plan_commitment)
+                .map_err(|error| format!("gkr_statement:{error:?}"))?;
+            let h4_statement =
+                bl_pq512_crypto_core::h4_proof_package_v2::h4_native_digest_statement_id_v2(
+                    0x100 + shard,
+                    bl_pq512_crypto_core::binding_root_v2::BindingDigestV2::hash(
+                        bl_pq512_crypto_core::binding_root_v2::BindingRoleV2::Payload,
+                        &raw_h4_statement,
+                    )
+                    .map_err(|error| format!("gkr_statement_binding:{error:?}"))?,
+                );
             let mut child = Command::new(&python);
             child
                 .arg("-S")
@@ -438,6 +485,7 @@ fn run() -> Result<(), String> {
                 .env("BL_SHARD_CONCURRENCY", shard_concurrency.to_string())
                 .env("BL_HASH_BUS_GKR_WORKER", &worker)
                 .env("BL_ATOMIC_PARENT_BINDING", &parent_hex)
+                .env("BL_H4_GKR_STATEMENT_BINDING", hex(&h4_statement))
                 .env("BL_NATIVE_RELEASE_DIR", &native_directory)
                 .env(
                     "BL_MULTIPROOF_VERIFIER",
@@ -506,6 +554,14 @@ fn run() -> Result<(), String> {
             }
             if let Some(suite) = qualified_proof_suite.as_ref() {
                 child.env("BL_PROOF_SUITE_ID", hex(suite));
+            }
+            if let Some(capture_path) = env::var_os("BL_CURRENT_H4_CAPTURE_DIR") {
+                let capture_path = PathBuf::from(
+                    capture_path
+                        .to_string_lossy()
+                        .replace("{shard}", &shard.to_string()),
+                );
+                child.env("BL_CURRENT_H4_CAPTURE_DIR", capture_path);
             }
             let child = match child.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
                 Ok(child) => child,
@@ -3878,8 +3934,8 @@ fn validate_state_binding_fields(
                 "state_squarefree_coefficient_root",
             )?;
             let expected_rounds = match profile {
-                1 => "6727",
-                3 => "6995",
+                1 => "6791",
+                3 => "7059",
                 _ => return Err(format!("shard_state_profile:{shard}")),
             };
             if squarefree_root == [0; 64]
@@ -4008,6 +4064,9 @@ mod tests {
 
     fn cuda_source(name: &str) -> Option<&'static str> {
         match name {
+            "cuda_binding_merkle_v2.py" => {
+                Some(include_str!("../../cuda/cuda_binding_merkle_v2.py"))
+            }
             "cuda_fp16_zk_rs_theorem8_1_k128_prototype.py" => Some(include_str!(
                 "../../cuda/cuda_fp16_zk_rs_theorem8_1_k128_prototype.py"
             )),

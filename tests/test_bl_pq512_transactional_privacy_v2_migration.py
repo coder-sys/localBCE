@@ -22,7 +22,7 @@ from app.privacy_v2_migration import (
     derive_migration_nonce,
 )
 from app.production_boundary import (
-    GovernedRootsV2,
+    GovernanceAuthorityV2,
     NativeVerificationResult,
     ProductionBoundaryError,
     ProductionProofEnvelope,
@@ -58,12 +58,20 @@ def _field(label: str) -> bytes:
 _DOMAIN = _field("migration-domain")
 _ROLLBACK_DOMAIN = _field("migration-rollback-domain")
 _RECOVERY_DOMAIN = _field("migration-recovery-domain")
-_ROOTS = GovernedRootsV2(
-    claim_source_root=_field("migration-claim-root"),
-    oracle_facts_root=_field("migration-oracle-root"),
-    policy_root=_field("migration-policy-root"),
-    ruleset_root=_field("migration-ruleset-root"),
-)
+def _authority_for_epoch(epoch: int) -> GovernanceAuthorityV2:
+    return GovernanceAuthorityV2(
+        profile_code=((epoch - 1) % 3) + 1,
+        epoch=epoch,
+        claim_truth_roots_512=tuple(
+            _wide(f"migration-truth-{index}") for index in range(6)
+        ),
+        claim_truth_authority_digest_512=_wide("migration-truth-authority"),
+        nullifier_authority_id_512=_wide("migration-nullifier-authority"),
+        pepper_commitment_512=_wide("migration-pepper"),
+    )
+
+
+_ROOTS = _authority_for_epoch(1)
 _SUBMITTER = _wide("migration-submitter")
 _NULLIFIER_0 = _wide("migration-nullifier-0")
 _NULLIFIER_1 = _wide("migration-nullifier-1")
@@ -159,7 +167,7 @@ def _store(
     return SQLiteSettlementStoreV2(
         path=path,
         settlement_domain=settlement_domain,
-        governed_roots=_ROOTS,
+        governance_authority=_authority_for_epoch(epoch),
         initial_strong_nullifier_root=_NULLIFIER_0,
         initial_strong_payment_state_root=_PAYMENT_0,
         epoch=epoch,
@@ -194,7 +202,7 @@ def _sidecar(
         sequence_after=source.sequence + 1,
         strong_nullifier_root_before=source.strong_nullifier_root,
         strong_nullifier_root_after=nullifier_after,
-        strong_governance_commitment=_ROOTS.commitment_512,
+        strong_governance_commitment=_authority_for_epoch(source.epoch + 1).commitment_512,
         strong_payment_state_root_before=source.strong_payment_state_root,
         strong_payment_state_root_after=payment_after,
         strong_batch_commitment=batch_commitment,
@@ -228,6 +236,7 @@ def _migration_inputs(
     target = PrivacyV2MigrationTarget.from_sidecar(
         CandidateSidecarV1.decode(provisional),
         settlement_domain=target_settlement_domain,
+        governance_authority=_authority_for_epoch(source.epoch + 1),
     )
     evidence = build_privacy_v2_migration_evidence(
         kind=kind,
@@ -255,7 +264,7 @@ def _migration_inputs(
         settlement_domain=target_settlement_domain,
         batch_nonce=nonce,
         sidecar=sidecar,
-        governed_roots=_ROOTS,
+        governance_authority=_authority_for_epoch(source.epoch + 1),
         suite_id=target_config.suite,
         schema_id=target_config.schema,
         verifier_artifact_identity=target_config.verifier,
@@ -283,9 +292,15 @@ def _coordinator(
         verifier=verifier,
         storage=store,
         settlement_domain=settlement_domain,
-        governed_roots=_ROOTS,
+        governance_authority=store.identity_snapshot().governance_authority,
         authorized_submitters=(_SUBMITTER,),
     )
+
+
+def _target_authority_for_envelope(
+    envelope: ProductionProofEnvelope,
+) -> GovernanceAuthorityV2:
+    return _authority_for_epoch(CandidateSidecarV1.decode(envelope.sidecar).epoch)
 
 
 def _settlement_envelope(
@@ -307,7 +322,7 @@ def _settlement_envelope(
         sequence_after=identity.sequence + 1,
         strong_nullifier_root_before=identity.strong_nullifier_root,
         strong_nullifier_root_after=_NULLIFIER_2,
-        strong_governance_commitment=_ROOTS.commitment_512,
+        strong_governance_commitment=identity.governance_authority.commitment_512,
         strong_payment_state_root_before=identity.strong_payment_state_root,
         strong_payment_state_root_after=_PAYMENT_2,
         strong_batch_commitment=_digest(_BATCH_NONCE_BINDING, nonce),
@@ -316,7 +331,7 @@ def _settlement_envelope(
         settlement_domain=settlement_domain,
         batch_nonce=nonce,
         sidecar=sidecar,
-        governed_roots=_ROOTS,
+        governance_authority=identity.governance_authority,
         suite_id=identity.suite_id,
         schema_id=identity.schema_id,
         verifier_artifact_identity=identity.verifier_artifact_identity,
@@ -345,10 +360,12 @@ def test_native_verified_migration_is_atomic_fixed_shape_and_exactly_retryable(
     envelope, nonce, evidence = _migration_inputs(coordinator)
 
     first = coordinator.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     second = coordinator.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
 
     assert first == second
@@ -358,6 +375,9 @@ def test_native_verified_migration_is_atomic_fixed_shape_and_exactly_retryable(
     identity = store.identity_snapshot()
     assert identity.sequence == identity.anti_rollback_epoch == 1
     assert identity.epoch == 2
+    assert identity.governance_authority == _authority_for_epoch(2)
+    assert identity.governance_commitment == _authority_for_epoch(2).commitment_512
+    assert identity.governance_commitment != coordinator.source_identity.governance_commitment
     assert identity.settled_batch_count == 0
     assert (identity.profile_id, identity.suite_id, identity.schema_id) == (
         _NEW.profile,
@@ -366,6 +386,11 @@ def test_native_verified_migration_is_atomic_fixed_shape_and_exactly_retryable(
     )
     assert identity.strong_nullifier_root == _NULLIFIER_1
     assert identity.strong_payment_state_root == _PAYMENT_1
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT activation_sequence, profile_code, epoch FROM governance_authorities "
+            "ORDER BY activation_sequence"
+        ).fetchall() == [(0, 1, 1), (1, 2, 2)]
     store.verify_integrity()
 
 
@@ -379,7 +404,8 @@ def test_restart_backup_recovery_and_new_profile_settlement_after_cutover(
     coordinator = _coordinator(store, _ReceiptVerifier())
     envelope, nonce, evidence = _migration_inputs(coordinator)
     coordinator.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     store.create_backup(backup)
     store.close()
@@ -398,7 +424,7 @@ def test_restart_backup_recovery_and_new_profile_settlement_after_cutover(
         verifier=_ReceiptVerifier(),
         storage=restarted,
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=identity.governance_authority,
         authorized_submitters=(_SUBMITTER,),
     )
     receipt = settlement.submit(
@@ -412,6 +438,76 @@ def test_restart_backup_recovery_and_new_profile_settlement_after_cutover(
     assert final.settled_batch_count == 1
     assert final.strong_nullifier_root == _NULLIFIER_2
     assert final.strong_payment_state_root == _PAYMENT_2
+    restarted.verify_integrity()
+
+
+def test_exact_pre_cutover_settlement_retry_survives_governance_rotation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    store = _store(path)
+    source_identity = store.identity_snapshot()
+    old_envelope, old_nonce = _settlement_envelope(source_identity)
+    settlement = TransactionalSettlementV2(
+        verifier=_ReceiptVerifier(),
+        storage=store,
+        settlement_domain=_DOMAIN,
+        governance_authority=source_identity.governance_authority,
+        authorized_submitters=(_SUBMITTER,),
+    )
+    original = settlement.submit(
+        envelope=old_envelope,
+        batch_nonce=old_nonce,
+        submitter=_SUBMITTER,
+    )
+
+    migration = _coordinator(store, _ReceiptVerifier())
+    migration_envelope, migration_nonce, evidence = _migration_inputs(
+        migration,
+        nullifier_after=_wide("migration-after-settlement-nullifier"),
+        payment_after=_wide("migration-after-settlement-payment"),
+        label="after-settlement",
+    )
+    migration.submit(
+        envelope=migration_envelope,
+        batch_nonce=migration_nonce,
+        submitter=_SUBMITTER,
+        evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(
+            migration_envelope
+        ),
+    )
+    after_migration = store.identity_snapshot()
+    store.close()
+
+    restarted = _store(path, config=_NEW, epoch=2)
+    retry_settlement = TransactionalSettlementV2(
+        verifier=_ReceiptVerifier(),
+        storage=restarted,
+        settlement_domain=_DOMAIN,
+        governance_authority=restarted.identity_snapshot().governance_authority,
+        authorized_submitters=(_SUBMITTER,),
+    )
+
+    retry = retry_settlement.submit(
+        envelope=old_envelope,
+        batch_nonce=old_nonce,
+        submitter=_SUBMITTER,
+    )
+    assert retry == original
+    assert restarted.identity_snapshot() == after_migration
+
+    conflicting = replace(
+        old_envelope,
+        evidence_commitment=_wide("conflicting-old-settlement-evidence"),
+    )
+    with pytest.raises(ProductionBoundaryError, match="database_conflicting_retry"):
+        retry_settlement.submit(
+            envelope=conflicting,
+            batch_nonce=old_nonce,
+            submitter=_SUBMITTER,
+        )
+    assert restarted.identity_snapshot() == after_migration
     restarted.verify_integrity()
 
 
@@ -440,13 +536,15 @@ def test_precommit_failure_rolls_back_database_and_retry_commits_once(
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
     assert store.identity_snapshot() == before
     assert anchor.snapshot() is not None and anchor.snapshot().pending is not None
 
     fail["enabled"] = False
     coordinator.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     assert store.identity_snapshot().sequence == 1
     assert anchor.snapshot() is not None and anchor.snapshot().pending is None
@@ -469,6 +567,7 @@ def test_committed_anchor_pending_is_reconciled_on_restart(tmp_path: Path) -> No
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
     committed = store.identity_snapshot()
     assert committed.sequence == 1
@@ -484,6 +583,7 @@ def test_committed_anchor_pending_is_reconciled_on_restart(tmp_path: Path) -> No
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     assert retry.sequence_after == committed.sequence
     restarted.verify_integrity()
@@ -507,6 +607,7 @@ def test_committed_migration_exact_retry_survives_process_restart(
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     store.close()
     envelope_path = tmp_path / "retry-envelope.bin"
@@ -540,7 +641,7 @@ from pathlib import Path
 import sys
 from app.privacy_v2_migration import PrivacyV2MigrationEvidence
 from experiments.bl_pq512_crypto_foundation.production_candidate import ProductionProofEnvelope
-from tests.test_bl_pq512_transactional_privacy_v2_migration import _NEW, _ReceiptVerifier, _coordinator, _store
+from tests.test_bl_pq512_transactional_privacy_v2_migration import _NEW, _ReceiptVerifier, _coordinator, _store, _target_authority_for_envelope
 
 database_path, envelope_path, payload_path = map(Path, sys.argv[1:4])
 payload = json.loads(payload_path.read_text(encoding="ascii"))
@@ -564,6 +665,7 @@ receipt = _coordinator(store, _ReceiptVerifier()).submit(
     batch_nonce=bytes.fromhex(payload["nonce"]),
     submitter=bytes.fromhex(payload["submitter"]),
     evidence=evidence,
+    target_governance_authority=_target_authority_for_envelope(envelope),
 )
 store.verify_integrity()
 print(json.dumps({
@@ -611,7 +713,8 @@ def test_rollback_and_recovery_require_known_checkpoint_and_fresh_identity(
     migration = _coordinator(store, _ReceiptVerifier())
     envelope, nonce, evidence = _migration_inputs(migration, label="forward")
     migration.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     forward = store.identity_snapshot()
     store.close()
@@ -634,7 +737,8 @@ def test_rollback_and_recovery_require_known_checkpoint_and_fresh_identity(
         target_settlement_domain=_ROLLBACK_DOMAIN,
     )
     rollback.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     rolled_back = store.identity_snapshot()
     assert rolled_back.epoch == 3 and rolled_back.sequence == 2
@@ -669,7 +773,8 @@ def test_rollback_and_recovery_require_known_checkpoint_and_fresh_identity(
         target_settlement_domain=_RECOVERY_DOMAIN,
     )
     recovery.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     recovered = store.identity_snapshot()
     assert recovered.epoch == 4 and recovered.sequence == 3
@@ -688,56 +793,27 @@ def test_rollback_and_recovery_require_known_checkpoint_and_fresh_identity(
     store.verify_integrity()
 
 
-def test_schema_v1_database_is_upgraded_and_transition_history_backfilled(
+def test_obsolete_schema_is_rejected_without_silent_governance_upgrade(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "ledger.sqlite3"
     store = _store(path)
-    identity = store.identity_snapshot()
-    envelope, nonce = _settlement_envelope(identity)
-    TransactionalSettlementV2(
-        verifier=_ReceiptVerifier(),
-        storage=store,
-        settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
-        authorized_submitters=(_SUBMITTER,),
-    ).submit(envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER)
     store.close()
 
     with sqlite3.connect(path) as connection:
-        for trigger in (
-            "migration_requests_no_update",
-            "migration_requests_no_delete",
-            "configuration_history_no_update",
-            "configuration_history_no_delete",
-            "transition_records_no_update",
-            "transition_records_no_delete",
-        ):
-            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-        for table in (
-            "migration_requests",
-            "transition_records",
-            "configuration_history",
-            "database_genesis",
-        ):
-            connection.execute(f"DROP TABLE IF EXISTS {table}")
-        connection.execute("ALTER TABLE metadata RENAME TO metadata_v2")
-        connection.execute(
-            "CREATE TABLE metadata ("
-            "id INTEGER PRIMARY KEY CHECK (id = 1), "
-            "schema_version INTEGER NOT NULL CHECK (schema_version = 1))"
-        )
-        connection.execute("INSERT INTO metadata VALUES (1, 1)")
-        connection.execute("DROP TABLE metadata_v2")
+        connection.execute("PRAGMA ignore_check_constraints=ON")
+        connection.execute("UPDATE metadata SET schema_version=2 WHERE id=1")
         connection.commit()
 
-    upgraded = _store(path)
-    assert upgraded.identity_snapshot().sequence == 1
-    upgraded.verify_integrity()
+    with pytest.raises(
+        ProductionBoundaryError,
+        match="database_legacy_governance_schema_rejected",
+    ):
+        _store(path)
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT schema_version FROM metadata WHERE id=1"
         ).fetchone() == (2,)
         assert connection.execute(
-            "SELECT transition_kind FROM transition_records WHERE sequence_after=1"
-        ).fetchone() == ("SETTLEMENT",)
+            "SELECT COUNT(*) FROM governance_authorities"
+        ).fetchone() == (1,)

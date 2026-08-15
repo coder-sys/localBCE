@@ -56,6 +56,13 @@ def _schema() -> dict:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
+def _assert_retired_document_marker() -> None:
+    document = DOC_PATH.read_text(encoding="utf-8")
+    assert document.startswith("# Retired architecture evidence")
+    assert "not architecture, execution, security, or release authority" in document
+    assert "docs/NATIVE_V3_ARCHITECTURE.md" in document
+
+
 def _walk(value: object, path: str = "$"):
     yield path, value
     if isinstance(value, dict):
@@ -241,10 +248,7 @@ def test_distinct_line_ids_allow_identical_economics_but_repeated_ids_reject() -
     with pytest.raises(ValueError, match="service_line_id_duplicate"):
         require_unique_multipart_ascii64((first, first), label="service_line_id")
 
-    document = DOC_PATH.read_text(encoding="utf-8")
-    assert "identical economic fields are preserved when and only when" in document
-    assert "Repeated enabled line IDs are" in document
-    assert "Disabled line slots" in document
+    _assert_retired_document_marker()
 
 
 def test_padding_and_cover_semantics_are_explicit_and_enabled_only() -> None:
@@ -275,10 +279,7 @@ def test_padding_and_cover_semantics_are_explicit_and_enabled_only() -> None:
     assert cover_branch["service_lines"]["items"]["properties"]["enabled"]["const"] is False
     assert cover_branch["authorizations"]["items"]["properties"]["authorization_present"]["const"] is False
 
-    document = DOC_PATH.read_text(encoding="utf-8")
-    assert "The logical cover record is exact" in document
-    assert "only enabled diagnoses and enabled lines participate" in document
-    assert "Relational checks that JSON Schema cannot express" in document
+    _assert_retired_document_marker()
 
 
 def test_schema_preserves_exact_ordered_privacy_v2_abi() -> None:
@@ -330,25 +331,9 @@ def test_fact_slots_pin_the_six_claim_level_facts_in_order() -> None:
     ]
 
 
-def test_review_document_keeps_open_gates_and_no_fake_proof_parameters() -> None:
+def test_review_document_is_retired_without_fake_production_claims() -> None:
+    _assert_retired_document_marker()
     document = DOC_PATH.read_text(encoding="utf-8")
-
-    for marker in (
-        "NOT A PRODUCTION FREEZE",
-        "S07-S09",
-        "K=256",
-        "K=128",
-        "K=512",
-        "physical AIR row count",
-        "FRI query count",
-        "TBD",
-        "This draft intentionally leaves `A01-A06` open.",
-        "Synthetic data only",
-    ):
-        assert marker in document
-
-    assert "FRI query count: 64" not in document
-    assert "blow-up factor: 4" not in document
     assert "production-ready" not in document.lower()
 
 

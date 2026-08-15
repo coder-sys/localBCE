@@ -4,12 +4,13 @@ use std::{
 };
 
 use bl_pq512_crypto_core::{
+    field::Fp16,
     merkle::RootHash,
     merkle_multiproof::{CanonicalMerkleMultiProof, canonical_frontier_positions},
 };
 use sha3::{Digest, Sha3_512};
 
-const PROTOCOL_MAGIC: &[u8; 8] = b"BLZKRSV1";
+const PROTOCOL_MAGIC: &[u8; 8] = b"BLZKRSV3";
 const PCS_MAGIC: &[u8; 8] = b"BLPQPCS1";
 const PCS_VERSION: u16 = 1;
 const SEGMENT_LEAF_DOMAIN: u16 = 516;
@@ -20,17 +21,24 @@ const FP16_SIZE: usize = 64;
 const MAIN_MASK_LEAF_SIZE: usize = 64;
 const MAIN_MASK_DATA_SIZE: usize = INITIAL_TREE_LEAVES * MAIN_MASK_LEAF_SIZE;
 const AUXILIARY_TREE_LEAVES: usize = 1 << 13;
-const SUMCHECK_LEAF_SIZE: usize = 9 * 64;
-const SUMCHECK_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * SUMCHECK_LEAF_SIZE;
-const GKR_MASK_LEAF_SIZE: usize = 64 * 64;
-const GKR_MASK_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * GKR_MASK_LEAF_SIZE;
-const COMPLETE_AUXILIARY_LEAF_SIZE: usize = 74 * 64;
+const SUMCHECK_BASE_WORDS: usize = 19;
+const SUMCHECK_BASE_LEAF_SIZE: usize = SUMCHECK_BASE_WORDS * 64;
+const SUMCHECK_BASE_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * SUMCHECK_BASE_LEAF_SIZE;
+const GKR_MASK_INNER_TREE_LEAVES: usize = AUXILIARY_TREE_LEAVES;
+const GKR_MASK_OUTER_TREE_LEAVES: usize = 1 << 7;
+const GKR_MASK_TREE_LEAVES: usize = GKR_MASK_INNER_TREE_LEAVES * GKR_MASK_OUTER_TREE_LEAVES;
+const GKR_MASK_LEAF_SIZE: usize = 64;
+const GKR_MASK_DATA_SIZE: usize = GKR_MASK_TREE_LEAVES * GKR_MASK_LEAF_SIZE;
 const STATE_SQUAREFREE_LEAF_SIZE: usize = 64;
 const STATE_SQUAREFREE_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * STATE_SQUAREFREE_LEAF_SIZE;
-const COMPLETE_AUXILIARY_DATA_SIZE: usize = AUXILIARY_TREE_LEAVES * COMPLETE_AUXILIARY_LEAF_SIZE;
 const MAIN_OPENING_COUNT: usize = 1_600;
 const AUXILIARY_OPENING_COUNT: usize = 1_218;
 const DIGEST_SIZE: usize = 64;
+const QUERY_DOMAIN: u16 = 524;
+const GKR_MASK_OUTER_QUERY_DOMAIN: u16 = 526;
+const GKR_MASK_OUTER_QUERY_LABEL: &[u8] = b"gkr_mask_outer_queries/v1";
+const QUERY_MAX_DRAWS: u64 = 1 << 20;
+const QUERY_MAX_RETRIES_PER_DRAW: u64 = 1 << 20;
 
 fn read_exact_array<const N: usize>(reader: &mut impl Read) -> io::Result<[u8; N]> {
     let mut value = [0_u8; N];
@@ -55,6 +63,95 @@ fn hash_parts(domain: u16, parts: &[&[u8]]) -> [u8; DIGEST_SIZE] {
         hash.update(part);
     }
     hash.finalize().into()
+}
+
+fn exact_queries(
+    state: &[u8; 64],
+    label: &[u8],
+    bound: usize,
+    count: usize,
+) -> Result<Vec<usize>, String> {
+    if bound == 0 || count == 0 || count > bound || bound > u64::MAX as usize {
+        return Err("query_geometry".to_string());
+    }
+    let bound_u64 = bound as u64;
+    let threshold = ((1_u128 << 64) - u128::from(bound_u64)) % u128::from(bound_u64);
+    let mut queries = Vec::with_capacity(count);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut draw = 0_u64;
+    while queries.len() < count {
+        if draw >= QUERY_MAX_DRAWS {
+            return Err("query_draw_limit".to_string());
+        }
+        let mut retry = 0_u64;
+        loop {
+            if retry >= QUERY_MAX_RETRIES_PER_DRAW {
+                return Err("query_retry_limit".to_string());
+            }
+            let digest = hash_parts(
+                QUERY_DOMAIN,
+                &[state, label, &draw.to_be_bytes(), &retry.to_be_bytes()],
+            );
+            let random_word = u64::from_le_bytes(
+                digest[..8]
+                    .try_into()
+                    .map_err(|_| "query_digest".to_string())?,
+            );
+            let product = u128::from(random_word) * u128::from(bound_u64);
+            if (product & u128::from(u64::MAX)) >= threshold {
+                let candidate =
+                    usize::try_from(product >> 64).map_err(|_| "query_candidate".to_string())?;
+                if seen.insert(candidate) {
+                    queries.push(candidate);
+                    break;
+                }
+            }
+            retry = retry
+                .checked_add(1)
+                .ok_or_else(|| "query_retry".to_string())?;
+        }
+        draw = draw
+            .checked_add(1)
+            .ok_or_else(|| "query_draw".to_string())?;
+    }
+    queries.sort_unstable();
+    Ok(queries)
+}
+
+fn gkr_mask_tensor_queries(state: &[u8; 64], inner: &[usize]) -> Result<Vec<usize>, String> {
+    let mut queries = Vec::with_capacity(inner.len());
+    for (ordinal, inner_query) in inner.iter().copied().enumerate() {
+        let ordinal = u64::try_from(ordinal).map_err(|_| "gkr_mask_query_ordinal".to_string())?;
+        let inner_u32 =
+            u32::try_from(inner_query).map_err(|_| "gkr_mask_inner_query".to_string())?;
+        let digest = hash_parts(
+            GKR_MASK_OUTER_QUERY_DOMAIN,
+            &[
+                state,
+                GKR_MASK_OUTER_QUERY_LABEL,
+                &ordinal.to_be_bytes(),
+                &inner_u32.to_be_bytes(),
+            ],
+        );
+        let random_word = u64::from_le_bytes(
+            digest[..8]
+                .try_into()
+                .map_err(|_| "gkr_mask_outer_query".to_string())?,
+        );
+        let outer =
+            usize::try_from((u128::from(random_word) * GKR_MASK_OUTER_TREE_LEAVES as u128) >> 64)
+                .map_err(|_| "gkr_mask_outer_query".to_string())?;
+        queries.push(
+            inner_query
+                .checked_mul(GKR_MASK_OUTER_TREE_LEAVES)
+                .and_then(|index| index.checked_add(outer))
+                .ok_or_else(|| "gkr_mask_tensor_query".to_string())?,
+        );
+    }
+    if queries.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("gkr_mask_tensor_query_order".to_string());
+    }
+    Ok(queries)
 }
 
 fn segment_leaf_hash(
@@ -120,6 +217,22 @@ fn run(mutation_kat: bool) -> Result<(), String> {
             "segment_count:expected=21|37:actual={segment_count}"
         ));
     }
+    let query_seed =
+        read_exact_array::<64>(&mut reader).map_err(|error| format!("query_seed:{error}"))?;
+    Fp16::decode(&query_seed).map_err(|error| format!("query_seed:{error:?}"))?;
+    let main_queries = exact_queries(
+        &query_seed,
+        b"main_queries",
+        INITIAL_TREE_LEAVES,
+        MAIN_OPENING_COUNT,
+    )?;
+    let auxiliary_queries = exact_queries(
+        &query_seed,
+        b"aux_queries",
+        AUXILIARY_TREE_LEAVES,
+        AUXILIARY_OPENING_COUNT,
+    )?;
+    let gkr_mask_queries = gkr_mask_tensor_queries(&query_seed, &auxiliary_queries)?;
     let initial_segments = segment_count - 5;
     let segments_per_boundary = initial_segments / 2;
     let interleavings_per_segment = 256 / segments_per_boundary;
@@ -170,9 +283,9 @@ fn run(mutation_kat: bool) -> Result<(), String> {
             (
                 2,
                 64,
-                SUMCHECK_DATA_SIZE,
+                SUMCHECK_BASE_DATA_SIZE,
                 AUXILIARY_TREE_LEAVES,
-                SUMCHECK_LEAF_SIZE,
+                SUMCHECK_BASE_LEAF_SIZE,
                 AUXILIARY_OPENING_COUNT,
             )
         } else if segment_ordinal == initial_segments + 1 {
@@ -180,7 +293,7 @@ fn run(mutation_kat: bool) -> Result<(), String> {
                 2,
                 67,
                 GKR_MASK_DATA_SIZE,
-                AUXILIARY_TREE_LEAVES,
+                GKR_MASK_TREE_LEAVES,
                 GKR_MASK_LEAF_SIZE,
                 AUXILIARY_OPENING_COUNT,
             )
@@ -197,9 +310,9 @@ fn run(mutation_kat: bool) -> Result<(), String> {
             (
                 2,
                 66,
-                COMPLETE_AUXILIARY_DATA_SIZE,
-                AUXILIARY_TREE_LEAVES,
-                COMPLETE_AUXILIARY_LEAF_SIZE,
+                GKR_MASK_DATA_SIZE,
+                GKR_MASK_TREE_LEAVES,
+                GKR_MASK_LEAF_SIZE,
                 AUXILIARY_OPENING_COUNT,
             )
         } else if segment_ordinal == initial_segments + 4 {
@@ -232,6 +345,19 @@ fn run(mutation_kat: bool) -> Result<(), String> {
                 usize::try_from(read_u32(&mut reader).map_err(|error| format!("index:{error}"))?)
                     .map_err(|_| "index".to_string())?,
             );
+        }
+        let expected_indices = if segment_ordinal < initial_segments
+            || segment_ordinal == initial_segments + 2
+        {
+            &main_queries
+        } else if segment_ordinal == initial_segments + 1 || segment_ordinal == initial_segments + 3
+        {
+            &gkr_mask_queries
+        } else {
+            &auxiliary_queries
+        };
+        if &indices != expected_indices {
+            return Err(format!("query_schedule:segment={segment_ordinal}"));
         }
         let frontier_positions = canonical_frontier_positions(tree_leaves, &indices)
             .map_err(|error| format!("frontier_positions:{error:?}"))?;
@@ -332,4 +458,48 @@ fn run(mutation_kat: bool) -> Result<(), String> {
     writeln!(writer, "DONE segments={segment_count}").map_err(|error| format!("stdout:{error}"))?;
     writer.flush().map_err(|error| format!("flush:{error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tensor_queries_are_verifier_derived_distinct_and_seed_bound() {
+        let seed = [0_u8; 64];
+        let inner = exact_queries(
+            &seed,
+            b"aux_queries",
+            AUXILIARY_TREE_LEAVES,
+            AUXILIARY_OPENING_COUNT,
+        )
+        .unwrap();
+        let tensor = gkr_mask_tensor_queries(&seed, &inner).unwrap();
+        assert_eq!(inner.len(), AUXILIARY_OPENING_COUNT);
+        assert_eq!(tensor.len(), AUXILIARY_OPENING_COUNT);
+        assert!(inner.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(tensor.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(tensor.iter().all(|query| *query < GKR_MASK_TREE_LEAVES));
+
+        let mut changed_seed = seed;
+        changed_seed[0] = 1;
+        let changed_inner = exact_queries(
+            &changed_seed,
+            b"aux_queries",
+            AUXILIARY_TREE_LEAVES,
+            AUXILIARY_OPENING_COUNT,
+        )
+        .unwrap();
+        let changed_tensor = gkr_mask_tensor_queries(&changed_seed, &changed_inner).unwrap();
+        assert_ne!(tensor, changed_tensor);
+    }
+
+    #[test]
+    fn retired_kind67_geometry_is_not_the_selected_geometry() {
+        assert_ne!(GKR_MASK_TREE_LEAVES, AUXILIARY_TREE_LEAVES);
+        assert_ne!(GKR_MASK_LEAF_SIZE, 64 * 64);
+        assert_eq!(GKR_MASK_TREE_LEAVES, 1 << 20);
+        assert_eq!(GKR_MASK_LEAF_SIZE, 64);
+        assert_eq!(GKR_MASK_DATA_SIZE, 67_108_864);
+    }
 }

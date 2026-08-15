@@ -298,7 +298,9 @@ fn frobenius_powers(value: Fp16) -> [Fp16; PACKED_INSTANCES] {
     powers
 }
 
-fn linearized_coefficients(images: [Fp16; PACKED_INSTANCES]) -> [Fp16; PACKED_INSTANCES] {
+pub(crate) fn linearized_coefficients(
+    images: [Fp16; PACKED_INSTANCES],
+) -> [Fp16; PACKED_INSTANCES] {
     let basis = fp16_basis();
     let mut matrix: [[Fp16; PACKED_INSTANCES + 1]; PACKED_INSTANCES] =
         core::array::from_fn(|row| {

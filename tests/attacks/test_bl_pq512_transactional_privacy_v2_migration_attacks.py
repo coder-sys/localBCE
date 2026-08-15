@@ -34,12 +34,14 @@ from tests.test_bl_pq512_transactional_privacy_v2_migration import (
     _ROOTS,
     _SUBMITTER,
     _ReceiptVerifier,
+    _authority_for_epoch,
     _config,
     _coordinator,
     _migration_inputs,
     _settlement_envelope,
     _sidecar,
     _store,
+    _target_authority_for_envelope,
     _wide,
 )
 
@@ -61,6 +63,7 @@ def test_caller_chosen_migration_salt_is_rejected_before_native_verification(
     target = PrivacyV2MigrationTarget.from_sidecar(
         CandidateSidecarV1.decode(provisional),
         settlement_domain=_DOMAIN,
+        governance_authority=_authority_for_epoch(source.epoch + 1),
     )
     evidence = _build_privacy_v2_migration_evidence_with_salt(
         kind="MIGRATION",
@@ -90,7 +93,7 @@ def test_caller_chosen_migration_salt_is_rejected_before_native_verification(
                 settlement_domain=_DOMAIN,
                 batch_nonce=nonce,
                 sidecar=sidecar,
-                governed_roots=_ROOTS,
+                governance_authority=target.governance_authority,
                 suite_id=_NEW.suite,
                 schema_id=_NEW.schema,
                 verifier_artifact_identity=_NEW.verifier,
@@ -111,6 +114,7 @@ def test_caller_chosen_migration_salt_is_rejected_before_native_verification(
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=target.governance_authority,
         )
     assert verifier.calls == 0
     assert store.identity_snapshot().sequence == 0
@@ -132,6 +136,7 @@ def test_mixed_target_evidence_and_stale_source_fail_closed(tmp_path: Path) -> N
             batch_nonce=nonce_b,
             submitter=_SUBMITTER,
             evidence=evidence_a,
+            target_governance_authority=_target_authority_for_envelope(envelope_b),
         )
 
     coordinator.submit(
@@ -139,6 +144,7 @@ def test_mixed_target_evidence_and_stale_source_fail_closed(tmp_path: Path) -> N
         batch_nonce=nonce_a,
         submitter=_SUBMITTER,
         evidence=evidence_a,
+        target_governance_authority=_target_authority_for_envelope(envelope_a),
     )
     stale_envelope, stale_nonce, stale_evidence = _migration_inputs(
         coordinator, target_config=_config("stale-target"), label="stale"
@@ -152,7 +158,32 @@ def test_mixed_target_evidence_and_stale_source_fail_closed(tmp_path: Path) -> N
             batch_nonce=stale_nonce,
             submitter=_SUBMITTER,
             evidence=stale_evidence,
+            target_governance_authority=_target_authority_for_envelope(stale_envelope),
         )
+
+
+def test_target_profile_code_substitution_fails_before_native_verification(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "ledger.sqlite3")
+    verifier = _ReceiptVerifier()
+    coordinator = _coordinator(store, verifier)
+    envelope, nonce, evidence = _migration_inputs(coordinator, label="profile-code-swap")
+    authority = _target_authority_for_envelope(envelope)
+    substituted = replace(authority, profile_code=3)
+    with pytest.raises(
+        ProductionBoundaryError,
+        match="migration_target_governance_authority_mismatch",
+    ):
+        coordinator.submit(
+            envelope=envelope,
+            batch_nonce=nonce,
+            submitter=_SUBMITTER,
+            evidence=evidence,
+            target_governance_authority=substituted,
+        )
+    assert verifier.calls == 0
+    assert store.identity_snapshot().sequence == 0
 
 
 def test_forged_seal_cannot_reach_database_mutation(tmp_path: Path) -> None:
@@ -164,6 +195,7 @@ def test_forged_seal_cannot_reach_database_mutation(tmp_path: Path) -> None:
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     forged = replace(operation, seal=_wide("forged-migration-seal"))
     before = store.identity_snapshot()
@@ -189,6 +221,7 @@ def test_concurrent_distinct_migrations_from_one_checkpoint_have_one_winner(
                 batch_nonce=nonce,
                 submitter=_SUBMITTER,
                 evidence=evidence,
+                target_governance_authority=_target_authority_for_envelope(envelope),
             )
         )
 
@@ -223,7 +256,7 @@ def test_old_profile_operation_prepared_before_cutover_is_rejected_after_cutover
         verifier=_ReceiptVerifier(),
         storage=store,
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=old_identity.governance_authority,
         authorized_submitters=(_SUBMITTER,),
     )
     old_operation = old_settlement._prepare(
@@ -233,10 +266,13 @@ def test_old_profile_operation_prepared_before_cutover_is_rejected_after_cutover
     migration = _coordinator(store, _ReceiptVerifier())
     envelope, nonce, evidence = _migration_inputs(migration, label="cutover")
     migration.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
 
-    with pytest.raises(ProductionBoundaryError, match="database_profile_identity_mismatch"):
+    with pytest.raises(
+        ProductionBoundaryError, match="database_operation_configuration_stale"
+    ):
         store._commit_verified(old_operation)
     assert store.identity_snapshot().profile_id == _NEW.profile
     assert store.identity_snapshot().sequence == 1
@@ -252,7 +288,7 @@ def test_old_profile_operation_cannot_cross_a_concurrent_cutover(
         verifier=_ReceiptVerifier(),
         storage=store,
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=old_identity.governance_authority,
         authorized_submitters=(_SUBMITTER,),
     )
     old_operation = old_settlement._prepare(
@@ -285,6 +321,7 @@ def test_old_profile_operation_cannot_cross_a_concurrent_cutover(
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
         continue_commit.set()
         result = pending.exception(timeout=10)
@@ -304,7 +341,8 @@ def test_migration_ledger_tamper_is_detected_on_integrity_replay(tmp_path: Path)
     coordinator = _coordinator(store, _ReceiptVerifier())
     envelope, nonce, evidence = _migration_inputs(coordinator, label="tamper")
     coordinator.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
 
     with sqlite3.connect(path) as connection:
@@ -319,13 +357,41 @@ def test_migration_ledger_tamper_is_detected_on_integrity_replay(tmp_path: Path)
         store.verify_integrity()
 
 
+def test_governance_tuple_tamper_is_detected_from_durable_recomputation(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "ledger.sqlite3")
+    coordinator = _coordinator(store, _ReceiptVerifier())
+    envelope, nonce, evidence = _migration_inputs(coordinator, label="authority-tamper")
+    coordinator.submit(
+        envelope=envelope,
+        batch_nonce=nonce,
+        submitter=_SUBMITTER,
+        evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TRIGGER governance_authorities_no_update")
+        connection.execute(
+            "UPDATE governance_authorities SET truth_root_2=? WHERE activation_sequence=1",
+            (sqlite3.Binary(_wide("tampered-full-truth-root")),),
+        )
+        connection.commit()
+    with pytest.raises(
+        ProductionBoundaryError,
+        match="database_governance_authority_digest_mismatch",
+    ):
+        store.verify_integrity()
+
+
 def test_reused_old_configuration_is_rejected_as_downgrade(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite3"
     store = _store(path)
     migration = _coordinator(store, _ReceiptVerifier())
     envelope, nonce, evidence = _migration_inputs(migration, label="forward")
     migration.submit(
-        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence
+        envelope=envelope, batch_nonce=nonce, submitter=_SUBMITTER, evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     store.close()
 
@@ -344,6 +410,7 @@ def test_reused_old_configuration_is_rejected_as_downgrade(tmp_path: Path) -> No
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
 
 
@@ -369,6 +436,7 @@ def test_rollback_without_fresh_settlement_domain_is_rejected(
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
     assert store.identity_snapshot() == genesis
 
@@ -389,6 +457,7 @@ def test_recovery_cannot_reuse_any_historical_settlement_domain(
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     forward = store.identity_snapshot()
     store.close()
@@ -415,6 +484,7 @@ def test_recovery_cannot_reuse_any_historical_settlement_domain(
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     store.close()
 
@@ -448,5 +518,6 @@ def test_recovery_cannot_reuse_any_historical_settlement_domain(
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
     assert store.identity_snapshot().sequence == 2

@@ -1,0 +1,569 @@
+{
+  "activation": false,
+  "complete_bound_available": false,
+  "fixture_only": true,
+  "grammar": {
+    "challenge_payload": {
+      "fields": [
+        [
+          "commitment_digest",
+          "bytes[64]"
+        ],
+        [
+          "challenge_nonce",
+          "bytes[32]",
+          "verifier OS-CSPRNG"
+        ],
+        [
+          "challenge_scalar",
+          "bytes[32]",
+          "verifier OS-CSPRNG"
+        ],
+        [
+          "selected_index",
+          "u32",
+          "big-endian first four scalar bytes modulo 2"
+        ],
+        [
+          "auth_tag",
+          "bytes[64]",
+          "fixture-only HMAC-SHA3-512 under verifier-held 32-byte key"
+        ]
+      ],
+      "fresh_after_commitment": true,
+      "prover_supplied_challenge": false
+    },
+    "commitment_payload": {
+      "fields": [
+        [
+          "statement_digest",
+          "bytes[64]"
+        ],
+        [
+          "vector_root",
+          "bytes[64]"
+        ],
+        [
+          "commitment_handle",
+          "bytes[64]"
+        ],
+        [
+          "leaf_count",
+          "u32=2"
+        ],
+        [
+          "salt_bytes",
+          "u16=32"
+        ],
+        [
+          "reserved",
+          "u16=0"
+        ]
+      ],
+      "handle": "SHA3-512(handle-domain,session_id,statement_digest,vector_root)"
+    },
+    "domain_separation": {
+      "challenge_authentication": "BL/NATIVE-V3/TBP/CHALLENGE-AUTH/v1\\0",
+      "challenge_digest": "BL/NATIVE-V3/TBP/CHALLENGE-DIGEST/v1\\0",
+      "commitment_digest": "BL/NATIVE-V3/TBP/COMMITMENT-DIGEST/v1\\0",
+      "commitment_handle": "BL/NATIVE-V3/TBP/COMMITMENT-HANDLE/v1\\0",
+      "frame_tag": "BL/NATIVE-V3/TBP/FRAME-TAG/v1\\0",
+      "leaf_tag": "BL/NATIVE-V3/TBP/LEAF-TAG/v1\\0",
+      "node_tag": "BL/NATIVE-V3/TBP/NODE-TAG/v1\\0",
+      "profile_id": "BL/NATIVE-V3/TBP/PROFILE-ID/v1\u0000",
+      "statement_digest": "BL/NATIVE-V3/TBP/STATEMENT/v1\u0000",
+      "transcript": "BL/NATIVE-V3/TBP/TRANSCRIPT/v1\\0",
+      "vector_leaf": "BL/NATIVE-V3/TBP/VECTOR-LEAF/v1\\0",
+      "vector_node": "BL/NATIVE-V3/TBP/VECTOR-NODE/v1\\0"
+    },
+    "frame": {
+      "fields": [
+        [
+          "magic",
+          "bytes[8]",
+          "BLTBFRM1"
+        ],
+        [
+          "version",
+          "u16",
+          1
+        ],
+        [
+          "kind",
+          "u8",
+          "commitment=1,challenge=2,response=3"
+        ],
+        [
+          "role",
+          "u8",
+          "prover=1,verifier=2"
+        ],
+        [
+          "round",
+          "u16",
+          "commitment=0,challenge=1,response=2"
+        ],
+        [
+          "session_id",
+          "bytes[32]",
+          "nonzero; OS-CSPRNG session uniqueness"
+        ],
+        [
+          "domain_tag",
+          "bytes[64]",
+          "SHA3-512(frame-tag-domain,kind-domain,kind||role,round)"
+        ],
+        [
+          "payload_length",
+          "u32",
+          "exact remaining payload length"
+        ],
+        [
+          "payload",
+          "bytes[payload_length]",
+          "no trailing bytes"
+        ]
+      ],
+      "message_order": [
+        "statement",
+        "prover_commitment",
+        "verifier_challenge",
+        "prover_response"
+      ]
+    },
+    "hash": "SHA3-512",
+    "integer_encoding": "unsigned big-endian",
+    "opening": {
+      "fields": [
+        [
+          "magic",
+          "bytes[8]"
+        ],
+        [
+          "version",
+          "u16=1"
+        ],
+        [
+          "reserved",
+          "u16=0"
+        ],
+        [
+          "index",
+          "u32"
+        ],
+        [
+          "value_length",
+          "u32"
+        ],
+        [
+          "value",
+          "bytes[value_length]"
+        ],
+        [
+          "salt_length",
+          "u16=32"
+        ],
+        [
+          "salt",
+          "bytes[32]"
+        ],
+        [
+          "path_count",
+          "u16=1"
+        ],
+        [
+          "sibling_is_left",
+          "u8 in {0,1}"
+        ],
+        [
+          "path_reserved",
+          "u8=0"
+        ],
+        [
+          "sibling_hash",
+          "bytes[64]"
+        ]
+      ],
+      "magic": "BLTBOP01",
+      "order": "exactly one sibling; index must equal verifier-selected index"
+    },
+    "private_or_fixture_only": [
+      "vector values",
+      "leaf salts",
+      "prover response nonce",
+      "verifier authentication key"
+    ],
+    "response_payload": {
+      "fields": [
+        [
+          "commitment_digest",
+          "bytes[64]"
+        ],
+        [
+          "challenge_digest",
+          "bytes[64]"
+        ],
+        [
+          "commitment_handle",
+          "bytes[64]"
+        ],
+        [
+          "response_nonce",
+          "bytes[32]",
+          "prover OS-CSPRNG"
+        ],
+        [
+          "opening_length",
+          "u32"
+        ],
+        [
+          "opening",
+          "bytes[opening_length]"
+        ]
+      ]
+    },
+    "statement": {
+      "fields": [
+        [
+          "magic",
+          "bytes[8]"
+        ],
+        [
+          "version",
+          "u16=1"
+        ],
+        [
+          "flags",
+          "u16=0"
+        ],
+        [
+          "proof_suite_marker",
+          "u8=0"
+        ],
+        [
+          "reserved",
+          "bytes[3]=0"
+        ],
+        [
+          "proof_suite_id",
+          "bytes[64]=0/null"
+        ],
+        [
+          "session_id",
+          "bytes[32]"
+        ],
+        [
+          "profile_id",
+          "bytes[64]"
+        ],
+        [
+          "attempt_id",
+          "bytes[64]"
+        ],
+        [
+          "phase0_statement_digest",
+          "bytes[64]"
+        ],
+        [
+          "source_root",
+          "bytes[64]"
+        ],
+        [
+          "control_set_id",
+          "bytes[64]"
+        ],
+        [
+          "decision_access_join_id",
+          "bytes[64]"
+        ],
+        [
+          "frozen_receipt_binding",
+          "bytes[64]"
+        ],
+        [
+          "completeness_id",
+          "bytes[64]"
+        ],
+        [
+          "chronology_id",
+          "bytes[64]"
+        ],
+        [
+          "replay_id",
+          "bytes[64]"
+        ],
+        [
+          "exception_id_or_sentinel",
+          "bytes[64]"
+        ],
+        [
+          "state_before_id",
+          "bytes[64]"
+        ],
+        [
+          "state_after_id",
+          "bytes[64]"
+        ],
+        [
+          "statement_sequence_before",
+          "u64"
+        ],
+        [
+          "statement_sequence_after",
+          "u64"
+        ],
+        [
+          "event_time",
+          "u64"
+        ],
+        [
+          "observation_time",
+          "u64"
+        ],
+        [
+          "rule_effective_time",
+          "u64"
+        ],
+        [
+          "decision_time",
+          "u64"
+        ]
+      ],
+      "length_bytes": 992,
+      "magic": "BLTBST01"
+    },
+    "transcript": {
+      "fields": [
+        [
+          "magic",
+          "bytes[8]"
+        ],
+        [
+          "version",
+          "u16=1"
+        ],
+        [
+          "flags",
+          "u16=0"
+        ],
+        [
+          "session_id",
+          "bytes[32]"
+        ],
+        [
+          "statement_length",
+          "u32"
+        ],
+        [
+          "statement",
+          "bytes[statement_length]"
+        ],
+        [
+          "frame_count",
+          "u16=3"
+        ],
+        [
+          "ordered_frames",
+          "3 x (u32 length, bytes)"
+        ],
+        [
+          "transcript_digest",
+          "bytes[64]",
+          "SHA3-512(transcript-domain,session,statement,commitment,challenge,response)"
+        ]
+      ],
+      "magic": "BLTBTX01"
+    },
+    "vector_leaf": {
+      "fields": [
+        [
+          "magic",
+          "bytes[8]"
+        ],
+        [
+          "version",
+          "u16=1"
+        ],
+        [
+          "reserved",
+          "u16=0"
+        ],
+        [
+          "leaf_tag",
+          "bytes[64]"
+        ],
+        [
+          "index",
+          "u32",
+          "ordered indices exactly 0 then 1"
+        ],
+        [
+          "value_length",
+          "u32"
+        ],
+        [
+          "value",
+          "bytes[value_length]",
+          "fixture-only private registered fact or fixed padding"
+        ],
+        [
+          "salt_length",
+          "u16=32"
+        ],
+        [
+          "salt",
+          "bytes[32]",
+          "hidden in statement; no production hiding claim"
+        ]
+      ],
+      "magic": "BLTBLF01"
+    },
+    "vector_node": {
+      "fields": [
+        [
+          "magic",
+          "bytes[8]"
+        ],
+        [
+          "version",
+          "u16=1"
+        ],
+        [
+          "reserved",
+          "u16=0"
+        ],
+        [
+          "node_tag",
+          "bytes[64]"
+        ],
+        [
+          "height",
+          "u16=0"
+        ],
+        [
+          "left_index",
+          "u32=0"
+        ],
+        [
+          "left_hash",
+          "bytes[64]"
+        ],
+        [
+          "right_hash",
+          "bytes[64]"
+        ]
+      ],
+      "magic": "BLTBND01",
+      "root": "SHA3-512(vector-node-domain,canonical-node-bytes)"
+    }
+  },
+  "nonclaims": [
+    "protocol-boundary evidence only",
+    "no ZK or native hiding claim",
+    "no VC collapse/binding claim",
+    "no source membership or policy proof",
+    "no state transition authorization"
+  ],
+  "phase0_binding_ids": {
+    "attempt_id": "2a1110e501acb83cef3a248182c9017e5569e9ea04d6f78bb9aa44c590df5fff36816b0bd7e5f9938f67df0e380ebccd0bc9c5c8ec938dbc3eda6463891d4209",
+    "chronology_id": "1a9626829c39bd3abc9faf969bf8915549b3845486a00f6ff227390520beff2e3dfd6aaf792d562e0a06539a01e250466b4ddb3f075fe4a14cd45745ad6fba99",
+    "completeness_id": "a234511ec4e922a357ec9b0d7c390a25d86c5b0ae564b2c5d130a20d46bbd289b1557af277190bbc7e6160dfc7d5385464f9682d2f73688208746c1879fba7e5",
+    "control_set_id": "864482b065b1ec00dfb388f72e628dd1b3377541e835c143080eaec8fc1429cb087f89147a1ea0f9fad2e654e72d96005c89f36f913f6090fe9296d3763f825b",
+    "decision_access_join_id": "d62d56dee1cc8b18869c128dbc178aa3ee993865bfe38216596b7f9b8788fb6b58fc8849b0db30c6b652e40dfa30bf8f8bea1b94f8a5e0f5b8421039ddc09245",
+    "exception_id_or_sentinel": "e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "frozen_receipt_binding": "b55b99adcb9085039947a09e718169fe4b882c49f8a1bb7b8fc221ed518555203ed51565280ba0f25228a9f3f735b205a0abe6620c68c2e8963d4e8635aa8808",
+    "phase0_statement_digest": "396587f05dbadeede82477853d400692608f6b25c3ed88f228ac1f8af113293c17512972ba9cb808a12685fe842ddd10061136261ef6c5deae1e160bd84495c3",
+    "replay_id": "c5eeb6caa78f094d831d122b7636a193f6af59675b6519bd8e059058fa95332603dbd6a65abf8667151fde44591cdfb5f4542a1976561c9b112c5099e2244cfa",
+    "source_root": "947b9937f37c0c0e4e47dfa1a7a54ef9a9ede7a17e6a4e0fb0fcb70d94ebe0a5cee85aec5b7b74ee0d5eb6459a91ffbdb643f8514f8d2c105f455b956749bdab",
+    "state_after_id": "4bb1b4fc536e0e9fc30b7cf17af7007b4d1c43b534adadf39e001618f9572ad083d482eccfef63aebfb43cac096ab1a20f37dc85456631c67a80f215a53f84c8",
+    "state_before_id": "ea5a9631ab0134beed2231f4b5f1539f976b0c34416ee9eb127ace55302e31dd45a626a8847bf09c32297073dabd9cdadc4fb768b4e043119079ee66504ac024"
+  },
+  "production_usable": false,
+  "profile_id": "8b07c423294e2d2cecf320e495b56c31b5ecbd75f28cee5b166785e0de872619a0149b1e3dacd195207c7c2f34a9b46a8843ef8dd1c6fbac613aa66111d4163c",
+  "profile_name": "BL-NATIVE-V3-TRUST-BOUNDARY-PROFILE-v1",
+  "proof_backend_selected": false,
+  "proof_suite_id": null,
+  "retry_cap": 4,
+  "schema": "BL/NATIVE-V3/TRUST-BOUNDARY-PROFILE/v1",
+  "security_ledger": "security_ledger.json",
+  "status": "TRUST_BOUNDARY_ONLY",
+  "verifier_owned_public_bindings": {
+    "automatic_control_set": {
+      "conflict_policy": "priority-then-human-review",
+      "control_set_id": "864482b065b1ec00dfb388f72e628dd1b3377541e835c143080eaec8fc1429cb087f89147a1ea0f9fad2e654e72d96005c89f36f913f6090fe9296d3763f825b",
+      "directive_mapping": [
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        4,
+        4,
+        5,
+        5
+      ],
+      "effective_interval": [
+        0,
+        16
+      ],
+      "owner": "verifier",
+      "rule_order": [
+        "abd3fa90adec7bf4fb698ecc64484110b27fafd02c9419e7dfad6ce6cc79fd8d16171275a38de25a7b995bcd9043322c4f2363655cc01c6d0f5279e0f270d663"
+      ],
+      "scope": "SHA3-512(BL/NATIVE-V3/TBP/SCOPE/v1\\0,synthetic-subject-payment-scope-v1)"
+    },
+    "chronology": {
+      "chronology_id": "1a9626829c39bd3abc9faf969bf8915549b3845486a00f6ff227390520beff2e3dfd6aaf792d562e0a06539a01e250466b4ddb3f075fe4a14cd45745ad6fba99",
+      "decision_time": 7002,
+      "event_time": 7000,
+      "observation_time": 7001,
+      "rule_effective_time": 6999,
+      "sequence_after": 8,
+      "sequence_before": 7
+    },
+    "completeness_or_nonmembership": {
+      "absence_authorized": false,
+      "complete": true,
+      "completeness_id": "a234511ec4e922a357ec9b0d7c390a25d86c5b0ae564b2c5d130a20d46bbd289b1557af277190bbc7e6160dfc7d5385464f9682d2f73688208746c1879fba7e5",
+      "observation_time": 7001,
+      "source_root": "947b9937f37c0c0e4e47dfa1a7a54ef9a9ede7a17e6a4e0fb0fcb70d94ebe0a5cee85aec5b7b74ee0d5eb6459a91ffbdb643f8514f8d2c105f455b956749bdab",
+      "subject_leaf": "registered source leaf bound by Phase-0 fixture"
+    },
+    "decision_access_join": {
+      "access_order": [
+        "read",
+        "write"
+      ],
+      "canonical_join": "u32(decision_count)||operation_row||u32(access_count)||ordered_state_access_rows",
+      "decision_row_count": 1,
+      "join_id": "d62d56dee1cc8b18869c128dbc178aa3ee993865bfe38216596b7f9b8788fb6b58fc8849b0db30c6b652e40dfa30bf8f8bea1b94f8a5e0f5b8421039ddc09245",
+      "operation_index": 0,
+      "state_access_row_count": 2
+    },
+    "frozen_receipt": "b55b99adcb9085039947a09e718169fe4b882c49f8a1bb7b8fc221ed518555203ed51565280ba0f25228a9f3f735b205a0abe6620c68c2e8963d4e8635aa8808",
+    "phase0_statement_digest": "396587f05dbadeede82477853d400692608f6b25c3ed88f228ac1f8af113293c17512972ba9cb808a12685fe842ddd10061136261ef6c5deae1e160bd84495c3",
+    "phase0_typed_receipt": {
+      "economic_clearance": "profile fixture only; verifier acceptance is never CLEAR",
+      "effective_directive": "CLEAR",
+      "effective_directive_code": 1,
+      "exception_id_or_sentinel": "e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "policy_result": "PASS",
+      "policy_result_code": 1,
+      "receipt_binding": "b55b99adcb9085039947a09e718169fe4b882c49f8a1bb7b8fc221ed518555203ed51565280ba0f25228a9f3f735b205a0abe6620c68c2e8963d4e8635aa8808"
+    },
+    "profile_id": "8b07c423294e2d2cecf320e495b56c31b5ecbd75f28cee5b166785e0de872619a0149b1e3dacd195207c7c2f34a9b46a8843ef8dd1c6fbac613aa66111d4163c",
+    "replay": {
+      "attempt_id": "2a1110e501acb83cef3a248182c9017e5569e9ea04d6f78bb9aa44c590df5fff36816b0bd7e5f9938f67df0e380ebccd0bc9c5c8ec938dbc3eda6463891d4209",
+      "exception_id_or_sentinel": "e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "replay_id": "c5eeb6caa78f094d831d122b7636a193f6af59675b6519bd8e059058fa95332603dbd6a65abf8667151fde44591cdfb5f4542a1976561c9b112c5099e2244cfa",
+      "retry_cap": 4
+    },
+    "source_root": "947b9937f37c0c0e4e47dfa1a7a54ef9a9ede7a17e6a4e0fb0fcb70d94ebe0a5cee85aec5b7b74ee0d5eb6459a91ffbdb643f8514f8d2c105f455b956749bdab",
+    "state_transition": {
+      "after_state_root": "4bb1b4fc536e0e9fc30b7cf17af7007b4d1c43b534adadf39e001618f9572ad083d482eccfef63aebfb43cac096ab1a20f37dc85456631c67a80f215a53f84c8",
+      "before_state_root": "ea5a9631ab0134beed2231f4b5f1539f976b0c34416ee9eb127ace55302e31dd45a626a8847bf09c32297073dabd9cdadc4fb768b4e043119079ee66504ac024",
+      "exact_transition": "one chronological read/write transition; profile evidence only"
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "activation": false,
+  "complete_bound_available": false,
+  "dp24": {
+    "bits_single_decimal": "134.47214976634539720898858216070537446713919040269651174941026",
+    "bits_union_decimal": "128.66479484428779310154661284347354365849816377673037096573297",
+    "construction": "4.12",
+    "ell": 28,
+    "epsilon_extraction_plus_sumcheck_fraction": {
+      "denominator": 14474011154664524427946373126085988481658748083205070504932198000989141204992,
+      "numerator": 67108871
+    },
+    "epsilon_query_fraction": {
+      "denominator": 1167984798111281975972139931059274579172666497855631342228273284582214442805421410945513679697247078343332431250840168271536308408672112127552681297848886832192510636636227827221215793215130566656,
+      "numerator": 38662196978715633273404758790074316960214213096178319621856934259807530937321861485192508542873470637501160980081794035970219670238407078788135931371782481
+    },
+    "epsilon_single_decimal": "0.000000000000000000000000000000000000000033101626871544280859079149296156999764207237886627270526053073392347985222300467",
+    "epsilon_single_fraction": {
+      "denominator": 1167984798111281975972139931059274579172666497855631342228273284582214442805421410945513679697247078343332431250840168271536308408672112127552681297848886832192510636636227827221215793215130566656,
+      "numerator": 38662196978715633273404758795489688021411090450303663812493713493740669609788395414964994905468137122575690841265755373127288313740024914300946151638761809
+    },
+    "epsilon_union_decimal": "0.0000000000000000000000000000000000000018536911048064797281084323605847919867956053216511271494589721099714871724488262",
+    "epsilon_union_fraction": {
+      "denominator": 145998099763910246996517491382409322396583312231953917778534160572776805350677676368189209962155884792916553906355021033942038551084014015944085162231110854024063829579528478402651974151891320832,
+      "numerator": 270635378851009432913833311568427816149877633152125646687455994456184687268518767904754964338276959858029835888860287611891018196180174400106623061471332663
+    },
+    "field_degree": 256,
+    "gamma": 324,
+    "instances": 56,
+    "model": "ideal-vector-oracle-only",
+    "rate_R": 1,
+    "theorem": "ePrint_2024_504_Theorem_4_17",
+    "theta": 4
+  },
+  "nonclaims": [
+    "no proof backend",
+    "no ZK",
+    "no concrete vector-commitment binding reduction",
+    "no salted-leaf hiding theorem",
+    "no semantic/state proof composition",
+    "no production challenge authentication",
+    "no production usability or activation"
+  ],
+  "production_usable": false,
+  "profile_id": "8b07c423294e2d2cecf320e495b56c31b5ecbd75f28cee5b166785e0de872619a0149b1e3dacd195207c7c2f34a9b46a8843ef8dd1c6fbac613aa66111d4163c",
+  "proof_backend_selected": false,
+  "proof_suite_id": null,
+  "schema": "BL/NATIVE-V3/TRUST-BOUNDARY-SECURITY-LEDGER/v1",
+  "unresolved_terms": [
+    {
+      "bound": null,
+      "coefficient": "sum_i L_i*q_i",
+      "id": "vc_collapse_binding",
+      "source": "2025/947 interactive IOP-to-argument bound",
+      "status": "UNRESOLVED",
+      "symbol": "epsilon_VCCollapse(lambda,t_VCCollapse)"
+    },
+    {
+      "bound": null,
+      "coefficient": "1",
+      "id": "salted_leaf_hiding",
+      "source": "Diamond 2025/1015 honest-verifier ideal-vector-oracle discussion",
+      "status": "UNRESOLVED",
+      "symbol": "epsilon_SaltedLeafHiding(lambda,salt_bytes)"
+    },
+    {
+      "bound": null,
+      "coefficient": "1",
+      "id": "malicious_verifier_zk_composition",
+      "source": "2026/307 abstract IOP composition",
+      "status": "UNRESOLVED",
+      "symbol": "epsilon_MaliciousVerifierZK(lambda)"
+    },
+    {
+      "bound": null,
+      "coefficient": "1",
+      "id": "semantic_state_composition",
+      "source": "No primary theorem for this native-v3 composition",
+      "status": "UNRESOLVED",
+      "symbol": "epsilon_SemanticStateComposition(lambda)"
+    },
+    {
+      "bound": null,
+      "coefficient": "retry_cap * session_count",
+      "id": "abort_retry_union",
+      "source": "No pinned abort/retry/grinding composition theorem",
+      "status": "UNRESOLVED",
+      "symbol": "epsilon_AbortRetryUnion(lambda,retry_cap)"
+    },
+    {
+      "bound": null,
+      "coefficient": "1",
+      "id": "verifier_challenge_authentication",
+      "source": "Fixture HMAC tag only; no production PQ authority selected",
+      "status": "UNRESOLVED",
+      "symbol": "epsilon_VerifierChallengeAuthentication(lambda)"
+    }
+  ],
+  "zero_placeholders_allowed": false
+}

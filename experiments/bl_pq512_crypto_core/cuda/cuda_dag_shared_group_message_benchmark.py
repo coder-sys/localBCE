@@ -39,7 +39,11 @@ from cuda_dag_shared_group_fold_benchmark import (
 
 
 MESSAGE_KERNEL = r"""
-enum Formula : unsigned int { XOR_GATE = 0U, NOT_LEFT_AND_RIGHT = 1U, NOT_XOR = 2U };
+enum Formula : unsigned int {
+    XOR_GATE = 0U, NOT_LEFT_AND_RIGHT = 1U, NOT_XOR = 2U,
+    COMPLEMENT_LEFT = 3U, SUBTRACT_GATE = 4U, MULTIPLY_GATE = 5U,
+    ADD_GATE = 6U, RELAY_LEFT = 7U, ZERO_GATE = 8U
+};
 
 __device__ __forceinline__ F16 z16(){F16 value={};return value;}
 __device__ __forceinline__ F16 n16(F16 x){return s16(z16(),x);}
@@ -105,7 +109,26 @@ __device__ __forceinline__ Cubic term_cubic(
         left_delta_right_delta
     );
     F16 q0, q1, q2;
-    if (formula == NOT_LEFT_AND_RIGHT) {
+    if (formula == ZERO_GATE) {
+        q0 = z16(); q1 = z16(); q2 = z16();
+    } else if (formula == RELAY_LEFT) {
+        q0 = left_zero; q1 = left_delta; q2 = z16();
+    } else if (formula == COMPLEMENT_LEFT) {
+        F16 one = z16(); one.a.a.a.a = 1U;
+        q0 = s16(one, left_zero); q1 = n16(left_delta); q2 = z16();
+    } else if (formula == ADD_GATE) {
+        q0 = a16(left_zero, right_zero);
+        q1 = a16(left_delta, right_delta);
+        q2 = z16();
+    } else if (formula == SUBTRACT_GATE) {
+        q0 = s16(left_zero, right_zero);
+        q1 = s16(left_delta, right_delta);
+        q2 = z16();
+    } else if (formula == MULTIPLY_GATE) {
+        q0 = left_zero_right_zero;
+        q1 = cross_linear;
+        q2 = left_delta_right_delta;
+    } else if (formula == NOT_LEFT_AND_RIGHT) {
         q0 = s16(right_zero, left_zero_right_zero);
         q1 = s16(right_delta, cross_linear);
         q2 = n16(left_delta_right_delta);

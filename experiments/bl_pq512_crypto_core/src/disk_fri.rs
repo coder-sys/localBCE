@@ -12,6 +12,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use crate::binding_root_v2::{
+    BindingDigestV2, BindingMerkleLeafV2, BindingMerkleMultiProofV2, BindingMerkleNodeV2,
+    BindingRootV2, BindingRootV2Error, canonical_binding_frontier_positions_v2,
+};
 use crate::circle_fri::{
     CircleFriError, bit_reverse_index, canonic_circle_point, conjugate_pair_zeroifier,
     fold_circle_pair, fold_line_pair,
@@ -30,6 +34,10 @@ use crate::disk_fft::{DiskFftError, evaluate_extension_circle_coefficient_file_i
 use crate::disk_logup::DiskAirLogupOracle;
 use crate::field::{
     EXTENSION_DEGREE, FP16_ENCODED_LENGTH, FieldError, Fp16, M31, M31_MODULUS, batch_inverse_fp16,
+};
+use crate::fri_layer_multiproof::{
+    FriLayerBindingMultiproofV2, FriLayerMultiproofError, FriPipelineBindingMultiproofsV2,
+    selected_indices_for_layer,
 };
 use crate::fri_pipeline::{
     FriPipelineError, FriPipelineLayerOpening, FriPipelineProof, FriPipelineQueryProof,
@@ -54,6 +62,8 @@ pub enum DiskFriError {
     DiskFft(DiskFftError),
     Field(FieldError),
     Fri(FriPipelineError),
+    FriLayerMultiproof(FriLayerMultiproofError),
+    Binding(BindingRootV2Error),
     Merkle(MerkleError),
     TraceMask(TraceMaskError),
     Decode(crate::field::DecodeError),
@@ -81,6 +91,8 @@ convert_error!(DiskDeepError, Deep);
 convert_error!(DiskFftError, DiskFft);
 convert_error!(FieldError, Field);
 convert_error!(FriPipelineError, Fri);
+convert_error!(FriLayerMultiproofError, FriLayerMultiproof);
+convert_error!(BindingRootV2Error, Binding);
 convert_error!(MerkleError, Merkle);
 convert_error!(TraceMaskError, TraceMask);
 convert_error!(crate::field::DecodeError, Decode);
@@ -157,6 +169,217 @@ impl DiskFriLayerTree {
         }
         read_fp16_at(&self.values_path, index)
     }
+
+    /// Recommit this exact disk-backed layer using native BindingRootV2
+    /// leaves. The computation retains only one digest per tree level.
+    pub fn binding_v2_root(&self) -> Result<BindingRootV2, DiskFriError> {
+        let (root, frontier, values) =
+            recompute_binding_fri_layer(self, &BTreeSet::new(), &BTreeSet::new())?;
+        if !frontier.is_empty() || !values.is_empty() {
+            return Err(DiskFriError::Shape);
+        }
+        Ok(root)
+    }
+
+    /// Recompute one canonical native multiproof directly from the values
+    /// file. No legacy layer root or legacy path digest is copied.
+    pub fn binding_v2_multiproof(
+        &self,
+        selected_indices: &[usize],
+    ) -> Result<(BindingRootV2, FriLayerBindingMultiproofV2), DiskFriError> {
+        let leaf_count = 1_usize
+            .checked_shl(u32::from(self.log_size.saturating_sub(1)))
+            .ok_or(DiskFriError::Overflow)?;
+        if self.log_size == 0 {
+            return Err(DiskFriError::Shape);
+        }
+        let selected_u64 = selected_indices
+            .iter()
+            .copied()
+            .map(|index| u64::try_from(index).map_err(|_| DiskFriError::Overflow))
+            .collect::<Result<Vec<_>, _>>()?;
+        let positions = canonical_binding_frontier_positions_v2(
+            u64::try_from(leaf_count).map_err(|_| DiskFriError::Overflow)?,
+            &selected_u64,
+        )?;
+        let targets = positions
+            .iter()
+            .map(|position| (position.level, position.index))
+            .collect::<BTreeSet<_>>();
+        let selected = selected_indices.iter().copied().collect::<BTreeSet<_>>();
+        if selected.len() != selected_indices.len() {
+            return Err(DiskFriError::Shape);
+        }
+        let (root, frontier, mut values) = recompute_binding_fri_layer(self, &targets, &selected)?;
+        let frontier_digests = positions
+            .iter()
+            .map(|position| {
+                frontier
+                    .get(&(position.level, position.index))
+                    .copied()
+                    .ok_or(DiskFriError::Shape)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let proof = BindingMerkleMultiProofV2::from_canonical_frontier(
+            u64::try_from(leaf_count).map_err(|_| DiskFriError::Overflow)?,
+            selected_u64,
+            frontier_digests,
+        )?;
+        let opened_values = selected_indices
+            .iter()
+            .map(|index| values.remove(index).ok_or(DiskFriError::Shape))
+            .collect::<Result<Vec<_>, _>>()?;
+        if !values.is_empty() {
+            return Err(DiskFriError::Shape);
+        }
+        Ok((
+            root,
+            FriLayerBindingMultiproofV2 {
+                log_size: self.log_size,
+                selected_indices: selected_indices.to_vec(),
+                opened_values,
+                proof,
+            },
+        ))
+    }
+}
+
+type RecomputedBindingFriLayer = (
+    BindingRootV2,
+    BTreeMap<(u32, u64), BindingDigestV2>,
+    BTreeMap<usize, Fp16>,
+);
+
+fn recompute_binding_fri_layer(
+    layer: &DiskFriLayerTree,
+    targets: &BTreeSet<(u32, u64)>,
+    selected_indices: &BTreeSet<usize>,
+) -> Result<RecomputedBindingFriLayer, DiskFriError> {
+    if layer.log_size == 0 {
+        return Err(DiskFriError::Shape);
+    }
+    let leaf_count = 1_usize
+        .checked_shl(u32::from(layer.log_size - 1))
+        .ok_or(DiskFriError::Overflow)?;
+    validate_fp16_file(&layer.values_path, leaf_count)?;
+    let height = leaf_count.trailing_zeros();
+    let mut reader = BufReader::new(File::open(&layer.values_path)?);
+    let mut stack = vec![None; usize::try_from(height).map_err(|_| DiskFriError::Overflow)? + 1];
+    let mut retained = BTreeMap::new();
+    let mut selected_values = BTreeMap::new();
+    for index in 0..leaf_count {
+        let value = read_one_fp16(&mut reader)?;
+        let index_u64 = u64::try_from(index).map_err(|_| DiskFriError::Overflow)?;
+        let mut current =
+            BindingMerkleLeafV2::hash(index_u64, &layer_payload(layer.log_size, value))?.digest();
+        if targets.contains(&(0, index_u64)) && retained.insert((0, index_u64), current).is_some() {
+            return Err(DiskFriError::Shape);
+        }
+        if selected_indices.contains(&index) && selected_values.insert(index, value).is_some() {
+            return Err(DiskFriError::Shape);
+        }
+        let mut level = 0_u32;
+        let mut node_index = index_u64;
+        while node_index & 1 == 1 {
+            let left = stack[usize::try_from(level).map_err(|_| DiskFriError::Overflow)?]
+                .take()
+                .ok_or(DiskFriError::Shape)?;
+            node_index >>= 1;
+            level = level.checked_add(1).ok_or(DiskFriError::Overflow)?;
+            current = BindingMerkleNodeV2::hash(level, node_index, left, current)?.digest();
+            if targets.contains(&(level, node_index))
+                && retained.insert((level, node_index), current).is_some()
+            {
+                return Err(DiskFriError::Shape);
+            }
+        }
+        let slot = stack
+            .get_mut(usize::try_from(level).map_err(|_| DiskFriError::Overflow)?)
+            .ok_or(DiskFriError::Shape)?;
+        if slot.replace(current).is_some() {
+            return Err(DiskFriError::Shape);
+        }
+    }
+    let mut trailing = [0_u8; 1];
+    if reader.read(&mut trailing)? != 0
+        || stack[..usize::try_from(height).map_err(|_| DiskFriError::Overflow)?]
+            .iter()
+            .any(Option::is_some)
+        || retained.len() != targets.len()
+        || selected_values.len() != selected_indices.len()
+    {
+        return Err(DiskFriError::Shape);
+    }
+    let top = stack[usize::try_from(height).map_err(|_| DiskFriError::Overflow)?]
+        .take()
+        .ok_or(DiskFriError::Shape)?;
+    let root = BindingRootV2::from_top(
+        u64::try_from(leaf_count).map_err(|_| DiskFriError::Overflow)?,
+        top,
+    )?;
+    Ok((root, retained, selected_values))
+}
+
+/// Native roots for every disk-backed FRI fold layer, in transcript order.
+pub fn binding_disk_fri_layer_roots_v2(
+    pipeline: &DiskFriPipeline,
+) -> Result<Vec<BindingRootV2>, DiskFriError> {
+    if pipeline.layers.len() != pipeline.fold_log_sizes.len()
+        || pipeline
+            .layers
+            .iter()
+            .zip(&pipeline.fold_log_sizes)
+            .any(|(layer, log_size)| layer.log_size != *log_size)
+    {
+        return Err(DiskFriError::Shape);
+    }
+    pipeline
+        .layers
+        .iter()
+        .map(DiskFriLayerTree::binding_v2_root)
+        .collect()
+}
+
+/// Build canonical native layer multiproofs without materializing any folded
+/// layer in host memory.
+pub fn build_disk_fri_layer_binding_multiproofs_v2(
+    pipeline: &DiskFriPipeline,
+    expected_roots: &[BindingRootV2],
+    query_indices: &[usize],
+) -> Result<FriPipelineBindingMultiproofsV2, DiskFriError> {
+    if pipeline.layers.len() != pipeline.fold_log_sizes.len()
+        || expected_roots.len() != pipeline.layers.len()
+        || pipeline.layers.is_empty()
+    {
+        return Err(DiskFriError::Shape);
+    }
+    let mut layers = Vec::with_capacity(pipeline.layers.len());
+    for (round, ((layer, log_size), expected_root)) in pipeline
+        .layers
+        .iter()
+        .zip(&pipeline.fold_log_sizes)
+        .zip(expected_roots)
+        .enumerate()
+    {
+        if layer.log_size != *log_size {
+            return Err(DiskFriError::Shape);
+        }
+        let leaf_count = 1_usize
+            .checked_shl(u32::from(log_size.saturating_sub(1)))
+            .ok_or(DiskFriError::Overflow)?;
+        let selected = selected_indices_for_layer(query_indices, round, leaf_count)?;
+        let (observed_root, proof) = layer.binding_v2_multiproof(&selected)?;
+        if &observed_root != expected_root {
+            return Err(DiskFriError::FriLayerMultiproof(
+                FriLayerMultiproofError::Authentication,
+            ));
+        }
+        layers.push(proof);
+    }
+    Ok(FriPipelineBindingMultiproofsV2 {
+        query_indices: query_indices.to_vec(),
+        layers,
+    })
 }
 
 pub struct DiskInteractiveFriBuilder {
@@ -328,6 +551,13 @@ pub fn start_disk_interactive_fri(
 impl DiskInteractiveFriBuilder {
     pub fn fold_round_count(&self) -> usize {
         self.fold_log_sizes.len()
+    }
+
+    pub fn last_binding_v2_root(&self) -> Result<BindingRootV2, DiskFriError> {
+        self.layers
+            .last()
+            .ok_or(DiskFriError::Shape)?
+            .binding_v2_root()
     }
 
     pub fn fold_next(&mut self, coefficient: Fp16) -> Result<RootHash, DiskFriError> {
@@ -1114,4 +1344,68 @@ fn cleanup_owned_directory(
     }
     fs::remove_dir_all(directory)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fri_layer_multiproof::binding_fri_layer_tree_v2;
+
+    #[test]
+    fn disk_binding_layer_root_and_multiproof_match_memory_tree() {
+        let parent =
+            std::env::temp_dir().join(format!("blpq-disk-fri-binding-test-{}", std::process::id()));
+        fs::create_dir(&parent).unwrap();
+        let log_size = 4_u8;
+        let values = (0..8_u32)
+            .map(|value| Fp16::from_m31(M31::from_canonical(value + 11).unwrap()))
+            .collect::<Vec<_>>();
+        let values_path = parent.join("values.fp16");
+        fs::write(
+            &values_path,
+            values
+                .iter()
+                .flat_map(|value| value.encode())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let disk = build_layer_tree(log_size, values_path, &parent, 0).unwrap();
+        let memory = binding_fri_layer_tree_v2(log_size, &values).unwrap();
+        assert_eq!(disk.binding_v2_root().unwrap(), memory.root());
+        let selected = [0, 1, 6, 7];
+        let (root, proof) = disk.binding_v2_multiproof(&selected).unwrap();
+        assert_eq!(root, memory.root());
+        assert_eq!(
+            proof.opened_values,
+            vec![values[0], values[1], values[6], values[7]]
+        );
+        assert_eq!(
+            proof.proof,
+            memory
+                .prove(&selected.map(|index| u64::try_from(index).unwrap()))
+                .unwrap()
+        );
+        proof
+            .proof
+            .verify_payloads(
+                &proof
+                    .opened_values
+                    .iter()
+                    .copied()
+                    .map(|value| layer_payload(log_size, value))
+                    .collect::<Vec<_>>(),
+                &root,
+            )
+            .unwrap();
+        let DiskFriLayerTree {
+            values_path,
+            level_paths,
+            ..
+        } = disk;
+        fs::remove_file(values_path).unwrap();
+        for path in level_paths {
+            fs::remove_file(path).unwrap();
+        }
+        fs::remove_dir(parent).unwrap();
+    }
 }

@@ -9,6 +9,9 @@ from experiments.bl_pq512_crypto_foundation.ops_authority import OPS_AUTHORITY_S
 
 ROOT = Path(__file__).resolve().parents[1]
 ROADMAP = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
+ARCHITECTURE = ROOT / "ARCHITECTURE.md"
+FORMAL_KERNEL = ROOT / "docs" / "LEAN_FORMAL_KERNEL.md"
+PLAINTEXT_CONTINUITY = ROOT / "docs" / "NATIVE_V3_PLAINTEXT_CONTINUITY.md"
 CONTRACT = ROOT / "docs" / "DEPLOYMENT_READY_BUILD_CONTRACT.md"
 BLOCKERS = ROOT / "ops" / "launch_blockers.json"
 
@@ -28,37 +31,52 @@ def _package_rows(roadmap: str) -> dict[str, str]:
     return rows
 
 
-def test_phase_two_roadmap_has_exactly_81_surviving_internal_packages() -> None:
+def test_native_v3_roadmap_has_no_retired_package_ledger() -> None:
     roadmap = _text(ROADMAP)
     rows = _package_rows(roadmap)
-    expected = {
-        *(f"S{i:02d}" for i in range(1, 13)),
-        *(f"A{i:02d}" for i in range(1, 17)),
-        *(f"Z{i:02d}" for i in range(1, 13)),
-        *(f"P{i:02d}" for i in range(1, 13)),
-        *(f"T{i:02d}" for i in range(1, 15)),
-        *(f"O{i:02d}" for i in range(1, 7)),
-        "O12",
-        *(f"I{i:02d}" for i in range(1, 9)),
-    }
-    assert len(rows) == 81
-    assert set(rows) == expected
-    assert len({package_id for package_id, status in rows.items() if status.startswith("Complete")}) == 33
-    assert len({package_id for package_id, status in rows.items() if status.startswith("Open")}) == 48
-    assert "| R01 |" not in roadmap and "| R12 |" not in roadmap
+    assert rows == {}
+    assert "Retired BL-PQ512/H4 package counts" in roadmap
+    assert "## Completed foundation" in roadmap
+    assert "## Current private-proof blocker" in roadmap
+    assert "33 of 81" not in roadmap
 
 
-def test_build_contract_preserves_fail_closed_release_lifecycle() -> None:
+def test_retired_build_contract_cannot_override_current_fail_closed_roadmap() -> None:
     roadmap = _text(ROADMAP)
     contract = _text(CONTRACT)
-    assert "All **81 counted packages are internal engineering work**" in roadmap
-    assert "## Final independent Security Audit Gate - not counted" in roadmap
-    assert "No L2" in roadmap
-    assert "UNSELECTED" in contract
-    assert "BUILT_AUDIT_PENDING" in contract
-    assert "AUDIT_ACCEPTED" in contract
-    assert "production_usable` remains `false" in contract
-    assert "mandatory" in contract.lower() and "zero-knowledge" in contract.lower()
+    assert contract.startswith("# Retired architecture evidence")
+    assert "not architecture, execution, security, or release authority" in contract
+    assert "complete theorem ledger" in roadmap
+    assert "`proofSuiteId=null`" in roadmap
+    assert "`production_usable=false`" in roadmap
+
+
+def test_lean_kernel_is_an_executable_target_not_a_detached_model() -> None:
+    architecture = _text(ARCHITECTURE)
+    roadmap = _text(ROADMAP)
+    formal = _text(FORMAL_KERNEL)
+    assert "## Executable formal kernel" in architecture
+    assert "## Later mandatory formal-kernel gate" in roadmap
+    assert "This is not the current or next implementation stage" in roadmap
+    assert "not a current implementation stage" in formal
+    assert "not yet implemented" in formal
+    assert "not production credit" in formal
+    assert "execute the proved Lean definitions" in formal
+    assert "proof_acceptance_ne_clear" in formal
+    assert "observe_only_no_operative_clearance" in formal
+    assert "absence_requires_authoritative_completeness" in formal
+    assert "nonclear_no_economic_mutation" in formal
+    assert "canonical_encoding_injective" in formal
+    assert "checkpoint_chain_append_only" in formal
+
+
+def test_commercial_continuity_wedge_cannot_become_clearance_api() -> None:
+    architecture = _text(ARCHITECTURE)
+    continuity = _text(PLAINTEXT_CONTINUITY)
+    assert "The first commercial wedge belongs externally to Mirror's Provider Trust Graph" in architecture
+    assert "does not expose a Blind Ledger clearance receipt" in architecture
+    assert "internal Blind Ledger conformance harness" in continuity
+    assert "without creating an operative" in continuity
 
 
 def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() -> None:

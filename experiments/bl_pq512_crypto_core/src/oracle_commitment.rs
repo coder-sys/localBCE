@@ -7,9 +7,10 @@ use sha3::{Digest, Sha3_512};
 use crate::air_composition::{AirCompositionOracle, AirMainTraceOracle};
 use crate::air_ir::{AIR_PROGRAM_DOMAIN, AirIrError, parse_air_program};
 use crate::air_logup::AirLogupOracle;
+use crate::binding_root_v2::{BindingDigestV2, BindingRoleV2, BindingRootV2, BindingRootV2Error};
 use crate::cross_domain::{
-    CommitmentStage, CrossDomainError, CrossDomainLayout, CrossDomainTree, DomainEvaluationBatch,
-    DomainSpec, EvaluationField,
+    BindingCrossDomainTreeV2, CommitmentStage, CrossDomainError, CrossDomainLayout,
+    CrossDomainTree, DomainEvaluationBatch, DomainSpec, EvaluationField,
 };
 use crate::field::{Fp16, M31};
 
@@ -20,6 +21,14 @@ pub struct CommittedAirOracles {
     pub main_trace: CrossDomainTree,
     pub interaction_trace: Option<CrossDomainTree>,
     pub composition: CrossDomainTree,
+}
+
+/// Parallel native BindingRootV2 commitments for the selected-v3 path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BindingCommittedAirOraclesV2 {
+    pub main_trace: BindingCrossDomainTreeV2,
+    pub interaction_trace: Option<BindingCrossDomainTreeV2>,
+    pub composition: BindingCrossDomainTreeV2,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,9 +71,62 @@ pub struct CommittedAirRoots {
     pub composition: crate::cross_domain::CrossDomainRoot,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BindingCommittedAirRootsV2 {
+    pub main_trace: BindingRootV2,
+    pub interaction_trace: Option<BindingRootV2>,
+    pub composition: BindingRootV2,
+}
+
 impl CommittedAirOracles {
     pub const fn roots(&self) -> CommittedAirRoots {
         CommittedAirRoots {
+            main_trace: self.main_trace.root(),
+            interaction_trace: match &self.interaction_trace {
+                Some(tree) => Some(tree.root()),
+                None => None,
+            },
+            composition: self.composition.root(),
+        }
+    }
+
+    /// Recommit the exact oracle row packets with native BindingRootV2 trees.
+    /// Legacy roots are neither copied nor hashed into these commitments.
+    pub fn binding_v2(
+        &self,
+        program_encoded: &[u8],
+        mask_coefficient_count: usize,
+        log_blowup: u8,
+    ) -> Result<BindingCommittedAirOraclesV2, OracleCommitmentError> {
+        let legacy =
+            derive_oracle_commitment_layouts(program_encoded, mask_coefficient_count, log_blowup)?;
+        let native = derive_binding_oracle_commitment_layouts_v2(
+            program_encoded,
+            mask_coefficient_count,
+            log_blowup,
+        )?;
+        if self.main_trace.layout() != &legacy.main_trace
+            || self.interaction_trace.as_ref().map(CrossDomainTree::layout)
+                != legacy.interaction_trace.as_ref()
+            || self.composition.layout() != &legacy.composition
+        {
+            return Err(OracleCommitmentError::Shape);
+        }
+        Ok(BindingCommittedAirOraclesV2 {
+            main_trace: self.main_trace.binding_v2_tree(native.main_trace.clone())?,
+            interaction_trace: match (&self.interaction_trace, native.interaction_trace) {
+                (Some(source), Some(layout)) => Some(source.binding_v2_tree(layout)?),
+                (None, None) => None,
+                _ => return Err(OracleCommitmentError::Shape),
+            },
+            composition: self.composition.binding_v2_tree(native.composition)?,
+        })
+    }
+}
+
+impl BindingCommittedAirOraclesV2 {
+    pub const fn roots(&self) -> BindingCommittedAirRootsV2 {
+        BindingCommittedAirRootsV2 {
             main_trace: self.main_trace.root(),
             interaction_trace: match &self.interaction_trace {
                 Some(tree) => Some(tree.root()),
@@ -78,9 +140,16 @@ impl CommittedAirOracles {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OracleCommitmentError {
     Air(AirIrError),
+    Binding(BindingRootV2Error),
     CrossDomain(CrossDomainError),
     Shape,
     CountOverflow,
+}
+
+impl From<BindingRootV2Error> for OracleCommitmentError {
+    fn from(value: BindingRootV2Error) -> Self {
+        Self::Binding(value)
+    }
 }
 
 impl From<AirIrError> for OracleCommitmentError {
@@ -149,6 +218,76 @@ fn layout_from_counts(
         commitment_id(program_commitment, stage, &groups)?,
         specs,
     )?))
+}
+
+const ORACLE_COMMITMENT_BINDING_V2_DOMAIN: &[u8] =
+    b"BL/PQ512/WAVE2/ORACLE-COMMITMENT-BINDING-V2/v1\0";
+
+fn binding_layout_from_legacy(
+    program_encoded: &[u8],
+    legacy: &CrossDomainLayout,
+) -> Result<CrossDomainLayout, OracleCommitmentError> {
+    if legacy.binding_commitment_id().is_some() {
+        return Err(OracleCommitmentError::Shape);
+    }
+    let mut frame = Vec::with_capacity(
+        ORACLE_COMMITMENT_BINDING_V2_DOMAIN.len()
+            + 8
+            + program_encoded.len()
+            + 2
+            + 4
+            + legacy.specs().len() * 8,
+    );
+    frame.extend_from_slice(ORACLE_COMMITMENT_BINDING_V2_DOMAIN);
+    frame.extend_from_slice(
+        &u64::try_from(program_encoded.len())
+            .map_err(|_| OracleCommitmentError::CountOverflow)?
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(program_encoded);
+    frame.extend_from_slice(&(legacy.stage() as u16).to_be_bytes());
+    frame.extend_from_slice(
+        &u32::try_from(legacy.specs().len())
+            .map_err(|_| OracleCommitmentError::CountOverflow)?
+            .to_be_bytes(),
+    );
+    for spec in legacy.specs() {
+        frame.push(spec.log_size);
+        frame.push(spec.field as u8);
+        frame.extend_from_slice(&0_u16.to_be_bytes());
+        frame.extend_from_slice(&spec.column_count.to_be_bytes());
+    }
+    let descriptor = BindingDigestV2::hash(BindingRoleV2::Payload, &frame)?;
+    Ok(CrossDomainLayout::new_binding_v2(
+        legacy.stage(),
+        descriptor,
+        legacy.specs().to_vec(),
+    )?)
+}
+
+/// Derive the verifier-authoritative native-v2 oracle layouts directly from
+/// the exact AIR program bytes. The 128-byte descriptors bind the program,
+/// stage, ordered domains, fields, and column counts; no legacy root or
+/// 64-byte layout digest is promoted into native proof authority.
+pub fn derive_binding_oracle_commitment_layouts_v2(
+    program_encoded: &[u8],
+    mask_coefficient_count: usize,
+    log_blowup: u8,
+) -> Result<OracleCommitmentLayouts, OracleCommitmentError> {
+    let legacy =
+        derive_oracle_commitment_layouts(program_encoded, mask_coefficient_count, log_blowup)?;
+    Ok(OracleCommitmentLayouts {
+        program_binary_commitment: legacy.program_binary_commitment,
+        main_trace: binding_layout_from_legacy(program_encoded, &legacy.main_trace)?,
+        interaction_trace: legacy
+            .interaction_trace
+            .as_ref()
+            .map(|layout| binding_layout_from_legacy(program_encoded, layout))
+            .transpose()?,
+        composition: binding_layout_from_legacy(program_encoded, &legacy.composition)?,
+        tables: legacy.tables,
+        interactions: legacy.interactions,
+    })
 }
 
 /// Derive all verifier-authoritative oracle layouts from program-only IR and

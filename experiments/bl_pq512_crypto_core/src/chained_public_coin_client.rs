@@ -17,10 +17,10 @@ use sha3::{Digest, Sha3_512};
 use crate::{
     Fp16,
     chained_public_coin::{
-        ChainedContributor, ChainedPublicCoin, ChainedPublicCoinBundle, ChainedPublicCoinError,
-        ChainedRoundDescriptor, ChainedRoundEvidence, ML_DSA_87_PUBLIC_KEY_BYTES,
-        ML_DSA_87_SIGNATURE_BYTES, PqSignatureSuite, SLH_DSA_SHAKE_256F_PUBLIC_KEY_BYTES,
-        SLH_DSA_SHAKE_256F_SIGNATURE_BYTES,
+        ChainedChallenge, ChainedContributor, ChainedPublicCoin, ChainedPublicCoinBundle,
+        ChainedPublicCoinError, ChainedRoundDescriptor, ChainedRoundEvidence,
+        ML_DSA_87_PUBLIC_KEY_BYTES, ML_DSA_87_SIGNATURE_BYTES, PqSignatureSuite,
+        SLH_DSA_SHAKE_256F_PUBLIC_KEY_BYTES, SLH_DSA_SHAKE_256F_SIGNATURE_BYTES,
     },
 };
 
@@ -213,6 +213,20 @@ impl ChainedPublicCoinCoordinator {
         descriptor: ChainedRoundDescriptor,
         prover_message: &[u8],
     ) -> Result<Vec<Fp16>, ChainedPublicCoinClientError> {
+        Ok(self
+            .challenge_with_evidence(descriptor, prover_message)?
+            .field_elements)
+    }
+
+    /// Accept one round and retain the verifier-derived seed and transcript
+    /// root alongside its sampled fields. Dependent staged protocols use this
+    /// to derive OODS points without replaying or predicting a public-coin
+    /// round; ordinary callers may continue using [`Self::challenge`].
+    pub fn challenge_with_evidence(
+        &mut self,
+        descriptor: ChainedRoundDescriptor,
+        prover_message: &[u8],
+    ) -> Result<ChainedChallenge, ChainedPublicCoinClientError> {
         let round = self.coin.round();
         let message_digest: [u8; 64] = Sha3_512::digest(prover_message).into();
         let request = [
@@ -240,7 +254,7 @@ impl ChainedPublicCoinCoordinator {
             prover_message: prover_message.to_vec(),
             reveals,
         });
-        Ok(challenge.field_elements)
+        Ok(challenge)
     }
 
     pub fn scalar_challenge(
@@ -253,6 +267,14 @@ impl ChainedPublicCoinCoordinator {
             return Err(ChainedPublicCoinClientError::OutputCount);
         }
         Ok(values[0])
+    }
+
+    /// Return the coordinator-owned transcript root after the most recently
+    /// accepted round.  The root is derived from the native coin state; it is
+    /// not a prover-supplied value and is exposed so a dependent round can
+    /// bind its `prior_transcript_root` before its own message is challenged.
+    pub const fn transcript_root(&self) -> [u8; 64] {
+        self.coin.transcript_root()
     }
 
     pub fn finish(self) -> Result<[u8; 64], ChainedPublicCoinClientError> {

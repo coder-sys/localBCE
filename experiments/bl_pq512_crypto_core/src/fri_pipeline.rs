@@ -10,6 +10,7 @@ use crate::air_composition::{
 };
 use crate::air_ir::{FixedColumn, ParsedProgram, Table, parse_air_program};
 use crate::air_logup::AirLogupOracle;
+use crate::binding_root_v2::{BindingDigestV2, BindingRoleV2, BindingRootV2};
 use crate::circle_fft::{
     CircleFftError, evaluate_extension_circle_coefficients,
     interpolate_extension_circle_evaluations, low_degree_extend_coset_order,
@@ -19,19 +20,27 @@ use crate::circle_fri::{
     degree_corrected_row, fold_circle_into_line, fold_circle_pair, fold_line, fold_line_pair,
 };
 use crate::cross_domain::{
-    CommitmentStage, CrossDomainError, CrossDomainLayout, CrossDomainProof, CrossDomainRoot,
-    CrossDomainTree, DomainOpening, DomainSpec, EvaluationField,
-    inverse_transpose_circle_fft_index, project_circle_fft_index, transpose_circle_fft_index,
+    BindingCrossDomainMultiProofV2, BindingCrossDomainTreeV2, CommitmentStage, CrossDomainError,
+    CrossDomainLayout, CrossDomainProof, CrossDomainRoot, CrossDomainTree, DomainOpening,
+    DomainSpec, EvaluationField, inverse_transpose_circle_fft_index, project_circle_fft_index,
+    transpose_circle_fft_index,
 };
-use crate::deep_quotient::{DeepQuotientOracles, DomainOodsClaims, deep_claims_commitment};
+use crate::deep_quotient::{
+    DeepQuotientOracles, DomainOodsClaims, deep_claims_commitment,
+    deep_claims_commitment_binding_v2,
+};
 use crate::field::{DecodeError, Fp16, M31, M31_MODULUS};
 use crate::fri_layer_multiproof::{
-    FriLayerMultiproofError, FriPipelineCanonicalMultiproofs, verify_fri_pipeline_layer_multiproofs,
+    FriLayerMultiproofError, FriPipelineBindingMultiproofsV2, FriPipelineCanonicalMultiproofs,
+    binding_fri_layer_root_v2, build_fri_layer_binding_multiproofs_v2,
+    verify_fri_layer_binding_multiproofs_v2, verify_fri_pipeline_layer_multiproofs,
 };
 use crate::merkle::{MerkleError, MerkleProof, MerkleTree, RootHash};
 use crate::oods::CirclePoint;
 use crate::oracle_commitment::{
-    CommittedAirOracles, CommittedAirRoots, OracleTableGeometry, derive_oracle_commitment_layouts,
+    BindingCommittedAirOraclesV2, BindingCommittedAirRootsV2, CommittedAirOracles,
+    CommittedAirRoots, OracleTableGeometry, derive_binding_oracle_commitment_layouts_v2,
+    derive_oracle_commitment_layouts,
 };
 use crate::proof_format::FriPipelineProofV2;
 use crate::trace_mask::{
@@ -114,6 +123,72 @@ pub struct FriPipelineProof {
     /// Per-interaction table sums, fixed before composition challenge use.
     pub logup_final_sums: Vec<Fp16>,
     pub queries: Vec<FriPipelineQueryProof>,
+}
+
+/// Canonical native BindingRootV2 proof. Query coordinates are derived from
+/// the strict public coin and all repeated openings are globally deduplicated.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FriPipelineProofV3 {
+    pub logup_final_sums: Vec<Fp16>,
+    pub query_indices: Vec<usize>,
+    pub mask: BindingCrossDomainMultiProofV2,
+    pub main: BindingCrossDomainMultiProofV2,
+    pub interaction: Option<BindingCrossDomainMultiProofV2>,
+    pub composition: BindingCrossDomainMultiProofV2,
+    pub fri_layers: FriPipelineBindingMultiproofsV2,
+}
+
+/// Native v3 commitments derived from one already-built legacy prover state.
+///
+/// The legacy prover keeps its row packets in `CrossDomainTree` values while
+/// the accepting v3 verifier requires independent `BindingRootV2` trees.  This
+/// adapter recommits those exact packets and derives the folded-layer roots in
+/// the same order consumed by `verify_fri_pipeline_v3`.  It is intentionally a
+/// construction helper only: it does not mint a verifier receipt or claim that
+/// the legacy proof has been accepted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeFriPipelineV3Construction {
+    pub proof: FriPipelineProofV3,
+    pub oracle_roots: BindingCommittedAirRootsV2,
+    pub mask_root: BindingRootV2,
+    pub layer_roots: Vec<BindingRootV2>,
+}
+
+/// Opaque result of the complete native-128 AIR/DEEP/FRI verifier.  Bridge
+/// adapters consume authenticated OODS claim cells through this receipt;
+/// they never accept a root/value pair supplied independently by the host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedFriPipelineV3 {
+    receipt_binding: BindingDigestV2,
+    public_inputs_binding: BindingDigestV2,
+    program_binding: BindingDigestV2,
+    oracle_roots: BindingCommittedAirRootsV2,
+    query_point: CirclePoint,
+    claims: Vec<DomainOodsClaims>,
+}
+
+impl VerifiedFriPipelineV3 {
+    pub const fn receipt_binding(&self) -> BindingDigestV2 {
+        self.receipt_binding
+    }
+    pub const fn public_inputs_binding(&self) -> BindingDigestV2 {
+        self.public_inputs_binding
+    }
+    pub const fn program_binding(&self) -> BindingDigestV2 {
+        self.program_binding
+    }
+
+    pub const fn oracle_roots(&self) -> &BindingCommittedAirRootsV2 {
+        &self.oracle_roots
+    }
+
+    pub const fn query_point(&self) -> CirclePoint {
+        self.query_point
+    }
+
+    pub fn claims(&self) -> &[DomainOodsClaims] {
+        &self.claims
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -226,6 +301,26 @@ pub fn fri_mask_layout(
     Ok(CrossDomainLayout::new(
         CommitmentStage::FriBatchMask,
         mask_id(claims_commitment, 0),
+        specs,
+    )?)
+}
+
+/// Native-v2 mask layout. The complete 128-byte DEEP-claims binding is the
+/// descriptor authority; no 64-byte digest is derived or wrapped.
+pub fn fri_mask_layout_binding_v2(
+    claims_commitment: &BindingDigestV2,
+    claims: &[DomainOodsClaims],
+) -> Result<CrossDomainLayout, FriPipelineError> {
+    if claims.is_empty() {
+        return Err(FriPipelineError::Shape);
+    }
+    let specs = claims
+        .iter()
+        .map(|claim| DomainSpec::new(claim.log_size, EvaluationField::Fp16, 1))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CrossDomainLayout::new_binding_v2(
+        CommitmentStage::FriBatchMask,
+        *claims_commitment,
         specs,
     )?)
 }
@@ -533,7 +628,7 @@ fn verify_air_composition_query(
     query: &FriPipelineQueryProof,
     program: &ParsedProgram,
     layouts: &crate::oracle_commitment::OracleCommitmentLayouts,
-    roots: &CommittedAirRoots,
+    legacy_roots: Option<&CommittedAirRoots>,
     supplied_public_inputs: &[M31],
     composition_alpha: Fp16,
     logup_beta: Fp16,
@@ -593,9 +688,11 @@ fn verify_air_composition_query(
     {
         return Err(FriPipelineError::Query);
     }
-    for proof in &query.next_main {
-        if !proof.verify(&layouts.main_trace, &roots.main_trace)? {
-            return Ok(false);
+    if let Some(roots) = legacy_roots {
+        for proof in &query.next_main {
+            if !proof.verify(&layouts.main_trace, &roots.main_trace)? {
+                return Ok(false);
+            }
         }
     }
 
@@ -626,10 +723,12 @@ fn verify_air_composition_query(
     {
         return Err(FriPipelineError::Query);
     }
-    if let (Some(layout), Some(root)) = (&layouts.interaction_trace, &roots.interaction_trace) {
-        for proof in &query.next_interaction {
-            if !proof.verify(layout, root)? {
-                return Ok(false);
+    if let Some(roots) = legacy_roots {
+        if let (Some(layout), Some(root)) = (&layouts.interaction_trace, &roots.interaction_trace) {
+            for proof in &query.next_interaction {
+                if !proof.verify(layout, root)? {
+                    return Ok(false);
+                }
             }
         }
     }
@@ -1170,6 +1269,7 @@ pub fn verify_fri_pipeline(
         &proof.logup_final_sums,
         &proof.queries,
         None,
+        None,
         program_encoded,
         mask_coefficient_count,
         log_blowup,
@@ -1177,13 +1277,15 @@ pub fn verify_fri_pipeline(
         composition_alpha,
         logup_beta,
         logup_gamma,
-        oracle_roots,
-        mask_root,
+        PipelineAuthentication::Legacy {
+            oracle_roots,
+            mask_root,
+            layer_roots,
+        },
         query_point,
         claims,
         batch_coefficient,
         fold_coefficients,
-        layer_roots,
         final_constant,
         expected_query_indices,
     )
@@ -1225,6 +1327,610 @@ pub fn verify_fri_pipeline_v2(
         &proof.logup_final_sums,
         &proof.queries,
         Some(&proof.fri_layer_multiproofs),
+        None,
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+        supplied_public_inputs,
+        composition_alpha,
+        logup_beta,
+        logup_gamma,
+        PipelineAuthentication::Legacy {
+            oracle_roots,
+            mask_root,
+            layer_roots,
+        },
+        query_point,
+        claims,
+        batch_coefficient,
+        fold_coefficients,
+        final_constant,
+        expected_query_indices,
+    )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BindingSelectedIndicesV3 {
+    mask: Vec<usize>,
+    main: Vec<usize>,
+    interaction: Vec<usize>,
+    composition: Vec<usize>,
+}
+
+/// Verifier-derived layouts and canonical opening coordinates for one native
+/// BindingRootV2 AIR/FRI statement. None of these coordinates or layouts is
+/// accepted from the encoded proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FriPipelineProofV3Geometry {
+    pub mask_layout: CrossDomainLayout,
+    pub main_layout: CrossDomainLayout,
+    pub interaction_layout: Option<CrossDomainLayout>,
+    pub composition_layout: CrossDomainLayout,
+    pub mask_indices: Vec<usize>,
+    pub main_indices: Vec<usize>,
+    pub interaction_indices: Vec<usize>,
+    pub composition_indices: Vec<usize>,
+    pub fri_layer_log_sizes: Vec<u8>,
+}
+
+fn binding_selected_indices_v3(
+    layouts: &crate::oracle_commitment::OracleCommitmentLayouts,
+    largest_log: u8,
+    query_indices: &[usize],
+) -> Result<BindingSelectedIndicesV3, FriPipelineError> {
+    if query_indices.is_empty()
+        || query_indices
+            .iter()
+            .any(|index| *index >= 1_usize << largest_log)
+    {
+        return Err(FriPipelineError::Query);
+    }
+    let mut mask = BTreeSet::new();
+    let mut main = BTreeSet::new();
+    let mut interaction = BTreeSet::new();
+    let mut composition = BTreeSet::new();
+    for initial_index in query_indices.iter().copied() {
+        let pair_start = initial_index & !1;
+        mask.extend([pair_start, pair_start + 1]);
+        for index in [pair_start, pair_start + 1] {
+            main.insert(projected_index(
+                index,
+                largest_log,
+                layouts.main_trace.maximum_log_size(),
+            )?);
+            composition.insert(projected_index(
+                index,
+                largest_log,
+                layouts.composition.maximum_log_size(),
+            )?);
+            if let Some(layout) = &layouts.interaction_trace {
+                interaction.insert(projected_index(
+                    index,
+                    largest_log,
+                    layout.maximum_log_size(),
+                )?);
+            }
+        }
+        for geometry in &layouts.tables {
+            if geometry.main_column_count == 0 {
+                continue;
+            }
+            let current =
+                projected_index(initial_index, largest_log, geometry.evaluation_log_size)?;
+            let shifted = shifted_fft_index(
+                current,
+                geometry.evaluation_log_size,
+                geometry.trace_log_size,
+            )
+            .map_err(|_| FriPipelineError::Shape)?;
+            main.insert(lifted_index(
+                shifted,
+                geometry.evaluation_log_size,
+                layouts.main_trace.maximum_log_size(),
+            )?);
+        }
+        if let Some(layout) = &layouts.interaction_trace {
+            for geometry in &layouts.interactions {
+                let current =
+                    projected_index(initial_index, largest_log, geometry.evaluation_log_size)?;
+                let trace_log_size = layouts.tables[geometry.table_index].trace_log_size;
+                let shifted =
+                    shifted_fft_index(current, geometry.evaluation_log_size, trace_log_size)
+                        .map_err(|_| FriPipelineError::Shape)?;
+                interaction.insert(lifted_index(
+                    shifted,
+                    geometry.evaluation_log_size,
+                    layout.maximum_log_size(),
+                )?);
+            }
+        }
+    }
+    Ok(BindingSelectedIndicesV3 {
+        mask: mask.into_iter().collect(),
+        main: main.into_iter().collect(),
+        interaction: interaction.into_iter().collect(),
+        composition: composition.into_iter().collect(),
+    })
+}
+
+/// Derive native proof geometry from the exact AIR program, OODS statement,
+/// 128-byte oracle roots, and ordered public-coin query list.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_fri_pipeline_proof_v3_geometry(
+    program_encoded: &[u8],
+    mask_coefficient_count: usize,
+    log_blowup: u8,
+    query_point: CirclePoint,
+    claims: &[DomainOodsClaims],
+    oracle_roots: &BindingCommittedAirRootsV2,
+    expected_query_indices: &[usize],
+) -> Result<FriPipelineProofV3Geometry, FriPipelineError> {
+    let layouts = derive_binding_oracle_commitment_layouts_v2(
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    if layouts.interaction_trace.is_some() != oracle_roots.interaction_trace.is_some() {
+        return Err(FriPipelineError::Shape);
+    }
+    let claims_commitment = deep_claims_commitment_binding_v2(
+        &layouts.program_binary_commitment,
+        query_point,
+        claims,
+        &oracle_roots.main_trace,
+        oracle_roots.interaction_trace.as_ref(),
+        &oracle_roots.composition,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let mask_layout = fri_mask_layout_binding_v2(&claims_commitment, claims)?;
+    let selected = binding_selected_indices_v3(
+        &layouts,
+        mask_layout.maximum_log_size(),
+        expected_query_indices,
+    )?;
+    let fri_layer_log_sizes = (2..=mask_layout.maximum_log_size()).rev().collect();
+    Ok(FriPipelineProofV3Geometry {
+        mask_layout,
+        main_layout: layouts.main_trace,
+        interaction_layout: layouts.interaction_trace,
+        composition_layout: layouts.composition,
+        mask_indices: selected.mask,
+        main_indices: selected.main,
+        interaction_indices: selected.interaction,
+        composition_indices: selected.composition,
+        fri_layer_log_sizes,
+    })
+}
+
+fn selected_indices_match_v3(
+    proof: &BindingCrossDomainMultiProofV2,
+    expected: &[usize],
+) -> Result<bool, FriPipelineError> {
+    let expected = expected
+        .iter()
+        .copied()
+        .map(|index| u64::try_from(index).map_err(|_| FriPipelineError::CountOverflow))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(proof.proof().selected_indices() == expected)
+}
+
+fn binding_query_views_v3(
+    proof: &FriPipelineProofV3,
+    layouts: &crate::oracle_commitment::OracleCommitmentLayouts,
+    largest_log: u8,
+) -> Result<Vec<FriPipelineQueryProof>, FriPipelineError> {
+    proof
+        .query_indices
+        .iter()
+        .copied()
+        .map(|initial_index| {
+            let pair_start = initial_index & !1;
+            let main_left_index = projected_index(
+                pair_start,
+                largest_log,
+                layouts.main_trace.maximum_log_size(),
+            )?;
+            let main_right_index = projected_index(
+                pair_start + 1,
+                largest_log,
+                layouts.main_trace.maximum_log_size(),
+            )?;
+            let composition_left_index = projected_index(
+                pair_start,
+                largest_log,
+                layouts.composition.maximum_log_size(),
+            )?;
+            let composition_right_index = projected_index(
+                pair_start + 1,
+                largest_log,
+                layouts.composition.maximum_log_size(),
+            )?;
+            let (interaction_left, interaction_right) = if let (Some(layout), Some(interaction)) =
+                (&layouts.interaction_trace, &proof.interaction)
+            {
+                (
+                    Some(
+                        interaction
+                            .row(projected_index(
+                                pair_start,
+                                largest_log,
+                                layout.maximum_log_size(),
+                            )?)?
+                            .arithmetic_view(),
+                    ),
+                    Some(
+                        interaction
+                            .row(projected_index(
+                                pair_start + 1,
+                                largest_log,
+                                layout.maximum_log_size(),
+                            )?)?
+                            .arithmetic_view(),
+                    ),
+                )
+            } else if layouts.interaction_trace.is_none() && proof.interaction.is_none() {
+                (None, None)
+            } else {
+                return Err(FriPipelineError::Shape);
+            };
+            let mut next_main_indices = BTreeSet::new();
+            for geometry in &layouts.tables {
+                if geometry.main_column_count == 0 {
+                    continue;
+                }
+                let current =
+                    projected_index(initial_index, largest_log, geometry.evaluation_log_size)?;
+                let shifted = shifted_fft_index(
+                    current,
+                    geometry.evaluation_log_size,
+                    geometry.trace_log_size,
+                )
+                .map_err(|_| FriPipelineError::Shape)?;
+                next_main_indices.insert(lifted_index(
+                    shifted,
+                    geometry.evaluation_log_size,
+                    layouts.main_trace.maximum_log_size(),
+                )?);
+            }
+            let next_main = next_main_indices
+                .into_iter()
+                .map(|index| Ok(proof.main.row(index)?.arithmetic_view()))
+                .collect::<Result<Vec<_>, FriPipelineError>>()?;
+            let mut next_interaction_indices = BTreeSet::new();
+            if let Some(layout) = &layouts.interaction_trace {
+                for geometry in &layouts.interactions {
+                    let current =
+                        projected_index(initial_index, largest_log, geometry.evaluation_log_size)?;
+                    let shifted = shifted_fft_index(
+                        current,
+                        geometry.evaluation_log_size,
+                        layouts.tables[geometry.table_index].trace_log_size,
+                    )
+                    .map_err(|_| FriPipelineError::Shape)?;
+                    next_interaction_indices.insert(lifted_index(
+                        shifted,
+                        geometry.evaluation_log_size,
+                        layout.maximum_log_size(),
+                    )?);
+                }
+            }
+            let next_interaction = match &proof.interaction {
+                Some(interaction) => next_interaction_indices
+                    .into_iter()
+                    .map(|index| Ok(interaction.row(index)?.arithmetic_view()))
+                    .collect::<Result<Vec<_>, FriPipelineError>>()?,
+                None if next_interaction_indices.is_empty() => Vec::new(),
+                None => return Err(FriPipelineError::Shape),
+            };
+            Ok(FriPipelineQueryProof {
+                initial_index,
+                mask_left: proof.mask.row(pair_start)?.arithmetic_view(),
+                mask_right: proof.mask.row(pair_start + 1)?.arithmetic_view(),
+                main_left: proof.main.row(main_left_index)?.arithmetic_view(),
+                main_right: proof.main.row(main_right_index)?.arithmetic_view(),
+                interaction_left,
+                interaction_right,
+                composition_left: proof
+                    .composition
+                    .row(composition_left_index)?
+                    .arithmetic_view(),
+                composition_right: proof
+                    .composition
+                    .row(composition_right_index)?
+                    .arithmetic_view(),
+                next_main,
+                next_interaction,
+                layers: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+/// Build the canonical selected-v3 proof entirely from native BindingRootV2
+/// trees. Legacy paths are not copied into the returned object.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_fri_pipeline_v3(
+    program_encoded: &[u8],
+    mask_coefficient_count: usize,
+    log_blowup: u8,
+    deep: &DeepQuotientOracles,
+    pipeline: &FriPipeline,
+    binding_mask_tree: &BindingCrossDomainTreeV2,
+    binding_oracles: &BindingCommittedAirOraclesV2,
+    logup: &AirLogupOracle,
+    binding_layer_roots: &[BindingRootV2],
+    query_indices: &[usize],
+) -> Result<FriPipelineProofV3, FriPipelineError> {
+    let oracle_layouts = derive_binding_oracle_commitment_layouts_v2(
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let roots = binding_oracles.roots();
+    let claims_commitment = deep_claims_commitment_binding_v2(
+        &oracle_layouts.program_binary_commitment,
+        deep.query,
+        &deep.claims,
+        &roots.main_trace,
+        roots.interaction_trace.as_ref(),
+        &roots.composition,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let mask_layout = fri_mask_layout_binding_v2(&claims_commitment, &deep.claims)?;
+    if binding_oracles.main_trace.layout() != &oracle_layouts.main_trace
+        || binding_oracles
+            .interaction_trace
+            .as_ref()
+            .map(BindingCrossDomainTreeV2::layout)
+            != oracle_layouts.interaction_trace.as_ref()
+        || binding_oracles.composition.layout() != &oracle_layouts.composition
+        || binding_mask_tree.layout() != &mask_layout
+        || pipeline.cascade.fold_log_sizes.len() != binding_layer_roots.len()
+        || pipeline.cascade.folded_layers.len() != binding_layer_roots.len()
+    {
+        return Err(FriPipelineError::Shape);
+    }
+    let largest_log = mask_layout.maximum_log_size();
+    let selected = binding_selected_indices_v3(&oracle_layouts, largest_log, query_indices)?;
+    let mask = binding_mask_tree.proof(&selected.mask)?;
+    let main = binding_oracles.main_trace.proof(&selected.main)?;
+    let interaction = match &binding_oracles.interaction_trace {
+        Some(tree) => Some(tree.proof(&selected.interaction)?),
+        None if selected.interaction.is_empty() => None,
+        None => return Err(FriPipelineError::Shape),
+    };
+    let composition = binding_oracles.composition.proof(&selected.composition)?;
+    let fri_layers = build_fri_layer_binding_multiproofs_v2(
+        &pipeline.cascade.fold_log_sizes,
+        &pipeline.cascade.folded_layers,
+        binding_layer_roots,
+        query_indices,
+    )?;
+    Ok(FriPipelineProofV3 {
+        logup_final_sums: logup
+            .interactions
+            .iter()
+            .map(|interaction| interaction.final_sum)
+            .collect(),
+        query_indices: query_indices.to_vec(),
+        mask,
+        main,
+        interaction,
+        composition,
+        fri_layers,
+    })
+}
+
+/// Build the native BindingRootV2 proof seam from the exact in-memory legacy
+/// prover state.  No legacy root or authentication path is copied into the
+/// returned proof.  Callers must still pass the returned proof and all
+/// returned commitments through `verify_fri_pipeline_v3_receipt` before they
+/// can enter any accepting composition.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_fri_pipeline_v3_from_legacy(
+    program_encoded: &[u8],
+    mask_coefficient_count: usize,
+    log_blowup: u8,
+    deep: &DeepQuotientOracles,
+    pipeline: &FriPipeline,
+    oracles: &CommittedAirOracles,
+    logup: &AirLogupOracle,
+    query_indices: &[usize],
+) -> Result<NativeFriPipelineV3Construction, FriPipelineError> {
+    let binding_oracles = oracles
+        .binding_v2(program_encoded, mask_coefficient_count, log_blowup)
+        .map_err(|_| FriPipelineError::Shape)?;
+    let oracle_roots = binding_oracles.roots();
+    let native_layouts = derive_binding_oracle_commitment_layouts_v2(
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let claims_commitment = deep_claims_commitment_binding_v2(
+        &native_layouts.program_binary_commitment,
+        deep.query,
+        &deep.claims,
+        &oracle_roots.main_trace,
+        oracle_roots.interaction_trace.as_ref(),
+        &oracle_roots.composition,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let binding_mask_layout = fri_mask_layout_binding_v2(&claims_commitment, &deep.claims)?;
+    let binding_mask_tree = pipeline.mask_tree.binding_v2_tree(binding_mask_layout)?;
+    let binding_layer_roots = pipeline
+        .cascade
+        .fold_log_sizes
+        .iter()
+        .copied()
+        .zip(&pipeline.cascade.folded_layers)
+        .map(|(log_size, values)| binding_fri_layer_root_v2(log_size, values))
+        .collect::<Result<Vec<_>, _>>()?;
+    let proof = prove_fri_pipeline_v3(
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+        deep,
+        pipeline,
+        &binding_mask_tree,
+        &binding_oracles,
+        logup,
+        &binding_layer_roots,
+        query_indices,
+    )?;
+    Ok(NativeFriPipelineV3Construction {
+        proof,
+        oracle_roots: binding_oracles.roots(),
+        mask_root: binding_mask_tree.root(),
+        layer_roots: binding_layer_roots,
+    })
+}
+
+/// Verify a generic AIR/FRI instance whose complete PCS surface uses native
+/// BindingRootV2 commitments. The exact program bytes and ordered public
+/// inputs are verifier-owned inputs to this function; no selected-program
+/// identity or caller assertion is accepted from the proof.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fri_pipeline_v3(
+    proof: &FriPipelineProofV3,
+    program_encoded: &[u8],
+    mask_coefficient_count: usize,
+    log_blowup: u8,
+    supplied_public_inputs: &[M31],
+    composition_alpha: Fp16,
+    logup_beta: Fp16,
+    logup_gamma: Fp16,
+    oracle_roots: &BindingCommittedAirRootsV2,
+    mask_root: &BindingRootV2,
+    query_point: CirclePoint,
+    claims: &[DomainOodsClaims],
+    batch_coefficient: Fp16,
+    fold_coefficients: &[Fp16],
+    layer_roots: &[BindingRootV2],
+    final_constant: Fp16,
+    expected_query_indices: &[usize],
+) -> Result<bool, FriPipelineError> {
+    let oracle_layouts = derive_binding_oracle_commitment_layouts_v2(
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let claims_commitment = deep_claims_commitment_binding_v2(
+        &oracle_layouts.program_binary_commitment,
+        query_point,
+        claims,
+        &oracle_roots.main_trace,
+        oracle_roots.interaction_trace.as_ref(),
+        &oracle_roots.composition,
+    )
+    .map_err(|_| FriPipelineError::Shape)?;
+    let mask_layout = fri_mask_layout_binding_v2(&claims_commitment, claims)?;
+    if proof.query_indices != expected_query_indices
+        || proof.fri_layers.query_indices != expected_query_indices
+        || oracle_layouts.interaction_trace.is_some() != oracle_roots.interaction_trace.is_some()
+        || oracle_layouts.interaction_trace.is_some() != proof.interaction.is_some()
+    {
+        return Err(FriPipelineError::Shape);
+    }
+
+    let selected = binding_selected_indices_v3(
+        &oracle_layouts,
+        mask_layout.maximum_log_size(),
+        expected_query_indices,
+    )?;
+    if !selected_indices_match_v3(&proof.mask, &selected.mask)?
+        || !selected_indices_match_v3(&proof.main, &selected.main)?
+        || !selected_indices_match_v3(&proof.composition, &selected.composition)?
+    {
+        return Err(FriPipelineError::Query);
+    }
+    match (
+        &oracle_layouts.interaction_trace,
+        &oracle_roots.interaction_trace,
+        &proof.interaction,
+    ) {
+        (Some(_), Some(_), Some(interaction)) => {
+            if !selected_indices_match_v3(interaction, &selected.interaction)? {
+                return Err(FriPipelineError::Query);
+            }
+        }
+        (None, None, None) if selected.interaction.is_empty() => {}
+        _ => return Err(FriPipelineError::Shape),
+    }
+
+    proof.mask.verify(&mask_layout, mask_root)?;
+    proof
+        .main
+        .verify(&oracle_layouts.main_trace, &oracle_roots.main_trace)?;
+    if let (Some(layout), Some(root), Some(interaction)) = (
+        &oracle_layouts.interaction_trace,
+        &oracle_roots.interaction_trace,
+        &proof.interaction,
+    ) {
+        interaction.verify(layout, root)?;
+    }
+    proof
+        .composition
+        .verify(&oracle_layouts.composition, &oracle_roots.composition)?;
+    verify_fri_layer_binding_multiproofs_v2(
+        &proof.fri_layers,
+        expected_query_indices,
+        layer_roots,
+    )?;
+
+    let queries = binding_query_views_v3(proof, &oracle_layouts, mask_layout.maximum_log_size())?;
+    verify_fri_pipeline_openings(
+        &proof.logup_final_sums,
+        &queries,
+        None,
+        Some(&proof.fri_layers),
+        program_encoded,
+        mask_coefficient_count,
+        log_blowup,
+        supplied_public_inputs,
+        composition_alpha,
+        logup_beta,
+        logup_gamma,
+        PipelineAuthentication::BindingV2 {
+            oracle_roots,
+            layer_roots,
+        },
+        query_point,
+        claims,
+        batch_coefficient,
+        fold_coefficients,
+        final_constant,
+        expected_query_indices,
+    )
+}
+
+/// Verify and retain exactly the authenticated data needed by downstream
+/// proof-native bridge adapters.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fri_pipeline_v3_receipt(
+    proof: &FriPipelineProofV3,
+    program_encoded: &[u8],
+    mask_coefficient_count: usize,
+    log_blowup: u8,
+    supplied_public_inputs: &[M31],
+    composition_alpha: Fp16,
+    logup_beta: Fp16,
+    logup_gamma: Fp16,
+    oracle_roots: &BindingCommittedAirRootsV2,
+    mask_root: &BindingRootV2,
+    query_point: CirclePoint,
+    claims: &[DomainOodsClaims],
+    batch_coefficient: Fp16,
+    fold_coefficients: &[Fp16],
+    layer_roots: &[BindingRootV2],
+    final_constant: Fp16,
+    expected_query_indices: &[usize],
+) -> Result<VerifiedFriPipelineV3, FriPipelineError> {
+    if !verify_fri_pipeline_v3(
+        proof,
         program_encoded,
         mask_coefficient_count,
         log_blowup,
@@ -1241,7 +1947,96 @@ pub fn verify_fri_pipeline_v2(
         layer_roots,
         final_constant,
         expected_query_indices,
-    )
+    )? {
+        return Err(FriPipelineError::Shape);
+    }
+    let mut program_frame = b"BL/PQ512/WAVE2/VERIFIED-FRI-V3-PROGRAM/v1\0".to_vec();
+    program_frame.extend_from_slice(
+        &u64::try_from(program_encoded.len())
+            .map_err(|_| FriPipelineError::CountOverflow)?
+            .to_be_bytes(),
+    );
+    program_frame.extend_from_slice(program_encoded);
+    let program_binding = BindingDigestV2::hash(BindingRoleV2::Payload, &program_frame)
+        .map_err(|_| FriPipelineError::Shape)?;
+    let mut public_input_frame = b"BL/PQ512/WAVE2/SEMANTIC-V3-PUBLIC-INPUTS/v1\0".to_vec();
+    public_input_frame.extend_from_slice(
+        &u32::try_from(supplied_public_inputs.len())
+            .map_err(|_| FriPipelineError::CountOverflow)?
+            .to_be_bytes(),
+    );
+    for value in supplied_public_inputs {
+        public_input_frame.extend_from_slice(&value.as_u32().to_be_bytes());
+    }
+    let public_inputs_binding = BindingDigestV2::hash(BindingRoleV2::Payload, &public_input_frame)
+        .map_err(|_| FriPipelineError::Shape)?;
+    let mut receipt_frame = b"BL/PQ512/WAVE2/VERIFIED-FRI-V3/v1\0".to_vec();
+    receipt_frame.extend_from_slice(program_binding.as_bytes());
+    receipt_frame.extend_from_slice(public_inputs_binding.as_bytes());
+    receipt_frame.extend_from_slice(oracle_roots.main_trace.as_bytes());
+    match oracle_roots.interaction_trace {
+        Some(root) => receipt_frame.extend_from_slice(root.as_bytes()),
+        None => receipt_frame.extend_from_slice(&[0_u8; 128]),
+    }
+    receipt_frame.extend_from_slice(oracle_roots.composition.as_bytes());
+    receipt_frame.extend_from_slice(&query_point.x.encode());
+    receipt_frame.extend_from_slice(&query_point.y.encode());
+    receipt_frame.extend_from_slice(
+        &u32::try_from(claims.len())
+            .map_err(|_| FriPipelineError::CountOverflow)?
+            .to_be_bytes(),
+    );
+    for claim in claims {
+        receipt_frame.push(claim.log_size);
+        receipt_frame.extend_from_slice(
+            &u32::try_from(claim.values.len())
+                .map_err(|_| FriPipelineError::CountOverflow)?
+                .to_be_bytes(),
+        );
+        for value in &claim.values {
+            receipt_frame.extend_from_slice(&value.encode());
+        }
+        receipt_frame.extend_from_slice(
+            &u32::try_from(claim.conjugate_values.len())
+                .map_err(|_| FriPipelineError::CountOverflow)?
+                .to_be_bytes(),
+        );
+        for value in &claim.conjugate_values {
+            receipt_frame.extend_from_slice(&value.encode());
+        }
+    }
+    let receipt_binding = BindingDigestV2::hash(BindingRoleV2::Payload, &receipt_frame)
+        .map_err(|_| FriPipelineError::Shape)?;
+    Ok(VerifiedFriPipelineV3 {
+        receipt_binding,
+        public_inputs_binding,
+        program_binding,
+        oracle_roots: oracle_roots.clone(),
+        query_point,
+        claims: claims.to_vec(),
+    })
+}
+
+#[derive(Clone, Copy)]
+enum PipelineAuthentication<'a> {
+    Legacy {
+        oracle_roots: &'a CommittedAirRoots,
+        mask_root: &'a CrossDomainRoot,
+        layer_roots: &'a [RootHash],
+    },
+    BindingV2 {
+        oracle_roots: &'a BindingCommittedAirRootsV2,
+        layer_roots: &'a [BindingRootV2],
+    },
+}
+
+impl PipelineAuthentication<'_> {
+    fn layer_count(self) -> usize {
+        match self {
+            Self::Legacy { layer_roots, .. } => layer_roots.len(),
+            Self::BindingV2 { layer_roots, .. } => layer_roots.len(),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1249,6 +2044,7 @@ fn verify_fri_pipeline_openings(
     logup_final_sums: &[Fp16],
     queries: &[FriPipelineQueryProof],
     fri_layer_multiproofs: Option<&FriPipelineCanonicalMultiproofs>,
+    binding_fri_layer_multiproofs: Option<&FriPipelineBindingMultiproofsV2>,
     program_encoded: &[u8],
     mask_coefficient_count: usize,
     log_blowup: u8,
@@ -1256,41 +2052,73 @@ fn verify_fri_pipeline_openings(
     composition_alpha: Fp16,
     logup_beta: Fp16,
     logup_gamma: Fp16,
-    oracle_roots: &CommittedAirRoots,
-    mask_root: &CrossDomainRoot,
+    authentication: PipelineAuthentication<'_>,
     query_point: CirclePoint,
     claims: &[DomainOodsClaims],
     batch_coefficient: Fp16,
     fold_coefficients: &[Fp16],
-    layer_roots: &[RootHash],
     final_constant: Fp16,
     expected_query_indices: &[usize],
 ) -> Result<bool, FriPipelineError> {
     let program = parse_air_program(program_encoded).map_err(|_| FriPipelineError::Shape)?;
-    let oracle_layouts =
-        derive_oracle_commitment_layouts(program_encoded, mask_coefficient_count, log_blowup)
-            .map_err(|_| FriPipelineError::Shape)?;
-    let main_root_bytes = oracle_roots.main_trace.into_bytes();
-    let interaction_root_bytes = oracle_roots.interaction_trace.map(|root| root.into_bytes());
-    let composition_root_bytes = oracle_roots.composition.into_bytes();
-    let claims_commitment = deep_claims_commitment(
-        &oracle_layouts.program_binary_commitment,
-        query_point,
-        claims,
-        &main_root_bytes,
-        interaction_root_bytes.as_ref(),
-        &composition_root_bytes,
-    )
+    let oracle_layouts = match authentication {
+        PipelineAuthentication::Legacy { .. } => {
+            derive_oracle_commitment_layouts(program_encoded, mask_coefficient_count, log_blowup)
+        }
+        PipelineAuthentication::BindingV2 { .. } => derive_binding_oracle_commitment_layouts_v2(
+            program_encoded,
+            mask_coefficient_count,
+            log_blowup,
+        ),
+    }
     .map_err(|_| FriPipelineError::Shape)?;
-    let mask_layout = fri_mask_layout(&claims_commitment, claims)?;
-    if oracle_layouts.interaction_trace.is_some() != oracle_roots.interaction_trace.is_some() {
+    let mask_layout = match authentication {
+        PipelineAuthentication::Legacy { oracle_roots, .. } => {
+            let main_root_bytes = oracle_roots.main_trace.into_bytes();
+            let interaction_root_bytes =
+                oracle_roots.interaction_trace.map(|root| root.into_bytes());
+            let composition_root_bytes = oracle_roots.composition.into_bytes();
+            let claims_commitment = deep_claims_commitment(
+                &oracle_layouts.program_binary_commitment,
+                query_point,
+                claims,
+                &main_root_bytes,
+                interaction_root_bytes.as_ref(),
+                &composition_root_bytes,
+            )
+            .map_err(|_| FriPipelineError::Shape)?;
+            fri_mask_layout(&claims_commitment, claims)?
+        }
+        PipelineAuthentication::BindingV2 { oracle_roots, .. } => {
+            let claims_commitment = deep_claims_commitment_binding_v2(
+                &oracle_layouts.program_binary_commitment,
+                query_point,
+                claims,
+                &oracle_roots.main_trace,
+                oracle_roots.interaction_trace.as_ref(),
+                &oracle_roots.composition,
+            )
+            .map_err(|_| FriPipelineError::Shape)?;
+            fri_mask_layout_binding_v2(&claims_commitment, claims)?
+        }
+    };
+    let interaction_root_present = match authentication {
+        PipelineAuthentication::Legacy { oracle_roots, .. } => {
+            oracle_roots.interaction_trace.is_some()
+        }
+        PipelineAuthentication::BindingV2 { oracle_roots, .. } => {
+            oracle_roots.interaction_trace.is_some()
+        }
+    };
+    if oracle_layouts.interaction_trace.is_some() != interaction_root_present {
         return Err(FriPipelineError::Shape);
     }
     if queries.len() != expected_query_indices.len()
         || queries.is_empty()
         || batch_coefficient.is_zero()
-        || fold_coefficients.len() != layer_roots.len()
+        || fold_coefficients.len() != authentication.layer_count()
         || fold_coefficients.is_empty()
+        || (fri_layer_multiproofs.is_some() && binding_fri_layer_multiproofs.is_some())
     {
         return Err(FriPipelineError::Shape);
     }
@@ -1347,9 +2175,11 @@ fn verify_fri_pipeline_openings(
     for (query, expected_index) in queries.iter().zip(expected_query_indices) {
         if query.initial_index != *expected_index
             || query.initial_index >= 1_usize << largest_log
-            || fri_layer_multiproofs.map_or(query.layers.len() != fold_logs.len(), |_| {
+            || if fri_layer_multiproofs.is_some() || binding_fri_layer_multiproofs.is_some() {
                 !query.layers.is_empty()
-            })
+            } else {
+                query.layers.len() != fold_logs.len()
+            }
         {
             return Err(FriPipelineError::Query);
         }
@@ -1368,9 +2198,13 @@ fn verify_fri_pipeline_openings(
             (&query.main_left, main_left_index),
             (&query.main_right, main_right_index),
         ] {
-            if candidate.query_fft_index() != expected
-                || !candidate.verify(&oracle_layouts.main_trace, &oracle_roots.main_trace)?
-            {
+            let authenticated = match authentication {
+                PipelineAuthentication::Legacy { oracle_roots, .. } => {
+                    candidate.verify(&oracle_layouts.main_trace, &oracle_roots.main_trace)?
+                }
+                PipelineAuthentication::BindingV2 { .. } => true,
+            };
+            if candidate.query_fft_index() != expected || !authenticated {
                 return Err(FriPipelineError::Authentication);
             }
         }
@@ -1388,39 +2222,54 @@ fn verify_fri_pipeline_openings(
             (&query.composition_left, composition_left_index),
             (&query.composition_right, composition_right_index),
         ] {
-            if candidate.query_fft_index() != expected
-                || !candidate.verify(&oracle_layouts.composition, &oracle_roots.composition)?
-            {
+            let authenticated = match authentication {
+                PipelineAuthentication::Legacy { oracle_roots, .. } => {
+                    candidate.verify(&oracle_layouts.composition, &oracle_roots.composition)?
+                }
+                PipelineAuthentication::BindingV2 { .. } => true,
+            };
+            if candidate.query_fft_index() != expected || !authenticated {
                 return Err(FriPipelineError::Authentication);
             }
         }
         match (
             &oracle_layouts.interaction_trace,
-            &oracle_roots.interaction_trace,
             &query.interaction_left,
             &query.interaction_right,
         ) {
-            (Some(layout), Some(root), Some(left), Some(right)) => {
+            (Some(layout), Some(left), Some(right)) => {
                 let expected_left =
                     projected_index(pair_start, largest_log, layout.maximum_log_size())?;
                 let expected_right =
                     projected_index(pair_start + 1, largest_log, layout.maximum_log_size())?;
+                let authenticated = match authentication {
+                    PipelineAuthentication::Legacy { oracle_roots, .. } => {
+                        let root = oracle_roots
+                            .interaction_trace
+                            .as_ref()
+                            .ok_or(FriPipelineError::Shape)?;
+                        left.verify(layout, root)? && right.verify(layout, root)?
+                    }
+                    PipelineAuthentication::BindingV2 { .. } => true,
+                };
                 if left.query_fft_index() != expected_left
                     || right.query_fft_index() != expected_right
-                    || !left.verify(layout, root)?
-                    || !right.verify(layout, root)?
+                    || !authenticated
                 {
                     return Err(FriPipelineError::Authentication);
                 }
             }
-            (None, None, None, None) => {}
+            (None, None, None) => {}
             _ => return Err(FriPipelineError::Shape),
         }
         if !verify_air_composition_query(
             query,
             &program,
             &oracle_layouts,
-            oracle_roots,
+            match authentication {
+                PipelineAuthentication::Legacy { oracle_roots, .. } => Some(oracle_roots),
+                PipelineAuthentication::BindingV2 { .. } => None,
+            },
             supplied_public_inputs,
             composition_alpha,
             logup_beta,
@@ -1435,9 +2284,13 @@ fn verify_fri_pipeline_openings(
             (&query.mask_left, pair_start),
             (&query.mask_right, pair_start + 1),
         ] {
-            if candidate.query_fft_index() != expected
-                || !candidate.verify(&mask_layout, mask_root)?
-            {
+            let authenticated = match authentication {
+                PipelineAuthentication::Legacy { mask_root, .. } => {
+                    candidate.verify(&mask_layout, mask_root)?
+                }
+                PipelineAuthentication::BindingV2 { .. } => true,
+            };
+            if candidate.query_fft_index() != expected || !authenticated {
                 return Ok(false);
             }
         }
@@ -1446,7 +2299,16 @@ fn verify_fri_pipeline_openings(
         let mut prior_pair: Option<[Fp16; 2]> = None;
         for (round, log_size) in fold_logs.iter().copied().enumerate() {
             let layer_pair_start = output_index & !1;
-            let layer_pair = if let Some(multiproofs) = fri_layer_multiproofs {
+            let layer_pair = if let Some(multiproofs) = binding_fri_layer_multiproofs {
+                let layer = multiproofs
+                    .layers
+                    .get(round)
+                    .ok_or(FriPipelineError::Shape)?;
+                if layer.log_size != log_size {
+                    return Err(FriPipelineError::Shape);
+                }
+                multiproofs.opened_pair(round, layer_pair_start)?
+            } else if let Some(multiproofs) = fri_layer_multiproofs {
                 let layer = multiproofs
                     .layers
                     .get(round)
@@ -1457,7 +2319,15 @@ fn verify_fri_pipeline_openings(
                 multiproofs.opened_pair(round, layer_pair_start)?
             } else {
                 let layer = &query.layers[round];
-                if !verify_layer_opening(layer, log_size, &layer_roots[round], layer_pair_start)? {
+                let root = match authentication {
+                    PipelineAuthentication::Legacy { layer_roots, .. } => {
+                        layer_roots.get(round).ok_or(FriPipelineError::Shape)?
+                    }
+                    PipelineAuthentication::BindingV2 { .. } => {
+                        return Err(FriPipelineError::Shape);
+                    }
+                };
+                if !verify_layer_opening(layer, log_size, root, layer_pair_start)? {
                     return Ok(false);
                 }
                 [layer.left, layer.right]
@@ -1545,6 +2415,7 @@ fn verify_fri_pipeline_openings(
             output_index >>= 1;
         }
         if fri_layer_multiproofs.is_none()
+            && binding_fri_layer_multiproofs.is_none()
             && query
                 .layers
                 .last()

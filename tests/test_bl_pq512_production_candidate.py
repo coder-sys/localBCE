@@ -11,7 +11,7 @@ import pytest
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.production_boundary import (
-    GovernedRootsV2,
+    GovernanceAuthorityV2,
     NativeStarkVerifierConfig,
     NativeStarkVerifierPort,
     _BATCH_NONCE_BINDING,
@@ -165,14 +165,18 @@ def _sidecar(suite: bytes, schema: bytes, verifier: bytes) -> bytes:
 
 def _settlement_sidecar(
     suite: bytes, schema: bytes, verifier: bytes
-) -> tuple[bytes, bytes, bytes, GovernedRootsV2]:
+) -> tuple[bytes, bytes, bytes, GovernanceAuthorityV2]:
     settlement_domain = _field("real-native-settlement-domain")
     batch_nonce = _field("real-native-batch-nonce")
-    roots = GovernedRootsV2(
-        claim_source_root=_field("real-native-claim-source"),
-        oracle_facts_root=_field("real-native-oracle-facts"),
-        policy_root=_field("real-native-policy"),
-        ruleset_root=_field("real-native-ruleset"),
+    roots = GovernanceAuthorityV2(
+        profile_code=1,
+        epoch=1,
+        claim_truth_roots_512=tuple(
+            _wide(f"real-native-truth-{index}") for index in range(6)
+        ),
+        claim_truth_authority_digest_512=_wide("real-native-truth-authority"),
+        nullifier_authority_id_512=_wide("real-native-nullifier-authority"),
+        pepper_commitment_512=_wide("real-native-pepper"),
     )
     sidecar = CandidateSidecarV1(
         profile_id=_wide("real-native-profile"),
@@ -305,7 +309,7 @@ def test_real_rust_verifier_remains_aggregate_unqualified(
             settlement_domain=settlement_domain,
             batch_nonce=batch_nonce,
             sidecar=sidecar,
-            governed_roots=roots,
+            governance_authority=roots,
             suite_id=suite,
             schema_id=schema,
             verifier_artifact_identity=verifier_identity,
@@ -434,7 +438,7 @@ def test_real_rust_verifier_remains_aggregate_unqualified(
     storage = SQLiteSettlementStoreV2(
         path=tmp_path / "real-native-settlement.sqlite3",
         settlement_domain=settlement_domain,
-        governed_roots=roots,
+        governance_authority=roots,
         initial_strong_nullifier_root=parsed_sidecar.strong_nullifier_root_before,
         initial_strong_payment_state_root=parsed_sidecar.strong_payment_state_root_before,
         epoch=parsed_sidecar.epoch,
@@ -456,7 +460,7 @@ def test_real_rust_verifier_remains_aggregate_unqualified(
         ),
         storage=storage,
         settlement_domain=settlement_domain,
-        governed_roots=roots,
+        governance_authority=roots,
         authorized_submitters=[submitter],
     )
     settlement_receipt = settlement.submit(

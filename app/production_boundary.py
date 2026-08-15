@@ -20,6 +20,7 @@ from typing import Final, Iterable, Protocol, Sequence
 
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
+from app.governance_authority_v2 import GovernanceAuthorityV2
 from app.native_public_input_projection import PublicInputProjectionV1
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
     NativeVerificationReceipt,
@@ -41,7 +42,6 @@ NATIVE_VERIFIER_TIMEOUT_SECONDS: Final[float] = float(30 * 60)
 V2_PROTOCOL_VERSION: Final[bytes] = (2).to_bytes(PUBLIC_FIELD_BYTES, "big")
 
 _SETTLEMENT_DOMAIN_BINDING = b"BL/PQ512/V2/SETTLEMENT-DOMAIN/v1\x00"
-_GOVERNANCE_BINDING = b"BL/PQ512/V2/GOVERNED-ROOTS/v1\x00"
 _BATCH_NONCE_BINDING = b"BL/PQ512/V2/BATCH-NONCE/v1\x00"
 _VALUE_COMMITMENT_BINDING = b"BL/PQ512/V2/VALUE-COMMITMENT/v1\x00"
 _SETTLEMENT_COMMITMENT_BINDING = b"BL/PQ512/V2/SETTLEMENT-COMMITMENT/v1\x00"
@@ -312,33 +312,6 @@ class NativeStarkVerifierPort:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class GovernedRootsV2:
-    claim_source_root: bytes
-    oracle_facts_root: bytes
-    policy_root: bytes
-    ruleset_root: bytes
-
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("claim_source_root", self.claim_source_root),
-            ("oracle_facts_root", self.oracle_facts_root),
-            ("policy_root", self.policy_root),
-            ("ruleset_root", self.ruleset_root),
-        ):
-            _field(name, value, nonzero=True)
-
-    @property
-    def commitment_512(self) -> bytes:
-        return _digest(
-            _GOVERNANCE_BINDING,
-            self.claim_source_root,
-            self.oracle_facts_root,
-            self.policy_root,
-            self.ruleset_root,
-        )
-
-
 def _sidecar(encoded: bytes) -> CandidateSidecarV1:
     if type(encoded) is not bytes or len(encoded) != SIDECAR_BYTES:
         raise ProductionBoundaryError("v2_sidecar_shape_invalid")
@@ -353,7 +326,7 @@ def build_v2_public_fields(
     settlement_domain: bytes,
     batch_nonce: bytes,
     sidecar: bytes,
-    governed_roots: GovernedRootsV2,
+    governance_authority: GovernanceAuthorityV2,
     suite_id: bytes,
     schema_id: bytes,
     verifier_artifact_identity: bytes,
@@ -365,13 +338,17 @@ def build_v2_public_fields(
     suite = _wide("projection_suite_id", suite_id)
     schema = _wide("projection_schema_id", schema_id)
     verifier = _wide("projection_verifier_artifact_identity", verifier_artifact_identity)
+    if type(governance_authority) is not GovernanceAuthorityV2:
+        raise TypeError("projection_governance_authority_required")
     parsed = _sidecar(sidecar)
     if parsed.proof_suite_id != suite or parsed.schema_id != schema or parsed.verifier_artifact_identity != verifier:
         raise ProductionBoundaryError("v2_sidecar_identity_mismatch")
     if parsed.strong_settlement_domain_id != _digest(_SETTLEMENT_DOMAIN_BINDING, domain):
         raise ProductionBoundaryError("v2_sidecar_settlement_domain_mismatch")
-    if parsed.strong_governance_commitment != governed_roots.commitment_512:
-        raise ProductionBoundaryError("v2_sidecar_governed_roots_mismatch")
+    if parsed.epoch != governance_authority.epoch:
+        raise ProductionBoundaryError("v2_sidecar_governance_epoch_mismatch")
+    if parsed.strong_governance_commitment != governance_authority.commitment_512:
+        raise ProductionBoundaryError("v2_sidecar_governance_authority_mismatch")
     if parsed.strong_batch_commitment != _digest(_BATCH_NONCE_BINDING, nonce):
         raise ProductionBoundaryError("v2_sidecar_batch_nonce_mismatch")
     value_commitment = _digest(
@@ -387,10 +364,7 @@ def build_v2_public_fields(
         nonce,
         _field_alias(parsed.strong_nullifier_root_before),
         _field_alias(parsed.strong_nullifier_root_after),
-        governed_roots.claim_source_root,
-        governed_roots.oracle_facts_root,
-        governed_roots.policy_root,
-        governed_roots.ruleset_root,
+        *governance_authority.public_aliases,
         _field_alias(parsed.strong_batch_commitment),
         _field_alias(value_commitment),
         bytes(PUBLIC_FIELD_BYTES),
@@ -414,7 +388,7 @@ def validate_v2_public_projection(
     sidecar: bytes,
     settlement_domain: bytes,
     batch_nonce: bytes,
-    governed_roots: GovernedRootsV2,
+    governance_authority: GovernanceAuthorityV2,
     suite_id: bytes,
     schema_id: bytes,
     verifier_artifact_identity: bytes,
@@ -424,7 +398,7 @@ def validate_v2_public_projection(
         settlement_domain=settlement_domain,
         batch_nonce=batch_nonce,
         sidecar=sidecar,
-        governed_roots=governed_roots,
+        governance_authority=governance_authority,
         suite_id=suite_id,
         schema_id=schema_id,
         verifier_artifact_identity=verifier_artifact_identity,
@@ -496,6 +470,7 @@ def _verified_operation_seal(
     sequence_after: int,
     strong_nullifier_root_before: bytes,
     strong_nullifier_root_after: bytes,
+    governance_authority: GovernanceAuthorityV2,
     strong_governance_commitment: bytes,
     strong_payment_state_root_before: bytes,
     strong_payment_state_root_after: bytes,
@@ -523,6 +498,7 @@ def _verified_operation_seal(
         sequence_after.to_bytes(8, "big"),
         strong_nullifier_root_before,
         strong_nullifier_root_after,
+        governance_authority.canonical_bytes,
         strong_governance_commitment,
         strong_payment_state_root_before,
         strong_payment_state_root_after,
@@ -562,6 +538,7 @@ class VerifiedSettlementOperationV2:
     sequence_after: int
     strong_nullifier_root_before: bytes
     strong_nullifier_root_after: bytes
+    governance_authority: GovernanceAuthorityV2
     strong_governance_commitment: bytes
     strong_payment_state_root_before: bytes
     strong_payment_state_root_after: bytes
@@ -595,6 +572,8 @@ class VerifiedSettlementOperationV2:
         if type(self.public_fields) is not tuple or canonical_fields != self.public_fields:
             raise ProductionBoundaryError("operation_public_fields_not_canonical")
         parsed = _sidecar(self.sidecar)
+        if type(self.governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("operation_governance_authority_required")
         if (
             parsed.profile_id != self.profile_id
             or parsed.proof_suite_id != self.suite_id
@@ -605,6 +584,9 @@ class VerifiedSettlementOperationV2:
             or parsed.sequence_after != self.sequence_after
             or parsed.strong_nullifier_root_before != self.strong_nullifier_root_before
             or parsed.strong_nullifier_root_after != self.strong_nullifier_root_after
+            or parsed.epoch != self.governance_authority.epoch
+            or parsed.strong_governance_commitment
+            != self.governance_authority.commitment_512
             or parsed.strong_governance_commitment != self.strong_governance_commitment
             or parsed.strong_payment_state_root_before != self.strong_payment_state_root_before
             or parsed.strong_payment_state_root_after != self.strong_payment_state_root_after
@@ -640,6 +622,7 @@ class VerifiedSettlementOperationV2:
             sequence_after=self.sequence_after,
             strong_nullifier_root_before=self.strong_nullifier_root_before,
             strong_nullifier_root_after=self.strong_nullifier_root_after,
+            governance_authority=self.governance_authority,
             strong_governance_commitment=self.strong_governance_commitment,
             strong_payment_state_root_before=self.strong_payment_state_root_before,
             strong_payment_state_root_after=self.strong_payment_state_root_after,
@@ -696,6 +679,11 @@ class TransactionalSettlementStoragePort(Protocol):
     def identity_snapshot(self) -> object:
         """Read the active versioned verifier/database identity."""
 
+    def _governance_authority_for_commitment(
+        self, commitment: bytes
+    ) -> GovernanceAuthorityV2:
+        """Resolve an immutable recorded authority for exact retry validation."""
+
     def verify_integrity(self) -> None:
         """Fail closed if the durable reference is internally inconsistent."""
 
@@ -727,7 +715,7 @@ class LocalSettlementV2:
         *,
         verifier: NativeVerifierPort,
         settlement_domain: bytes,
-        governed_roots: GovernedRootsV2,
+        governance_authority: GovernanceAuthorityV2,
         initial_nullifier_root: bytes,
         authorized_submitters: Iterable[bytes],
     ) -> None:
@@ -737,9 +725,9 @@ class LocalSettlementV2:
             raise TypeError("settlement_native_verifier_required")
         self._verifier = verifier
         self._settlement_domain = _field("settlement_domain", settlement_domain, nonzero=True)
-        if type(governed_roots) is not GovernedRootsV2:
-            raise TypeError("settlement_governed_roots_required")
-        self._governed_roots = governed_roots
+        if type(governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("settlement_governance_authority_required")
+        self._governance_authority = governance_authority
         self._current_nullifier_root = _field(
             "initial_nullifier_root", initial_nullifier_root, nonzero=True
         )
@@ -793,7 +781,7 @@ class LocalSettlementV2:
             sidecar=envelope.sidecar,
             settlement_domain=self._settlement_domain,
             batch_nonce=nonce,
-            governed_roots=self._governed_roots,
+            governance_authority=self._governance_authority,
             suite_id=envelope.suite_id,
             schema_id=envelope.schema_id,
             verifier_artifact_identity=envelope.verifier_artifact_identity,
@@ -862,7 +850,7 @@ class LocalSettlementV2:
 
 __all__ = (
     "DatabaseSettlementSnapshotV2",
-    "GovernedRootsV2",
+    "GovernanceAuthorityV2",
     "LocalSettlementV2",
     "NativeStarkVerifierConfig",
     "NativeStarkVerifierPort",

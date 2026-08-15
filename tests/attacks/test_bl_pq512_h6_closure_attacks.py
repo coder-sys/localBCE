@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -70,27 +71,10 @@ def test_h6_simulator_rejects_malformed_profile_and_unknown_case() -> None:
 
 def test_h6_security_ledger_mutation_does_not_meet_floor() -> None:
     ledger = build_h6_security_ledger()
-    assert ledger.qualifies
+    assert ledger.qualifies is False
     assert ledger.target_bits == TARGET_BITS
-    assert ledger.__class__(
-        status=ledger.status,
-        theorem_source=ledger.theorem_source,
-        mca_assumption=ledger.mca_assumption,
-        target_bits=TARGET_BITS + 1,
-        target_count=ledger.target_count,
-        max_retries=ledger.max_retries,
-        terms=ledger.terms,
-        composed_iopp_error=ledger.composed_iopp_error,
-        composed_iopp_bits=ledger.composed_iopp_bits,
-        multi_target_error=ledger.multi_target_error,
-        multi_target_bits=ledger.multi_target_bits,
-        retry_error=ledger.retry_error,
-        retry_bits=ledger.retry_bits,
-        abort_error=ledger.abort_error,
-        abort_bits=ledger.abort_bits,
-        source_manifest_sha3_512=ledger.source_manifest_sha3_512,
-        ledger_digest_sha3_512=ledger.ledger_digest_sha3_512,
-    ).qualifies is False
+    assert replace(ledger, target_bits=TARGET_BITS + 1).qualifies is False
+    assert replace(ledger, status="H6_SECURITY_LEDGER_V2_COMPLETE").qualifies is False
 
 
 def test_h6_migration_root_mutation_rejects() -> None:

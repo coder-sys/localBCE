@@ -71,6 +71,8 @@ from cuda_sparse_round_kat import EXTRA
 ROOT25 = (1_905_033_081, 454_651_505)
 COSET = (2, 1)
 ROW_QUERY_DOMAIN = 521
+ROW_QUERY_MAX_DRAWS = 1 << 20
+ROW_QUERY_MAX_RETRIES_PER_DRAW = 1 << 20
 BASE_MESSAGE_LOG = 16
 BASE_CODE_LOG = 17
 BASE_MESSAGE_VALUES = 1 << BASE_MESSAGE_LOG
@@ -371,6 +373,37 @@ extern "C" __global__ void transpose_rs_rows_big_endian(
     }
 }
 
+extern "C" __global__ void transpose_rs_rows_native(
+    const u32 *codeword_major,
+    u32 *row_major,
+    u32 log_code,
+    u32 batch
+) {
+    u64 code_values = 1ULL << log_code;
+    u64 count = (u64)batch * code_values;
+    u64 index = (u64)blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    u64 word = index >> log_code;
+    u64 row = index & (code_values - 1ULL);
+    u64 destination = (row * batch + word) * 16ULL;
+    u64 source = index * 16ULL;
+    #pragma unroll
+    for (u32 coordinate = 0U; coordinate < 16U; ++coordinate) {
+        row_major[destination + coordinate] =
+            codeword_major[source + coordinate];
+    }
+}
+
+extern "C" __global__ void canonicalize_rs_codewords_big_endian(
+    const u32 *source,
+    u32 *destination,
+    u64 count
+) {
+    u64 index = (u64)blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    destination[index] = rs_bswap32(source[index]);
+}
+
 extern "C" __global__ void gather_rs_nodes(
     const u8 *nodes,
     const u32 *indices,
@@ -509,9 +542,12 @@ class NativeMultiproofVerifier:
         self,
         executable,
         segment_count,
+        query_seed,
         deferred=False,
         mutation_kat=False,
     ):
+        if len(query_seed) != 64:
+            raise SystemExit("native_verifier_query_seed_shape")
         self.segment_count = segment_count
         self.next_segment = 0
         self.closed = False
@@ -526,7 +562,9 @@ class NativeMultiproofVerifier:
             bufsize=0,
         )
         self.process.stdin.write(
-            b"BLZKRSV1" + struct.pack(">I", segment_count)
+            b"BLZKRSV3"
+            + struct.pack(">I", segment_count)
+            + query_seed
         )
         self.process.stdin.flush()
         self.deferred_lines = []
@@ -1317,6 +1355,8 @@ def encode_segment(
     initializer=None,
     initializer_context=None,
     initializer_auxiliary_context=None,
+    transpose_rows=True,
+    canonical_bytes=True,
 ):
     code_values = 1 << log_code
     value_count = batch * code_values
@@ -1423,18 +1463,48 @@ def encode_segment(
     ntt_seconds = time.perf_counter() - started
 
     started = time.perf_counter()
-    launch(
-        runtime,
-        kernel_functions["transpose"],
-        value_count,
-        arguments(
-            ctypes.c_uint64(values.pointer),
-            ctypes.c_uint64(row_major.pointer),
-            ctypes.c_uint32(log_code),
-            ctypes.c_uint32(batch),
-        ),
-        "transpose_rs_rows_big_endian",
-    )
+    if transpose_rows:
+        launch(
+            runtime,
+            (
+                kernel_functions["transpose"]
+                if canonical_bytes
+                else kernel_functions["transpose_native"]
+            ),
+            value_count,
+            arguments(
+                ctypes.c_uint64(values.pointer),
+                ctypes.c_uint64(row_major.pointer),
+                ctypes.c_uint32(log_code),
+                ctypes.c_uint32(batch),
+            ),
+            (
+                "transpose_rs_rows_big_endian"
+                if canonical_bytes
+                else "transpose_rs_rows_native"
+            ),
+        )
+    elif canonical_bytes:
+        launch(
+            runtime,
+            kernel_functions["canonicalize_codewords"],
+            value_count * 16,
+            arguments(
+                ctypes.c_uint64(values.pointer),
+                ctypes.c_uint64(row_major.pointer),
+                ctypes.c_uint64(value_count * 16),
+            ),
+            "canonicalize_rs_codewords_big_endian",
+        )
+    else:
+        ck(
+            runtime.cuda.cuMemcpyDtoD_v2(
+                row_major.pointer,
+                values.pointer,
+                value_bytes,
+            ),
+            "copy_rs_codewords_native",
+        )
     ck(
         runtime.cuda.cuCtxSynchronize(),
         f"rs_transpose_sync_{boundary}_{segment}",
@@ -1534,8 +1604,12 @@ def derive_row_queries(set_root, count):
     seen = set()
     draw = 0
     while len(rows) < count:
+        if draw >= ROW_QUERY_MAX_DRAWS:
+            raise SystemExit("row_query_draw_limit")
         retry = 0
         while True:
+            if retry >= ROW_QUERY_MAX_RETRIES_PER_DRAW:
+                raise SystemExit("row_query_retry_limit")
             digest = sha3_parts(
                 ROW_QUERY_DOMAIN,
                 (
@@ -2004,6 +2078,14 @@ def main():
                 runtime,
                 "transpose_rs_rows_big_endian",
             ),
+            "transpose_native": function(
+                runtime,
+                "transpose_rs_rows_native",
+            ),
+            "canonicalize_codewords": function(
+                runtime,
+                "canonicalize_rs_codewords_big_endian",
+            ),
             "gather_nodes": function(runtime, "gather_rs_nodes"),
             "canonicalize_masks": function(
                 runtime,
@@ -2062,6 +2144,7 @@ def main():
         native_verifier = NativeMultiproofVerifier(
             native_verifier_path,
             BOUNDARY_COUNT * SEGMENTS_PER_BOUNDARY,
+            b"\0" * 64,
             mutation_kat=True,
         )
         proof_memory = ProofPhaseMemorySampler(

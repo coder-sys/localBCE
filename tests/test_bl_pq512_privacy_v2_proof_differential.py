@@ -67,11 +67,13 @@ from tests.test_bl_pq512_transactional_privacy_v2_migration import (
     _ROOTS,
     _SUBMITTER,
     _ReceiptVerifier,
+    _authority_for_epoch,
     _coordinator,
     _sidecar,
     _wide,
     _migration_inputs,
     _store,
+    _target_authority_for_envelope,
 )
 from tests.test_bl_pq512_production_candidate import production_candidate_binaries
 from tests.test_wave1a_executable_air import _fixture
@@ -128,6 +130,7 @@ def test_private_amount_phi_decision_ciphertext_and_record_count_do_not_change_a
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=_target_authority_for_envelope(envelope),
         )
         artifact = public_migration_artifact(operation)
         artifact_payload = json.loads(artifact)
@@ -188,6 +191,7 @@ def test_public_migration_surfaces_are_commitment_only_and_nonactivating(
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=_target_authority_for_envelope(envelope),
     )
     artifact = json.loads(public_migration_artifact(operation))
     evidence_public = evidence.as_public_dict()
@@ -272,6 +276,7 @@ def test_public_evidence_builder_owns_fresh_privacy_randomness(
             )
         ),
         settlement_domain=_DOMAIN,
+        governance_authority=_authority_for_epoch(source.epoch + 1),
     )
     inputs = dict(
         kind="MIGRATION",
@@ -315,6 +320,7 @@ def test_migration_evidence_known_answer_is_stable(tmp_path: Path) -> None:
     target = PrivacyV2MigrationTarget.from_sidecar(
         CandidateSidecarV1.decode(envelope.sidecar),
         settlement_domain=envelope.public_outputs[32:64],
+        governance_authority=_target_authority_for_envelope(envelope),
     )
     deterministic = _build_privacy_v2_migration_evidence_with_salt(
         kind="MIGRATION",
@@ -329,8 +335,8 @@ def test_migration_evidence_known_answer_is_stable(tmp_path: Path) -> None:
     )
     assert evidence.commitment != deterministic.commitment
     assert deterministic.commitment.hex() == (
-        "d1dfad3b08ec107d22cddda8f7970d2ff52f6fb2a77ac806b99ca9939646e422c"
-        "64909363953b96aebf8a4d65fd4310badb79dfa1ba083afd7aec31339dbf121"
+        "ce9e59897bcbdce1c560c6600bbe8efc737a61445f1014ed33e32c171235bd10"
+        "be4f8a21844e530290b3293cdeafeed16b136b447a25dd124872093cf47dbf8e"
     )
 
 
@@ -382,7 +388,7 @@ def test_real_native_proof_differential_commits_one_migration_exactly_once(
     store = SQLiteSettlementStoreV2(
         path=tmp_path / "privacy-v2-real-native.sqlite3",
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=_ROOTS,
         initial_strong_nullifier_root=_NULLIFIER_0,
         initial_strong_payment_state_root=_PAYMENT_0,
         epoch=1,
@@ -402,6 +408,7 @@ def test_real_native_proof_differential_commits_one_migration_exactly_once(
     target = PrivacyV2MigrationTarget.from_sidecar(
         CandidateSidecarV1.decode(provisional_sidecar),
         settlement_domain=_DOMAIN,
+        governance_authority=_authority_for_epoch(source.epoch + 1),
     )
     private_records = (
         b"phi:synthetic-patient-OMEGA|amount:424242|decision:APPROVED|cipher:opaque",
@@ -431,7 +438,7 @@ def test_real_native_proof_differential_commits_one_migration_exactly_once(
             settlement_domain=_DOMAIN,
             batch_nonce=nonce,
             sidecar=sidecar,
-            governed_roots=_ROOTS,
+            governance_authority=target.governance_authority,
             suite_id=suite,
             schema_id=schema,
             verifier_artifact_identity=verifier_identity,
@@ -563,7 +570,7 @@ def test_real_native_proof_differential_commits_one_migration_exactly_once(
         verifier=verifier,
         storage=store,
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=source.governance_authority,
         authorized_submitters=(_SUBMITTER,),
     )
     operation = migration._prepare(
@@ -571,6 +578,7 @@ def test_real_native_proof_differential_commits_one_migration_exactly_once(
         batch_nonce=nonce,
         submitter=_SUBMITTER,
         evidence=evidence,
+        target_governance_authority=target.governance_authority,
     )
     public_artifact = public_migration_artifact(operation)
     for private_value in private_records + replacement_records + semantic_records:
@@ -587,6 +595,7 @@ def test_real_native_proof_differential_commits_one_migration_exactly_once(
             batch_nonce=nonce,
             submitter=_SUBMITTER,
             evidence=evidence,
+            target_governance_authority=target.governance_authority,
         )
     assert store.identity_snapshot().sequence == 1
     store.verify_integrity()

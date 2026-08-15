@@ -139,6 +139,13 @@ def build_application_sha3_interface_program(
                 "local",
             ),
             Identity(
+                "inactive_value_zero",
+                (1 - cell("live")) * cell("value"),
+                0,
+                message_rows,
+                "local",
+            ),
+            Identity(
                 "position_starts_at_zero",
                 cell("call_start") * cell("position"),
                 0,

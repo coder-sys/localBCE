@@ -174,3 +174,113 @@ required-features = ["std"]
 name = "selected_slh_dsa_service"
 path = "src/bin/selected_slh_dsa_service.rs"
 required-features = ["std"]
+
+[[bin]]
+name = "gkr_sparse_layer_fixture"
+path = "src/bin/gkr_sparse_layer_fixture.rs"
+required-features = ["parallel"]
+
+[[bin]]
+name = "composite_parent_produce"
+path = "src/bin/composite_parent_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "composite_parent_transcript_produce"
+path = "src/bin/composite_parent_transcript_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "resource_preflight"
+path = "src/bin/resource_preflight.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_aggregate_assemble"
+path = "src/bin/h4_aggregate_assemble.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "strict_h4_transcript_produce"
+path = "src/bin/strict_h4_transcript_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_pre_alpha_verify"
+path = "src/bin/h4_pre_alpha_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_post_z_evidence_produce"
+path = "src/bin/h4_post_z_evidence_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "typed_state_proof_package_verify"
+path = "src/bin/typed_state_proof_package_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "v3_composite_verify"
+path = "src/bin/v3_composite_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "v3_synthetic_input_produce"
+path = "src/bin/v3_synthetic_input_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "v3_synthetic_proof_produce"
+path = "src/bin/v3_synthetic_proof_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "v3_synthetic_aggregate_verify"
+path = "src/bin/v3_synthetic_aggregate_verify.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "v3_synthetic_resource_preflight"
+path = "src/bin/v3_synthetic_resource_preflight.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "k512_atomic_semantic_prototype"
+path = "src/bin/k512_atomic_semantic_prototype.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_v2_segment_materialize"
+path = "src/bin/h4_v2_segment_materialize.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_v2_produce"
+path = "src/bin/h4_v2_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_v2_key_produce"
+path = "src/bin/h4_v2_key_produce.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "h4_differential_compare"
+path = "src/bin/h4_differential_compare.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "v3_real_authority_run"
+path = "src/bin/v3_real_authority_run.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "semantic_v3_strict_coin_service"
+path = "src/bin/semantic_v3_strict_coin_service.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "composite_parent_staged_service"
+path = "src/bin/composite_parent_staged_service.rs"
+required-features = ["std"]

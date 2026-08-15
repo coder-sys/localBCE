@@ -1,23 +1,16 @@
 # Experimental implementations
 
-This directory contains the sealed Wave 1 semantic references and the active Wave 2 proof
-prototype. It is not production-activated or a settlement path.
+The active native-v3 work is:
 
-The current integration target is
-`docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`: sealed M31 semantic AIR plus one hiding committed
-bus, masked Fp16 Boolean GKR SHA3 coprocessor, Construction 8.2 PCS, authenticated public coin, and
-Rust-authoritative independent verifier. Standalone RISC Zero and Stwo source trees were removed
-because they are not imported by or compatible with the selected proof boundary.
+- `native_v3_phase0/` and `native_v3_phase0_rust/`: five-directive canonical business KATs.
+- `native_v3_trust_boundary/` and `native_v3_trust_boundary_rust/`: interactive framing,
+  authentication, and independent parsing profile.
+- `native_v3_plaintext_continuity/`: synthetic read-only provider credential/enrollment wedge.
+- `native_v3_dp_nucleus/`: ideal-vector-oracle research only; not a proof backend.
 
-## Current implementation
+The BL-PQ512, H4/CUDA, fixed-shape, Privacy V2, binary-field, and Binius64 directories are retained
+code evidence. Their former design claims are retired. They cannot select a backend, qualify a
+suite, authorize PHI or payments, or activate production.
 
-- `fixed_shape_claim_air/`: sealed, nonactivating semantic relation and exact hash-call schedule.
-- `bl_pq512_crypto_foundation/`: current cross-language semantic and cryptographic references.
-- `bl_pq512_crypto_core/`: authoritative Rust proof core plus untrusted CUDA workers.
-- `bl_pq512_hint_mlwe_392/`: Retired Gate 2E state/commitment research reference only; not an
-  active gate or selected suite.
-
-Removed backend evidence is retained in `../docs/REJECTED_ARCHITECTURES.md` and Git history, not as
-buildable alternative stacks.
-
-Read `docs/EXPERIMENTAL_PROVING_AND_PRIVACY.md` before evaluating performance or security claims.
+Current authority is `ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
+`docs/DATABASE_ZK_ARCHITECTURE.md`, and `CURRENT_TASK.md`.

@@ -13,7 +13,7 @@ import pytest
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.production_boundary import (
-    GovernedRootsV2,
+    GovernanceAuthorityV2,
     NativeVerificationResult,
     ProductionBoundaryError,
     ProductionProofEnvelope,
@@ -50,11 +50,15 @@ _SCHEMA = _wide("transactional-schema")
 _VERIFIER = _wide("transactional-verifier")
 _PROFILE = _wide("transactional-profile")
 _DOMAIN = _field("transactional-domain")
-_ROOTS = GovernedRootsV2(
-    claim_source_root=_field("transactional-claim-source"),
-    oracle_facts_root=_field("transactional-oracle-facts"),
-    policy_root=_field("transactional-policy"),
-    ruleset_root=_field("transactional-ruleset"),
+_ROOTS = GovernanceAuthorityV2(
+    profile_code=1,
+    epoch=1,
+    claim_truth_roots_512=tuple(
+        _wide(f"transactional-truth-{index}") for index in range(6)
+    ),
+    claim_truth_authority_digest_512=_wide("transactional-truth-authority"),
+    nullifier_authority_id_512=_wide("transactional-nullifier-authority"),
+    pepper_commitment_512=_wide("transactional-pepper"),
 )
 _NULLIFIER_0 = _wide("transactional-nullifier-0")
 _NULLIFIER_1 = _wide("transactional-nullifier-1")
@@ -96,7 +100,7 @@ def _envelope(
         settlement_domain=_DOMAIN,
         batch_nonce=nonce,
         sidecar=sidecar,
-        governed_roots=_ROOTS,
+        governance_authority=_ROOTS,
         suite_id=_SUITE,
         schema_id=_SCHEMA,
         verifier_artifact_identity=_VERIFIER,
@@ -233,7 +237,7 @@ def _store(
     return SQLiteSettlementStoreV2(
         path=path,
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=_ROOTS,
         initial_strong_nullifier_root=_NULLIFIER_0,
         initial_strong_payment_state_root=_PAYMENT_0,
         epoch=1,
@@ -255,7 +259,7 @@ def _settlement(
         verifier=verifier,
         storage=store,
         settlement_domain=_DOMAIN,
-        governed_roots=_ROOTS,
+        governance_authority=_ROOTS,
         authorized_submitters=list(submitters),
     )
 

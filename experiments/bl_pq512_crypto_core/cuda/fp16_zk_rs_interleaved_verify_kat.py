@@ -29,9 +29,19 @@ INITIAL_LEAF_SIZE = INTERLEAVINGS_PER_SEGMENT * 64
 MAIN_OPENING_COUNT = 1_600
 AUXILIARY_TREE_LEAVES = 1 << 13
 SUMCHECK_LEAF_SIZE = 9 * 64
-GKR_MASK_LEAF_SIZE = 64 * 64
+GKR_MASK_OUTER_VALUES = 1 << 7
+GKR_MASK_TREE_LEAVES = (
+    AUXILIARY_TREE_LEAVES * GKR_MASK_OUTER_VALUES
+)
+GKR_MASK_LEAF_SIZE = 64
 COMPLETE_AUXILIARY_LEAF_SIZE = 74 * 64
 AUXILIARY_OPENING_COUNT = 1_218
+QUERY_DOMAIN = 524
+GKR_MASK_OUTER_QUERY_DOMAIN = 526
+GKR_MASK_OUTER_QUERY_LABEL = b"gkr_mask_outer_queries/v1"
+QUERY_SEED = b"\0" * 64
+QUERY_MAX_DRAWS = 1 << 20
+QUERY_MAX_RETRIES_PER_DRAW = 1 << 20
 
 
 def sha3_parts(domain, parts):
@@ -42,6 +52,79 @@ def sha3_parts(domain, parts):
     for part in parts:
         digest.update(part)
     return digest.digest()
+
+
+def exact_queries(state, label, bound, count):
+    queries = []
+    seen = set()
+    draw = 0
+    threshold = ((1 << 64) - bound) % bound
+    while len(queries) < count:
+        if draw >= QUERY_MAX_DRAWS:
+            raise AssertionError("query_draw_limit")
+        retry = 0
+        while True:
+            if retry >= QUERY_MAX_RETRIES_PER_DRAW:
+                raise AssertionError("query_retry_limit")
+            digest = sha3_parts(
+                QUERY_DOMAIN,
+                (
+                    state,
+                    label,
+                    draw.to_bytes(8, "big"),
+                    retry.to_bytes(8, "big"),
+                ),
+            )
+            random_word = int.from_bytes(digest[:8], "little")
+            product = random_word * bound
+            if (product & 0xFFFF_FFFF_FFFF_FFFF) >= threshold:
+                candidate = product >> 64
+                if candidate not in seen:
+                    queries.append(candidate)
+                    seen.add(candidate)
+                    break
+            retry += 1
+        draw += 1
+    return tuple(sorted(queries))
+
+
+MAIN_QUERIES = exact_queries(
+    QUERY_SEED,
+    b"main_queries",
+    INITIAL_TREE_LEAVES,
+    MAIN_OPENING_COUNT,
+)
+AUXILIARY_QUERIES = exact_queries(
+    QUERY_SEED,
+    b"aux_queries",
+    AUXILIARY_TREE_LEAVES,
+    AUXILIARY_OPENING_COUNT,
+)
+
+
+def gkr_mask_tensor_queries():
+    queries = []
+    for ordinal, inner_query in enumerate(AUXILIARY_QUERIES):
+        digest = sha3_parts(
+            GKR_MASK_OUTER_QUERY_DOMAIN,
+            (
+                QUERY_SEED,
+                GKR_MASK_OUTER_QUERY_LABEL,
+                ordinal.to_bytes(8, "big"),
+                inner_query.to_bytes(4, "big"),
+            ),
+        )
+        random_word = int.from_bytes(digest[:8], "little")
+        outer_query = (random_word * GKR_MASK_OUTER_VALUES) >> 64
+        queries.append(
+            inner_query * GKR_MASK_OUTER_VALUES + outer_query
+        )
+    if tuple(queries) != tuple(sorted(set(queries))):
+        raise AssertionError("gkr_mask_tensor_query_schedule")
+    return tuple(queries)
+
+
+GKR_MASK_QUERIES = gkr_mask_tensor_queries()
 
 
 def leaf_digest(
@@ -106,7 +189,7 @@ def segment_geometry(segment_ordinal):
         return (
             2,
             67,
-            AUXILIARY_TREE_LEAVES,
+            GKR_MASK_TREE_LEAVES,
             GKR_MASK_LEAF_SIZE,
             AUXILIARY_OPENING_COUNT,
         )
@@ -144,8 +227,16 @@ def segment_fixture(segment_ordinal):
         opening_count,
     ) = segment_geometry(segment_ordinal)
     data_size = tree_leaves * leaf_size
-    queries = tuple(2 * index for index in range(opening_count))
-    if queries[-1] >= tree_leaves:
+    if (
+        segment_ordinal < INITIAL_SEGMENT_COUNT
+        or segment_ordinal == INITIAL_SEGMENT_COUNT + 2
+    ):
+        queries = MAIN_QUERIES
+    elif segment_ordinal == INITIAL_SEGMENT_COUNT + 1:
+        queries = GKR_MASK_QUERIES
+    else:
+        queries = AUXILIARY_QUERIES
+    if len(queries) != opening_count or queries[-1] >= tree_leaves:
         raise AssertionError("query_geometry")
     leaves = bytearray()
     current = {}
@@ -236,7 +327,11 @@ def main():
         stderr=subprocess.PIPE,
         bufsize=0,
     )
-    process.stdin.write(b"BLZKRSV1" + struct.pack(">I", SEGMENT_COUNT))
+    process.stdin.write(
+        b"BLZKRSV3"
+        + struct.pack(">I", SEGMENT_COUNT)
+        + QUERY_SEED
+    )
     process.stdin.flush()
     proof_mb = 0.0
     verify_seconds = 0.0
@@ -344,12 +439,15 @@ def main():
             process.kill()
             process.wait(timeout=10)
     wall_seconds = time.perf_counter() - started
-    print("kat=fp16_zk_rs_interleaved_native_verify_v2")
+    print("kat=fp16_zk_rs_interleaved_native_verify_v3")
     print("evidence_class=deterministic_cross_language_k128_geometry")
     print(f"segment_count={SEGMENT_COUNT}")
     print("initial_tree_leaves=131072")
     print("initial_opening_count_per_segment=1600")
     print("auxiliary_tree_leaves=8192")
+    print("gkr_mask_tensor_tree_leaves=1048576")
+    print("gkr_mask_tensor_leaf_bytes=64")
+    print("gkr_mask_outer_queries_verifier_derived=true")
     print("auxiliary_opening_count_per_segment=1218")
     print(f"proof_fixture_mb={proof_mb:.6f}")
     print(f"verify_compute_seconds={verify_seconds:.6f}")

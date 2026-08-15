@@ -3,21 +3,32 @@
 use alloc::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use alloc::vec::Vec;
 
+use crate::binding_root_v2::{
+    BINDING_MERKLE_MULTIPROOF_V2_HEADER_BYTES, BindingMerkleMultiProofV2, BindingRootV2Error,
+    MAX_BINDING_MERKLE_MULTIPROOF_V2_BYTES,
+};
 use crate::cross_domain::{
-    CrossDomainError, CrossDomainProof, DomainOpening, DomainSpec, EvaluationField,
-    transpose_circle_fft_index,
+    BindingCrossDomainMultiProofV2, BindingCrossDomainRowV2, CrossDomainError, CrossDomainLayout,
+    CrossDomainProof, DomainOpening, DomainSpec, EvaluationField,
+    binding_cross_domain_row_v2_payload_len, transpose_circle_fft_index,
 };
 use crate::field::{DecodeError, Fp16};
 use crate::fri_layer_multiproof::{
-    FriLayerMultiproofError, FriPipelineCanonicalMultiproofs, compact_fri_layer_openings,
+    FriLayerMultiproofError, FriPipelineBindingMultiproofsV2, FriPipelineCanonicalMultiproofs,
+    compact_fri_layer_openings,
 };
-use crate::fri_pipeline::{FriPipelineLayerOpening, FriPipelineProof, FriPipelineQueryProof};
+use crate::fri_pipeline::{
+    FriPipelineLayerOpening, FriPipelineProof, FriPipelineProofV3, FriPipelineProofV3Geometry,
+    FriPipelineQueryProof,
+};
 use crate::merkle::{MerkleError, MerkleProof};
 
 pub const PROOF_MAGIC: &[u8; 8] = b"BLPQPRF1";
 pub const PROOF_VERSION: u16 = 1;
 pub const PROOF_V2_MAGIC: &[u8; 8] = b"BLPQPRF2";
 pub const PROOF_V2_VERSION: u16 = 2;
+pub const PROOF_V3_MAGIC: &[u8; 8] = b"BLPQPRF3";
+pub const PROOF_V3_VERSION: u16 = 3;
 pub const MAX_PROOF_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_PROOF_QUERIES: usize = 1024;
 pub const MAX_NEXT_PROOFS_PER_QUERY: usize = 128;
@@ -37,6 +48,7 @@ pub enum ProofFormatError {
     Attribution,
     Trailing,
     CrossDomain(CrossDomainError),
+    Binding(BindingRootV2Error),
     FriLayerMultiproof(FriLayerMultiproofError),
     Merkle(MerkleError),
     Decode(DecodeError),
@@ -111,6 +123,12 @@ impl From<CrossDomainError> for ProofFormatError {
     }
 }
 
+impl From<BindingRootV2Error> for ProofFormatError {
+    fn from(value: BindingRootV2Error) -> Self {
+        Self::Binding(value)
+    }
+}
+
 impl From<FriLayerMultiproofError> for ProofFormatError {
     fn from(value: FriLayerMultiproofError) -> Self {
         Self::FriLayerMultiproof(value)
@@ -154,6 +172,119 @@ fn opening_payload_length(spec: DomainSpec) -> Result<usize, ProofFormatError> {
             EvaluationField::Fp16 => 64,
         })
         .ok_or(ProofFormatError::Integer)
+}
+
+fn expected_binding_indices_v3(indices: &[usize]) -> Result<Vec<u64>, ProofFormatError> {
+    indices
+        .iter()
+        .copied()
+        .map(|index| u64::try_from(index).map_err(|_| ProofFormatError::Integer))
+        .collect()
+}
+
+fn encode_binding_cross_domain_v3(
+    output: &mut Vec<u8>,
+    proof: &BindingCrossDomainMultiProofV2,
+    layout: &CrossDomainLayout,
+    expected_indices: &[usize],
+) -> Result<(), ProofFormatError> {
+    let expected_u64 = expected_binding_indices_v3(expected_indices)?;
+    if proof.proof().selected_indices() != expected_u64
+        || proof.rows().len() != expected_indices.len()
+        || proof
+            .rows()
+            .iter()
+            .zip(expected_indices)
+            .any(|(row, index)| row.query_fft_index() != *index)
+    {
+        return Err(ProofFormatError::Count);
+    }
+    let encoded_proof = proof.proof().encode()?;
+    push_u32(output, encoded_proof.len())?;
+    output.extend_from_slice(&encoded_proof);
+    let row_length = binding_cross_domain_row_v2_payload_len(layout)?;
+    for row in proof.rows() {
+        let payload = row.encode_payload(layout)?;
+        if payload.len() != row_length {
+            return Err(ProofFormatError::Length);
+        }
+        output.extend_from_slice(&payload);
+    }
+    Ok(())
+}
+
+/// Encode the canonical native-128 proof. Query coordinates and all layouts
+/// are verifier-derived external context and therefore are not serialized as
+/// caller-controlled authority.
+pub fn encode_fri_pipeline_proof_v3(
+    proof: &FriPipelineProofV3,
+    geometry: &FriPipelineProofV3Geometry,
+    expected_query_indices: &[usize],
+) -> Result<Vec<u8>, ProofFormatError> {
+    if expected_query_indices.is_empty()
+        || expected_query_indices.len() > MAX_PROOF_QUERIES
+        || proof.query_indices != expected_query_indices
+        || proof.logup_final_sums.len() > MAX_NEXT_PROOFS_PER_QUERY * MAX_PROOF_QUERIES
+        || proof.interaction.is_some() != geometry.interaction_layout.is_some()
+        || proof.fri_layers.query_indices != expected_query_indices
+        || proof
+            .fri_layers
+            .layers
+            .iter()
+            .map(|layer| layer.log_size)
+            .ne(geometry.fri_layer_log_sizes.iter().copied())
+    {
+        return Err(ProofFormatError::Count);
+    }
+    let mut output = Vec::new();
+    output.extend_from_slice(PROOF_V3_MAGIC);
+    output.extend_from_slice(&PROOF_V3_VERSION.to_be_bytes());
+    output.extend_from_slice(&0_u16.to_be_bytes());
+    push_u32(&mut output, proof.logup_final_sums.len())?;
+    push_u32(&mut output, expected_query_indices.len())?;
+    for value in &proof.logup_final_sums {
+        output.extend_from_slice(&value.encode());
+    }
+    encode_binding_cross_domain_v3(
+        &mut output,
+        &proof.mask,
+        &geometry.mask_layout,
+        &geometry.mask_indices,
+    )?;
+    encode_binding_cross_domain_v3(
+        &mut output,
+        &proof.main,
+        &geometry.main_layout,
+        &geometry.main_indices,
+    )?;
+    match (&proof.interaction, &geometry.interaction_layout) {
+        (Some(interaction), Some(layout)) => {
+            output.extend_from_slice(&[1_u8, 0, 0, 0]);
+            encode_binding_cross_domain_v3(
+                &mut output,
+                interaction,
+                layout,
+                &geometry.interaction_indices,
+            )?;
+        }
+        (None, None) if geometry.interaction_indices.is_empty() => {
+            output.extend_from_slice(&[0_u8; 4]);
+        }
+        _ => return Err(ProofFormatError::Flag),
+    }
+    encode_binding_cross_domain_v3(
+        &mut output,
+        &proof.composition,
+        &geometry.composition_layout,
+        &geometry.composition_indices,
+    )?;
+    let fri_layers = proof.fri_layers.encode()?;
+    push_u32(&mut output, fri_layers.len())?;
+    output.extend_from_slice(&fri_layers);
+    if output.len() > MAX_PROOF_BYTES {
+        return Err(ProofFormatError::Length);
+    }
+    Ok(output)
 }
 
 fn encode_cross_domain(
@@ -647,6 +778,127 @@ impl<'a> Reader<'a> {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(MerkleProof::from_parts(leaf_index, leaf_count, siblings)?)
     }
+}
+
+fn decode_binding_cross_domain_v3(
+    reader: &mut Reader<'_>,
+    layout: &CrossDomainLayout,
+    expected_indices: &[usize],
+) -> Result<BindingCrossDomainMultiProofV2, ProofFormatError> {
+    let proof_length = reader.count(MAX_BINDING_MERKLE_MULTIPROOF_V2_BYTES)?;
+    if proof_length < BINDING_MERKLE_MULTIPROOF_V2_HEADER_BYTES {
+        return Err(ProofFormatError::Length);
+    }
+    let proof = BindingMerkleMultiProofV2::decode(reader.take(proof_length)?)?;
+    let expected_u64 = expected_binding_indices_v3(expected_indices)?;
+    if proof.selected_indices() != expected_u64 {
+        return Err(ProofFormatError::Count);
+    }
+    let row_length = binding_cross_domain_row_v2_payload_len(layout)?;
+    let total_row_bytes = row_length
+        .checked_mul(expected_indices.len())
+        .ok_or(ProofFormatError::Integer)?;
+    if total_row_bytes > MAX_PROOF_BYTES {
+        return Err(ProofFormatError::Length);
+    }
+    let encoded_rows = reader.take(total_row_bytes)?;
+    let rows = expected_indices
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(position, index)| {
+            let start = position
+                .checked_mul(row_length)
+                .ok_or(ProofFormatError::Integer)?;
+            let end = start
+                .checked_add(row_length)
+                .ok_or(ProofFormatError::Integer)?;
+            Ok(BindingCrossDomainRowV2::decode_payload(
+                encoded_rows
+                    .get(start..end)
+                    .ok_or(ProofFormatError::Truncated)?,
+                layout,
+                index,
+            )?)
+        })
+        .collect::<Result<Vec<_>, ProofFormatError>>()?;
+    Ok(BindingCrossDomainMultiProofV2::from_parts(
+        layout, rows, proof,
+    )?)
+}
+
+/// Decode native-128 proof bytes against verifier-derived layouts, query
+/// coordinates, and fold geometry. Binding multiproofs are decoded and capped
+/// before any row payload vector is allocated.
+pub fn decode_fri_pipeline_proof_v3(
+    encoded: &[u8],
+    geometry: &FriPipelineProofV3Geometry,
+    expected_query_indices: &[usize],
+) -> Result<FriPipelineProofV3, ProofFormatError> {
+    if expected_query_indices.is_empty() || expected_query_indices.len() > MAX_PROOF_QUERIES {
+        return Err(ProofFormatError::Count);
+    }
+    let mut reader = Reader::new(encoded)?;
+    if reader.take(8)? != PROOF_V3_MAGIC {
+        return Err(ProofFormatError::Magic);
+    }
+    if reader.u16()? != PROOF_V3_VERSION {
+        return Err(ProofFormatError::Version);
+    }
+    if reader.u16()? != 0 {
+        return Err(ProofFormatError::Flag);
+    }
+    let sum_count = reader.count(MAX_NEXT_PROOFS_PER_QUERY * MAX_PROOF_QUERIES)?;
+    let query_count = reader.count(MAX_PROOF_QUERIES)?;
+    if query_count != expected_query_indices.len() {
+        return Err(ProofFormatError::Count);
+    }
+    let logup_final_sums = (0..sum_count)
+        .map(|_| Fp16::decode(reader.take(64)?).map_err(ProofFormatError::from))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mask =
+        decode_binding_cross_domain_v3(&mut reader, &geometry.mask_layout, &geometry.mask_indices)?;
+    let main =
+        decode_binding_cross_domain_v3(&mut reader, &geometry.main_layout, &geometry.main_indices)?;
+    let interaction_flag = reader.u8()?;
+    if reader.take(3)? != [0_u8; 3] {
+        return Err(ProofFormatError::Flag);
+    }
+    let interaction = match (&geometry.interaction_layout, interaction_flag) {
+        (Some(layout), 1) => Some(decode_binding_cross_domain_v3(
+            &mut reader,
+            layout,
+            &geometry.interaction_indices,
+        )?),
+        (None, 0) if geometry.interaction_indices.is_empty() => None,
+        _ => return Err(ProofFormatError::Flag),
+    };
+    let composition = decode_binding_cross_domain_v3(
+        &mut reader,
+        &geometry.composition_layout,
+        &geometry.composition_indices,
+    )?;
+    let fri_layer_length = reader.count(MAX_PROOF_BYTES)?;
+    if fri_layer_length == 0 {
+        return Err(ProofFormatError::Length);
+    }
+    let fri_layers = FriPipelineBindingMultiproofsV2::decode(
+        reader.take(fri_layer_length)?,
+        expected_query_indices,
+        &geometry.fri_layer_log_sizes,
+    )?;
+    if reader.offset != encoded.len() {
+        return Err(ProofFormatError::Trailing);
+    }
+    Ok(FriPipelineProofV3 {
+        logup_final_sums,
+        query_indices: expected_query_indices.to_vec(),
+        mask,
+        main,
+        interaction,
+        composition,
+        fri_layers,
+    })
 }
 
 fn decode_cross_domain_frontier(

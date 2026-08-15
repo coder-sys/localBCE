@@ -18,7 +18,7 @@ from typing import Final, Protocol
 
 from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.production_boundary import (
-    GovernedRootsV2,
+    GovernanceAuthorityV2,
     NativeVerificationResult,
     PUBLIC_FIELD_BYTES,
     ProductionBoundaryError,
@@ -109,6 +109,7 @@ class PrivacyV2DatabaseIdentity:
 
     settlement_domain_commitment: bytes
     governance_commitment: bytes
+    governance_authority: GovernanceAuthorityV2
     profile_id: bytes
     suite_id: bytes
     schema_id: bytes
@@ -146,12 +147,20 @@ class PrivacyV2DatabaseIdentity:
             raise ProductionBoundaryError("migration_identity_anti_rollback_mismatch")
         if self.settled_batch_count > self.sequence:
             raise ProductionBoundaryError("migration_identity_count_invalid")
+        if type(self.governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("migration_identity_governance_authority_required")
+        if (
+            self.governance_authority.epoch != self.epoch
+            or self.governance_authority.commitment_512 != self.governance_commitment
+        ):
+            raise ProductionBoundaryError("migration_identity_governance_authority_mismatch")
 
     @property
     def checkpoint_commitment(self) -> bytes:
         return _digest(
             _CHECKPOINT_DOMAIN,
             self.settlement_domain_commitment,
+            self.governance_authority.canonical_bytes,
             self.governance_commitment,
             self.profile_id,
             self.suite_id,
@@ -182,6 +191,7 @@ class PrivacyV2MigrationTarget:
     strong_nullifier_root_after: bytes
     strong_payment_state_root_before: bytes
     strong_payment_state_root_after: bytes
+    governance_authority: GovernanceAuthorityV2
     governance_commitment: bytes
 
     def __post_init__(self) -> None:
@@ -205,6 +215,13 @@ class PrivacyV2MigrationTarget:
         _u64(self.sequence_after, "target_sequence_after")
         if self.sequence_after != self.sequence_before + 1:
             raise ProductionBoundaryError("migration_target_sequence_invalid")
+        if type(self.governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("migration_target_governance_authority_required")
+        if (
+            self.governance_authority.epoch != self.epoch
+            or self.governance_authority.commitment_512 != self.governance_commitment
+        ):
+            raise ProductionBoundaryError("migration_target_governance_authority_mismatch")
 
     @classmethod
     def from_sidecar(
@@ -212,6 +229,7 @@ class PrivacyV2MigrationTarget:
         sidecar: CandidateSidecarV1,
         *,
         settlement_domain: bytes,
+        governance_authority: GovernanceAuthorityV2,
     ) -> "PrivacyV2MigrationTarget":
         if type(sidecar) is not CandidateSidecarV1:
             raise TypeError("migration_sidecar_required")
@@ -233,6 +251,7 @@ class PrivacyV2MigrationTarget:
             strong_nullifier_root_after=sidecar.strong_nullifier_root_after,
             strong_payment_state_root_before=sidecar.strong_payment_state_root_before,
             strong_payment_state_root_after=sidecar.strong_payment_state_root_after,
+            governance_authority=governance_authority,
             governance_commitment=sidecar.strong_governance_commitment,
         )
 
@@ -252,6 +271,7 @@ class PrivacyV2MigrationTarget:
             self.strong_nullifier_root_after,
             self.strong_payment_state_root_before,
             self.strong_payment_state_root_after,
+            self.governance_authority.canonical_bytes,
             self.governance_commitment,
         )
 
@@ -546,6 +566,7 @@ class VerifiedMigrationOperationV2:
         if self.target != PrivacyV2MigrationTarget.from_sidecar(
             _sidecar(self.transition.sidecar),
             settlement_domain=self.transition.public_fields[1],
+            governance_authority=self.target.governance_authority,
         ):
             raise ProductionBoundaryError("migration_operation_sidecar_mismatch")
 
@@ -631,7 +652,7 @@ class TransactionalPrivacyV2Migration:
         verifier: object,
         storage: TransactionalPrivacyV2MigrationStoragePort,
         settlement_domain: bytes,
-        governed_roots: GovernedRootsV2,
+        governance_authority: GovernanceAuthorityV2,
         authorized_submitters: Sequence[bytes],
     ) -> None:
         if not callable(getattr(verifier, "verify", None)):
@@ -647,14 +668,14 @@ class TransactionalPrivacyV2Migration:
             )
         ):
             raise TypeError("migration_storage_port_required")
-        if type(governed_roots) is not GovernedRootsV2:
-            raise TypeError("migration_governed_roots_required")
+        if type(governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("migration_governance_authority_required")
         self._verifier = verifier
         self._storage = storage
         self._settlement_domain = _field(
             "migration_settlement_domain", settlement_domain, nonzero=True
         )
-        self._governed_roots = governed_roots
+        self._governance_authority = governance_authority
         self._authorized_submitters = frozenset(
             _wide("migration_authorized_submitter", value)
             for value in authorized_submitters
@@ -662,7 +683,7 @@ class TransactionalPrivacyV2Migration:
         if not self._authorized_submitters:
             raise ProductionBoundaryError("migration_submitters_empty")
         self._source_identity = storage.identity_snapshot()
-        if self._source_identity.governance_commitment != governed_roots.commitment_512:
+        if self._source_identity.governance_authority != governance_authority:
             raise ProductionBoundaryError("migration_source_configuration_mismatch")
         self.__authority_key = secrets.token_bytes(64)
         self._storage._bind_migration_authority(self.__authority_key)
@@ -678,6 +699,7 @@ class TransactionalPrivacyV2Migration:
         batch_nonce: bytes,
         submitter: bytes,
         evidence: PrivacyV2MigrationEvidence,
+        target_governance_authority: GovernanceAuthorityV2,
     ) -> VerifiedMigrationOperationV2:
         if type(envelope) is not ProductionProofEnvelope:
             raise ProductionBoundaryError("migration_envelope_required")
@@ -691,6 +713,7 @@ class TransactionalPrivacyV2Migration:
         target = PrivacyV2MigrationTarget.from_sidecar(
             parsed,
             settlement_domain=self._settlement_domain,
+            governance_authority=target_governance_authority,
         )
         source = self._source_identity
         historical_retry = False
@@ -713,7 +736,6 @@ class TransactionalPrivacyV2Migration:
             or target.sequence_after != source.sequence + 1
             or target.strong_nullifier_root_before != source.strong_nullifier_root
             or target.strong_payment_state_root_before != source.strong_payment_state_root
-            or target.governance_commitment != source.governance_commitment
         ):
             raise ProductionBoundaryError("migration_source_state_mismatch")
         if (
@@ -750,7 +772,7 @@ class TransactionalPrivacyV2Migration:
             sidecar=envelope.sidecar,
             settlement_domain=self._settlement_domain,
             batch_nonce=nonce,
-            governed_roots=self._governed_roots,
+            governance_authority=target.governance_authority,
             suite_id=envelope.suite_id,
             schema_id=envelope.schema_id,
             verifier_artifact_identity=envelope.verifier_artifact_identity,
@@ -805,6 +827,7 @@ class TransactionalPrivacyV2Migration:
             "sequence_after": parsed.sequence_after,
             "strong_nullifier_root_before": parsed.strong_nullifier_root_before,
             "strong_nullifier_root_after": parsed.strong_nullifier_root_after,
+            "governance_authority": target.governance_authority,
             "strong_governance_commitment": parsed.strong_governance_commitment,
             "strong_payment_state_root_before": parsed.strong_payment_state_root_before,
             "strong_payment_state_root_after": parsed.strong_payment_state_root_after,
@@ -844,6 +867,7 @@ class TransactionalPrivacyV2Migration:
         batch_nonce: bytes,
         submitter: bytes,
         evidence: PrivacyV2MigrationEvidence,
+        target_governance_authority: GovernanceAuthorityV2,
     ) -> MigrationReceiptV2:
         return self._storage._commit_verified_migration(
             self._prepare(
@@ -851,6 +875,7 @@ class TransactionalPrivacyV2Migration:
                 batch_nonce=batch_nonce,
                 submitter=submitter,
                 evidence=evidence,
+                target_governance_authority=target_governance_authority,
             )
         )
 

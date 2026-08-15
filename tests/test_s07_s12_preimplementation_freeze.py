@@ -227,7 +227,7 @@ def test_domains_and_modules_have_no_duplicate_identity() -> None:
     assert len(module_kinds) == len(set(module_kinds)) == 8
 
 
-def test_security_budget_and_corrected_fri_math_are_pinned_as_draft_only() -> None:
+def test_security_budget_registry_remains_draft_and_document_is_retired() -> None:
     policy = _registry()["securityPolicy"]
     assert policy == {
         "minimumQuantumWorkFactorBits": 128,
@@ -246,20 +246,8 @@ def test_security_budget_and_corrected_fri_math_are_pinned_as_draft_only() -> No
         "status": "POLICY_DRAFT_EXTERNAL_REVIEW_REQUIRED",
     }
     document = DOC_PATH.read_text(encoding="utf-8")
-    for marker in (
-        '"proofSuiteId": null',
-        "446 queries",
-        "441.598195840033",
-        "25 bits of multiplicative slack",
-        'ASCII("BLPQSALT")',
-        "mandatory out-of-band settlement argument",
-        "`D_eff <= 2^111`",
-        "exactly 12 ordered `bytes32`",
-        "sidecar is **744 bytes**",
-        "UNCONFIGURED -> STAGED -> READY -> ACTIVE",
-        "S12 | Complete formal-statement draft and blocker ledger; remains open",
-    ):
-        assert marker in document
+    assert document.startswith("# Retired architecture evidence")
+    assert "not architecture, execution, security, or release authority" in document
 
 
 def test_all_unresolved_security_decisions_remain_explicit_blockers() -> None:

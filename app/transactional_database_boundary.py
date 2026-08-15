@@ -21,7 +21,7 @@ from typing import Callable, Final, Protocol
 
 from app.production_boundary import (
     DatabaseSettlementSnapshotV2,
-    GovernedRootsV2,
+    GovernanceAuthorityV2,
     NativeVerificationResult,
     PUBLIC_FIELD_BYTES,
     ProductionBoundaryError,
@@ -57,7 +57,7 @@ from experiments.bl_pq512_crypto_foundation.production_candidate import (
 )
 
 
-_SCHEMA_VERSION: Final[int] = 2
+_SCHEMA_VERSION: Final[int] = 3
 _AUDIT_GENESIS_DOMAIN = b"BL/PQ512/V2/DATABASE-AUDIT-GENESIS/v1\x00"
 _AUDIT_EVENT_DOMAIN = b"BL/PQ512/V2/DATABASE-AUDIT-EVENT/v1\x00"
 _AUDIT_HEAD_DOMAIN = b"BL/PQ512/V2/DATABASE-AUDIT-HEAD/v1\x00"
@@ -304,6 +304,51 @@ def _hex(value: bytes) -> str:
     return value.hex()
 
 
+def _governance_authority_row(
+    activation_sequence: int,
+    authority: GovernanceAuthorityV2,
+) -> tuple[object, ...]:
+    if type(activation_sequence) is not int or activation_sequence < 0:
+        raise ProductionBoundaryError("database_governance_activation_sequence_invalid")
+    if type(authority) is not GovernanceAuthorityV2:
+        raise TypeError("database_governance_authority_required")
+    return (
+        activation_sequence,
+        authority.commitment_512,
+        authority.profile_code,
+        authority.epoch,
+        *authority.claim_truth_roots_512,
+        authority.claim_truth_authority_digest_512,
+        authority.nullifier_authority_id_512,
+        authority.pepper_commitment_512,
+    )
+
+
+def _governance_authority_from_row(row: tuple[object, ...]) -> GovernanceAuthorityV2:
+    if len(row) != 13:
+        raise ProductionBoundaryError("database_governance_authority_shape_invalid")
+    normalized = tuple(
+        value if type(value) is int else bytes(value)
+        for value in row
+    )
+    try:
+        authority = GovernanceAuthorityV2(
+            profile_code=normalized[2],  # type: ignore[arg-type]
+            epoch=normalized[3],  # type: ignore[arg-type]
+            claim_truth_roots_512=tuple(normalized[4:10]),  # type: ignore[arg-type]
+            claim_truth_authority_digest_512=normalized[10],  # type: ignore[arg-type]
+            nullifier_authority_id_512=normalized[11],  # type: ignore[arg-type]
+            pepper_commitment_512=normalized[12],  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        raise ProductionBoundaryError(
+            "database_governance_authority_tuple_invalid"
+        ) from exc
+    if normalized[1] != authority.commitment_512:
+        raise ProductionBoundaryError("database_governance_authority_digest_mismatch")
+    return authority
+
+
 def _operation_digest(operation: VerifiedSettlementOperationV2) -> bytes:
     return _digest(
         _OPERATION_DIGEST_DOMAIN,
@@ -326,6 +371,7 @@ def _operation_digest(operation: VerifiedSettlementOperationV2) -> bytes:
         _u64(operation.sequence_after, "operation_sequence_after"),
         operation.strong_nullifier_root_before,
         operation.strong_nullifier_root_after,
+        operation.governance_authority.canonical_bytes,
         operation.strong_governance_commitment,
         operation.strong_payment_state_root_before,
         operation.strong_payment_state_root_after,
@@ -552,7 +598,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         *,
         path: Path,
         settlement_domain: bytes,
-        governed_roots: GovernedRootsV2,
+        governance_authority: GovernanceAuthorityV2,
         initial_strong_nullifier_root: bytes,
         initial_strong_payment_state_root: bytes,
         epoch: int,
@@ -571,11 +617,11 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             raise ProductionBoundaryError("database_path_must_be_regular_file")
         if not path.parent.is_dir():
             raise ProductionBoundaryError("database_parent_directory_missing")
-        if type(governed_roots) is not GovernedRootsV2:
-            raise TypeError("database_governed_roots_required")
+        if type(governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("database_governance_authority_required")
         self._path = path
         self._settlement_domain = _field("database_settlement_domain", settlement_domain, nonzero=True)
-        self._governed_roots = governed_roots
+        self._governance_authority = governance_authority
         self._initial_nullifier_root = _wide(
             "database_initial_strong_nullifier_root", initial_strong_nullifier_root
         )
@@ -749,19 +795,57 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         ).fetchone()
         if row == (_SCHEMA_VERSION,):
             return
-        if row != (1,):
-            raise ProductionBoundaryError("database_schema_version_mismatch")
-        # The v1 table constrained its only row to schema_version=1.  Rebuild
-        # this one-row metadata table inside the same initialization
-        # transaction; no state or audit bytes are rewritten.
-        connection.execute("ALTER TABLE metadata RENAME TO metadata_v1")
+        if row in {(1,), (2,)}:
+            raise ProductionBoundaryError("database_legacy_governance_schema_rejected")
+        raise ProductionBoundaryError("database_schema_version_mismatch")
+
+    @staticmethod
+    def _governance_authority_at(
+        connection: sqlite3.Connection,
+        activation_sequence: int,
+    ) -> GovernanceAuthorityV2:
+        row = connection.execute(
+            "SELECT activation_sequence, governance_commitment, profile_code, epoch, "
+            "truth_root_0, truth_root_1, truth_root_2, truth_root_3, truth_root_4, "
+            "truth_root_5, claim_truth_authority_digest, nullifier_authority_id, "
+            "pepper_commitment FROM governance_authorities WHERE activation_sequence=?",
+            (activation_sequence,),
+        ).fetchone()
+        if row is None:
+            raise ProductionBoundaryError("database_governance_authority_missing")
+        return _governance_authority_from_row(row)
+
+    @staticmethod
+    def _governance_authority_by_commitment(
+        connection: sqlite3.Connection,
+        commitment: bytes,
+    ) -> GovernanceAuthorityV2:
+        row = connection.execute(
+            "SELECT activation_sequence, governance_commitment, profile_code, epoch, "
+            "truth_root_0, truth_root_1, truth_root_2, truth_root_3, truth_root_4, "
+            "truth_root_5, claim_truth_authority_digest, nullifier_authority_id, "
+            "pepper_commitment FROM governance_authorities WHERE governance_commitment=?",
+            (sqlite3.Binary(_wide("database_governance_commitment", commitment)),),
+        ).fetchone()
+        if row is None:
+            raise ProductionBoundaryError("database_governance_authority_missing")
+        return _governance_authority_from_row(row)
+
+    @staticmethod
+    def _insert_governance_authority(
+        connection: sqlite3.Connection,
+        activation_sequence: int,
+        authority: GovernanceAuthorityV2,
+    ) -> None:
+        values = _governance_authority_row(activation_sequence, authority)
         connection.execute(
-            "CREATE TABLE metadata ("
-            "id INTEGER PRIMARY KEY CHECK (id = 1), "
-            "schema_version INTEGER NOT NULL CHECK (schema_version IN (1, 2)))"
+            "INSERT INTO governance_authorities VALUES "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tuple(
+                value if type(value) is int else sqlite3.Binary(value)
+                for value in values
+            ),
         )
-        connection.execute("INSERT INTO metadata VALUES (1, ?)", (_SCHEMA_VERSION,))
-        connection.execute("DROP TABLE metadata_v1")
 
     def _ensure_genesis_and_history(
         self,
@@ -774,6 +858,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             for value in config
         )
         governance = _wide("database_genesis_governance", governance)
+        governance_authority = self._governance_authority
         profile = _wide("database_genesis_profile", profile)
         suite = _wide("database_genesis_suite", suite)
         schema = _wide("database_genesis_schema", schema)
@@ -798,6 +883,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         genesis_identity = PrivacyV2DatabaseIdentity(
             settlement_domain_commitment=domain_commitment,
             governance_commitment=governance,
+            governance_authority=governance_authority,
             profile_id=profile,
             suite_id=suite,
             schema_id=schema,
@@ -857,9 +943,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 observed_audit,
                 observed_checkpoint,
             ) = normalized
+            governance_authority = self._governance_authority_by_commitment(
+                connection,
+                governance,  # type: ignore[arg-type]
+            )
             if (
-                governance != self._governed_roots.commitment_512
-                or genesis_nullifier != self._initial_nullifier_root
+                genesis_nullifier != self._initial_nullifier_root
                 or genesis_payment != self._initial_payment_root
             ):
                 raise ProductionBoundaryError("database_genesis_input_mismatch")
@@ -880,6 +969,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             genesis_identity = PrivacyV2DatabaseIdentity(
                 settlement_domain_commitment=domain_commitment,  # type: ignore[arg-type]
                 governance_commitment=governance,  # type: ignore[arg-type]
+                governance_authority=governance_authority,
                 profile_id=profile,  # type: ignore[arg-type]
                 suite_id=suite,  # type: ignore[arg-type]
                 schema_id=schema,  # type: ignore[arg-type]
@@ -970,6 +1060,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 checkpoint = PrivacyV2DatabaseIdentity(
                     settlement_domain_commitment=domain_commitment,
                     governance_commitment=governance,
+                    governance_authority=governance_authority,
                     profile_id=profile,
                     suite_id=suite,
                     schema_id=schema,
@@ -1019,6 +1110,16 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         with closing(self._connect()) as connection:
             began = False
             try:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                }
+                if "metadata" in tables:
+                    self._upgrade_schema_version(connection)
+                elif tables:
+                    raise ProductionBoundaryError("database_schema_metadata_missing")
                 connection.execute("PRAGMA journal_mode=WAL")
                 self._create_schema(connection)
                 connection.execute("BEGIN IMMEDIATE")
@@ -1033,7 +1134,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 if config is None:
                     config = (
                         _digest(_DOMAIN_COMMITMENT_DOMAIN, self._settlement_domain),
-                        self._governed_roots.commitment_512,
+                        self._governance_authority.commitment_512,
                         self._profile_id,
                         self._suite_id,
                         self._schema_id,
@@ -1049,6 +1150,25 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     )
                 else:
                     self._validate_config_row(config)
+                authority_rows = connection.execute(
+                    "SELECT COUNT(*) FROM governance_authorities"
+                ).fetchone()[0]
+                if authority_rows == 0:
+                    self._insert_governance_authority(
+                        connection,
+                        0,
+                        self._governance_authority,
+                    )
+                elif (
+                    self._governance_authority_by_commitment(
+                        connection,
+                        bytes(config[1]),
+                    )
+                    != self._governance_authority
+                ):
+                    raise ProductionBoundaryError(
+                        "database_current_governance_authority_mismatch"
+                    )
                 state = connection.execute(
                     "SELECT epoch, sequence, strong_nullifier_root, strong_payment_state_root, "
                     "state_binding, audit_head, governance_commitment, anti_rollback_epoch, "
@@ -1061,7 +1181,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         _u64(0, "database_sequence"),
                         self._initial_nullifier_root,
                         self._initial_payment_root,
-                        self._governed_roots.commitment_512,
+                        self._governance_authority.commitment_512,
                     )
                     audit_head = _digest(
                         _AUDIT_GENESIS_DOMAIN,
@@ -1077,7 +1197,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                             sqlite3.Binary(self._initial_payment_root),
                             sqlite3.Binary(state_binding),
                             sqlite3.Binary(audit_head),
-                            sqlite3.Binary(self._governed_roots.commitment_512),
+                            sqlite3.Binary(self._governance_authority.commitment_512),
                         ),
                     )
                     state = (
@@ -1087,7 +1207,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         self._initial_payment_root,
                         state_binding,
                         audit_head,
-                        self._governed_roots.commitment_512,
+                        self._governance_authority.commitment_512,
                         0,
                         0,
                     )
@@ -1120,9 +1240,9 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             """
             CREATE TABLE IF NOT EXISTS metadata (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                schema_version INTEGER NOT NULL CHECK (schema_version IN (1, 2))
+                schema_version INTEGER NOT NULL CHECK (schema_version = 3)
             );
-            INSERT OR IGNORE INTO metadata(id, schema_version) VALUES (1, 2);
+            INSERT OR IGNORE INTO metadata(id, schema_version) VALUES (1, 3);
             CREATE TABLE IF NOT EXISTS configuration (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 settlement_domain_commitment BLOB NOT NULL CHECK (length(settlement_domain_commitment) = 64),
@@ -1144,6 +1264,22 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 governance_commitment BLOB NOT NULL CHECK (length(governance_commitment) = 64),
                 anti_rollback_epoch INTEGER NOT NULL CHECK (anti_rollback_epoch >= 0),
                 settled_batch_count INTEGER NOT NULL CHECK (settled_batch_count >= 0)
+            );
+            CREATE TABLE IF NOT EXISTS governance_authorities (
+                activation_sequence INTEGER PRIMARY KEY CHECK (activation_sequence >= 0),
+                governance_commitment BLOB NOT NULL UNIQUE CHECK (length(governance_commitment) = 64),
+                profile_code INTEGER NOT NULL CHECK (profile_code IN (1, 2, 3)),
+                epoch INTEGER NOT NULL CHECK (epoch > 0),
+                truth_root_0 BLOB NOT NULL CHECK (length(truth_root_0) = 64),
+                truth_root_1 BLOB NOT NULL CHECK (length(truth_root_1) = 64),
+                truth_root_2 BLOB NOT NULL CHECK (length(truth_root_2) = 64),
+                truth_root_3 BLOB NOT NULL CHECK (length(truth_root_3) = 64),
+                truth_root_4 BLOB NOT NULL CHECK (length(truth_root_4) = 64),
+                truth_root_5 BLOB NOT NULL CHECK (length(truth_root_5) = 64),
+                claim_truth_authority_digest BLOB NOT NULL CHECK (length(claim_truth_authority_digest) = 64),
+                nullifier_authority_id BLOB NOT NULL CHECK (length(nullifier_authority_id) = 64),
+                pepper_commitment BLOB NOT NULL CHECK (length(pepper_commitment) = 64),
+                UNIQUE(profile_code, epoch)
             );
             CREATE TABLE IF NOT EXISTS settlement_requests (
                 envelope_commitment BLOB PRIMARY KEY CHECK (length(envelope_commitment) = 64),
@@ -1288,6 +1424,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             CREATE TRIGGER IF NOT EXISTS transition_records_no_delete
             BEFORE DELETE ON transition_records
             BEGIN SELECT RAISE(ABORT, 'transition_records_append_only'); END;
+            CREATE TRIGGER IF NOT EXISTS governance_authorities_no_update
+            BEFORE UPDATE ON governance_authorities
+            BEGIN SELECT RAISE(ABORT, 'governance_authorities_append_only'); END;
+            CREATE TRIGGER IF NOT EXISTS governance_authorities_no_delete
+            BEFORE DELETE ON governance_authorities
+            BEGIN SELECT RAISE(ABORT, 'governance_authorities_append_only'); END;
             """
         )
 
@@ -1300,7 +1442,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
     def _validate_config_row(self, row: tuple[object, ...]) -> None:
         expected = (
             _digest(_DOMAIN_COMMITMENT_DOMAIN, self._settlement_domain),
-            self._governed_roots.commitment_512,
+            self._governance_authority.commitment_512,
             self._profile_id,
             self._suite_id,
             self._schema_id,
@@ -1356,27 +1498,15 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             or not operation.is_native_authorized(self._native_authority_key)
         ):
             raise ProductionBoundaryError("database_operation_not_native_authorized")
-        if operation.profile_id != self._profile_id:
-            raise ProductionBoundaryError("database_profile_identity_mismatch")
-        if (
-            operation.suite_id != self._suite_id
-            or operation.schema_id != self._schema_id
-            or operation.verifier_artifact_identity != self._verifier_artifact_identity
-        ):
-            raise ProductionBoundaryError("database_verifier_identity_mismatch")
-        if operation.epoch != self._epoch:
-            raise ProductionBoundaryError("database_epoch_mismatch")
-        if operation.strong_governance_commitment != self._governed_roots.commitment_512:
-            raise ProductionBoundaryError("database_governance_root_mismatch")
         if operation.public_fields_commitment != public_fields_commitment(operation.public_fields):
             raise ProductionBoundaryError("database_public_fields_commitment_mismatch")
         parsed = _sidecar(operation.sidecar)
         validate_v2_public_projection(
             public_fields=operation.public_fields,
             sidecar=operation.sidecar,
-            settlement_domain=self._settlement_domain,
+            settlement_domain=operation.public_fields[1],
             batch_nonce=operation.batch_nonce,
-            governed_roots=self._governed_roots,
+            governance_authority=operation.governance_authority,
             suite_id=operation.suite_id,
             schema_id=operation.schema_id,
             verifier_artifact_identity=operation.verifier_artifact_identity,
@@ -1420,8 +1550,14 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 "state_binding, audit_head, governance_commitment, anti_rollback_epoch, "
                 "settled_batch_count FROM state WHERE id=1"
             ).fetchone()
+            authority = None
+            if config is not None:
+                authority = self._governance_authority_by_commitment(
+                    connection,
+                    bytes(config[1]),
+                )
             connection.execute("COMMIT")
-        if config is None or state is None:
+        if config is None or state is None or authority is None:
             raise ProductionBoundaryError("database_identity_missing")
         self._validate_config_row(config)
         snapshot = self._state_snapshot(state)
@@ -1436,6 +1572,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         return PrivacyV2DatabaseIdentity(
             settlement_domain_commitment=normalized[0],  # type: ignore[arg-type]
             governance_commitment=normalized[1],  # type: ignore[arg-type]
+            governance_authority=authority,
             profile_id=normalized[2],  # type: ignore[arg-type]
             suite_id=normalized[3],  # type: ignore[arg-type]
             schema_id=normalized[4],  # type: ignore[arg-type]
@@ -1449,6 +1586,17 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             anti_rollback_epoch=snapshot.anti_rollback_epoch,
             settled_batch_count=snapshot.settled_batch_count,
         )
+
+    def _governance_authority_for_commitment(
+        self,
+        commitment: bytes,
+    ) -> GovernanceAuthorityV2:
+        with closing(self._connect()) as connection:
+            self._validate_schema_version(connection)
+            return self._governance_authority_by_commitment(
+                connection,
+                commitment,
+            )
 
     def _migration_source_identity(
         self,
@@ -1474,12 +1622,14 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         with closing(self._connect()) as connection:
             connection.execute("BEGIN")
             rows = connection.execute(
-                "SELECT settlement_domain_before, governance_commitment, "
-                "profile_before, suite_before, schema_before, verifier_before, "
-                "epoch_before, sequence_before, nullifier_root_before, "
-                "payment_root_before, state_binding_before "
-                "FROM migration_requests WHERE source_checkpoint_commitment=? "
-                "AND migration_evidence_commitment=?",
+                "SELECT m.settlement_domain_before, t.governance_before, "
+                "m.profile_before, m.suite_before, m.schema_before, m.verifier_before, "
+                "m.epoch_before, m.sequence_before, m.nullifier_root_before, "
+                "m.payment_root_before, m.state_binding_before "
+                "FROM migration_requests AS m JOIN transition_records AS t "
+                "ON t.record_commitment=m.migration_commitment "
+                "WHERE m.source_checkpoint_commitment=? "
+                "AND m.migration_evidence_commitment=?",
                 (
                     sqlite3.Binary(source_checkpoint),
                     sqlite3.Binary(evidence_commitment),
@@ -1510,12 +1660,17 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 "SELECT COUNT(*) FROM settlement_requests WHERE sequence_after<=?",
                 (sequence,),
             ).fetchone()[0]
+            authority = self._governance_authority_by_commitment(
+                connection,
+                bytes(row[1]),
+            )
             connection.execute("COMMIT")
         if audit_row is None or type(settled_count) is not int:
             raise ProductionBoundaryError("database_migration_retry_source_invalid")
         identity = PrivacyV2DatabaseIdentity(
             settlement_domain_commitment=bytes(row[0]),
             governance_commitment=bytes(row[1]),
+            governance_authority=authority,
             profile_id=bytes(row[2]),
             suite_id=bytes(row[3]),
             schema_id=bytes(row[4]),
@@ -1552,21 +1707,16 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 if config is None:
                     raise ProductionBoundaryError("database_configuration_missing")
                 self._validate_config_row(config)
-                operation_config = (
-                    _digest(_DOMAIN_COMMITMENT_DOMAIN, self._settlement_domain),
-                    operation.strong_governance_commitment,
-                    operation.profile_id,
-                    operation.suite_id,
-                    operation.schema_id,
-                    operation.verifier_artifact_identity,
-                    operation.epoch,
-                )
                 normalized_config = tuple(
                     value if type(value) is int else bytes(value) for value in config
                 )
-                if normalized_config != operation_config:
+                recorded_operation_authority = self._governance_authority_by_commitment(
+                    connection,
+                    operation.strong_governance_commitment,
+                )
+                if recorded_operation_authority != operation.governance_authority:
                     raise ProductionBoundaryError(
-                        "database_operation_configuration_stale"
+                        "database_operation_governance_authority_mismatch"
                     )
                 row = connection.execute(
                     "SELECT epoch, sequence, strong_nullifier_root, strong_payment_state_root, "
@@ -1576,7 +1726,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 if row is None:
                     raise ProductionBoundaryError("database_state_missing")
                 self._validate_state_row(row)
-                if row[0] != self._epoch or bytes(row[6]) != self._governed_roots.commitment_512:
+                if row[0] != self._epoch or bytes(row[6]) != self._governance_authority.commitment_512:
                     raise ProductionBoundaryError("database_state_identity_mismatch")
                 pending_anchor = self._reconcile_anti_rollback_state(
                     epoch=row[7],  # type: ignore[arg-type]
@@ -1635,11 +1785,29 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         public_fields_commitment=normalized[2],  # type: ignore[arg-type]
                         envelope_commitment=normalized[0],  # type: ignore[arg-type]
                         native_statement_commitment=normalized[7],  # type: ignore[arg-type]
-                        proof_suite_id=self._suite_id,
+                        proof_suite_id=operation.suite_id,
                         state_binding=normalized[15],  # type: ignore[arg-type]
                     )
                     connection.execute("COMMIT")
                     return receipt
+
+                operation_config = (
+                    _digest(_DOMAIN_COMMITMENT_DOMAIN, operation.public_fields[1]),
+                    operation.strong_governance_commitment,
+                    operation.profile_id,
+                    operation.suite_id,
+                    operation.schema_id,
+                    operation.verifier_artifact_identity,
+                    operation.epoch,
+                )
+                if normalized_config != operation_config:
+                    raise ProductionBoundaryError(
+                        "database_operation_configuration_stale"
+                    )
+                if operation.governance_authority != self._governance_authority:
+                    raise ProductionBoundaryError(
+                        "database_operation_governance_authority_stale"
+                    )
 
                 if parsed.sequence_before != row[1]:
                     raise ProductionBoundaryError("database_sequence_stale")
@@ -1757,7 +1925,8 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     settlement_domain_commitment=_digest(
                         _DOMAIN_COMMITMENT_DOMAIN, self._settlement_domain
                     ),
-                    governance_commitment=self._governed_roots.commitment_512,
+                    governance_commitment=self._governance_authority.commitment_512,
+                    governance_authority=self._governance_authority,
                     profile_id=self._profile_id,
                     suite_id=self._suite_id,
                     schema_id=self._schema_id,
@@ -1783,8 +1952,8 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         sqlite3.Binary(parsed.strong_nullifier_root_after),
                         sqlite3.Binary(parsed.strong_payment_state_root_before),
                         sqlite3.Binary(parsed.strong_payment_state_root_after),
-                        sqlite3.Binary(self._governed_roots.commitment_512),
-                        sqlite3.Binary(self._governed_roots.commitment_512),
+                        sqlite3.Binary(self._governance_authority.commitment_512),
+                        sqlite3.Binary(self._governance_authority.commitment_512),
                         sqlite3.Binary(self._profile_id),
                         sqlite3.Binary(self._profile_id),
                         sqlite3.Binary(self._suite_id),
@@ -1887,7 +2056,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             sidecar=transition.sidecar,
             settlement_domain=transition.public_fields[1],
             batch_nonce=transition.batch_nonce,
-            governed_roots=self._governed_roots,
+            governance_authority=operation.target.governance_authority,
             suite_id=transition.suite_id,
             schema_id=transition.schema_id,
             verifier_artifact_identity=transition.verifier_artifact_identity,
@@ -1944,7 +2113,22 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 ).fetchone()
                 if config is None or state is None:
                     raise ProductionBoundaryError("database_migration_state_missing")
+                self._validate_config_row(config)
                 self._validate_state_row(state)
+                current_authority = self._governance_authority_by_commitment(
+                    connection,
+                    bytes(config[1]),
+                )
+                if current_authority != self._governance_authority:
+                    raise ProductionBoundaryError(
+                        "database_current_governance_authority_mismatch"
+                    )
+                if (
+                    state[0] != self._epoch
+                    or bytes(state[6])
+                    != self._governance_authority.commitment_512
+                ):
+                    raise ProductionBoundaryError("database_state_identity_mismatch")
                 pending_anchor = self._reconcile_anti_rollback_state(
                     epoch=state[7],  # type: ignore[arg-type]
                     state_binding=bytes(state[4]),
@@ -1973,8 +2157,15 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     if len(existing) != 1:
                         raise ProductionBoundaryError("database_migration_conflicting_retry")
                     receipt = self._migration_receipt_from_row(existing[0])
+                    recorded_target_authority = (
+                        self._governance_authority_by_commitment(
+                            connection,
+                            target.governance_commitment,
+                        )
+                    )
                     if (
-                        receipt.kind != evidence.kind
+                        recorded_target_authority != target.governance_authority
+                        or receipt.kind != evidence.kind
                         or receipt.migration_commitment != migration_commitment
                         or receipt.evidence_commitment != evidence.commitment
                         or receipt.source_checkpoint_commitment
@@ -2016,6 +2207,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     observed_source = PrivacyV2DatabaseIdentity(
                         settlement_domain_commitment=normalized_config[0],  # type: ignore[arg-type]
                         governance_commitment=normalized_config[1],  # type: ignore[arg-type]
+                        governance_authority=self._governance_authority_by_commitment(
+                            connection,
+                            normalized_config[1],  # type: ignore[arg-type]
+                        ),
                         profile_id=normalized_config[2],  # type: ignore[arg-type]
                         suite_id=normalized_config[3],  # type: ignore[arg-type]
                         schema_id=normalized_config[4],  # type: ignore[arg-type]
@@ -2033,6 +2228,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         raise ProductionBoundaryError(
                             "database_migration_source_checkpoint_stale"
                         )
+                    if source.governance_authority != self._governance_authority:
+                        raise ProductionBoundaryError(
+                            "database_migration_source_governance_authority_stale"
+                        )
                     if (
                         parsed.epoch != source.epoch + 1
                         or parsed.sequence_before != source.sequence
@@ -2042,7 +2241,9 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         or parsed.strong_payment_state_root_before
                         != source.strong_payment_state_root
                         or parsed.strong_governance_commitment
-                        != source.governance_commitment
+                        != target.governance_commitment
+                        or transition.governance_authority
+                        != target.governance_authority
                         or target.profile_id != transition.profile_id
                         or target.suite_id != transition.suite_id
                         or target.schema_id != transition.schema_id
@@ -2068,6 +2269,19 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         raise ProductionBoundaryError(
                             "database_migration_downgrade_or_reuse"
                         )
+                    prior_authority = connection.execute(
+                        "SELECT activation_sequence FROM governance_authorities "
+                        "WHERE governance_commitment=? OR (profile_code=? AND epoch=?)",
+                        (
+                            sqlite3.Binary(target.governance_commitment),
+                            target.governance_authority.profile_code,
+                            target.governance_authority.epoch,
+                        ),
+                    ).fetchone()
+                    if prior_authority is not None:
+                        raise ProductionBoundaryError(
+                            "database_migration_governance_authority_reuse"
+                        )
                     if evidence.kind in {"ROLLBACK", "RECOVERY"}:
                         reused_domain = connection.execute(
                             "SELECT activation_sequence FROM configuration_history "
@@ -2089,10 +2303,18 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                             raise ProductionBoundaryError(
                                 "database_migration_unknown_target_checkpoint"
                             )
-                        if known != (
-                            target.strong_nullifier_root_after,
-                            target.strong_payment_state_root_after,
-                            target.governance_commitment,
+                        known_authority = self._governance_authority_by_commitment(
+                            connection,
+                            known[2],
+                        )
+                        if (
+                            known[:2]
+                            != (
+                                target.strong_nullifier_root_after,
+                                target.strong_payment_state_root_after,
+                            )
+                            or known_authority.authority_material
+                            != target.governance_authority.authority_material
                         ):
                             raise ProductionBoundaryError(
                                 "database_migration_target_checkpoint_mismatch"
@@ -2160,6 +2382,11 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                                 transition_commitment=migration_commitment,
                             )
 
+                    self._insert_governance_authority(
+                        connection,
+                        target.sequence_after,
+                        target.governance_authority,
+                    )
                     connection.execute(
                         "INSERT INTO migration_requests VALUES "
                         "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
@@ -2233,6 +2460,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     checkpoint = PrivacyV2DatabaseIdentity(
                         settlement_domain_commitment=target.settlement_domain_commitment,
                         governance_commitment=target.governance_commitment,
+                        governance_authority=target.governance_authority,
                         profile_id=target.profile_id,
                         suite_id=target.suite_id,
                         schema_id=target.schema_id,
@@ -2345,6 +2573,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             self._schema_id = target.schema_id
             self._verifier_artifact_identity = target.verifier_artifact_identity
             self._epoch = target.epoch
+            self._governance_authority = target.governance_authority
         if self._anti_rollback is not None and committed_new:
             if next_binding is None or next_anti_epoch is None:
                 raise ProductionBoundaryError("database_migration_anchor_state_missing")
@@ -2387,7 +2616,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             snapshot = self._state_snapshot(state_row)
             if (
                 snapshot.epoch != self._epoch
-                or snapshot.governance_commitment != self._governed_roots.commitment_512
+                or snapshot.governance_commitment != self._governance_authority.commitment_512
             ):
                 raise ProductionBoundaryError("database_state_identity_mismatch")
             counts = (
@@ -2619,6 +2848,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             current = PrivacyV2DatabaseIdentity(
                 settlement_domain_commitment=normalized_genesis[0],  # type: ignore[arg-type]
                 governance_commitment=normalized_genesis[1],  # type: ignore[arg-type]
+                governance_authority=self._governance_authority_by_commitment(
+                    connection,
+                    normalized_genesis[1],  # type: ignore[arg-type]
+                ),
                 profile_id=normalized_genesis[2],  # type: ignore[arg-type]
                 suite_id=normalized_genesis[3],  # type: ignore[arg-type]
                 schema_id=normalized_genesis[4],  # type: ignore[arg-type]
@@ -2634,8 +2867,6 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             )
             if (
                 current.checkpoint_commitment != normalized_genesis[11]
-                or current.governance_commitment
-                != self._governed_roots.commitment_512
                 or current.strong_nullifier_root != self._initial_nullifier_root
                 or current.strong_payment_state_root != self._initial_payment_root
             ):
@@ -2936,6 +3167,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         strong_nullifier_root_after=nullifier_after,
                         strong_payment_state_root_before=payment_before,
                         strong_payment_state_root_after=payment_after,
+                        governance_authority=self._governance_authority_by_commitment(
+                            connection,
+                            governance_after,
+                        ),
                         governance_commitment=governance_after,
                     )
                     migration_evidence = PrivacyV2MigrationEvidence(
@@ -3066,6 +3301,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 next_identity = PrivacyV2DatabaseIdentity(
                     settlement_domain_commitment=next_domain_commitment,
                     governance_commitment=governance_after,
+                    governance_authority=self._governance_authority_by_commitment(
+                        connection,
+                        governance_after,
+                    ),
                     profile_id=profile_after,
                     suite_id=suite_after,
                     schema_id=schema_after,
@@ -3127,6 +3366,50 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
 
     def verify_integrity(self) -> None:
         with closing(self._connect()) as connection:
+            authority_rows = connection.execute(
+                "SELECT activation_sequence, governance_commitment, profile_code, epoch, "
+                "truth_root_0, truth_root_1, truth_root_2, truth_root_3, truth_root_4, "
+                "truth_root_5, claim_truth_authority_digest, nullifier_authority_id, "
+                "pepper_commitment FROM governance_authorities ORDER BY activation_sequence"
+            ).fetchall()
+            if not authority_rows:
+                raise ProductionBoundaryError("database_governance_authority_missing")
+            authority_by_sequence = {
+                row[0]: _governance_authority_from_row(row)
+                for row in authority_rows
+            }
+            genesis_governance = connection.execute(
+                "SELECT governance_commitment FROM database_genesis WHERE id=1"
+            ).fetchone()
+            if (
+                genesis_governance is None
+                or 0 not in authority_by_sequence
+                or authority_by_sequence[0].commitment_512
+                != bytes(genesis_governance[0])
+            ):
+                raise ProductionBoundaryError(
+                    "database_genesis_governance_authority_mismatch"
+                )
+            migration_authorities = connection.execute(
+                "SELECT sequence_after, governance_after, epoch_after FROM transition_records "
+                "WHERE transition_kind!='SETTLEMENT' ORDER BY sequence_after"
+            ).fetchall()
+            expected_authority_sequences = {0}
+            for sequence_after, governance_after, epoch_after in migration_authorities:
+                expected_authority_sequences.add(sequence_after)
+                authority = authority_by_sequence.get(sequence_after)
+                if (
+                    authority is None
+                    or authority.commitment_512 != bytes(governance_after)
+                    or authority.epoch != epoch_after
+                ):
+                    raise ProductionBoundaryError(
+                        "database_transition_governance_authority_mismatch"
+                    )
+            if set(authority_by_sequence) != expected_authority_sequences:
+                raise ProductionBoundaryError(
+                    "database_governance_authority_ledger_count_mismatch"
+                )
             migration_count = connection.execute(
                 "SELECT COUNT(*) FROM migration_requests"
             ).fetchone()[0]
@@ -3166,7 +3449,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             candidate = SQLiteSettlementStoreV2(
                 path=destination,
                 settlement_domain=self._settlement_domain,
-                governed_roots=self._governed_roots,
+                governance_authority=self._governance_authority,
                 initial_strong_nullifier_root=self._initial_nullifier_root,
                 initial_strong_payment_state_root=self._initial_payment_root,
                 epoch=self._epoch,
@@ -3215,7 +3498,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             return SQLiteSettlementStoreV2(
                 path=recovered_path,
                 settlement_domain=self._settlement_domain,
-                governed_roots=self._governed_roots,
+                governance_authority=self._governance_authority,
                 initial_strong_nullifier_root=self._initial_nullifier_root,
                 initial_strong_payment_state_root=self._initial_payment_root,
                 epoch=self._epoch,
@@ -3244,7 +3527,7 @@ class TransactionalSettlementV2:
         verifier: object,
         storage: TransactionalSettlementStoragePort,
         settlement_domain: bytes,
-        governed_roots: GovernedRootsV2,
+        governance_authority: GovernanceAuthorityV2,
         authorized_submitters: tuple[bytes, ...] | list[bytes],
     ) -> None:
         if not callable(getattr(verifier, "verify", None)):
@@ -3256,6 +3539,7 @@ class TransactionalSettlementV2:
             for name in (
                 "_bind_native_authority",
                 "_commit_verified",
+                "_governance_authority_for_commitment",
                 "identity_snapshot",
                 "snapshot",
                 "verify_integrity",
@@ -3263,17 +3547,25 @@ class TransactionalSettlementV2:
             )
         ):
             raise TypeError("transactional_storage_port_required")
-        if type(governed_roots) is not GovernedRootsV2:
-            raise TypeError("transactional_governed_roots_required")
+        if type(governance_authority) is not GovernanceAuthorityV2:
+            raise TypeError("transactional_governance_authority_required")
         self._verifier = verifier
         self._storage = storage
         self._settlement_domain = _field("transactional_settlement_domain", settlement_domain, nonzero=True)
-        self._governed_roots = governed_roots
+        self._initial_governance_authority = governance_authority
         self._authorized_submitters = frozenset(
             _wide("transactional_authorized_submitter", value) for value in authorized_submitters
         )
         if not self._authorized_submitters:
             raise ProductionBoundaryError("transactional_submitters_empty")
+        initial_identity = self._storage.identity_snapshot()
+        if (
+            type(initial_identity) is not PrivacyV2DatabaseIdentity
+            or initial_identity.governance_authority != governance_authority
+            or initial_identity.settlement_domain_commitment
+            != _digest(_DOMAIN_COMMITMENT_DOMAIN, self._settlement_domain)
+        ):
+            raise ProductionBoundaryError("transactional_initial_configuration_mismatch")
         self.__native_authority_key = secrets.token_bytes(64)
         self._storage._bind_native_authority(self.__native_authority_key)
 
@@ -3291,29 +3583,22 @@ class TransactionalSettlementV2:
             raise ProductionBoundaryError("transactional_submitter_not_authorized")
         nonce = _field("transactional_batch_nonce", batch_nonce, nonzero=True)
         parsed = _sidecar(envelope.sidecar)
-        identity = self._storage.identity_snapshot()
-        if type(identity) is not PrivacyV2DatabaseIdentity:
-            raise ProductionBoundaryError("transactional_database_identity_invalid")
-        if (
-            parsed.profile_id != identity.profile_id
-            or envelope.suite_id != identity.suite_id
-            or envelope.schema_id != identity.schema_id
-            or envelope.verifier_artifact_identity
-            != identity.verifier_artifact_identity
-            or parsed.epoch != identity.epoch
-            or parsed.strong_governance_commitment
-            != identity.governance_commitment
-        ):
-            raise ProductionBoundaryError("transactional_active_identity_mismatch")
+        governance_authority = self._storage._governance_authority_for_commitment(
+            parsed.strong_governance_commitment
+        )
+        active_domain = tuple(
+            envelope.public_outputs[index : index + PUBLIC_FIELD_BYTES]
+            for index in range(0, len(envelope.public_outputs), PUBLIC_FIELD_BYTES)
+        )[1]
         fields = validate_v2_public_projection(
             public_fields=tuple(
                 envelope.public_outputs[index : index + PUBLIC_FIELD_BYTES]
                 for index in range(0, len(envelope.public_outputs), PUBLIC_FIELD_BYTES)
             ),
             sidecar=envelope.sidecar,
-            settlement_domain=self._settlement_domain,
+            settlement_domain=active_domain,
             batch_nonce=nonce,
-            governed_roots=self._governed_roots,
+            governance_authority=governance_authority,
             suite_id=envelope.suite_id,
             schema_id=envelope.schema_id,
             verifier_artifact_identity=envelope.verifier_artifact_identity,
@@ -3366,6 +3651,7 @@ class TransactionalSettlementV2:
             "sequence_after": parsed.sequence_after,
             "strong_nullifier_root_before": parsed.strong_nullifier_root_before,
             "strong_nullifier_root_after": parsed.strong_nullifier_root_after,
+            "governance_authority": governance_authority,
             "strong_governance_commitment": parsed.strong_governance_commitment,
             "strong_payment_state_root_before": parsed.strong_payment_state_root_before,
             "strong_payment_state_root_after": parsed.strong_payment_state_root_after,

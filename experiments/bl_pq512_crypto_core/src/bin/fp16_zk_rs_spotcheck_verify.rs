@@ -6,17 +6,27 @@ use std::{
 };
 
 use bl_pq512_crypto_core::field::Fp16;
+use sha3::{Digest, Sha3_512};
 
-const INPUT_MAGIC: &[u8; 8] = b"BLSPOT03";
+const INPUT_MAGIC: &[u8; 8] = b"BLSPOT05";
 const OUTPUT_MAGIC: &[u8; 8] = b"BLSPOUT1";
 const INTERLEAVINGS: usize = 512;
 const MAIN_QUERIES: usize = 1_600;
 const AUXILIARY_QUERIES: usize = 1_218;
 const SUMCHECK_WORDS: usize = 9;
-const GKR_MASK_WORDS: usize = 64;
-const STATE_SQUAREFREE_WORDS: usize = 1;
-const COMPLETE_AUXILIARY_WORDS: usize = SUMCHECK_WORDS + GKR_MASK_WORDS + STATE_SQUAREFREE_WORDS;
+const NON_GKR_AUXILIARY_WORDS: usize = SUMCHECK_WORDS + 1;
+const SUMCHECK_BASE_WORDS: usize = SUMCHECK_WORDS + NON_GKR_AUXILIARY_WORDS;
+const GKR_MASK_OUTER_LOG: u32 = 7;
+const GKR_MASK_OUTER_CODE_VALUES: usize = 1 << GKR_MASK_OUTER_LOG;
 const FP16_BYTES: usize = 64;
+const PCS_MAGIC: &[u8; 8] = b"BLPQPCS1";
+const PCS_VERSION: u16 = 1;
+const QUERY_DOMAIN: u16 = 524;
+const GKR_MASK_OUTER_QUERY_DOMAIN: u16 = 526;
+const GKR_MASK_OUTER_QUERY_LABEL: &[u8] = b"gkr_mask_outer_queries/v1";
+const AUXILIARY_TREE_LEAVES: usize = 1 << 13;
+const QUERY_MAX_DRAWS: u64 = 1 << 20;
+const QUERY_MAX_RETRIES_PER_DRAW: u64 = 1 << 20;
 
 fn read_fp16(reader: &mut impl Read) -> Result<Fp16, String> {
     let mut encoded = [0_u8; FP16_BYTES];
@@ -49,6 +59,100 @@ fn read_values(reader: &mut impl Read, count: usize) -> Result<Vec<Fp16>, String
                 .try_into()
                 .map_err(|_| "read_values_chunk".to_string())?;
             Fp16::decode(value).map_err(|error| format!("fp16:{error:?}"))
+        })
+        .collect()
+}
+
+fn hash_parts(domain: u16, parts: &[&[u8]]) -> [u8; 64] {
+    let mut hash = Sha3_512::new();
+    hash.update(PCS_MAGIC);
+    hash.update(PCS_VERSION.to_be_bytes());
+    hash.update(domain.to_be_bytes());
+    for part in parts {
+        hash.update(part);
+    }
+    hash.finalize().into()
+}
+
+fn exact_queries(
+    state: &[u8; 64],
+    label: &[u8],
+    bound: usize,
+    count: usize,
+) -> Result<Vec<usize>, String> {
+    if bound == 0 || count == 0 || count > bound {
+        return Err("query_geometry".to_string());
+    }
+    let bound_u64 = u64::try_from(bound).map_err(|_| "query_bound".to_string())?;
+    let threshold = ((1_u128 << 64) - u128::from(bound_u64)) % u128::from(bound_u64);
+    let mut queries = Vec::with_capacity(count);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut draw = 0_u64;
+    while queries.len() < count {
+        if draw >= QUERY_MAX_DRAWS {
+            return Err("query_draw_limit".to_string());
+        }
+        let mut retry = 0_u64;
+        loop {
+            if retry >= QUERY_MAX_RETRIES_PER_DRAW {
+                return Err("query_retry_limit".to_string());
+            }
+            let digest = hash_parts(
+                QUERY_DOMAIN,
+                &[state, label, &draw.to_be_bytes(), &retry.to_be_bytes()],
+            );
+            let random_word = u64::from_le_bytes(
+                digest[..8]
+                    .try_into()
+                    .map_err(|_| "query_digest".to_string())?,
+            );
+            let product = u128::from(random_word) * u128::from(bound_u64);
+            if (product & u128::from(u64::MAX)) >= threshold {
+                let candidate =
+                    usize::try_from(product >> 64).map_err(|_| "query_candidate".to_string())?;
+                if seen.insert(candidate) {
+                    queries.push(candidate);
+                    break;
+                }
+            }
+            retry = retry
+                .checked_add(1)
+                .ok_or_else(|| "query_retry".to_string())?;
+        }
+        draw = draw
+            .checked_add(1)
+            .ok_or_else(|| "query_draw".to_string())?;
+    }
+    queries.sort_unstable();
+    Ok(queries)
+}
+
+fn gkr_mask_outer_coordinates(state: &[u8; 64], inner: &[usize]) -> Result<Vec<usize>, String> {
+    inner
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(ordinal, inner_query)| {
+            let ordinal =
+                u64::try_from(ordinal).map_err(|_| "gkr_mask_query_ordinal".to_string())?;
+            let inner_query =
+                u32::try_from(inner_query).map_err(|_| "gkr_mask_inner_query".to_string())?;
+            let digest = hash_parts(
+                GKR_MASK_OUTER_QUERY_DOMAIN,
+                &[
+                    state,
+                    GKR_MASK_OUTER_QUERY_LABEL,
+                    &ordinal.to_be_bytes(),
+                    &inner_query.to_be_bytes(),
+                ],
+            );
+            let random_word = u64::from_le_bytes(
+                digest[..8]
+                    .try_into()
+                    .map_err(|_| "gkr_mask_outer_query".to_string())?,
+            );
+            usize::try_from((u128::from(random_word) * GKR_MASK_OUTER_CODE_VALUES as u128) >> 64)
+                .map_err(|_| "gkr_mask_outer_query".to_string())
         })
         .collect()
 }
@@ -202,16 +306,32 @@ fn run() -> Result<(), String> {
             "initial_geometry:{initial_segments}:{words_per_segment}"
         ));
     }
+    let mut query_seed = [0_u8; 64];
+    reader
+        .read_exact(&mut query_seed)
+        .map_err(|error| format!("query_seed:{error}"))?;
+    Fp16::decode(&query_seed).map_err(|error| format!("query_seed:{error:?}"))?;
+    let auxiliary_queries = exact_queries(
+        &query_seed,
+        b"aux_queries",
+        AUXILIARY_TREE_LEAVES,
+        AUXILIARY_QUERIES,
+    )?;
+    let tensor_queries = gkr_mask_outer_coordinates(&query_seed, &auxiliary_queries)?;
+    if tensor_queries.len() != AUXILIARY_QUERIES {
+        return Err("tensor_query_shape".to_string());
+    }
     let weights = read_values(&mut reader, INTERLEAVINGS)?;
     let combination = read_fp16(&mut reader)?;
     let folded = fold_initial_openings(&mut reader, &weights, initial_segments, words_per_segment)?;
-    let sumcheck = read_values(&mut reader, AUXILIARY_QUERIES * SUMCHECK_WORDS)?;
-    let gkr_mask = read_values(&mut reader, AUXILIARY_QUERIES * GKR_MASK_WORDS)?;
+    let sumcheck_and_base = read_values(&mut reader, AUXILIARY_QUERIES * SUMCHECK_BASE_WORDS)?;
+    let gkr_mask = read_values(&mut reader, AUXILIARY_QUERIES)?;
     let state_squarefree = read_values(&mut reader, AUXILIARY_QUERIES)?;
     let base_main = read_values(&mut reader, MAIN_QUERIES)?;
-    let base_auxiliary = read_values(&mut reader, AUXILIARY_QUERIES * COMPLETE_AUXILIARY_WORDS)?;
+    let base_gkr_mask = read_values(&mut reader, AUXILIARY_QUERIES)?;
     let answer_main = read_values(&mut reader, MAIN_QUERIES)?;
-    let answer_auxiliary = read_values(&mut reader, AUXILIARY_QUERIES * COMPLETE_AUXILIARY_WORDS)?;
+    let answer_auxiliary = read_values(&mut reader, AUXILIARY_QUERIES * NON_GKR_AUXILIARY_WORDS)?;
+    let answer_gkr_mask = read_values(&mut reader, AUXILIARY_QUERIES)?;
     let mut trailing = [0_u8; 1];
     if reader
         .read(&mut trailing)
@@ -262,27 +382,36 @@ fn run() -> Result<(), String> {
             .step_by(query_chunk)
             .map(|start| {
                 let end = AUXILIARY_QUERIES.min(start + query_chunk);
-                let sumcheck = &sumcheck;
+                let sumcheck_and_base = &sumcheck_and_base;
                 let gkr_mask = &gkr_mask;
+                let base_gkr_mask = &base_gkr_mask;
+                let answer_gkr_mask = &answer_gkr_mask;
                 let state_squarefree = &state_squarefree;
-                let base_auxiliary = &base_auxiliary;
                 let answer_auxiliary = &answer_auxiliary;
                 scope.spawn(move || {
                     for query in start..end {
-                        for word in 0..COMPLETE_AUXILIARY_WORDS {
-                            let index = query * COMPLETE_AUXILIARY_WORDS + word;
-                            let source = if word < SUMCHECK_WORDS {
-                                sumcheck[query * SUMCHECK_WORDS + word]
-                            } else if word < SUMCHECK_WORDS + GKR_MASK_WORDS {
-                                gkr_mask[query * GKR_MASK_WORDS + word - SUMCHECK_WORDS]
-                            } else {
-                                state_squarefree[query]
-                            };
-                            if answer_auxiliary[index]
-                                != base_auxiliary[index] + source * combination
-                            {
+                        for word in 0..SUMCHECK_WORDS {
+                            let source = sumcheck_and_base[query * SUMCHECK_BASE_WORDS + word];
+                            let base = sumcheck_and_base
+                                [query * SUMCHECK_BASE_WORDS + SUMCHECK_WORDS + word];
+                            let index = query * NON_GKR_AUXILIARY_WORDS + word;
+                            if answer_auxiliary[index] != base + source * combination {
                                 return Some((query, word));
                             }
+                        }
+                        let squarefree_word = NON_GKR_AUXILIARY_WORDS - 1;
+                        let squarefree_index = query * NON_GKR_AUXILIARY_WORDS + squarefree_word;
+                        let squarefree_base = sumcheck_and_base
+                            [query * SUMCHECK_BASE_WORDS + SUMCHECK_WORDS + squarefree_word];
+                        if answer_auxiliary[squarefree_index]
+                            != squarefree_base + state_squarefree[query] * combination
+                        {
+                            return Some((query, squarefree_word));
+                        }
+                        if answer_gkr_mask[query]
+                            != base_gkr_mask[query] + gkr_mask[query] * combination
+                        {
+                            return Some((query, SUMCHECK_WORDS));
                         }
                     }
                     None

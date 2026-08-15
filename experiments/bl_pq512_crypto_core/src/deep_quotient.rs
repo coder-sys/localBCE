@@ -6,6 +6,7 @@ use sha3::{Digest, Sha3_512};
 
 use crate::air_composition::AirCompositionOracle;
 use crate::air_logup::AirLogupOracle;
+use crate::binding_root_v2::{BindingDigestV2, BindingRoleV2, BindingRootV2};
 use crate::circle_fft::{
     CircleFftError, evaluate_extension_coefficients_at_point,
     interpolate_extension_circle_evaluation_columns,
@@ -22,6 +23,7 @@ use crate::oods::CirclePoint;
 
 pub const DEEP_QUOTIENT_COMMITMENT_DOMAIN: &[u8] = b"BL/PQ512/WAVE1B/DEEP-QUOTIENT-COMMITMENT/v1\0";
 pub const DEEP_CLAIMS_DOMAIN: &[u8] = b"BL/PQ512/WAVE1B/DEEP-CLAIMS/v1\0";
+pub const DEEP_CLAIMS_BINDING_V2_DOMAIN: &[u8] = b"BL/PQ512/WAVE2/DEEP-CLAIMS/BINDING-ROOT-V2/v2\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DomainOodsClaims {
@@ -247,6 +249,59 @@ pub fn deep_claims_commitment(
         }
     }
     Ok(hash.finalize().into())
+}
+
+/// Bind OODS claims to native 128-byte BindingRootV2 oracle roots.
+///
+/// This parallel selected-v3 commitment never accepts or wraps a legacy
+/// 64-byte Merkle/oracle root.
+pub fn deep_claims_commitment_binding_v2(
+    program_binary_commitment: &[u8; 64],
+    query: CirclePoint,
+    claims: &[DomainOodsClaims],
+    main_root: &BindingRootV2,
+    interaction_root: Option<&BindingRootV2>,
+    composition_root: &BindingRootV2,
+) -> Result<BindingDigestV2, DeepQuotientError> {
+    if claims.is_empty()
+        || claims
+            .windows(2)
+            .any(|pair| pair[0].log_size >= pair[1].log_size)
+        || claims.iter().any(|claim| {
+            claim.values.is_empty() || claim.values.len() != claim.conjugate_values.len()
+        })
+    {
+        return Err(DeepQuotientError::Shape);
+    }
+    let mut payload = Vec::new();
+    payload.extend_from_slice(DEEP_CLAIMS_BINDING_V2_DOMAIN);
+    payload.extend_from_slice(program_binary_commitment);
+    payload.extend_from_slice(main_root.as_bytes());
+    payload.push(u8::from(interaction_root.is_some()));
+    if let Some(root) = interaction_root {
+        payload.extend_from_slice(root.as_bytes());
+    }
+    payload.extend_from_slice(composition_root.as_bytes());
+    payload.extend_from_slice(&query.x.encode());
+    payload.extend_from_slice(&query.y.encode());
+    payload.extend_from_slice(
+        &u32::try_from(claims.len())
+            .map_err(|_| DeepQuotientError::CountOverflow)?
+            .to_be_bytes(),
+    );
+    for claim in claims {
+        payload.push(claim.log_size);
+        payload.extend_from_slice(
+            &u32::try_from(claim.values.len())
+                .map_err(|_| DeepQuotientError::CountOverflow)?
+                .to_be_bytes(),
+        );
+        for value in claim.values.iter().chain(&claim.conjugate_values) {
+            payload.extend_from_slice(&value.encode());
+        }
+    }
+    BindingDigestV2::hash(BindingRoleV2::Payload, &payload)
+        .map_err(|_| DeepQuotientError::CountOverflow)
 }
 
 /// Derive the verifier-authoritative DEEP layout only from the public program
