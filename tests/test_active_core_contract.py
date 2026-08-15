@@ -76,6 +76,7 @@ def test_current_authority_keeps_private_run_and_resource_claims_closed() -> Non
     native = (ROOT / "docs" / "NATIVE_V3_ARCHITECTURE.md").read_text(encoding="utf-8")
 
     assert "No production proof backend is selected." in state
+    assert "no K128, K512, production-proof, or scale claim is permitted" in state
     assert "`proofSuiteId=null`" in state
     assert "`production_usable=false`" in state
     assert "Complete prover process-tree peak resident memory is at most 5,000,000,000" in native
