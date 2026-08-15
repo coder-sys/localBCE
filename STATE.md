@@ -129,27 +129,22 @@ The next private-proof step is research and closure of the six unresolved theore
 listed in `CURRENT_TASK.md`. Until then, the safe implementation boundary is the synthetic
 read-only plaintext wedge and narrow future-proof adapter.
 
-The accepted Withdrawal V1 publication contains 964 payload files plus one embedded manifest
-(965 ZIP entries) in one fresh candidate and three retained byte-identical targets. Each copy is
-15,156,629 bytes with SHA-256
-91CF3DFC69F652FACD03F55229D41129831E7D55DF993391C7462CFB82AC3817. The embedded
-`RELEASE_FILE_MANIFEST.json` is 182,515 bytes with SHA-256
-C4D1473275938F4CAA0124FC398473CA984377C6C44340A6ECA774FB8547C087. The exact candidate is
-`_handoff_support/archive-output-native-v3-withdrawal-v1-20260815/canonical-source.zip`; the
-retained targets are the Downloads copy, Desktop-root copy, and nested Desktop source-backup copy
-of `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. Shared target LastWrite UTC is
-2026-08-15T14:57:58.1728270Z; CRC failures are null, duplicates are 0, directories are 0, and
-zero-byte entries are 0. Direct comparison with the accepted Restore V1 archive found exactly
-3 additions, 0 removals, 7 active-document modifications, and 954 unchanged payload members.
-The additions are the three Withdrawal V1 producer/independent-verifier/test files; the seven
-modifications are `ARCHITECTURE.md`, `docs/DATABASE_ZK_ARCHITECTURE.md`,
-`docs/DESIGN_IDEOLOGY.md`, `docs/LEAN_FORMAL_KERNEL.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
-`QUICKSTART.md`, and `README.md`. The same-directory CreateNew publication attempt was denied;
-the main driver used exact in-place overwrite under the user context with retained Restore V1
-rollback copies. This publication is not called atomic. All four copies then passed complete
-byte, CRC, and readback verification. The retained Restore V1 rollback identity is 15,088,113
-bytes with SHA-256
-8AEF7CE35DF3DF7C5867F60E9300D4A7C571D87E46654BFFE3B2E0A138FE8C56. Archive identities are source
-preservation only; STATE.md and CURRENT_TASK.md remain workspace-only and are excluded from the ZIP.
-This record makes no claim of production persistence, POSIX no-clobber behavior, source
-authentication, ZK, formal verification, payment authority, PHI safety, or activation.
+The accepted post-cleanup Withdrawal V1 publication contains 964 payload files plus one embedded
+manifest (965 ZIP entries) in one fresh candidate and three retained byte-identical targets. Each
+copy is 15,169,121 bytes with SHA-256
+ACDAA4E232DED29DC666C5CA8C359E2DB1F2A48693A053EBD531324B8D81E946. The embedded
+`RELEASE_FILE_MANIFEST.json` is 182,516 bytes with SHA-256
+ECDEAC9A76B22F72E52E480AE24B539E7AF6CA1FB44CE1A1F4151BFF7DD1E516. The exact candidate is
+`C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-mirror-workhorse\work\archive-output-deletion-pass-20260815-36da256\canonical-source.zip`; the retained targets are the Downloads copy, Desktop-root copy, and nested Desktop source-backup copy
+of `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. Each readback consumed 14,958,887
+bytes and returned CRC PASS, duplicates 0, directories 0, and zero-byte entries 0. Direct
+comparison with the accepted Restore V1 archive still finds exactly 3 additions, 0 removals,
+7 active-document modifications, and 954 unchanged payload members; the deleted
+`experiments/binary_field_k128/generate_keccak_states.py` was not a manifest member. The fresh
+stage independently checked all 964 live manifest source hashes. The three new rollback copies
+remain preserved at the deletion-pass receipt directory and all pass the same ZIP readback.
+The current manifest, custodian receipt, and architecture verification are retained under
+`_handoff_support/retained-evidence-20260815`; STATE.md and CURRENT_TASK.md remain workspace-only
+and are excluded from the ZIP. This record makes no claim of production persistence, POSIX
+no-clobber behavior, source authentication, ZK, formal verification, payment authority, PHI
+safety, or activation.
