@@ -13,11 +13,11 @@ from experiments.bl_pq512_crypto_foundation.selected_proof_parameters import (
     derive_selected_proof_geometry,
     proof_suite_id,
 )
-from tests.test_wave1a_executable_air import _fixture
+from tests.fixtures.selected_air import selected_air_fixture
 
 
 def _schedule():
-    program, _ = _fixture()
+    program, _ = selected_air_fixture()
     geometry = derive_selected_proof_geometry(program)
     return geometry, build_selected_theorem_round_schedule(geometry)
 

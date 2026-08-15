@@ -29,12 +29,12 @@ from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
     encode_selected_challenge_bundle,
     verify_selected_transcript,
 )
-from tests.test_wave1a_executable_air import _fixture
+from tests.fixtures.selected_air import selected_air_fixture
 
 
 @pytest.fixture(scope="module")
 def completed_selected_session():
-    program, _ = _fixture()
+    program, _ = selected_air_fixture()
     geometry = derive_selected_proof_geometry(program)
     schedule = build_selected_theorem_round_schedule(geometry)
     ml = MlDsa87PqcryptoAdapter()

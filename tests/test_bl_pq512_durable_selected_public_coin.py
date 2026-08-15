@@ -38,7 +38,7 @@ from experiments.bl_pq512_crypto_foundation.selected_prover_orchestrator import 
     prove_selected_air,
 )
 from experiments.bl_pq512_crypto_foundation import selected_prover_orchestrator as orchestrator
-from tests.test_wave1a_executable_air import _fixture
+from tests.fixtures.selected_air import selected_air_fixture
 
 
 def _field(label: str) -> bytes:
@@ -46,7 +46,7 @@ def _field(label: str) -> bytes:
 
 
 def _material():
-    program, _ = _fixture()
+    program, _ = selected_air_fixture()
     schedule = build_selected_theorem_round_schedule(
         derive_selected_proof_geometry(program)
     )
@@ -259,7 +259,7 @@ def test_orchestrator_spawn_failure_durably_aborts_burned_attempt(
         "experiments.bl_pq512_crypto_foundation.selected_prover_orchestrator.subprocess.Popen",
         fail_spawn,
     )
-    program, _ = _fixture()
+    program, _ = selected_air_fixture()
     with pytest.raises(OSError, match="test-only-spawn-failure"):
         prove_selected_air(
             worker_executable=executable,

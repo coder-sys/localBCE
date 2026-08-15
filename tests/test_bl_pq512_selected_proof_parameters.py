@@ -25,11 +25,11 @@ def test_k128_legacy_wide_sha3_is_rejected_by_exact_resource_floor() -> None:
     assert bound.interaction_evaluation_bytes == 2_201_170_739_200
     assert bound.combined_evaluation_bytes == 2_430_548_836_352
 from experiments.fixed_shape_claim_air.semantics import StructuralError
-from tests.test_wave1a_executable_air import _fixture
+from tests.fixtures.selected_air import selected_air_fixture
 
 
 def test_selected_parameters_are_exact_and_derive_from_executable_air() -> None:
-    program, _ = _fixture()
+    program, _ = selected_air_fixture()
     geometry = derive_selected_proof_geometry(program)
 
     assert len(selected_parameter_bytes()) == 99
@@ -50,7 +50,7 @@ def test_selected_parameters_are_exact_and_derive_from_executable_air() -> None:
 
 
 def test_selected_geometry_and_suite_binding_fail_closed() -> None:
-    program, _ = _fixture()
+    program, _ = selected_air_fixture()
     geometry = derive_selected_proof_geometry(program)
     schedule = sha3_512(b"selected-schedule").digest()
     suite = proof_suite_id(geometry.program_binary_commitment, schedule)
