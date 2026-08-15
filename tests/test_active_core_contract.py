@@ -80,3 +80,13 @@ def test_current_authority_keeps_private_run_and_resource_claims_closed() -> Non
     assert "`production_usable=false`" in state
     assert "Complete prover process-tree peak resident memory is at most 5,000,000,000" in native
     assert "Do not begin another synthetic exact-K128 hash bakeoff" in native
+
+
+def test_component_benchmark_cannot_qualify_the_private_backend() -> None:
+    state = (ROOT / "STATE.md").read_text(encoding="utf-8")
+    ideology = (ROOT / "docs" / "DESIGN_IDEOLOGY.md").read_text(encoding="utf-8")
+
+    assert "No production proof backend is selected." in state
+    assert "complete bound covering concrete SHA3-512" in state
+    assert "A component benchmark, cached proof, clean process exit" in ideology
+    assert "cannot become complete-proof credit" in ideology
