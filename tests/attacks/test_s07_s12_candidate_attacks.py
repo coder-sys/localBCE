@@ -120,18 +120,6 @@ def test_candidate_registry_rejects_semantic_mutations_and_malformed_entries() -
     with pytest.raises(ValueError, match="sha3_air_mismatch"):
         validate_unqualified_registry(sha3_air)
 
-    sha3_ports = copy.deepcopy(_registry())
-    sha3_ports["candidateSha3Air"]["applicationPortFinalScheduleSelected"] = True
-    with pytest.raises(ValueError, match="sha3_air_mismatch"):
-        validate_unqualified_registry(sha3_ports)
-
-    shared_schedule = copy.deepcopy(_registry())
-    shared_schedule["candidateSha3Air"][
-        "denseSharedScheduleK512HashInvocations"
-    ] -= 1
-    with pytest.raises(ValueError, match="sha3_air_mismatch"):
-        validate_unqualified_registry(shared_schedule)
-
     malformed_module = copy.deepcopy(_registry())
     malformed_module["modules"][0] = "ENCODING_FRAMING"
     with pytest.raises(ValueError, match="module_entry_invalid"):

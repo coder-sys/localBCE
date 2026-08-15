@@ -93,34 +93,10 @@ def test_registry_is_explicitly_unqualified_and_nonactivatable() -> None:
     assert sha3_air["traceBaseColumns"] == 1_704
     assert sha3_air["coreRoundLookupMessages"] == 1_024
     assert sha3_air["firstRoundLookupMessages"] == 1_096
-    assert sha3_air["applicationPortStaticCallsites"] == 89
-    assert sha3_air["applicationPortAirCallsites"] == 39
-    assert sha3_air["applicationPortPublicPrecomputedCallsites"] == 5
-    assert sha3_air["applicationPortHostEvidenceOnlyCallsites"] == 29
-    assert sha3_air["applicationPortWave1cVerifierStateCallsites"] == 13
-    assert sha3_air["applicationPortSupersededReferenceCallsites"] == 3
-    assert sha3_air["applicationPortComprehensiveSourceScopeCurrent"] is True
-    assert sha3_air["applicationPortGovernedSourceDirectories"] == [
-        "app/batch",
-        "experiments/fixed_shape_claim_air",
-    ]
-    assert sha3_air["applicationPortObservedInvocations"] == 404_482
-    assert sha3_air["applicationPortConservativeInvocations"] == 401_275
-    assert sha3_air["applicationPortConservativePermutations"] == 1_205_016
-    assert sha3_air["applicationPortConservativeKeccakRoundRows"] == 28_920_384
-    assert sha3_air["applicationPortInventoryCurrent"] is True
-    assert sha3_air["applicationPortHistoricalMeasurementCurrent"] is False
-    assert sha3_air["applicationPortReconciledAdditionMeasurementCurrent"] is True
-    assert sha3_air["applicationPortReconciledAdditionCount"] == 5
-    assert sha3_air["applicationPortFinalScheduleSelected"] is False
-    assert sha3_air["denseSharedSchedulePackedOracleBundlesPerSlot"] == 1
-    assert sha3_air["denseSharedScheduleK128HashInvocations"] == 385
-    assert sha3_air["denseSharedScheduleK256HashInvocations"] == 769
-    assert sha3_air["denseSharedScheduleK512HashInvocations"] == 1_537
-    assert sha3_air["denseSharedScheduleK128Permutations"] == 14_322
-    assert sha3_air["denseSharedScheduleK256Permutations"] == 28_644
-    assert sha3_air["denseSharedScheduleK512Permutations"] == 57_288
-    assert sha3_air["denseSharedSchedulePreimageWidthsSelected"] is True
+    assert not any(
+        key.startswith(("applicationPort", "denseSharedSchedule"))
+        for key in sha3_air
+    )
     assert sha3_air["interactionPackingSelected"] is False
     assert sha3_air["proofSuiteId"] is None
 
@@ -137,15 +113,11 @@ def test_candidate_schema_is_strict_and_preserves_null_suite_identity() -> None:
     assert schema["properties"]["candidateNativeHiding"]["properties"][
         "interfaceScheduleCurrent"
     ] == {"const": False}
-    assert schema["properties"]["candidateSha3Air"]["properties"][
-        "applicationPortFinalScheduleSelected"
-    ] == {"const": False}
-    assert schema["properties"]["candidateSha3Air"]["properties"][
-        "applicationPortInventoryCurrent"
-    ] == {"const": True}
-    assert schema["properties"]["candidateSha3Air"]["properties"][
-        "denseSharedSchedulePreimageWidthsSelected"
-    ] == {"const": True}
+    sha3_properties = schema["properties"]["candidateSha3Air"]["properties"]
+    assert not any(
+        key.startswith(("applicationPort", "denseSharedSchedule"))
+        for key in sha3_properties
+    )
     assert schema["properties"]["candidateSha3Air"]["properties"][
         "economicMapShardIndexBits"
     ] == {"const": 24}

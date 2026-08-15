@@ -27,8 +27,8 @@ SALT_USE_LENGTH = 78
 
 # Filled from the canonical JSON instance after every reviewed registry change.
 EXPECTED_REGISTRY_CANONICAL_SHA3_512 = (
-    "4dd71275a1c400c8d19a2bd53792f92c70375e159982034b6a56108c1a2f9249"
-    "29edd35dc20150930e2bd09462a48ae6ebc41dd80853850d274bc269dcfe583e"
+    "fb179963a577a7f37f812fce5f878b60eeabae8920236f7537db7e35198369d7"
+    "a43c849fca8f3188861bb44dc59d96041e85a89af900b669e2873c5afcbe43f0"
 )
 
 SIDECAR_LAYOUT_SPEC = (
@@ -176,63 +176,6 @@ EXPECTED_SHA3_AIR_CANDIDATE = {
     "shapeSha3_512": (
         "824d0d5adb44dc5a7f61960f7ad61ccb5a34aff177a51616afd0de6b49bbb4ad"
         "ea54e216cb0d0ea5bbe59f4818468e6bc3deafec21bdeddb4db797d899784e1c"
-    ),
-    "applicationPortInventoryStatus": (
-        "HISTORICAL_51XK_MEASUREMENT_SUPERSEDED_BY_PACKED_SCHEDULE"
-    ),
-    "applicationPortInventoryCurrent": True,
-    "applicationPortComprehensiveSourceScopeCurrent": True,
-    "applicationPortGovernedSourceDirectories": [
-        "app/batch",
-        "experiments/fixed_shape_claim_air",
-    ],
-    "applicationPortHistoricalMeasurementCurrent": False,
-    "applicationPortReconciledAdditionMeasurementCurrent": True,
-    "applicationPortReconciledAdditionCount": 5,
-    "applicationPortInventoryProfileId": "K128_CALIBRATION",
-    "applicationPortStaticCallsites": 89,
-    "applicationPortAirCallsites": 39,
-    "applicationPortPublicPrecomputedCallsites": 5,
-    "applicationPortHostEvidenceOnlyCallsites": 29,
-    "applicationPortWave1cVerifierStateCallsites": 13,
-    "applicationPortSupersededReferenceCallsites": 3,
-    "applicationPortObservedInvocations": 404_482,
-    "applicationPortConservativeInvocations": 401_275,
-    "applicationPortConservativePermutations": 1_205_016,
-    "applicationPortConservativeKeccakRoundRows": 28_920_384,
-    "applicationPortInventorySha3_512": (
-        "f583d02e68c3de7b7b946b1decb620757f04b1cb0850fa23660f8e8965b611f1"
-        "11b4075c8ad8b6c246fde2c3732ab9c90effd6d17ccaf3d820f261825d1fa992"
-    ),
-    "applicationPortFinalScheduleSelected": False,
-    "applicationPortInventoryImplementation": (
-        "experiments/bl_pq512_crypto_foundation/application_sha3_port_inventory.py"
-    ),
-    "denseSharedScheduleStatus": (
-        "COMPACT_CLAIM_TREE_AND_PACKED_ORACLE_BUNDLE_SCHEDULE_PROVED_"
-        "INTERACTION_PACKING_OPEN"
-    ),
-    "denseSharedSchedulePackedOracleBundlesPerSlot": 1,
-    "denseSharedScheduleK128HashInvocations": 385,
-    "denseSharedScheduleK256HashInvocations": 769,
-    "denseSharedScheduleK512HashInvocations": 1_537,
-    "denseSharedScheduleK128Permutations": 14_322,
-    "denseSharedScheduleK256Permutations": 28_644,
-    "denseSharedScheduleK512Permutations": 57_288,
-    "denseSharedScheduleK128KeccakRoundRows": 343_728,
-    "denseSharedScheduleK256KeccakRoundRows": 687_456,
-    "denseSharedScheduleK512KeccakRoundRows": 1_374_912,
-    "denseSharedScheduleK128MembershipLinks": 896,
-    "denseSharedScheduleK256MembershipLinks": 2_048,
-    "denseSharedScheduleK512MembershipLinks": 4_608,
-    "denseSharedSchedulePreimageWidthsSelected": True,
-    "denseSharedScheduleSha3_512": (
-        "b25f5122554354b37b45eaeeca67fc78eeb0197ec258e55af10ff5922c667a0c"
-        "d5ac04b9d8e01271564df046ef87c5b220e04492119cf0532f074c3841771e28"
-    ),
-    "denseSharedScheduleImplementation": (
-        "experiments/bl_pq512_crypto_foundation/"
-        "application_sha3_shared_schedule.py"
     ),
     "economicMapScheduleStatus": (
         "SHARD24_FIXED_PRIVACY_BOUNDS_SELECTED_PADDED_AIR_OPEN"
