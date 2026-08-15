@@ -34,7 +34,7 @@ def test_h6_closed_union_is_machine_derived_and_fails_closed_pending_migration()
     assert ledger.parameters.h4_max_segments_per_shard == 37
     assert ledger.parameters.h4_max_iopp_targets_per_attempt == 148
     assert ledger.parameters.iopp_lifetime_multiplier == (1 << 64) * 4 * 148
-    assert len(ledger.sources) == 57
+    assert len(ledger.sources) == 56
     assert len(ledger.terms) == 59
     assert len(ledger.pending_term_ids) == 23
     assert ledger.iopp_per_target_bits == pytest.approx(392.108419572807)

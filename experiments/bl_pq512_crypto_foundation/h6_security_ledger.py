@@ -248,7 +248,6 @@ class H6SecurityLedger:
 
 _LEDGER_SOURCES: Final[tuple[str, ...]] = (
     "experiments/bl_pq512_crypto_foundation/h6_security_ledger.py",
-    "experiments/bl_pq512_crypto_foundation/internal_package_matrix.py",
 )
 _ALGEBRAIC_SOURCES: Final[tuple[str, ...]] = (
     "experiments/bl_pq512_crypto_core/cuda/fp16_zk_rs_security_ledger.py",
