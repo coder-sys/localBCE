@@ -98,7 +98,7 @@ OPEN_PACKAGE_DEFINITIONS: Final[dict[str, PackageDefinition]] = {
         "A02",
         "freeze bounded canonical witness and private-slot serialization",
         ("experiments/fixed_shape_claim_air/witness_schema_reference.py", "experiments/fixed_shape_claim_air/semantics.py", "app/canonical_encoding.py"),
-        ("tests/test_r25_witness_schema_reference.py", "tests/test_fixed_k_privacy_reference.py", "tests/attacks/test_r25_payment_attacks.py"),
+        ("tests/test_r25_witness_schema_reference.py", "tests/attacks/test_r25_payment_attacks.py"),
     ),
     "A03": _definition(
         "A03",
