@@ -18,6 +18,7 @@ from app.batch.leaf import current_duplicate_pepper
 from app.ingestion import parse_837
 from app.operator_portal import assert_dashboard_metrics_match, create_app
 from app.oracle_attestation import make_test_attestation
+from app.production_readiness import ProductionReadinessReport
 from app.shared_context import build_shared_context, tar_authorization_commitment_for_context
 
 
@@ -158,6 +159,18 @@ class OperatorPortalTests(unittest.TestCase):
         payload = readiness.json()
         self.assertEqual(payload["portal_mode"], "local_operator_pilot")
         self.assertEqual(payload["proof_lane"], "BL_PQ512_NATIVE")
+        self.assertEqual(payload["verifier_pin_status"], "UNSELECTED")
+        self.assertEqual(payload["selection_status"], "UNSELECTED")
+        self.assertTrue(payload["verifier_pin_ok"])
+        self.assertFalse(payload["production_ready"])
+
+    def test_unselected_verifier_blocks_production_even_when_other_checks_are_green(self):
+        with patch(
+            "app.operator_portal.production_readiness",
+            return_value=ProductionReadinessReport(True, True, ()),
+        ):
+            payload = operator_portal._readiness_payload()
+        self.assertEqual(payload["selection_status"], "UNSELECTED")
         self.assertFalse(payload["production_ready"])
 
     def test_operator_can_submit_sample_batch(self):

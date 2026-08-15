@@ -62,16 +62,27 @@ class OperationalReadinessTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertTrue(any("protocolVersion" in item for item in report.errors))
 
-    def test_verifier_pin_manifest_hashes_sources_and_forbids_legacy_wrapper(self):
+    def test_verifier_selection_sentinel_is_fail_closed(self):
         payload = load_json(OPS / "verifier_artifact_pin.example.json")
         self.assertTrue(validate_verifier_pin_manifest(payload, repo_root=REPO_ROOT).ok)
+        self.assertEqual(payload["selection_status"], "UNSELECTED")
+        self.assertFalse(payload["proof_backend_selected"])
+        self.assertFalse(payload["production_usable"])
+        self.assertIsNone(payload["proofSuiteId"])
+        self.assertIsNone(payload["verifier_interface"])
+        self.assertIsNone(payload["artifact_hash"])
+        self.assertIsNone(payload["public_input_schema"])
+        self.assertEqual(payload["source_hashes"], [])
+
         bad = copy.deepcopy(payload)
-        bad["is_legacy_proof_wrapper"] = True
-        bad["source_hashes"][0]["sha256"] = "00" * 32
+        bad["selection_status"] = "SELECTED"
+        bad["proof_backend_selected"] = True
+        bad["proofSuiteId"] = "selected-suite"
         report = validate_verifier_pin_manifest(bad, repo_root=REPO_ROOT)
         self.assertFalse(report.ok)
-        self.assertTrue(any("legacy proof" in item for item in report.errors))
-        self.assertTrue(any("source hash mismatch" in item for item in report.errors))
+        self.assertTrue(any("UNSELECTED" in item for item in report.errors))
+        self.assertTrue(any("proof_backend_selected" in item for item in report.errors))
+        self.assertTrue(any("proofSuiteId" in item for item in report.errors))
 
     def test_monitoring_events_and_launch_blockers_are_machine_readable(self):
         self.assertTrue(validate_monitoring_events(load_json(OPS / "monitoring_events.json")).ok)

@@ -24,7 +24,13 @@ from pydantic import BaseModel, Field
 from app.batch.access_control import ADMIN, AUDITOR, OPERATOR, AccessDenied, RoleBook
 from app.batch.batch_orchestrator import BatchConfig, LocalBatchRecorder, SubmittedBatch, submit_batches
 from app.batch.proof_status import REAL_PROOF_REQUIRED_STATUS
-from app.operational_readiness import load_json, validate_launch_blockers, validate_verifier_pin_manifest
+from app.operational_readiness import (
+    SELECTED_VERIFIER_SELECTION,
+    load_json,
+    validate_launch_blockers,
+    validate_verifier_pin_manifest,
+    verifier_selection_status,
+)
 from app.production_readiness import (
     CANONICAL_PROOF_LANE,
     CANONICAL_STATE_TRANSITION_BOUNDARY,
@@ -643,6 +649,7 @@ def _readiness_payload() -> dict[str, Any]:
     launch_report = validate_launch_blockers(launch_blockers)
     verifier_pin = load_json(OPS_ROOT / "verifier_artifact_pin.example.json")
     verifier_report = validate_verifier_pin_manifest(verifier_pin, repo_root=APP_ROOT)
+    selection_status = verifier_selection_status(verifier_pin)
     open_blockers = [
         {
             "id": str(item.get("id", "")),
@@ -655,10 +662,17 @@ def _readiness_payload() -> dict[str, Any]:
     ]
     return {
         "portal_mode": "production" if report.production_mode else "local_operator_pilot",
-        "production_ready": report.production_mode and report.ready,
+        "production_ready": (
+            report.production_mode
+            and report.ready
+            and verifier_report.ok
+            and selection_status == SELECTED_VERIFIER_SELECTION
+        ),
         "production_blockers": list(report.blockers),
         "launch_manifest_ok": launch_report.ok,
         "verifier_pin_ok": verifier_report.ok,
+        "verifier_pin_status": selection_status,
+        "selection_status": selection_status,
         "open_launch_blockers": open_blockers,
         "proof_lane": CANONICAL_PROOF_LANE,
         "state_transition_boundary": CANONICAL_STATE_TRANSITION_BOUNDARY,

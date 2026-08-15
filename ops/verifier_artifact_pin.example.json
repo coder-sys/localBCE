@@ -1,24 +1,12 @@
 {
-  "schema_version": "blind_ledger_native_stark_verifier_pin_v1",
+  "schema_version": "blind_ledger_verifier_selection_v1",
   "environment": "example_non_production",
+  "selection_status": "UNSELECTED",
+  "proof_backend_selected": false,
   "production_usable": false,
-  "state_transition_boundary": "NATIVE_STARK_DATABASE_TRANSITION",
-  "verifier_interface": "NativeVerifierPort",
-  "artifact_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "is_legacy_proof_wrapper": false,
-  "public_input_schema": "ops/native_stark_public_inputs_v2.json",
-  "source_hashes": [
-    {
-      "path": "experiments/bl_pq512_crypto_core/src/bin/production_candidate_verify.rs",
-      "sha256": "7ff6e0c3f0a52570e0476f3dc516a77c9777d5ed6565b6dbd4a047ac249d8237"
-    },
-    {
-      "path": "app/production_boundary.py",
-      "sha256": "85bd2f97d859456fe87f8dd3bc75541b17c1444c61a4392c26b9f0e5ee95d08b"
-    },
-    {
-      "path": "ops/native_stark_public_inputs_v2.json",
-      "sha256": "a9fb39f1f17ce50d2873dfad176b6c27cc32c1737c3c8874e9c83ef790b34301"
-    }
-  ]
+  "proofSuiteId": null,
+  "verifier_interface": null,
+  "artifact_hash": null,
+  "public_input_schema": null,
+  "source_hashes": []
 }

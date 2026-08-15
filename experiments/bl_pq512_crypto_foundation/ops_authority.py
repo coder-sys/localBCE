@@ -26,7 +26,7 @@ EXPECTED_OPS_FILES: Final[tuple[tuple[str, int, str], ...]] = (
     ("oracle_source_manifest.example.json", 1062, "2488a56707935bccc892b7dc78cd57c78adccd2348aff2dc75a48a755bb164e8f2a499d52ac896ced70f30cfbfb99181f7b691596b178c7042fcc449b95c98ff"),
     ("policy_spec_v1.yaml", 2006, "86fbce089c246c5631ff824d08af23b9646e6753470a84c9bd810c05c67c9adee4576917fece90d781ffa47e166b500bab9b14720f8511a2474c957a0bceebda"),
     ("production.env.example", 1993, "05d9bf86ef5bfb29660afdcc08f6cf2fb687466a543b169aa34ddbea5d3e6df6e74145bbbb51ecf65a34bc2069c8307fa9357cff86b9fb2238d474be7754f97e"),
-    ("verifier_artifact_pin.example.json", 948, "6e57dbe54652bacdf7f8b1c0cd0c63331fea0a4e7935399a3af4a5c3f5874d7079363173339d550f3b724d24e26dd24b45e59020df7f41e420e8a42f670f5c68"),
+    ("verifier_artifact_pin.example.json", 338, "d662d4452ab75ca59d0d35a1e5e584a44a36884447313a033be0e7d9674a9d45206e1b882ad5f0135b061e87eaba0bf68e20d1e44e9efb59d11e30ed0767a908"),
     ("wave2_internal_release_profile.json", 1351, "47c3c707402a1449cf29fc4bd7a3615e32d56b85b9865d8063f833cd6e3164e02830f0994560baa68b1fd9579ee26cf60d0f7eadb570712cde95c1afa1cce99e"),
     ("wave4_release_profile.json", 1200, "3e49c004bf91946ebcc2ff72c1852db7aa60c3d7bcd8afd6250c5bc574ceddf7463c563b6e8aa596edf4aa7eba08e88b709d2e0659cb80185d605865a5534010"),
     ("wave4_sandbox_config.json", 804, "61a6c1649c2c92690de377ae09f1e4da98336c8039274fa5e1740c45b3ca6d66634f2d7d4f7085745b1237ad5d33d254e1515b5ea448e9cb1591cca4a9806ff8"),

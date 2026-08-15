@@ -19,8 +19,22 @@ MIN_THRESHOLD = 2
 MIN_TIMELOCK_SECONDS = 72 * 60 * 60
 
 EXPECTED_PUBLIC_INPUTS = PUBLIC_INPUT_FIELD_NAMES_V2
-FORBIDDEN_PRODUCTION_SOURCE_MARKERS = (".circom", "groth", "groth16")
-DEV_ONLY_PROOF_SOURCE_MARKERS = ("blind-ledger-app-layer/zk-stark/", "blind-ledger-app-layer\\zk-stark\\", "winterfell", "f128")
+UNSELECTED_VERIFIER_SELECTION = "UNSELECTED"
+SELECTED_VERIFIER_SELECTION = "SELECTED"
+UNSELECTED_VERIFIER_PIN_KEYS = frozenset(
+    {
+        "schema_version",
+        "environment",
+        "selection_status",
+        "proof_backend_selected",
+        "production_usable",
+        "proofSuiteId",
+        "verifier_interface",
+        "artifact_hash",
+        "public_input_schema",
+        "source_hashes",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -194,44 +208,36 @@ def validate_public_input_schema(payload: Mapping[str, Any]) -> ValidationReport
     return _report(errors)
 
 
+def verifier_selection_status(payload: Mapping[str, Any]) -> str:
+    if not isinstance(payload, Mapping):
+        return "INVALID"
+    status = payload.get("selection_status")
+    if status in {UNSELECTED_VERIFIER_SELECTION, SELECTED_VERIFIER_SELECTION}:
+        return str(status)
+    return "INVALID"
+
+
 def validate_verifier_pin_manifest(payload: Mapping[str, Any], *, repo_root: Path) -> ValidationReport:
     errors: list[str] = []
-    if payload.get("schema_version") != "blind_ledger_native_stark_verifier_pin_v1":
+    if not isinstance(payload, Mapping):
+        return _report(["verifier selection sentinel must be an object"])
+    if set(payload) != UNSELECTED_VERIFIER_PIN_KEYS:
+        errors.append("verifier selection sentinel field set is not exact")
+    if payload.get("schema_version") != "blind_ledger_verifier_selection_v1":
         errors.append("verifier pin schema_version mismatch")
-    if str(payload.get("state_transition_boundary") or "") != "NATIVE_STARK_DATABASE_TRANSITION":
-        errors.append("state_transition_boundary must be NATIVE_STARK_DATABASE_TRANSITION")
-    if payload.get("is_legacy_proof_wrapper") is not False:
-        errors.append("legacy proof wrapper flag must be false")
-    if not _valid_hex32(payload.get("artifact_hash")):
-        errors.append("artifact_hash must be 32-byte hex")
-    for item in payload.get("source_hashes", []):
-        if not isinstance(item, dict):
-            errors.append("source_hashes entries must be objects")
-            continue
-        rel = str(item.get("path") or "")
-        if not rel or ".." in Path(rel).parts or Path(rel).is_absolute():
-            errors.append(f"unsafe source hash path: {rel}")
-            continue
-        rel_lower = rel.lower()
-        if any(marker in rel_lower for marker in FORBIDDEN_PRODUCTION_SOURCE_MARKERS):
-            errors.append(f"forbidden legacy proof source in verifier manifest: {rel}")
-            continue
-        if any(marker in rel_lower for marker in DEV_ONLY_PROOF_SOURCE_MARKERS):
-            errors.append(f"dev-only proof source cannot be a production verifier artifact: {rel}")
-            continue
-        observed_path = repo_root / rel
-        if not observed_path.exists():
-            errors.append(f"source hash path missing: {rel}")
-            continue
-        expected = str(item.get("sha256") or "").lower().removeprefix("0x")
-        if not HEX32_RE.fullmatch(expected):
-            errors.append(f"invalid source hash for {rel}")
-            continue
-        import hashlib
-
-        observed = hashlib.sha256(observed_path.read_bytes()).hexdigest()
-        if observed != expected:
-            errors.append(f"source hash mismatch for {rel}")
+    if payload.get("environment") != "example_non_production":
+        errors.append("verifier selection environment must be example_non_production")
+    if payload.get("selection_status") != UNSELECTED_VERIFIER_SELECTION:
+        errors.append("verifier selection status must be UNSELECTED")
+    if payload.get("proof_backend_selected") is not False:
+        errors.append("proof_backend_selected must be false")
+    if payload.get("production_usable") is not False:
+        errors.append("production_usable must be false")
+    for field in ("proofSuiteId", "verifier_interface", "artifact_hash", "public_input_schema"):
+        if payload.get(field) is not None:
+            errors.append(f"{field} must be null while verifier selection is UNSELECTED")
+    if payload.get("source_hashes") != []:
+        errors.append("source_hashes must be empty while verifier selection is UNSELECTED")
     return _report(errors)
 
 
