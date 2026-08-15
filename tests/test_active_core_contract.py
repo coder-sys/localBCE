@@ -90,3 +90,16 @@ def test_component_benchmark_cannot_qualify_the_private_backend() -> None:
     assert "complete bound covering concrete SHA3-512" in state
     assert "A component benchmark, cached proof, clean process exit" in ideology
     assert "cannot become complete-proof credit" in ideology
+
+
+def test_current_owner_keeps_the_threat_boundary_fail_closed() -> None:
+    native = (ROOT / "docs" / "NATIVE_V3_ARCHITECTURE.md").read_text(encoding="utf-8")
+    database = (ROOT / "docs" / "DATABASE_ZK_ARCHITECTURE.md").read_text(encoding="utf-8")
+    state = (ROOT / "STATE.md").read_text(encoding="utf-8")
+
+    assert "The prover cannot omit an applicable rule" in native
+    assert "authoritative completeness/nonmembership" in native
+    assert "A verifier failure returns no receipt and no directive" in native
+    assert "rechecks the batch nonce, state-before roots" in database
+    assert "Proof/session acceptance never means `CLEAR`" in state
+    assert "The complete process tree, scratch, and pagefile gates" in state

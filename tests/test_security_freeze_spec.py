@@ -82,16 +82,6 @@ def test_hardening_machine_artifact_is_snapshot_consistent_and_markdown_is_retir
         _assert_retired(path)
 
 
-def test_current_threat_model_matches_conditional_zk_clearance_boundary() -> None:
-    threat_model = _read(ROOT / "docs" / "BL_PQ512_THREAT_MODEL.md")
-    database = _read(ROOT / "docs" / "DATABASE_ZK_ARCHITECTURE.md")
-    assert "Caller selects mode" in threat_model
-    assert "Require authoritative completeness plus exact nonmembership" in threat_model
-    assert "official system moves money" in threat_model
-    assert "proofSuiteId=null" in threat_model
-    assert "No payment state transition occurs inside Blind Ledger" in database
-
-
 def test_legacy_twelve_field_manifest_is_exact_but_does_not_govern_native_v3() -> None:
     manifest = json.loads(_read(ABI_PATH))
     observed = [
