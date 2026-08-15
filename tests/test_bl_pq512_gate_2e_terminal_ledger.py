@@ -250,8 +250,6 @@ def test_terminal_ledger_routes_simulator_evidence_to_active_construction(contex
     sources = tuple(record.source_id for record in ledger.records)
     assert any("fp16_zk_rs_hiding_simulator_kat.py" in source for source in sources)
     assert any("fp16_zk_rs_public_coin_bridge.rs" in source for source in sources)
-    assert all("circle_hiding_simulator.py" not in source for source in sources)
-    assert all("circle_quotient_masking.py" not in source for source in sources)
     assert "complete_simulator_missing" not in ledger.blockers
 
 

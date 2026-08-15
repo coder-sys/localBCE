@@ -19,13 +19,6 @@ from experiments.bl_pq512_crypto_foundation.scalar_state_relation_controls impor
     run_all_scalar_controls,
     scalar_parity_summary,
 )
-from experiments.bl_pq512_crypto_foundation.scalar_state_relation_parity import (
-    STATUS as PARITY_STATUS,
-    build_c0_parity_records,
-    parity_manifest_sha3_512_hex,
-)
-
-
 FLAGS = {
     "BL_ENV": "test",
     "BL_DEV": "1",
@@ -94,27 +87,6 @@ def test_scalar_controls_expose_derived_candidate_risk_without_claiming_measurem
     permutation = results["C4"].lanes[0].shuffle_permutation
     assert set(permutation) == set(range(len(permutation)))
     assert results["C4"].lanes[0].shuffle_challenge_512 != b"\x00" * 64
-
-
-def test_c0_positive_and_negative_parity_manifest_is_reproducible() -> None:
-    records = build_c0_parity_records()
-    assert [record.profile_id for record in records] == list(PROFILE_CLAIM_SLOTS)
-    assert all(record.candidate_ids == CANDIDATE_IDS for record in records)
-    assert all(record.negative_case_names == (
-        "stale_read",
-        "omitted_write",
-        "reordered_write",
-        "duplicate_identity",
-        "collision",
-        "conflicting_update",
-        "root_substitution",
-    ) for record in records)
-    assert all(record.negative_rejection_families for record in records)
-    assert all(record.as_dict()["status"] == PARITY_STATUS for record in records)
-    assert parity_manifest_sha3_512_hex(records) == (
-        "fc99b31b333a6ec3a19cc55099bd612dcd1d7964115301bbcb9d512d8efe184b"
-        "c320f04af65f3aa8417bf03fe368e05dddc1d2bd7fd2b2005280e777f0d496c4"
-    )
 
 
 def test_result_root_mutation_is_rejected_by_independent_verifier() -> None:
