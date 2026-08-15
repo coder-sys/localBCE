@@ -1,8 +1,8 @@
 """Qualification record for the active Construction 8.2 hiding path.
 
-The old ``native_hiding_parameters`` module is retained as historical Circle
-worksheet evidence.  The current prover does not import that worksheet: it
-uses the committed GKR mask, the packed SHA3 bus, the selected FRI geometry,
+The old Circle worksheet is retained only in Git history and reviewed source
+archives.  The current prover does not import that retired worksheet: it uses
+the committed GKR mask, the packed SHA3 bus, the selected FRI geometry,
 and the dual-PQ interactive transcript.  This module makes that rebase
 machine-checkable without pretending that an old Circle-only obligation was a
 missing implementation in the active path.
