@@ -1,31 +1,17 @@
-# Blind Ledger historical documentation
+# Historical evidence
 
-Updated: 2026-08-02
+Superseded architecture narratives were removed from the live documentation set on 2026-08-14.
+Git history and retained source archives preserve their exact bytes.
 
-Status: non-executable audit history. Files in this directory preserve former active documents
-verbatim except for an `Archived` title marker. They can explain provenance, rejected decisions,
-and measurement lineage but cannot authorize implementation or restore a retired path.
+Legacy filenames that are still imported or asserted by regression code contain a short retirement
+marker. Those markers are compatibility aids only; they are not architecture, security, execution,
+or release authority.
 
-## Authority rule
+Use `ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
+`docs/DATABASE_ZK_ARCHITECTURE.md`, `STATE.md`, and `CURRENT_TASK.md` for the current system.
 
-Use current source, fail-closed tests, the newest verified `STATE.md` section,
-`CURRENT_TECH_STACK.md`, `ARCHITECTURE.md`, and the active `IMPLEMENTATION_ROADMAP.md` for work.
-Never execute a `next`, `current`, `remaining`, `rerun`, or `resume` sentence found here.
-
-## Archived documents
-
-| File | Preserved scope | Active replacement |
-| --- | --- | --- |
-| `IMPLEMENTATION_ROADMAP_THROUGH_2026-08-01.md` | Former 2,072-line roadmap, package narrative, dated runs, and superseded execution language | `../IMPLEMENTATION_ROADMAP.md` |
-| `BL_PQ512_THROUGHPUT_RECOVERY_PLAN_THROUGH_2026-08-01.md` | Former recovery research, intermediate profiles, measurements, and dated closure records | `../BL_PQ512_THROUGHPUT_RECOVERY_PLAN.md` |
-| `BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR_THROUGH_2026-08-01.md` | Former architecture evolution from early controls through H4 | `../BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md` |
-| `BL_PQ512_CRYPTO_CORE_README_THROUGH_2026-08-01.md` | Former crate checkpoint narrative and superseded measurements | `../../experiments/bl_pq512_crypto_core/README.md` |
-| `PROVING_OPTIMIZATION_REVIEW_THROUGH_2026-08-01.md` | Former paper screen, experimental mechanisms, and superseded prototype order | `../PROVING_OPTIMIZATION_REVIEW.md` |
-
-Chronological cross-document evidence remains in dated `STATE.md` sections. Architectures that are
-affirmatively rejected are indexed in `../REJECTED_ARCHITECTURES.md`. Exact pre-split bytes remain
-recoverable from Git commit `e640e88` and its parents.
-
-Some preserved files still contain `authoritative`, `current`, or `next` wording that was accurate
-at the time they governed the workspace. The `Archived` title marker and the authority rule above
-override those historical words; they do not authorize present implementation.
+The root `WAVE2_HANDOFF_2026-07-26.md` checkpoint was superseded by those current authority
+records and retired from the live source baseline. Its exact 12,916-byte UTF-8 blob remains
+recoverable in Git commit `20c409b6f546085120542e294e1868e878c56cf8` (SHA-256
+`5a4de0ca15f5ce75b5dc3f6cff47d81f976c00cc9b20fb279a2d7212ade9f572`). It is intentionally
+excluded from the current release manifest and must not be treated as current authority.

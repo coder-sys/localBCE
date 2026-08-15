@@ -20,3 +20,11 @@ l2/deployments/
 /cargo-target-*/
 /experiments/bl_pq512_crypto_core/cuda/nvrtc-cache/
 /experiments/bl_pq512_crypto_core/cuda/cuda_nvrtc/
+
+# Workspace-only custody and run evidence. These trees remain preserved on disk and are
+# intentionally excluded from the reviewable source ledger and release manifests.
+/_handoff_support/
+**/_handoff_support/
+/work/
+/experiments/native_v3_dp_nucleus/_run/
+/experiments/native_v3_dp_nucleus/research/
