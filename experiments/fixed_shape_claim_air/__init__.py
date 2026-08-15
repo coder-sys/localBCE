@@ -22,7 +22,6 @@ from .trace import (
     LogicalTraceSlot,
     build_logical_trace,
 )
-from .replay_alignment import validate_k256_replay_alignment
 from .payment import (
     BatchEconomics,
     SlotEconomics,
@@ -72,6 +71,5 @@ __all__ = [
     "reference_payment_state_root",
     "reference_slot_operation_commitment",
     "validate_batch",
-    "validate_k256_replay_alignment",
     "validate_slot_shape",
 ]
