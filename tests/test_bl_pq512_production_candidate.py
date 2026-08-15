@@ -126,34 +126,6 @@ def test_candidate_rejects_bundle_statement_swap() -> None:
         )
 
 
-def test_candidate_rejects_bundle_suite_mismatch() -> None:
-    suite = _wide("candidate-suite")
-    schema = _wide("candidate-schema")
-    verifier = _wide("candidate-verifier")
-    with pytest.raises(ProductionCandidateError, match="candidate_bundle_suite_mismatch"):
-        build_production_envelope(
-            public_outputs=bytes(12 * 32),
-            sidecar=_sidecar(suite, schema, verifier),
-            proof_package=b"opaque-proof-package",
-            transcript_evidence=b"opaque-transcript",
-            challenge_bundle=_bundle(_wide("candidate-other-suite")),
-        )
-
-
-@pytest.mark.parametrize(
-    ("line", "error"),
-    (
-        ("NOT_OK", "candidate_native_receipt_header_invalid"),
-        ("OK proof_suite_id=00", "candidate_native_receipt_field_set_invalid"),
-        (
-            "OK proof_suite_id=00 proof_suite_id=00",
-            "candidate_native_receipt_field_invalid",
-        ),
-    ),
-)
-def test_native_receipt_parser_rejects_malformed_fields(line: str, error: str) -> None:
-    with pytest.raises(ProductionCandidateError, match=error):
-        NativeVerificationReceipt.from_native_line(line)
 
 
 def test_candidate_rejects_bundle_suite_mismatch() -> None:

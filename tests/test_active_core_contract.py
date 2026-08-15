@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_ROOT = ROOT / "tests"
 ACTIVE_OWNER_ROOTS = (
     ROOT / "app" / "governance",
     ROOT / "app" / "mirror",
@@ -75,6 +76,21 @@ def _resolve_local_module(module: str) -> Path | None:
     return next((path for path in candidates if path.is_file()), None)
 
 
+def _resolve_local_test_module(module: str) -> Path | None:
+    if module != "tests" and not module.startswith("tests."):
+        return None
+    relative = Path(*module.split("."))
+    candidates = (
+        ROOT / relative.with_suffix(".py"),
+        ROOT / relative / "__init__.py",
+    )
+    resolved = next((path for path in candidates if path.is_file()), None)
+    if resolved is not None:
+        return resolved
+    directory = ROOT / relative
+    return directory if directory.is_dir() else None
+
+
 def _transitive_source_files() -> list[Path]:
     return sorted(
         {
@@ -140,6 +156,42 @@ def test_active_application_transitive_closure_has_no_retired_core_or_pin_refere
         if marker in pin
     )
     assert not violations
+
+
+def test_test_integrity_has_no_unresolved_local_imports_or_duplicate_names() -> None:
+    unresolved: set[str] = set()
+    duplicates: set[str] = set()
+    for path in sorted(TEST_ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.update(
+                    alias.name
+                    for alias in node.names
+                    if alias.name == "tests" or alias.name.startswith("tests.")
+                )
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module == "tests" or node.module.startswith("tests."):
+                    imported_modules.add(node.module)
+        for module in imported_modules:
+            if _resolve_local_test_module(module) is None:
+                unresolved.add(f"{path.relative_to(ROOT)} -> {module}")
+        names: dict[str, int] = {}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+                "test_"
+            ):
+                names[node.name] = names.get(node.name, 0) + 1
+        duplicates.update(
+            f"{path.relative_to(ROOT)} -> {name} x{count}"
+            for name, count in names.items()
+            if count > 1
+        )
+    assert not unresolved, f"unresolved local tests.* imports: {sorted(unresolved)}"
+    assert not duplicates, f"duplicate top-level test names: {sorted(duplicates)}"
 
 
 def test_current_authority_keeps_the_nonpayment_nonproof_boundary() -> None:
