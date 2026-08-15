@@ -93,6 +93,9 @@ _FORBIDDEN_SUFFIXES = {
     ".zip",
     ".zst",
 }
+_PORTAL_FONT_PREFIX = "portal_shared/fonts/"
+_PORTAL_FONT_SUFFIX = ".woff2"
+_WOFF2_HEADER_BYTES = 48
 _STRUCTURAL_PRIVATE_CATEGORIES = {
     "encoded_container_not_privacy_scanned",
     "host_private_path",
@@ -184,7 +187,11 @@ def _validate_relative_path(value: object) -> str:
     filename = parts[-1].casefold()
     if filename in _FORBIDDEN_FILENAMES:
         raise ReleaseArchiveError("release path names a forbidden artifact or assistant file")
-    if Path(filename).suffix in _FORBIDDEN_SUFFIXES:
+    is_portal_font = (
+        value.casefold().startswith(_PORTAL_FONT_PREFIX)
+        and Path(filename).suffix.casefold() == _PORTAL_FONT_SUFFIX
+    )
+    if Path(filename).suffix in _FORBIDDEN_SUFFIXES and not is_portal_font:
         raise ReleaseArchiveError("release path has a forbidden generated or archive suffix")
     stem = Path(filename).stem
     if Path(filename).suffix == ".json" and "proof" in re.sub(r"[^a-z0-9]", "", stem):
@@ -412,6 +419,17 @@ def _contains_forbidden_encoded_payload(text: str) -> bool:
 
 
 def _validate_payload_content(relative: str, data: bytes) -> None:
+    if (
+        relative.casefold().startswith(_PORTAL_FONT_PREFIX)
+        and Path(relative).suffix.casefold() == _PORTAL_FONT_SUFFIX
+    ):
+        if len(data) < _WOFF2_HEADER_BYTES or data[:4] != b"wOF2":
+            raise ReleaseArchiveError("portal WOFF2 asset has an invalid header")
+        declared_length = int.from_bytes(data[8:12], "big")
+        table_count = int.from_bytes(data[12:14], "big")
+        if declared_length != len(data) or table_count == 0:
+            raise ReleaseArchiveError("portal WOFF2 asset header does not match its payload")
+        return
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
