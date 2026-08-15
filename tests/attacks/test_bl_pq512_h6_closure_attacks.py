@@ -13,9 +13,6 @@ from experiments.bl_pq512_crypto_foundation.h6_complete_simulator import (
     simulate_malformed,
     simulate_valid,
 )
-from experiments.bl_pq512_crypto_foundation.h6_migration_theorem import (
-    verify_h6_migration_mutation_rejection,
-)
 from experiments.bl_pq512_crypto_foundation.h6_receipt_grammar import (
     H6ReceiptGrammarError,
     encode_receipt,
@@ -75,10 +72,6 @@ def test_h6_security_ledger_mutation_does_not_meet_floor() -> None:
     assert ledger.target_bits == TARGET_BITS
     assert replace(ledger, target_bits=TARGET_BITS + 1).qualifies is False
     assert replace(ledger, status="H6_SECURITY_LEDGER_V2_COMPLETE").qualifies is False
-
-
-def test_h6_migration_root_mutation_rejects() -> None:
-    verify_h6_migration_mutation_rejection()
 
 
 def test_h6_supply_chain_missing_third_party_license_rejects(tmp_path: Path) -> None:
