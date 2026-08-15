@@ -54,8 +54,6 @@ PIN_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "experiments/bl_pq512_crypto_foundation/h6_security_ledger.py",
         "experiments/bl_pq512_crypto_foundation/h6_privacy_boundary.py",
         "experiments/bl_pq512_crypto_foundation/h6_migration_theorem.py",
-        "experiments/bl_pq512_crypto_foundation/h6_evidence_manifest.py",
-        "tools/build_h6_evidence_manifest.py",
     ),
     "cuda": (
         "experiments/bl_pq512_crypto_core/cuda/fp16_zk_rs_security_ledger.py",
