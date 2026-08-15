@@ -1,6 +1,6 @@
 # Blind Ledger architecture
 
-Updated: 2026-08-14
+Updated: 2026-08-15
 
 Blind Ledger is RightRail's state-side payment-clearance product. It answers one narrow question:
 may this proposed payment proceed under the deterministic rules the state has approved for
@@ -102,7 +102,7 @@ requires architecture review.
 | Current candidate seam | Production plug-in | Invariant interface | Qualification evidence |
 | --- | --- | --- | --- |
 | Mirror Provider Trust Graph source intake | Authenticated credential/enrollment source adapters | Canonical source coverage, provenance, completeness/nonmembership, findings, snapshots, and transitions | Graph independent verifier and focused mutation/rebound KATs |
-| Governance Control Pack approval/withdrawal | Real governance custody and PQ signatures | External approval bytes, stage/root chain, source-contract and suite roots, observation-only flags | Governance KATs; withdrawal V1 source/test evidence remains pending review |
+| Governance Control Pack approval/withdrawal | Real governance custody and PQ signatures | External approval bytes, stage/root chain, source-contract and suite roots, observation-only flags | Governance KATs; Withdrawal V1 and lifecycle-head evidence is accepted as synthetic, local/current-Windows candidate evidence |
 | Mirror Continuity V2/Restore V1 | Production database, custody, and deployment state store | Derived chain ID, immutable artifact/event/receipt roots, exact retry, export/restore, heads, and durable approval lifecycle head | 34/34 lifecycle/operational suite; local/current-Windows evidence is not a POSIX claim |
 | Sanitized support boundary | State-owned deployment/support adapter | Allowlist-only diagnostics, bounded telemetry, zero-raw-identifier output | Support isolation and canary tests |
 | Deferred Lean semantic target | Lean executable kernel and narrow native adapter | Canonical semantics, legal transition, replay, decision/access join, and after-state | Theorem/build/axiom and independent-kernel gates defined in `docs/LEAN_FORMAL_KERNEL.md` |
@@ -241,6 +241,27 @@ assumptions, CI gates, and implementation order.
   fallback/bypass process and is recorded by Mirror.
 - The state owns its rules, data, keys, histories, interfaces, tests, configurations, and continuity
   export. RightRail must remain replaceable without a proprietary operational dependency.
+
+## Repository ownership and documentation map
+
+The root authorities are `AGENTS.md` (execution), `CURRENT_TASK.md` (bounded work), `STATE.md`
+(verified evidence), this file (system ownership), and `README.md` (entry route). The independent
+design authority is `docs/DESIGN_IDEOLOGY.md`; the private-proof, database, Lean, Native-v3,
+roadmap, technology, dependency, and supply-chain owners are linked from `README.md`.
+
+The following local documents have one component owner and one narrow purpose:
+
+| Component | Local authority | Purpose |
+| --- | --- | --- |
+| Protected batch reference | [`app/batch/PEPPER_ROTATION.md`](app/batch/PEPPER_ROTATION.md), [`app/batch/leaf_format.md`](app/batch/leaf_format.md) | Retired format and pepper notes required by the protected compatibility boundary |
+| Protected deployment marker | [`docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`](docs/DEPLOYMENT_READY_BUILD_CONTRACT.md) | Byte-bound launch-blocker compatibility marker retained for `ops/launch_blockers.json` |
+| Experimental lanes | [`experiments/README.md`](experiments/README.md), [`experiments/bl_pq512_crypto_foundation/README.md`](experiments/bl_pq512_crypto_foundation/README.md), [`experiments/fixed_shape_claim_air/README.md`](experiments/fixed_shape_claim_air/README.md) | Native-v3 entry route and explicit non-authority status for retained experiments |
+| Operations | [`ops/DEPLOYMENT_RUNBOOK.md`](ops/DEPLOYMENT_RUNBOOK.md), [`ops/KEY_CUSTODY_AND_ROTATION.md`](ops/KEY_CUSTODY_AND_ROTATION.md), [`ops/MONITORING_AUDIT_EVENTS.md`](ops/MONITORING_AUDIT_EVENTS.md), [`ops/PRODUCTION_CONFIG_CHECKLIST.md`](ops/PRODUCTION_CONFIG_CHECKLIST.md), [`ops/RISK_REGISTER.md`](ops/RISK_REGISTER.md) | Synthetic deployment, custody, monitoring, configuration, and risk procedures |
+| Portal | [`portal_shared/FONT_SOURCES.md`](portal_shared/FONT_SOURCES.md) | Font provenance and local-serving license record |
+| Protected Cairo reference | [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md), [`zk-cairo-sharp/PROVING_STATUS.md`](zk-cairo-sharp/PROVING_STATUS.md), [`zk-cairo-sharp/SECURITY_ATTACK_NOTES.md`](zk-cairo-sharp/SECURITY_ATTACK_NOTES.md) | Differential reference status and attack coverage; never a selected backend |
+
+The release and documentation gates register every retained Markdown path. A new document or a
+document under a retired lane is a policy failure until its owner and purpose are reviewed.
 
 ## Active target
 

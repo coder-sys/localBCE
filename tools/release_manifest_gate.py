@@ -36,7 +36,6 @@ MAX_FILE_BYTES = archive_builder.MAX_FILE_BYTES
 POLICY_INPUT_SHA256 = {
     ".archiveignore": "a6b8981b81255c914df2fd7fb60cbab3266922b748492aad08f82c6e6e25c6d6",
     ".gitignore": "8e62c95885ead2e9d03a65568ccc425d01b0b92a3f3f7d9bb89b7d85c558cdc9",
-    "PROJECT_MAP.md": "aebd2ebaf91050df2210ff3a3b25d921a8d058b2c959e284a2f480c21d24dcbe",
 }
 
 
@@ -67,14 +66,10 @@ ROOT_PATH_ALLOWLIST = frozenset(
         ".gitignore",
         "AGENTS.md",
         "ARCHITECTURE.md",
-        "CONTINUATION_MANDATE.md",
         "CURRENT_TASK.md",
-        "PROJECT_MAP.md",
         "PROOF_PROVENANCE.md",
         "pytest.ini",
-        "QUICKSTART.md",
         "rarc_mapping.tsv",
-        "rarc_ratification_proposal.md",
         "README.md",
         "STATE.md",
         "requirements-dev.txt",
@@ -91,24 +86,16 @@ ROOT_MARKDOWN_ALLOWLIST = frozenset(
 DOC_MARKDOWN_ALLOWLIST = frozenset(
     {
         "docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md",
-        "docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md",
-        "docs/BL_PQ512_SECURITY_FREEZE.md",
+        "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
         "docs/CURRENT_TECH_STACK.md",
         "docs/DATABASE_ZK_ARCHITECTURE.md",
-        "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
         "docs/DESIGN_IDEOLOGY.md",
-        "docs/history/README.md",
         "docs/IMPLEMENTATION_ROADMAP.md",
         "docs/LEAN_FORMAL_KERNEL.md",
         "docs/NATIVE_V3_ARCHITECTURE.md",
         "docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md",
         "docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md",
         "docs/PYTHON_DEPENDENCY_LOCKING.md",
-        "docs/REJECTED_ARCHITECTURES.md",
-        "docs/security-freeze/BL-PQ512-v1/context.md",
-        "docs/security-freeze/BL-PQ512-v1/hardening.md",
-        "docs/security-freeze/BL-PQ512-v1/proposals/001-wide-challenge-and-proof-commitments.md",
-        "docs/security-freeze/BL-PQ512-v1/proposals/002-native-witness-hiding.md",
         "docs/SUPPLY_CHAIN_BASELINE.md",
     }
 )
@@ -137,11 +124,9 @@ CURRENT_TOP_LEVELS = frozenset(
 # They remain selectable only when a release review explicitly includes them.
 RETAINED_PREFIXES = (
     "app/batch/",
-    "docs/BL_PQ512_",
+    "docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md",
     "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
-    "docs/REJECTED_ARCHITECTURES.md",
     "docs/history/",
-    "docs/security-freeze/",
     "experiments/bl_pq512_crypto_foundation/",
     "experiments/fixed_shape_claim_air/",
     "zk-cairo-sharp/",

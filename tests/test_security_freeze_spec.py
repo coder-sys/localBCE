@@ -29,12 +29,6 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _assert_retired(path: Path) -> None:
-    text = _read(path)
-    assert text.startswith("# Retired architecture evidence")
-    assert "not architecture, execution, security, or release authority" in text
-
-
 def test_tracked_ops_is_the_exact_commit_bound_authority() -> None:
     from experiments.bl_pq512_crypto_foundation.ops_authority import (
         OPS_AUTHORITY_STATUS,
@@ -45,9 +39,6 @@ def test_tracked_ops_is_the_exact_commit_bound_authority() -> None:
 
 
 def test_legacy_security_prose_is_retired_while_machine_evidence_remains_nonactivating() -> None:
-    _assert_retired(ROOT / "docs" / "BL_PQ512_SECURITY_FREEZE.md")
-    _assert_retired(ROOT / "docs" / "REJECTED_ARCHITECTURES.md")
-
     hardening = json.loads(_read(HARDENING_PATH))
     assert hardening["status"] == "REJECTED_KERNEL_INTERNAL_REPLACEMENT_SELECTED_S09_OPEN"
     assert hardening["historical_r23_status"] == (
@@ -63,6 +54,8 @@ def test_legacy_security_prose_is_retired_while_machine_evidence_remains_nonacti
     assert hardening["observed_current_profile"]["library_nominal_bits"] == 13
     assert hardening["observed_current_profile"]["witness_hiding"] is False
     assert not (ROOT / "experiments" / "stwo_batch_air").exists()
+    assert not (ROOT / "docs" / "BL_PQ512_SECURITY_FREEZE.md").exists()
+    assert not (ROOT / "docs" / "REJECTED_ARCHITECTURES.md").exists()
 
 
 def test_hardening_machine_artifact_is_snapshot_consistent_and_markdown_is_retired() -> None:
@@ -74,12 +67,9 @@ def test_hardening_machine_artifact_is_snapshot_consistent_and_markdown_is_retir
         "BLH-001",
         "BLH-002",
     }
-    _assert_retired(HARDENING_ROOT / "context.md")
-    _assert_retired(HARDENING_ROOT / "hardening.md")
     for proposal in hardening["proposals"]:
-        path = HARDENING_ROOT / proposal["file"]
-        assert path.is_file()
-        _assert_retired(path)
+        assert proposal["disposition"] == "git-history-and-retained-archives"
+        assert "file" not in proposal
 
 
 def test_legacy_twelve_field_manifest_is_exact_but_does_not_govern_native_v3() -> None:

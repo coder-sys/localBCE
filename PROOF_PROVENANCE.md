@@ -2,9 +2,10 @@
 
 Updated: 2026-08-15
 
-This is a concise compatibility index retained because the protected `zk-cairo-sharp/README.md`
-references it. It is not architecture authority; `STATE.md`, `CURRENT_TASK.md`, and the active
-architecture documents control qualification and nonactivation.
+Owner: the protected `zk-cairo-sharp/README.md` compatibility boundary. Purpose: point that
+protected reference to current evidence without preserving a competing proof narrative. It is not
+architecture authority; `STATE.md`, `CURRENT_TASK.md`, and the active architecture documents
+control qualification and nonactivation.
 
 ## Current evidence
 

@@ -381,34 +381,6 @@ class ReleaseArchiveTests(unittest.TestCase):
                             source, manifest, base / f"release-{index}.zip"
                         )
 
-    def test_continuation_mandate_allows_only_the_pinned_operational_workspace_path(self) -> None:
-        pinned = release._PINNED_WORKSPACE_PATH
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
-            source = base / "source"
-            source.mkdir()
-            manifest = _write_manifest(
-                source,
-                {"CONTINUATION_MANDATE.md": f"workspace={pinned}\n".encode("utf-8")},
-            )
-            receipt = release.build_release_archive(source, manifest, base / "release.zip")
-            self.assertEqual(2, receipt["entry_count"])
-
-            other = base / "other"
-            other.mkdir()
-            other_manifest = _write_manifest(
-                other,
-                {
-                    "CONTINUATION_MANDATE.md": (
-                        b"workspace=C:\\Users\\someone-else\\private\\checkout\n"
-                    )
-                },
-            )
-            with self.assertRaisesRegex(
-                release.ReleaseArchiveError, "structural privacy gate"
-            ):
-                release.build_release_archive(other, other_manifest, base / "other.zip")
-
     def test_canonical_standard_and_urlsafe_base64_variants_are_rejected(self) -> None:
         private_payload = b"PK\x03\x04\x00>\xfc"
         standard = base64.b64encode(private_payload)

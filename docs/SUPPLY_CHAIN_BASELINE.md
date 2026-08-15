@@ -1,6 +1,8 @@
 # Supply-chain baseline
 
 Updated: 2026-08-14
+Owner: source, dependency, build, and release hygiene baseline. Detailed Python lock behavior belongs
+to `docs/PYTHON_DEPENDENCY_LOCKING.md`; this document keeps only the cross-cutting rules.
 
 This repository is developed and verified with existing offline Python and Rust toolchains.
 Dependency acquisition is a separate reviewed activity; routine verification must not silently

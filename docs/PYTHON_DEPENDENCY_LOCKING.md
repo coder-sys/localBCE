@@ -1,5 +1,8 @@
 # Reviewed Python dependency boundary
 
+Owner: offline Python dependency acquisition, lock, wheelhouse, and installation contract. It does
+not authorize network resolution or production activation.
+
 Finding `R25-C01` is closed for the supported Python targets by a split acquisition/install design.
 Network acquisition is an explicit maintainer review activity. Routine development, CI, and release
 installation are offline and consume only an already provisioned wheelhouse.

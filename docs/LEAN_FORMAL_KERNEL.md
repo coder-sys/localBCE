@@ -5,6 +5,8 @@ Status: approved deferred target architecture and production-shaped semantic plu
 qualification status is authoritative in `STATE.md` and `CURRENT_TASK.md`; Lean work remains
 phase-gated, is not a current implementation stage, and the kernel is not yet implemented or
 linked to the deployed path; it is not production credit until those gates pass.
+Owner: later mandatory formal semantic/state-transition gate. This document specifies the target and
+theorem contract; it contains no Lean implementation.
 
 ## Purpose
 

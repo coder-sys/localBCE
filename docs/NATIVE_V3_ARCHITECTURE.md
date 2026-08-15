@@ -3,6 +3,8 @@
 Updated: 2026-08-14
 Status: production-shaped target architecture; current qualification status is authoritative in
 `STATE.md` and `CURRENT_TASK.md`, and no backend is selected.
+Owner: private-proof, security, state, privacy, and CPU qualification authority. The commercial
+Mirror wedge is governed by its own read-only boundary and does not inherit private-proof claims.
 
 This document is the active proof, security, state, and CPU qualification authority. The former
 Privacy V2, BL-PQ512/H4, binary-field, Binius64, and decisive-composition narratives have been

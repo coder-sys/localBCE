@@ -1,46 +1,83 @@
 # Blind Ledger
 
-Blind Ledger is RightRail's state-side payment-clearance system. It determines whether an already
-proposed payment may proceed under selected deterministic state rules; it does not adjudicate the
-entire claim or move money.
+Blind Ledger is RightRail's state-side payment-clearance layer. It answers whether an already
+proposed payment satisfies state-approved deterministic controls; the incumbent adjudicates the
+claim and the official state system and payment rails move money.
 
-When undisclosed evidence crosses the clearance trust boundary and affects automation, the pinned
-native verifier must accept the private proof before the database applies the corresponding state
-transition atomically. Signed government and oracle records provide authenticated inputs. The proof
-binds the underlying policy result, one of `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, or
-`EXCEPTION_APPROVED`, governed exception authority, source, replay protection, value conservation,
-and the clearance commitment. Proof acceptance alone never means `CLEAR`; the existing state
-payment system remains the money mover.
+Mirror / Provider Trust Graph is a separate read-only evidence and continuity product. It reports
+source coverage, findings, discrepancies, remediation/retest, parity, and transition artifacts.
+It does not expose a Blind Ledger clearance receipt or authorize an economic mutation. The
+five-directive clearance harness remains internal.
 
-This repository is a production-shaped, integration-ready candidate. Productionization is bounded
-qualification and adapter substitution, not a semantic rewrite; current qualification status and
-nonactivation gates are authoritative in `STATE.md` and `CURRENT_TASK.md`.
+When an undisclosed payment-relevant assertion crosses the clearance boundary and affects
+automation, a verifier-owned native proof must be accepted before the database applies the exact
+transition atomically. Lawfully state-owned plaintext may use the verifier-owned deterministic
+control set without a purposeless ZK wrapper. Proof/session acceptance never means `CLEAR`, and
+`policyResult` remains distinct from `effectiveDirective`.
 
-The approved target uses a small executable Lean kernel for clearance semantics, canonical semantic
-decoding, and legal state transitions. Rust remains the native cryptographic verifier and database
-integration shell. The Lean kernel is a deferred production plug-in behind the fixed semantics.
+This repository is a production-shaped, integration-ready candidate. Current evidence is synthetic,
+local/current-Windows, and nonactivating: `proofSuiteId=null`, `production_usable=false`, activation
+is false, and no real PHI, payment data, production proof backend, or deployed Lean kernel is
+authorized. Productionization is qualification and narrow adapter substitution, not a semantic
+rewrite.
 
-The first commercial wedge is read-only provider credential and enrollment continuity through the
-Mirror/Provider Trust Graph and observation-only Governance seams. It can adopt authenticated source
-adapters and a qualified operational store independently of the private-payment ZK backend; the
-private clearance path still requires Lean, theorem-qualified ZK, and database/custody qualification.
+## Read in this order
 
-Start with:
+1. [`AGENTS.md`](AGENTS.md) — execution rules and document precedence.
+2. [`CURRENT_TASK.md`](CURRENT_TASK.md) — the current bounded objective and blockers.
+3. [`STATE.md`](STATE.md) — verified implementation evidence and nonclaims.
+4. [`ARCHITECTURE.md`](ARCHITECTURE.md) — whole-system ownership and component map.
+5. [`docs/DATABASE_ZK_ARCHITECTURE.md`](docs/DATABASE_ZK_ARCHITECTURE.md) — transaction boundary.
+6. [`docs/NATIVE_V3_ARCHITECTURE.md`](docs/NATIVE_V3_ARCHITECTURE.md) — private-proof target.
+7. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later mandatory formal gate.
+8. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
 
-- `docs/DATABASE_ZK_ARCHITECTURE.md` for the system boundary.
-- `docs/NATIVE_V3_ARCHITECTURE.md` for the active proof, state, security, privacy, and CPU contract.
-- `docs/LEAN_FORMAL_KERNEL.md` for the formal semantic kernel, theorem gates, and Rust/database boundary.
-- `docs/CURRENT_TECH_STACK.md` for implemented components.
-- `docs/IMPLEMENTATION_ROADMAP.md` for the native-v3 critical path.
-- `CURRENT_TASK.md` for the current bounded implementation phase in the full workspace.
-- `QUICKSTART.md` for local verification.
+Supporting authorities are [`docs/CURRENT_TECH_STACK.md`](docs/CURRENT_TECH_STACK.md),
+[`docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md`](docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md),
+[`docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md`](docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md),
+[`docs/PYTHON_DEPENDENCY_LOCKING.md`](docs/PYTHON_DEPENDENCY_LOCKING.md),
+[`docs/SUPPLY_CHAIN_BASELINE.md`](docs/SUPPLY_CHAIN_BASELINE.md), and the independent
+[`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md). Git history and the retained source archives
+preserve superseded narratives. The protected Cairo reference retains its own status and attack
+notes under [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md).
 
-The old Privacy V2, BL-PQ512/H4/CUDA, binary-field K128, Binius64, and decisive-composition
-prose has been retired. Compatibility filenames remain only where regression code still requires
-them; Git history and retained archives preserve the former bytes.
+## Local verification
 
-Published source archives may omit workspace-only continuation records; use the current documents
-and `RELEASE_FILE_MANIFEST.json` when working from an archive.
+Run from the repository root with the existing offline toolchains. Use a new empty session
+directory for every trust-boundary run.
 
-No L2 is part of the design. Ethereum remains an optional later checkpoint adapter and is not an
-automatic dependency of the read-only wedge.
+```powershell
+py -3.14 -B -m unittest tests.test_native_v3_plaintext_continuity
+py -3.14 -B -m unittest tests.test_native_v3_trust_boundary_profile
+py -3.14 -B experiments/native_v3_phase0/native_v3_fixture.py kat
+py -3.14 -B experiments/native_v3_phase0/native_v3_fixture.py negatives
+cargo run --manifest-path experiments/native_v3_phase0_rust/Cargo.toml --locked --offline -- kat
+cargo run --manifest-path experiments/native_v3_phase0_rust/Cargo.toml --locked --offline -- negatives
+py -3.14 -B -m pytest -q tests/test_active_core_contract.py tests/test_security_freeze_spec.py
+py -3.14 -B -m pytest -q tests/test_documentation_governance.py
+git diff --check
+```
+
+These checks exercise bounded candidate seams. They do not close the private-proof theorem ledger,
+authorize deployment, move money, authorize PHI, select a backend, or publish an archive.
+
+Dependency installation is explicit and offline through `tools.locked_python_dependencies`; the
+checked-in locks and wheelhouse, not network resolution, are the installation authority.
+
+## Retained component references
+
+The concise component-local documents linked from [`ARCHITECTURE.md`](ARCHITECTURE.md) are exact
+format, operations, custody, monitoring, licensing, or protected-reference notes. Compatibility
+material is clearly marked and cannot select a backend or supply production credit. The root
+[`PROOF_PROVENANCE.md`](PROOF_PROVENANCE.md) remains only because the protected Cairo README
+references that exact path; it is a non-authoritative compatibility index.
+The protected reference's [`zk-cairo-sharp/PROVING_STATUS.md`](zk-cairo-sharp/PROVING_STATUS.md) and
+[`zk-cairo-sharp/SECURITY_ATTACK_NOTES.md`](zk-cairo-sharp/SECURITY_ATTACK_NOTES.md) retain its local status and
+attack coverage.
+
+## Source authority
+
+Git is the history for retired source and narrative. A retained source archive is a reviewed
+publication artifact, not a substitute for the live authority hierarchy. Archive selection is
+controlled by the deterministic release-manifest gate and builder; this documentation stage does
+not rebuild or publish archives.

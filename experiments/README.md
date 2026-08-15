@@ -1,5 +1,8 @@
 # Experimental implementations
 
+Owner: the experimental source tree. Purpose: route to active Native-v3 fixtures and label
+retained research lanes. This file is not architecture or backend-selection authority.
+
 The active native-v3 work is:
 
 - `native_v3_phase0/` and `native_v3_phase0_rust/`: five-directive canonical business KATs.
@@ -12,3 +15,7 @@ suite, authorize PHI or payments, or activate production.
 
 Current authority is `ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
 `docs/DATABASE_ZK_ARCHITECTURE.md`, and `CURRENT_TASK.md`.
+
+Retained lane notes are [`bl_pq512_crypto_foundation/README.md`](bl_pq512_crypto_foundation/README.md)
+and [`fixed_shape_claim_air/README.md`](fixed_shape_claim_air/README.md). Their code and tests are
+read-only evidence until a separately reviewed replacement deletes the corresponding property.

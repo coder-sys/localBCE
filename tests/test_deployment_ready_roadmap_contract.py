@@ -12,7 +12,6 @@ ROADMAP = ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md"
 ARCHITECTURE = ROOT / "ARCHITECTURE.md"
 FORMAL_KERNEL = ROOT / "docs" / "LEAN_FORMAL_KERNEL.md"
 PLAINTEXT_CONTINUITY = ROOT / "docs" / "NATIVE_V3_PLAINTEXT_CONTINUITY.md"
-CONTRACT = ROOT / "docs" / "DEPLOYMENT_READY_BUILD_CONTRACT.md"
 BLOCKERS = ROOT / "ops" / "launch_blockers.json"
 
 
@@ -39,16 +38,6 @@ def test_native_v3_roadmap_has_no_retired_package_ledger() -> None:
     assert "## Completed foundation" in roadmap
     assert "## Current private-proof blocker" in roadmap
     assert "33 of 81" not in roadmap
-
-
-def test_retired_build_contract_cannot_override_current_fail_closed_roadmap() -> None:
-    roadmap = _text(ROADMAP)
-    contract = _text(CONTRACT)
-    assert contract.startswith("# Retired architecture evidence")
-    assert "not architecture, execution, security, or release authority" in contract
-    assert "complete theorem ledger" in roadmap
-    assert "`proofSuiteId=null`" in roadmap
-    assert "`production_usable=false`" in roadmap
 
 
 def test_lean_kernel_is_an_executable_target_not_a_detached_model() -> None:

@@ -1,6 +1,8 @@
 # Native-v3 trust-boundary profile
 
 Status: bounded protocol-boundary evidence only; no proof backend is selected.
+Owner: Native-v3 session framing and independent-parser profile. It owns framing and replay
+properties, not proof soundness, payment authority, or activation.
 
 The profile in `experiments/native_v3_trust_boundary/` freezes the smallest
 session composition that must exist before a private clearance proof can be

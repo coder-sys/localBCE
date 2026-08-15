@@ -1,6 +1,8 @@
 # Native-v3 implementation roadmap
 
 Updated: 2026-08-14
+Owner: dependency order for Native-v3, the later Lean gate, and the nonpayment Mirror wedge. It is
+not a proof-backend selection or activation record.
 
 This roadmap follows the smallest dependency chain that can produce a trustworthy state-side
 clearance system. Retired BL-PQ512/H4 package counts and capture campaigns are not milestones.

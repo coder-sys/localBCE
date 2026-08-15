@@ -21,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "docs" / "bl_pq512_suite_candidate_v1.json"
 SCHEMA_PATH = ROOT / "schemas" / "bl_pq512_suite_candidate_v1.schema.json"
 ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
-DOC_PATH = ROOT / "docs" / "BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md"
 
 EXPECTED_ABI = [
     "protocolVersion",
@@ -199,7 +198,7 @@ def test_domains_and_modules_have_no_duplicate_identity() -> None:
     assert len(module_kinds) == len(set(module_kinds)) == 8
 
 
-def test_security_budget_registry_remains_draft_and_document_is_retired() -> None:
+def test_security_budget_registry_remains_draft() -> None:
     policy = _registry()["securityPolicy"]
     assert policy == {
         "minimumQuantumWorkFactorBits": 128,
@@ -217,11 +216,6 @@ def test_security_budget_registry_remains_draft_and_document_is_retired() -> Non
         "maximumConservativeDEffExponent": 111,
         "status": "POLICY_DRAFT_EXTERNAL_REVIEW_REQUIRED",
     }
-    document = DOC_PATH.read_text(encoding="utf-8")
-    assert document.startswith("# Retired architecture evidence")
-    assert "not architecture, execution, security, or release authority" in document
-
-
 def test_all_unresolved_security_decisions_remain_explicit_blockers() -> None:
     blocked = set(_registry()["blockedBy"])
     assert {

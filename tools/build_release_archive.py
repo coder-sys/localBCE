@@ -102,16 +102,6 @@ _STRUCTURAL_PRIVATE_CATEGORIES = {
     "plaintext_x12_837",
     "private_key_material",
 }
-# The continuation mandate intentionally pins the user-authorized workspace so an agent does not
-# rediscover the wrong checkout.  This is a narrow documentation exception, not a general path
-# exemption: every other host path, and the same path in every other archived file, remains a
-# structural privacy failure.  The published copies are still local source archives.
-_PINNED_WORKSPACE_PATH = (
-    "C:" + r"\Users\neers\Documents\Codex\2026-07-27\he\work"
-    r"\Blind-Ledger-Wave2-Workspace-2026-07-26"
-)
-
-
 class ReleaseArchiveError(RuntimeError):
     """A fail-closed release validation or readback failure."""
 
@@ -445,10 +435,7 @@ def _validate_payload_content(relative: str, data: bytes) -> None:
         _walk_json,
     )
 
-    privacy_scan_text = text
-    if relative.replace("\\", "/") == "CONTINUATION_MANDATE.md":
-        privacy_scan_text = privacy_scan_text.replace(_PINNED_WORKSPACE_PATH, "<configured-workspace>")
-    categories = set(_text_categories(privacy_scan_text))
+    categories = set(_text_categories(text))
     if categories & _STRUCTURAL_PRIVATE_CATEGORIES:
         raise ReleaseArchiveError("release payload failed the structural privacy gate")
     if _contains_forbidden_encoded_payload(text):

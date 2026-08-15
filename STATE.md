@@ -120,31 +120,20 @@ no complete backend exists. The CPU-only peak process-tree memory ceiling remain
 
 ## Authority and next work
 
-Current authority is `ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
-`docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/LEAN_FORMAL_KERNEL.md`, and `CURRENT_TASK.md`. Legacy BL-PQ512, H4/CUDA,
-Privacy V2, binary-field, Binius64, and decisive-composition documents are retired compatibility
-markers, not design authority.
+Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.md`,
+`docs/NATIVE_V3_ARCHITECTURE.md`, `docs/DATABASE_ZK_ARCHITECTURE.md`,
+`docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
+Retained compatibility references are not design authority.
 
 The next private-proof step is research and closure of the six unresolved theorem/composition terms
 listed in `CURRENT_TASK.md`. Until then, the safe implementation boundary is the synthetic
 read-only plaintext wedge and narrow future-proof adapter.
 
-The accepted post-cleanup Withdrawal V1 publication contains 964 payload files plus one embedded
-manifest (965 ZIP entries) in one fresh candidate and three retained byte-identical targets. Each
-copy is 15,169,121 bytes with SHA-256
-ACDAA4E232DED29DC666C5CA8C359E2DB1F2A48693A053EBD531324B8D81E946. The embedded
-`RELEASE_FILE_MANIFEST.json` is 182,516 bytes with SHA-256
-ECDEAC9A76B22F72E52E480AE24B539E7AF6CA1FB44CE1A1F4151BFF7DD1E516. The exact candidate is
-`C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-mirror-workhorse\work\archive-output-deletion-pass-20260815-36da256\canonical-source.zip`; the retained targets are the Downloads copy, Desktop-root copy, and nested Desktop source-backup copy
-of `Blind-Ledger-Wave2-Source-Complete-2026-08-02.zip`. Each readback consumed 14,958,887
-bytes and returned CRC PASS, duplicates 0, directories 0, and zero-byte entries 0. Direct
-comparison with the accepted Restore V1 archive still finds exactly 3 additions, 0 removals,
-7 active-document modifications, and 954 unchanged payload members; the deleted
-`experiments/binary_field_k128/generate_keccak_states.py` was not a manifest member. The fresh
-stage independently checked all 964 live manifest source hashes. The three new rollback copies
-remain preserved at the deletion-pass receipt directory and all pass the same ZIP readback.
-The current manifest, custodian receipt, and architecture verification are retained under
-`_handoff_support/retained-evidence-20260815`; STATE.md and CURRENT_TASK.md remain workspace-only
-and are excluded from the ZIP. This record makes no claim of production persistence, POSIX
-no-clobber behavior, source authentication, ZK, formal verification, payment authority, PHI
-safety, or activation.
+The last verified retained source publication contains 417 payload files plus one embedded
+manifest (418 ZIP entries) in one candidate and the three retained byte-identical targets. Its
+identity is 5,996,045 bytes with SHA-256
+`d916b181944b3ecff2a93b52702075c70ae24bcaf3d68b3e4373990dd844c360`. This documentation stage
+does not rebuild or publish archives; the next archive run must regenerate its manifest from the
+final committed tree. `STATE.md` and `CURRENT_TASK.md` are workspace-only authority records and
+are excluded from the source archive. No archive identity is evidence of ZK, formal verification,
+production persistence, source authentication, payment authority, PHI safety, or activation.

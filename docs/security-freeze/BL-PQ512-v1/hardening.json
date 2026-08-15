@@ -49,13 +49,13 @@
       "id": "BLH-001",
       "title": "Wide challenge and proof commitment profile",
       "priority": "critical",
-      "file": "proposals/001-wide-challenge-and-proof-commitments.md"
+      "disposition": "git-history-and-retained-archives"
     },
     {
       "id": "BLH-002",
       "title": "Complete native witness hiding",
       "priority": "critical",
-      "file": "proposals/002-native-witness-hiding.md"
+      "disposition": "git-history-and-retained-archives"
     }
   ],
   "open_gates": [

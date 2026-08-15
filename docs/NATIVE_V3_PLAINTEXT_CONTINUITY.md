@@ -2,6 +2,8 @@
 
 Status: synthetic, local, read-only, nonactivating deterministic V2 boundary. This is not a proof
 backend and does not select a production direct evaluator.
+Owner: internal plaintext continuity conformance harness. The external product is Mirror / Provider
+Trust Graph; this file owns only the V2 bundle, absence, timing, roots, and parser contract.
 
 This module is an internal Blind Ledger conformance harness for future clearance semantics. It is
 not the external contract for the first commercial provider-continuity wedge. That wedge belongs

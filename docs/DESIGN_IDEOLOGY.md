@@ -1,13 +1,15 @@
 # Blind Ledger design ideology
 
 Updated: 2026-08-14
+Owner: independent design contract for smallest-correct implementation, deterministic evidence,
+bounded resources, modular ownership, and fail-closed execution. It cannot override `AGENTS.md`.
 
 This is the working design contract for implementation and proof-run decisions. It explains how
 the system should be built, not what a successful experiment is allowed to claim.
 
-Operational gate and continuation authority is `AGENTS.md`, with recovery precedence in
-`CONTINUATION_MANDATE.md` and the newest current section of `STATE.md`. This design contract may
-explain those rules but cannot override them.
+Operational gate and continuation authority is `AGENTS.md`, with bounded-work precedence in
+`CURRENT_TASK.md` and evidence precedence in `STATE.md`. This design contract may explain those
+rules but cannot override them.
 
 ## First principles
 

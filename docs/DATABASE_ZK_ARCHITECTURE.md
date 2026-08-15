@@ -2,6 +2,8 @@
 
 Status: authoritative transaction boundary; proof boundary is `NATIVE_V3_ARCHITECTURE.md`
 Updated: 2026-08-14
+Owner: this document defines the verifier-to-database, retry, recovery, migration, and
+anti-rollback boundary. It does not select a backend or claim production persistence.
 
 ## Product rule
 
@@ -20,8 +22,8 @@ The verifier-owned automatic control set fixes `evidenceMode` as `PRIVATE_ZK` or
 `DIRECT_STATE_OWNED` before request admission and binds the authorized proof verifier or direct
 evaluator identity. They use distinct execution contexts. A caller cannot select the weaker mode,
 and a missing or failed private proof can never retry as direct merely by changing a flag. The
-native-v3 work in this repository qualifies only `PRIVATE_ZK`; a production direct evaluator is a
-separate unselected trust-critical component.
+native-v3 private-clearance target is `PRIVATE_ZK`; the plaintext continuity harness is a separate
+synthetic conformance path, and no production direct evaluator is selected.
 
 Ordinary Provider App preflight may check completeness and formatting locally and may emit a small
 state-verifiable receipt. It does not create a Blind Ledger clearance receipt and cannot authorize
@@ -142,10 +144,9 @@ finalized-transition history for idempotency, and be independently durable for t
 carry into production.
 
 The reference also exercises online backup, restore into a new database file, process restart,
-append-only audit verification, and an external anti-rollback port. The native artifact identity is
-the SHA3-512-domain-separated commitment to the exact verifier executable and AIR program bytes and
-is rechecked before every invocation. A real Rust candidate proof reaches this database path in the
-bounded end-to-end test.
+append-only audit verification, and an external anti-rollback port. Earlier local candidate evidence
+bound a SHA3-512 identity to the verifier and program inputs; that compatibility evidence does not
+select a backend or establish a current proof claim.
 
 This reference is a local candidate evidence seam. The production persistence/custody adapter,
 source authentication, and activation gates remain separately qualified; current status and

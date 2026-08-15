@@ -36,10 +36,10 @@ class PythonSupplyChainAttackTests(unittest.TestCase):
         self.assertIn('"cp314-win_amd64"', manifest)
         self.assertIn('"cp314-linux_x86_64"', manifest)
 
-    def test_quickstart_cannot_resolve_dependencies_from_the_network(self) -> None:
-        quickstart = (ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
-        self.assertNotIn("pip install -r requirements-dev.txt", quickstart)
-        self.assertIn("tools.locked_python_dependencies", quickstart)
+    def test_readme_cannot_resolve_dependencies_from_the_network(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("pip install -r requirements-dev.txt", readme)
+        self.assertIn("tools.locked_python_dependencies", readme)
 
     def test_direct_manifests_are_not_installable_release_inputs(self) -> None:
         for name in ("requirements.txt", "requirements-dev.txt"):

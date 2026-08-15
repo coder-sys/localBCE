@@ -1,5 +1,8 @@
 # Portal Font Sources
 
+Owner: portal shared static assets. Purpose: record the license and provenance for locally served
+fonts; the portal does not fetch fonts at runtime.
+
 The portal bundles the Latin subsets required by its current English-language interface.
 
 - IBM Plex Mono, weights 400, 500, and 600: SIL Open Font License 1.1; source: https://fonts.google.com/specimen/IBM+Plex+Mono

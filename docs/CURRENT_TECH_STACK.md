@@ -1,6 +1,8 @@
 # Current technology stack
 
 Updated: 2026-08-14
+Owner: this document inventories implemented and qualified-candidate components. It does not select
+a proof backend or override `STATE.md`.
 
 ## Active implementation
 
@@ -47,12 +49,5 @@ Privacy V2, BL-PQ512/H4/CUDA, fixed-shape AIR, binary-field K128, Binius64, Cair
 code remain for regression, differential comparison, or staged deletion. They are not the active
 architecture and cannot supply production credit.
 
-## Current flags
-
-- `proofSuiteId=null`
-- `production_usable=false`
-- activation false
-- private backend unselected
-- synthetic-only
-- no real PHI or payments
-- no deployed formally verified kernel claim
+Current nonactivation flags and evidence limits are maintained once in `STATE.md` and
+`CURRENT_TASK.md`; this document records the stack and its replacement boundaries.

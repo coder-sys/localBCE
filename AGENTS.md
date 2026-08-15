@@ -9,9 +9,9 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 2. Read `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
    `docs/LEAN_FORMAL_KERNEL.md`, `docs/CURRENT_TECH_STACK.md`, and
    `docs/IMPLEMENTATION_ROADMAP.md`.
-3. After context loss, re-read this file, `CONTINUATION_MANDATE.md`, and, when working from the full
-   workspace, `STATE.md`. A published source archive may omit workspace-only continuation
-   records; in that archive, use the current root documents and `RELEASE_FILE_MANIFEST.json`.
+3. After context loss, re-read this file, `CURRENT_TASK.md`, and `STATE.md`. A published source
+   archive may omit workspace-only authority records; in that archive, use the current root
+   documents and `RELEASE_FILE_MANIFEST.json`.
 4. Use existing Python, Rust, Scarb, and CUDA installations. Keep generated outputs outside release archives.
 5. For work that changes a gate, proof claim, or continuation decision, also read
    `docs/DESIGN_IDEOLOGY.md` and `docs/IMPLEMENTATION_ROADMAP.md` before acting.
@@ -38,6 +38,14 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 - Government and oracle signatures authenticate provenance and authority; they do not prove that the underlying facts are true.
 - No L2, rollup, sequencer, bridge, public data-availability layer, or Solidity settlement contract is part of the current design.
 - Ethereum is not a Phase 0-2 dependency. A later design may checkpoint a compact signed state root or aggregate proof directly to Ethereum L1.
+
+## Document precedence
+
+`AGENTS.md` owns execution and safety rules. `CURRENT_TASK.md` owns only the current bounded
+objective and blockers. `STATE.md` owns verified implementation evidence and nonclaims.
+`ARCHITECTURE.md` owns system boundaries and component ownership. The active `docs/` authorities
+own their named technical boundaries, and `docs/DESIGN_IDEOLOGY.md` remains an independent design
+contract. Retired or compatibility documents cannot override any of these authorities.
 
 ## Protected trust-critical paths
 
