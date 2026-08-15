@@ -191,10 +191,11 @@ Governed ingestion verifies source signatures over exact canonical bytes once, b
 publication. Repeating public signature verification inside every proof is unnecessary when private
 membership in that authenticated registry is proved. A prover-supplied registry root is forbidden.
 
-The retained `BLPQENV1` version-2 native lane independently verifies one pinned selected AIR/FRI
-package and its authenticated transcript. It does not yet contain the complete semantic-bus,
-typed-state, H4/GKR/Construction-8.2, and proof-native equality composition. It is component and
-LB-007 migration evidence, not the complete claim-proof theorem or an audit-pending release.
+The former `BLPQENV1` version-2 native lane and its Rust/CUDA AIR/FRI implementation are retired
+from the live source ledger. Their component and LB-007 migration evidence remains available in
+Git history and retained source archives; no current release or readiness path selects that
+backend. The live verifier-selection contract remains explicitly `UNSELECTED` until an
+independently reviewed backend is selected.
 
 It cannot establish that an authorized source told the truth, that the policy was wise or lawful, or that database operators preserved availability. Those are governance and operational trust boundaries.
 

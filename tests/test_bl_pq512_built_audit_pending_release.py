@@ -72,8 +72,8 @@ def _candidate(tmp_path: Path, *, release_contract_schema: Path = RELEASE_SCHEMA
     sources = tuple(
         sorted(
             (
-                ROOT / "experiments" / "bl_pq512_crypto_core" / "src" / "production_verifier.rs",
                 ROOT / "experiments" / "bl_pq512_crypto_foundation" / "production_candidate.py",
+                ROOT / "experiments" / "bl_pq512_crypto_foundation" / "selected_public_coin.py",
             ),
             key=lambda path: path.relative_to(ROOT).as_posix(),
         )

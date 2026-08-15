@@ -4,7 +4,6 @@
 | --- | --- |
 | `app/` | Application, adapters, batching, readiness checks, and direct native-verifier/database boundary |
 | `app/batch/` | Retained Privacy V2 batching/state reference; protected until native-v3 replacements accept |
-| `experiments/bl_pq512_crypto_core/` | Retained Rust H4/CUDA, composition, and binary-field component evidence |
 | `experiments/bl_pq512_crypto_foundation/` | Retained foundation, security-ledger, and operational evidence |
 | `experiments/fixed_shape_claim_air/` | Executable AIR and claim/oracle composition experiments |
 | `zk-cairo-sharp/` | Earlier Cairo proof research retained for evidence and comparison |
