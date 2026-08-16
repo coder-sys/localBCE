@@ -41,6 +41,7 @@ from experiments.native_v3_plaintext_continuity.continuity import (
     ContinuityStore,
     CredentialEnrollmentFact,
     CredentialFactSet,
+    DecisionAccessJoin,
     FeedCompleteness,
     RULE_ID,
     StateAccessRow,
@@ -134,6 +135,42 @@ class PlaintextContinuityTests(unittest.TestCase):
         )
         body[276:340] = cls.digest(b"BL/NATIVE-V3/CONTINUITY/DECISION-ACCESS-JOIN/v2\0", join_raw)
         return bytes(body) + cls.digest(b"BL/NATIVE-V3/CONTINUITY/RECEIPT-ID/v2\0", bytes(body))
+
+    @staticmethod
+    def patch_access_field(access_raw: bytes, field_offset: int, value: bytes | int) -> bytes:
+        mutated = bytearray(access_raw)
+        if isinstance(value, int):
+            mutated[field_offset] = value
+        else:
+            mutated[field_offset : field_offset + len(value)] = value
+        return bytes(mutated)
+
+    @classmethod
+    def replace_access_rows(cls, raw: bytes, access_raws: tuple[bytes, bytes]) -> bytes:
+        parts = cls.split_bundle(raw)
+        body = bytearray(parts[0][:-64])
+        decision_length = int.from_bytes(body[532:536], "big")
+        cursor = 532 + 4 + decision_length + 4
+        for index, access_raw in enumerate(access_raws):
+            length = int.from_bytes(body[cursor : cursor + 4], "big")
+            cursor += 4
+            if len(access_raw) != length:
+                raise AssertionError(f"test access length {index}")
+            body[cursor : cursor + length] = access_raw
+            cursor += length
+        parts[0] = cls.rebind_receipt(bytes(body) + b"\0" * 64)
+        return cls.join_bundle(parts)
+
+    @classmethod
+    def replace_decision(cls, raw: bytes, decision_raw: bytes) -> bytes:
+        parts = cls.split_bundle(raw)
+        body = bytearray(parts[0][:-64])
+        decision_length = int.from_bytes(body[532:536], "big")
+        if len(decision_raw) != decision_length:
+            raise AssertionError("test decision length")
+        body[536 : 536 + decision_length] = decision_raw
+        parts[0] = cls.rebind_receipt(bytes(body) + b"\0" * 64)
+        return cls.join_bundle(parts)
 
     @classmethod
     def mutate_access(cls, raw: bytes, access_index: int, field_offset: int, value: int | None = None) -> bytes:
@@ -241,6 +278,135 @@ class PlaintextContinuityTests(unittest.TestCase):
         self.assertNotEqual(receipt.accesses[1].value_before, receipt.accesses[1].value_after)
         self.assertEqual(receipt.join_id, receipt.join_id)
         self.assertEqual(receipt.decision.completeness_id, completeness.evidence_id)
+
+    def test_producer_join_enforces_roles_times_values_and_transition(self) -> None:
+        request, facts, completeness, _, _, receipt = self.apply_case("valid-continuity")
+        read, write = receipt.accesses
+        replacement = b"\xA5" * 64
+
+        invalid_joins = (
+            (
+                "swapped-roles",
+                (
+                    replace(read, mode=ACCESS_WRITE, value_after=replacement),
+                    replace(write, mode=ACCESS_READ, value_after=write.value_before),
+                ),
+                "join:read",
+            ),
+            (
+                "read-read",
+                (read, replace(write, mode=ACCESS_READ, value_after=write.value_before)),
+                "join:write",
+            ),
+            (
+                "write-write",
+                (replace(read, mode=ACCESS_WRITE, value_after=replacement), write),
+                "join:read",
+            ),
+            ("unknown-role", (replace(read, mode=9), write), "access:mode"),
+            ("wrong-access-order", (replace(read, access_index=1), replace(write, access_index=0)), "join:access-order"),
+            ("wrong-access-count", (replace(read, access_count=3), write), "access:index-count"),
+            ("wrong-decision-index", (replace(read, decision_index=1), write), "access:index-count"),
+            ("wrong-decision-id", (replace(read, decision_id=replacement), write), "join:decision-binding"),
+            ("read-at-decision", (replace(read, access_time=receipt.decision.decision_time), write), "join:read"),
+            ("write-at-observation", (read, replace(write, access_time=receipt.decision.observation_time)), "join:write"),
+            ("read-before-value", (replace(read, value_before=replacement, value_after=replacement), write), "join:read"),
+            ("read-after-value", (replace(read, value_after=replacement), write), "access:read-mutates"),
+            ("read-address", (replace(read, address=replacement), write), "join:read"),
+            ("read-key", (replace(read, key=replacement), write), "join:read"),
+            ("write-address", (read, replace(write, address=replacement)), "join:write"),
+            ("write-key", (read, replace(write, key=replacement)), "join:write"),
+            (
+                "wrong-before-state-binding",
+                (read, write),
+                "join:state-binding",
+            ),
+            (
+                "wrong-after-state-binding",
+                (read, write),
+                "join:state-binding",
+            ),
+        )
+        invalid_states = {
+            "wrong-before-state-binding": (
+                replace(receipt.before_state, context_id=replacement),
+                receipt.after_state,
+            ),
+            "wrong-after-state-binding": (
+                receipt.before_state,
+                replace(receipt.after_state, context_id=replacement),
+            ),
+        }
+        for label, accesses, error in invalid_joins:
+            before_state, after_state = invalid_states.get(
+                label,
+                (receipt.before_state, receipt.after_state),
+            )
+            with self.assertRaisesRegex(ContinuityError, error, msg=label):
+                DecisionAccessJoin(receipt.decision, accesses, before_state, after_state).join_id
+
+        bad_write = replace(write, value_before=replacement)
+        bad_accesses = (read, bad_write)
+        bad_join = DecisionAccessJoin(receipt.decision, bad_accesses, receipt.before_state, receipt.after_state)
+        with self.assertRaisesRegex(ContinuityError, "join:write-state"):
+            bad_join.join_id
+        with self.assertRaisesRegex(ContinuityError, "join:write-state"):
+            replace(receipt, accesses=bad_accesses).canonical_bytes()
+
+        bad_after = replace(receipt.after_state, audit_head=replacement)
+        bad_decision = replace(receipt.decision, state_after_id=bad_after.state_id)
+        bad_write = replace(write, value_after=bad_after.audit_head)
+        bad_accesses = (read, bad_write)
+        bad_join = DecisionAccessJoin(bad_decision, bad_accesses, receipt.before_state, bad_after)
+        with self.assertRaisesRegex(ContinuityError, "join:state-transition"):
+            bad_join.join_id
+        with self.assertRaisesRegex(ContinuityError, "join:state-transition"):
+            replace(
+                receipt,
+                decision=bad_decision,
+                accesses=bad_accesses,
+                after_state=bad_after,
+            ).canonical_bytes()
+
+    def test_deterministic_rebuild_parse_and_replay_contract(self) -> None:
+        request, facts, completeness, exception = build_demo_case("valid-continuity")
+        first_store = ContinuityStore()
+        first = first_store.apply(request, facts, completeness, exception)
+
+        retry_request, retry_facts, retry_completeness, retry_exception = build_demo_case("valid-continuity")
+        second = ContinuityStore().apply(
+            retry_request,
+            retry_facts,
+            retry_completeness,
+            retry_exception,
+        )
+        first_receipt_raw = first.canonical_bytes()
+        second_receipt_raw = second.canonical_bytes()
+        first_bundle_raw = bundle_bytes(first, facts, completeness)
+        second_bundle_raw = bundle_bytes(second, retry_facts, retry_completeness)
+        self.assertEqual(first_receipt_raw, second_receipt_raw)
+        self.assertEqual(first_bundle_raw, second_bundle_raw)
+        self.assertEqual(first.join_id, second.join_id)
+        self.assertEqual(first.receipt_id, second.receipt_id)
+        self.assertEqual(
+            DecisionAccessJoin(first.decision, first.accesses, first.before_state, first.after_state).join_id,
+            first.join_id,
+        )
+
+        parsed = ContinuityReceipt.parse(
+            first_receipt_raw,
+            before_state=first.before_state,
+            after_state=first.after_state,
+            request=request,
+            exception_authorization=exception,
+        )
+        self.assertEqual(parsed.canonical_bytes(), first_receipt_raw)
+        self.assertEqual(
+            parse_bundle(first_bundle_raw)["status"],
+            "NATIVE_V3_PLAINTEXT_CONTINUITY_INDEPENDENT_PARSE_PASS",
+        )
+        with self.assertRaisesRegex(ContinuityError, "replay:attempt"):
+            first_store.apply(request, facts, completeness, exception)
 
     def test_plaintext_acceptance_is_not_proof_acceptance_or_clear(self) -> None:
         _, _, _, _, _, receipt = self.apply_case("valid-continuity")
@@ -444,19 +610,76 @@ class PlaintextContinuityTests(unittest.TestCase):
             parse_bundle(self.join_bundle(parts))
 
         access_mutations = (
-            (0, 96, None),   # address
-            (0, 95, None),   # time
-            (0, 160, None),  # key
-            (0, 224, None),  # value before
-            (0, 288, None),  # value after
-            (0, 352, 9),     # unknown access mode
+            (0, 96, None, "access:read"),   # address
+            (0, 95, None, "access:read"),   # time
+            (0, 160, None, "access:read"),  # key
+            (0, 224, None, "access:read-mutates"),  # value before
+            (0, 288, None, "access:read-mutates"),  # value after
+            (0, 352, 9, "access:mode"),     # unknown access mode
+            (1, 95, None, "access:write"),   # write at the wrong time
+            (1, 224, None, "access:write"),  # write before value
+            (1, 288, None, "access:write"),  # write after value
+            (1, 352, ACCESS_READ, "access:read-mutates"),  # write/read role confusion
         )
-        for access_index, field_offset, value in access_mutations:
-            with self.assertRaises(IndependentParseError):
+        for access_index, field_offset, value, error in access_mutations:
+            with self.assertRaisesRegex(IndependentParseError, error):
                 parse_bundle(self.mutate_access(raw, access_index, field_offset, value))
 
         self.assertEqual(receipt.accesses[0].address, source_state_address(request.provider_id))
         self.assertEqual(receipt.accesses[1].address, audit_state_address(request.provider_id))
+
+    def test_independent_rebound_join_mutations_reach_semantic_validators(self) -> None:
+        _, facts, completeness, _, _, receipt = self.apply_case("valid-continuity")
+        raw = bundle_bytes(receipt, facts, completeness)
+        read_raw, write_raw = tuple(row.canonical_bytes() for row in receipt.accesses)
+        replacement = b"\xA5" * 64
+
+        swapped_read = read_raw
+        swapped_write = write_raw
+        for field_offset, field_length in ((88, 8), (96, 64), (160, 64), (224, 64), (288, 64), (352, 1)):
+            swapped_read = self.patch_access_field(
+                swapped_read,
+                field_offset,
+                write_raw[field_offset : field_offset + field_length],
+            )
+            swapped_write = self.patch_access_field(
+                swapped_write,
+                field_offset,
+                read_raw[field_offset : field_offset + field_length],
+            )
+
+        write_write = self.patch_access_field(read_raw, 352, bytes((ACCESS_WRITE,)))
+        write_write = self.patch_access_field(write_write, 288, replacement)
+        read_read = self.patch_access_field(write_raw, 352, bytes((ACCESS_READ,)))
+        read_read = self.patch_access_field(read_read, 288, write_raw[224:288])
+        wrong_access_index = self.patch_access_field(read_raw, 80, (1).to_bytes(4, "big"))
+        wrong_access_count = self.patch_access_field(read_raw, 84, (3).to_bytes(4, "big"))
+        wrong_decision_index = self.patch_access_field(read_raw, 76, (1).to_bytes(4, "big"))
+        wrong_decision_id = self.patch_access_field(read_raw, 12, replacement)
+        wrong_write_before = self.patch_access_field(write_raw, 224, replacement)
+        wrong_write_after = self.patch_access_field(write_raw, 288, replacement)
+
+        mutations = (
+            ("coherent-access-row-swap", (swapped_read, swapped_write), "access:read"),
+            ("write-write-role-confusion", (write_write, write_raw), "access:read"),
+            ("read-read-role-confusion", (read_raw, read_read), "access:write"),
+            ("wrong-access-index", (wrong_access_index, write_raw), "join:order-or-decision"),
+            ("wrong-access-order", (write_raw, read_raw), "join:order-or-decision"),
+            ("wrong-access-count", (wrong_access_count, write_raw), "access:shape"),
+            ("wrong-decision-index", (wrong_decision_index, write_raw), "access:shape"),
+            ("wrong-access-decision-id", (wrong_decision_id, write_raw), "join:order-or-decision"),
+            ("wrong-write-before", (read_raw, wrong_write_before), "access:write"),
+            ("wrong-write-after", (read_raw, wrong_write_after), "access:write"),
+        )
+        for label, access_raws, error in mutations:
+            mutated = self.replace_access_rows(raw, access_raws)
+            with self.assertRaisesRegex(IndependentParseError, error, msg=label):
+                parse_bundle(mutated)
+
+        decision_raw = bytearray(receipt.decision.canonical_bytes())
+        decision_raw[12:16] = (1).to_bytes(4, "big")
+        with self.assertRaisesRegex(IndependentParseError, "decision:shape-or-flags"):
+            parse_bundle(self.replace_decision(raw, bytes(decision_raw)))
 
     def test_v2_framing_length_enum_and_domain_mutations_reject(self) -> None:
         _, facts, completeness, _, _, receipt = self.apply_case("valid-continuity")

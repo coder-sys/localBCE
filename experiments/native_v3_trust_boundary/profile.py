@@ -326,6 +326,8 @@ class ProfileBindings:
             raise ProfileError("bindings:sequence")
         if len({self.event_time, self.observation_time, self.rule_effective_time, self.decision_time}) != 4:
             raise ProfileError("bindings:times-not-distinct")
+        if not (self.rule_effective_time < self.event_time < self.observation_time < self.decision_time):
+            raise ProfileError("bindings:chronology")
 
     def canonical_bytes(self) -> bytes:
         return b"".join(

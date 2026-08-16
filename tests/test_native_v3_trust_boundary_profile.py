@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import hashlib
 from pathlib import Path
 import tempfile
@@ -22,6 +23,7 @@ from experiments.native_v3_trust_boundary.session import (
     Opening,
     ProverSession,
     ProverState,
+    ProfileStatement,
     Transcript,
     VerifierSession,
     create_session_artifacts,
@@ -89,6 +91,42 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         bad["complete_bound_available"] = True
         with self.assertRaises(ProfileError):
             validate_security_ledger(bad)
+
+    def test_producer_rejects_all_non_strict_time_orders(self) -> None:
+        bindings = build_profile_bindings()
+        times = [
+            bindings.rule_effective_time,
+            bindings.event_time,
+            bindings.observation_time,
+            bindings.decision_time,
+        ]
+        self.assertEqual(times, sorted(times))
+        self.assertEqual(len(set(times)), 4)
+        self.assertEqual(len(ProfileStatement(b"\1" * 32, bindings).canonical_bytes()), 992)
+
+        for left, right in ((0, 1), (1, 2), (2, 3), (0, 2), (1, 3), (0, 3)):
+            swapped = times.copy()
+            swapped[left], swapped[right] = swapped[right], swapped[left]
+            with self.assertRaisesRegex(ProfileError, "bindings:chronology"):
+                replace(
+                    bindings,
+                    rule_effective_time=swapped[0],
+                    event_time=swapped[1],
+                    observation_time=swapped[2],
+                    decision_time=swapped[3],
+                )
+
+        for left, right in ((0, 1), (1, 2), (2, 3), (0, 2), (1, 3), (0, 3)):
+            equal = times.copy()
+            equal[right] = equal[left]
+            with self.assertRaises(ProfileError):
+                replace(
+                    bindings,
+                    rule_effective_time=equal[0],
+                    event_time=equal[1],
+                    observation_time=equal[2],
+                    decision_time=equal[3],
+                )
 
     def test_live_flow_and_replay_marker(self) -> None:
         state, challenge, transcript = self.make_flow()

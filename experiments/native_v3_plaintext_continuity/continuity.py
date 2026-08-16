@@ -1059,13 +1059,64 @@ class StateAccessRow:
 class DecisionAccessJoin:
     decision: ClearanceDecisionRow
     accesses: tuple[StateAccessRow, StateAccessRow]
+    before_state: ContinuityState
+    after_state: ContinuityState
 
     def canonical_bytes(self) -> bytes:
         decision = self.decision.canonical_bytes()
+        try:
+            before_state_id = self.before_state.state_id
+            after_state_id = self.after_state.state_id
+        except ContinuityError as error:
+            raise ContinuityError("join:state-binding") from error
+        if (
+            self.decision.state_before_id != before_state_id
+            or self.decision.state_after_id != after_state_id
+        ):
+            raise ContinuityError("join:state-binding")
+        try:
+            expected_after = self.before_state.advance(
+                self.decision.decision_id,
+                self.decision.source_root,
+                self.decision.effective_directive,
+            )
+        except ContinuityError as error:
+            raise ContinuityError("join:state-transition") from error
+        if self.after_state != expected_after:
+            raise ContinuityError("join:state-transition")
         if len(self.accesses) != 2 or [row.access_index for row in self.accesses] != [0, 1]:
             raise ContinuityError("join:access-order")
         if any(row.decision_id != self.decision.decision_id for row in self.accesses):
             raise ContinuityError("join:decision-binding")
+        for row in self.accesses:
+            row.canonical_bytes()
+        read, write = self.accesses
+        if (
+            read.mode != ACCESS_READ
+            or read.access_time != self.decision.observation_time
+            or read.address != source_state_address(self.decision.provider_id)
+            or read.key != _sha(
+                SUBJECT_KEY_DOMAIN,
+                self.decision.provider_id,
+                self.decision.credential_id,
+                self.decision.enrollment_id,
+            )
+            or read.value_before != self.decision.source_root
+            or read.value_after != self.decision.source_root
+        ):
+            raise ContinuityError("join:read")
+        if (
+            write.mode != ACCESS_WRITE
+            or write.access_time != self.decision.decision_time
+            or write.address != audit_state_address(self.decision.provider_id)
+            or write.key != self.decision.decision_id
+        ):
+            raise ContinuityError("join:write")
+        if (
+            write.value_before != self.before_state.audit_head
+            or write.value_after != self.after_state.audit_head
+        ):
+            raise ContinuityError("join:write-state")
         return b"".join(
             (
                 JOIN_MAGIC,
@@ -1105,8 +1156,22 @@ class ContinuityReceipt:
         _nonzero(self.adapter_binding, "receipt:adapter")
         _nonzero(self.control_set_id, "receipt:control-set")
         _nonzero(self.phase0_receipt_binding, "receipt:phase0")
-        if self.join_id != DecisionAccessJoin(self.decision, self.accesses).join_id:
+        join = DecisionAccessJoin(self.decision, self.accesses, self.before_state, self.after_state)
+        if self.join_id != join.join_id:
             raise ContinuityError("receipt:join")
+        try:
+            expected_after = self.before_state.advance(
+                self.decision.decision_id,
+                self.decision.source_root,
+                self.decision.effective_directive,
+            )
+        except ContinuityError as error:
+            raise ContinuityError("receipt:state-transition") from error
+        if self.after_state != expected_after:
+            raise ContinuityError("receipt:state-transition")
+        write = self.accesses[1]
+        if write.value_before != self.before_state.audit_head or write.value_after != self.after_state.audit_head:
+            raise ContinuityError("receipt:write-state")
         if self.decision.control_set_id != self.control_set_id or self.decision.phase0_receipt_binding != self.phase0_receipt_binding:
             raise ContinuityError("receipt:decision-binding")
         if self.decision.state_before_id != self.before_state.state_id or self.decision.state_after_id != self.after_state.state_id:
@@ -1380,7 +1445,7 @@ class ContinuityStore:
                 ACCESS_WRITE,
             ),
         )
-        join = DecisionAccessJoin(decision, accesses)
+        join = DecisionAccessJoin(decision, accesses, before, after)
         receipt = ContinuityReceipt(
             self.adapter.bind_private_assertion(evaluation.source_root),
             automatic_control_set_id(),
@@ -1519,7 +1584,10 @@ def _process_memory() -> dict[str, int | None]:
     counters = Counters()
     counters.cb = ctypes.sizeof(Counters)
     try:
-        ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+        get_memory = ctypes.windll.psapi.GetProcessMemoryInfo
+        get_memory.argtypes = [ctypes.c_void_p, ctypes.POINTER(Counters), ctypes.c_ulong]
+        get_memory.restype = ctypes.c_int
+        ok = get_memory(
             ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
         )
     except (AttributeError, OSError):
