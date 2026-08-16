@@ -34,6 +34,43 @@ RETIRED_CORE_MARKERS = (
     "experiments/bl_pq512_crypto_core",
     "experiments\\bl_pq512_crypto_core",
 )
+MIRROR_CAPABILITIES = (
+    "Transaction Mirror",
+    "Contract Mirror",
+    "Money Mirror",
+    "Transition Mirror",
+    "Denominator Ledger",
+    "Responsibility Graph and corrective-action runtime",
+    "Provider Trust Graph",
+    "State Value Ledger",
+)
+MIRROR_QUESTIONS = (
+    "1. What entered?",
+    "2. Which rule or obligation applied?",
+    "3. What did each responsibility boundary do?",
+    "4. What came out?",
+    "5. What was paid or reported?",
+    "6. Where did expected and actual behavior diverge?",
+)
+MIRROR_VISIBILITY_LEVELS = (
+    "1. State-existing data.",
+    "2. State-controlled boundary observation.",
+    "3. Optional deep vendor telemetry.",
+)
+MIRROR_CLAIM_LEVELS = (
+    "Architecture-defined",
+    "Synthetic candidate",
+    "Controlled shadow-pilot qualified",
+    "Production qualified",
+)
+MIRROR_LADDER = (
+    "Current synthetic Provider Trust Graph foundation.",
+    "Finish V2 and governance composition.",
+    "Qualify one authenticated real-state source vertical slice.",
+    "Qualify state-side persistence, custody, support, privacy, and pilot operations.",
+    "Run a controlled read-only shadow pilot.",
+    "Expand later by measured need.",
+)
 
 
 def _python_files() -> list[Path]:
@@ -192,6 +229,36 @@ def test_test_integrity_has_no_unresolved_local_imports_or_duplicate_names() -> 
         )
     assert not unresolved, f"unresolved local tests.* imports: {sorted(unresolved)}"
     assert not duplicates, f"duplicate top-level test names: {sorted(duplicates)}"
+
+
+def test_mirror_product_contract_and_readiness_ladder_remain_explicit() -> None:
+    architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    roadmap = (ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    mirror_contract = architecture.split("## Mirror product contract", 1)[1].split(
+        "## Product and promotion boundary", 1
+    )[0]
+    normalized_contract = " ".join(mirror_contract.split())
+
+    assert all(capability in normalized_contract for capability in MIRROR_CAPABILITIES)
+    assert all(question in normalized_contract for question in MIRROR_QUESTIONS)
+    assert all(level in normalized_contract for level in MIRROR_VISIBILITY_LEVELS)
+    assert "Its eight internal capability views are not separate products:" in normalized_contract
+    assert "Provider Trust Graph is a narrow first wedge of Mirror, never a rebranding of the whole product." in normalized_contract
+    assert "the broad `Continuity State`, which is a later state-owned operational handoff package." in normalized_contract
+
+    ladder_start = roadmap.index("## Mirror dependency ladder and claim levels")
+    ladder = " ".join(roadmap[ladder_start:].split())
+    ladder_positions = [ladder.index(marker) for marker in MIRROR_LADDER]
+    assert ladder_positions == sorted(ladder_positions)
+    assert all(level in ladder for level in MIRROR_CLAIM_LEVELS)
+    assert "does not make every later Mirror capability a prerequisite for the first" in ladder
+    assert "does not claim a controlled shadow pilot or production qualification" in ladder
+
+    assert "Mirror is RightRail's umbrella read-only evidence" in readme
+    assert "Provider Trust Graph is Mirror's current" in readme
+    assert "not the whole Mirror product" in readme
+    assert "ARCHITECTURE.md" in readme and "docs/IMPLEMENTATION_ROADMAP.md" in readme
 
 
 def test_current_authority_keeps_the_nonpayment_nonproof_boundary() -> None:

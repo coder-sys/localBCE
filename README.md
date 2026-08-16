@@ -4,10 +4,18 @@ Blind Ledger is RightRail's state-side payment-clearance layer. It answers wheth
 proposed payment satisfies state-approved deterministic controls; the incumbent adjudicates the
 claim and the official state system and payment rails move money.
 
-Mirror / Provider Trust Graph is a separate read-only evidence and continuity product. It reports
-source coverage, findings, discrepancies, remediation/retest, parity, and transition artifacts.
-It does not expose a Blind Ledger clearance receipt or authorize an economic mutation. The
+Mirror is RightRail's umbrella read-only evidence, reconciliation, and operational-visibility
+product, and one of its three customer-facing products. Provider Trust Graph is Mirror's current
+narrow first wedge, not the whole Mirror product. Mirror's eight capability views are internal
+views, not separate products. It reports only evidence-backed source coverage, findings,
+discrepancies, remediation/retest, parity, responsibility, money, and transition artifacts; it
+does not expose a Blind Ledger clearance receipt or authorize an economic mutation. The
 five-directive clearance harness remains internal.
+
+Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for Mirror's six-question contract, visibility levels,
+capability map, and separation from Blind Ledger and broad `Continuity State`. Read
+[`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) for the dependency ladder and
+claim levels; this README is the entry route, not a readiness record.
 
 When an undisclosed payment-relevant assertion crosses the clearance boundary and affects
 automation, a verifier-owned native proof must be accepted before the database applies the exact

@@ -40,6 +40,50 @@ The first recommended RightRail wedge is read-only provider-enrollment and crede
 It can proceed without payment authority and without waiting for a production Blind Ledger proof
 suite. Native-v3 remains a parallel synthetic R&D boundary for later narrow payment controls.
 
+## Mirror product contract
+
+Mirror is one of RightRail's three customer-facing products. It is the umbrella evidence,
+reconciliation, and operational-visibility product that answers: what actually happened, who was
+responsible, and what money moved? Mirror works from state-held data and state-controlled
+boundaries first. Deep incumbent or vendor telemetry is optional precision, never a V1 dependency.
+
+Mirror asks six questions:
+
+1. What entered?
+2. Which rule or obligation applied?
+3. What did each responsibility boundary do?
+4. What came out?
+5. What was paid or reported?
+6. Where did expected and actual behavior diverge?
+
+Its evidence ladder has three visibility levels:
+
+1. State-existing data.
+2. State-controlled boundary observation.
+3. Optional deep vendor telemetry.
+
+Mirror states only what the evidence supports and exposes RightRail's own failures. Its eight
+internal capability views are not separate products:
+
+| Internal view | Meaning |
+| --- | --- |
+| Transaction Mirror | Trace available input through processor decision, payment, reporting, correction, and appeal against the State Control Pack or state reference. |
+| Contract Mirror | Continuously test exact vendor obligations, populations, results, responsible party, exceptions, and remediation. |
+| Money Mirror | Reconcile adjudicated claims, cash, encounters, voids, adjustments, capitation, withholds, state-directed payments, invoices, and reporting. |
+| Transition Mirror | Compare incumbent and challenger behavior, unresolved differences, coverage, interface compatibility, export, continuity, and rollback readiness. |
+| Denominator Ledger | Preserve the complete population before later systems narrow it. |
+| Responsibility Graph and corrective-action runtime | Connect obligation to plan/delegate, interface, transaction, failure, corrective action, retest, evidence, and closure. |
+| Provider Trust Graph | Maintain an authoritative evidence-backed view of provider identity, license, sanction/exclusion, ownership, affiliation, taxonomy, location, accreditation, credential, enrollment, effective dates, termination, and reverification. |
+| State Value Ledger | Keep one evidence-backed baseline, intervention, calculation, category, and owner for each claimed dollar, counted once. |
+
+North Carolina Provider Enrollment and Credential Continuity is the recommended read-only first
+wedge, not an irreversible state selection. It is scoped to one provider class and scope, uses
+authoritative state-accessible sources and relevant policy/contract tests, and requires
+evidence-backed discrepancies, remediation/retest, parity/adapter/continuity artifacts, and zero
+payment authority. Provider Trust Graph is a narrow first wedge of Mirror, never a rebranding of
+the whole product. It remains distinct from Blind Ledger's operative clearance boundary and from
+the broad `Continuity State`, which is a later state-owned operational handoff package.
+
 ## Product and promotion boundary
 
 The first commercial wedge belongs externally to Mirror's Provider Trust Graph. It reports

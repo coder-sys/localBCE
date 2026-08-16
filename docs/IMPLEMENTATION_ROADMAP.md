@@ -83,20 +83,53 @@ and union term. Promising components or ideal-model calculators do not close thi
 6. Only then consider K128/K512 qualification, independent audit, production database/key custody,
    PHI authorization, or activation.
 
-## Parallel commercial wedge
+## Mirror dependency ladder and claim levels
 
-Continue the read-only provider continuity product as a Mirror/Provider Trust Graph evidence and
-remediation capability. Its external contract reports governed findings, source coverage,
-discrepancies, remediation/retest status, parity cases, and transition artifacts; it does not emit
-an operative Blind Ledger clearance directive or create an economic state transition. The current
-five-directive continuity implementation remains an internal synthetic harness for future
-clearance semantics until that product/API separation is implemented.
+Mirror is the umbrella read-only evidence, reconciliation, and operational-visibility product;
+Provider Trust Graph is its current narrow first wedge. The ladder below qualifies that wedge one
+boundary at a time and does not make every later Mirror capability a prerequisite for the first
+controlled use:
 
-Productionizing the wedge requires state source contracts, deterministic control governance,
-production data/storage selection, monitoring, recovery, a state-side sanitized support boundary,
-privacy review, portability/export, and independent audit. It does not require a private-proof
-backend unless an undisclosed payment-relevant assertion crosses its trust boundary and affects
-automation.
+1. **Current synthetic Provider Trust Graph foundation.** Preserve the configured source-admission
+   contract, independent graph verification, findings, authoritative coverage/nonmembership,
+   remediation/retest, parity, continuity, export/restore, support sanitization, and narrow V1
+   governance evidence. This is a synthetic candidate, not full Mirror.
+2. **Finish V2 and governance composition.** Compose the multi-subject/profile graph with an
+   equivalent multi-profile Control Pack approval and withdrawal lifecycle, preserving exact retry,
+   lifecycle heads, independent verification, and read-only/nonpayment authority.
+3. **Qualify one authenticated real-state source vertical slice.** Select one state-accessible
+   provider class and scope, authenticate its source through a state-owned boundary, and rerun the
+   canonical, mutation, completeness, remediation/retest, and recovery gates. No real source,
+   signature, API, or custody choice is implied by this roadmap entry.
+4. **Qualify state-side persistence, custody, support, privacy, and pilot operations.** Close the
+   production database/custody, state-owned support sanitizer, privacy review, portability, recovery,
+   monitoring, and operational runbook gates for that one vertical slice.
+5. **Run a controlled read-only shadow pilot.** Compare the evidence product with the incumbent or
+   reference boundary without payment authority, automatic clearance, or silent fallback. Record
+   coverage, discrepancies, responsibility, remediation, rollback, and unresolved limitations.
+6. **Expand later by measured need.** North Carolina can add responsibility, contract, and
+   denominator views; Georgia can add transaction, money, and transition views; the State Value
+   Ledger follows measured baselines and an approved counting-once authority. These are expansion
+   dependencies, not blockers for the narrow first wedge unless a selected scope explicitly needs
+   one.
+
+Mirror claim levels are explicit:
+
+- **Architecture-defined:** a repository-owned boundary, capability, and dependency contract.
+- **Synthetic candidate:** deterministic local evidence using synthetic inputs and nonactivating
+  operational seams.
+- **Controlled shadow-pilot qualified:** one scoped, state-controlled read-only pilot has passed its
+  source, privacy, recovery, support, parity, and operational gates.
+- **Production qualified:** the scoped product has current state approval, authenticated sources,
+  qualified persistence/custody, privacy and support evidence, independent assurance, and all
+  applicable operational gates.
+
+The current repository can define the full Mirror architecture and substantiate a synthetic
+Provider Trust Graph candidate; it does not claim a controlled shadow pilot or production
+qualification. The later views do not silently change the first wedge's claim level. Mirror never
+emits an operative Blind Ledger clearance directive or creates an economic state transition. It
+does not require a private-proof backend unless an undisclosed payment-relevant assertion crosses
+its trust boundary and affects automation.
 
 Behavioral Twin output enters the State Control Pack only as a candidate. It cannot become an
 automatic control until source authority, deterministic tests, state approval, exact scope, and
