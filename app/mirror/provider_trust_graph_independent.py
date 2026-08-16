@@ -208,6 +208,7 @@ class _GraphProfile:
     observation_end: int | None
     effective_start: int
     effective_end: int
+    require_complete: bool
     allow_nonmembership: bool
 
     def role_index(self, source_id: str) -> int:
@@ -281,6 +282,7 @@ def _profile_view(profile: object | None) -> _GraphProfile:
             6_000,
             9_000,
             True,
+            True,
         )
     try:
         details = getattr(profile, "source_role_details")
@@ -296,6 +298,8 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         )
         profile_digest = _profile_digest(profile)
         supplied_digest = getattr(profile, "profile_digest")
+        require_complete = getattr(profile, "require_complete")
+        allow_nonmembership = getattr(profile, "allow_nonmembership")
     except Exception as exc:
         raise IndependentProviderTrustGraphError("profile:configuration") from exc
     role_ids = tuple(role[0] for role in roles)
@@ -309,7 +313,8 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         or getattr(profile, "version") != 2
         or getattr(profile, "canonical_order") != "lexicographic-v1"
         or getattr(profile, "root_rule") != "source-root-v1"
-        or type(getattr(profile, "allow_nonmembership")) is not bool
+        or type(require_complete) is not bool
+        or type(allow_nonmembership) is not bool
     ):
         raise IndependentProviderTrustGraphError("profile:configuration")
     subject = getattr(profile, "subject")
@@ -335,7 +340,8 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         getattr(profile, "observation_end"),
         getattr(profile, "effective_start"),
         getattr(profile, "effective_end"),
-        getattr(profile, "allow_nonmembership"),
+        require_complete,
+        allow_nonmembership,
     )
 
 
@@ -577,7 +583,9 @@ def _validate_source(
     end = _int(source["coverage_effective_end"], "source:coverage-end")
     if start >= end:
         raise IndependentProviderTrustGraphError("source:coverage-interval")
-    _bool(source["coverage_complete"], "source:complete")
+    coverage_complete = _bool(source["coverage_complete"], "source:complete")
+    if view.v2 and view.require_complete and coverage_complete is not True:
+        raise IndependentProviderTrustGraphError("source:completeness-policy")
     _text(source["coverage_authority_id"], "source:authority")
     nonmembership = _sorted_unique(source["nonmembership_keys"], "source:nonmembership", maximum=2)
     if nonmembership and not view.allow_nonmembership:

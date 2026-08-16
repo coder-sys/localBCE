@@ -326,6 +326,7 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         or type(observation_start) is not int
         or type(observation_end) is not int
         or type(profile_digest) is not str
+        or type(require_complete) is not bool
         or type(allow_nonmembership) is not bool
         or canonical_order != "lexicographic-v1"
         or root_rule != "source-root-v1"
@@ -374,7 +375,7 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         observation_end,
         int(effective_start),
         int(effective_end),
-        bool(require_complete),
+        require_complete,
         allow_nonmembership,
     )
 
@@ -644,7 +645,9 @@ def _validate_source(
     end = _int(item["coverage_effective_end"], "source:coverage-end")
     if start >= end:
         raise ProviderTrustGraphError("source:coverage-interval")
-    _bool(item["coverage_complete"], "source:complete")
+    coverage_complete = _bool(item["coverage_complete"], "source:complete")
+    if view.v2 and view.require_complete and coverage_complete is not True:
+        raise ProviderTrustGraphError("source:completeness-policy")
     _text(item["coverage_authority_id"], "source:authority")
     nonmembership = _sorted_unique(item["nonmembership_keys"], "source:nonmembership", maximum=2)
     if nonmembership and not view.allow_nonmembership:

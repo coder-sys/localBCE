@@ -198,6 +198,75 @@ def _adapter(profile: SourceProfile, *, case: str = "confirmed", observation: in
     return _canonical(value)
 
 
+def _rebound_incomplete_artifact(profile: SourceProfile, raw: bytes) -> bytes:
+    value = json.loads(raw.decode("ascii"))
+    assert isinstance(value, dict)
+    view = graph._profile_view(profile)
+    sources = value["source_coverage"]
+    assert isinstance(sources, list)
+    for source in sources:
+        assert isinstance(source, dict)
+        source["coverage_complete"] = False
+        source["provenance"]["integrity_digest"] = graph.source_integrity_digest(source, profile)  # type: ignore[index]
+        without_root = {key: item for key, item in source.items() if key != "source_root"}
+        source["source_root"] = graph._source_root(without_root, profile=view)
+    observation = value["observation_snapshot"]["observation_time"]  # type: ignore[index]
+    source_inputs = [{key: item for key, item in source.items() if key != "source_root"} for source in sources]
+    snapshot_id, snapshot_root = graph._snapshot(source_inputs, observation, profile=view)
+    value["observation_snapshot"] = {
+        "snapshot_id": snapshot_id,
+        "snapshot_root": snapshot_root,
+        "observation_time": observation,
+    }
+    findings = [
+        graph._finding(
+            graph.FINDING_INCOMPLETE,
+            snapshot_id,
+            [source["source_id"] for source in sources],
+            profile=view,
+        )
+    ]
+    value["findings"] = findings
+    value["discrepancies"] = []
+    identity = value["report"]["identity_material"]  # type: ignore[index]
+    identity.update(
+        {
+            "snapshot_id": snapshot_id,
+            "snapshot_root": snapshot_root,
+            "source_coverage_root": graph._digest(
+                "source-coverage-root",
+                {"source_roots": [source["source_root"] for source in sources]},
+                profile=view,
+            ),
+            "findings_root": graph._findings_root(findings, profile=view),
+            "discrepancies_root": graph._digest("discrepancies-root", {"discrepancies": []}, profile=view),
+            "remediation_root": None,
+            "parity_root": graph._digest("parity-root", {"parity_cases": value["parity_cases"]}, profile=view),
+            "lifecycle": graph.LIFECYCLE_OPEN,
+            "prior_report_id": None,
+            "prior_snapshot_id": None,
+            "prior_snapshot_root": None,
+        }
+    )
+    report_id = graph._digest("report-id", identity, profile=view)
+    value["report"]["report_id"] = report_id  # type: ignore[index]
+    value["report"]["lifecycle"] = graph.LIFECYCLE_OPEN  # type: ignore[index]
+    transition = value["transition"]
+    transition.update(
+        {
+            "prior_report_id": None,
+            "prior_snapshot_id": None,
+            "prior_snapshot_root": None,
+            "current_report_id": report_id,
+            "current_snapshot_id": snapshot_id,
+            "current_snapshot_root": snapshot_root,
+        }
+    )
+    transition_core = {key: transition[key] for key in graph.TRANSITION_KEYS if key != "transition_id"}
+    transition["transition_id"] = graph._digest("transition-id", transition_core, profile=view)
+    return _canonical(value)
+
+
 class ProviderTrustGraphV2Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.profiles = tuple(_profile(number) for number in (1, 2, 3))
@@ -345,6 +414,28 @@ class ProviderTrustGraphV2Tests(unittest.TestCase):
         partial, _ = _build(profile, complete=False)
         self.assertEqual([graph.FINDING_STALE], independent.verify_bytes_v2(stale, self.registry)["finding_kinds"])
         self.assertEqual([graph.FINDING_INCOMPLETE], independent.verify_bytes_v2(partial, self.registry)["finding_kinds"])
+
+    def test_required_completeness_rejects_rebound_artifact_without_store_mutation(self) -> None:
+        profile = _profile(4, require_complete=True)
+        registry = {profile.profile_id: profile}
+        valid, _ = _build(profile)
+        incomplete_input = _input(profile, complete=False)
+        with self.assertRaisesRegex(graph.ProviderTrustGraphError, "source:completeness-policy"):
+            graph.build_report(graph.canonical_input(incomplete_input), profile=profile)
+        incomplete_artifact = _rebound_incomplete_artifact(profile, valid)
+        with self.assertRaisesRegex(independent.IndependentProviderTrustGraphError, "source:completeness-policy"):
+            independent.verify_bytes_v2(incomplete_artifact, registry)
+        with tempfile.TemporaryDirectory(prefix="mirror-v2-required-complete-") as directory:
+            root = Path(directory)
+            database = root / "state.db"
+            configured = store.ContinuityStore(database, graph_profile_registry=registry)
+            configured.admit(store.ARTIFACT_GRAPH, valid)
+            before_state = configured._snapshot_rows()
+            before_files = {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()}
+            with self.assertRaisesRegex(store.ArtifactAdmissionError, "artifact:independent-reject"):
+                configured.admit(store.ARTIFACT_GRAPH, incomplete_artifact)
+            self.assertEqual(before_state, configured._snapshot_rows())
+            self.assertEqual(before_files, {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()})
 
     def test_profile_nonmembership_policy_is_not_caller_selected(self) -> None:
         profile = replace(self.profiles[0], allow_nonmembership=False)
