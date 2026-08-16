@@ -142,11 +142,12 @@ The next private-proof step is research and closure of the six unresolved theore
 listed in `CURRENT_TASK.md`. Until then, the safe implementation boundary is the synthetic
 read-only plaintext wedge and narrow future-proof adapter.
 
-The last verified retained source publication contains 417 payload files plus one embedded
-manifest (418 ZIP entries) in one candidate and the three retained byte-identical targets. Its
-identity is 5,996,045 bytes with SHA-256
-`d916b181944b3ecff2a93b52702075c70ae24bcaf3d68b3e4373990dd844c360`. This documentation stage
-does not rebuild or publish archives; the next archive run must regenerate its manifest from the
-final committed tree. `STATE.md` and `CURRENT_TASK.md` are workspace-only authority records and
-are excluded from the source archive. No archive identity is evidence of ZK, formal verification,
-production persistence, source authentication, payment authority, PHI safety, or activation.
+Current archive authority is the external publication receipt plus independent physical readback
+of exactly the three retained roles: one Downloads copy, one Desktop-root copy, and one nested
+Desktop source-backup copy, each checked against the Git commit recorded by that receipt. Any
+source commit after a receipt makes those archives stale until republished. Verification requires
+equal byte length and SHA-256 across all three roles, canonical ZIP/CRC readback, no duplicate or
+unexpected entries, zero temporary publication artifacts, and `three_way_byte_identical=true`.
+`STATE.md` and `CURRENT_TASK.md` are workspace-only authority records and are excluded from the
+source archive. No archive identity is evidence of ZK, formal verification, production persistence,
+source authentication, payment authority, PHI safety, or activation.
