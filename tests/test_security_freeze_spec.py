@@ -102,7 +102,7 @@ def test_legacy_twelve_field_manifest_is_exact_but_does_not_govern_native_v3() -
     roadmap = _read(ROOT / "docs" / "IMPLEMENTATION_ROADMAP.md")
     assert "It is not the old 12-field `bytes32` ABI" in native_v3
     assert "does not carry felt or Poseidon compatibility projections" in native_v3
-    assert "Retired BL-PQ512/H4 package counts" in roadmap
+    assert "Rejected architectures are recorded separately" in roadmap
     assert "proofSuiteId=null" in roadmap
     assert not (
         ROOT / "docs" / "history" / "IMPLEMENTATION_ROADMAP_THROUGH_2026-08-01.md"
