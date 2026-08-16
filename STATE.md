@@ -55,7 +55,7 @@ The synthetic plaintext continuity wedge now exercises a verifier-owned
 completeness/nonmembership. It preserves `policyResult` separately from
 `effectiveDirective`, binds all four times, joins one logical `ClearanceDecisionRow` to ordered
 chronological `StateAccessRow` records, and binds SHA3-512 before/after roots, replay identity,
-and governed exception identity. Its focused test suite reports 21/21 passing and its independent
+and governed exception identity. Its focused test suite reports 24/24 passing and its independent
 parser accepts all eight intended case bundles. Reviewed V2 regressions include producer receipt
 parse/canonical round-trips for all eight `DEMO_CASES`, including NONE and governed-exception paths,
 and producer/independent rejection of fact/nonmembership contradiction with
@@ -96,6 +96,34 @@ kernel; it is not active now. It will own bounded canonical semantic decoding, c
 absence, chronology, exceptions, observation-only separation, replay, exact decision/access joins,
 and allowed after-state. It is not implemented; the current Python/Rust KATs and parsers are not a
 deployed-formal-verification claim.
+
+## Direct-State-Owned Atomic Clearance V1 candidate
+
+On 2026-08-15 an isolated candidate based on source commit
+`ce31abeb941ce7ad5927ca67d6f23872f430ed09` composed the canonical plaintext continuity bundle,
+its independent parser, and the existing serializable SQLite database boundary. The composition
+root pins the source profile, `DIRECT_STATE_OWNED` mode, evaluator, control-set/rule order,
+governance authority, schema/program identity, epoch, and database context. A successful independent
+parse is converted into a store-sealed typed operation; the database rechecks chronology, direct
+continuity state IDs/roots, policy/directive separation, exact retry identity, context, and the
+allowed clear-versus-non-clear state transition before one append-only direct request, audit event,
+transition record, and state update commit.
+
+The isolated candidate's focused evidence is 24/24 direct-state tests, 31/31 combined continuity
+and trust-boundary tests, 34/34 transactional database/production/migration tests, and 12/12
+implicated migration-attack tests. The direct tests cover all five directives, governed exception
+and sentinel paths, independently rebound semantic mutations, authority/downgrade mutations,
+concurrency, exact retry, conflicting retry, stale state, rollback, post-commit indeterminate
+recovery, restart, and backup/restore. The existing continuity telemetry covered 8 synthetic cases:
+195,889-byte Python heap peak, 23,859,200-byte peak working set, zero pagefile growth, and
+`complete_proof_resource_gate_measured=false`.
+
+This remains an isolated, synthetic, nonactivating candidate. `proofSuiteId=null`,
+`production_usable=false`, and activation remain false. The run did not select a proof backend,
+implement Lean, touch payment/PHI/Ethereum, or refresh archives. No production persistence,
+anti-rollback custody, source authentication, formal-kernel qualification, complete process-tree
+qualification, payment movement, or integration into the authoritative checkout is claimed. The
+next dependency is Sol review and explicit integration authorization.
 
 ## Private-proof status
 

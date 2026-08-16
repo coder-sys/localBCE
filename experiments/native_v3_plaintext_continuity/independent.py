@@ -8,6 +8,7 @@ re-evaluates the fixed synthetic rule before returning a typed summary.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 import sys
@@ -135,6 +136,54 @@ REASON_STALE_RULE = _sha(REASON_DOMAIN, b"stale-rule-interval")
 REASON_CONTROL_INTERVAL = _sha(REASON_DOMAIN, b"control-set-decision-time")
 
 
+@dataclass(frozen=True)
+class IndependentBundleDetails:
+    """Independently reconstructed values for the direct state boundary.
+
+    The producer record classes are deliberately absent from this module.  The
+    direct adapter consumes this immutable parse result only after the full
+    independent semantic verification below has succeeded.
+    """
+
+    data: bytes
+    bundle_id: bytes
+    receipt_id: bytes
+    adapter_binding: bytes
+    control_set_id: bytes
+    phase0_receipt_binding: bytes
+    join_id: bytes
+    request: dict[str, Any]
+    facts: dict[str, Any]
+    completeness: dict[str, Any]
+    exception: dict[str, Any] | None
+    before: dict[str, Any]
+    after: dict[str, Any]
+    decision: dict[str, Any]
+    accesses: tuple[dict[str, Any], dict[str, Any]]
+    reason_id: bytes
+    policy_result: int
+    effective_directive: int
+
+    def summary(self) -> dict[str, Any]:
+        """Return the historical public summary shape."""
+
+        return {
+            "status": "NATIVE_V3_PLAINTEXT_CONTINUITY_INDEPENDENT_PARSE_PASS",
+            "receipt_id": self.receipt_id.hex(),
+            "bundle_sha3_512": self.bundle_id.hex(),
+            "request_id": self.request["id"].hex(),
+            "reason_id": self.reason_id.hex(),
+            "policy_result": self.policy_result,
+            "effective_directive": self.effective_directive,
+            "state_before_id": self.before["id"].hex(),
+            "state_after_id": self.after["id"].hex(),
+            "access_count": len(self.accesses),
+            "proof_suite_id": None,
+            "proof_session_accepted": False,
+            "economic_mutation": False,
+        }
+
+
 def _u16(value: int) -> bytes:
     return value.to_bytes(2, "big")
 
@@ -213,6 +262,9 @@ def _control_set_bytes() -> bytes:
             b"\0" * 3,
         )
     )
+
+
+CONTROL_SET_ID = _sha(CONTROL_SET_DOMAIN, _control_set_bytes())
 
 
 def _initial_state_id(profile_id: bytes) -> bytes:
@@ -615,7 +667,7 @@ def _evaluate_semantics(
     return policy, directive, reason, exception_id
 
 
-def parse_bundle(data: bytes) -> dict[str, Any]:
+def parse_bundle_details(data: bytes) -> IndependentBundleDetails:
     if len(data) > MAX_BUNDLE_BYTES:
         raise IndependentParseError("bundle:size")
     offset = _header(data, BUNDLE_MAGIC, "bundle")
@@ -798,21 +850,32 @@ def parse_bundle(data: bytes) -> dict[str, Any]:
     if receipt_join_id != _sha(JOIN_DOMAIN, join_raw):
         raise IndependentParseError("join:id")
 
-    return {
-        "status": "NATIVE_V3_PLAINTEXT_CONTINUITY_INDEPENDENT_PARSE_PASS",
-        "receipt_id": receipt_id.hex(),
-        "bundle_sha3_512": _sha(BUNDLE_DOMAIN, data).hex(),
-        "request_id": request["id"].hex(),
-        "reason_id": reason.hex(),
-        "policy_result": policy,
-        "effective_directive": directive,
-        "state_before_id": before["id"].hex(),
-        "state_after_id": after["id"].hex(),
-        "access_count": len(accesses),
-        "proof_suite_id": None,
-        "proof_session_accepted": False,
-        "economic_mutation": False,
-    }
+    return IndependentBundleDetails(
+        data=data,
+        bundle_id=_sha(BUNDLE_DOMAIN, data),
+        receipt_id=receipt_id,
+        adapter_binding=adapter_binding,
+        control_set_id=control_id,
+        phase0_receipt_binding=receipt_phase0,
+        join_id=receipt_join_id,
+        request=request,
+        facts=facts,
+        completeness=completeness,
+        exception=exception,
+        before=before,
+        after=after,
+        decision=decision,
+        accesses=(accesses[0], accesses[1]),
+        reason_id=reason,
+        policy_result=policy,
+        effective_directive=directive,
+    )
+
+
+def parse_bundle(data: bytes) -> dict[str, Any]:
+    """Independently verify one bundle and return the stable summary."""
+
+    return parse_bundle_details(data).summary()
 
 
 def main(argv: list[str] | None = None) -> int:

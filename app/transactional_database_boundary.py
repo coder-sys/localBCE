@@ -10,8 +10,9 @@ credential is opened here.
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import secrets
@@ -67,6 +68,16 @@ _SUBMITTER_AUDIT_DOMAIN = b"BL/PQ512/V2/DATABASE-SUBMITTER-AUDIT/v1\x00"
 _MIGRATION_AUDIT_EVENT_DOMAIN = b"BL/PQ512/V2/DATABASE-MIGRATION-AUDIT/v1\x00"
 _MIGRATION_STATE_BINDING_DOMAIN = b"BL/PQ512/V2/DATABASE-MIGRATION-STATE/v1\x00"
 _TRANSITION_RECORD_DOMAIN = b"BL/PQ512/V2/DATABASE-TRANSITION-RECORD/v1\x00"
+_DIRECT_OPERATION_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-OPERATION/v1\x00"
+_DIRECT_OPERATION_SEAL_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-SEAL/v1\x00"
+_DIRECT_REPLAY_ROOT_DOMAIN = b"BL/DIRECT-STATE-OWNED/REPLAY-ROOT/v1\x00"
+_DIRECT_CLEARANCE_ROOT_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-ROOT/v1\x00"
+_DIRECT_CONTINUITY_STATE_MAGIC = b"BLCSTA02"
+_DIRECT_CONTINUITY_STATE_VERSION = 2
+_DIRECT_CONTINUITY_STATE_CONTEXT_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/STATE-CONTEXT/v2\x00"
+_DIRECT_CONTINUITY_STATE_ID_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/STATE-ID/v2\x00"
+_DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/AUDIT-HEAD/v2\x00"
+_DIRECT_CONTINUITY_ROOT_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/ROOT/v2\x00"
 _AUDIT_HEX_FIELDS = frozenset(
     {
         "batch_nonce_commitment",
@@ -172,6 +183,254 @@ class AntiRollbackReference(Protocol):
         transition_commitment: bytes,
     ) -> None:
         """Idempotently promote the reserved successor after commit."""
+
+
+@dataclass(frozen=True, slots=True)
+class DirectStateOwnedOperationV1:
+    """Independent semantic result sealed for the direct database boundary.
+
+    This is not a proof envelope and contains no private source bytes.  The
+    direct adapter constructs it only from a successful independent bundle
+    parse; the database authenticates the value with a store-bound key before
+    opening its transaction.
+    """
+
+    bundle_id: bytes
+    receipt_id: bytes
+    request_id: bytes
+    attempt_id: bytes
+    decision_id: bytes
+    join_id: bytes
+    source_root: bytes
+    profile_id: bytes
+    schema_id: bytes
+    program_id: bytes
+    mode_id: bytes
+    evaluator_id: bytes
+    control_set_id: bytes
+    rule_id: bytes
+    phase0_receipt_binding: bytes
+    exception_id: bytes
+    policy_result: int
+    effective_directive: int
+    event_time: int
+    observation_time: int
+    rule_effective_time: int
+    decision_time: int
+    continuity_epoch: int
+    continuity_sequence_before: int
+    continuity_sequence_after: int
+    continuity_before_state_id: bytes
+    continuity_after_state_id: bytes
+    continuity_before_audit_head: bytes
+    continuity_after_audit_head: bytes
+    continuity_before_root: bytes
+    continuity_after_root: bytes
+    seal: bytes | None = None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("direct_bundle_id", self.bundle_id),
+            ("direct_receipt_id", self.receipt_id),
+            ("direct_request_id", self.request_id),
+            ("direct_attempt_id", self.attempt_id),
+            ("direct_decision_id", self.decision_id),
+            ("direct_join_id", self.join_id),
+            ("direct_source_root", self.source_root),
+            ("direct_profile_id", self.profile_id),
+            ("direct_schema_id", self.schema_id),
+            ("direct_program_id", self.program_id),
+            ("direct_mode_id", self.mode_id),
+            ("direct_evaluator_id", self.evaluator_id),
+            ("direct_control_set_id", self.control_set_id),
+            ("direct_rule_id", self.rule_id),
+            ("direct_phase0_receipt_binding", self.phase0_receipt_binding),
+            ("direct_exception_id", self.exception_id),
+            ("direct_before_state_id", self.continuity_before_state_id),
+            ("direct_after_state_id", self.continuity_after_state_id),
+            ("direct_before_audit_head", self.continuity_before_audit_head),
+            ("direct_after_audit_head", self.continuity_after_audit_head),
+            ("direct_before_root", self.continuity_before_root),
+            ("direct_after_root", self.continuity_after_root),
+        ):
+            _wide(label, value)
+        if type(self.policy_result) is not int or self.policy_result not in (1, 2, 3, 4):
+            raise ProductionBoundaryError("direct_policy_result_invalid")
+        if type(self.effective_directive) is not int or self.effective_directive not in (1, 2, 3, 4, 5):
+            raise ProductionBoundaryError("direct_effective_directive_invalid")
+        if self.policy_result != {1: 1, 2: 2, 3: 3, 4: 4, 5: 4}[self.effective_directive]:
+            raise ProductionBoundaryError("direct_policy_directive_mismatch")
+        for label, value in (
+            ("direct_event_time", self.event_time),
+            ("direct_observation_time", self.observation_time),
+            ("direct_rule_effective_time", self.rule_effective_time),
+            ("direct_decision_time", self.decision_time),
+            ("direct_continuity_epoch", self.continuity_epoch),
+            ("direct_continuity_sequence_before", self.continuity_sequence_before),
+            ("direct_continuity_sequence_after", self.continuity_sequence_after),
+        ):
+            if type(value) is not int or value < 0 or value >= 2**64:
+                raise ProductionBoundaryError(f"{label}_invalid")
+        if not (
+            self.rule_effective_time
+            < self.event_time
+            < self.observation_time
+            < self.decision_time
+        ):
+            raise ProductionBoundaryError("direct_chronology_invalid")
+        if (
+            self.continuity_epoch != 7
+            or self.continuity_sequence_before != 0
+            or self.continuity_sequence_after != 1
+        ):
+            raise ProductionBoundaryError("direct_continuity_state_shape_invalid")
+        expected_empty_audit = _direct_continuity_sha(
+            _DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+            b"empty",
+        )
+        expected_empty_root = _direct_continuity_sha(
+            _DIRECT_CONTINUITY_ROOT_DOMAIN,
+            b"empty",
+        )
+        if (
+            self.continuity_before_audit_head != expected_empty_audit
+            or self.continuity_before_root != expected_empty_root
+            or self.continuity_before_state_id
+            != _direct_continuity_state_id(
+                profile_id=self.profile_id,
+                mode_id=self.mode_id,
+                sequence=0,
+                row_count=0,
+                audit_head=self.continuity_before_audit_head,
+                continuity_root=self.continuity_before_root,
+            )
+        ):
+            raise ProductionBoundaryError("direct_continuity_before_state_invalid")
+        expected_after_audit = _direct_continuity_sha(
+            _DIRECT_CONTINUITY_AUDIT_HEAD_DOMAIN,
+            self.continuity_before_audit_head,
+            self.decision_id,
+            bytes((self.effective_directive,)),
+        )
+        expected_after_root = _direct_continuity_sha(
+            _DIRECT_CONTINUITY_ROOT_DOMAIN,
+            self.continuity_before_root,
+            self.source_root,
+            self.decision_id,
+        )
+        if (
+            self.continuity_after_audit_head != expected_after_audit
+            or self.continuity_after_root != expected_after_root
+            or self.continuity_after_state_id
+            != _direct_continuity_state_id(
+                profile_id=self.profile_id,
+                mode_id=self.mode_id,
+                sequence=1,
+                row_count=1,
+                audit_head=self.continuity_after_audit_head,
+                continuity_root=self.continuity_after_root,
+            )
+        ):
+            raise ProductionBoundaryError("direct_continuity_after_state_invalid")
+        if self.seal is not None:
+            _wide("direct_operation_seal", self.seal)
+
+
+@dataclass(frozen=True, slots=True)
+class DirectStateOwnedDatabaseReceiptV1:
+    """Committed identity returned by the direct transactional database lane."""
+
+    operation_digest: bytes
+    bundle_id: bytes
+    receipt_id: bytes
+    decision_id: bytes
+    join_id: bytes
+    sequence_before: int
+    sequence_after: int
+    nullifier_root_before: bytes
+    nullifier_root_after: bytes
+    clearance_root_before: bytes
+    clearance_root_after: bytes
+    state_binding: bytes
+    audit_head: bytes
+    effective_directive: int
+    clearance_advanced: bool
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("direct_receipt_operation", self.operation_digest),
+            ("direct_receipt_bundle", self.bundle_id),
+            ("direct_receipt_id", self.receipt_id),
+            ("direct_receipt_decision", self.decision_id),
+            ("direct_receipt_join", self.join_id),
+            ("direct_receipt_nullifier_before", self.nullifier_root_before),
+            ("direct_receipt_nullifier_after", self.nullifier_root_after),
+            ("direct_receipt_clearance_before", self.clearance_root_before),
+            ("direct_receipt_clearance_after", self.clearance_root_after),
+            ("direct_receipt_binding", self.state_binding),
+            ("direct_receipt_audit", self.audit_head),
+        ):
+            _wide(label, value)
+        if type(self.sequence_before) is not int or self.sequence_before < 0:
+            raise ProductionBoundaryError("direct_receipt_sequence_before_invalid")
+        if self.sequence_after != self.sequence_before + 1:
+            raise ProductionBoundaryError("direct_receipt_sequence_after_invalid")
+        if type(self.effective_directive) is not int or self.effective_directive not in (1, 2, 3, 4, 5):
+            raise ProductionBoundaryError("direct_receipt_directive_invalid")
+        if type(self.clearance_advanced) is not bool:
+            raise ProductionBoundaryError("direct_receipt_clearance_flag_invalid")
+
+
+def _direct_operation_parts(operation: DirectStateOwnedOperationV1) -> tuple[bytes, ...]:
+    return (
+        operation.bundle_id,
+        operation.receipt_id,
+        operation.request_id,
+        operation.attempt_id,
+        operation.decision_id,
+        operation.join_id,
+        operation.source_root,
+        operation.profile_id,
+        operation.schema_id,
+        operation.program_id,
+        operation.mode_id,
+        operation.evaluator_id,
+        operation.control_set_id,
+        operation.rule_id,
+        operation.phase0_receipt_binding,
+        operation.exception_id,
+        _u64(operation.policy_result, "direct_policy_result"),
+        _u64(operation.effective_directive, "direct_effective_directive"),
+        _u64(operation.event_time, "direct_event_time"),
+        _u64(operation.observation_time, "direct_observation_time"),
+        _u64(operation.rule_effective_time, "direct_rule_effective_time"),
+        _u64(operation.decision_time, "direct_decision_time"),
+        _u64(operation.continuity_epoch, "direct_continuity_epoch"),
+        _u64(operation.continuity_sequence_before, "direct_continuity_sequence_before"),
+        _u64(operation.continuity_sequence_after, "direct_continuity_sequence_after"),
+        operation.continuity_before_state_id,
+        operation.continuity_after_state_id,
+        operation.continuity_before_audit_head,
+        operation.continuity_after_audit_head,
+        operation.continuity_before_root,
+        operation.continuity_after_root,
+    )
+
+
+def _direct_operation_digest(operation: DirectStateOwnedOperationV1) -> bytes:
+    return _digest(_DIRECT_OPERATION_DOMAIN, *_direct_operation_parts(operation))
+
+
+def _direct_operation_seal(
+    authority_key: bytes,
+    operation: DirectStateOwnedOperationV1,
+) -> bytes:
+    key = _wide("direct_operation_authority_key", authority_key)
+    return hmac.new(
+        key,
+        _digest(_DIRECT_OPERATION_SEAL_DOMAIN, _direct_operation_digest(operation)),
+        hashlib.sha3_512,
+    ).digest()
 
 
 class InMemoryAntiRollbackReference:
@@ -446,6 +705,294 @@ def _audit_payload_from_json(encoded: bytes) -> dict[str, object]:
         raise ProductionBoundaryError("database_audit_payload_invalid") from exc
 
 
+_DIRECT_AUDIT_HEX_FIELDS = frozenset(
+    {
+        "operation_digest",
+        "bundle_id",
+        "receipt_id",
+        "request_id",
+        "attempt_id",
+        "decision_id",
+        "join_id",
+        "source_root",
+        "profile_id",
+        "schema_id",
+        "program_id",
+        "mode_id",
+        "evaluator_id",
+        "control_set_id",
+        "rule_id",
+        "phase0_receipt_binding",
+        "exception_id",
+        "continuity_before_state_id",
+        "continuity_after_state_id",
+        "continuity_before_audit_head",
+        "continuity_after_audit_head",
+        "continuity_before_root",
+        "continuity_after_root",
+        "nullifier_root_before",
+        "nullifier_root_after",
+        "payment_root_before",
+        "payment_root_after",
+        "state_binding",
+        "previous_audit_head",
+    }
+)
+_DIRECT_AUDIT_PAYLOAD_FIELDS = _DIRECT_AUDIT_HEX_FIELDS | {
+    "version",
+    "event_kind",
+    "epoch",
+    "sequence_before",
+    "sequence_after",
+    "policy_result",
+    "effective_directive",
+    "clearance_advanced",
+    "event_time",
+    "observation_time",
+    "rule_effective_time",
+    "decision_time",
+}
+
+
+def _direct_continuity_sha(domain: bytes, *parts: bytes) -> bytes:
+    digest = hashlib.sha3_512(domain)
+    for part in parts:
+        digest.update(part)
+    return digest.digest()
+
+
+def _direct_continuity_state_id(
+    *,
+    profile_id: bytes,
+    mode_id: bytes,
+    sequence: int,
+    row_count: int,
+    audit_head: bytes,
+    continuity_root: bytes,
+) -> bytes:
+    context_id = _direct_continuity_sha(
+        _DIRECT_CONTINUITY_STATE_CONTEXT_DOMAIN,
+        profile_id,
+        mode_id,
+    )
+    raw = b"".join(
+        (
+            _DIRECT_CONTINUITY_STATE_MAGIC,
+            _DIRECT_CONTINUITY_STATE_VERSION.to_bytes(2, "big"),
+            b"\0\0",
+            context_id,
+            sequence.to_bytes(8, "big"),
+            row_count.to_bytes(4, "big"),
+            b"\0" * 4,
+            audit_head,
+            continuity_root,
+        )
+    )
+    return _direct_continuity_sha(_DIRECT_CONTINUITY_STATE_ID_DOMAIN, raw)
+
+
+def _direct_audit_payload(
+    *,
+    operation: DirectStateOwnedOperationV1,
+    operation_digest: bytes,
+    sequence_before: int,
+    sequence_after: int,
+    nullifier_before: bytes,
+    nullifier_after: bytes,
+    payment_before: bytes,
+    payment_after: bytes,
+    state_binding: bytes,
+    previous_head: bytes,
+) -> bytes:
+    payload = {
+        "version": 3,
+        "event_kind": "DIRECT_STATE_OWNED_CLEARANCE_V1",
+        "epoch": operation.continuity_epoch,
+        "sequence_before": sequence_before,
+        "sequence_after": sequence_after,
+        "policy_result": operation.policy_result,
+        "effective_directive": operation.effective_directive,
+        "clearance_advanced": int(operation.effective_directive in (1, 5)),
+        "event_time": operation.event_time,
+        "observation_time": operation.observation_time,
+        "rule_effective_time": operation.rule_effective_time,
+        "decision_time": operation.decision_time,
+        "operation_digest": operation_digest.hex(),
+        "bundle_id": operation.bundle_id.hex(),
+        "receipt_id": operation.receipt_id.hex(),
+        "request_id": operation.request_id.hex(),
+        "attempt_id": operation.attempt_id.hex(),
+        "decision_id": operation.decision_id.hex(),
+        "join_id": operation.join_id.hex(),
+        "source_root": operation.source_root.hex(),
+        "profile_id": operation.profile_id.hex(),
+        "schema_id": operation.schema_id.hex(),
+        "program_id": operation.program_id.hex(),
+        "mode_id": operation.mode_id.hex(),
+        "evaluator_id": operation.evaluator_id.hex(),
+        "control_set_id": operation.control_set_id.hex(),
+        "rule_id": operation.rule_id.hex(),
+        "phase0_receipt_binding": operation.phase0_receipt_binding.hex(),
+        "exception_id": operation.exception_id.hex(),
+        "continuity_before_state_id": operation.continuity_before_state_id.hex(),
+        "continuity_after_state_id": operation.continuity_after_state_id.hex(),
+        "continuity_before_audit_head": operation.continuity_before_audit_head.hex(),
+        "continuity_after_audit_head": operation.continuity_after_audit_head.hex(),
+        "continuity_before_root": operation.continuity_before_root.hex(),
+        "continuity_after_root": operation.continuity_after_root.hex(),
+        "nullifier_root_before": nullifier_before.hex(),
+        "nullifier_root_after": nullifier_after.hex(),
+        "payment_root_before": payment_before.hex(),
+        "payment_root_after": payment_after.hex(),
+        "state_binding": state_binding.hex(),
+        "previous_audit_head": previous_head.hex(),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
+
+
+def _direct_audit_payload_from_json(encoded: bytes) -> dict[str, object]:
+    try:
+        payload = json.loads(encoded.decode("ascii"))
+        if type(payload) is not dict or set(payload) != _DIRECT_AUDIT_PAYLOAD_FIELDS:
+            raise ValueError
+        if payload["version"] != 3 or payload["event_kind"] != "DIRECT_STATE_OWNED_CLEARANCE_V1":
+            raise ValueError
+        for name in ("epoch", "sequence_before", "sequence_after", "event_time", "observation_time", "rule_effective_time", "decision_time"):
+            value = payload[name]
+            if type(value) is not int or value < 0:
+                raise ValueError
+        if payload["epoch"] <= 0 or payload["sequence_after"] != payload["sequence_before"] + 1:
+            raise ValueError
+        if payload["policy_result"] not in (1, 2, 3, 4) or payload["effective_directive"] not in (1, 2, 3, 4, 5):
+            raise ValueError
+        if payload["policy_result"] != {1: 1, 2: 2, 3: 3, 4: 4, 5: 4}[payload["effective_directive"]]:
+            raise ValueError
+        if payload["clearance_advanced"] not in (0, 1):
+            raise ValueError
+        for name in _DIRECT_AUDIT_HEX_FIELDS:
+            value = payload[name]
+            if type(value) is not str or len(bytes.fromhex(value)) != 64:
+                raise ValueError
+        return payload
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ProductionBoundaryError("database_direct_audit_payload_invalid") from exc
+
+
+def _direct_operation_record_values(
+    operation: DirectStateOwnedOperationV1,
+) -> tuple[object, ...]:
+    return (
+        operation.bundle_id,
+        operation.receipt_id,
+        operation.request_id,
+        operation.attempt_id,
+        operation.decision_id,
+        operation.join_id,
+        operation.source_root,
+        operation.profile_id,
+        operation.schema_id,
+        operation.program_id,
+        operation.mode_id,
+        operation.evaluator_id,
+        operation.control_set_id,
+        operation.rule_id,
+        operation.phase0_receipt_binding,
+        operation.exception_id,
+        operation.policy_result,
+        operation.effective_directive,
+        operation.event_time,
+        operation.observation_time,
+        operation.rule_effective_time,
+        operation.decision_time,
+        operation.continuity_epoch,
+        operation.continuity_sequence_before,
+        operation.continuity_sequence_after,
+        operation.continuity_before_state_id,
+        operation.continuity_after_state_id,
+        operation.continuity_before_audit_head,
+        operation.continuity_after_audit_head,
+        operation.continuity_before_root,
+        operation.continuity_after_root,
+    )
+
+
+def _direct_receipt_from_row(
+    row: tuple[object, ...],
+) -> DirectStateOwnedDatabaseReceiptV1:
+    if len(row) != 15:
+        raise ProductionBoundaryError("database_direct_receipt_shape_invalid")
+    normalized = tuple(
+        value if type(value) is int else bytes(value)
+        for value in row
+    )
+    return DirectStateOwnedDatabaseReceiptV1(
+        operation_digest=normalized[0],  # type: ignore[arg-type]
+        bundle_id=normalized[1],  # type: ignore[arg-type]
+        receipt_id=normalized[2],  # type: ignore[arg-type]
+        decision_id=normalized[3],  # type: ignore[arg-type]
+        join_id=normalized[4],  # type: ignore[arg-type]
+        sequence_before=normalized[5],  # type: ignore[arg-type]
+        sequence_after=normalized[6],  # type: ignore[arg-type]
+        nullifier_root_before=normalized[7],  # type: ignore[arg-type]
+        nullifier_root_after=normalized[8],  # type: ignore[arg-type]
+        clearance_root_before=normalized[9],  # type: ignore[arg-type]
+        clearance_root_after=normalized[10],  # type: ignore[arg-type]
+        state_binding=normalized[11],  # type: ignore[arg-type]
+        audit_head=normalized[12],  # type: ignore[arg-type]
+        effective_directive=normalized[13],  # type: ignore[arg-type]
+        clearance_advanced=bool(normalized[14]),
+    )
+
+
+def _direct_operation_from_record(
+    row: tuple[object, ...],
+) -> DirectStateOwnedOperationV1:
+    if len(row) != 41:
+        raise ProductionBoundaryError("database_direct_operation_record_shape_invalid")
+    normalized = tuple(
+        value if type(value) is int else bytes(value)
+        for value in row
+    )
+    try:
+        return DirectStateOwnedOperationV1(
+            bundle_id=normalized[1],  # type: ignore[arg-type]
+            receipt_id=normalized[2],  # type: ignore[arg-type]
+            request_id=normalized[3],  # type: ignore[arg-type]
+            attempt_id=normalized[4],  # type: ignore[arg-type]
+            decision_id=normalized[5],  # type: ignore[arg-type]
+            join_id=normalized[6],  # type: ignore[arg-type]
+            source_root=normalized[7],  # type: ignore[arg-type]
+            profile_id=normalized[8],  # type: ignore[arg-type]
+            schema_id=normalized[9],  # type: ignore[arg-type]
+            program_id=normalized[10],  # type: ignore[arg-type]
+            mode_id=normalized[11],  # type: ignore[arg-type]
+            evaluator_id=normalized[12],  # type: ignore[arg-type]
+            control_set_id=normalized[13],  # type: ignore[arg-type]
+            rule_id=normalized[14],  # type: ignore[arg-type]
+            phase0_receipt_binding=normalized[15],  # type: ignore[arg-type]
+            exception_id=normalized[16],  # type: ignore[arg-type]
+            policy_result=normalized[17],  # type: ignore[arg-type]
+            effective_directive=normalized[18],  # type: ignore[arg-type]
+            event_time=normalized[19],  # type: ignore[arg-type]
+            observation_time=normalized[20],  # type: ignore[arg-type]
+            rule_effective_time=normalized[21],  # type: ignore[arg-type]
+            decision_time=normalized[22],  # type: ignore[arg-type]
+            continuity_epoch=normalized[23],  # type: ignore[arg-type]
+            continuity_sequence_before=normalized[24],  # type: ignore[arg-type]
+            continuity_sequence_after=normalized[25],  # type: ignore[arg-type]
+            continuity_before_state_id=normalized[26],  # type: ignore[arg-type]
+            continuity_after_state_id=normalized[27],  # type: ignore[arg-type]
+            continuity_before_audit_head=normalized[28],  # type: ignore[arg-type]
+            continuity_after_audit_head=normalized[29],  # type: ignore[arg-type]
+            continuity_before_root=normalized[30],  # type: ignore[arg-type]
+            continuity_after_root=normalized[31],  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError) as exc:
+        raise ProductionBoundaryError(
+            "database_direct_operation_record_invalid"
+        ) from exc
+
+
 _MIGRATION_AUDIT_HEX_FIELDS = frozenset(
     {
         "migration_commitment",
@@ -643,6 +1190,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         self._before_commit_hook = before_commit_hook
         self._native_authority_key: bytes | None = None
         self._migration_authority_key: bytes | None = None
+        self._direct_authority_key: bytes | None = None
+        self._direct_mode_id: bytes | None = None
+        self._direct_evaluator_id: bytes | None = None
+        self._direct_control_set_id: bytes | None = None
+        self._direct_rule_id: bytes | None = None
+        self._direct_phase0_receipt_binding: bytes | None = None
         self._closed = False
         self._initialize()
 
@@ -685,6 +1238,49 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         if self._migration_authority_key is not None:
             raise ProductionBoundaryError("database_migration_authority_already_bound")
         self._migration_authority_key = key
+
+    def _bind_direct_authority(
+        self,
+        authority_key: bytes,
+        *,
+        mode_id: bytes,
+        evaluator_id: bytes,
+        control_set_id: bytes,
+        rule_id: bytes,
+        phase0_receipt_binding: bytes,
+    ) -> None:
+        key = _wide("database_direct_authority_key", authority_key)
+        mode = _wide("database_direct_mode_id", mode_id)
+        evaluator = _wide("database_direct_evaluator_id", evaluator_id)
+        control = _wide("database_direct_control_set_id", control_set_id)
+        rule = _wide("database_direct_rule_id", rule_id)
+        phase0 = _wide(
+            "database_direct_phase0_receipt_binding",
+            phase0_receipt_binding,
+        )
+        if self._closed:
+            raise ProductionBoundaryError("database_store_closed")
+        if self._direct_authority_key is not None:
+            raise ProductionBoundaryError("database_direct_authority_already_bound")
+        self._direct_authority_key = key
+        self._direct_mode_id = mode
+        self._direct_evaluator_id = evaluator
+        self._direct_control_set_id = control
+        self._direct_rule_id = rule
+        self._direct_phase0_receipt_binding = phase0
+
+    def _seal_direct_state_owned(
+        self,
+        operation: DirectStateOwnedOperationV1,
+    ) -> DirectStateOwnedOperationV1:
+        if type(operation) is not DirectStateOwnedOperationV1:
+            raise TypeError("direct_operation_required")
+        if self._direct_authority_key is None:
+            raise ProductionBoundaryError("database_direct_authority_unbound")
+        return replace(
+            operation,
+            seal=_direct_operation_seal(self._direct_authority_key, operation),
+        )
 
     def _reconcile_anti_rollback_state(
         self,
@@ -773,6 +1369,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 "SELECT operation_digest FROM settlement_requests WHERE sequence_after=?",
                 (epoch,),
             ).fetchone()
+            if authority is None:
+                authority = connection.execute(
+                    "SELECT operation_digest FROM direct_clearance_requests "
+                    "WHERE sequence_after=?",
+                    (epoch,),
+                ).fetchone()
         else:
             authority = connection.execute(
                 "SELECT migration_commitment FROM migration_requests WHERE sequence_after=?",
@@ -1033,6 +1635,9 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         request_count = connection.execute(
             "SELECT COUNT(*) FROM settlement_requests"
         ).fetchone()[0]
+        direct_count = connection.execute(
+            "SELECT COUNT(*) FROM direct_clearance_requests"
+        ).fetchone()[0]
         migration_count = connection.execute(
             "SELECT COUNT(*) FROM migration_requests"
         ).fetchone()[0]
@@ -1103,7 +1708,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 )
                 previous_binding = state_binding_after
                 settled_count += 1
-        elif transition_count != request_count + migration_count:
+        elif transition_count != request_count + direct_count + migration_count:
             raise ProductionBoundaryError("database_transition_ledger_count_mismatch")
 
     def _initialize(self) -> None:
@@ -1299,6 +1904,55 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 strong_payment_state_root_after BLOB NOT NULL CHECK (length(strong_payment_state_root_after) = 64),
                 state_binding_after BLOB NOT NULL CHECK (length(state_binding_after) = 64)
             );
+            CREATE TABLE IF NOT EXISTS direct_clearance_requests (
+                operation_digest BLOB PRIMARY KEY CHECK (length(operation_digest) = 64),
+                bundle_id BLOB NOT NULL UNIQUE CHECK (length(bundle_id) = 64),
+                receipt_id BLOB NOT NULL UNIQUE CHECK (length(receipt_id) = 64),
+                request_id BLOB NOT NULL UNIQUE CHECK (length(request_id) = 64),
+                attempt_id BLOB NOT NULL UNIQUE CHECK (length(attempt_id) = 64),
+                decision_id BLOB NOT NULL UNIQUE CHECK (length(decision_id) = 64),
+                join_id BLOB NOT NULL UNIQUE CHECK (length(join_id) = 64),
+                source_root BLOB NOT NULL CHECK (length(source_root) = 64),
+                profile_id BLOB NOT NULL CHECK (length(profile_id) = 64),
+                schema_id BLOB NOT NULL CHECK (length(schema_id) = 64),
+                program_id BLOB NOT NULL CHECK (length(program_id) = 64),
+                mode_id BLOB NOT NULL CHECK (length(mode_id) = 64),
+                evaluator_id BLOB NOT NULL CHECK (length(evaluator_id) = 64),
+                control_set_id BLOB NOT NULL CHECK (length(control_set_id) = 64),
+                rule_id BLOB NOT NULL CHECK (length(rule_id) = 64),
+                phase0_receipt_binding BLOB NOT NULL CHECK (length(phase0_receipt_binding) = 64),
+                exception_id BLOB NOT NULL CHECK (length(exception_id) = 64),
+                policy_result INTEGER NOT NULL CHECK (policy_result IN (1, 2, 3, 4)),
+                effective_directive INTEGER NOT NULL CHECK (effective_directive IN (1, 2, 3, 4, 5)),
+                event_time INTEGER NOT NULL CHECK (event_time >= 0),
+                observation_time INTEGER NOT NULL CHECK (observation_time >= 0),
+                rule_effective_time INTEGER NOT NULL CHECK (rule_effective_time >= 0),
+                decision_time INTEGER NOT NULL CHECK (decision_time >= 0),
+                continuity_epoch INTEGER NOT NULL CHECK (continuity_epoch > 0),
+                continuity_sequence_before INTEGER NOT NULL CHECK (continuity_sequence_before >= 0),
+                continuity_sequence_after INTEGER NOT NULL CHECK (continuity_sequence_after = continuity_sequence_before + 1),
+                continuity_before_state_id BLOB NOT NULL CHECK (length(continuity_before_state_id) = 64),
+                continuity_after_state_id BLOB NOT NULL CHECK (length(continuity_after_state_id) = 64),
+                continuity_before_audit_head BLOB NOT NULL CHECK (length(continuity_before_audit_head) = 64),
+                continuity_after_audit_head BLOB NOT NULL CHECK (length(continuity_after_audit_head) = 64),
+                continuity_before_root BLOB NOT NULL CHECK (length(continuity_before_root) = 64),
+                continuity_after_root BLOB NOT NULL CHECK (length(continuity_after_root) = 64),
+                sequence_before INTEGER NOT NULL CHECK (sequence_before >= 0),
+                sequence_after INTEGER NOT NULL CHECK (sequence_after = sequence_before + 1),
+                nullifier_root_before BLOB NOT NULL CHECK (length(nullifier_root_before) = 64),
+                nullifier_root_after BLOB NOT NULL UNIQUE CHECK (length(nullifier_root_after) = 64),
+                payment_root_before BLOB NOT NULL CHECK (length(payment_root_before) = 64),
+                payment_root_after BLOB NOT NULL CHECK (length(payment_root_after) = 64),
+                state_binding_after BLOB NOT NULL CHECK (length(state_binding_after) = 64),
+                audit_head_after BLOB NOT NULL CHECK (length(audit_head_after) = 64),
+                clearance_advanced INTEGER NOT NULL CHECK (clearance_advanced IN (0, 1))
+            );
+            CREATE TRIGGER IF NOT EXISTS direct_clearance_requests_no_update
+            BEFORE UPDATE ON direct_clearance_requests
+            BEGIN SELECT RAISE(ABORT, 'direct_clearance_requests_append_only'); END;
+            CREATE TRIGGER IF NOT EXISTS direct_clearance_requests_no_delete
+            BEFORE DELETE ON direct_clearance_requests
+            BEGIN SELECT RAISE(ABORT, 'direct_clearance_requests_append_only'); END;
             CREATE TABLE IF NOT EXISTS settled_nullifier_roots (
                 strong_nullifier_root_after BLOB PRIMARY KEY CHECK (length(strong_nullifier_root_after) = 64),
                 envelope_commitment BLOB NOT NULL REFERENCES settlement_requests(envelope_commitment)
@@ -1512,6 +2166,36 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             verifier_artifact_identity=operation.verifier_artifact_identity,
         )
         return parsed
+
+    def _validate_direct_operation(
+        self,
+        operation: DirectStateOwnedOperationV1,
+    ) -> bytes:
+        if (
+            self._direct_authority_key is None
+            or type(operation) is not DirectStateOwnedOperationV1
+            or operation.seal is None
+        ):
+            raise ProductionBoundaryError("database_direct_operation_not_authorized")
+        if (
+            operation.profile_id != self._profile_id
+            or operation.schema_id != self._schema_id
+            or operation.program_id != self._verifier_artifact_identity
+            or operation.mode_id != self._direct_mode_id
+            or operation.evaluator_id != self._direct_evaluator_id
+            or operation.control_set_id != self._direct_control_set_id
+            or operation.rule_id != self._direct_rule_id
+            or operation.phase0_receipt_binding != self._direct_phase0_receipt_binding
+            or operation.continuity_epoch != self._epoch
+        ):
+            raise ProductionBoundaryError("database_direct_operation_configuration_stale")
+        expected_seal = _direct_operation_seal(
+            self._direct_authority_key,
+            replace(operation, seal=None),
+        )
+        if not hmac.compare_digest(operation.seal, expected_seal):
+            raise ProductionBoundaryError("database_direct_operation_not_authorized")
+        return _direct_operation_digest(operation)
 
     def snapshot(self) -> DatabaseSettlementSnapshotV2:
         with closing(self._connect()) as connection:
@@ -2007,6 +2691,340 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             except Exception as exc:
                 raise ProductionBoundaryError(
                     "database_transition_committed_anchor_pending"
+                ) from exc
+        return receipt
+
+    def _commit_direct_state_owned(
+        self,
+        operation: DirectStateOwnedOperationV1,
+    ) -> DirectStateOwnedDatabaseReceiptV1:
+        """Commit one independently verified direct-state clearance attempt."""
+
+        operation_digest = self._validate_direct_operation(operation)
+        operation_values = _direct_operation_record_values(operation)
+        next_binding: bytes | None = None
+        next_anti_epoch: int | None = None
+        with closing(self._connect()) as connection:
+            began = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                began = True
+                self._validate_schema_version(connection)
+                config = connection.execute(
+                    "SELECT settlement_domain_commitment, governance_commitment, profile_id, "
+                    "suite_id, schema_id, verifier_artifact_identity, epoch "
+                    "FROM configuration WHERE id=1"
+                ).fetchone()
+                if config is None:
+                    raise ProductionBoundaryError("database_configuration_missing")
+                self._validate_config_row(config)
+                if self._governance_authority_by_commitment(
+                    connection,
+                    bytes(config[1]),
+                ) != self._governance_authority:
+                    raise ProductionBoundaryError(
+                        "database_direct_governance_authority_mismatch"
+                    )
+                row = connection.execute(
+                    "SELECT epoch, sequence, strong_nullifier_root, strong_payment_state_root, "
+                    "state_binding, audit_head, governance_commitment, anti_rollback_epoch, "
+                    "settled_batch_count FROM state WHERE id=1"
+                ).fetchone()
+                if row is None:
+                    raise ProductionBoundaryError("database_state_missing")
+                self._validate_state_row(row)
+                if (
+                    row[0] != self._epoch
+                    or bytes(row[6]) != self._governance_authority.commitment_512
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_state_identity_mismatch"
+                    )
+                pending_anchor = self._reconcile_anti_rollback_state(
+                    epoch=row[7],  # type: ignore[arg-type]
+                    state_binding=bytes(row[4]),
+                    transition_commitment=self._latest_operation_digest(
+                        connection,
+                        row[7],  # type: ignore[arg-type]
+                    ),
+                )
+
+                existing = connection.execute(
+                    "SELECT operation_digest, bundle_id, receipt_id, request_id, attempt_id, "
+                    "decision_id, join_id, source_root, profile_id, schema_id, program_id, "
+                    "mode_id, evaluator_id, control_set_id, rule_id, phase0_receipt_binding, "
+                    "exception_id, policy_result, effective_directive, event_time, "
+                    "observation_time, rule_effective_time, decision_time, continuity_epoch, "
+                    "continuity_sequence_before, continuity_sequence_after, "
+                    "continuity_before_state_id, continuity_after_state_id, "
+                    "continuity_before_audit_head, continuity_after_audit_head, "
+                    "continuity_before_root, continuity_after_root "
+                    "FROM direct_clearance_requests "
+                    "WHERE operation_digest=? OR bundle_id=? OR receipt_id=? OR request_id=? "
+                    "OR attempt_id=? OR decision_id=? OR join_id=?",
+                    (
+                        sqlite3.Binary(operation_digest),
+                        sqlite3.Binary(operation.bundle_id),
+                        sqlite3.Binary(operation.receipt_id),
+                        sqlite3.Binary(operation.request_id),
+                        sqlite3.Binary(operation.attempt_id),
+                        sqlite3.Binary(operation.decision_id),
+                        sqlite3.Binary(operation.join_id),
+                    ),
+                ).fetchall()
+                if existing:
+                    if len(existing) != 1:
+                        raise ProductionBoundaryError(
+                            "database_direct_conflicting_retry"
+                        )
+                    observed = tuple(
+                        value if type(value) is int else bytes(value)
+                        for value in existing[0]
+                    )
+                    if observed[0] != operation_digest or observed[1:] != operation_values:
+                        raise ProductionBoundaryError(
+                            "database_direct_conflicting_retry"
+                        )
+                    receipt_row = connection.execute(
+                        "SELECT operation_digest, bundle_id, receipt_id, decision_id, join_id, "
+                        "sequence_before, sequence_after, nullifier_root_before, "
+                        "nullifier_root_after, payment_root_before, payment_root_after, "
+                        "state_binding_after, audit_head_after, effective_directive, "
+                        "clearance_advanced FROM direct_clearance_requests "
+                        "WHERE operation_digest=?",
+                        (sqlite3.Binary(operation_digest),),
+                    ).fetchone()
+                    if receipt_row is None:
+                        raise ProductionBoundaryError(
+                            "database_direct_receipt_missing"
+                        )
+                    receipt = _direct_receipt_from_row(receipt_row)
+                    connection.execute("COMMIT")
+                    began = False
+                    return receipt
+
+                if row[1] != 0:
+                    raise ProductionBoundaryError("database_direct_sequence_stale")
+                nullifier_before = bytes(row[2])
+                payment_before = bytes(row[3])
+                nullifier_after = _digest(
+                    _DIRECT_REPLAY_ROOT_DOMAIN,
+                    nullifier_before,
+                    operation.attempt_id,
+                    operation.bundle_id,
+                    operation.receipt_id,
+                )
+                duplicate = connection.execute(
+                    "SELECT operation_digest FROM direct_clearance_requests "
+                    "WHERE nullifier_root_after=?",
+                    (sqlite3.Binary(nullifier_after),),
+                ).fetchone()
+                if duplicate is not None:
+                    raise ProductionBoundaryError("database_direct_replay")
+                clearance_advanced = operation.effective_directive in (1, 5)
+                payment_after = (
+                    _digest(
+                        _DIRECT_CLEARANCE_ROOT_DOMAIN,
+                        payment_before,
+                        operation.continuity_after_state_id,
+                        operation.decision_id,
+                        bytes((operation.effective_directive,)),
+                    )
+                    if clearance_advanced
+                    else payment_before
+                )
+                previous_binding = bytes(row[4])
+                next_binding = _digest(
+                    _DATABASE_STATE_BINDING,
+                    previous_binding,
+                    operation.attempt_id,
+                    nullifier_after,
+                    payment_after,
+                    operation.bundle_id,
+                    operation_digest,
+                    self._governance_authority.commitment_512,
+                    _u64(self._epoch, "database_epoch"),
+                )
+                event_payload = _direct_audit_payload(
+                    operation=operation,
+                    operation_digest=operation_digest,
+                    sequence_before=row[1],  # type: ignore[arg-type]
+                    sequence_after=row[1] + 1,  # type: ignore[operator]
+                    nullifier_before=nullifier_before,
+                    nullifier_after=nullifier_after,
+                    payment_before=payment_before,
+                    payment_after=payment_after,
+                    state_binding=next_binding,
+                    previous_head=bytes(row[5]),
+                )
+                event_commitment = _digest(
+                    _AUDIT_EVENT_DOMAIN,
+                    bytes(row[5]),
+                    event_payload,
+                )
+                next_audit_head = _digest(
+                    _AUDIT_HEAD_DOMAIN,
+                    bytes(row[5]),
+                    event_commitment,
+                )
+                next_anti_epoch = row[7] + 1  # type: ignore[operator]
+                if self._anti_rollback is not None:
+                    expected_pending = PendingAntiRollbackTransition(
+                        next_anti_epoch,
+                        next_binding,
+                        operation_digest,
+                    )
+                    if pending_anchor is not None:
+                        if pending_anchor != expected_pending:
+                            raise ProductionBoundaryError(
+                                "anti_rollback_transition_conflict"
+                            )
+                    else:
+                        self._anti_rollback.prepare(
+                            expected_epoch=row[7],  # type: ignore[arg-type]
+                            expected_state_binding=bytes(row[4]),
+                            next_epoch=next_anti_epoch,
+                            next_state_binding=next_binding,
+                            transition_commitment=operation_digest,
+                        )
+                direct_values = (
+                    operation_digest,
+                    *operation_values,
+                    row[1],
+                    row[1] + 1,
+                    nullifier_before,
+                    nullifier_after,
+                    payment_before,
+                    payment_after,
+                    next_binding,
+                    next_audit_head,
+                    int(clearance_advanced),
+                )
+                connection.execute(
+                    "INSERT INTO direct_clearance_requests VALUES ("
+                    + ", ".join("?" for _ in range(41))
+                    + ")",
+                    tuple(
+                        value if type(value) is int else sqlite3.Binary(value)
+                        for value in direct_values
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?)",
+                    (
+                        row[1] + 1,
+                        sqlite3.Binary(bytes(row[5])),
+                        sqlite3.Binary(event_commitment),
+                        sqlite3.Binary(next_audit_head),
+                        sqlite3.Binary(event_payload),
+                    ),
+                )
+                checkpoint = PrivacyV2DatabaseIdentity(
+                    settlement_domain_commitment=_digest(
+                        _DOMAIN_COMMITMENT_DOMAIN,
+                        self._settlement_domain,
+                    ),
+                    governance_commitment=self._governance_authority.commitment_512,
+                    governance_authority=self._governance_authority,
+                    profile_id=self._profile_id,
+                    suite_id=self._suite_id,
+                    schema_id=self._schema_id,
+                    verifier_artifact_identity=self._verifier_artifact_identity,
+                    epoch=self._epoch,
+                    sequence=row[1] + 1,  # type: ignore[operator]
+                    strong_nullifier_root=nullifier_after,
+                    strong_payment_state_root=payment_after,
+                    state_binding=next_binding,
+                    audit_head=next_audit_head,
+                    anti_rollback_epoch=next_anti_epoch,
+                    settled_batch_count=row[8] + 1,  # type: ignore[operator]
+                )
+                connection.execute(
+                    "INSERT INTO transition_records VALUES "
+                    "(?, 'SETTLEMENT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row[1] + 1,
+                        sqlite3.Binary(operation_digest),
+                        sqlite3.Binary(previous_binding),
+                        sqlite3.Binary(next_binding),
+                        sqlite3.Binary(nullifier_before),
+                        sqlite3.Binary(nullifier_after),
+                        sqlite3.Binary(payment_before),
+                        sqlite3.Binary(payment_after),
+                        sqlite3.Binary(self._governance_authority.commitment_512),
+                        sqlite3.Binary(self._governance_authority.commitment_512),
+                        sqlite3.Binary(self._profile_id),
+                        sqlite3.Binary(self._profile_id),
+                        sqlite3.Binary(self._suite_id),
+                        sqlite3.Binary(self._suite_id),
+                        sqlite3.Binary(self._schema_id),
+                        sqlite3.Binary(self._schema_id),
+                        sqlite3.Binary(self._verifier_artifact_identity),
+                        sqlite3.Binary(self._verifier_artifact_identity),
+                        self._epoch,
+                        self._epoch,
+                        sqlite3.Binary(checkpoint.checkpoint_commitment),
+                    ),
+                )
+                connection.execute(
+                    "UPDATE state SET sequence=?, strong_nullifier_root=?, "
+                    "strong_payment_state_root=?, state_binding=?, audit_head=?, "
+                    "anti_rollback_epoch=?, settled_batch_count=? WHERE id=1",
+                    (
+                        row[1] + 1,
+                        sqlite3.Binary(nullifier_after),
+                        sqlite3.Binary(payment_after),
+                        sqlite3.Binary(next_binding),
+                        sqlite3.Binary(next_audit_head),
+                        next_anti_epoch,
+                        row[8] + 1,
+                    ),
+                )
+                if self._before_commit_hook is not None:
+                    self._before_commit_hook()
+                connection.execute("COMMIT")
+                began = False
+                receipt = DirectStateOwnedDatabaseReceiptV1(
+                    operation_digest=operation_digest,
+                    bundle_id=operation.bundle_id,
+                    receipt_id=operation.receipt_id,
+                    decision_id=operation.decision_id,
+                    join_id=operation.join_id,
+                    sequence_before=row[1],  # type: ignore[arg-type]
+                    sequence_after=row[1] + 1,  # type: ignore[operator]
+                    nullifier_root_before=nullifier_before,
+                    nullifier_root_after=nullifier_after,
+                    clearance_root_before=payment_before,
+                    clearance_root_after=payment_after,
+                    state_binding=next_binding,
+                    audit_head=next_audit_head,
+                    effective_directive=operation.effective_directive,
+                    clearance_advanced=clearance_advanced,
+                )
+            except sqlite3.IntegrityError as exc:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise ProductionBoundaryError("database_direct_transition_conflict") from exc
+            except sqlite3.OperationalError as exc:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise ProductionBoundaryError("database_direct_transition_unavailable") from exc
+            except Exception:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        if self._anti_rollback is not None:
+            if next_binding is None or next_anti_epoch is None:
+                raise ProductionBoundaryError("database_direct_anchor_state_missing")
+            try:
+                self._anti_rollback.finalize(
+                    next_epoch=next_anti_epoch,
+                    next_state_binding=next_binding,
+                    transition_commitment=operation_digest,
+                )
+            except Exception as exc:
+                raise ProductionBoundaryError(
+                    "database_direct_transition_committed_anchor_pending"
                 ) from exc
         return receipt
 
@@ -2624,11 +3642,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 connection.execute("SELECT COUNT(*) FROM settled_nullifier_roots").fetchone()[0],
                 connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
             )
-            if counts != (
-                snapshot.settled_batch_count,
-                snapshot.settled_batch_count,
-                snapshot.settled_batch_count,
-            ):
+            direct_count = connection.execute(
+                "SELECT COUNT(*) FROM direct_clearance_requests"
+            ).fetchone()[0]
+            if counts[0] + direct_count != snapshot.settled_batch_count or counts[1] != counts[0] or counts[2] != snapshot.sequence:
                 raise ProductionBoundaryError("database_transition_count_mismatch")
             previous_head = _digest(
                 _AUDIT_GENESIS_DOMAIN,
@@ -2663,16 +3680,40 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 expected_head = _digest(_AUDIT_HEAD_DOMAIN, previous_head, event_commitment)
                 if current_head != expected_head:
                     raise ProductionBoundaryError("database_audit_head_invalid")
-                decoded_payload = _audit_payload_from_json(payload)
+                try:
+                    payload_probe = json.loads(payload.decode("ascii"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ProductionBoundaryError(
+                        "database_audit_payload_invalid"
+                    ) from exc
                 if (
-                    decoded_payload["epoch"] != snapshot.epoch
-                    or decoded_payload["sequence_before"] != sequence - 1
-                    or decoded_payload["sequence_after"] != sequence
-                    or decoded_payload["previous_audit_head"] != previous_head.hex()
-                    or decoded_payload["governance_commitment"]
-                    != snapshot.governance_commitment.hex()
+                    type(payload_probe) is dict
+                    and payload_probe.get("event_kind")
+                    == "DIRECT_STATE_OWNED_CLEARANCE_V1"
                 ):
-                    raise ProductionBoundaryError("database_audit_payload_binding_mismatch")
+                    decoded_payload = _direct_audit_payload_from_json(payload)
+                    if (
+                        decoded_payload["epoch"] != snapshot.epoch
+                        or decoded_payload["sequence_before"] != sequence - 1
+                        or decoded_payload["sequence_after"] != sequence
+                        or decoded_payload["previous_audit_head"] != previous_head.hex()
+                    ):
+                        raise ProductionBoundaryError(
+                            "database_audit_payload_binding_mismatch"
+                        )
+                else:
+                    decoded_payload = _audit_payload_from_json(payload)
+                    if (
+                        decoded_payload["epoch"] != snapshot.epoch
+                        or decoded_payload["sequence_before"] != sequence - 1
+                        or decoded_payload["sequence_after"] != sequence
+                        or decoded_payload["previous_audit_head"] != previous_head.hex()
+                        or decoded_payload["governance_commitment"]
+                        != snapshot.governance_commitment.hex()
+                    ):
+                        raise ProductionBoundaryError(
+                            "database_audit_payload_binding_mismatch"
+                        )
                 audit_payloads[sequence] = decoded_payload
                 previous_head = current_head
                 expected_sequence += 1
@@ -2797,6 +3838,202 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 previous_nullifier = nullifier_after
                 previous_payment = payment_after
                 previous_binding = state_binding_after
+                expected_sequence += 1
+            direct_rows = connection.execute(
+                "SELECT operation_digest, bundle_id, receipt_id, request_id, attempt_id, "
+                "decision_id, join_id, source_root, profile_id, schema_id, program_id, "
+                "mode_id, evaluator_id, control_set_id, rule_id, phase0_receipt_binding, "
+                "exception_id, policy_result, effective_directive, event_time, "
+                "observation_time, rule_effective_time, decision_time, continuity_epoch, "
+                "continuity_sequence_before, continuity_sequence_after, "
+                "continuity_before_state_id, continuity_after_state_id, "
+                "continuity_before_audit_head, continuity_after_audit_head, "
+                "continuity_before_root, continuity_after_root, sequence_before, "
+                "sequence_after, nullifier_root_before, nullifier_root_after, "
+                "payment_root_before, payment_root_after, state_binding_after, "
+                "audit_head_after, clearance_advanced "
+                "FROM direct_clearance_requests ORDER BY sequence_after"
+            )
+            for raw_direct in direct_rows:
+                direct = tuple(
+                    value if type(value) is int else bytes(value)
+                    for value in raw_direct
+                )
+                direct_operation = _direct_operation_from_record(direct)
+                operation_digest = direct[0]
+                if (
+                    _direct_operation_digest(direct_operation) != operation_digest
+                    or direct_operation.profile_id != self._profile_id
+                    or direct_operation.schema_id != self._schema_id
+                    or direct_operation.program_id != self._verifier_artifact_identity
+                    or direct_operation.continuity_epoch != snapshot.epoch
+                    or direct[32] != expected_sequence - 1
+                    or direct[33] != expected_sequence
+                    or direct[34] != previous_nullifier
+                    or direct[36] != previous_payment
+                    or direct[40] != int(direct_operation.effective_directive in (1, 5))
+                ):
+                    raise ProductionBoundaryError("database_direct_transition_mismatch")
+                if (
+                    self._direct_mode_id is not None
+                    and (
+                        direct_operation.mode_id != self._direct_mode_id
+                        or direct_operation.evaluator_id != self._direct_evaluator_id
+                        or direct_operation.control_set_id != self._direct_control_set_id
+                        or direct_operation.rule_id != self._direct_rule_id
+                        or direct_operation.phase0_receipt_binding
+                        != self._direct_phase0_receipt_binding
+                    )
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_operation_context_mismatch"
+                    )
+                expected_nullifier = _digest(
+                    _DIRECT_REPLAY_ROOT_DOMAIN,
+                    previous_nullifier,
+                    direct_operation.attempt_id,
+                    direct_operation.bundle_id,
+                    direct_operation.receipt_id,
+                )
+                expected_payment = (
+                    _digest(
+                        _DIRECT_CLEARANCE_ROOT_DOMAIN,
+                        previous_payment,
+                        direct_operation.continuity_after_state_id,
+                        direct_operation.decision_id,
+                        bytes((direct_operation.effective_directive,)),
+                    )
+                    if direct_operation.effective_directive in (1, 5)
+                    else previous_payment
+                )
+                expected_binding = _digest(
+                    _DATABASE_STATE_BINDING,
+                    previous_binding,
+                    direct_operation.attempt_id,
+                    expected_nullifier,
+                    expected_payment,
+                    direct_operation.bundle_id,
+                    operation_digest,
+                    snapshot.governance_commitment,
+                    _u64(snapshot.epoch, "database_epoch"),
+                )
+                if (
+                    direct[35] != expected_nullifier
+                    or direct[37] != expected_payment
+                    or direct[38] != expected_binding
+                ):
+                    raise ProductionBoundaryError("database_direct_state_binding_invalid")
+                payload = audit_payloads.get(expected_sequence)
+                if payload is None:
+                    raise ProductionBoundaryError("database_direct_audit_missing")
+                if expected_sequence == 1:
+                    expected_previous_head = _digest(
+                        _AUDIT_GENESIS_DOMAIN,
+                        _digest(
+                            _DATABASE_STATE_BINDING,
+                            _u64(snapshot.epoch, "database_epoch"),
+                            _u64(0, "database_sequence"),
+                            self._initial_nullifier_root,
+                            self._initial_payment_root,
+                            snapshot.governance_commitment,
+                        ),
+                        self._initial_nullifier_root,
+                        self._initial_payment_root,
+                    )
+                else:
+                    previous_row = connection.execute(
+                        "SELECT previous_head FROM audit_events WHERE sequence=?",
+                        (expected_sequence,),
+                    ).fetchone()
+                    if previous_row is None:
+                        raise ProductionBoundaryError("database_direct_audit_missing")
+                    expected_previous_head = bytes(previous_row[0])
+                expected_payload = json.loads(
+                    _direct_audit_payload(
+                        operation=direct_operation,
+                        operation_digest=operation_digest,  # type: ignore[arg-type]
+                        sequence_before=expected_sequence - 1,
+                        sequence_after=expected_sequence,
+                        nullifier_before=previous_nullifier,
+                        nullifier_after=direct[35],  # type: ignore[arg-type]
+                        payment_before=previous_payment,
+                        payment_after=direct[37],  # type: ignore[arg-type]
+                        state_binding=direct[38],  # type: ignore[arg-type]
+                        previous_head=expected_previous_head,
+                    ).decode("ascii")
+                )
+                if payload != expected_payload:
+                    raise ProductionBoundaryError("database_direct_audit_binding_mismatch")
+                audit_row = connection.execute(
+                    "SELECT current_head FROM audit_events WHERE sequence=?",
+                    (expected_sequence,),
+                ).fetchone()
+                if audit_row is None or direct[39] != bytes(audit_row[0]):
+                    raise ProductionBoundaryError("database_direct_audit_head_mismatch")
+                transition = connection.execute(
+                    "SELECT sequence_after, record_commitment, state_binding_before, "
+                    "state_binding_after, nullifier_root_before, nullifier_root_after, "
+                    "payment_root_before, payment_root_after, governance_before, "
+                    "governance_after, profile_before, profile_after, suite_before, "
+                    "suite_after, schema_before, schema_after, verifier_before, "
+                    "verifier_after, epoch_before, epoch_after, checkpoint_commitment_after "
+                    "FROM transition_records WHERE record_commitment=?",
+                    (sqlite3.Binary(operation_digest),),
+                ).fetchone()
+                if transition is None:
+                    raise ProductionBoundaryError("database_direct_transition_missing")
+                transition = tuple(
+                    value if type(value) is int else bytes(value)
+                    for value in transition
+                )
+                if (
+                    transition[0] != expected_sequence
+                    or transition[1] != operation_digest
+                    or transition[2] != previous_binding
+                    or transition[3] != direct[38]
+                    or transition[4] != previous_nullifier
+                    or transition[5] != direct[35]
+                    or transition[6] != previous_payment
+                    or transition[7] != direct[37]
+                    or transition[8] != snapshot.governance_commitment
+                    or transition[9] != snapshot.governance_commitment
+                    or transition[10] != self._profile_id
+                    or transition[11] != self._profile_id
+                    or transition[12] != self._suite_id
+                    or transition[13] != self._suite_id
+                    or transition[14] != self._schema_id
+                    or transition[15] != self._schema_id
+                    or transition[16] != self._verifier_artifact_identity
+                    or transition[17] != self._verifier_artifact_identity
+                    or transition[18] != snapshot.epoch
+                    or transition[19] != snapshot.epoch
+                ):
+                    raise ProductionBoundaryError("database_direct_transition_mismatch")
+                checkpoint = PrivacyV2DatabaseIdentity(
+                    settlement_domain_commitment=_digest(
+                        _DOMAIN_COMMITMENT_DOMAIN,
+                        self._settlement_domain,
+                    ),
+                    governance_commitment=snapshot.governance_commitment,
+                    governance_authority=self._governance_authority,
+                    profile_id=self._profile_id,
+                    suite_id=self._suite_id,
+                    schema_id=self._schema_id,
+                    verifier_artifact_identity=self._verifier_artifact_identity,
+                    epoch=snapshot.epoch,
+                    sequence=expected_sequence,
+                    strong_nullifier_root=direct[35],  # type: ignore[arg-type]
+                    strong_payment_state_root=direct[37],  # type: ignore[arg-type]
+                    state_binding=direct[38],  # type: ignore[arg-type]
+                    audit_head=direct[39],  # type: ignore[arg-type]
+                    anti_rollback_epoch=expected_sequence,
+                    settled_batch_count=expected_sequence,
+                )
+                if transition[20] != checkpoint.checkpoint_commitment:
+                    raise ProductionBoundaryError("database_transition_checkpoint_invalid")
+                previous_nullifier = direct[35]  # type: ignore[assignment]
+                previous_payment = direct[37]  # type: ignore[assignment]
+                previous_binding = direct[38]  # type: ignore[assignment]
                 expected_sequence += 1
             if (
                 expected_sequence - 1 != snapshot.sequence
@@ -3413,13 +4650,16 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             migration_count = connection.execute(
                 "SELECT COUNT(*) FROM migration_requests"
             ).fetchone()[0]
+            direct_count = connection.execute(
+                "SELECT COUNT(*) FROM direct_clearance_requests"
+            ).fetchone()[0]
             transition_count = connection.execute(
                 "SELECT COUNT(*) FROM transition_records"
             ).fetchone()[0]
             request_count = connection.execute(
                 "SELECT COUNT(*) FROM settlement_requests"
             ).fetchone()[0]
-        if transition_count != request_count + migration_count:
+        if transition_count != request_count + direct_count + migration_count:
             raise ProductionBoundaryError("database_transition_ledger_count_mismatch")
         if migration_count == 0:
             self._verify_integrity_single_epoch()
@@ -3515,6 +4755,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
     def close(self) -> None:
         self._native_authority_key = None
         self._migration_authority_key = None
+        self._direct_authority_key = None
+        self._direct_mode_id = None
+        self._direct_evaluator_id = None
+        self._direct_control_set_id = None
+        self._direct_rule_id = None
+        self._direct_phase0_receipt_binding = None
         self._closed = True
 
 
