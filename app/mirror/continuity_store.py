@@ -22,6 +22,7 @@ from app.governance import provider_continuity_control_pack_withdrawal_independe
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import continuity_store_independent as store_independent
 from app.mirror import source_evidence_custody_independent as source_independent
+from app.mirror import source_reconciliation_independent as reconciliation_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -29,7 +30,8 @@ SCHEMA_VERSION = 2
 ARTIFACT_GRAPH = "PROVIDER_TRUST_GRAPH_V1"
 ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
 ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE)
+ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 MAX_ARTIFACT_BYTES = 524_288
@@ -275,6 +277,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind == ARTIFACT_SOURCE_EVIDENCE:
         if dict(value) != source_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_RECONCILIATION:
+        if dict(value) != reconciliation_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -311,6 +316,7 @@ def verify_artifact(
     raw: bytes,
     *,
     graph_profile_registry: Mapping[str, object] | None = None,
+    reconciliation_context: Mapping[str, object] | None = None,
 ) -> VerifiedArtifact:
     """Run the matching independent verifier and normalize its exact identities."""
 
@@ -319,12 +325,33 @@ def verify_artifact(
     if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
         raise ArtifactAdmissionError("artifact:byte-cap")
     try:
-        value = source_independent._parse(raw) if artifact_kind == ARTIFACT_SOURCE_EVIDENCE else _parse_canonical(raw)
-    except (ContinuityStoreError, source_independent.IndependentSourceCustodyError) as exc:
+        if artifact_kind == ARTIFACT_SOURCE_EVIDENCE:
+            value = source_independent._parse(raw)
+        elif artifact_kind == ARTIFACT_RECONCILIATION:
+            value = reconciliation_independent._parse(raw)
+        else:
+            value = _parse_canonical(raw)
+    except (
+        ContinuityStoreError,
+        source_independent.IndependentSourceCustodyError,
+        reconciliation_independent.IndependentSourceReconciliationError,
+    ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE:
             result = source_independent.verify_artifact(raw, graph_profile_registry=graph_profile_registry, allow_unresolved_graph=True)
+        elif artifact_kind == ARTIFACT_RECONCILIATION:
+            if not isinstance(reconciliation_context, Mapping):
+                raise ArtifactAdmissionError("reconciliation:context-required")
+            result = reconciliation_independent.verify_artifact(
+                raw,
+                current_custody_raw=reconciliation_context["current_custody_raw"],
+                prior_custody_raw=reconciliation_context.get("prior_custody_raw"),
+                current_graph_raw=reconciliation_context.get("current_graph_raw"),
+                prior_graph_raw=reconciliation_context.get("prior_graph_raw"),
+                prior_reconciliation_raw=reconciliation_context.get("prior_reconciliation_raw"),
+                graph_profile_registry=graph_profile_registry,
+            )
         elif artifact_kind == ARTIFACT_GRAPH:
             if value.get("schema") == graph_independent.SCHEMA_V2:
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
@@ -344,6 +371,19 @@ def verify_artifact(
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE:
             artifact_id = result["artifact_id"]
             report_id = result["report_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = result["schema"]
+            subject_id = result["subject"]
+            scope = result["scope"]
+            profile_id = result["profile_id"]
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_RECONCILIATION:
+            artifact_id = result["artifact_id"]
+            report_id = None
             current_stage_id = result["current_stage_id"]
             transition_id = result["transition_id"]
             stage_kind = result["stage_kind"]
@@ -1028,6 +1068,8 @@ class ContinuityStore:
     def admit(self, artifact_kind: str, artifact_raw: bytes) -> AdmissionReceipt:
         """Verify and atomically admit one artifact, or replay its exact receipt."""
 
+        if artifact_kind == ARTIFACT_RECONCILIATION:
+            raise StoreConflictError("reconciliation:transaction-required")
         artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE and source_independent.has_graph_link(artifact_raw):
             raise StoreConflictError("custody:graph-link-transaction-required")
@@ -1158,6 +1200,319 @@ class ContinuityStore:
             except sqlite3.Error:
                 pass
             raise
+        finally:
+            connection.close()
+
+    def _load_source_reconciliation_context(
+        self,
+        connection: sqlite3.Connection,
+        custody_raw: bytes,
+        *,
+        require_source_head: bool = True,
+    ) -> dict[str, object]:
+        """Load the verifier-owned custody chain needed for one delta.
+
+        This runs under the caller's transaction.  The returned bytes are
+        state-owned rows, never caller-selected predecessor or graph payloads.
+        """
+
+        registry = self.graph_profile_registry
+        try:
+            preview = source_independent.verify_artifact(
+                custody_raw,
+                graph_profile_registry=registry,
+                allow_unresolved_graph=True,
+            )
+            source_artifact = verify_artifact(
+                ARTIFACT_SOURCE_EVIDENCE,
+                custody_raw,
+                graph_profile_registry=registry,
+            )
+        except Exception as exc:
+            raise StoreConflictError("reconciliation:custody-reject") from exc
+        source_row = connection.execute(
+            "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_SOURCE_EVIDENCE, source_artifact.artifact_id),
+        ).fetchone()
+        if source_row is None or bytes(source_row["payload"]) != custody_raw or source_row["payload_hash"] != _payload_hash(custody_raw):
+            raise StoreConflictError("reconciliation:custody-not-stored")
+
+        current_graph_raw: bytes | None = None
+        if preview.get("linked_graph_artifact_id") is not None:
+            graph_row = connection.execute(
+                "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_GRAPH, preview["linked_graph_artifact_id"]),
+            ).fetchone()
+            if graph_row is None:
+                raise StoreConflictError("reconciliation:current-graph-missing")
+            current_graph_raw = bytes(graph_row["payload"])
+            try:
+                source_independent.verify_artifact(
+                    custody_raw,
+                    graph_raw=current_graph_raw,
+                    graph_profile_registry=registry,
+                )
+            except Exception as exc:
+                raise StoreConflictError("reconciliation:current-graph-binding") from exc
+
+        source_chain = _chain_id(
+            ARTIFACT_SOURCE_EVIDENCE,
+            source_artifact.subject,
+            source_artifact.scope,
+            source_artifact.profile_id,
+        )
+        source_head = self._head(connection, source_chain)
+        if require_source_head and (source_head is None or (source_head["artifact_id"], source_head["current_stage_id"]) != (source_artifact.artifact_id, source_artifact.current_stage_id)):
+            raise StoreConflictError("reconciliation:source-not-head")
+
+        prior_custody_raw: bytes | None = None
+        prior_graph_raw: bytes | None = None
+        prior_source_artifact: VerifiedArtifact | None = None
+        if source_artifact.prior_artifact_id is not None:
+            prior_row = connection.execute(
+                "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_SOURCE_EVIDENCE, source_artifact.prior_artifact_id),
+            ).fetchone()
+            if prior_row is None or prior_row["current_stage_id"] != source_artifact.prior_stage_id:
+                raise StoreConflictError("reconciliation:prior-custody-missing")
+            prior_custody_raw = bytes(prior_row["payload"])
+            prior_preview = source_independent.verify_artifact(
+                prior_custody_raw,
+                graph_profile_registry=registry,
+                allow_unresolved_graph=True,
+            )
+            if prior_preview.get("linked_graph_artifact_id") is not None:
+                prior_graph_row = connection.execute(
+                    "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_GRAPH, prior_preview["linked_graph_artifact_id"]),
+                ).fetchone()
+                if prior_graph_row is None:
+                    raise StoreConflictError("reconciliation:prior-graph-missing")
+                prior_graph_raw = bytes(prior_graph_row["payload"])
+            try:
+                prior_source_artifact = verify_artifact(
+                    ARTIFACT_SOURCE_EVIDENCE,
+                    prior_custody_raw,
+                    graph_profile_registry=registry,
+                )
+                source_independent.verify_artifact(
+                    prior_custody_raw,
+                    graph_raw=prior_graph_raw,
+                    graph_profile_registry=registry,
+                )
+            except Exception as exc:
+                raise StoreConflictError("reconciliation:prior-custody-binding") from exc
+            if prior_source_artifact.artifact_id != source_artifact.prior_artifact_id or prior_source_artifact.current_stage_id != source_artifact.prior_stage_id:
+                raise StoreConflictError("reconciliation:prior-custody-binding")
+
+        recon_chain = _chain_id(
+            ARTIFACT_RECONCILIATION,
+            source_artifact.subject,
+            source_artifact.scope,
+            source_artifact.profile_id,
+        )
+        recon_head = self._head(connection, recon_chain)
+        prior_reconciliation_raw: bytes | None = None
+        if prior_source_artifact is None:
+            if recon_head is not None:
+                raise StoreConflictError("reconciliation:unexpected-existing-head")
+        else:
+            if recon_head is None:
+                raise StoreConflictError("reconciliation:prior-head-missing")
+            prior_recon_row = connection.execute(
+                "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_RECONCILIATION, recon_head["artifact_id"]),
+            ).fetchone()
+            if prior_recon_row is None or prior_recon_row["current_stage_id"] != recon_head["current_stage_id"]:
+                raise StoreSchemaError("reconciliation:head-artifact-missing")
+            prior_reconciliation_raw = bytes(prior_recon_row["payload"])
+            try:
+                prior_value = reconciliation_independent._parse(prior_reconciliation_raw)
+            except Exception as exc:
+                raise StoreSchemaError("reconciliation:head-artifact-invalid") from exc
+            prior_current = prior_value.get("current_custody")
+            if not isinstance(prior_current, dict) or prior_current.get("artifact_id") != source_artifact.prior_artifact_id or prior_current.get("stage_id") != source_artifact.prior_stage_id:
+                raise StoreConflictError("reconciliation:prior-head-binding")
+
+        return {
+            "current_custody_raw": custody_raw,
+            "prior_custody_raw": prior_custody_raw,
+            "current_graph_raw": current_graph_raw,
+            "prior_graph_raw": prior_graph_raw,
+            "prior_reconciliation_raw": prior_reconciliation_raw,
+            "source_artifact": source_artifact,
+            "source_preview": preview,
+            "reconciliation_head": recon_head,
+        }
+
+    def source_reconciliation_context(
+        self,
+        custody_raw: bytes,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Return an immutable read context for the configured reconciliation service."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            self._validate_transaction_snapshot(connection)
+            context = self._load_source_reconciliation_context(connection, custody_raw)
+            connection.commit()
+            return {key: value for key, value in context.items() if key not in {"source_artifact", "source_preview", "reconciliation_head"}}
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
+    def find_source_reconciliation(
+        self,
+        custody_raw: bytes,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt | None:
+        """Find an exact retry by its already-stored current custody identity."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        try:
+            preview = source_independent.verify_artifact(
+                custody_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                allow_unresolved_graph=True,
+            )
+        except Exception as exc:
+            raise StoreConflictError("reconciliation:custody-reject") from exc
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            self._validate_transaction_snapshot(connection)
+            source_row = connection.execute(
+                "SELECT payload,payload_hash FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_SOURCE_EVIDENCE, preview["artifact_id"]),
+            ).fetchone()
+            if source_row is None or bytes(source_row["payload"]) != custody_raw or source_row["payload_hash"] != _payload_hash(custody_raw):
+                connection.commit()
+                return None
+            for row in connection.execute("SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (ARTIFACT_RECONCILIATION,)):
+                value = reconciliation_independent._parse(bytes(row["payload"]))
+                current = value.get("current_custody")
+                if isinstance(current, dict) and current.get("artifact_id") == preview["artifact_id"]:
+                    receipt_row = connection.execute(
+                        "SELECT r.receipt FROM operations o JOIN receipts r ON r.operation_id=o.operation_id WHERE o.artifact_kind=? AND o.artifact_id=? AND o.payload_hash=?",
+                        (ARTIFACT_RECONCILIATION, row["artifact_id"], row["payload_hash"]),
+                    ).fetchone()
+                    if receipt_row is None:
+                        raise StoreSchemaError("reconciliation:receipt-missing")
+                    receipt = AdmissionReceipt(bytes(receipt_row["receipt"]))
+                    connection.commit()
+                    return receipt
+            connection.commit()
+            return None
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
+    def admit_source_reconciliation(
+        self,
+        custody_raw: bytes,
+        reconciliation_raw: bytes,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt:
+        """Atomically admit one verifier-bound temporal delta over custody state."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        if type(custody_raw) is not bytes or type(reconciliation_raw) is not bytes:
+            raise StoreConflictError("reconciliation:bytes")
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("transaction:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+            try:
+                current_preview = source_independent.verify_artifact(
+                    custody_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    allow_unresolved_graph=True,
+                )
+            except Exception as exc:
+                raise StoreConflictError("reconciliation:custody-reject") from exc
+            current_source_row = connection.execute(
+                "SELECT payload,payload_hash FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_SOURCE_EVIDENCE, current_preview["artifact_id"]),
+            ).fetchone()
+            if current_source_row is not None and (bytes(current_source_row["payload"]) != custody_raw or current_source_row["payload_hash"] != _payload_hash(custody_raw)):
+                raise StoreConflictError("reconciliation:custody-identity-conflict")
+            if current_source_row is not None:
+                for existing_row in connection.execute("SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (ARTIFACT_RECONCILIATION,)):
+                    existing_value = reconciliation_independent._parse(bytes(existing_row["payload"]))
+                    existing_current = existing_value.get("current_custody")
+                    if isinstance(existing_current, dict) and existing_current.get("artifact_id") == current_preview["artifact_id"]:
+                        if bytes(existing_row["payload"]) != reconciliation_raw:
+                            raise StoreConflictError("reconciliation:identity-conflict")
+                        receipt_row = connection.execute(
+                            "SELECT r.receipt FROM operations o JOIN receipts r ON r.operation_id=o.operation_id WHERE o.artifact_kind=? AND o.artifact_id=? AND o.payload_hash=?",
+                            (ARTIFACT_RECONCILIATION, existing_row["artifact_id"], existing_row["payload_hash"]),
+                        ).fetchone()
+                        if receipt_row is None:
+                            raise StoreSchemaError("reconciliation:receipt-missing")
+                        connection.commit()
+                        return AdmissionReceipt(bytes(receipt_row["receipt"]))
+            context = self._load_source_reconciliation_context(connection, custody_raw)
+            artifact = verify_artifact(
+                ARTIFACT_RECONCILIATION,
+                reconciliation_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                reconciliation_context=context,
+            )
+            receipt = self._admit_in_transaction(
+                connection,
+                artifact,
+                _payload_hash(reconciliation_raw),
+                enforce_governance=False,
+            )
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("transaction:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("transaction:operational") from exc
         finally:
             connection.close()
 

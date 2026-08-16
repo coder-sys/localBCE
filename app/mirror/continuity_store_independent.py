@@ -21,6 +21,7 @@ from app.governance import provider_continuity_control_pack_v2_independent as go
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import source_evidence_custody_independent as source_independent
+from app.mirror import source_reconciliation_independent as reconciliation_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -28,7 +29,8 @@ SCHEMA_VERSION = 2
 ARTIFACT_GRAPH = "PROVIDER_TRUST_GRAPH_V1"
 ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
 ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE)
+ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
@@ -365,6 +367,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_SOURCE_EVIDENCE:
         if dict(value) != source_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_RECONCILIATION:
+        if dict(value) != reconciliation_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -375,18 +380,39 @@ def _normalize_artifact(
     raw: bytes,
     *,
     graph_profile_registry: Mapping[str, object] | None = None,
+    reconciliation_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if kind not in ARTIFACT_KINDS:
         raise IndependentStoreError("artifact:kind")
     if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
         raise IndependentStoreError("artifact:byte-cap")
     try:
-        value = source_independent._parse(raw) if kind == ARTIFACT_SOURCE_EVIDENCE else _parse_canonical(raw)
-    except source_independent.IndependentSourceCustodyError as exc:
+        if kind == ARTIFACT_SOURCE_EVIDENCE:
+            value = source_independent._parse(raw)
+        elif kind == ARTIFACT_RECONCILIATION:
+            value = reconciliation_independent._parse(raw)
+        else:
+            value = _parse_canonical(raw)
+    except (
+        source_independent.IndependentSourceCustodyError,
+        reconciliation_independent.IndependentSourceReconciliationError,
+    ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
         if kind == ARTIFACT_SOURCE_EVIDENCE:
             result = source_independent.verify_artifact(raw, graph_profile_registry=graph_profile_registry, allow_unresolved_graph=True)
+        elif kind == ARTIFACT_RECONCILIATION:
+            if not isinstance(reconciliation_context, Mapping):
+                raise IndependentStoreError("reconciliation:context-required")
+            result = reconciliation_independent.verify_artifact(
+                raw,
+                current_custody_raw=reconciliation_context["current_custody_raw"],
+                prior_custody_raw=reconciliation_context.get("prior_custody_raw"),
+                current_graph_raw=reconciliation_context.get("current_graph_raw"),
+                prior_graph_raw=reconciliation_context.get("prior_graph_raw"),
+                prior_reconciliation_raw=reconciliation_context.get("prior_reconciliation_raw"),
+                graph_profile_registry=graph_profile_registry,
+            )
         elif kind == ARTIFACT_GRAPH:
             if value.get("schema") == graph_independent.SCHEMA_V2:
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
@@ -406,6 +432,20 @@ def _normalize_artifact(
         if kind == ARTIFACT_SOURCE_EVIDENCE:
             artifact_id = result["artifact_id"]
             report_id = result["report_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            authority_json = _authority_json(value["authority"], kind)
+            subject_id = result["subject"]
+            scope = result["scope"]
+            schema = result["schema"]
+            profile_id = result["profile_id"]
+            profile_version = result["profile_version"]
+        elif kind == ARTIFACT_RECONCILIATION:
+            artifact_id = result["artifact_id"]
+            report_id = None
             current_stage_id = result["current_stage_id"]
             transition_id = result["transition_id"]
             stage_kind = result["stage_kind"]
@@ -540,6 +580,18 @@ def _normalize_artifact(
                 "source_status": result["source_status"],
             }
         )
+    elif kind == ARTIFACT_RECONCILIATION:
+        normalized.update(
+            {
+                "current_custody_artifact_id": result["current_custody_artifact_id"],
+                "current_custody_stage_id": result["current_custody_stage_id"],
+                "predecessor_custody_artifact_id": result["predecessor_custody_artifact_id"],
+                "predecessor_custody_stage_id": result["predecessor_custody_stage_id"],
+                "result_status": result["result_status"],
+                "current_snapshot_root": result["current_snapshot_root"],
+                "current_source_status": result["current_source_status"],
+            }
+        )
     return normalized
 
 
@@ -637,6 +689,8 @@ def _verify_rows(
         raise IndependentStoreError("database:schema-version")
 
     artifacts: dict[tuple[str, str], dict[str, object]] = {}
+    raw_by_key: dict[tuple[str, str], bytes] = {}
+    reconciliation_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     artifact_hashes: set[tuple[str, str]] = set()
     for row in rows["artifacts"]:
         kind = row["kind"]
@@ -644,9 +698,13 @@ def _verify_rows(
         if kind not in ARTIFACT_KINDS or not isinstance(artifact_id, str):
             raise IndependentStoreError("database:artifact-identity")
         key = (kind, artifact_id)
-        if key in artifacts:
+        if key in artifacts or key in raw_by_key:
             raise IndependentStoreError("database:artifact-duplicate")
         raw = _row_bytes(row, "payload")
+        raw_by_key[key] = raw
+        if kind == ARTIFACT_RECONCILIATION:
+            reconciliation_rows.append((row, raw, key))
+            continue
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
             stored = row[field]
@@ -682,6 +740,63 @@ def _verify_rows(
             )
         except Exception as exc:
             raise IndependentStoreError("database:source-graph-binding") from exc
+
+    # Reconciliation artifacts are verified only after all source and graph
+    # payloads are available.  Their carried labels are not authority: the
+    # verifier reconstructs each custody context from the independently stored
+    # source/graph bytes and then checks the transition binding.
+    for row, raw, key in reconciliation_rows:
+        try:
+            value = reconciliation_independent._parse(raw)
+            current_summary = value["current_custody"]
+            if not isinstance(current_summary, dict):
+                raise IndependentStoreError("database:reconciliation-current")
+            current_key = (ARTIFACT_SOURCE_EVIDENCE, str(current_summary["artifact_id"]))
+            current = artifacts.get(current_key)
+            if current is None or current["current_stage_id"] != current_summary["stage_id"]:
+                raise IndependentStoreError("database:reconciliation-current-custody")
+            predecessor_id = current.get("prior_artifact_id")
+            predecessor_stage = current.get("prior_stage_id")
+            predecessor = None
+            if predecessor_id is not None:
+                predecessor = artifacts.get((ARTIFACT_SOURCE_EVIDENCE, str(predecessor_id)))
+                if predecessor is None or predecessor["current_stage_id"] != predecessor_stage:
+                    raise IndependentStoreError("database:reconciliation-predecessor-custody")
+            current_graph = artifacts.get((ARTIFACT_GRAPH, str(current["linked_graph_artifact_id"]))) if current.get("linked_graph_artifact_id") is not None else None
+            prior_graph = artifacts.get((ARTIFACT_GRAPH, str(predecessor["linked_graph_artifact_id"]))) if predecessor is not None and predecessor.get("linked_graph_artifact_id") is not None else None
+            prior_reconciliation_raw = None
+            prior_reconciliation_id = value.get("prior_artifact_id")
+            if prior_reconciliation_id is not None:
+                prior_reconciliation_raw = raw_by_key.get((ARTIFACT_RECONCILIATION, str(prior_reconciliation_id)))
+                if prior_reconciliation_raw is None:
+                    raise IndependentStoreError("database:reconciliation-prior")
+            context = {
+                "current_custody_raw": raw_by_key[current_key],
+                "prior_custody_raw": raw_by_key[(ARTIFACT_SOURCE_EVIDENCE, str(predecessor_id))] if predecessor_id is not None else None,
+                "current_graph_raw": current_graph["payload"] if current_graph is not None else None,
+                "prior_graph_raw": prior_graph["payload"] if prior_graph is not None else None,
+                "prior_reconciliation_raw": prior_reconciliation_raw,
+            }
+            artifact = _normalize_artifact(
+                ARTIFACT_RECONCILIATION,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                reconciliation_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:reconciliation-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_RECONCILIATION, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
 
     operations = {row["operation_id"]: row for row in rows["operations"]}
     receipts = {row["operation_id"]: row for row in rows["receipts"]}
@@ -810,6 +925,57 @@ def _verify_rows(
 
     if set(operations) != seen_operations:
         raise IndependentStoreError("database:orphan-operation")
+
+    # A reconciliation transition may only consume the current source head at
+    # the moment its own event is committed.  This prevents a late replay from
+    # becoming a second temporal authority while still preserving the source
+    # custody artifact as durable evidence.
+    for reconciliation_artifact in artifacts.values():
+        if reconciliation_artifact["kind"] != ARTIFACT_RECONCILIATION:
+            continue
+        reconciliation_sequence = artifact_event_sequence.get((ARTIFACT_RECONCILIATION, str(reconciliation_artifact["artifact_id"])))
+        current_id = reconciliation_artifact.get("current_custody_artifact_id")
+        current_key = (ARTIFACT_SOURCE_EVIDENCE, str(current_id))
+        current_source = artifacts.get(current_key)
+        current_sequence = artifact_event_sequence.get(current_key)
+        if reconciliation_sequence is None or current_source is None or current_sequence is None or current_sequence >= reconciliation_sequence:
+            raise IndependentStoreError("database:reconciliation-event-order")
+        source_chain = _chain_id(
+            ARTIFACT_SOURCE_EVIDENCE,
+            str(current_source["subject"]),
+            str(current_source["scope"]),
+            current_source.get("profile_id"),
+        )
+        source_events_before = [
+            sequence
+            for key, sequence in artifact_event_sequence.items()
+            if key[0] == ARTIFACT_SOURCE_EVIDENCE
+            and sequence < reconciliation_sequence
+            and _chain_id(
+                ARTIFACT_SOURCE_EVIDENCE,
+                str(artifacts[key]["subject"]),
+                str(artifacts[key]["scope"]),
+                artifacts[key].get("profile_id"),
+            ) == source_chain
+        ]
+        if not source_events_before or max(source_events_before) != current_sequence:
+            raise IndependentStoreError("database:reconciliation-source-not-head")
+        predecessor_id = reconciliation_artifact.get("predecessor_custody_artifact_id")
+        if predecessor_id is not None:
+            predecessor_key = (ARTIFACT_SOURCE_EVIDENCE, str(predecessor_id))
+            predecessor = artifacts.get(predecessor_key)
+            if predecessor is None or artifact_event_sequence.get(predecessor_key, 0) >= current_sequence:
+                raise IndependentStoreError("database:reconciliation-predecessor-order")
+        prior_reconciliation_id = reconciliation_artifact.get("prior_artifact_id")
+        if prior_reconciliation_id is None:
+            if predecessor_id is not None:
+                raise IndependentStoreError("database:reconciliation-missing-prior")
+        else:
+            prior_reconciliation = artifacts.get((ARTIFACT_RECONCILIATION, str(prior_reconciliation_id)))
+            if prior_reconciliation is None or prior_reconciliation.get("current_custody_artifact_id") != predecessor_id:
+                raise IndependentStoreError("database:reconciliation-prior-binding")
+            if artifact_event_sequence.get((ARTIFACT_RECONCILIATION, str(prior_reconciliation_id)), 0) >= reconciliation_sequence:
+                raise IndependentStoreError("database:reconciliation-prior-order")
 
     # A linked V2 graph is independently eligible only while a matching
     # verifier-owned approval was effective at the source-custody event.  This

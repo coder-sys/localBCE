@@ -17,6 +17,8 @@ from app.mirror import continuity_store as store
 from app.mirror import continuity_store_independent as independent
 from app.mirror import source_evidence_custody as source_custody
 from app.mirror import source_evidence_custody_independent as source_custody_independent
+from app.mirror import source_reconciliation as source_reconciliation
+from app.mirror import source_reconciliation_independent as source_reconciliation_independent
 
 
 EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
@@ -119,6 +121,8 @@ SOFTWARE_IDENTITIES = {
     "independent_module_identity": _module_identity(independent.__file__),
     "source_custody_module_identity": _module_identity(source_custody.__file__),
     "source_custody_independent_identity": _module_identity(source_custody_independent.__file__),
+    "source_reconciliation_module_identity": _module_identity(source_reconciliation.__file__),
+    "source_reconciliation_independent_identity": _module_identity(source_reconciliation_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 
