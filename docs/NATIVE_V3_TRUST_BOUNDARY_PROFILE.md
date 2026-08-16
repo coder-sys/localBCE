@@ -19,6 +19,8 @@ native hiding or simulation, malicious-verifier ZK, semantic/state
 composition, authenticated production authority, or abort/retry security.
 The profile therefore records `complete_bound_available=false`,
 `production_usable=false`, `proofSuiteId=null`, and no activation.
+It binds all four times across the request, receipt, and retry, but strict chronology is owned by
+the later semantic/database gate; this framing profile does not claim that theorem.
 
 The machine-readable `security_ledger.json` retains the exact DP24
 Construction 4.12 / Theorem 4.17 ideal-vector-oracle calculation:

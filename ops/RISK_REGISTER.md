@@ -5,7 +5,7 @@ The machine-readable authority is `ops/launch_blockers.json`.
 | Risk | Required treatment |
 | --- | --- |
 | Invalid or privacy-leaking proof | Complete fixed-shape relation, native hiding, independent verification, audit |
-| Forged/stale signed evidence | Dual-PQ authority, exact source/version/epoch/completeness binding |
+| Forged/stale signed evidence | Algorithm-agile authority signatures; dual-PQ only when the approved threat model requires it, plus exact source/version/epoch/completeness binding |
 | Verifier/database TOCTOU | One serializable transaction with locked roots and nullifier uniqueness |
 | Duplicate/conflicting retries | Idempotency key plus exact request commitment; fail on mismatch |
 | Database loss or rollback | Replication, backup/restore drills, signed append-only log, external anti-rollback |

@@ -86,7 +86,8 @@ clearance semantics until that product/API separation is implemented.
 Productionizing the wedge requires state source contracts, deterministic control governance,
 production data/storage selection, monitoring, recovery, a state-side sanitized support boundary,
 privacy review, portability/export, and independent audit. It does not require a private-proof
-backend unless undisclosed evidence crosses its trust boundary.
+backend unless an undisclosed payment-relevant assertion crosses its trust boundary and affects
+automation.
 
 Behavioral Twin output enters the State Control Pack only as a candidate. It cannot become an
 automatic control until source authority, deterministic tests, state approval, exact scope, and

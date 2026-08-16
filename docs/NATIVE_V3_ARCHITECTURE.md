@@ -19,8 +19,9 @@ fail-closed atomic transaction.
 
 ZK is not required merely because data is sensitive. If the state clearance service already
 lawfully holds every required fact in plaintext, the smallest correct mechanism is inspectable
-deterministic evaluation over signed governed records. Native v3 is the mandatory path for an
-undisclosed payment-relevant assertion, not ceremony around evidence the verifier already owns.
+deterministic evaluation over signed governed records. Native v3 is the mandatory path when an
+undisclosed payment-relevant assertion crosses the clearance boundary and affects automation, not
+ceremony around evidence the verifier already owns.
 
 No L2, rollup, sequencer, bridge, Solidity ABI, or public data-availability layer is part of this
 boundary. Ethereum is not a dependency.
@@ -129,9 +130,9 @@ verifier-owned governed source contract determines clearance eligibility.
 Absence is a fact with its own authority. A missing authorization, enrollment, attachment, or other
 record may produce `HOLD` or `BLOCK` only when the proof binds a complete authoritative snapshot,
 bounded nonmembership proof, or signed closure/completeness assertion for the exact subject, scope,
-and time. Absence from an incomplete feed yields `HUMAN_REVIEW`. Event time, source-observation time,
-rule-effective time, and decision time are distinct canonical values; retries cannot change which
-historical rule or source snapshot applies.
+and time. Absence from an incomplete feed yields `HUMAN_REVIEW`. The database authority owns the
+strict relation `rule_effective < event < observation < decision` and exact decision/access join;
+retries cannot change the bound rule or source snapshot.
 
 ## Native-v3 public statement
 
@@ -207,10 +208,6 @@ agreement alone is not formal-verification credit. The full theorem and build co
 
 ## State and replay design
 
-The old workload performed SHA3/Keccak tree work for each replay and payment-state access. In the
-measured K128-shaped stream, 46,208 of 46,858 hash calls (98.61%) came from those state structures.
-That stream is evidence about the rejected layout, not the workload a new backend must reproduce.
-
 Native v3 separates three jobs:
 
 - the semantic relation owns the exact fixed-capacity ordered operation table, five-directive
@@ -271,9 +268,6 @@ mode is a universal invariant; the leanest theorem-backed mode wins.
 - No production claim is allowed without executable parameter accounting, exact theorem mapping,
   independent verification, malformed-proof tests, and side-channel review.
 
-This is a practical government-aligned baseline. It is not a claim of 256 quantum bits, and no
-approximately 96-bit component may be hidden by calling the overall design 128-bit.
-
 ## Privacy and resource contract
 
 - Proof, trace, operation count, errors, and externally visible schedule are fixed per selected
@@ -305,20 +299,15 @@ explicit phase authorization. It still must close before production clearance or
 
 1. Freeze the canonical native-v3 statement, typed receipt, five-directive operation table,
    source/exception-registry contract, privacy adversary, and exact CPU reference host.
-2. The former boolean Phase-0 decision skeleton has been replaced with five cross-language
-   known-answer vectors using one fixed grammar: `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and a
-   governed `EXCEPTION_APPROVED`. Wrong directive, unauthorized/expired/wrong-scope exception,
-   forbidden economic-transition, chronology, corruption, source-root, statement, and state
-   mutation negatives pass in both the independent Python and Rust reconstructions. The
-   exception record's deterministic seal is synthetic-KAT-only and is not a production signature.
-3. At the later authorized formal gate, implement the executable Lean semantic/state-transition kernel, canonical decoder, theorem
-   manifest, independent kernel check, and narrow fail-closed Rust adapter against the frozen KATs.
-4. Implement the smallest complete private fixture: one registered fact, one approved deterministic
-   rule, one clearance directive, one chronological read/write transition, one SHA3-512 before/after
-   endpoint, one native proof, and one independent verifier linked to the Lean relation.
-5. Require corruption, wrong statement, wrong source root, wrong before-state, reorder, omission,
-   duplicate/replay, directive mutation, exception mutation, and after-state mutation rejection plus
-   complete resource telemetry.
+2. The five cross-language KATs cover `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and governed
+   `EXCEPTION_APPROVED`, with wrong-directive, exception, chronology, corruption, root, statement,
+   and state-mutation negatives. The exception seal is synthetic-KAT-only.
+3. At the later authorized formal gate, implement the Lean kernel, canonical decoder, theorem
+   manifest, independent check, and narrow fail-closed Rust adapter against the frozen KATs.
+4. Implement the smallest complete private fixture: one fact, rule, directive, chronological
+   read/write, SHA3-512 endpoints, native proof, and independent verifier linked to Lean.
+5. Require rejection of corruption, wrong bindings, reorder, omission, duplicate/replay, directive,
+   exception, and after-state mutations plus complete resource telemetry.
 6. Add fixed-profile batching and a streaming state/memory implementation. Optimize only the
    measured dominant complete-process stage.
 7. Bind the typed receipt to the existing atomic database boundary and test retry, concurrency,
@@ -326,27 +315,16 @@ explicit phase authorization. It still must close before production clearance or
 8. Meet the 100-live CPU floor, then freeze the machine-verifiable security ledger and proof-package
    grammar. Only then consider a larger profile, accelerator, aggregation, or production candidate.
 
-Do not begin another synthetic exact-K128 hash bakeoff, K512 campaign, old H4 acquisition repair,
-or monolithic cryptographic theorem implementation before steps 1-4 accept.
-
 ## Retirement and deletion boundary
 
-The following are outside the active core: the old Privacy V2 ABI, felt/Poseidon projections,
-duplicate legacy/strong roots, L2/Starknet/Solidity compatibility, exact 64 MiB packaging, mandatory
-interactive-coin infrastructure, mandatory dual Category-5 signing, CUDA/H4 composition, and the old
-exact-K128 hash manifest.
-
-They remain read-only regression, migration, or research evidence until native v3 has a passing
-replacement for the property each one currently tests. A deletion pass must enumerate every
-producer, consumer, test, manifest, and protected path; replace the needed assertions; prove no
-active import or release-manifest dependency remains; and then remove the dead lane in one bounded,
-reviewable change. Historical performance never becomes production credit.
+The old Privacy V2, fixed-shape, binary-field, H4/CUDA, L2/Starknet/Solidity, exact-package, and
+unconditional dual-signature lanes are outside the active core. They remain read-only evidence until
+their current property has a smaller replacement. Deletion requires an enumerated producer/consumer
+and manifest scan, replacement tests, and one bounded change; historical performance is never
+production credit. Do not begin another synthetic exact-K128 hash bakeoff, K512 campaign, or H4 repair before the replacement boundary is accepted.
 
 ## Current claim boundary
 
-The present qualification status, nonactivation flags, process-tree ceiling, and private-proof
-blocker are authoritative in `STATE.md`. The Phase-0 fixture has a fixed five-directive grammar
-with independent Python/Rust KATs, but no complete five-directive native-v3 proof exists. Its
-`EXCEPTION_APPROVED` authorization seal remains synthetic-KAT-only, not a production signature or
-proof of authorization. The Lean kernel target remains a deferred plug-in and no deployed-formal-
-verification claim exists.
+`STATE.md` owns qualification, nonactivation, resource, and private-proof status. Phase-0 KATs and
+the synthetic exception seal are evidence only; no complete native-v3 proof, production signature,
+or deployed formal-verification claim exists.

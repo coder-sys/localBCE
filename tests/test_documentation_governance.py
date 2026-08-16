@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class DocumentationGovernanceTests(unittest.TestCase):
     def test_live_markdown_tree_is_registered_and_linked(self) -> None:
         result = governance.validate_markdown_tree(ROOT)
-        self.assertEqual(32, result["markdown_count"])
+        self.assertEqual(23, result["markdown_count"])
         self.assertEqual(5, result["root_authority_count"])
-        self.assertEqual(1, result["root_protected_compatibility_count"])
-        self.assertEqual(32, result["registered_count"])
+        self.assertEqual(0, result["root_protected_compatibility_count"])
+        self.assertEqual(23, result["registered_count"])
 
     def test_unregistered_markdown_is_rejected(self) -> None:
         current = list(governance._current_paths(ROOT))
@@ -30,12 +30,30 @@ class DocumentationGovernanceTests(unittest.TestCase):
         for removed in governance.REMOVED_MARKDOWN_PATHS:
             self.assertNotIn(removed, current)
         result = governance.validate_markdown_tree(ROOT, current_paths=current)
-        self.assertEqual(32, result["markdown_count"])
+        self.assertEqual(23, result["markdown_count"])
 
     def test_design_ideology_remains_independent(self) -> None:
         registration = governance.MARKDOWN_REGISTRY["docs/DESIGN_IDEOLOGY.md"]
         self.assertTrue(registration.independent_authority)
         self.assertEqual("design-ideology", registration.role)
+
+    def test_constructed_removed_paths_and_duplicate_ownership_fail_closed(self) -> None:
+        self.assertTrue(
+            governance._has_constructed_reference(
+                "tools/example.py",
+                'root / "docs" / "CURRENT_TECH_STACK.md"',
+                "docs/CURRENT_TECH_STACK.md",
+            )
+        )
+        self.assertFalse(
+            governance._has_constructed_reference(
+                "tests/test_security_freeze_spec.py",
+                'ROOT / "docs" / "REJECTED_ARCHITECTURES.md"',
+                "docs/REJECTED_ARCHITECTURES.md",
+            )
+        )
+        roles = [registration.role for registration in governance.MARKDOWN_REGISTRY.values()]
+        self.assertEqual(len(roles), len(set(roles)))
 
 
 if __name__ == "__main__":

@@ -232,8 +232,6 @@ contract advance to the 100-live CPU profile. A larger profile is a dependent sc
 independent shortcut around an unresolved tiny boundary. The old exact-K128/K512 workloads remain
 rejected-layout evidence rather than active scale names.
 
-## Nonactivation
-
 Current qualification status and nonactivation gates are authoritative in `STATE.md` and
-`CURRENT_TASK.md`. Preserve conditional ZK and optional later Ethereum L1 checkpointing; neither is
-an automatic dependency of the read-only wedge, and neither may weaken the canonical boundaries.
+`CURRENT_TASK.md`; conditional ZK and committed later Ethereum L1 checkpointing never weaken the canonical
+boundaries or become automatic dependencies of the read-only wedge.

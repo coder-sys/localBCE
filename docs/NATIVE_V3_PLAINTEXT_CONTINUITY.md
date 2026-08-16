@@ -20,8 +20,8 @@ The wedge covers one synthetic provider, credential, enrollment, and feed identi
 verifier-owned control set has one ordered rule (`EXPECTED_RULE_ID`), priority 100,
 `priority-then-human-review` conflict handling, the scope
 `provider-credential-enrollment-continuity-v1`, and the effective interval `[6000, 9000)`. Its
-mode is the fixed `DIRECT_STATE_OWNED` identity. No request field can select a mode, control set,
-directive, fallback, economic mutation, or after-state.
+mode is the fixed synthetic `DIRECT_STATE_OWNED` identity, not a selected production evaluator. No
+request field can select a mode, control set, directive, fallback, economic mutation, or after-state.
 
 The canonical path is:
 

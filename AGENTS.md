@@ -7,8 +7,7 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 
 1. Work from this repository root.
 2. Read `docs/DATABASE_ZK_ARCHITECTURE.md`, `docs/NATIVE_V3_ARCHITECTURE.md`,
-   `docs/LEAN_FORMAL_KERNEL.md`, `docs/CURRENT_TECH_STACK.md`, and
-   `docs/IMPLEMENTATION_ROADMAP.md`.
+   `docs/LEAN_FORMAL_KERNEL.md`, and `docs/IMPLEMENTATION_ROADMAP.md`.
 3. After context loss, re-read this file, `CURRENT_TASK.md`, and `STATE.md`. A published source
    archive may omit workspace-only authority records; in that archive, use the current root
    documents and `RELEASE_FILE_MANIFEST.json`.
@@ -20,8 +19,8 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 
 - The application database is the operational source of truth for Blind Ledger clearance state; the
   official state payment system remains the source of truth for actual funds movement.
-- An undisclosed payment-relevant assertion crossing the clearance trust boundary requires a
-  mandatory application ZK proof. Evidence already lawfully held in plaintext by the state
+- An undisclosed payment-relevant assertion crossing the clearance trust boundary and affecting
+  automation requires a mandatory application ZK proof. Evidence already lawfully held in plaintext by the state
   clearance service uses the same inspectable deterministic rule and atomic state machine without
   purposeless ZK ceremony.
 - The verifier-owned automatic control set fixes the evidence mode and evaluator identity before
@@ -29,15 +28,21 @@ signature, custody, clearance-transition, and downstream payment-interface code 
   downgrade to it.
 - The native verifier must accept before one atomic private-path database transaction can consume
   nullifiers and update clearance state. Proof acceptance never defaults to `CLEAR`.
-- The approved target architecture gives an executable Lean kernel authority over clearance
-  semantics and legal state transitions. Rust retains cryptographic proof acceptance and the
-  database retains durability/concurrency. No formal-verification claim exists until the deployed
-  kernel is linked to the proved definitions and every theorem/build gate passes.
+- The later mandatory target gives an executable Lean kernel authority over clearance semantics and
+  legal state transitions. It is not active now: Rust retains cryptographic proof acceptance and
+  the database retains durability/concurrency until the kernel is linked and every theorem/build
+  gate passes.
 - The fixed directives are `CLEAR`, `HOLD`, `HUMAN_REVIEW`, `BLOCK`, and
   `EXCEPTION_APPROVED`; the last requires a governed signed state authorization.
 - Government and oracle signatures authenticate provenance and authority; they do not prove that the underlying facts are true.
 - No L2, rollup, sequencer, bridge, public data-availability layer, or Solidity settlement contract is part of the current design.
-- Ethereum is not a Phase 0-2 dependency. A later design may checkpoint a compact signed state root or aggregate proof directly to Ethereum L1.
+- Ethereum is a committed later L1 checkpoint capability, not a Phase 0-2 dependency, settlement
+  role, or fixed-cadence requirement.
+- The executable chronology is strict: `rule_effective < event < observation < decision`. The same
+  four times are bound across the request, decision, receipt, and exact retry.
+- The database boundary admits one decision and exactly two accesses indexed `[0,1]`: `decision_index=0`,
+  `access_count=2`, and each access carries the matching `decision_id`. Reads use observation time;
+  the clearance-state write uses decision time.
 
 ## Document precedence
 

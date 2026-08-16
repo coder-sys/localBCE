@@ -16,4 +16,8 @@ Status: local, synthetic rehearsal only.
 
 Do not activate until every release-candidate blocker is closed, the exact release passes the independent Security Audit Gate, production database/custody evidence passes, and operators supply authorized source credentials, payment accounts, signers, legal approval, and incident procedures.
 
-The native verifier and payment state transition must remain one atomic fail-closed boundary. No L2 deployment is required. Optional Ethereum L1 checkpoints require a separate later runbook.
+The accepted verifier receipt and Blind Ledger clearance-state mutation must remain one atomic
+fail-closed boundary. This boundary does not move funds: the incumbent adjudicates and the official
+state payment rails execute the later payment. No L2 deployment is required. Optional Ethereum L1
+checkpoints are a committed later capability and require a separate runbook; their cadence is not
+fixed in the current phase.

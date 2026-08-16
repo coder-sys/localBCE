@@ -11,8 +11,8 @@ Blind Ledger controls a state-local clearance decision; it does not adjudicate t
 move money. The official processor and payment system retain those functions.
 No payment state transition occurs inside Blind Ledger; it owns clearance state only.
 
-When hidden evidence crosses the clearance trust boundary and affects an automated payment
-directive, no clearance-state transition occurs unless a mandatory zero-knowledge proof has been
+When an undisclosed payment-relevant assertion crosses the clearance trust boundary and affects
+automation, no clearance-state transition occurs unless a mandatory zero-knowledge proof has been
 accepted by the pinned native verifier and the resulting update commits in one atomic database transaction.
 When the state clearance service already lawfully holds all required evidence in
 plaintext, it uses the same approved deterministic rule artifact and atomic state machine without
@@ -32,7 +32,7 @@ payment.
 The first commercial provider-continuity wedge is likewise read-only, but it belongs externally to
 Mirror's Provider Trust Graph. It emits evidence findings, source coverage, remediation/retest,
 parity, and transition artifacts rather than an operative Blind Ledger directive. The five-directive
-five-directive continuity module is an internal clearance-semantics harness, not that external API.
+continuity module is an internal clearance-semantics harness, not that external API.
 
 ## Production-shaped patch-in contract
 
@@ -45,10 +45,7 @@ ordering, transactions, and fail-closed behavior. Qualification reruns the same 
 artifact/database checks, mutation/replay/recovery tests, resource gates, and canonical KATs; a
 semantic or state-interface rewrite is architecture review, not integration.
 
-This persistence seam can qualify for the read-only provider-continuity wedge independently of the
-private-payment proof backend. The private clearance path still requires the Lean semantic kernel,
-the theorem-qualified ZK backend, and a separately qualified production custody boundary. Current
-qualification and nonclaims are authoritative in `STATE.md` and `CURRENT_TASK.md`.
+This seam can qualify for the read-only wedge independently of the private-payment backend; the private clearance path still requires the later Lean, ZK, and custody gates. Status is in `STATE.md`.
 
 ## Transaction boundary
 
@@ -64,9 +61,9 @@ For each batch, the service:
 6. rejects consumed nullifiers, stale roots, duplicates, or conflicting retries;
 7. validates the proof-bound typed receipt and its underlying policy result, effective directive,
    exception authorization or sentinel, and exact amount/decision-path commitments;
-8. submits the exact canonical semantic receipt and proposed transition to the executable Lean
-   kernel; a missing kernel result, decoding error, theorem-version mismatch, or Rust/Lean
-   disagreement rejects;
+8. reserves the exact canonical semantic receipt and proposed transition for the later mandatory
+   Lean gate; the current nonactivating boundary has no Lean result, and any future missing result,
+   decoding error, theorem-version mismatch, or Rust/Lean disagreement rejects;
 9. writes the state-after roots, clearance commitment, and audit event; economic clearance may
    advance only for `CLEAR` or a valid `EXCEPTION_APPROVED`;
 10. commits the database transition exactly once, or rolls it back; an uncertain response is resolved
@@ -97,89 +94,58 @@ observation, rule-effective, and decision times are distinct canonical values an
 across retry. A negative fact cannot authorize `HOLD` or `BLOCK` merely because a record is absent
 from an incomplete feed.
 
+The executable chronology is strict: `rule_effective < event < observation < decision`. These four
+times are bound identically across the request, decision, verifier receipt, and exact retry. The
+transaction admits one decision (`decision_index=0`) and exactly two accesses indexed `[0,1]`
+(`access_count=2`); every access carries the matching `decision_id`. Reads occur at observation time,
+and the clearance-state write occurs at decision time. The independent parser is the current checker
+for the READ/WRITE row roles; the producer compatibility object is not semantic authority.
+
 ## Formal semantic boundary
 
-Lean 4 is the approved executable authority for clearance meaning and the legal local transition.
-The kernel covers bounded canonical semantic decoding, the five directives,
-`policyResult`/`effectiveDirective` separation, control sets, authoritative absence, chronology,
-governed exceptions, observation-only separation, replay, exact decision/access joins, and allowed
-after-state. It does not own database serializability, durability, crash recovery, source truth, or
-cryptographic proof soundness.
+Lean 4 is the later mandatory executable authority for clearance meaning and the legal local
+transition. It is not an active dependency of the current synthetic transaction boundary: the kernel
+is not implemented, linked, or production-qualified. Before direct or private clearance authority,
+the future kernel must cover bounded decoding, the five directives, result separation, control sets,
+authoritative absence, chronology, exceptions, observation-only separation, replay, exact joins, and
+allowed after-state.
 
-For `PRIVATE_ZK`, Rust cryptographic proof acceptance is necessary before the Lean check. For
-`DIRECT_STATE_OWNED`, the Lean kernel evaluates the canonical governed plaintext input directly.
-Both paths use distinct verifier-owned execution contexts, and no caller can select, downgrade, or
-promote them. The database commits only a transition accepted by the appropriate cryptographic
-boundary, the Lean kernel, and its own current-state/concurrency checks.
+For a future `PRIVATE_ZK` path, Rust proof acceptance must precede the Lean check. For a future
+direct path, the Lean kernel must evaluate the canonical governed plaintext input directly. These
+are distinct verifier-owned execution contexts; no caller may select, downgrade, or promote them.
+Current Python/Rust KATs and local database tests are evidence for the patch-in contract, not Lean
+or production clearance authority.
 
-The kernel is not implemented. `LEAN_FORMAL_KERNEL.md` defines the required executable
-correspondence, theorem manifest, axiom inventory, independent kernel check, and CI gates. Current
-Python/Rust KAT agreement must not be described as deployed formal verification.
+`LEAN_FORMAL_KERNEL.md` defines the required executable correspondence, theorem manifest, axiom
+inventory, independent kernel check, and CI gates. Current status and nonactivation remain in
+`STATE.md` and `CURRENT_TASK.md`.
 
-## Retained LB-006 local transactional reference
+## Current recovery and compatibility evidence
 
-`app/production_boundary.py` defines the verifier-to-storage operation shape, while
-`app/transactional_database_boundary.py` implements the Phase 2 SQLite reference. The reference
-persists the exact verifier identities, sequence, strong nullifier root, strong payment-state root,
-authenticated submitter, state binding, replay keys, and chained audit event in one
-`BEGIN IMMEDIATE` transaction. The state binding authenticates the exact submitter; the audit event
-stores only its domain-separated commitment and the verifier-authorized operation digest. Exact
-retries return the original durable receipt; conflicting retries, stale roots, reused nullifier
-roots, partial writes, configuration drift, and post-verification mutation fail closed.
+`app/production_boundary.py` and `app/transactional_database_boundary.py` remain the tested local
+owners of the current compatibility seam. They must preserve one atomic clearance-state mutation,
+exact receipt identities, idempotent retry, concurrency rejection, anti-rollback, backup/restore,
+migration, append-only audit, and zero-PHI support behavior.
 
-After native receipt verification, `TransactionalSettlementV2` MAC-authenticates the operation with
-a fresh per-settlement key bound once to that store. There is no deterministic public factory or
-public storage-commit method. This closes the supported request-path bypass and mutation boundary;
-it is not a claim that Python-private objects isolate malicious code already executing inside the
-trusted application process.
+The focused evidence is `tests/test_bl_pq512_production_boundary.py`,
+`tests/test_bl_pq512_transactional_database_boundary.py`,
+`tests/test_bl_pq512_transactional_privacy_v2_migration.py`,
+`tests/attacks/test_bl_pq512_transactional_privacy_v2_migration_attacks.py`,
+`tests/test_bl_pq512_built_audit_pending_release.py`, and the public-input, commitment, nullifier,
+and custody tests named by the active-core map. These are synthetic compatibility regressions; they
+do not select a proof backend or make historical package claims current.
 
-When an external anti-rollback port is configured, it write-ahead reserves the exact expected and
-next anchor states plus transition commitment before SQLite commit, then finalizes after commit. A
-pre-commit failure leaves only that exact transition replayable. A post-commit finalization failure
-returns an explicit indeterminate error; exact retry finalizes the reservation and returns the one
-durable receipt without advancing state again. A competing transition or older database remains
-fail closed. Delayed duplicate finalization remains idempotent even after a later transition. The
-external port must make its snapshot, prepare, and finalize operations atomic, retain enough
-finalized-transition history for idempotency, and be independently durable for this property to
-carry into production.
-
-The reference also exercises online backup, restore into a new database file, process restart,
-append-only audit verification, and an external anti-rollback port. Earlier local candidate evidence
-bound a SHA3-512 identity to the verifier and program inputs; that compatibility evidence does not
-select a backend or establish a current proof claim.
-
-This reference is a local candidate evidence seam. The production persistence/custody adapter,
-source authentication, and activation gates remain separately qualified; current status and
-nonclaims are authoritative in `STATE.md`. The canonical transaction, retry, recovery, and
-zero-PHI support interfaces are intended to remain unchanged.
-
-## Retained LB-007 Privacy V2 migration reference
-
-This is historical migration/regression evidence for the superseded Privacy V2 boundary. It is not
-the native-v3 migration plan and does not constrain its statement or package shape.
-
-`app/privacy_v2_migration.py` and the schema-v2 extension of
-`app/transactional_database_boundary.py` implement the local Privacy V2 migration boundary. A
-fresh migration requires sealed OS-random evidence and acceptance by the pinned native verifier.
-The database then rechecks the exact source configuration inside `BEGIN IMMEDIATE` and atomically
-records the new profile, schema, verifier, epoch/domain, roots, state binding, migration ledger,
-configuration history, and audit event. Old-profile races, conflicting retries, manually constructed
-fresh evidence, reused rollback/recovery domains, partial writes, and restored older state fail
-closed. An exact recorded retry may reconstruct its evidence after process restart and cannot
-advance state twice.
-
-The qualification lane uses a fixed 64 MiB version-2 proof package so public-coin query
-de-duplication cannot expose a variable external proof length. Two real dual-PQ authenticated Rust
-proofs from different private witnesses independently verified with identical public shape; one
-committed through SQLite and the conflicting transition was rejected without a second state
-advance. Public artifacts were scanned for the private amount, decision, PHI, claim, and replacement
-values.
-
-This closes LB-007 only for local, synthetic, nonactivating Phase 2 migration evidence. It does not
-select a production proof suite, database, entropy authority, anti-rollback service, or custody
-system, and it does not authorize real PHI or payments.
+The recovery contract is: reserve the exact expected and next anchors before commit, finalize after
+commit, return an explicit indeterminate result on post-commit finalization failure, and resolve it
+only by exact idempotent retry. Competing transitions, stale roots, older databases, partial writes,
+and configuration drift fail closed. Backup/restore and restart must retain the same decision,
+receipt, audit, and anti-rollback identities.
 
 ## What the selected proof must establish
+
+No production proof is selected: the live verifier-selection sentinel is `proofSuiteId=null`,
+`production_usable=false`, and `selection_status=UNSELECTED`. `DIRECT_STATE_OWNED` is a
+verifier-owned synthetic continuity control-set identity, not a selected production evaluator.
 
 The complete selected proof must establish that a hidden, fixed-profile witness satisfies the
 pinned clearance program: membership in verifier-owned immutable source/governance registries,
@@ -192,18 +158,17 @@ Governed ingestion verifies source signatures over exact canonical bytes once, b
 publication. Repeating public signature verification inside every proof is unnecessary when private
 membership in that authenticated registry is proved. A prover-supplied registry root is forbidden.
 
-The former `BLPQENV1` version-2 native lane and its Rust/CUDA AIR/FRI implementation are retired
-from the live source ledger. Their component and LB-007 migration evidence remains available in
-Git history and retained source archives; no current release or readiness path selects that
-backend. The live verifier-selection contract remains explicitly `UNSELECTED` until an
-independently reviewed backend is selected.
+Retired backend implementations and detailed migration narratives remain available through Git
+history and retained source archives. No current release or readiness path selects them; the live
+verifier-selection contract remains explicitly `UNSELECTED` until an independently reviewed backend
+is selected.
 
 It cannot establish that an authorized source told the truth, that the policy was wise or lawful, or that database operators preserved availability. Those are governance and operational trust boundaries.
 
 ## Cryptographic requirements
 
-- Mandatory application ZK for an undisclosed payment-relevant assertion; no mandatory ZK ceremony
-  when the state clearance boundary already owns all required plaintext evidence.
+- Mandatory application ZK when an undisclosed payment-relevant assertion crosses the clearance
+  boundary and affects automation; no ceremony when the state boundary owns all required plaintext.
 - Canonical fixed-profile native-v3 statement and privacy-safe observable behavior.
 - SHA3-512 authoritative external identifiers over a proof-verified transparent PQ state
   commitment; no per-operation SHA3-tree requirement.
@@ -227,11 +192,12 @@ It cannot establish that an authorized source told the truth, that the policy wa
 Ethereum is not a dependency. No L2, rollup, sequencer, bridge, Solidity settlement contract, or
 public data-availability layer is active.
 
-A later phase may post one compact signed checkpoint or aggregate-proof commitment directly to
-Ethereum L1 on a fixed governed cadence; one or two hours is a candidate operational interval, not
-a frozen security parameter. The checkpoint binds the exact ordered accepted batch, control-set and
-software identities, before/after state, prior checkpoint, exceptions, and interval. Full proofs
-and audit material remain in state-controlled storage.
+A committed later product phase may post one compact signed checkpoint or aggregate-proof commitment
+directly to Ethereum L1. This is not a Phase 0-2 dependency, settlement role, L2, rollup, sequencer,
+bridge, or payment rail. The posting cadence remains a governed deployment parameter and is not yet
+fixed. The checkpoint binds the exact ordered accepted batch, control-set and software identities,
+before/after state, prior checkpoint, exceptions, and interval. Full proofs and audit material remain
+in state-controlled storage.
 
 Posting a root proves public anchoring, not underlying correctness. Posting proof bytes does not
 make Ethereum a verifier unless a separately qualified on-chain verifier checks the exact proof and

@@ -38,6 +38,21 @@ def test_tracked_ops_is_the_exact_commit_bound_authority() -> None:
     assert verify_ops_authority() == OPS_AUTHORITY_STATUS
 
 
+def test_ops_authority_text_preserves_the_current_payment_and_custody_meaning() -> None:
+    deployment = _read(ROOT / "ops" / "DEPLOYMENT_RUNBOOK.md")
+    checklist = _read(ROOT / "ops" / "PRODUCTION_CONFIG_CHECKLIST.md")
+    custody = _read(ROOT / "ops" / "KEY_CUSTODY_AND_ROTATION.md")
+    risks = _read(ROOT / "ops" / "RISK_REGISTER.md")
+    assert "clearance-state mutation must remain one atomic" in deployment
+    assert "official" in deployment and "state payment rails execute the later payment" in deployment
+    assert "disabled legacy" in checklist
+    assert "not a selected verifier, evaluator, or production backend" in checklist
+    assert "Category 1 or stronger" in custody
+    assert "only when an explicit deployment threat model calls for it" in custody
+    assert "do not establish that the signed facts are" in custody
+    assert "dual-PQ only when the approved threat model requires it" in risks
+
+
 def test_legacy_security_prose_is_retired_while_machine_evidence_remains_nonactivating() -> None:
     hardening = json.loads(_read(HARDENING_PATH))
     assert hardening["status"] == "REJECTED_KERNEL_INTERNAL_REPLACEMENT_SELECTED_S09_OPEN"

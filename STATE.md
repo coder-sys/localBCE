@@ -32,6 +32,19 @@ a theorem-qualified ZK backend, and database/custody qualification. Current qual
 nonclaims remain centralized here and in `CURRENT_TASK.md`; the architecture docs define the fixed
 patch-in interfaces and gates.
 
+## Governed operations-byte evolution
+
+The three changed byte-bound operation documents evolved under the gate-change procedure in
+`docs/DESIGN_IDEOLOGY.md`. Old bytes, exact predicate meaning, and replacements are recorded here;
+the updated SHA3-512 values are the new commit-bound authority.
+
+| File | Old bytes / SHA3-512 | Fixed invariant and new bytes / SHA3-512 |
+| --- | --- | --- |
+| `ops/DEPLOYMENT_RUNBOOK.md` | 1207 / `45e902ee19516bfebccbddfd041cdaac932eff639d2ca2b7e7c8cfe580e8bb1a803e02763a617420afbab99f81f88befac1f3ad0aa487004f893239eb54c939c` | Accepted verifier receipt plus Blind Ledger clearance-state mutation are atomic; official rails move funds later; L1 anchoring is committed later with no fixed cadence. 1435 / `57a38a947d4c7d88c57403f6ad122a024bc707b3082335ab43d9029d15872b13cf067c2a14b3a61481fdbc54e8d00afdf5dce131e59d4311f4670f36f4fde0b9` |
+| `ops/KEY_CUSTODY_AND_ROTATION.md` | 2375 / `a3bb1283a04a133b0f32cb8d27d1867bb0cf9543c12976fc31f0827ab9235952c06349a35a81d34972c241f32c1793e87f845a3c2668f02d60f8d9111920167c` | Algorithm-agile Category 1+ signatures; dual Category-5 only for an explicit threat model; signatures prove provenance/authority, not truth. 2700 / `76787aa22795639b4e5bd91365f3c9e8f609d739bfb98a01d5e5e2e3d9797dc0a82b3c3ff411c6cb56b30ecd0cde5ab8fd2389098611b146b30c0b3da5a639a9` |
+| `ops/PRODUCTION_CONFIG_CHECKLIST.md` | 1080 / `afffeff773a00aec7471f2a8fb15d463244e025f2c8928cd76e56e43ab7d7d93938dd63b8cfd71812b38093f9f780aca593eeaf826db566d96040b8fa9842a3a` | `NATIVE_STARK_DATABASE_TRANSITION` is a disabled legacy sentinel; no verifier/evaluator/backend is selected. 1257 / `286c31e304644ad6fa23a63b7b8940dfd5294f78c3242997628253518b70f9d127b621be40cea92540d83761e19a5e6757bfbab4d237ee90ff55e33e4bd2c0b6` |
+| `ops/RISK_REGISTER.md` | 1278 / `d5ad6ac4a0812292df5ea3f8cc754181cc40560831a931f493212cdfa77c52a69be6eb51eabc0907ca23e77385493086ae47e93d8c75e35ecf5d4508d4b243d8` | Risk treatment now names algorithm-agile authority signatures and makes dual-PQ conditional on the approved threat model. 1359 / `9ac9ae175f6fd1fd5ebf4b3efa95999f7e3833452e9768966c5bacca1360bdc069b5e56e9c4e1d01046a4e903a5d14514b7c043d87fbe9326705b4de6ae6ea1e` |
+
 ## Current executable evidence
 
 Native-v3 Phase 0 fixes the five-directive business grammar and eleven identity fields. The Python
@@ -78,8 +91,8 @@ conformance or head-binding error. Only a current `APPROVED_OBSERVATION_ONLY` he
 export/restore preserve that head. This remains synthetic, local/current-Windows, observation-only
 evidence with no production persistence, source authentication, payment authority, or activation.
 
-Lean 4 is now the approved target for the executable clearance semantic and legal state-transition
-kernel. It will own bounded canonical semantic decoding, control-set evaluation, authoritative
+Lean 4 is the later mandatory target for the executable clearance semantic and legal state-transition
+kernel; it is not active now. It will own bounded canonical semantic decoding, control-set evaluation, authoritative
 absence, chronology, exceptions, observation-only separation, replay, exact decision/access joins,
 and allowed after-state. It is not implemented; the current Python/Rust KATs and parsers are not a
 deployed-formal-verification claim.
@@ -111,7 +124,7 @@ before absence can be inferred. Event, observation, rule-effective, and decision
 distinct. Governed exceptions require a stable signed authorization identity or the exact sentinel.
 
 Verification fails closed for corrupt or noncanonical bytes, wrong roots or control sets, stale
-before-state, omission/reorder/duplicate, incomplete-feed absence, replay, chronology errors,
+before-state, omission/reorder/duplicate, incomplete-feed absence, replay, strict-chronology errors,
 directive/exception/economic mismatch, retry conflict, and after-state mutation.
 
 The complete process tree, scratch, and pagefile gates for a private proof remain unmeasured because

@@ -6,7 +6,10 @@ validation, named operator enrollment, or production activation.
 
 ## Approved Blind Ledger authority material
 
-- Dual authority signatures: ML-DSA-87 and SLH-DSA-SHAKE-256f.
+- Algorithm-agile NIST-approved authority signatures at Category 1 or stronger. Dual Category-5
+  signing is required only when an explicit deployment threat model calls for it.
+- Signatures authenticate provenance and authority; they do not establish that the signed facts are
+  true.
 - Private-data wrapping: ML-KEM-1024 with AES-256-GCM and authenticated associated data.
 - State and key identity: SHA3-512 roots and domain-separated commitments.
 - Stored operational records: opaque handle, root digest, epoch, lifecycle status, and audit digest.
@@ -33,7 +36,8 @@ signatures are not accepted as Blind Ledger authority or as a fallback in signed
 
 1. Create a proposal binding old root, new root, successor epoch, reason commitment, and exact
    release identity.
-2. Obtain both approved PQ authority signatures and wait the configured timelock.
+2. Obtain the configured algorithm-agile authority signature set and wait the configured timelock;
+   add dual Category-5 signatures only when the approved threat model requires them.
 3. Dry-run old/new verification, migration, replay, recovery, and rollback against synthetic data.
 4. Atomically publish the new root and epoch; reject partial or downgraded manifests.
 5. Keep the old root read-only until retention and recovery obligations are complete.

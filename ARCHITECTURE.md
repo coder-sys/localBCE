@@ -107,7 +107,7 @@ requires architecture review.
 | Sanitized support boundary | State-owned deployment/support adapter | Allowlist-only diagnostics, bounded telemetry, zero-raw-identifier output | Support isolation and canary tests |
 | Deferred Lean semantic target | Lean executable kernel and narrow native adapter | Canonical semantics, legal transition, replay, decision/access join, and after-state | Theorem/build/axiom and independent-kernel gates defined in `docs/LEAN_FORMAL_KERNEL.md` |
 | Native-v3 private-proof seam | Theorem-qualified transparent PQ backend | Exact private statement, receipt, roots, state transition, and complete security ledger | Six unresolved theorem/composition terms remain in the authoritative status record |
-| Optional future checkpoint | Qualified Ethereum L1 checkpoint adapter | Additive ordered root/checkpoint binding only; no authority or payment mutation | Separate later cadence, verifier, key, custody, and PQ qualification |
+| Committed later checkpoint | Qualified Ethereum L1 checkpoint adapter | Additive ordered root/checkpoint binding only; no authority or payment mutation | Separate later cadence, verifier, key, custody, and PQ qualification; cadence is not fixed |
 
 The term `Continuity State` is reserved for the broad state-owned operational handoff package:
 in-flight claims, authorizations, appeals, provider applications, balances, exceptions,
@@ -121,8 +121,8 @@ Use the smallest mechanism that establishes the required fact:
 - signed canonical records and tamper-evident state for provenance, authority, and ordinary
   state-local processing;
 - commitments for stable identifiers and selective disclosure; and
-- a mandatory native-v3 ZK proof only when hidden evidence crosses the clearance trust boundary and
-  affects an automated payment directive.
+- a mandatory native-v3 ZK proof only when an undisclosed payment-relevant assertion crosses the
+  clearance trust boundary and affects automation.
 
 If the state clearance service already lawfully holds all required evidence in plaintext, ordinary
 inspectable deterministic evaluation does not become safer merely by wrapping it in ZK. Conversely,
@@ -190,8 +190,8 @@ alone is never interpreted as `CLEAR`.
 
 ## Executable formal kernel
 
-Lean 4 is the approved target for the smallest executable semantic and legal state-transition
-kernel. It owns the five-directive evaluator, `policyResult`/`effectiveDirective` separation,
+Lean 4 is the later mandatory target for the smallest executable semantic and legal state-transition
+kernel; it is not active now. It owns the five-directive evaluator, `policyResult`/`effectiveDirective` separation,
 control-set semantics, authoritative absence, chronology, governed exceptions, observation-only
 separation, bounded canonical semantic decoding, replay, the exact decision/access join, and
 allowed after-state.
@@ -247,18 +247,19 @@ assumptions, CI gates, and implementation order.
 The root authorities are `AGENTS.md` (execution), `CURRENT_TASK.md` (bounded work), `STATE.md`
 (verified evidence), this file (system ownership), and `README.md` (entry route). The independent
 design authority is `docs/DESIGN_IDEOLOGY.md`; the private-proof, database, Lean, Native-v3,
-roadmap, technology, dependency, and supply-chain owners are linked from `README.md`.
+roadmap, dependency, and pending-domain-decision owners are linked from `README.md`.
 
 The following local documents have one component owner and one narrow purpose:
 
 | Component | Local authority | Purpose |
 | --- | --- | --- |
-| Protected batch reference | [`app/batch/PEPPER_ROTATION.md`](app/batch/PEPPER_ROTATION.md), [`app/batch/leaf_format.md`](app/batch/leaf_format.md) | Retired format and pepper notes required by the protected compatibility boundary |
+| Protected batch implementation | `app/batch/` source and focused tests | The code and tests own the retained compatibility format and pepper behavior; no separate legacy Markdown is current |
 | Protected deployment marker | [`docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`](docs/DEPLOYMENT_READY_BUILD_CONTRACT.md) | Byte-bound launch-blocker compatibility marker retained for `ops/launch_blockers.json` |
-| Experimental lanes | [`experiments/README.md`](experiments/README.md), [`experiments/bl_pq512_crypto_foundation/README.md`](experiments/bl_pq512_crypto_foundation/README.md), [`experiments/fixed_shape_claim_air/README.md`](experiments/fixed_shape_claim_air/README.md) | Native-v3 entry route and explicit non-authority status for retained experiments |
+| Experimental lanes | [`experiments/README.md`](experiments/README.md) | Native-v3 entry route and explicit non-authority status for retained experiments |
 | Operations | [`ops/DEPLOYMENT_RUNBOOK.md`](ops/DEPLOYMENT_RUNBOOK.md), [`ops/KEY_CUSTODY_AND_ROTATION.md`](ops/KEY_CUSTODY_AND_ROTATION.md), [`ops/MONITORING_AUDIT_EVENTS.md`](ops/MONITORING_AUDIT_EVENTS.md), [`ops/PRODUCTION_CONFIG_CHECKLIST.md`](ops/PRODUCTION_CONFIG_CHECKLIST.md), [`ops/RISK_REGISTER.md`](ops/RISK_REGISTER.md) | Synthetic deployment, custody, monitoring, configuration, and risk procedures |
 | Portal | [`portal_shared/FONT_SOURCES.md`](portal_shared/FONT_SOURCES.md) | Font provenance and local-serving license record |
-| Protected Cairo reference | [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md), [`zk-cairo-sharp/PROVING_STATUS.md`](zk-cairo-sharp/PROVING_STATUS.md), [`zk-cairo-sharp/SECURITY_ATTACK_NOTES.md`](zk-cairo-sharp/SECURITY_ATTACK_NOTES.md) | Differential reference status and attack coverage; never a selected backend |
+| Protected Cairo reference | [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md) | Differential reference status and attack coverage; never a selected backend |
+| Pending domain decision | [`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md) and `rarc_mapping.tsv` | Open mapping rows, source material, G8 split rationale, and required sign-off |
 
 The release and documentation gates register every retained Markdown path. A new document or a
 document under a retired lane is a policy failure until its owner and purpose are reviewed.
@@ -279,7 +280,8 @@ document under a retired lane is a policy failure until its owner and purpose ar
 - RightRail corporate, routine support, monitoring, analytics, and AI systems receive zero PHI.
 
 The old 12-field Privacy V2 ABI, felt/Poseidon projections, dual legacy/strong state, exact 64 MiB
-container, mandatory interactive-coin service, mandatory dual Category-5 signatures, CUDA H4 lane,
+container, mandatory interactive-coin service, dual Category-5 signing outside an explicit threat
+model, CUDA H4 lane,
 and synthetic exact-K128 Keccak manifest are retained only as historical, differential, or migration
 evidence. They do not constrain native v3. They may be deleted only after their actual consumers and
 replacement tests are enumerated and the replacement boundary accepts.

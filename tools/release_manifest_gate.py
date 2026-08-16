@@ -26,6 +26,11 @@ import unicodedata
 from typing import Iterable, Sequence
 
 from tools import build_release_archive as archive_builder
+from tools.documentation_governance import (
+    MARKDOWN_REGISTRY,
+    ROOT_AUTHORITIES,
+    ROOT_PROTECTED_COMPATIBILITY,
+)
 
 
 POLICY_VERSION = "blind-ledger-release-policy-v1"
@@ -67,7 +72,6 @@ ROOT_PATH_ALLOWLIST = frozenset(
         "AGENTS.md",
         "ARCHITECTURE.md",
         "CURRENT_TASK.md",
-        "PROOF_PROVENANCE.md",
         "pytest.ini",
         "rarc_mapping.tsv",
         "README.md",
@@ -80,24 +84,9 @@ ROOT_PATH_ALLOWLIST = frozenset(
 
 # These two allowlists are the authority-document guard.  DESIGN_IDEOLOGY.md is kept as
 # a distinct canonical document; it is not merged into another authority file.
-ROOT_MARKDOWN_ALLOWLIST = frozenset(
-    path for path in ROOT_PATH_ALLOWLIST if path.casefold().endswith(".md")
-)
+ROOT_MARKDOWN_ALLOWLIST = frozenset(ROOT_AUTHORITIES | ROOT_PROTECTED_COMPATIBILITY)
 DOC_MARKDOWN_ALLOWLIST = frozenset(
-    {
-        "docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md",
-        "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
-        "docs/CURRENT_TECH_STACK.md",
-        "docs/DATABASE_ZK_ARCHITECTURE.md",
-        "docs/DESIGN_IDEOLOGY.md",
-        "docs/IMPLEMENTATION_ROADMAP.md",
-        "docs/LEAN_FORMAL_KERNEL.md",
-        "docs/NATIVE_V3_ARCHITECTURE.md",
-        "docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md",
-        "docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md",
-        "docs/PYTHON_DEPENDENCY_LOCKING.md",
-        "docs/SUPPLY_CHAIN_BASELINE.md",
-    }
+    path for path in MARKDOWN_REGISTRY if path.casefold().startswith("docs/")
 )
 
 CURRENT_TOP_LEVELS = frozenset(
@@ -124,9 +113,7 @@ CURRENT_TOP_LEVELS = frozenset(
 # They remain selectable only when a release review explicitly includes them.
 RETAINED_PREFIXES = (
     "app/batch/",
-    "docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md",
     "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
-    "docs/history/",
     "experiments/bl_pq512_crypto_foundation/",
     "experiments/fixed_shape_claim_air/",
     "zk-cairo-sharp/",

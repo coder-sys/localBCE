@@ -32,14 +32,13 @@ rewrite.
 7. [`docs/LEAN_FORMAL_KERNEL.md`](docs/LEAN_FORMAL_KERNEL.md) — later mandatory formal gate.
 8. [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) — dependency order.
 
-Supporting authorities are [`docs/CURRENT_TECH_STACK.md`](docs/CURRENT_TECH_STACK.md),
-[`docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md`](docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md),
+Supporting authorities are [`docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md`](docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md),
 [`docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md`](docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md),
 [`docs/PYTHON_DEPENDENCY_LOCKING.md`](docs/PYTHON_DEPENDENCY_LOCKING.md),
-[`docs/SUPPLY_CHAIN_BASELINE.md`](docs/SUPPLY_CHAIN_BASELINE.md), and the independent
-[`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md). Git history and the retained source archives
-preserve superseded narratives. The protected Cairo reference retains its own status and attack
-notes under [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md).
+[`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md), and the independent
+[`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md). Git history and retained source archives
+preserve superseded narratives; the protected Cairo README is the sole differential-evidence
+authority for that reference: [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md).
 
 ## Local verification
 
@@ -67,13 +66,8 @@ checked-in locks and wheelhouse, not network resolution, are the installation au
 ## Retained component references
 
 The concise component-local documents linked from [`ARCHITECTURE.md`](ARCHITECTURE.md) are exact
-format, operations, custody, monitoring, licensing, or protected-reference notes. Compatibility
-material is clearly marked and cannot select a backend or supply production credit. The root
-[`PROOF_PROVENANCE.md`](PROOF_PROVENANCE.md) remains only because the protected Cairo README
-references that exact path; it is a non-authoritative compatibility index.
-The protected reference's [`zk-cairo-sharp/PROVING_STATUS.md`](zk-cairo-sharp/PROVING_STATUS.md) and
-[`zk-cairo-sharp/SECURITY_ATTACK_NOTES.md`](zk-cairo-sharp/SECURITY_ATTACK_NOTES.md) retain its local status and
-attack coverage.
+operations, custody, monitoring, licensing, deployment-marker, or protected-reference notes.
+Compatibility material is clearly marked and cannot select a backend or supply production credit.
 
 ## Source authority
 

@@ -1,26 +1,41 @@
-# Cairo Native-STARK Binding Reference
+# Cairo Native-STARK differential reference
 
-This directory contains a hardened Cairo semantic/KAT reference. It is no longer the retired flat
-trusted-flag prototype, but it is also not the active release proof lane. The current target is the
-heterogeneous semantic-STARK/shared-bus/Boolean-GKR proof in
-`../docs/BL_PQ512_HETEROGENEOUS_HASH_COPROCESSOR.md`.
+Owner: the protected `zk-cairo-sharp/` compatibility lane. Status: historical and differential
+evidence only. This reference is not a selected production proof backend, cannot authorize a
+database transition or payment, and does not override `STATE.md`, `CURRENT_TASK.md`, or the active
+Native-v3/database authorities.
 
-## Status
+## Retained scope
 
-- Scarb/Cairo target: Cairo 2 / Scarb 2.18.
-- Entry points: `main` for one `MultiLineDecisionInput`, `batch_main` for `BatchClaimInput`.
-- Commitments: domain-and-arity-bound Poseidon over the Cairo/Stark field.
-- Facts: bound through governed oracle commitments, not raw free flags.
-- Policy: fee and TAR membership are merged under governed `policyRoot`.
-- Nullifiers: approved-only indexed-tree transitions with sentinel denied outputs.
-- Generated proof artifacts: not packaged in this source handoff; regenerate locally when needed.
-- Native database-boundary verifier integration: represented by the Rust candidate; production
-  artifact audit, database qualification, and governance pin remain pending.
-- Release role: differential semantics only; it cannot replace the shared bus, SHA3 coprocessor, or
-  atomic BL-PQ512 verifier.
+The Cairo 2 / Scarb 2.18 implementation provides semantic known-answer and mutation fixtures for
+one `MultiLineDecisionInput` (`main`) and `BatchClaimInput` (`batch_main`). It binds governed facts,
+policy, nullifier, and state-root inputs instead of accepting free flags. Generated proof artifacts
+are not packaged in the source tree; a local regeneration is evidence only after independent
+verification and readback.
 
-## Proof evidence
+The current live selection is explicitly unselected: `proofSuiteId=null`, `production_usable=false`,
+and no Cairo artifact is a production release dependency. Native-v3
+Phase 0, the trust-boundary profile, plaintext continuity, and Mirror evidence are synthetic
+semantic/operational evidence; none is a Cairo proof or deployed formal verification.
 
-A previous developer checkout produced a real local Cairo proof checkpoint for this statement family. The generated proof JSON is intentionally excluded from this optimized source archive.
+## Differential attack coverage
 
-Use `PROOF_PROVENANCE.md` in the app-layer root for the current handoff-level proof note. Do not claim this archive contains proof evidence unless a proof is regenerated and verified in the current environment.
+The retained fixtures exercise fabricated facts, duplicate-by-omission, procedure substitution,
+free ceilings, non-empty padding, stale roots, denied-claim nullifier forgery, authorization
+substitution, claim-source/oracle drift, cent bounds, value conservation, and state-root binding.
+They also preserve regression expectations for exact public inputs, source/custody qualification,
+database isolation, retry, crash, recovery, and anti-rollback. These are attack classes and
+compatibility checks, not a complete soundness or privacy claim.
+
+## Evidence and nonclaims
+
+Earlier local checkouts contained a Cairo proof checkpoint for this statement family, but its proof
+JSON is intentionally excluded from the optimized source archive. Do not claim the checkpoint is
+current without regenerating it in the current environment and independently verifying its exact
+bytes, public inputs, and artifacts. Retired BL-PQ512/H4/CUDA, Privacy V2, fixed-shape, and
+decisive-composition narratives remain in Git history and retained archives rather than selecting
+this reference.
+
+Ethereum is not a Cairo settlement boundary. No L2, rollup, sequencer, bridge, or Solidity payment
+role is active. Production clearance remains blocked on the later qualified proof/backend, Lean,
+database, custody, source-governance, and activation gates owned by the current authorities.
