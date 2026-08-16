@@ -142,6 +142,7 @@ class SourceAdmission:
     receipt: bytes
     report_id: str
     production_source_authentication: bool
+    telemetry: tuple[tuple[str, int | bool | str | None], ...]
 
 
 MAX_ADAPTER_BYTES = 262_144
@@ -208,19 +209,30 @@ class SourceAdmissionService:
 
     def _validate_result(self, result: VerifiedSourceCoverage) -> None:
         profile = self.profile
-        if result.profile_id != profile.profile_id:
+        if type(result.profile_id) is not str or result.profile_id != profile.profile_id:
             raise SourceAdmissionError("result:profile-mismatch")
-        if result.subject != profile.subject or result.scope != profile.scope:
+        if (
+            type(result.subject) is not str
+            or type(result.scope) is not str
+            or result.subject != profile.subject
+            or result.scope != profile.scope
+        ):
             raise SourceAdmissionError("result:subject-or-scope-mismatch")
-        if result.observation_time != profile.observation_time:
+        if type(result.observation_time) is not int or result.observation_time != profile.observation_time:
             raise SourceAdmissionError("result:observation-mismatch")
-        if (result.effective_start, result.effective_end) != (profile.effective_start, profile.effective_end):
+        if (
+            type(result.effective_start) is not int
+            or type(result.effective_end) is not int
+            or (result.effective_start, result.effective_end) != (profile.effective_start, profile.effective_end)
+        ):
             raise SourceAdmissionError("result:interval-mismatch")
+        if type(result.complete) is not bool:
+            raise SourceAdmissionError("result:completeness")
         if profile.require_complete and result.complete is not True:
             raise SourceAdmissionError("result:partial-coverage")
-        if result.source_roles != profile.source_roles:
+        if type(result.source_roles) is not tuple or result.source_roles != profile.source_roles:
             raise SourceAdmissionError("result:source-roles-mismatch")
-        if result.evidence_mode is not profile.evidence_mode:
+        if type(result.evidence_mode) is not EvidenceMode or result.evidence_mode is not profile.evidence_mode:
             raise SourceAdmissionError("result:evidence-mode-mismatch")
         if type(result.graph_input) is not bytes or not result.graph_input or len(result.graph_input) > graph.MAX_INPUT_BYTES:
             raise SourceAdmissionError("result:graph-input")
@@ -257,7 +269,7 @@ class SourceAdmissionService:
         result = self._verify(adapter_bytes)
         self._validate_result(result)
         try:
-            graph_artifact, _telemetry = graph.build_report(result.graph_input)
+            graph_artifact, graph_telemetry = graph.build_report(result.graph_input)
         except Exception as exc:
             raise SourceAdmissionError("graph:producer-reject") from exc
         try:
@@ -310,6 +322,16 @@ class SourceAdmissionService:
         receipt = _canonical(receipt_value)
         if expected_receipt is not None and (type(expected_receipt) is not bytes or expected_receipt != receipt):
             raise SourceAdmissionError("retry:conflict")
+        telemetry = tuple(
+            (key, graph_telemetry[key])
+            for key in (
+                "artifact_bytes",
+                "wall_time_ns",
+                "process_tree_peak_bytes",
+                "process_tree_scope",
+                "proof_performance_claim",
+            )
+        )
         return SourceAdmission(
             profile_id=self.profile.profile_id,
             profile_digest=self.profile.profile_digest,
@@ -320,6 +342,7 @@ class SourceAdmissionService:
             receipt=receipt,
             report_id=report_id,
             production_source_authentication=False,
+            telemetry=telemetry,
         )
 
 
