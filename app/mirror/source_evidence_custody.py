@@ -241,32 +241,28 @@ class SourceEvidenceCustodyService:
             prior_stage_id=prior[1] if prior else None,
             admission=admission,
         )
-        try:
+        if admission is None:
             return self.store.admit_source_evidence(
                 candidate.raw,
-                admission.graph_artifact if admission is not None else None,
+                None,
                 self.graph_profile_registry,
             )
-        except store.StoreConflictError as exc:
-            # A withdrawn/unapproved profile still permits evidence custody, but
-            # it cannot create a new governed graph admission.  The fallback is
-            # state-owned observation custody, not a caller-selected downgrade.
-            if admission is None or not str(exc).startswith("governance:"):
-                raise
-            prior = self.store.source_evidence_head(
-                self.profile.graph_profile.subject,
-                self.profile.graph_profile.scope,
-                self.profile.graph_profile.profile_id,
-                self.graph_profile_registry,
-            )
-            fallback = build_artifact(
-                envelope_raw,
-                result,
-                prior_artifact_id=prior[0] if prior else None,
-                prior_stage_id=prior[1] if prior else None,
-                admission=None,
-            )
-            return self.store.admit_source_evidence(fallback.raw, None, self.graph_profile_registry)
+        # The store performs the governance check and any observation-only
+        # retention in one transaction.  Only its typed, independently
+        # reconstructable not-approved/withdrawn outcome can select fallback.
+        fallback = build_artifact(
+            envelope_raw,
+            result,
+            prior_artifact_id=prior[0] if prior else None,
+            prior_stage_id=prior[1] if prior else None,
+            admission=None,
+        )
+        return self.store.admit_source_evidence_with_governance_observation(
+            candidate.raw,
+            admission.graph_artifact,
+            fallback.raw,
+            self.graph_profile_registry,
+        )
 
 
 __all__ = [

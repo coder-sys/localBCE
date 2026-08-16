@@ -77,6 +77,18 @@ class StoreConflictError(ContinuityStoreError):
     pass
 
 
+class GovernanceObservationOnly(StoreConflictError):
+    """Typed verifier-owned result for an explicitly ineligible V2 governance head."""
+
+    _REASONS = frozenset({"not-approved", "withdrawn"})
+
+    def __init__(self, reason: str) -> None:
+        if reason not in self._REASONS:
+            raise ValueError("governance:observation-reason")
+        self.reason = reason
+        super().__init__(f"governance:{reason}")
+
+
 class StoreBusyError(ContinuityStoreError):
     pass
 
@@ -700,7 +712,7 @@ class ContinuityStore:
             (governance_chain,),
         ).fetchone()
         if row is None:
-            raise StoreConflictError("governance:not-approved")
+            raise GovernanceObservationOnly("not-approved")
         if row["artifact_schema"] not in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             raise StoreConflictError("governance:v1-not-v2")
         try:
@@ -710,9 +722,9 @@ class ContinuityStore:
         except Exception as exc:
             raise StoreSchemaError("governance:independent-reject") from exc
         if governed.get("schema") == governance_v2_independent.WITHDRAWAL_SCHEMA:
-            raise StoreConflictError("governance:withdrawn")
+            raise GovernanceObservationOnly("withdrawn")
         if governed.get("current_stage_kind") != governance_v2_independent.STAGE_APPROVED:
-            raise StoreConflictError("governance:not-approved")
+            raise GovernanceObservationOnly("not-approved")
         if governed.get("profile_id") != artifact.profile_id or governed.get("profile_digest") != graph_value["profile"]["profile_digest"]:
             raise StoreConflictError("governance:profile-binding")
         if type(observation) is not int or not governed["effective_start"] <= observation <= governed["effective_end"]:
@@ -1157,9 +1169,44 @@ class ContinuityStore:
     ) -> SourceCustodyAdmission:
         """Atomically custody source evidence and, when present, its graph artifact."""
 
+        return self._admit_source_evidence(
+            custody_raw,
+            graph_raw,
+            graph_profile_registry,
+            observation_raw=None,
+        )
+
+    def admit_source_evidence_with_governance_observation(
+        self,
+        custody_raw: bytes,
+        graph_raw: bytes,
+        observation_raw: bytes,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> SourceCustodyAdmission:
+        """Atomically retain observation evidence only for a typed governance outcome."""
+
+        return self._admit_source_evidence(
+            custody_raw,
+            graph_raw,
+            graph_profile_registry,
+            observation_raw=observation_raw,
+        )
+
+    def _admit_source_evidence(
+        self,
+        custody_raw: bytes,
+        graph_raw: bytes | None,
+        graph_profile_registry: Mapping[str, object] | None,
+        *,
+        observation_raw: bytes | None,
+    ) -> SourceCustodyAdmission:
+        """Run source/graph admission with any observation fallback inside one transaction."""
+
         if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
             raise StoreConflictError("profile:registry-mismatch")
         registry = self.graph_profile_registry
+        if observation_raw is not None and graph_raw is None:
+            raise StoreConflictError("custody:observation-without-graph")
         try:
             source_preview = source_independent.verify_artifact(custody_raw, graph_raw=graph_raw, graph_profile_registry=registry)
         except Exception as exc:
@@ -1181,6 +1228,31 @@ class ContinuityStore:
             ):
                 raise StoreConflictError("custody:graph-link-mismatch")
         source_artifact = verify_artifact(ARTIFACT_SOURCE_EVIDENCE, custody_raw, graph_profile_registry=registry)
+        observation_artifact: VerifiedArtifact | None = None
+        if observation_raw is not None:
+            try:
+                observation_preview = source_independent.verify_artifact(
+                    observation_raw,
+                    graph_profile_registry=registry,
+                )
+                observation_artifact = verify_artifact(
+                    ARTIFACT_SOURCE_EVIDENCE,
+                    observation_raw,
+                    graph_profile_registry=registry,
+                )
+            except Exception as exc:
+                raise StoreConflictError("custody:observation-independent-reject") from exc
+            if observation_preview.get("linked_graph_artifact_id") is not None:
+                raise StoreConflictError("custody:observation-graph-link")
+            if (
+                observation_preview.get("envelope_digest") != source_preview.get("envelope_digest")
+                or observation_artifact.subject != source_artifact.subject
+                or observation_artifact.scope != source_artifact.scope
+                or observation_artifact.profile_id != source_artifact.profile_id
+                or observation_artifact.prior_artifact_id != source_artifact.prior_artifact_id
+                or observation_artifact.prior_stage_id != source_artifact.prior_stage_id
+            ):
+                raise StoreConflictError("custody:observation-binding")
         request_hash = _payload_hash(custody_raw)
         self._fault("before_transaction")
         connection = self._connect()
@@ -1207,15 +1279,30 @@ class ContinuityStore:
                         graph_receipt = self._receipt_for_artifact(connection, graph_artifact)
                     connection.commit()
                     return SourceCustodyAdmission(source_receipt, graph_receipt, graph_receipt is not None)
+            admitted_source_artifact = source_artifact
+            admitted_source_request_hash = request_hash
             if graph_artifact is not None:
-                self._require_active_v2_governance(connection, graph_artifact)
+                try:
+                    self._require_active_v2_governance(connection, graph_artifact)
+                except GovernanceObservationOnly:
+                    if observation_artifact is None or observation_raw is None:
+                        raise
+                    admitted_source_artifact = observation_artifact
+                    admitted_source_request_hash = _payload_hash(observation_raw)
+                    graph_artifact = None
+            if graph_artifact is not None:
                 existing_graph_row = connection.execute(
                     "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
                     (ARTIFACT_GRAPH, graph_artifact.artifact_id),
                 ).fetchone()
                 if existing_graph_row is not None and not self._artifact_matches(existing_graph_row, graph_artifact):
                     raise StoreConflictError("custody:graph-identity-conflict")
-            source_receipt = self._admit_in_transaction(connection, source_artifact, request_hash, enforce_governance=False)
+            source_receipt = self._admit_in_transaction(
+                connection,
+                admitted_source_artifact,
+                admitted_source_request_hash,
+                enforce_governance=False,
+            )
             if graph_artifact is None:
                 graph_receipt = None
             elif existing_graph_row is not None:

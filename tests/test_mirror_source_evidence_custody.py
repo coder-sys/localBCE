@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 from app.governance import provider_continuity_control_pack_v2 as governance
 from app.mirror import continuity_export as export
@@ -124,6 +125,58 @@ class MirrorSourceEvidenceCustodyTests(unittest.TestCase):
         self.assertEqual("PARTIAL", value["source_status"])
         self.assertEqual("UNKNOWN", value["source_completeness"])
         self.assertFalse(value["allow_nonmembership"])
+
+    def test_governance_observation_outcome_is_typed_and_atomic(self) -> None:
+        registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
+        instance = store.ContinuityStore(self.root / "typed-governance.db", graph_profile_registry=registry)
+        admission = SourceAdmissionService(
+            profile.NC_MEDICAID_GRAPH_PROFILE,
+            fhir_independent.NcMedicaidFhirVerifier(),
+        ).admit(_envelope())
+        result = fhir_independent.verify_bytes(_envelope())
+        candidate = custody.build_artifact(_envelope(), result, admission=admission)
+        before = store_independent.verify_database(instance.path, registry)
+        with self.assertRaises(store.GovernanceObservationOnly) as caught:
+            instance.admit_source_evidence(candidate.raw, admission.graph_artifact, registry)
+        self.assertEqual("not-approved", caught.exception.reason)
+        self.assertEqual(before, store_independent.verify_database(instance.path, registry))
+
+        retained = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry).ingest(_envelope())
+        self.assertFalse(retained.graph_admitted)
+        self.assertEqual(1, store_independent.verify_database(instance.path, registry)["event_count"])
+
+    def test_non_governance_store_conflicts_never_fallback_or_mutate(self) -> None:
+        for index, reason in enumerate(("governance:profile-binding", "governance:effective-interval", "head:stale-or-wrong-prior")):
+            with self.subTest(reason=reason):
+                fault_root = self.root / f"conflict-{index}"
+                fault_root.mkdir()
+                instance, registry, _graph_raw = _approved_store(fault_root)
+                service = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry)
+                before = store_independent.verify_database(instance.path, registry)
+                with mock.patch.object(
+                    instance,
+                    "admit_source_evidence_with_governance_observation",
+                    side_effect=store.StoreConflictError(reason),
+                ) as attempt:
+                    with self.assertRaises(store.StoreConflictError):
+                        service.ingest(_envelope())
+                attempt.assert_called_once()
+                self.assertEqual(before, store_independent.verify_database(instance.path, registry))
+
+        atomic_root = self.root / "atomic-conflict"
+        atomic_root.mkdir()
+        instance, registry, _graph_raw = _approved_store(atomic_root)
+        service = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry)
+        before = store_independent.verify_database(instance.path, registry)
+        with mock.patch.object(
+            instance,
+            "_require_active_v2_governance",
+            side_effect=store.StoreConflictError("governance:profile-binding"),
+        ) as gate:
+            with self.assertRaises(store.StoreConflictError):
+                service.ingest(_envelope())
+        gate.assert_called_once()
+        self.assertEqual(before, store_independent.verify_database(instance.path, registry))
 
     def test_unapproved_or_withdrawn_graph_is_not_admitted_but_evidence_remains_durable(self) -> None:
         registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
