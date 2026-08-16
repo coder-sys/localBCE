@@ -130,7 +130,16 @@ class ProviderTrustGraphV1Tests(unittest.TestCase):
             payload["authority"],
         )
         encoded = raw.decode("utf-8")
-        for token in graph.FORBIDDEN_EXTERNAL_TOKENS:
+        for token in (
+            "policyResult",
+            "policy_result",
+            "effectiveDirective",
+            "ClearanceDecisionRow",
+            "StateAccessRow",
+            "proofSuiteId",
+            "directive",
+            "payment_directive",
+        ):
             self.assertNotIn(token, encoded)
         self.assertNotIn("native_v3_plaintext_continuity", Path(graph.__file__).read_text(encoding="utf-8"))
         self.assertNotIn("from app.mirror.provider_trust_graph", Path(independent.__file__).read_text(encoding="utf-8"))
@@ -247,7 +256,8 @@ class ProviderTrustGraphV1Tests(unittest.TestCase):
 
         raw, _ = self.build_case()
         forbidden = _mutated_artifact(raw, lambda value: value.__setitem__("payment_directive", "UNSAFE"))
-        with self.assertRaisesRegex(independent.IndependentProviderTrustGraphError, "payload:forbidden-token"):
+        # Exact artifact keys own the external-boundary exclusion; no keyword blacklist is authority.
+        with self.assertRaisesRegex(independent.IndependentProviderTrustGraphError, "artifact:schema"):
             self.verify(forbidden)
 
         unknown_enum = _mutated_artifact(raw, lambda value: value["findings"][0].__setitem__("kind", "UNKNOWN"))

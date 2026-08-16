@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Any, Mapping
+from types import MappingProxyType
 
 from app.governance import provider_continuity_control_pack_independent as governance_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
@@ -107,6 +108,7 @@ class VerifiedArtifact:
     prior_artifact_id: str | None
     prior_stage_id: str | None
     authority_json: str
+    profile_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -219,12 +221,17 @@ def _payload_hash(raw: bytes) -> str:
     return digest.hexdigest()
 
 
-def _chain_id(artifact_kind: str, subject: str, scope: str) -> str:
+def _chain_id(artifact_kind: str, subject: str, scope: str, profile_id: str | None = None) -> str:
     if not all(type(value) is str and value for value in (artifact_kind, subject, scope)):
         raise StoreConflictError("chain:identity")
+    if profile_id is not None and (type(profile_id) is not str or not profile_id):
+        raise StoreConflictError("chain:profile")
+    material: dict[str, object] = {"artifact_kind": artifact_kind, "scope": scope, "subject": subject}
+    if profile_id is not None:
+        material["profile_id"] = profile_id
     return _digest(
         "chain-id",
-        {"artifact_kind": artifact_kind, "scope": scope, "subject": subject},
+        material,
     )
 
 
@@ -267,7 +274,12 @@ def _governance_prefix(value: Mapping[str, object], stage_count: int) -> tuple[b
     return raw, artifact
 
 
-def verify_artifact(artifact_kind: str, raw: bytes) -> VerifiedArtifact:
+def verify_artifact(
+    artifact_kind: str,
+    raw: bytes,
+    *,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> VerifiedArtifact:
     """Run the matching independent verifier and normalize its exact identities."""
 
     if artifact_kind not in ARTIFACT_KINDS:
@@ -280,7 +292,10 @@ def verify_artifact(artifact_kind: str, raw: bytes) -> VerifiedArtifact:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
         if artifact_kind == ARTIFACT_GRAPH:
-            result = graph_independent.verify_bytes(raw)
+            if value.get("schema") == graph_independent.SCHEMA_V2:
+                result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
+            else:
+                result = graph_independent.verify_bytes(raw)
         elif value.get("schema") == withdrawal_independent.SCHEMA:
             result = withdrawal_independent.verify_bytes(raw)
         else:
@@ -308,6 +323,10 @@ def verify_artifact(artifact_kind: str, raw: bytes) -> VerifiedArtifact:
             subject_id = str(subject["provider_graph_subject"])
             scope = str(subject["scope"])
             authority_json = _authority_json(value["authority"], kind=artifact_kind)
+            profile_id = None
+            if schema == graph_independent.SCHEMA_V2:
+                profile_value = graph_independent._expect_keys(value.get("profile"), graph_independent.PROFILE_KEYS, "artifact:profile")
+                profile_id = profile_value["profile_id"]
         elif value.get("schema") == withdrawal_independent.SCHEMA:
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
@@ -380,6 +399,7 @@ def verify_artifact(artifact_kind: str, raw: bytes) -> VerifiedArtifact:
         prior_artifact_id=prior_artifact_id,
         prior_stage_id=prior_stage_id,
         authority_json=authority_json,
+        profile_id=profile_id if artifact_kind == ARTIFACT_GRAPH else None,
     )
 
 
@@ -437,12 +457,13 @@ def _state_root(sequence: int, heads: list[Mapping[str, object]]) -> str:
 class ContinuityStore:
     """Small transactional SQLite candidate with immutable artifacts and events."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, graph_profile_registry: Mapping[str, object] | None = None) -> None:
         self.path = Path(path)
         if self.path.name in {"", ".", ".."}:
             raise StoreSchemaError("database:path")
         if self.path.parent.exists() is False:
             raise StoreSchemaError("database:parent-missing")
+        self.graph_profile_registry = MappingProxyType(dict(graph_profile_registry or {}))
         self._fault_point: str | None = None
         self._initialize()
 
@@ -608,7 +629,7 @@ class ContinuityStore:
         try:
             store_independent._check_sqlite_shape(connection)
             snapshot = store_independent._snapshot_from_connection(connection)
-            store_independent._verify_rows(snapshot)
+            store_independent._verify_rows(snapshot, graph_profile_registry=self.graph_profile_registry)
         except store_independent.IndependentStoreError as exc:
             raise StoreSchemaError(f"database:conformance:{exc}") from exc
 
@@ -774,8 +795,8 @@ class ContinuityStore:
     def admit(self, artifact_kind: str, artifact_raw: bytes) -> AdmissionReceipt:
         """Verify and atomically admit one artifact, or replay its exact receipt."""
 
-        artifact = verify_artifact(artifact_kind, artifact_raw)
-        chain_id = _chain_id(artifact.kind, artifact.subject, artifact.scope)
+        artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
+        chain_id = _chain_id(artifact.kind, artifact.subject, artifact.scope, artifact.profile_id)
         request_hash = _payload_hash(artifact_raw)
         self._fault("before_transaction")
         connection = self._connect()

@@ -197,7 +197,11 @@ def _decode_rows(value: Mapping[str, object]) -> dict[str, list[dict[str, object
     return result
 
 
-def _decode_and_verify(raw: bytes) -> tuple[dict[str, object], dict[str, list[dict[str, object]]], dict[str, object]]:
+def _decode_and_verify(
+    raw: bytes,
+    *,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, list[dict[str, object]]], dict[str, object]]:
     if type(raw) is not bytes or not raw or len(raw) > MAX_EXPORT_BYTES:
         raise ContinuityExportError("export:byte-cap")
     try:
@@ -216,7 +220,7 @@ def _decode_and_verify(raw: bytes) -> tuple[dict[str, object], dict[str, list[di
         raise ContinuityExportError("export:state-root")
     snapshot = _decode_rows(value)
     try:
-        result = independent.verify_snapshot(snapshot)
+        result = independent.verify_snapshot(snapshot, graph_profile_registry=graph_profile_registry)
     except independent.IndependentStoreError as exc:
         raise ContinuityExportError(f"export:state:{exc}") from exc
     if result["state_root"] != value["state_root"]:
@@ -501,6 +505,7 @@ def _restore_stage_classification(
     stage: Path,
     raw: bytes,
     expected: Mapping[str, object],
+    graph_profile_registry: Mapping[str, object] | None = None,
 ) -> tuple[str, dict[str, object]]:
     if stage.is_symlink() or stage.is_dir() or not stage.is_file():
         raise ContinuityExportError("restore:staging-object")
@@ -509,7 +514,7 @@ def _restore_stage_classification(
     last_error: independent.IndependentStoreError | None = None
     for attempt in range(RESTORE_WAIT_ATTEMPTS):
         try:
-            actual = independent.verify_database(stage)
+            actual = independent.verify_database(stage, graph_profile_registry=graph_profile_registry)
             break
         except independent.IndependentStoreError as exc:
             last_error = exc
@@ -519,7 +524,7 @@ def _restore_stage_classification(
         raise ContinuityExportError("restore:staging-invalid") from last_error
     if actual == expected:
         try:
-            if export_database(stage) != raw:
+            if export_database(stage, graph_profile_registry=graph_profile_registry) != raw:
                 raise ContinuityExportError("restore:staging-export-mismatch")
         except ContinuityExportError:
             raise
@@ -566,6 +571,7 @@ def _restore_prepare_stage(
     raw: bytes,
     snapshot: Mapping[str, list[Mapping[str, object]]],
     expected: Mapping[str, object],
+    graph_profile_registry: Mapping[str, object] | None = None,
 ) -> tuple[Path, Path, dict[str, object]]:
     stage, marker = _restore_stage_paths(target, str(value["export_root"]))
     stage_exists = os.path.lexists(os.fspath(stage))
@@ -582,28 +588,28 @@ def _restore_prepare_stage(
             _restore_validate_marker(marker, target, stage, value)
             _restore_wait_for_stage(stage, marker)
         try:
-            store.ContinuityStore(stage)
+            store.ContinuityStore(stage, graph_profile_registry=graph_profile_registry)
         except (store.ContinuityStoreError, OSError) as exc:
             raise ContinuityExportError("restore:staging-create") from exc
         _restore_fault("after_empty_staging_db_creation")
-    state, actual = _restore_stage_classification(stage, raw, expected)
+    state, actual = _restore_stage_classification(stage, raw, expected, graph_profile_registry)
     if state == "empty":
         try:
-            restored = store.ContinuityStore(stage)
+            restored = store.ContinuityStore(stage, graph_profile_registry=graph_profile_registry)
             restored._restore_snapshot(snapshot)
         except store.StoreConflictError:
-            state, actual = _restore_stage_classification(stage, raw, expected)
+            state, actual = _restore_stage_classification(stage, raw, expected, graph_profile_registry)
             if state != "verified":
                 raise ContinuityExportError("restore:staging-race")
         except (store.ContinuityStoreError, OSError) as exc:
             raise ContinuityExportError("restore:staging-write") from exc
         _restore_fault("after_snapshot_transaction")
-        state, actual = _restore_stage_classification(stage, raw, expected)
+        state, actual = _restore_stage_classification(stage, raw, expected, graph_profile_registry)
     if state != "verified":
         raise ContinuityExportError("restore:staging-verification")
     _restore_checkpoint(stage)
     _restore_fault("after_independent_verification_checkpoint")
-    state, actual = _restore_stage_classification(stage, raw, expected)
+    state, actual = _restore_stage_classification(stage, raw, expected, graph_profile_registry)
     if state != "verified":
         raise ContinuityExportError("restore:staging-verification")
     _restore_checkpoint(stage)
@@ -617,11 +623,12 @@ def _restore_cleanup_owned_stage(
     value: Mapping[str, object],
     raw: bytes,
     expected: Mapping[str, object],
+    graph_profile_registry: Mapping[str, object] | None = None,
 ) -> None:
     if os.path.lexists(os.fspath(marker)):
         _restore_validate_marker(marker, target, stage, value)
     if os.path.lexists(os.fspath(stage)):
-        state, _actual = _restore_stage_classification(stage, raw, expected)
+        state, _actual = _restore_stage_classification(stage, raw, expected, graph_profile_registry)
         if state != "verified":
             raise ContinuityExportError("restore:staging-conflict")
         _restore_checkpoint(stage)
@@ -642,6 +649,7 @@ def _restore_existing_target(
     value: Mapping[str, object],
     raw: bytes,
     expected: Mapping[str, object],
+    graph_profile_registry: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     if not os.path.lexists(os.fspath(target)):
         return None
@@ -658,17 +666,17 @@ def _restore_existing_target(
             raise ContinuityExportError("restore:staging-state")
         _restore_validate_marker(marker, target, stage, value)
         if stage_exists:
-            _restore_stage_classification(stage, raw, expected)
+            _restore_stage_classification(stage, raw, expected, graph_profile_registry)
     try:
-        actual = independent.verify_database(target)
-        current = export_database(target)
+        actual = independent.verify_database(target, graph_profile_registry=graph_profile_registry)
+        current = export_database(target, graph_profile_registry=graph_profile_registry)
     except Exception as exc:
         raise ContinuityExportError("restore:target-conflict") from exc
     if current != raw or actual != expected:
         raise ContinuityExportError("restore:target-conflict")
     if marker_exists:
         try:
-            _restore_cleanup_owned_stage(stage, marker, target, value, raw, expected)
+            _restore_cleanup_owned_stage(stage, marker, target, value, raw, expected, graph_profile_registry)
         except OSError:
             pass
     return {"accepted": True, "restored": True, **actual}
@@ -724,25 +732,26 @@ def _restore_import_locked_body(
     target: Path,
     stage: Path,
     marker: Path,
+    graph_profile_registry: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    existing = _restore_existing_target(target, stage, marker, value, raw, expected)
+    existing = _restore_existing_target(target, stage, marker, value, raw, expected, graph_profile_registry)
     if existing is not None:
         return existing
     _restore_reject_destination_sidecars(target)
-    stage, marker, _actual = _restore_prepare_stage(target, value, raw, snapshot, expected)
+    stage, marker, _actual = _restore_prepare_stage(target, value, raw, snapshot, expected, graph_profile_registry)
     _restore_sidecars(stage, "staging")
     if os.path.lexists(os.fspath(target)):
-        existing = _restore_existing_target(target, stage, marker, value, raw, expected)
+        existing = _restore_existing_target(target, stage, marker, value, raw, expected, graph_profile_registry)
         if existing is not None:
             return existing
         raise ContinuityExportError("restore:target-conflict")
     if not _restore_publish_no_clobber(stage, target):
-        existing = _restore_existing_target(target, stage, marker, value, raw, expected)
+        existing = _restore_existing_target(target, stage, marker, value, raw, expected, graph_profile_registry)
         if existing is not None:
             return existing
         raise ContinuityExportError("restore:target-conflict")
     _restore_fault("after_atomic_publication_before_response")
-    result = _restore_existing_target(target, stage, marker, value, raw, expected)
+    result = _restore_existing_target(target, stage, marker, value, raw, expected, graph_profile_registry)
     if result is None:
         raise ContinuityExportError("restore:published-missing")
     return result
@@ -754,12 +763,13 @@ def _restore_import_locked(
     snapshot: Mapping[str, list[Mapping[str, object]]],
     expected: Mapping[str, object],
     target: Path,
+    graph_profile_registry: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     stage, marker = _restore_stage_paths(target, str(value["export_root"]))
     _restore_reject_foreign_stage_artifacts(target, stage, marker)
     with _restore_stage_process_lock(target, stage, marker, value):
         _restore_reject_foreign_stage_artifacts(target, stage, marker)
-        result = _restore_import_locked_body(raw, value, snapshot, expected, target, stage, marker)
+        result = _restore_import_locked_body(raw, value, snapshot, expected, target, stage, marker, graph_profile_registry)
     # The deterministic coordination file is retained as a canonical,
     # non-sensitive recovery sentinel. Its byte-range lock is released by the
     # context manager, including on process death; removing it would race a
@@ -767,10 +777,13 @@ def _restore_import_locked(
     return result
 
 
-def verify_export_bytes(raw: bytes) -> dict[str, object]:
+def verify_export_bytes(
+    raw: bytes,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Independently verify a complete canonical portability artifact."""
 
-    _value, _snapshot, result = _decode_and_verify(raw)
+    _value, _snapshot, result = _decode_and_verify(raw, graph_profile_registry=graph_profile_registry)
     return {
         "accepted": True,
         "schema_version": store.SCHEMA_VERSION,
@@ -782,11 +795,14 @@ def verify_export_bytes(raw: bytes) -> dict[str, object]:
     }
 
 
-def export_database(path: str | Path) -> bytes:
+def export_database(
+    path: str | Path,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> bytes:
     """Export exactly the independently verified state of one candidate database."""
 
-    verified = independent.verify_database(path)
-    source_store = store.ContinuityStore(path)
+    verified = independent.verify_database(path, graph_profile_registry=graph_profile_registry)
+    source_store = store.ContinuityStore(path, graph_profile_registry=graph_profile_registry)
     rows = _encode_rows(source_store._snapshot_rows())
     body: dict[str, object] = {
         "schema": EXPORT_SCHEMA,
@@ -803,17 +819,21 @@ def export_database(path: str | Path) -> bytes:
     raw = _canonical(value)
     if len(raw) > MAX_EXPORT_BYTES:
         raise ContinuityExportError("export:byte-cap")
-    verify_export_bytes(raw)
+    verify_export_bytes(raw, graph_profile_registry=graph_profile_registry)
     return raw
 
 
-def import_export(raw: bytes, destination: str | Path) -> dict[str, object]:
+def import_export(
+    raw: bytes,
+    destination: str | Path,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Restore a verified export through a deterministic, no-clobber stage."""
 
-    value, snapshot, expected = _decode_and_verify(raw)
+    value, snapshot, expected = _decode_and_verify(raw, graph_profile_registry=graph_profile_registry)
     target = _restore_destination(destination)
     with _restore_lock_for(target):
-        return _restore_import_locked(raw, value, snapshot, expected, target)
+        return _restore_import_locked(raw, value, snapshot, expected, target, graph_profile_registry)
 
 
 def main(argv: list[str] | None = None) -> int:

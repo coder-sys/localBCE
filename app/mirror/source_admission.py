@@ -31,6 +31,38 @@ class EvidenceMode(str, Enum):
 
 
 @dataclass(frozen=True)
+class SourceRole:
+    """State-owned description of one ordered synthetic source role."""
+
+    source_id: str
+    source_kind: str
+    record_kind: str
+    authority_id: str
+    provenance_id: str
+
+    def __post_init__(self) -> None:
+        if any(type(value) is not str or not value for value in (
+            self.source_id,
+            self.source_kind,
+            self.record_kind,
+            self.authority_id,
+            self.provenance_id,
+        )):
+            raise ValueError("profile:source-role")
+        if self.record_kind not in ("CREDENTIAL", "ENROLLMENT"):
+            raise ValueError("profile:source-role-kind")
+
+    def material(self) -> dict[str, str]:
+        return {
+            "source_id": self.source_id,
+            "source_kind": self.source_kind,
+            "record_kind": self.record_kind,
+            "authority_id": self.authority_id,
+            "provenance_id": self.provenance_id,
+        }
+
+
+@dataclass(frozen=True)
 class SourceProfile:
     """Immutable composition-root configuration for one source contract."""
 
@@ -38,7 +70,7 @@ class SourceProfile:
     version: int
     subject: str
     scope: str
-    observation_time: int
+    observation_time: int | None
     effective_start: int
     effective_end: int
     source_roles: tuple[str, ...]
@@ -46,6 +78,14 @@ class SourceProfile:
     verifier_id: str
     verifier_epoch: int
     evidence_mode: EvidenceMode
+    source_role_details: tuple[SourceRole, ...] | None = None
+    credential_id: str | None = None
+    enrollment_id: str | None = None
+    observation_start: int | None = None
+    observation_end: int | None = None
+    allow_nonmembership: bool = True
+    canonical_order: str = "lexicographic-v1"
+    root_rule: str = "source-root-v1"
 
     def __post_init__(self) -> None:
         if any(
@@ -55,7 +95,7 @@ class SourceProfile:
             raise ValueError("profile:identity")
         if type(self.version) is not int or self.version <= 0:
             raise ValueError("profile:version")
-        if type(self.observation_time) is not int or self.observation_time < 0:
+        if self.observation_time is not None and (type(self.observation_time) is not int or self.observation_time < 0):
             raise ValueError("profile:observation-time")
         if (
             type(self.effective_start) is not int
@@ -76,21 +116,73 @@ class SourceProfile:
             raise ValueError("profile:verifier")
         if self.evidence_mode is not EvidenceMode.SYNTHETIC_TEST_ONLY:
             raise ValueError("profile:evidence-mode-not-qualified")
+        if type(self.allow_nonmembership) is not bool:
+            raise ValueError("profile:nonmembership-policy")
+        if self.canonical_order != "lexicographic-v1" or self.root_rule != "source-root-v1":
+            raise ValueError("profile:canonical-rules")
+        if self.source_role_details is None:
+            if self.observation_time is None:
+                raise ValueError("profile:observation-window")
+            if any(value is not None for value in (self.credential_id, self.enrollment_id, self.observation_start, self.observation_end)) or not self.allow_nonmembership:
+                raise ValueError("profile:v1-extra")
+            return
+        if type(self.source_role_details) is not tuple or len(self.source_role_details) != 2:
+            raise ValueError("profile:source-role-details")
+        if self.version != 2:
+            raise ValueError("profile:v2-version")
+        if any(not isinstance(role, SourceRole) for role in self.source_role_details):
+            raise ValueError("profile:source-role-details")
+        role_ids = tuple(role.source_id for role in self.source_role_details)
+        if role_ids != self.source_roles or role_ids != tuple(sorted(role_ids)) or len(set(role_ids)) != len(role_ids):
+            raise ValueError("profile:source-role-order")
+        if self.observation_time is not None:
+            raise ValueError("profile:v2-snapshot-time")
+        if any(type(value) is not str or not value for value in (self.credential_id, self.enrollment_id)):
+            raise ValueError("profile:subject-identities")
+        if (
+            type(self.observation_start) is not int
+            or type(self.observation_end) is not int
+            or self.observation_start < 1
+            or self.observation_start >= self.observation_end
+        ):
+            raise ValueError("profile:observation-window")
+        if self.observation_start < self.effective_start or self.observation_end > self.effective_end:
+            raise ValueError("profile:observation-window-interval")
 
     def material(self) -> dict[str, object]:
+        if self.source_role_details is None:
+            return {
+                "profile_id": self.profile_id,
+                "version": self.version,
+                "subject": self.subject,
+                "scope": self.scope,
+                "observation_time": self.observation_time,
+                "effective_start": self.effective_start,
+                "effective_end": self.effective_end,
+                "source_roles": list(self.source_roles),
+                "require_complete": self.require_complete,
+                "verifier_id": self.verifier_id,
+                "verifier_epoch": self.verifier_epoch,
+                "evidence_mode": self.evidence_mode.value,
+            }
         return {
             "profile_id": self.profile_id,
             "version": self.version,
             "subject": self.subject,
             "scope": self.scope,
-            "observation_time": self.observation_time,
+            "observation_window": {"start": self.observation_start, "end": self.observation_end},
             "effective_start": self.effective_start,
             "effective_end": self.effective_end,
-            "source_roles": list(self.source_roles),
+            "source_roles": [role.material() for role in self.source_role_details],
             "require_complete": self.require_complete,
+            "credential_id": self.credential_id,
+            "enrollment_id": self.enrollment_id,
             "verifier_id": self.verifier_id,
             "verifier_epoch": self.verifier_epoch,
             "evidence_mode": self.evidence_mode.value,
+            "allow_nonmembership": self.allow_nonmembership,
+            "canonical_order": self.canonical_order,
+            "root_rule": self.root_rule,
         }
 
     @property
@@ -143,11 +235,13 @@ class SourceAdmission:
     report_id: str
     production_source_authentication: bool
     telemetry: tuple[tuple[str, int | bool | str | None], ...]
+    profile_version: int = 1
 
 
 MAX_ADAPTER_BYTES = 262_144
 MAX_RECEIPT_BYTES = 32_768
 RECEIPT_SCHEMA = "mirror-source-admission-receipt-v1"
+RECEIPT_SCHEMA_V2 = "mirror-source-admission-receipt-v2"
 
 
 def _canonical(value: object) -> bytes:
@@ -172,6 +266,10 @@ def _raw_digest(label: str, raw: bytes) -> str:
     digest.update(("BL/MIRROR/SOURCE-ADMISSION/" + label + "/v1\0").encode("ascii"))
     digest.update(raw)
     return digest.hexdigest()
+
+
+def _v2_profile(profile: SourceProfile) -> bool:
+    return profile.source_role_details is not None
 
 
 class SourceAdmissionService:
@@ -218,7 +316,13 @@ class SourceAdmissionService:
             or result.scope != profile.scope
         ):
             raise SourceAdmissionError("result:subject-or-scope-mismatch")
-        if type(result.observation_time) is not int or result.observation_time != profile.observation_time:
+        if type(result.observation_time) is not int:
+            raise SourceAdmissionError("result:observation-mismatch")
+        if _v2_profile(profile):
+            assert profile.observation_start is not None and profile.observation_end is not None
+            if not profile.observation_start <= result.observation_time < profile.observation_end:
+                raise SourceAdmissionError("result:observation-mismatch")
+        elif result.observation_time != profile.observation_time:
             raise SourceAdmissionError("result:observation-mismatch")
         if (
             type(result.effective_start) is not int
@@ -250,11 +354,18 @@ class SourceAdmissionService:
                 raise SourceAdmissionError("graph:source-shape")
             if profile.require_complete and source.get("coverage_complete") is not True:
                 raise SourceAdmissionError("graph:partial-coverage")
-            if source.get("coverage_observation_time") != profile.observation_time:
+            if not isinstance(source.get("coverage_observation_time"), int):
+                raise SourceAdmissionError("graph:observation-mismatch")
+            if _v2_profile(profile):
+                assert profile.observation_start is not None and profile.observation_end is not None
+                if not profile.observation_start <= source["coverage_observation_time"] < profile.observation_end:
+                    raise SourceAdmissionError("graph:observation-mismatch")
+            elif source.get("coverage_observation_time") != profile.observation_time:
                 raise SourceAdmissionError("graph:observation-mismatch")
             start = source.get("coverage_effective_start")
             end = source.get("coverage_effective_end")
-            if not isinstance(start, int) or not isinstance(end, int) or not start <= profile.observation_time < end:
+            observation = source["coverage_observation_time"]
+            if not isinstance(start, int) or not isinstance(end, int) or not start <= observation < end:
                 raise SourceAdmissionError("graph:stale-coverage")
             if (start, end) != (profile.effective_start, profile.effective_end):
                 raise SourceAdmissionError("graph:interval-mismatch")
@@ -269,11 +380,20 @@ class SourceAdmissionService:
         result = self._verify(adapter_bytes)
         self._validate_result(result)
         try:
-            graph_artifact, graph_telemetry = graph.build_report(result.graph_input)
+            if _v2_profile(self.profile):
+                graph_artifact, graph_telemetry = graph.build_report(result.graph_input, profile=self.profile)
+            else:
+                graph_artifact, graph_telemetry = graph.build_report(result.graph_input)
         except Exception as exc:
             raise SourceAdmissionError("graph:producer-reject") from exc
         try:
-            independent = graph_independent.verify_bytes(graph_artifact)
+            if _v2_profile(self.profile):
+                independent = graph_independent.verify_bytes_v2(
+                    graph_artifact,
+                    {self.profile.profile_id: self.profile},
+                )
+            else:
+                independent = graph_independent.verify_bytes(graph_artifact)
         except Exception as exc:
             raise SourceAdmissionError("graph:independent-reject") from exc
         if independent.get("accepted") is not True:
@@ -304,7 +424,7 @@ class SourceAdmissionService:
             },
         )
         body: dict[str, object] = {
-            "schema": RECEIPT_SCHEMA,
+            "schema": RECEIPT_SCHEMA_V2 if _v2_profile(self.profile) else RECEIPT_SCHEMA,
             "profile_id": self.profile.profile_id,
             "profile_version": self.profile.version,
             "profile_digest": self.profile.profile_digest,
@@ -343,7 +463,51 @@ class SourceAdmissionService:
             report_id=report_id,
             production_source_authentication=False,
             telemetry=telemetry,
+            profile_version=self.profile.version,
         )
+
+
+@dataclass(frozen=True)
+class SourceAdmissionBinding:
+    """One immutable profile/verifier pair owned by a composition root."""
+
+    profile: SourceProfile
+    verifier: SourceVerifier
+
+
+class MultiSubjectSourceAdmissionService:
+    """Select exactly one configured synthetic profile by verifier acceptance."""
+
+    def __init__(self, bindings: tuple[SourceAdmissionBinding, ...]) -> None:
+        if type(bindings) is not tuple or not bindings:
+            raise SourceAdmissionError("composition:bindings")
+        services: list[SourceAdmissionService] = []
+        profile_ids: set[str] = set()
+        for binding in bindings:
+            if not isinstance(binding, SourceAdmissionBinding) or binding.profile.source_role_details is None:
+                raise SourceAdmissionError("composition:v2-profile-required")
+            if binding.profile.profile_id in profile_ids:
+                raise SourceAdmissionError("composition:duplicate-profile")
+            profile_ids.add(binding.profile.profile_id)
+            services.append(SourceAdmissionService(binding.profile, binding.verifier))
+        self._services = tuple(services)
+        self.profiles = tuple(service.profile for service in services)
+
+    def admit(self, adapter_bytes: bytes, *, expected_receipt: bytes | None = None) -> SourceAdmission:
+        accepted: list[SourceAdmission] = []
+        for service in self._services:
+            try:
+                accepted.append(service.admit(adapter_bytes))
+            except SourceAdmissionError:
+                continue
+        if len(accepted) != 1:
+            if len(accepted) > 1:
+                raise SourceAdmissionError("admission:ambiguous-profile")
+            raise SourceAdmissionError("admission:no-profile")
+        result = accepted[0]
+        if expected_receipt is not None and expected_receipt != result.receipt:
+            raise SourceAdmissionError("retry:conflict")
+        return result
 
 
 __all__ = [
@@ -351,7 +515,10 @@ __all__ = [
     "SourceAdmission",
     "SourceAdmissionError",
     "SourceAdmissionService",
+    "SourceAdmissionBinding",
+    "MultiSubjectSourceAdmissionService",
     "SourceProfile",
+    "SourceRole",
     "SourceVerifier",
     "VerifiedSourceCoverage",
 ]

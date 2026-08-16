@@ -135,7 +135,11 @@ def _bundle(*, path: str | Path, result: Mapping[str, object] | None, code: str,
     return raw
 
 
-def build_support_bundle(path: str | Path, telemetry: Mapping[str, object] | None = None) -> bytes:
+def build_support_bundle(
+    path: str | Path,
+    telemetry: Mapping[str, object] | None = None,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> bytes:
     """Return a sanitized diagnostic artifact, never a support copy of state."""
 
     try:
@@ -144,7 +148,7 @@ def build_support_bundle(path: str | Path, telemetry: Mapping[str, object] | Non
         safe_telemetry = {"process_tree_peak_bytes": None, "database_bytes": 0, "wal_bytes": 0, "scratch_bytes": 0}
         return _bundle(path=path, result=None, code="SUPPORT_INPUT_REJECTED", telemetry=safe_telemetry)
     try:
-        result = independent.verify_database(path)
+        result = independent.verify_database(path, graph_profile_registry=graph_profile_registry)
     except Exception as exc:
         return _bundle(path=path, result=None, code=diagnostic_code(exc), telemetry=safe_telemetry)
     return _bundle(path=path, result=result, code="DB_CONFORMANCE_PASS", telemetry=safe_telemetry)

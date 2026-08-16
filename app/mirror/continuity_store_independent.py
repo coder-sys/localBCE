@@ -278,12 +278,17 @@ def _payload_hash(raw: bytes) -> str:
     return digest.hexdigest()
 
 
-def _chain_id(artifact_kind: str, subject: str, scope: str) -> str:
+def _chain_id(artifact_kind: str, subject: str, scope: str, profile_id: str | None = None) -> str:
     if not all(type(value) is str and value for value in (artifact_kind, subject, scope)):
         raise IndependentStoreError("chain:identity")
+    if profile_id is not None and (type(profile_id) is not str or not profile_id):
+        raise IndependentStoreError("chain:profile")
+    material: dict[str, object] = {"artifact_kind": artifact_kind, "scope": scope, "subject": subject}
+    if profile_id is not None:
+        material["profile_id"] = profile_id
     return _digest(
         "chain-id",
-        {"artifact_kind": artifact_kind, "scope": scope, "subject": subject},
+        material,
     )
 
 
@@ -356,7 +361,12 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
 
 
-def _normalize_artifact(kind: str, raw: bytes) -> dict[str, object]:
+def _normalize_artifact(
+    kind: str,
+    raw: bytes,
+    *,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     if kind not in ARTIFACT_KINDS:
         raise IndependentStoreError("artifact:kind")
     if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
@@ -364,7 +374,10 @@ def _normalize_artifact(kind: str, raw: bytes) -> dict[str, object]:
     value = _parse_canonical(raw)
     try:
         if kind == ARTIFACT_GRAPH:
-            result = graph_independent.verify_bytes(raw)
+            if value.get("schema") == graph_independent.SCHEMA_V2:
+                result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
+            else:
+                result = graph_independent.verify_bytes(raw)
         elif value.get("schema") == withdrawal_independent.SCHEMA:
             result = withdrawal_independent.verify_bytes(raw)
         else:
@@ -391,6 +404,10 @@ def _normalize_artifact(kind: str, raw: bytes) -> dict[str, object]:
             subject_id = subject["provider_graph_subject"]
             scope = subject["scope"]
             schema = value["schema"]
+            profile_id = None
+            if schema == graph_independent.SCHEMA_V2:
+                profile_value = graph_independent._expect_keys(value.get("profile"), graph_independent.PROFILE_KEYS, "artifact:profile")
+                profile_id = profile_value["profile_id"]
         elif value.get("schema") == withdrawal_independent.SCHEMA:
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
@@ -464,6 +481,7 @@ def _normalize_artifact(kind: str, raw: bytes) -> dict[str, object]:
         "prior_artifact_id": prior_artifact_id,
         "prior_stage_id": prior_stage_id,
         "authority_json": authority_json,
+        "profile_id": profile_id if kind == ARTIFACT_GRAPH else None,
     }
 
 
@@ -538,7 +556,11 @@ def _require_row_keys(rows: list[Mapping[str, object]], table: str) -> None:
             raise IndependentStoreError(f"database:{table}-columns")
 
 
-def _verify_rows(snapshot: Mapping[str, object]) -> dict[str, object]:
+def _verify_rows(
+    snapshot: Mapping[str, object],
+    *,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     if set(snapshot) != set(SNAPSHOT_TABLES):
         raise IndependentStoreError("database:snapshot-tables")
     rows = {table: snapshot[table] for table in SNAPSHOT_TABLES}
@@ -567,7 +589,7 @@ def _verify_rows(snapshot: Mapping[str, object]) -> dict[str, object]:
         if key in artifacts:
             raise IndependentStoreError("database:artifact-duplicate")
         raw = _row_bytes(row, "payload")
-        artifact = _normalize_artifact(kind, raw)
+        artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
             stored = row[field]
             expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
@@ -622,7 +644,7 @@ def _verify_rows(snapshot: Mapping[str, object]) -> dict[str, object]:
             raise IndependentStoreError("database:event-operation-binding")
         if event["prior_artifact_id"] != artifact["prior_artifact_id"] or event["prior_stage_id"] != artifact["prior_stage_id"]:
             raise IndependentStoreError("database:event-artifact-prior")
-        chain_id = _chain_id(artifact["kind"], artifact["subject"], artifact["scope"])
+        chain_id = _chain_id(artifact["kind"], artifact["subject"], artifact["scope"], artifact.get("profile_id"))
         if event["chain_id"] != chain_id or operation["chain_id"] != chain_id:
             raise IndependentStoreError("database:chain-id-binding")
         prior_artifact_id = artifact["prior_artifact_id"]
@@ -829,7 +851,10 @@ def _check_sqlite_shape(connection: sqlite3.Connection) -> None:
         raise IndependentStoreError("database:foreign-key")
 
 
-def verify_database(path: str | Path) -> dict[str, object]:
+def verify_database(
+    path: str | Path,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Open a database read-only and return only compact conformance evidence."""
 
     database = Path(path)
@@ -847,7 +872,7 @@ def verify_database(path: str | Path) -> dict[str, object]:
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         _check_sqlite_shape(connection)
         snapshot = _snapshot_from_connection(connection)
-        result = _verify_rows(snapshot)
+        result = _verify_rows(snapshot, graph_profile_registry=graph_profile_registry)
         return result
     except IndependentStoreError:
         raise
@@ -860,10 +885,13 @@ def verify_database(path: str | Path) -> dict[str, object]:
             pass
 
 
-def verify_snapshot(snapshot: Mapping[str, object]) -> dict[str, object]:
+def verify_snapshot(
+    snapshot: Mapping[str, object],
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Verify an already decoded complete snapshot, used by export validation."""
 
-    return _verify_rows(snapshot)
+    return _verify_rows(snapshot, graph_profile_registry=graph_profile_registry)
 
 
 def main(argv: list[str] | None = None) -> int:
