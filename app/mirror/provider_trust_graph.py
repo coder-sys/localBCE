@@ -19,7 +19,10 @@ from pathlib import Path
 import re
 import sys
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.mirror.state_source_contract import StateSourceAdmission
 
 try:
     import resource
@@ -1306,6 +1309,24 @@ def build_report(raw_input: bytes) -> tuple[bytes, dict[str, object]]:
 
 def build_demo_report(case: str = "confirmed") -> tuple[bytes, dict[str, object]]:
     return build_report(canonical_input(demo_input(case)))
+
+
+def build_report_from_state_source(adapter_raw: bytes) -> tuple[bytes, dict[str, object], StateSourceAdmission]:
+    """Build a read-only graph report from the verifier-owned source seam.
+
+    The source contract is imported lazily so existing synthetic graph KATs do
+    not make the source adapter depend on graph producer validation.  The
+    returned admission object contains the synthetic-only receipt and the
+    canonical source input used for this report.
+    """
+
+    from app.mirror import state_source_contract
+
+    admission = state_source_contract.admit(adapter_raw)
+    raw, telemetry = build_report(admission.graph_input)
+    telemetry = dict(telemetry)
+    telemetry["source_admission"] = admission.telemetry()
+    return raw, telemetry, admission
 
 
 def prior_artifact_from_artifact(raw: bytes) -> dict[str, object]:
