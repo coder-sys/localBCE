@@ -116,10 +116,25 @@ def _bundle(*, path: str | Path, result: Mapping[str, object] | None, code: str,
     if any(value < 0 or value > 64 for value in counts.values()):
         counts = {key: 0 for key in counts}
         code = "DB_RESOURCE_REJECTED"
+    governed_profiles = result.get("governed_profiles", []) if result else []
+    if not isinstance(governed_profiles, list) or len(governed_profiles) > 16:
+        governed_profiles = []
+        code = "DB_RESOURCE_REJECTED"
+    safe_profiles: list[dict[str, object]] = []
+    for item in governed_profiles:
+        if not isinstance(item, dict) or set(item) != {"profile_id", "version"} or type(item["profile_id"]) is not str or not item["profile_id"] or type(item["version"]) is not int or item["version"] < 1:
+            raise SupportBoundaryError("support:profile-evidence")
+        try:
+            if len(item["profile_id"].encode("ascii")) > 256:
+                raise SupportBoundaryError("support:profile-evidence")
+        except UnicodeEncodeError as exc:
+            raise SupportBoundaryError("support:profile-evidence") from exc
+        safe_profiles.append({"profile_id": item["profile_id"], "version": item["version"]})
+    profiles = {**PROFILE_LABELS, "governed_profiles": safe_profiles}
     value = {
         "schema": SUPPORT_SCHEMA,
         "schema_version": store.SCHEMA_VERSION,
-        "profiles": dict(PROFILE_LABELS),
+        "profiles": profiles,
         "row_counts": counts,
         "integrity": "PASS" if code == "DB_CONFORMANCE_PASS" else "REJECTED",
         "diagnostic_codes": [code],
@@ -167,7 +182,16 @@ def verify_support_bytes(raw: bytes) -> dict[str, object]:
         raise SupportBoundaryError("support:keys")
     if _canonical(value) != raw or value["schema"] != SUPPORT_SCHEMA or type(value["schema_version"]) is not int or value["schema_version"] != store.SCHEMA_VERSION:
         raise SupportBoundaryError("support:canonical")
-    if value["profiles"] != PROFILE_LABELS:
+    profiles = value["profiles"]
+    if not isinstance(profiles, dict) or any(profiles.get(key) != expected for key, expected in PROFILE_LABELS.items()):
+        raise SupportBoundaryError("support:profiles")
+    governed_profiles = profiles.get("governed_profiles")
+    if not isinstance(governed_profiles, list) or len(governed_profiles) > 16:
+        raise SupportBoundaryError("support:profiles")
+    for item in governed_profiles:
+        if not isinstance(item, dict) or set(item) != {"profile_id", "version"} or type(item["profile_id"]) is not str or not item["profile_id"] or type(item["version"]) is not int or item["version"] < 1:
+            raise SupportBoundaryError("support:profiles")
+    if governed_profiles != sorted(governed_profiles, key=lambda item: (str(item["profile_id"]), int(item["version"]))) or len({(item["profile_id"], item["version"]) for item in governed_profiles}) != len(governed_profiles):
         raise SupportBoundaryError("support:profiles")
     if value["integrity"] not in {"PASS", "REJECTED"} or not isinstance(value["diagnostic_codes"], list) or len(value["diagnostic_codes"]) != 1 or value["diagnostic_codes"][0] not in DIAGNOSTIC_CODES:
         raise SupportBoundaryError("support:diagnostic")

@@ -2,7 +2,7 @@
 
 This module is deliberately separate from the Blind Ledger clearance database.  It
 stores only independently verified synthetic Provider Trust Graph and observation-only
-Governance V1 lineage artifacts, including the terminal withdrawal stage.  Storage
+Governance V1/V2 lineage artifacts, including the terminal withdrawal stage.  Storage
 admission is not a policy, payment, proof, or source truth decision.
 """
 
@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from types import MappingProxyType
 
 from app.governance import provider_continuity_control_pack_independent as governance_independent
+from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import continuity_store_independent as store_independent
@@ -144,6 +145,8 @@ class ProviderContinuityLifecycleHead:
     status: str
     active: bool
     terminal: bool
+    profile_id: str | None = None
+    profile_version: int | None = None
 
 
 def _canonical(value: object) -> bytes:
@@ -252,6 +255,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
 
 
 def _governance_prefix(value: Mapping[str, object], stage_count: int) -> tuple[bytes, dict[str, object]]:
+    if value.get("schema") == governance_v2_independent.SCHEMA:
+        raw = governance_v2_independent.prefix_bytes(value, stage_count)
+        return raw, _parse_canonical(raw)
     stages = value.get("stages")
     if not isinstance(stages, list) or len(stages) < stage_count or stage_count not in (1, 2):
         raise ArtifactAdmissionError("governance:prior-prefix")
@@ -296,6 +302,8 @@ def verify_artifact(
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
             else:
                 result = graph_independent.verify_bytes(raw)
+        elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
+            result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
         elif value.get("schema") == withdrawal_independent.SCHEMA:
             result = withdrawal_independent.verify_bytes(raw)
         else:
@@ -303,6 +311,7 @@ def verify_artifact(
     except Exception as exc:
         raise ArtifactAdmissionError(f"artifact:independent-reject:{type(exc).__name__}") from exc
     payload_hash = _payload_hash(raw)
+    profile_id: str | None = None
     try:
         if artifact_kind == ARTIFACT_GRAPH:
             subject = value["subject"]
@@ -323,11 +332,10 @@ def verify_artifact(
             subject_id = str(subject["provider_graph_subject"])
             scope = str(subject["scope"])
             authority_json = _authority_json(value["authority"], kind=artifact_kind)
-            profile_id = None
             if schema == graph_independent.SCHEMA_V2:
                 profile_value = graph_independent._expect_keys(value.get("profile"), graph_independent.PROFILE_KEYS, "artifact:profile")
                 profile_id = profile_value["profile_id"]
-        elif value.get("schema") == withdrawal_independent.SCHEMA:
+        elif value.get("schema") in (withdrawal_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
                 raise ArtifactAdmissionError("artifact:withdrawal-id")
@@ -341,10 +349,11 @@ def verify_artifact(
             schema = str(value["schema"])
             subject_id = str(value["provider_graph_subject"])
             scope = str(value["scope"])
-            authority_json = _authority_json(
-                {key: value[key] for key in withdrawal_independent.AUTHORITY_FLAGS},
-                kind=artifact_kind,
-            )
+            authority_flags = governance_v2_independent.AUTHORITY_FLAGS if schema == governance_v2_independent.WITHDRAWAL_SCHEMA else withdrawal_independent.AUTHORITY_FLAGS
+            authority_json = _authority_json({key: value[key] for key in authority_flags}, kind=artifact_kind)
+            if schema == governance_v2_independent.WITHDRAWAL_SCHEMA:
+                profile_value = governance_v2_independent._expect_keys(value.get("profile"), governance_v2_independent.PROFILE_KEYS, "artifact:profile")
+                profile_id = str(profile_value["profile_id"])
         else:
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
@@ -364,7 +373,10 @@ def verify_artifact(
             if len(stages) > 1:
                 prefix_raw, prefix = _governance_prefix(value, len(stages) - 1)
                 try:
-                    governance_independent.verify_bytes(prefix_raw)
+                    if value.get("schema") == governance_v2_independent.SCHEMA:
+                        governance_v2_independent.verify_bytes(prefix_raw, graph_profile_registry or {})
+                    else:
+                        governance_independent.verify_bytes(prefix_raw)
                 except Exception as exc:
                     raise ArtifactAdmissionError("governance:prior-prefix") from exc
                 prior_artifact_id = str(prefix["artifact_id"])
@@ -375,7 +387,11 @@ def verify_artifact(
             schema = str(value["schema"])
             subject_id = str(subject["provider_graph_subject"])
             scope = str(subject["scope"])
-            authority_json = _authority_json({key: value[key] for key in governance_independent.AUTHORITY_FLAGS}, kind=artifact_kind)
+            authority_flags = governance_v2_independent.AUTHORITY_FLAGS if schema == governance_v2_independent.SCHEMA else governance_independent.AUTHORITY_FLAGS
+            authority_json = _authority_json({key: value[key] for key in authority_flags}, kind=artifact_kind)
+            if schema == governance_v2_independent.SCHEMA:
+                profile_value = governance_v2_independent._expect_keys(value.get("profile"), governance_v2_independent.PROFILE_KEYS, "artifact:profile")
+                profile_id = str(profile_value["profile_id"])
         if not subject_id or not scope or not artifact_id or not current_stage_id or not transition_id:
             raise ArtifactAdmissionError("artifact:identity-empty")
         if prior_artifact_id is not None and not isinstance(prior_artifact_id, str):
@@ -399,7 +415,7 @@ def verify_artifact(
         prior_artifact_id=prior_artifact_id,
         prior_stage_id=prior_stage_id,
         authority_json=authority_json,
-        profile_id=profile_id if artifact_kind == ARTIFACT_GRAPH else None,
+        profile_id=profile_id,
     )
 
 
@@ -636,10 +652,42 @@ class ContinuityStore:
     def _head(self, connection: sqlite3.Connection, chain_id: str) -> sqlite3.Row | None:
         return connection.execute("SELECT * FROM heads WHERE chain_id=?", (chain_id,)).fetchone()
 
+    def _require_active_v2_governance(self, connection: sqlite3.Connection, artifact: VerifiedArtifact) -> None:
+        """Require the state-owned approved V2 profile before a new graph write."""
+
+        if artifact.kind != ARTIFACT_GRAPH or artifact.schema != graph_independent.SCHEMA_V2:
+            return
+        if artifact.profile_id is None:
+            raise StoreConflictError("governance:profile-missing")
+        governance_chain = _chain_id(ARTIFACT_GOVERNANCE, artifact.subject, artifact.scope, artifact.profile_id)
+        row = connection.execute(
+            "SELECT h.*, a.payload, a.artifact_schema FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.chain_id=?",
+            (governance_chain,),
+        ).fetchone()
+        if row is None:
+            raise StoreConflictError("governance:not-approved")
+        if row["artifact_schema"] not in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
+            raise StoreConflictError("governance:v1-not-v2")
+        try:
+            governed = governance_v2_independent.verify_bytes(bytes(row["payload"]), self.graph_profile_registry)
+            graph_value = _parse_canonical(artifact.payload)
+            observation = graph_value["observation_snapshot"]["observation_time"]
+        except Exception as exc:
+            raise StoreSchemaError("governance:independent-reject") from exc
+        if governed.get("schema") == governance_v2_independent.WITHDRAWAL_SCHEMA:
+            raise StoreConflictError("governance:withdrawn")
+        if governed.get("current_stage_kind") != governance_v2_independent.STAGE_APPROVED:
+            raise StoreConflictError("governance:not-approved")
+        if governed.get("profile_id") != artifact.profile_id or governed.get("profile_digest") != graph_value["profile"]["profile_digest"]:
+            raise StoreConflictError("governance:profile-binding")
+        if type(observation) is not int or not governed["effective_start"] <= observation <= governed["effective_end"]:
+            raise StoreConflictError("governance:effective-interval")
+
     def provider_continuity_lifecycle_head(
         self,
         provider_graph_subject: str,
         scope: str,
+        profile_id: str | None = None,
     ) -> ProviderContinuityLifecycleHead | None:
         """Return the verified governance-lineage head used for active-status decisions.
 
@@ -648,7 +696,7 @@ class ContinuityStore:
         makes the same approval non-active without any caller-selected status flag.
         """
 
-        chain_id = _chain_id(ARTIFACT_GOVERNANCE, provider_graph_subject, scope)
+        chain_id = _chain_id(ARTIFACT_GOVERNANCE, provider_graph_subject, scope, profile_id)
         connection = self._connect()
         try:
             try:
@@ -657,7 +705,7 @@ class ContinuityStore:
                 raise StoreBusyError("transaction:read-busy") from exc
             self._validate_transaction_snapshot(connection)
             row = connection.execute(
-                "SELECT h.*, a.subject, a.scope FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.chain_id=?",
+                "SELECT h.*, a.subject, a.scope, a.payload, a.artifact_schema FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.chain_id=?",
                 (chain_id,),
             ).fetchone()
             if row is None:
@@ -688,6 +736,12 @@ class ContinuityStore:
                 status=status,
                 active=active,
                 terminal=terminal,
+                profile_id=profile_id,
+                profile_version=(
+                    int(governance_v2_independent.verify_bytes(bytes(row["payload"]), self.graph_profile_registry)["profile_version"])
+                    if row["artifact_schema"] in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA)
+                    else None
+                ),
             )
             connection.commit()
             return result
@@ -828,6 +882,7 @@ class ContinuityStore:
                     raise StoreSchemaError("operation:receipt-missing")
                 connection.commit()
                 return AdmissionReceipt(bytes(receipt_row[0]))
+            self._require_active_v2_governance(connection, artifact)
             head = self._head(connection, chain_id)
             if artifact.prior_artifact_id is None:
                 if head is not None:

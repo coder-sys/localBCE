@@ -17,6 +17,7 @@ import sys
 from typing import Any, Mapping
 
 from app.governance import provider_continuity_control_pack_independent as governance_independent
+from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 
@@ -324,6 +325,9 @@ def _expect_keys(value: object, expected: set[str], label: str) -> dict[str, obj
 
 
 def _governance_prefix(value: Mapping[str, object], stage_count: int) -> tuple[bytes, dict[str, object]]:
+    if value.get("schema") == governance_v2_independent.SCHEMA:
+        raw = governance_v2_independent.prefix_bytes(value, stage_count)
+        return raw, _parse_canonical(raw)
     stages = value.get("stages")
     if not isinstance(stages, list) or stage_count not in (1, 2) or len(stages) < stage_count:
         raise IndependentStoreError("artifact:governance-prior-prefix")
@@ -378,12 +382,16 @@ def _normalize_artifact(
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
             else:
                 result = graph_independent.verify_bytes(raw)
+        elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
+            result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
         elif value.get("schema") == withdrawal_independent.SCHEMA:
             result = withdrawal_independent.verify_bytes(raw)
         else:
             result = governance_independent.verify_bytes(raw)
     except Exception as exc:
         raise IndependentStoreError(f"artifact:independent-reject:{type(exc).__name__}") from exc
+    profile_id: str | None = None
+    profile_version: int | None = None
     try:
         if kind == ARTIFACT_GRAPH:
             subject = _expect_keys(value["subject"], {"provider_graph_subject", "scope"}, "artifact:graph-subject")
@@ -408,7 +416,8 @@ def _normalize_artifact(
             if schema == graph_independent.SCHEMA_V2:
                 profile_value = graph_independent._expect_keys(value.get("profile"), graph_independent.PROFILE_KEYS, "artifact:profile")
                 profile_id = profile_value["profile_id"]
-        elif value.get("schema") == withdrawal_independent.SCHEMA:
+                profile_version = profile_value.get("version")
+        elif value.get("schema") in (withdrawal_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
                 raise IndependentStoreError("artifact:withdrawal-id")
@@ -419,12 +428,15 @@ def _normalize_artifact(
             stage_kind = value["action"]
             prior_artifact_id = value["approved_artifact_id"]
             prior_stage_id = value["approved_stage_id"]
-            authority_json = _authority_json(
-                {key: value[key] for key in withdrawal_independent.AUTHORITY_FLAGS}, kind
-            )
+            schema = value["schema"]
+            authority_flags = governance_v2_independent.AUTHORITY_FLAGS if schema == governance_v2_independent.WITHDRAWAL_SCHEMA else withdrawal_independent.AUTHORITY_FLAGS
+            authority_json = _authority_json({key: value[key] for key in authority_flags}, kind)
             subject_id = value["provider_graph_subject"]
             scope = value["scope"]
-            schema = value["schema"]
+            if schema == governance_v2_independent.WITHDRAWAL_SCHEMA:
+                profile_value = governance_v2_independent._expect_keys(value.get("profile"), governance_v2_independent.PROFILE_KEYS, "artifact:profile")
+                profile_id = profile_value["profile_id"]
+                profile_version = profile_value["version"]
         else:
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
@@ -441,12 +453,16 @@ def _normalize_artifact(
             current_stage_id = current["stage_id"]
             transition_id = value["chain_root"]
             stage_kind = current["stage_kind"]
+            schema = value["schema"]
             prior_artifact_id = None
             prior_stage_id = None
             if len(stages) > 1:
                 prefix_raw, prefix = _governance_prefix(value, len(stages) - 1)
                 try:
-                    governance_independent.verify_bytes(prefix_raw)
+                    if value.get("schema") == governance_v2_independent.SCHEMA:
+                        governance_v2_independent.verify_bytes(prefix_raw, graph_profile_registry or {})
+                    else:
+                        governance_independent.verify_bytes(prefix_raw)
                 except Exception as exc:
                     raise IndependentStoreError("artifact:governance-prior-prefix") from exc
                 prior_artifact_id = prefix["artifact_id"]
@@ -454,10 +470,14 @@ def _normalize_artifact(
                 if not isinstance(previous, dict):
                     raise IndependentStoreError("artifact:governance-prior-stage")
                 prior_stage_id = previous["stage_id"]
-            authority_json = _authority_json({key: value[key] for key in governance_independent.AUTHORITY_FLAGS}, kind)
+            authority_flags = governance_v2_independent.AUTHORITY_FLAGS if schema == governance_v2_independent.SCHEMA else governance_independent.AUTHORITY_FLAGS
+            authority_json = _authority_json({key: value[key] for key in authority_flags}, kind)
             subject_id = subject["provider_graph_subject"]
             scope = subject["scope"]
-            schema = value["schema"]
+            if schema == governance_v2_independent.SCHEMA:
+                profile_value = governance_v2_independent._expect_keys(value.get("profile"), governance_v2_independent.PROFILE_KEYS, "artifact:profile")
+                profile_id = profile_value["profile_id"]
+                profile_version = profile_value["version"]
         if not all(isinstance(item, str) and item for item in (schema, artifact_id, subject_id, scope, current_stage_id, transition_id, stage_kind)):
             raise IndependentStoreError("artifact:identity-empty")
         if prior_artifact_id is not None and (not isinstance(prior_artifact_id, str) or not prior_artifact_id):
@@ -481,7 +501,8 @@ def _normalize_artifact(
         "prior_artifact_id": prior_artifact_id,
         "prior_stage_id": prior_stage_id,
         "authority_json": authority_json,
-        "profile_id": profile_id if kind == ARTIFACT_GRAPH else None,
+        "profile_id": profile_id,
+        "profile_version": profile_version,
     }
 
 
@@ -732,6 +753,18 @@ def _verify_rows(
         actual = heads[chain_id]
         if actual != expected:
             raise IndependentStoreError("database:head-binding")
+    governed_profiles = sorted(
+        (
+            {"profile_id": artifact["profile_id"], "version": artifact["profile_version"]}
+            for artifact in artifacts.values()
+            if artifact.get("profile_id") is not None and artifact.get("profile_version") is not None
+        ),
+        key=lambda item: (str(item["profile_id"]), int(item["version"])),
+    )
+    deduplicated_profiles: list[dict[str, object]] = []
+    for profile in governed_profiles:
+        if profile not in deduplicated_profiles:
+            deduplicated_profiles.append(profile)
     return {
         "accepted": True,
         "schema_version": SCHEMA_VERSION,
@@ -740,6 +773,7 @@ def _verify_rows(
         "receipt_count": len(rows["receipts"]),
         "head_count": len(rows["heads"]),
         "state_root": final_state_root,
+        "governed_profiles": deduplicated_profiles,
     }
 
 

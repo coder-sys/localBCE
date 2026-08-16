@@ -16,6 +16,7 @@ from app.mirror import continuity_store_independent as store_independent
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as independent
 from app.mirror import support_boundary as support
+from app.governance import provider_continuity_control_pack_v2 as governance_v2
 from app.mirror.source_admission import (
     EvidenceMode,
     MultiSubjectSourceAdmissionService,
@@ -147,6 +148,16 @@ def _input(
 
 def _build(profile: SourceProfile, **kwargs: object) -> tuple[bytes, dict[str, object]]:
     return graph.build_report(graph.canonical_input(_input(profile, **kwargs)), profile=profile)
+
+
+def _admit_governance(instance: store.ContinuityStore, profile: SourceProfile) -> None:
+    graph_raw, _ = _build(profile)
+    candidate, _ = governance_v2.build_candidate(graph_raw, profile)
+    tested, _ = governance_v2.build_tested(candidate, profile)
+    approval = governance_v2.build_approval_record(tested, profile, approval_time=7_300)
+    approved, _ = governance_v2.build_approved(tested, approval, profile)
+    for raw in (candidate, tested, approved):
+        instance.admit(store.ARTIFACT_GOVERNANCE, raw)
 
 
 class SyntheticV2Verifier:
@@ -429,6 +440,7 @@ class ProviderTrustGraphV2Tests(unittest.TestCase):
             root = Path(directory)
             database = root / "state.db"
             configured = store.ContinuityStore(database, graph_profile_registry=registry)
+            _admit_governance(configured, profile)
             configured.admit(store.ARTIFACT_GRAPH, valid)
             before_state = configured._snapshot_rows()
             before_files = {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()}
@@ -455,6 +467,8 @@ class ProviderTrustGraphV2Tests(unittest.TestCase):
             root = Path(directory)
             database = root / "state.db"
             configured = store.ContinuityStore(database, graph_profile_registry=self.registry)
+            for profile in self.profiles:
+                _admit_governance(configured, profile)
             artifacts = [_build(profile, case="expired")[0] for profile in self.profiles]
 
             def admit(raw: bytes):
@@ -466,9 +480,9 @@ class ProviderTrustGraphV2Tests(unittest.TestCase):
             replay = configured.admit(store.ARTIFACT_GRAPH, artifacts[0])
             self.assertEqual(receipts[0].raw, replay.raw)
             verified = store_independent.verify_database(database, self.registry)
-            self.assertEqual(3, verified["artifact_count"])
-            self.assertEqual(3, verified["event_count"])
-            self.assertEqual(3, verified["head_count"])
+            self.assertEqual(12, verified["artifact_count"])
+            self.assertEqual(12, verified["event_count"])
+            self.assertEqual(6, verified["head_count"])
             normalized = [store.verify_artifact(store.ARTIFACT_GRAPH, raw, graph_profile_registry=self.registry) for raw in artifacts]
             chain_ids = {store._chain_id(item.kind, item.subject, item.scope, item.profile_id) for item in normalized}
             self.assertEqual(3, len(chain_ids))
@@ -483,10 +497,10 @@ class ProviderTrustGraphV2Tests(unittest.TestCase):
             retest, _ = _build(self.profiles[0], observation=8_000, case="confirmed", prior=prior, remediation=remediation)
             configured.admit(store.ARTIFACT_GRAPH, retest)
             verified_after = store_independent.verify_database(database, self.registry)
-            self.assertEqual(4, verified_after["event_count"])
-            self.assertEqual(3, verified_after["head_count"])
+            self.assertEqual(13, verified_after["event_count"])
+            self.assertEqual(6, verified_after["head_count"])
             heads = configured._snapshot_rows()["heads"]
-            self.assertEqual(3, len(heads))
+            self.assertEqual(6, len(heads))
             head_artifacts = {row["artifact_id"] for row in heads}
             self.assertIn(json.loads(retest.decode("ascii"))["report"]["report_id"], head_artifacts)
             for initial in artifacts[1:]:
@@ -505,7 +519,7 @@ class ProviderTrustGraphV2Tests(unittest.TestCase):
             text = bundle.decode("ascii")
             for profile in self.profiles:
                 self.assertNotIn(profile.subject, text)
-                self.assertNotIn(profile.profile_id, text)
+                self.assertIn(profile.profile_id, text)
             self.assertNotRegex(text, r"[0-9a-f]{128}")
 
 
