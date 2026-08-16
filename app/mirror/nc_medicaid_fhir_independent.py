@@ -697,6 +697,7 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
         "freshness": freshness,
         "server_total": expected_total,
         "server_last_updated": expected_marker,
+        "snapshot_root": snapshot_root,
         "page_count": len(pages),
         "resource_count": resource_count,
         "resource_counts": counts,

@@ -21,13 +21,15 @@ from app.governance import provider_continuity_control_pack_v2_independent as go
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import continuity_store_independent as store_independent
+from app.mirror import source_evidence_custody_independent as source_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
 SCHEMA_VERSION = 2
 ARTIFACT_GRAPH = "PROVIDER_TRUST_GRAPH_V1"
 ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE)
+ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 MAX_ARTIFACT_BYTES = 524_288
@@ -126,6 +128,15 @@ class AdmissionReceipt:
     @property
     def operation_id(self) -> str:
         return str(self.value["operation_id"])
+
+
+@dataclass(frozen=True)
+class SourceCustodyAdmission:
+    """Atomic source-custody result and optional graph continuity receipt."""
+
+    custody_receipt: AdmissionReceipt
+    graph_receipt: AdmissionReceipt | None
+    graph_admitted: bool
 
 
 @dataclass(frozen=True)
@@ -249,6 +260,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
         }
         if dict(value) != expected:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_SOURCE_EVIDENCE:
+        if dict(value) != source_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -293,11 +307,13 @@ def verify_artifact(
     if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
         raise ArtifactAdmissionError("artifact:byte-cap")
     try:
-        value = _parse_canonical(raw)
-    except ContinuityStoreError as exc:
+        value = source_independent._parse(raw) if artifact_kind == ARTIFACT_SOURCE_EVIDENCE else _parse_canonical(raw)
+    except (ContinuityStoreError, source_independent.IndependentSourceCustodyError) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
-        if artifact_kind == ARTIFACT_GRAPH:
+        if artifact_kind == ARTIFACT_SOURCE_EVIDENCE:
+            result = source_independent.verify_artifact(raw, graph_profile_registry=graph_profile_registry, allow_unresolved_graph=True)
+        elif artifact_kind == ARTIFACT_GRAPH:
             if value.get("schema") == graph_independent.SCHEMA_V2:
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
             else:
@@ -313,7 +329,20 @@ def verify_artifact(
     payload_hash = _payload_hash(raw)
     profile_id: str | None = None
     try:
-        if artifact_kind == ARTIFACT_GRAPH:
+        if artifact_kind == ARTIFACT_SOURCE_EVIDENCE:
+            artifact_id = result["artifact_id"]
+            report_id = result["report_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = result["schema"]
+            subject_id = result["subject"]
+            scope = result["scope"]
+            profile_id = result["profile_id"]
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_GRAPH:
             subject = value["subject"]
             snapshot = value["observation_snapshot"]
             transition = value["transition"]
@@ -487,7 +516,13 @@ class ContinuityStore:
         if self.path.is_file() and self.path.stat().st_size > MAX_DB_BYTES:
             raise StoreSchemaError("database:byte-cap")
         wal_path = Path(str(self.path) + "-wal")
-        if wal_path.is_file() and wal_path.stat().st_size > MAX_WAL_BYTES:
+        try:
+            wal_size = wal_path.stat().st_size if wal_path.is_file() else 0
+        except FileNotFoundError:
+            # A concurrent FULL checkpoint may remove the WAL between the
+            # existence check and stat; reopening the bounded database is safe.
+            wal_size = 0
+        if wal_size > MAX_WAL_BYTES:
             raise StoreSchemaError("database:wal-byte-cap")
         try:
             connection = sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None)
@@ -846,11 +881,144 @@ class ContinuityStore:
             raise StoreConflictError("receipt:byte-cap")
         return raw, _receipt_hash(raw)
 
+    def _admit_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        artifact: VerifiedArtifact,
+        request_hash: str,
+        *,
+        enforce_governance: bool = True,
+    ) -> AdmissionReceipt:
+        """Insert one artifact while the caller owns BEGIN IMMEDIATE."""
+
+        chain_id = _chain_id(artifact.kind, artifact.subject, artifact.scope, artifact.profile_id)
+        existing = connection.execute(
+            "SELECT operation_id,request_hash FROM operations WHERE chain_id=? AND artifact_kind=? AND artifact_id=? AND payload_hash=? AND (prior_artifact_id IS ? OR prior_artifact_id=?) AND (prior_stage_id IS ? OR prior_stage_id=?)",
+            (
+                chain_id, artifact.kind, artifact.artifact_id, artifact.payload_hash,
+                artifact.prior_artifact_id, artifact.prior_artifact_id,
+                artifact.prior_stage_id, artifact.prior_stage_id,
+            ),
+        ).fetchone()
+        if existing is not None:
+            if existing["request_hash"] != request_hash:
+                raise StoreConflictError("operation:request-conflict")
+            receipt_row = connection.execute("SELECT receipt FROM receipts WHERE operation_id=?", (existing["operation_id"],)).fetchone()
+            if receipt_row is None:
+                raise StoreSchemaError("operation:receipt-missing")
+            return AdmissionReceipt(bytes(receipt_row[0]))
+        if enforce_governance:
+            self._require_active_v2_governance(connection, artifact)
+        head = self._head(connection, chain_id)
+        if artifact.prior_artifact_id is None:
+            if head is not None:
+                raise StoreConflictError("head:unexpected-existing")
+            expected_head = (NO_PRIOR, NO_PRIOR)
+        else:
+            if head is None or (head["artifact_id"], head["current_stage_id"]) != (artifact.prior_artifact_id, artifact.prior_stage_id):
+                raise StoreConflictError("head:stale-or-wrong-prior")
+            expected_head = (str(head["artifact_id"]), str(head["current_stage_id"]))
+        operation_id = _operation_id(artifact, chain_id, expected_head)
+        by_operation = connection.execute("SELECT request_hash FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
+        if by_operation is not None:
+            if by_operation["request_hash"] != request_hash:
+                raise StoreConflictError("operation:request-conflict")
+            receipt_row = connection.execute("SELECT receipt FROM receipts WHERE operation_id=?", (operation_id,)).fetchone()
+            if receipt_row is None:
+                raise StoreSchemaError("operation:receipt-missing")
+            return AdmissionReceipt(bytes(receipt_row[0]))
+        self._insert_or_check_artifact(connection, artifact)
+        self._fault("after_artifact_insert")
+        event_sequence = int(connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM events").fetchone()[0])
+        if event_sequence > MAX_EVENTS:
+            raise StoreConflictError("event:count-cap")
+        previous_row = connection.execute("SELECT event_root FROM events ORDER BY sequence DESC LIMIT 1").fetchone()
+        previous_event_root = str(previous_row[0]) if previous_row is not None else GENESIS_EVENT_ROOT
+        head_root = _digest(
+            "head-root",
+            {
+                "chain_id": chain_id,
+                "artifact_kind": artifact.kind,
+                "artifact_id": artifact.artifact_id,
+                "current_stage_id": artifact.current_stage_id,
+                "stage_kind": artifact.stage_kind,
+                "transition_id": artifact.transition_id,
+                "event_sequence": event_sequence,
+            },
+        )
+        head_material = {
+            "chain_id": chain_id,
+            "artifact_kind": artifact.kind,
+            "artifact_id": artifact.artifact_id,
+            "current_stage_id": artifact.current_stage_id,
+            "stage_kind": artifact.stage_kind,
+            "transition_id": artifact.transition_id,
+            "event_sequence": event_sequence,
+            "head_root": head_root,
+        }
+        state_root = _state_root(event_sequence, self._heads_for_state(connection, head_material))
+        event_material = {
+            "sequence": event_sequence,
+            "chain_id": chain_id,
+            "previous_event_root": previous_event_root,
+            "operation_id": operation_id,
+            "artifact_kind": artifact.kind,
+            "artifact_id": artifact.artifact_id,
+            "payload_hash": artifact.payload_hash,
+            "prior_artifact_id": artifact.prior_artifact_id or NO_PRIOR,
+            "prior_stage_id": artifact.prior_stage_id or NO_PRIOR,
+            "receipt_hash": RECEIPT_EVENT_PLACEHOLDER,
+            "commit_state_root": state_root,
+        }
+        _receipt_template, receipt_hash = self._make_receipt(
+            operation_id=operation_id,
+            event_sequence=event_sequence,
+            previous_event_root=previous_event_root,
+            event_root=RECEIPT_EVENT_PLACEHOLDER,
+            chain_id=chain_id,
+            artifact=artifact,
+            expected_head=expected_head,
+            head_root=head_root,
+            state_root=state_root,
+        )
+        event_material["receipt_hash"] = receipt_hash
+        event_root = _event_root(event_material)
+        receipt_raw, final_receipt_hash = self._make_receipt(
+            operation_id=operation_id,
+            event_sequence=event_sequence,
+            previous_event_root=previous_event_root,
+            event_root=event_root,
+            chain_id=chain_id,
+            artifact=artifact,
+            expected_head=expected_head,
+            head_root=head_root,
+            state_root=state_root,
+        )
+        if final_receipt_hash != receipt_hash:
+            raise StoreSchemaError("receipt:identity-binding")
+        if _event_root({**event_material, "receipt_hash": final_receipt_hash}) != event_root:
+            raise StoreSchemaError("event:receipt-binding")
+        connection.execute(
+            "INSERT INTO operations(operation_id,chain_id,artifact_kind,artifact_id,payload_hash,request_hash,prior_artifact_id,prior_stage_id,expected_head_artifact_id,expected_head_stage_id,event_sequence,receipt_hash,commit_state_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (operation_id, chain_id, artifact.kind, artifact.artifact_id, artifact.payload_hash, request_hash, artifact.prior_artifact_id, artifact.prior_stage_id, expected_head[0], expected_head[1], event_sequence, receipt_hash, state_root),
+        )
+        connection.execute("INSERT INTO receipts(operation_id,receipt_hash,receipt) VALUES(?,?,?)", (operation_id, receipt_hash, sqlite3.Binary(receipt_raw)))
+        connection.execute(
+            "INSERT INTO events(sequence,chain_id,previous_event_root,event_root,operation_id,artifact_kind,artifact_id,payload_hash,prior_artifact_id,prior_stage_id,receipt_hash,commit_state_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (event_sequence, chain_id, previous_event_root, event_root, operation_id, artifact.kind, artifact.artifact_id, artifact.payload_hash, artifact.prior_artifact_id, artifact.prior_stage_id, receipt_hash, state_root),
+        )
+        connection.execute(
+            "INSERT INTO heads(chain_id,artifact_kind,artifact_id,current_stage_id,stage_kind,transition_id,event_sequence,head_root,state_root) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(chain_id) DO UPDATE SET artifact_kind=excluded.artifact_kind,artifact_id=excluded.artifact_id,current_stage_id=excluded.current_stage_id,stage_kind=excluded.stage_kind,transition_id=excluded.transition_id,event_sequence=excluded.event_sequence,head_root=excluded.head_root,state_root=excluded.state_root",
+            (chain_id, artifact.kind, artifact.artifact_id, artifact.current_stage_id, artifact.stage_kind, artifact.transition_id, event_sequence, head_root, state_root),
+        )
+        return AdmissionReceipt(receipt_raw)
+
     def admit(self, artifact_kind: str, artifact_raw: bytes) -> AdmissionReceipt:
         """Verify and atomically admit one artifact, or replay its exact receipt."""
 
         artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
-        chain_id = _chain_id(artifact.kind, artifact.subject, artifact.scope, artifact.profile_id)
+        if artifact_kind == ARTIFACT_SOURCE_EVIDENCE and source_independent.has_graph_link(artifact_raw):
+            raise StoreConflictError("custody:graph-link-transaction-required")
         request_hash = _payload_hash(artifact_raw)
         self._fault("before_transaction")
         connection = self._connect()
@@ -861,141 +1029,208 @@ class ContinuityStore:
                 raise StoreBusyError("transaction:busy") from exc
             self._fault("after_begin")
             self._validate_transaction_snapshot(connection)
-            existing = connection.execute(
-                "SELECT operation_id,request_hash FROM operations WHERE chain_id=? AND artifact_kind=? AND artifact_id=? AND payload_hash=? AND (prior_artifact_id IS ? OR prior_artifact_id=?) AND (prior_stage_id IS ? OR prior_stage_id=?)",
-                (
-                    chain_id,
-                    artifact.kind,
-                    artifact.artifact_id,
-                    artifact.payload_hash,
-                    artifact.prior_artifact_id,
-                    artifact.prior_artifact_id,
-                    artifact.prior_stage_id,
-                    artifact.prior_stage_id,
-                ),
-            ).fetchone()
-            if existing is not None:
-                if existing["request_hash"] != request_hash:
-                    raise StoreConflictError("operation:request-conflict")
-                receipt_row = connection.execute("SELECT receipt FROM receipts WHERE operation_id=?", (existing["operation_id"],)).fetchone()
-                if receipt_row is None:
-                    raise StoreSchemaError("operation:receipt-missing")
-                connection.commit()
-                return AdmissionReceipt(bytes(receipt_row[0]))
-            self._require_active_v2_governance(connection, artifact)
-            head = self._head(connection, chain_id)
-            if artifact.prior_artifact_id is None:
-                if head is not None:
-                    raise StoreConflictError("head:unexpected-existing")
-                expected_head = (NO_PRIOR, NO_PRIOR)
-            else:
-                if head is None or (head["artifact_id"], head["current_stage_id"]) != (artifact.prior_artifact_id, artifact.prior_stage_id):
-                    raise StoreConflictError("head:stale-or-wrong-prior")
-                expected_head = (str(head["artifact_id"]), str(head["current_stage_id"]))
-            operation_id = _operation_id(artifact, chain_id, expected_head)
-            by_operation = connection.execute("SELECT request_hash FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
-            if by_operation is not None:
-                if by_operation["request_hash"] != request_hash:
-                    raise StoreConflictError("operation:request-conflict")
-                receipt_row = connection.execute("SELECT receipt FROM receipts WHERE operation_id=?", (operation_id,)).fetchone()
-                if receipt_row is None:
-                    raise StoreSchemaError("operation:receipt-missing")
-                connection.commit()
-                return AdmissionReceipt(bytes(receipt_row[0]))
-            self._insert_or_check_artifact(connection, artifact)
-            self._fault("after_artifact_insert")
-            event_sequence = int(connection.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM events").fetchone()[0])
-            if event_sequence > MAX_EVENTS:
-                raise StoreConflictError("event:count-cap")
-            previous_row = connection.execute("SELECT event_root FROM events ORDER BY sequence DESC LIMIT 1").fetchone()
-            previous_event_root = str(previous_row[0]) if previous_row is not None else GENESIS_EVENT_ROOT
-            head_root = _digest(
-                "head-root",
-                {
-                    "chain_id": chain_id,
-                    "artifact_kind": artifact.kind,
-                    "artifact_id": artifact.artifact_id,
-                    "current_stage_id": artifact.current_stage_id,
-                    "stage_kind": artifact.stage_kind,
-                    "transition_id": artifact.transition_id,
-                    "event_sequence": event_sequence,
-                },
-            )
-            head_material = {
-                "chain_id": chain_id,
-                "artifact_kind": artifact.kind,
-                "artifact_id": artifact.artifact_id,
-                "current_stage_id": artifact.current_stage_id,
-                "stage_kind": artifact.stage_kind,
-                "transition_id": artifact.transition_id,
-                "event_sequence": event_sequence,
-                "head_root": head_root,
-            }
-            state_root = _state_root(event_sequence, self._heads_for_state(connection, head_material))
-            event_material = {
-                "sequence": event_sequence,
-                "chain_id": chain_id,
-                "previous_event_root": previous_event_root,
-                "operation_id": operation_id,
-                "artifact_kind": artifact.kind,
-                "artifact_id": artifact.artifact_id,
-                "payload_hash": artifact.payload_hash,
-                "prior_artifact_id": artifact.prior_artifact_id or NO_PRIOR,
-                "prior_stage_id": artifact.prior_stage_id or NO_PRIOR,
-                "receipt_hash": RECEIPT_EVENT_PLACEHOLDER,
-                "commit_state_root": state_root,
-            }
-            # The receipt hash excludes event_root; this permits a receipt to bind
-            # the final event root while the event root binds the receipt hash.
-            _receipt_template, receipt_hash = self._make_receipt(
-                operation_id=operation_id,
-                event_sequence=event_sequence,
-                previous_event_root=previous_event_root,
-                event_root=RECEIPT_EVENT_PLACEHOLDER,
-                chain_id=chain_id,
-                artifact=artifact,
-                expected_head=expected_head,
-                head_root=head_root,
-                state_root=state_root,
-            )
-            event_material["receipt_hash"] = receipt_hash
-            event_root = _event_root(event_material)
-            receipt_raw, final_receipt_hash = self._make_receipt(
-                operation_id=operation_id,
-                event_sequence=event_sequence,
-                previous_event_root=previous_event_root,
-                event_root=event_root,
-                chain_id=chain_id,
-                artifact=artifact,
-                expected_head=expected_head,
-                head_root=head_root,
-                state_root=state_root,
-            )
-            if final_receipt_hash != receipt_hash:
-                raise StoreSchemaError("receipt:identity-binding")
-            if _event_root({**event_material, "receipt_hash": final_receipt_hash}) != event_root:
-                raise StoreSchemaError("event:receipt-binding")
-            connection.execute(
-                "INSERT INTO operations(operation_id,chain_id,artifact_kind,artifact_id,payload_hash,request_hash,prior_artifact_id,prior_stage_id,expected_head_artifact_id,expected_head_stage_id,event_sequence,receipt_hash,commit_state_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (operation_id, chain_id, artifact.kind, artifact.artifact_id, artifact.payload_hash, request_hash, artifact.prior_artifact_id, artifact.prior_stage_id, expected_head[0], expected_head[1], event_sequence, receipt_hash, state_root),
-            )
-            connection.execute("INSERT INTO receipts(operation_id,receipt_hash,receipt) VALUES(?,?,?)", (operation_id, receipt_hash, sqlite3.Binary(receipt_raw)))
-            connection.execute(
-                "INSERT INTO events(sequence,chain_id,previous_event_root,event_root,operation_id,artifact_kind,artifact_id,payload_hash,prior_artifact_id,prior_stage_id,receipt_hash,commit_state_root) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (event_sequence, chain_id, previous_event_root, event_root, operation_id, artifact.kind, artifact.artifact_id, artifact.payload_hash, artifact.prior_artifact_id, artifact.prior_stage_id, receipt_hash, state_root),
-            )
-            connection.execute(
-                "INSERT INTO heads(chain_id,artifact_kind,artifact_id,current_stage_id,stage_kind,transition_id,event_sequence,head_root,state_root) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(chain_id) DO UPDATE SET artifact_kind=excluded.artifact_kind,artifact_id=excluded.artifact_id,current_stage_id=excluded.current_stage_id,stage_kind=excluded.stage_kind,transition_id=excluded.transition_id,event_sequence=excluded.event_sequence,head_root=excluded.head_root,state_root=excluded.state_root",
-                (chain_id, artifact.kind, artifact.artifact_id, artifact.current_stage_id, artifact.stage_kind, artifact.transition_id, event_sequence, head_root, state_root),
-            )
+            receipt = self._admit_in_transaction(connection, artifact, request_hash)
             self._validate_transaction_snapshot(connection)
             self._fault("after_event_receipt_before_commit")
             connection.commit()
             try:
                 self._fault("after_commit_before_response")
             except InjectedFault as exc:
-                raise IndeterminateCommitError(operation_id) from exc
-            return AdmissionReceipt(receipt_raw)
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("transaction:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("transaction:operational") from exc
+        finally:
+            connection.close()
+
+    def source_evidence_head(
+        self,
+        subject: str,
+        scope: str,
+        profile_id: str,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> tuple[str, str] | None:
+        """Return the state-owned source-evidence head for canonical retry binding."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        chain_id = _chain_id(ARTIFACT_SOURCE_EVIDENCE, subject, scope, profile_id)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            self._validate_transaction_snapshot(connection)
+            row = connection.execute("SELECT artifact_id,current_stage_id FROM heads WHERE chain_id=?", (chain_id,)).fetchone()
+            connection.commit()
+            return None if row is None else (str(row["artifact_id"]), str(row["current_stage_id"]))
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
+    def _receipt_for_artifact(self, connection: sqlite3.Connection, artifact: VerifiedArtifact) -> AdmissionReceipt:
+        row = connection.execute(
+            "SELECT o.operation_id,r.receipt FROM operations o JOIN receipts r ON r.operation_id=o.operation_id WHERE o.artifact_kind=? AND o.artifact_id=? AND o.payload_hash=?",
+            (artifact.kind, artifact.artifact_id, artifact.payload_hash),
+        ).fetchone()
+        if row is None:
+            raise StoreSchemaError("operation:artifact-receipt-missing")
+        return AdmissionReceipt(bytes(row["receipt"]))
+
+    def find_source_evidence(
+        self,
+        envelope_raw: bytes,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> SourceCustodyAdmission | None:
+        """Find an immutable envelope retry without exposing its payload."""
+
+        if type(envelope_raw) is not bytes or not envelope_raw:
+            raise StoreConflictError("custody:envelope-bytes")
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        expected_digest = source_independent._raw_digest("envelope", envelope_raw)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            self._validate_transaction_snapshot(connection)
+            rows = connection.execute(
+                "SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id",
+                (ARTIFACT_SOURCE_EVIDENCE,),
+            ).fetchall()
+            for row in rows:
+                candidate_raw = bytes(row["payload"])
+                if source_independent.envelope_digest_from_artifact(candidate_raw) != expected_digest:
+                    continue
+                source_artifact = verify_artifact(ARTIFACT_SOURCE_EVIDENCE, candidate_raw, graph_profile_registry=self.graph_profile_registry)
+                source_receipt = self._receipt_for_artifact(connection, source_artifact)
+                graph_receipt = None
+                if source_independent.has_graph_link(candidate_raw):
+                    normalized = source_independent.verify_artifact(candidate_raw, graph_profile_registry=self.graph_profile_registry, allow_unresolved_graph=True)
+                    linked_row = connection.execute(
+                        "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                        (ARTIFACT_GRAPH, normalized["linked_graph_artifact_id"]),
+                    ).fetchone()
+                    if linked_row is None:
+                        raise StoreSchemaError("custody:linked-graph-missing")
+                    linked = verify_artifact(ARTIFACT_GRAPH, bytes(linked_row["payload"]), graph_profile_registry=self.graph_profile_registry)
+                    source_independent.verify_artifact(candidate_raw, graph_raw=linked.payload, graph_profile_registry=self.graph_profile_registry)
+                    graph_receipt = self._receipt_for_artifact(connection, linked)
+                connection.commit()
+                return SourceCustodyAdmission(source_receipt, graph_receipt, graph_receipt is not None)
+            connection.commit()
+            return None
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
+    def admit_source_evidence(
+        self,
+        custody_raw: bytes,
+        graph_raw: bytes | None = None,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> SourceCustodyAdmission:
+        """Atomically custody source evidence and, when present, its graph artifact."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        registry = self.graph_profile_registry
+        try:
+            source_preview = source_independent.verify_artifact(custody_raw, graph_raw=graph_raw, graph_profile_registry=registry)
+        except Exception as exc:
+            raise StoreConflictError("custody:independent-reject") from exc
+        linked = source_preview.get("linked_graph_artifact_id") is not None
+        if linked != (graph_raw is not None):
+            raise StoreConflictError("custody:graph-link-carrier")
+        graph_artifact: VerifiedArtifact | None = None
+        if graph_raw is not None:
+            try:
+                source_independent.verify_artifact(custody_raw, graph_raw=graph_raw, graph_profile_registry=registry)
+                graph_artifact = verify_artifact(ARTIFACT_GRAPH, graph_raw, graph_profile_registry=registry)
+            except Exception as exc:
+                raise StoreConflictError("custody:graph-independent-reject") from exc
+            if (
+                source_preview.get("linked_graph_artifact_id") != graph_artifact.artifact_id
+                or source_preview.get("linked_graph_payload_hash") != graph_artifact.payload_hash
+                or source_preview.get("linked_graph_report_id") != graph_artifact.report_id
+            ):
+                raise StoreConflictError("custody:graph-link-mismatch")
+        source_artifact = verify_artifact(ARTIFACT_SOURCE_EVIDENCE, custody_raw, graph_profile_registry=registry)
+        request_hash = _payload_hash(custody_raw)
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("transaction:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+            expected_envelope_digest = source_preview["envelope_digest"]
+            for row in connection.execute(
+                "SELECT artifact_id,payload_hash,payload FROM artifacts WHERE kind=? ORDER BY artifact_id",
+                (ARTIFACT_SOURCE_EVIDENCE,),
+            ):
+                existing_digest = source_independent.envelope_digest_from_artifact(bytes(row["payload"]))
+                if existing_digest == expected_envelope_digest:
+                    if row["artifact_id"] != source_artifact.artifact_id or row["payload_hash"] != source_artifact.payload_hash or bytes(row["payload"]) != custody_raw:
+                        raise StoreConflictError("custody:envelope-collision")
+                    existing = verify_artifact(ARTIFACT_SOURCE_EVIDENCE, custody_raw, graph_profile_registry=registry)
+                    source_receipt = self._receipt_for_artifact(connection, existing)
+                    graph_receipt = None
+                    if graph_artifact is not None:
+                        graph_receipt = self._receipt_for_artifact(connection, graph_artifact)
+                    connection.commit()
+                    return SourceCustodyAdmission(source_receipt, graph_receipt, graph_receipt is not None)
+            if graph_artifact is not None:
+                self._require_active_v2_governance(connection, graph_artifact)
+                existing_graph_row = connection.execute(
+                    "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_GRAPH, graph_artifact.artifact_id),
+                ).fetchone()
+                if existing_graph_row is not None and not self._artifact_matches(existing_graph_row, graph_artifact):
+                    raise StoreConflictError("custody:graph-identity-conflict")
+            source_receipt = self._admit_in_transaction(connection, source_artifact, request_hash, enforce_governance=False)
+            if graph_artifact is None:
+                graph_receipt = None
+            elif existing_graph_row is not None:
+                graph_receipt = self._receipt_for_artifact(connection, graph_artifact)
+            else:
+                graph_receipt = self._admit_in_transaction(connection, graph_artifact, _payload_hash(graph_raw), enforce_governance=True)
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                operation = graph_receipt or source_receipt
+                raise IndeterminateCommitError(operation.operation_id) from exc
+            return SourceCustodyAdmission(source_receipt, graph_receipt, graph_receipt is not None)
         except IndeterminateCommitError:
             raise
         except (InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):

@@ -15,6 +15,8 @@ from typing import Mapping
 
 from app.mirror import continuity_store as store
 from app.mirror import continuity_store_independent as independent
+from app.mirror import source_evidence_custody as source_custody
+from app.mirror import source_evidence_custody_independent as source_custody_independent
 
 
 EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
@@ -115,6 +117,8 @@ def _module_identity(path: str | Path) -> str:
 SOFTWARE_IDENTITIES = {
     "store_module_identity": _module_identity(store.__file__),
     "independent_module_identity": _module_identity(independent.__file__),
+    "source_custody_module_identity": _module_identity(source_custody.__file__),
+    "source_custody_independent_identity": _module_identity(source_custody_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 

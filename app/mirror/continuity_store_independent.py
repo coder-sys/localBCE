@@ -20,13 +20,15 @@ from app.governance import provider_continuity_control_pack_independent as gover
 from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
+from app.mirror import source_evidence_custody_independent as source_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
 SCHEMA_VERSION = 2
 ARTIFACT_GRAPH = "PROVIDER_TRUST_GRAPH_V1"
 ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE)
+ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
@@ -360,6 +362,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
         }
         if dict(value) != expected:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_SOURCE_EVIDENCE:
+        if dict(value) != source_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -375,9 +380,14 @@ def _normalize_artifact(
         raise IndependentStoreError("artifact:kind")
     if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
         raise IndependentStoreError("artifact:byte-cap")
-    value = _parse_canonical(raw)
     try:
-        if kind == ARTIFACT_GRAPH:
+        value = source_independent._parse(raw) if kind == ARTIFACT_SOURCE_EVIDENCE else _parse_canonical(raw)
+    except source_independent.IndependentSourceCustodyError as exc:
+        raise IndependentStoreError(str(exc)) from exc
+    try:
+        if kind == ARTIFACT_SOURCE_EVIDENCE:
+            result = source_independent.verify_artifact(raw, graph_profile_registry=graph_profile_registry, allow_unresolved_graph=True)
+        elif kind == ARTIFACT_GRAPH:
             if value.get("schema") == graph_independent.SCHEMA_V2:
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
             else:
@@ -393,7 +403,21 @@ def _normalize_artifact(
     profile_id: str | None = None
     profile_version: int | None = None
     try:
-        if kind == ARTIFACT_GRAPH:
+        if kind == ARTIFACT_SOURCE_EVIDENCE:
+            artifact_id = result["artifact_id"]
+            report_id = result["report_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            authority_json = _authority_json(value["authority"], kind)
+            subject_id = result["subject"]
+            scope = result["scope"]
+            schema = result["schema"]
+            profile_id = result["profile_id"]
+            profile_version = result["profile_version"]
+        elif kind == ARTIFACT_GRAPH:
             subject = _expect_keys(value["subject"], {"provider_graph_subject", "scope"}, "artifact:graph-subject")
             snapshot = value["observation_snapshot"]
             transition = value["transition"]
@@ -486,7 +510,7 @@ def _normalize_artifact(
             raise IndependentStoreError("artifact:prior-stage")
     except (KeyError, TypeError, ValueError) as exc:
         raise IndependentStoreError("artifact:identity-shape") from exc
-    return {
+    normalized = {
         "kind": kind,
         "schema": schema,
         "artifact_id": artifact_id,
@@ -504,6 +528,19 @@ def _normalize_artifact(
         "profile_id": profile_id,
         "profile_version": profile_version,
     }
+    if kind == ARTIFACT_SOURCE_EVIDENCE:
+        normalized.update(
+            {
+                "source_profile_id": result["source_profile_id"],
+                "source_profile_version": result["source_profile_version"],
+                "envelope_digest": result["envelope_digest"],
+                "linked_graph_artifact_id": result["linked_graph_artifact_id"],
+                "linked_graph_payload_hash": result["linked_graph_payload_hash"],
+                "linked_graph_report_id": result["linked_graph_report_id"],
+                "source_status": result["source_status"],
+            }
+        )
+    return normalized
 
 
 def _operation_id(artifact: Mapping[str, object], chain_id: str, expected_head: tuple[str, str]) -> str:
@@ -622,6 +659,30 @@ def _verify_rows(
         artifact_hashes.add(hash_key)
         artifacts[key] = artifact
 
+    # A source artifact may point at exactly one graph artifact.  Re-run the
+    # full source-to-graph binding here with the independently stored graph
+    # bytes; the source artifact's own link fields are not authority by
+    # themselves.
+    for artifact in artifacts.values():
+        if artifact["kind"] != ARTIFACT_SOURCE_EVIDENCE:
+            continue
+        linked_id = artifact.get("linked_graph_artifact_id")
+        if linked_id is None:
+            continue
+        linked = artifacts.get((ARTIFACT_GRAPH, str(linked_id)))
+        if linked is None:
+            raise IndependentStoreError("database:source-graph-missing")
+        if linked["payload_hash"] != artifact.get("linked_graph_payload_hash") or linked.get("report_id") != artifact.get("linked_graph_report_id"):
+            raise IndependentStoreError("database:source-graph-link")
+        try:
+            source_independent.verify_artifact(
+                artifact["payload"],
+                graph_raw=linked["payload"],
+                graph_profile_registry=graph_profile_registry,
+            )
+        except Exception as exc:
+            raise IndependentStoreError("database:source-graph-binding") from exc
+
     operations = {row["operation_id"]: row for row in rows["operations"]}
     receipts = {row["operation_id"]: row for row in rows["receipts"]}
     events = {row["sequence"]: row for row in rows["events"]}
@@ -645,6 +706,7 @@ def _verify_rows(
     previous_event_root = GENESIS_EVENT_ROOT
     final_state_root = _state_root(0, [])
     seen_operations: set[str] = set()
+    artifact_event_sequence: dict[tuple[str, str], int] = {}
     for sequence in range(1, len(rows["events"]) + 1):
         event = events.get(sequence)
         if event is None:
@@ -743,10 +805,69 @@ def _verify_rows(
         if receipt_row["operation_id"] != operation_id:
             raise IndependentStoreError("database:receipt-operation")
         state_heads[chain_id] = {**next_head, "state_root": final_state_root}
+        artifact_event_sequence[(artifact["kind"], artifact["artifact_id"])] = sequence
         previous_event_root = event["event_root"]
 
     if set(operations) != seen_operations:
         raise IndependentStoreError("database:orphan-operation")
+
+    # A linked V2 graph is independently eligible only while a matching
+    # verifier-owned approval was effective at the source-custody event.  This
+    # preserves historical verification after withdrawal while rejecting a
+    # forged/rebound source link that appears after withdrawal.
+    for source_artifact in artifacts.values():
+        if source_artifact["kind"] != ARTIFACT_SOURCE_EVIDENCE or source_artifact.get("linked_graph_artifact_id") is None:
+            continue
+        graph_key = (ARTIFACT_GRAPH, str(source_artifact["linked_graph_artifact_id"]))
+        graph_artifact = artifacts.get(graph_key)
+        if graph_artifact is None:
+            raise IndependentStoreError("database:source-graph-missing")
+        source_sequence = artifact_event_sequence.get((ARTIFACT_SOURCE_EVIDENCE, str(source_artifact["artifact_id"])))
+        graph_sequence = artifact_event_sequence.get(graph_key)
+        if source_sequence is None or graph_sequence is None:
+            raise IndependentStoreError("database:source-graph-event-missing")
+        graph_value = _parse_canonical(graph_artifact["payload"])
+        graph_profile = graph_value.get("profile")
+        graph_snapshot = graph_value.get("observation_snapshot")
+        if not isinstance(graph_profile, dict) or not isinstance(graph_snapshot, dict):
+            raise IndependentStoreError("database:source-graph-profile")
+        graph_profile_id = graph_profile.get("profile_id")
+        graph_profile_digest = graph_profile.get("profile_digest")
+        observation_time = graph_snapshot.get("observation_time")
+        if not isinstance(graph_profile_id, str) or not isinstance(graph_profile_digest, str) or type(observation_time) is not int:
+            raise IndependentStoreError("database:source-graph-profile")
+        approved = False
+        for sequence in sorted(artifact_event_sequence.values()):
+            if sequence >= source_sequence:
+                break
+            governance_artifacts = [
+                item for item in artifacts.values()
+                if item["kind"] == ARTIFACT_GOVERNANCE
+                and item["subject"] == graph_artifact["subject"]
+                and item["scope"] == graph_artifact["scope"]
+                and item.get("profile_id") == graph_profile_id
+                and artifact_event_sequence.get((item["kind"], item["artifact_id"])) == sequence
+            ]
+            for governance_artifact in governance_artifacts:
+                try:
+                    governed_value = _parse_canonical(governance_artifact["payload"])
+                    governed = governance_v2_independent.verify_bytes(governance_artifact["payload"], graph_profile_registry or {})
+                except Exception as exc:
+                    raise IndependentStoreError("database:source-governance-reject") from exc
+                if governed_value.get("schema") == governance_v2_independent.SCHEMA and governed.get("current_stage_kind") == governance_v2_independent.STAGE_APPROVED:
+                    if (
+                        governed.get("profile_id") == graph_profile_id
+                        and governed.get("profile_digest") == graph_profile_digest
+                        and type(governed.get("effective_start")) is int
+                        and type(governed.get("effective_end")) is int
+                        and governed["effective_start"] <= observation_time <= governed["effective_end"]
+                    ):
+                        approved = True
+                elif governed_value.get("schema") == governance_v2_independent.WITHDRAWAL_SCHEMA:
+                    approved = False
+        if not approved:
+            raise IndependentStoreError("database:source-governance-ineligible")
+
     if set(heads) != set(state_heads):
         raise IndependentStoreError("database:head-set")
     for chain_id, expected in state_heads.items():
