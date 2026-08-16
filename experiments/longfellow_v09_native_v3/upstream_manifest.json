@@ -1,0 +1,38 @@
+{
+  "experiment": "longfellow_v09_native_v3",
+  "disposition": "nonactivating_experiment_only",
+  "upstream": {
+    "remote": "https://github.com/google/longfellow-zk.git",
+    "commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+    "tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+    "sha3_circuit": "lib/circuits/tests/sha3/sha3_circuit.h",
+    "sha3_witness": "lib/circuits/tests/sha3/sha3_witness.h"
+  },
+  "sha3_512": {
+    "permutation": "Keccak-f[1600]",
+    "rate_bytes": 72,
+    "capacity_bits": 1024,
+    "domain_suffix": "06",
+    "final_padding_byte": "80",
+    "digest_bytes": 64,
+    "hidden_message_and_round_witnesses_constrained_in_circuit": true,
+    "patch": "patches/sha3_512_circuit.patch"
+  },
+  "build": {
+    "platform": "Windows x64",
+    "generator": "Visual Studio 17 2022",
+    "compiler": "MSVC 19.44.35228.0",
+    "cmake": "4.3.3",
+    "language_standard": "C++20",
+    "cpu_only": true,
+    "network_service": false
+  },
+  "engineering_disposition": "ENGINEERING_RED",
+  "evidence": "evidence/longfellow_v09_native_v3_failure.json",
+  "reproduction": "evidence/reproduce_failure.ps1",
+  "unqualified": [
+    "published security level is not a production 128-bit proof ledger",
+    "the upstream SHA3 circuit is experimental and not production vetted",
+    "the Windows crypto/sysdep files are task-local build adapters"
+  ]
+}
