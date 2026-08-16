@@ -107,16 +107,30 @@ governance authority, schema/program identity, epoch, and database context. A su
 parse is converted into a store-sealed typed operation; the database rechecks chronology, direct
 continuity state IDs/roots, policy/directive separation, exact retry identity, context, and the
 allowed clear-versus-non-clear state transition before one append-only direct request, audit event,
-transition record, and state update commit.
+dedicated `DIRECT_CLEARANCE` transition, and state update commit.
 
-The isolated candidate's focused evidence is 24/24 direct-state tests, 31/31 combined continuity
-and trust-boundary tests, 34/34 transactional database/production/migration tests, and 12/12
-implicated migration-attack tests. The direct tests cover all five directives, governed exception
+The settlement-separation correction gives the direct lane an explicit version-1
+`direct_clearance_state` snapshot and request-column shape. Its clearance root and direct-transition
+count are independently reconstructed and included in the main database state-binding chain. All
+five direct directives preserve the durable payment root and `settled_batch_count`; only `CLEAR`
+and `EXCEPTION_APPROVED` advance the dedicated clearance root, while every direct attempt advances
+only the dedicated direct count. The existing settlement and migration lanes retain their original
+payment-root, settlement-count, transition-kind, and recovery semantics. A pre-correction direct
+table shape is rejected as a schema mismatch rather than silently reinterpreted.
+
+The correction's focused evidence is 27/27 direct-state tests, 31/31 combined continuity and
+trust-boundary tests, and 46/46 transactional database/production/migration plus implicated
+migration-attack tests. The direct tests cover all five directives, governed exception
 and sentinel paths, independently rebound semantic mutations, authority/downgrade mutations,
 concurrency, exact retry, conflicting retry, stale state, rollback, post-commit indeterminate
 recovery, restart, and backup/restore. The existing continuity telemetry covered 8 synthetic cases:
 195,889-byte Python heap peak, 23,859,200-byte peak working set, zero pagefile growth, and
 `complete_proof_resource_gate_measured=false`.
+
+The active-core, security, documentation, release-manifest, and production-readiness gate command
+passed 35 tests plus 17 subtests. The existing offline Rust Phase-0 `kat` and `negatives` commands
+also passed with their original five-directive and negative-rejection statuses. These checks do not
+select a proof backend or qualify a production deployment.
 
 This remains an isolated, synthetic, nonactivating candidate. `proofSuiteId=null`,
 `production_usable=false`, and activation remain false. The run did not select a proof backend,

@@ -72,6 +72,75 @@ _DIRECT_OPERATION_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-OPERATION/v1\x00"
 _DIRECT_OPERATION_SEAL_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-SEAL/v1\x00"
 _DIRECT_REPLAY_ROOT_DOMAIN = b"BL/DIRECT-STATE-OWNED/REPLAY-ROOT/v1\x00"
 _DIRECT_CLEARANCE_ROOT_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-ROOT/v1\x00"
+_DIRECT_CLEARANCE_STATE_BINDING_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-STATE-BINDING/v1\x00"
+_DIRECT_CLEARANCE_GENESIS_DOMAIN = b"BL/DIRECT-STATE-OWNED/CLEARANCE-GENESIS/v1\x00"
+_DIRECT_DATABASE_STATE_BINDING_DOMAIN = b"BL/DIRECT-STATE-OWNED/DATABASE-STATE-BINDING/v1\x00"
+_DIRECT_CLEARANCE_SCHEMA_VERSION: Final[int] = 1
+_DIRECT_TRANSITION_KIND = "DIRECT_CLEARANCE"
+_DIRECT_CLEARANCE_STATE_COLUMNS: Final[tuple[str, ...]] = (
+    "id",
+    "schema_version",
+    "epoch",
+    "sequence",
+    "clearance_root",
+    "direct_clearance_count",
+    "state_binding",
+    "database_state_binding",
+    "payment_root",
+    "settled_batch_count",
+    "audit_head",
+    "last_operation_digest",
+)
+_DIRECT_CLEARANCE_REQUEST_COLUMNS: Final[tuple[str, ...]] = (
+    "operation_digest",
+    "bundle_id",
+    "receipt_id",
+    "request_id",
+    "attempt_id",
+    "decision_id",
+    "join_id",
+    "source_root",
+    "profile_id",
+    "schema_id",
+    "program_id",
+    "mode_id",
+    "evaluator_id",
+    "control_set_id",
+    "rule_id",
+    "phase0_receipt_binding",
+    "exception_id",
+    "policy_result",
+    "effective_directive",
+    "event_time",
+    "observation_time",
+    "rule_effective_time",
+    "decision_time",
+    "continuity_epoch",
+    "continuity_sequence_before",
+    "continuity_sequence_after",
+    "continuity_before_state_id",
+    "continuity_after_state_id",
+    "continuity_before_audit_head",
+    "continuity_after_audit_head",
+    "continuity_before_root",
+    "continuity_after_root",
+    "sequence_before",
+    "sequence_after",
+    "nullifier_root_before",
+    "nullifier_root_after",
+    "payment_root_before",
+    "payment_root_after",
+    "state_binding_after",
+    "audit_head_after",
+    "clearance_advanced",
+    "clearance_root_before",
+    "clearance_root_after",
+    "direct_clearance_count_before",
+    "direct_clearance_count_after",
+    "direct_state_binding_after",
+    "settled_batch_count_before",
+    "settled_batch_count_after",
+)
 _DIRECT_CONTINUITY_STATE_MAGIC = b"BLCSTA02"
 _DIRECT_CONTINUITY_STATE_VERSION = 2
 _DIRECT_CONTINUITY_STATE_CONTEXT_DOMAIN = b"BL/NATIVE-V3/CONTINUITY/STATE-CONTEXT/v2\x00"
@@ -351,6 +420,12 @@ class DirectStateOwnedDatabaseReceiptV1:
     nullifier_root_after: bytes
     clearance_root_before: bytes
     clearance_root_after: bytes
+    clearance_count_before: int
+    clearance_count_after: int
+    payment_root_before: bytes
+    payment_root_after: bytes
+    settled_batch_count_before: int
+    settled_batch_count_after: int
     state_binding: bytes
     audit_head: bytes
     effective_directive: int
@@ -367,6 +442,8 @@ class DirectStateOwnedDatabaseReceiptV1:
             ("direct_receipt_nullifier_after", self.nullifier_root_after),
             ("direct_receipt_clearance_before", self.clearance_root_before),
             ("direct_receipt_clearance_after", self.clearance_root_after),
+            ("direct_receipt_payment_before", self.payment_root_before),
+            ("direct_receipt_payment_after", self.payment_root_after),
             ("direct_receipt_binding", self.state_binding),
             ("direct_receipt_audit", self.audit_head),
         ):
@@ -375,10 +452,59 @@ class DirectStateOwnedDatabaseReceiptV1:
             raise ProductionBoundaryError("direct_receipt_sequence_before_invalid")
         if self.sequence_after != self.sequence_before + 1:
             raise ProductionBoundaryError("direct_receipt_sequence_after_invalid")
+        if type(self.clearance_count_before) is not int or self.clearance_count_before < 0:
+            raise ProductionBoundaryError("direct_receipt_clearance_count_before_invalid")
+        if self.clearance_count_after != self.clearance_count_before + 1:
+            raise ProductionBoundaryError("direct_receipt_clearance_count_after_invalid")
+        if type(self.settled_batch_count_before) is not int or self.settled_batch_count_before < 0:
+            raise ProductionBoundaryError("direct_receipt_settled_count_before_invalid")
+        if self.settled_batch_count_after != self.settled_batch_count_before:
+            raise ProductionBoundaryError("direct_receipt_settled_count_changed")
+        if self.payment_root_after != self.payment_root_before:
+            raise ProductionBoundaryError("direct_receipt_payment_root_changed")
         if type(self.effective_directive) is not int or self.effective_directive not in (1, 2, 3, 4, 5):
             raise ProductionBoundaryError("direct_receipt_directive_invalid")
         if type(self.clearance_advanced) is not bool:
             raise ProductionBoundaryError("direct_receipt_clearance_flag_invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class DirectClearanceStateSnapshotV1:
+    """Dedicated direct-clearance state, separate from settlement state."""
+
+    schema_version: int
+    epoch: int
+    sequence: int
+    clearance_root: bytes
+    clearance_count: int
+    state_binding: bytes
+    database_state_binding: bytes
+    payment_root: bytes
+    settled_batch_count: int
+    audit_head: bytes
+    last_operation_digest: bytes | None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != _DIRECT_CLEARANCE_SCHEMA_VERSION:
+            raise ProductionBoundaryError("direct_clearance_schema_version_invalid")
+        for label, value in (
+            ("direct_clearance_root", self.clearance_root),
+            ("direct_clearance_state_binding", self.state_binding),
+            ("direct_clearance_database_binding", self.database_state_binding),
+            ("direct_clearance_payment_root", self.payment_root),
+            ("direct_clearance_audit_head", self.audit_head),
+        ):
+            _wide(label, value)
+        if type(self.epoch) is not int or self.epoch <= 0:
+            raise ProductionBoundaryError("direct_clearance_epoch_invalid")
+        if type(self.sequence) is not int or self.sequence < 0:
+            raise ProductionBoundaryError("direct_clearance_sequence_invalid")
+        if type(self.clearance_count) is not int or self.clearance_count < 0:
+            raise ProductionBoundaryError("direct_clearance_count_invalid")
+        if type(self.settled_batch_count) is not int or self.settled_batch_count < 0:
+            raise ProductionBoundaryError("direct_clearance_settled_count_invalid")
+        if self.last_operation_digest is not None:
+            _wide("direct_clearance_last_operation", self.last_operation_digest)
 
 
 def _direct_operation_parts(operation: DirectStateOwnedOperationV1) -> tuple[bytes, ...]:
@@ -734,6 +860,9 @@ _DIRECT_AUDIT_HEX_FIELDS = frozenset(
         "nullifier_root_after",
         "payment_root_before",
         "payment_root_after",
+        "clearance_root_before",
+        "clearance_root_after",
+        "direct_state_binding",
         "state_binding",
         "previous_audit_head",
     }
@@ -747,6 +876,10 @@ _DIRECT_AUDIT_PAYLOAD_FIELDS = _DIRECT_AUDIT_HEX_FIELDS | {
     "policy_result",
     "effective_directive",
     "clearance_advanced",
+    "direct_clearance_count_before",
+    "direct_clearance_count_after",
+    "settled_batch_count_before",
+    "settled_batch_count_after",
     "event_time",
     "observation_time",
     "rule_effective_time",
@@ -791,6 +924,113 @@ def _direct_continuity_state_id(
     return _direct_continuity_sha(_DIRECT_CONTINUITY_STATE_ID_DOMAIN, raw)
 
 
+def _direct_clearance_genesis_binding(
+    *,
+    epoch: int,
+    database_state_binding: bytes,
+    clearance_root: bytes,
+    payment_root: bytes,
+    settled_batch_count: int,
+    governance_commitment: bytes,
+) -> bytes:
+    return _digest(
+        _DIRECT_CLEARANCE_GENESIS_DOMAIN,
+        _u64(_DIRECT_CLEARANCE_SCHEMA_VERSION, "direct_clearance_schema_version"),
+        _u64(epoch, "direct_clearance_epoch"),
+        database_state_binding,
+        clearance_root,
+        _u64(0, "direct_clearance_count"),
+        payment_root,
+        _u64(settled_batch_count, "direct_clearance_settled_count"),
+        governance_commitment,
+    )
+
+
+def _direct_clearance_state_binding(
+    *,
+    previous_binding: bytes,
+    previous_database_binding: bytes,
+    operation_digest: bytes,
+    epoch: int,
+    sequence: int,
+    clearance_root: bytes,
+    clearance_count: int,
+    payment_root: bytes,
+    settled_batch_count: int,
+    governance_commitment: bytes,
+) -> bytes:
+    return _digest(
+        _DIRECT_CLEARANCE_STATE_BINDING_DOMAIN,
+        _u64(_DIRECT_CLEARANCE_SCHEMA_VERSION, "direct_clearance_schema_version"),
+        previous_binding,
+        previous_database_binding,
+        operation_digest,
+        _u64(epoch, "direct_clearance_epoch"),
+        _u64(sequence, "direct_clearance_sequence"),
+        clearance_root,
+        _u64(clearance_count, "direct_clearance_count"),
+        payment_root,
+        _u64(settled_batch_count, "direct_clearance_settled_count"),
+        governance_commitment,
+    )
+
+
+def _direct_database_state_binding(
+    *,
+    previous_database_binding: bytes,
+    direct_state_binding: bytes,
+    operation: DirectStateOwnedOperationV1,
+    operation_digest: bytes,
+    sequence: int,
+    nullifier_after: bytes,
+    payment_root_after: bytes,
+    settled_batch_count_after: int,
+    clearance_root_after: bytes,
+    clearance_count_after: int,
+    governance_commitment: bytes,
+) -> bytes:
+    return _digest(
+        _DIRECT_DATABASE_STATE_BINDING_DOMAIN,
+        previous_database_binding,
+        direct_state_binding,
+        operation.attempt_id,
+        nullifier_after,
+        payment_root_after,
+        operation.bundle_id,
+        operation_digest,
+        governance_commitment,
+        _u64(operation.continuity_epoch, "direct_database_epoch"),
+        _u64(sequence, "direct_database_sequence"),
+        clearance_root_after,
+        _u64(clearance_count_after, "direct_database_clearance_count"),
+        _u64(settled_batch_count_after, "direct_database_settled_count"),
+    )
+
+
+def _direct_clearance_state_from_row(
+    row: tuple[object, ...],
+) -> DirectClearanceStateSnapshotV1:
+    if len(row) != 12:
+        raise ProductionBoundaryError("database_direct_clearance_state_shape_invalid")
+    normalized = tuple(
+        value if value is None or type(value) is int else bytes(value)
+        for value in row
+    )
+    return DirectClearanceStateSnapshotV1(
+        schema_version=normalized[1],  # type: ignore[arg-type]
+        epoch=normalized[2],  # type: ignore[arg-type]
+        sequence=normalized[3],  # type: ignore[arg-type]
+        clearance_root=normalized[4],  # type: ignore[arg-type]
+        clearance_count=normalized[5],  # type: ignore[arg-type]
+        state_binding=normalized[6],  # type: ignore[arg-type]
+        database_state_binding=normalized[7],  # type: ignore[arg-type]
+        payment_root=normalized[8],  # type: ignore[arg-type]
+        settled_batch_count=normalized[9],  # type: ignore[arg-type]
+        audit_head=normalized[10],  # type: ignore[arg-type]
+        last_operation_digest=normalized[11],  # type: ignore[arg-type]
+    )
+
+
 def _direct_audit_payload(
     *,
     operation: DirectStateOwnedOperationV1,
@@ -801,6 +1041,13 @@ def _direct_audit_payload(
     nullifier_after: bytes,
     payment_before: bytes,
     payment_after: bytes,
+    clearance_before: bytes,
+    clearance_after: bytes,
+    clearance_count_before: int,
+    clearance_count_after: int,
+    direct_state_binding: bytes,
+    settled_batch_count_before: int,
+    settled_batch_count_after: int,
     state_binding: bytes,
     previous_head: bytes,
 ) -> bytes:
@@ -844,6 +1091,13 @@ def _direct_audit_payload(
         "nullifier_root_after": nullifier_after.hex(),
         "payment_root_before": payment_before.hex(),
         "payment_root_after": payment_after.hex(),
+        "clearance_root_before": clearance_before.hex(),
+        "clearance_root_after": clearance_after.hex(),
+        "direct_clearance_count_before": clearance_count_before,
+        "direct_clearance_count_after": clearance_count_after,
+        "direct_state_binding": direct_state_binding.hex(),
+        "settled_batch_count_before": settled_batch_count_before,
+        "settled_batch_count_after": settled_batch_count_after,
         "state_binding": state_binding.hex(),
         "previous_audit_head": previous_head.hex(),
     }
@@ -857,7 +1111,7 @@ def _direct_audit_payload_from_json(encoded: bytes) -> dict[str, object]:
             raise ValueError
         if payload["version"] != 3 or payload["event_kind"] != "DIRECT_STATE_OWNED_CLEARANCE_V1":
             raise ValueError
-        for name in ("epoch", "sequence_before", "sequence_after", "event_time", "observation_time", "rule_effective_time", "decision_time"):
+        for name in ("epoch", "sequence_before", "sequence_after", "event_time", "observation_time", "rule_effective_time", "decision_time", "direct_clearance_count_before", "direct_clearance_count_after", "settled_batch_count_before", "settled_batch_count_after"):
             value = payload[name]
             if type(value) is not int or value < 0:
                 raise ValueError
@@ -868,6 +1122,10 @@ def _direct_audit_payload_from_json(encoded: bytes) -> dict[str, object]:
         if payload["policy_result"] != {1: 1, 2: 2, 3: 3, 4: 4, 5: 4}[payload["effective_directive"]]:
             raise ValueError
         if payload["clearance_advanced"] not in (0, 1):
+            raise ValueError
+        if payload["direct_clearance_count_after"] != payload["direct_clearance_count_before"] + 1:
+            raise ValueError
+        if payload["settled_batch_count_after"] != payload["settled_batch_count_before"]:
             raise ValueError
         for name in _DIRECT_AUDIT_HEX_FIELDS:
             value = payload[name]
@@ -919,7 +1177,7 @@ def _direct_operation_record_values(
 def _direct_receipt_from_row(
     row: tuple[object, ...],
 ) -> DirectStateOwnedDatabaseReceiptV1:
-    if len(row) != 15:
+    if len(row) != 21:
         raise ProductionBoundaryError("database_direct_receipt_shape_invalid")
     normalized = tuple(
         value if type(value) is int else bytes(value)
@@ -937,10 +1195,16 @@ def _direct_receipt_from_row(
         nullifier_root_after=normalized[8],  # type: ignore[arg-type]
         clearance_root_before=normalized[9],  # type: ignore[arg-type]
         clearance_root_after=normalized[10],  # type: ignore[arg-type]
-        state_binding=normalized[11],  # type: ignore[arg-type]
-        audit_head=normalized[12],  # type: ignore[arg-type]
-        effective_directive=normalized[13],  # type: ignore[arg-type]
-        clearance_advanced=bool(normalized[14]),
+        clearance_count_before=normalized[11],  # type: ignore[arg-type]
+        clearance_count_after=normalized[12],  # type: ignore[arg-type]
+        payment_root_before=normalized[13],  # type: ignore[arg-type]
+        payment_root_after=normalized[14],  # type: ignore[arg-type]
+        settled_batch_count_before=normalized[15],  # type: ignore[arg-type]
+        settled_batch_count_after=normalized[16],  # type: ignore[arg-type]
+        state_binding=normalized[17],  # type: ignore[arg-type]
+        audit_head=normalized[18],  # type: ignore[arg-type]
+        effective_directive=normalized[19],  # type: ignore[arg-type]
+        clearance_advanced=bool(normalized[20]),
     )
 
 
@@ -1148,6 +1412,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         governance_authority: GovernanceAuthorityV2,
         initial_strong_nullifier_root: bytes,
         initial_strong_payment_state_root: bytes,
+        initial_direct_clearance_root: bytes | None = None,
         epoch: int,
         profile_id: bytes,
         suite_id: bytes,
@@ -1174,6 +1439,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         )
         self._initial_payment_root = _wide(
             "database_initial_strong_payment_state_root", initial_strong_payment_state_root
+        )
+        self._initial_direct_clearance_root = _wide(
+            "database_initial_direct_clearance_root",
+            self._initial_payment_root
+            if initial_direct_clearance_root is None
+            else initial_direct_clearance_root,
         )
         if type(epoch) is not int or epoch <= 0 or epoch >= 2**64:
             raise ProductionBoundaryError("database_epoch_invalid")
@@ -1369,12 +1640,12 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 "SELECT operation_digest FROM settlement_requests WHERE sequence_after=?",
                 (epoch,),
             ).fetchone()
-            if authority is None:
-                authority = connection.execute(
-                    "SELECT operation_digest FROM direct_clearance_requests "
-                    "WHERE sequence_after=?",
-                    (epoch,),
-                ).fetchone()
+        elif kind == _DIRECT_TRANSITION_KIND:
+            authority = connection.execute(
+                "SELECT operation_digest FROM direct_clearance_requests "
+                "WHERE sequence_after=?",
+                (epoch,),
+            ).fetchone()
         else:
             authority = connection.execute(
                 "SELECT migration_commitment FROM migration_requests WHERE sequence_after=?",
@@ -1448,6 +1719,193 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 for value in values
             ),
         )
+
+    @staticmethod
+    def _validate_direct_table_shapes(connection: sqlite3.Connection) -> None:
+        observed_state = tuple(
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(direct_clearance_state)"
+            ).fetchall()
+        )
+        observed_requests = tuple(
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(direct_clearance_requests)"
+            ).fetchall()
+        )
+        if observed_state != _DIRECT_CLEARANCE_STATE_COLUMNS:
+            raise ProductionBoundaryError("database_direct_clearance_schema_mismatch")
+        if observed_requests != _DIRECT_CLEARANCE_REQUEST_COLUMNS:
+            raise ProductionBoundaryError("database_direct_clearance_schema_mismatch")
+
+    def _direct_clearance_genesis_row(
+        self,
+        connection: sqlite3.Connection,
+    ) -> tuple[object, ...]:
+        row = connection.execute(
+            "SELECT epoch, governance_commitment, strong_payment_state_root, "
+            "state_binding, audit_head FROM database_genesis WHERE id=1"
+        ).fetchone()
+        if row is None:
+            raise ProductionBoundaryError("database_genesis_integrity_failed")
+        epoch, governance, payment, database_binding, audit_head = tuple(
+            value if type(value) is int else bytes(value) for value in row
+        )
+        existing_root = connection.execute(
+            "SELECT clearance_root FROM direct_clearance_state WHERE id=1"
+        ).fetchone()
+        clearance_root = (
+            self._initial_direct_clearance_root
+            if existing_root is None
+            else _wide("database_direct_clearance_genesis_root", bytes(existing_root[0]))
+        )
+        clearance_binding = _direct_clearance_genesis_binding(
+            epoch=epoch,  # type: ignore[arg-type]
+            database_state_binding=database_binding,  # type: ignore[arg-type]
+            clearance_root=clearance_root,
+            payment_root=payment,  # type: ignore[arg-type]
+            settled_batch_count=0,
+            governance_commitment=governance,  # type: ignore[arg-type]
+        )
+        return (
+            1,
+            _DIRECT_CLEARANCE_SCHEMA_VERSION,
+            epoch,
+            0,
+            clearance_root,
+            0,
+            clearance_binding,
+            database_binding,
+            payment,
+            0,
+            audit_head,
+            None,
+        )
+
+    @staticmethod
+    def _normalized_direct_state_row(
+        row: tuple[object, ...],
+    ) -> tuple[object, ...]:
+        return tuple(
+            value if value is None or type(value) is int else bytes(value)
+            for value in row
+        )
+
+    def _validate_direct_state_current(
+        self,
+        connection: sqlite3.Connection,
+        direct_state: DirectClearanceStateSnapshotV1,
+        direct_count: int,
+    ) -> None:
+        state = connection.execute(
+            "SELECT epoch, sequence, strong_nullifier_root, strong_payment_state_root, "
+            "state_binding, audit_head, governance_commitment, anti_rollback_epoch, "
+            "settled_batch_count FROM state WHERE id=1"
+        ).fetchone()
+        if state is None:
+            raise ProductionBoundaryError("database_state_missing")
+        self._validate_state_row(state)
+        if direct_count == 0:
+            expected = self._direct_clearance_genesis_row(connection)
+            observed = connection.execute(
+                "SELECT * FROM direct_clearance_state WHERE id=1"
+            ).fetchone()
+            if observed is None or self._normalized_direct_state_row(observed) != expected:
+                raise ProductionBoundaryError("database_direct_clearance_state_mismatch")
+            return
+        transition = connection.execute(
+            "SELECT transition_kind FROM transition_records WHERE sequence_after=?",
+            (state[1],),
+        ).fetchone()
+        if transition is None or transition[0] != _DIRECT_TRANSITION_KIND:
+            raise ProductionBoundaryError("database_direct_transition_kind_invalid")
+        latest = self._latest_operation_digest(connection, state[7])
+        if (
+            direct_state.epoch != state[0]
+            or direct_state.sequence != state[1]
+            or direct_state.clearance_count != direct_count
+            or direct_state.database_state_binding != bytes(state[4])
+            or direct_state.payment_root != bytes(state[3])
+            or direct_state.settled_batch_count != state[8]
+            or direct_state.audit_head != bytes(state[5])
+            or direct_state.last_operation_digest != latest
+        ):
+            raise ProductionBoundaryError("database_direct_clearance_state_mismatch")
+
+    def _ensure_direct_clearance_state(
+        self,
+        connection: sqlite3.Connection,
+    ) -> None:
+        self._validate_direct_table_shapes(connection)
+        settlement_count = connection.execute(
+            "SELECT COUNT(*) FROM settlement_requests"
+        ).fetchone()[0]
+        direct_count = connection.execute(
+            "SELECT COUNT(*) FROM direct_clearance_requests"
+        ).fetchone()[0]
+        migration_count = connection.execute(
+            "SELECT COUNT(*) FROM migration_requests"
+        ).fetchone()[0]
+        if direct_count and (settlement_count or migration_count):
+            raise ProductionBoundaryError("database_direct_mixed_transition_history")
+        state_count = connection.execute(
+            "SELECT COUNT(*) FROM direct_clearance_state"
+        ).fetchone()[0]
+        if state_count > 1:
+            raise ProductionBoundaryError("database_direct_clearance_state_multiplicity")
+        expected = self._direct_clearance_genesis_row(connection)
+        observed = connection.execute(
+            "SELECT * FROM direct_clearance_state WHERE id=1"
+        ).fetchone()
+        if observed is None:
+            if direct_count:
+                raise ProductionBoundaryError("database_direct_clearance_state_missing")
+            connection.execute(
+                "INSERT INTO direct_clearance_state VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(
+                    value if type(value) is int or value is None else sqlite3.Binary(value)
+                    for value in expected
+                ),
+            )
+            return
+        normalized = self._normalized_direct_state_row(observed)
+        direct_state = _direct_clearance_state_from_row(normalized)
+        if direct_count == 0:
+            if normalized != expected:
+                raise ProductionBoundaryError("database_direct_clearance_state_mismatch")
+            return
+        self._validate_direct_state_current(connection, direct_state, direct_count)
+
+    def _validate_direct_clearance_state(
+        self,
+        connection: sqlite3.Connection,
+    ) -> tuple[int, DirectClearanceStateSnapshotV1]:
+        self._validate_direct_table_shapes(connection)
+        settlement_count = connection.execute(
+            "SELECT COUNT(*) FROM settlement_requests"
+        ).fetchone()[0]
+        direct_count = connection.execute(
+            "SELECT COUNT(*) FROM direct_clearance_requests"
+        ).fetchone()[0]
+        migration_count = connection.execute(
+            "SELECT COUNT(*) FROM migration_requests"
+        ).fetchone()[0]
+        if direct_count and (settlement_count or migration_count):
+            raise ProductionBoundaryError("database_direct_mixed_transition_history")
+        rows = connection.execute(
+            "SELECT * FROM direct_clearance_state WHERE id=1"
+        ).fetchall()
+        if len(rows) != 1:
+            raise ProductionBoundaryError("database_direct_clearance_state_missing")
+        normalized = self._normalized_direct_state_row(rows[0])
+        snapshot = _direct_clearance_state_from_row(normalized)
+        if direct_count == 0:
+            if normalized != self._direct_clearance_genesis_row(connection):
+                raise ProductionBoundaryError("database_direct_clearance_state_mismatch")
+        else:
+            self._validate_direct_state_current(connection, snapshot, direct_count)
+        return direct_count, snapshot
 
     def _ensure_genesis_and_history(
         self,
@@ -1815,9 +2273,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         self._governance_authority.commitment_512,
                         0,
                         0,
-                    )
+                )
                 self._validate_state_row(state)
                 self._ensure_genesis_and_history(connection, config, state)
+                self._ensure_direct_clearance_state(connection)
                 state_transition_commitment = self._latest_operation_digest(
                     connection,
                     state[7],  # type: ignore[arg-type]
@@ -1869,6 +2328,20 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 governance_commitment BLOB NOT NULL CHECK (length(governance_commitment) = 64),
                 anti_rollback_epoch INTEGER NOT NULL CHECK (anti_rollback_epoch >= 0),
                 settled_batch_count INTEGER NOT NULL CHECK (settled_batch_count >= 0)
+            );
+            CREATE TABLE IF NOT EXISTS direct_clearance_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+                epoch INTEGER NOT NULL CHECK (epoch > 0),
+                sequence INTEGER NOT NULL CHECK (sequence >= 0),
+                clearance_root BLOB NOT NULL CHECK (length(clearance_root) = 64),
+                direct_clearance_count INTEGER NOT NULL CHECK (direct_clearance_count >= 0),
+                state_binding BLOB NOT NULL CHECK (length(state_binding) = 64),
+                database_state_binding BLOB NOT NULL CHECK (length(database_state_binding) = 64),
+                payment_root BLOB NOT NULL CHECK (length(payment_root) = 64),
+                settled_batch_count INTEGER NOT NULL CHECK (settled_batch_count >= 0),
+                audit_head BLOB NOT NULL CHECK (length(audit_head) = 64),
+                last_operation_digest BLOB CHECK (last_operation_digest IS NULL OR length(last_operation_digest) = 64)
             );
             CREATE TABLE IF NOT EXISTS governance_authorities (
                 activation_sequence INTEGER PRIMARY KEY CHECK (activation_sequence >= 0),
@@ -1945,7 +2418,14 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 payment_root_after BLOB NOT NULL CHECK (length(payment_root_after) = 64),
                 state_binding_after BLOB NOT NULL CHECK (length(state_binding_after) = 64),
                 audit_head_after BLOB NOT NULL CHECK (length(audit_head_after) = 64),
-                clearance_advanced INTEGER NOT NULL CHECK (clearance_advanced IN (0, 1))
+                clearance_advanced INTEGER NOT NULL CHECK (clearance_advanced IN (0, 1)),
+                clearance_root_before BLOB NOT NULL CHECK (length(clearance_root_before) = 64),
+                clearance_root_after BLOB NOT NULL CHECK (length(clearance_root_after) = 64),
+                direct_clearance_count_before INTEGER NOT NULL CHECK (direct_clearance_count_before >= 0),
+                direct_clearance_count_after INTEGER NOT NULL CHECK (direct_clearance_count_after = direct_clearance_count_before + 1),
+                direct_state_binding_after BLOB NOT NULL CHECK (length(direct_state_binding_after) = 64),
+                settled_batch_count_before INTEGER NOT NULL CHECK (settled_batch_count_before >= 0),
+                settled_batch_count_after INTEGER NOT NULL CHECK (settled_batch_count_after = settled_batch_count_before)
             );
             CREATE TRIGGER IF NOT EXISTS direct_clearance_requests_no_update
             BEFORE UPDATE ON direct_clearance_requests
@@ -1998,7 +2478,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             );
             CREATE TABLE IF NOT EXISTS transition_records (
                 sequence_after INTEGER PRIMARY KEY CHECK (sequence_after > 0),
-                transition_kind TEXT NOT NULL CHECK (transition_kind IN ('SETTLEMENT', 'MIGRATION', 'ROLLBACK', 'RECOVERY')),
+                transition_kind TEXT NOT NULL CHECK (transition_kind IN ('SETTLEMENT', 'DIRECT_CLEARANCE', 'MIGRATION', 'ROLLBACK', 'RECOVERY')),
                 record_commitment BLOB NOT NULL UNIQUE CHECK (length(record_commitment) = 64),
                 state_binding_before BLOB NOT NULL CHECK (length(state_binding_before) = 64),
                 state_binding_after BLOB NOT NULL CHECK (length(state_binding_after) = 64),
@@ -2218,6 +2698,20 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
             transition_commitment=transition_commitment,
         )
         return snapshot
+
+    def direct_clearance_snapshot(self) -> DirectClearanceStateSnapshotV1:
+        """Read the independently bound direct-clearance state snapshot."""
+
+        with closing(self._connect()) as connection:
+            self._validate_direct_clearance_state(connection)
+            row = connection.execute(
+                "SELECT * FROM direct_clearance_state WHERE id=1"
+            ).fetchone()
+        if row is None:
+            raise ProductionBoundaryError("database_direct_clearance_state_missing")
+        return _direct_clearance_state_from_row(
+            self._normalized_direct_state_row(row)
+        )
 
     def identity_snapshot(self) -> PrivacyV2DatabaseIdentity:
         """Read one transactionally consistent configuration/state checkpoint."""
@@ -2698,7 +3192,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
         self,
         operation: DirectStateOwnedOperationV1,
     ) -> DirectStateOwnedDatabaseReceiptV1:
-        """Commit one independently verified direct-state clearance attempt."""
+        """Commit one direct clearance without entering the settlement lane."""
 
         operation_digest = self._validate_direct_operation(operation)
         operation_values = _direct_operation_record_values(operation)
@@ -2710,6 +3204,20 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 connection.execute("BEGIN IMMEDIATE")
                 began = True
                 self._validate_schema_version(connection)
+                self._validate_direct_table_shapes(connection)
+                settlement_count = connection.execute(
+                    "SELECT COUNT(*) FROM settlement_requests"
+                ).fetchone()[0]
+                direct_count = connection.execute(
+                    "SELECT COUNT(*) FROM direct_clearance_requests"
+                ).fetchone()[0]
+                migration_count = connection.execute(
+                    "SELECT COUNT(*) FROM migration_requests"
+                ).fetchone()[0]
+                if direct_count and (settlement_count or migration_count):
+                    raise ProductionBoundaryError(
+                        "database_direct_mixed_transition_history"
+                    )
                 config = connection.execute(
                     "SELECT settlement_domain_commitment, governance_commitment, profile_id, "
                     "suite_id, schema_id, verifier_artifact_identity, epoch "
@@ -2740,6 +3248,19 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     raise ProductionBoundaryError(
                         "database_direct_state_identity_mismatch"
                     )
+                direct_state_row = connection.execute(
+                    "SELECT * FROM direct_clearance_state WHERE id=1"
+                ).fetchone()
+                if direct_state_row is None:
+                    raise ProductionBoundaryError("database_direct_clearance_state_missing")
+                direct_state = _direct_clearance_state_from_row(
+                    self._normalized_direct_state_row(direct_state_row)
+                )
+                self._validate_direct_state_current(
+                    connection,
+                    direct_state,
+                    direct_count,
+                )
                 pending_anchor = self._reconcile_anti_rollback_state(
                     epoch=row[7],  # type: ignore[arg-type]
                     state_binding=bytes(row[4]),
@@ -2748,7 +3269,6 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         row[7],  # type: ignore[arg-type]
                     ),
                 )
-
                 existing = connection.execute(
                     "SELECT operation_digest, bundle_id, receipt_id, request_id, attempt_id, "
                     "decision_id, join_id, source_root, profile_id, schema_id, program_id, "
@@ -2788,25 +3308,48 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     receipt_row = connection.execute(
                         "SELECT operation_digest, bundle_id, receipt_id, decision_id, join_id, "
                         "sequence_before, sequence_after, nullifier_root_before, "
-                        "nullifier_root_after, payment_root_before, payment_root_after, "
+                        "nullifier_root_after, clearance_root_before, clearance_root_after, "
+                        "direct_clearance_count_before, direct_clearance_count_after, "
+                        "payment_root_before, payment_root_after, "
+                        "settled_batch_count_before, settled_batch_count_after, "
                         "state_binding_after, audit_head_after, effective_directive, "
                         "clearance_advanced FROM direct_clearance_requests "
                         "WHERE operation_digest=?",
                         (sqlite3.Binary(operation_digest),),
                     ).fetchone()
                     if receipt_row is None:
-                        raise ProductionBoundaryError(
-                            "database_direct_receipt_missing"
-                        )
+                        raise ProductionBoundaryError("database_direct_receipt_missing")
                     receipt = _direct_receipt_from_row(receipt_row)
+                    if (
+                        receipt.clearance_root_after != direct_state.clearance_root
+                        or receipt.clearance_count_after != direct_state.clearance_count
+                        or receipt.payment_root_after != direct_state.payment_root
+                        or receipt.settled_batch_count_after != direct_state.settled_batch_count
+                        or receipt.state_binding != bytes(row[4])
+                        or receipt.audit_head != bytes(row[5])
+                    ):
+                        raise ProductionBoundaryError(
+                            "database_direct_clearance_state_mismatch"
+                        )
                     connection.execute("COMMIT")
                     began = False
                     return receipt
 
-                if row[1] != 0:
+                if (
+                    row[1] != 0
+                    or direct_count != 0
+                    or direct_state.sequence != 0
+                    or direct_state.clearance_count != 0
+                    or direct_state.clearance_root != self._initial_direct_clearance_root
+                    or bytes(row[3]) != self._initial_payment_root
+                    or row[8] != 0
+                ):
                     raise ProductionBoundaryError("database_direct_sequence_stale")
                 nullifier_before = bytes(row[2])
                 payment_before = bytes(row[3])
+                clearance_before = direct_state.clearance_root
+                clearance_count_before = direct_state.clearance_count
+                settled_batch_count_before = row[8]
                 nullifier_after = _digest(
                     _DIRECT_REPLAY_ROOT_DOMAIN,
                     nullifier_before,
@@ -2822,28 +3365,44 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 if duplicate is not None:
                     raise ProductionBoundaryError("database_direct_replay")
                 clearance_advanced = operation.effective_directive in (1, 5)
-                payment_after = (
+                clearance_after = (
                     _digest(
                         _DIRECT_CLEARANCE_ROOT_DOMAIN,
-                        payment_before,
+                        clearance_before,
                         operation.continuity_after_state_id,
                         operation.decision_id,
                         bytes((operation.effective_directive,)),
                     )
                     if clearance_advanced
-                    else payment_before
+                    else clearance_before
                 )
+                clearance_count_after = clearance_count_before + 1
+                settled_batch_count_after = settled_batch_count_before
                 previous_binding = bytes(row[4])
-                next_binding = _digest(
-                    _DATABASE_STATE_BINDING,
-                    previous_binding,
-                    operation.attempt_id,
-                    nullifier_after,
-                    payment_after,
-                    operation.bundle_id,
-                    operation_digest,
-                    self._governance_authority.commitment_512,
-                    _u64(self._epoch, "database_epoch"),
+                direct_state_binding_after = _direct_clearance_state_binding(
+                    previous_binding=direct_state.state_binding,
+                    previous_database_binding=previous_binding,
+                    operation_digest=operation_digest,
+                    epoch=self._epoch,
+                    sequence=row[1] + 1,  # type: ignore[operator]
+                    clearance_root=clearance_after,
+                    clearance_count=clearance_count_after,
+                    payment_root=payment_before,
+                    settled_batch_count=settled_batch_count_after,
+                    governance_commitment=self._governance_authority.commitment_512,
+                )
+                next_binding = _direct_database_state_binding(
+                    previous_database_binding=previous_binding,
+                    direct_state_binding=direct_state_binding_after,
+                    operation=operation,
+                    operation_digest=operation_digest,
+                    sequence=row[1] + 1,  # type: ignore[operator]
+                    nullifier_after=nullifier_after,
+                    payment_root_after=payment_before,
+                    settled_batch_count_after=settled_batch_count_after,
+                    clearance_root_after=clearance_after,
+                    clearance_count_after=clearance_count_after,
+                    governance_commitment=self._governance_authority.commitment_512,
                 )
                 event_payload = _direct_audit_payload(
                     operation=operation,
@@ -2853,7 +3412,14 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     nullifier_before=nullifier_before,
                     nullifier_after=nullifier_after,
                     payment_before=payment_before,
-                    payment_after=payment_after,
+                    payment_after=payment_before,
+                    clearance_before=clearance_before,
+                    clearance_after=clearance_after,
+                    clearance_count_before=clearance_count_before,
+                    clearance_count_after=clearance_count_after,
+                    direct_state_binding=direct_state_binding_after,
+                    settled_batch_count_before=settled_batch_count_before,
+                    settled_batch_count_after=settled_batch_count_after,
                     state_binding=next_binding,
                     previous_head=bytes(row[5]),
                 )
@@ -2895,14 +3461,21 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     nullifier_before,
                     nullifier_after,
                     payment_before,
-                    payment_after,
+                    payment_before,
                     next_binding,
                     next_audit_head,
                     int(clearance_advanced),
+                    clearance_before,
+                    clearance_after,
+                    clearance_count_before,
+                    clearance_count_after,
+                    direct_state_binding_after,
+                    settled_batch_count_before,
+                    settled_batch_count_after,
                 )
                 connection.execute(
                     "INSERT INTO direct_clearance_requests VALUES ("
-                    + ", ".join("?" for _ in range(41))
+                    + ", ".join("?" for _ in range(48))
                     + ")",
                     tuple(
                         value if type(value) is int else sqlite3.Binary(value)
@@ -2933,24 +3506,25 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     epoch=self._epoch,
                     sequence=row[1] + 1,  # type: ignore[operator]
                     strong_nullifier_root=nullifier_after,
-                    strong_payment_state_root=payment_after,
+                    strong_payment_state_root=payment_before,
                     state_binding=next_binding,
                     audit_head=next_audit_head,
                     anti_rollback_epoch=next_anti_epoch,
-                    settled_batch_count=row[8] + 1,  # type: ignore[operator]
+                    settled_batch_count=settled_batch_count_after,
                 )
                 connection.execute(
                     "INSERT INTO transition_records VALUES "
-                    "(?, 'SETTLEMENT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         row[1] + 1,
+                        _DIRECT_TRANSITION_KIND,
                         sqlite3.Binary(operation_digest),
                         sqlite3.Binary(previous_binding),
                         sqlite3.Binary(next_binding),
                         sqlite3.Binary(nullifier_before),
                         sqlite3.Binary(nullifier_after),
                         sqlite3.Binary(payment_before),
-                        sqlite3.Binary(payment_after),
+                        sqlite3.Binary(payment_before),
                         sqlite3.Binary(self._governance_authority.commitment_512),
                         sqlite3.Binary(self._governance_authority.commitment_512),
                         sqlite3.Binary(self._profile_id),
@@ -2968,16 +3542,31 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 )
                 connection.execute(
                     "UPDATE state SET sequence=?, strong_nullifier_root=?, "
-                    "strong_payment_state_root=?, state_binding=?, audit_head=?, "
-                    "anti_rollback_epoch=?, settled_batch_count=? WHERE id=1",
+                    "state_binding=?, audit_head=?, anti_rollback_epoch=? WHERE id=1",
                     (
                         row[1] + 1,
                         sqlite3.Binary(nullifier_after),
-                        sqlite3.Binary(payment_after),
                         sqlite3.Binary(next_binding),
                         sqlite3.Binary(next_audit_head),
                         next_anti_epoch,
-                        row[8] + 1,
+                    ),
+                )
+                connection.execute(
+                    "UPDATE direct_clearance_state SET epoch=?, sequence=?, "
+                    "clearance_root=?, direct_clearance_count=?, state_binding=?, "
+                    "database_state_binding=?, payment_root=?, settled_batch_count=?, "
+                    "audit_head=?, last_operation_digest=? WHERE id=1",
+                    (
+                        self._epoch,
+                        row[1] + 1,
+                        sqlite3.Binary(clearance_after),
+                        clearance_count_after,
+                        sqlite3.Binary(direct_state_binding_after),
+                        sqlite3.Binary(next_binding),
+                        sqlite3.Binary(payment_before),
+                        settled_batch_count_after,
+                        sqlite3.Binary(next_audit_head),
+                        sqlite3.Binary(operation_digest),
                     ),
                 )
                 if self._before_commit_hook is not None:
@@ -2994,8 +3583,14 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     sequence_after=row[1] + 1,  # type: ignore[operator]
                     nullifier_root_before=nullifier_before,
                     nullifier_root_after=nullifier_after,
-                    clearance_root_before=payment_before,
-                    clearance_root_after=payment_after,
+                    clearance_root_before=clearance_before,
+                    clearance_root_after=clearance_after,
+                    clearance_count_before=clearance_count_before,
+                    clearance_count_after=clearance_count_after,
+                    payment_root_before=payment_before,
+                    payment_root_after=payment_before,
+                    settled_batch_count_before=settled_batch_count_before,
+                    settled_batch_count_after=settled_batch_count_after,
                     state_binding=next_binding,
                     audit_head=next_audit_head,
                     effective_directive=operation.effective_directive,
@@ -3637,15 +4232,29 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 or snapshot.governance_commitment != self._governance_authority.commitment_512
             ):
                 raise ProductionBoundaryError("database_state_identity_mismatch")
+            direct_count, direct_state = self._validate_direct_clearance_state(connection)
             counts = (
                 connection.execute("SELECT COUNT(*) FROM settlement_requests").fetchone()[0],
                 connection.execute("SELECT COUNT(*) FROM settled_nullifier_roots").fetchone()[0],
                 connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0],
             )
-            direct_count = connection.execute(
-                "SELECT COUNT(*) FROM direct_clearance_requests"
-            ).fetchone()[0]
-            if counts[0] + direct_count != snapshot.settled_batch_count or counts[1] != counts[0] or counts[2] != snapshot.sequence:
+            if direct_count:
+                if (
+                    counts[0] != 0
+                    or counts[1] != 0
+                    or direct_count != snapshot.sequence
+                    or snapshot.settled_batch_count != 0
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_mixed_transition_history"
+                    )
+            elif (
+                counts[0] != snapshot.settled_batch_count
+                or counts[1] != counts[0]
+                or counts[0] != snapshot.sequence
+            ):
+                raise ProductionBoundaryError("database_transition_count_mismatch")
+            if counts[2] != snapshot.sequence:
                 raise ProductionBoundaryError("database_transition_count_mismatch")
             previous_head = _digest(
                 _AUDIT_GENESIS_DOMAIN,
@@ -3839,6 +4448,17 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 previous_payment = payment_after
                 previous_binding = state_binding_after
                 expected_sequence += 1
+            previous_clearance_root = self._initial_direct_clearance_root
+            previous_clearance_count = 0
+            previous_clearance_binding = _direct_clearance_genesis_binding(
+                epoch=snapshot.epoch,
+                database_state_binding=previous_binding,
+                clearance_root=previous_clearance_root,
+                payment_root=previous_payment,
+                settled_batch_count=0,
+                governance_commitment=snapshot.governance_commitment,
+            )
+            previous_settled_batch_count = 0
             direct_rows = connection.execute(
                 "SELECT operation_digest, bundle_id, receipt_id, request_id, attempt_id, "
                 "decision_id, join_id, source_root, profile_id, schema_id, program_id, "
@@ -3851,7 +4471,10 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 "continuity_before_root, continuity_after_root, sequence_before, "
                 "sequence_after, nullifier_root_before, nullifier_root_after, "
                 "payment_root_before, payment_root_after, state_binding_after, "
-                "audit_head_after, clearance_advanced "
+                "audit_head_after, clearance_advanced, clearance_root_before, "
+                "clearance_root_after, direct_clearance_count_before, "
+                "direct_clearance_count_after, direct_state_binding_after, "
+                "settled_batch_count_before, settled_batch_count_after "
                 "FROM direct_clearance_requests ORDER BY sequence_after"
             )
             for raw_direct in direct_rows:
@@ -3859,7 +4482,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     value if type(value) is int else bytes(value)
                     for value in raw_direct
                 )
-                direct_operation = _direct_operation_from_record(direct)
+                direct_operation = _direct_operation_from_record(direct[:41])
                 operation_digest = direct[0]
                 if (
                     _direct_operation_digest(direct_operation) != operation_digest
@@ -3872,6 +4495,9 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     or direct[34] != previous_nullifier
                     or direct[36] != previous_payment
                     or direct[40] != int(direct_operation.effective_directive in (1, 5))
+                    or direct[41] != previous_clearance_root
+                    or direct[43] != previous_clearance_count
+                    or direct[46] != previous_settled_batch_count
                 ):
                     raise ProductionBoundaryError("database_direct_transition_mismatch")
                 if (
@@ -3895,31 +4521,51 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     direct_operation.bundle_id,
                     direct_operation.receipt_id,
                 )
-                expected_payment = (
+                expected_clearance = (
                     _digest(
                         _DIRECT_CLEARANCE_ROOT_DOMAIN,
-                        previous_payment,
+                        previous_clearance_root,
                         direct_operation.continuity_after_state_id,
                         direct_operation.decision_id,
                         bytes((direct_operation.effective_directive,)),
                     )
                     if direct_operation.effective_directive in (1, 5)
-                    else previous_payment
+                    else previous_clearance_root
                 )
-                expected_binding = _digest(
-                    _DATABASE_STATE_BINDING,
-                    previous_binding,
-                    direct_operation.attempt_id,
-                    expected_nullifier,
-                    expected_payment,
-                    direct_operation.bundle_id,
-                    operation_digest,
-                    snapshot.governance_commitment,
-                    _u64(snapshot.epoch, "database_epoch"),
+                expected_clearance_count = previous_clearance_count + 1
+                expected_settled_batch_count = previous_settled_batch_count
+                expected_direct_binding = _direct_clearance_state_binding(
+                    previous_binding=previous_clearance_binding,
+                    previous_database_binding=previous_binding,
+                    operation_digest=operation_digest,
+                    epoch=snapshot.epoch,
+                    sequence=expected_sequence,
+                    clearance_root=expected_clearance,
+                    clearance_count=expected_clearance_count,
+                    payment_root=previous_payment,
+                    settled_batch_count=expected_settled_batch_count,
+                    governance_commitment=snapshot.governance_commitment,
+                )
+                expected_binding = _direct_database_state_binding(
+                    previous_database_binding=previous_binding,
+                    direct_state_binding=expected_direct_binding,
+                    operation=direct_operation,
+                    operation_digest=operation_digest,
+                    sequence=expected_sequence,
+                    nullifier_after=expected_nullifier,
+                    payment_root_after=previous_payment,
+                    settled_batch_count_after=expected_settled_batch_count,
+                    clearance_root_after=expected_clearance,
+                    clearance_count_after=expected_clearance_count,
+                    governance_commitment=snapshot.governance_commitment,
                 )
                 if (
                     direct[35] != expected_nullifier
-                    or direct[37] != expected_payment
+                    or direct[37] != previous_payment
+                    or direct[42] != expected_clearance
+                    or direct[44] != expected_clearance_count
+                    or direct[45] != expected_direct_binding
+                    or direct[47] != expected_settled_batch_count
                     or direct[38] != expected_binding
                 ):
                     raise ProductionBoundaryError("database_direct_state_binding_invalid")
@@ -3957,7 +4603,14 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                         nullifier_before=previous_nullifier,
                         nullifier_after=direct[35],  # type: ignore[arg-type]
                         payment_before=previous_payment,
-                        payment_after=direct[37],  # type: ignore[arg-type]
+                        payment_after=previous_payment,
+                        clearance_before=previous_clearance_root,
+                        clearance_after=direct[42],  # type: ignore[arg-type]
+                        clearance_count_before=previous_clearance_count,
+                        clearance_count_after=direct[44],  # type: ignore[arg-type]
+                        direct_state_binding=direct[45],  # type: ignore[arg-type]
+                        settled_batch_count_before=previous_settled_batch_count,
+                        settled_batch_count_after=direct[47],  # type: ignore[arg-type]
                         state_binding=direct[38],  # type: ignore[arg-type]
                         previous_head=expected_previous_head,
                     ).decode("ascii")
@@ -3970,6 +4623,13 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 ).fetchone()
                 if audit_row is None or direct[39] != bytes(audit_row[0]):
                     raise ProductionBoundaryError("database_direct_audit_head_mismatch")
+                transition_kind = connection.execute(
+                    "SELECT transition_kind FROM transition_records "
+                    "WHERE record_commitment=?",
+                    (sqlite3.Binary(operation_digest),),
+                ).fetchone()
+                if transition_kind is None or transition_kind[0] != _DIRECT_TRANSITION_KIND:
+                    raise ProductionBoundaryError("database_direct_transition_kind_invalid")
                 transition = connection.execute(
                     "SELECT sequence_after, record_commitment, state_binding_before, "
                     "state_binding_after, nullifier_root_before, nullifier_root_after, "
@@ -3994,7 +4654,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     or transition[4] != previous_nullifier
                     or transition[5] != direct[35]
                     or transition[6] != previous_payment
-                    or transition[7] != direct[37]
+                    or transition[7] != previous_payment
                     or transition[8] != snapshot.governance_commitment
                     or transition[9] != snapshot.governance_commitment
                     or transition[10] != self._profile_id
@@ -4023,17 +4683,21 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                     epoch=snapshot.epoch,
                     sequence=expected_sequence,
                     strong_nullifier_root=direct[35],  # type: ignore[arg-type]
-                    strong_payment_state_root=direct[37],  # type: ignore[arg-type]
+                    strong_payment_state_root=previous_payment,
                     state_binding=direct[38],  # type: ignore[arg-type]
                     audit_head=direct[39],  # type: ignore[arg-type]
                     anti_rollback_epoch=expected_sequence,
-                    settled_batch_count=expected_sequence,
+                    settled_batch_count=previous_settled_batch_count,
                 )
                 if transition[20] != checkpoint.checkpoint_commitment:
                     raise ProductionBoundaryError("database_transition_checkpoint_invalid")
                 previous_nullifier = direct[35]  # type: ignore[assignment]
                 previous_payment = direct[37]  # type: ignore[assignment]
                 previous_binding = direct[38]  # type: ignore[assignment]
+                previous_clearance_root = direct[42]  # type: ignore[assignment]
+                previous_clearance_count = direct[44]  # type: ignore[assignment]
+                previous_clearance_binding = direct[45]  # type: ignore[assignment]
+                previous_settled_batch_count = direct[47]  # type: ignore[assignment]
                 expected_sequence += 1
             if (
                 expected_sequence - 1 != snapshot.sequence
@@ -4042,6 +4706,22 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 or previous_binding != snapshot.state_binding
             ):
                 raise ProductionBoundaryError("database_request_final_state_mismatch")
+            if direct_count:
+                if (
+                    direct_state.sequence != snapshot.sequence
+                    or direct_state.clearance_count != previous_clearance_count
+                    or direct_state.clearance_root != previous_clearance_root
+                    or direct_state.state_binding != previous_clearance_binding
+                    or direct_state.database_state_binding != snapshot.state_binding
+                    or direct_state.payment_root != snapshot.strong_payment_state_root
+                    or direct_state.settled_batch_count != previous_settled_batch_count
+                    or direct_state.audit_head != snapshot.audit_head
+                    or direct_state.last_operation_digest
+                    != self._latest_operation_digest(connection, snapshot.sequence)
+                ):
+                    raise ProductionBoundaryError(
+                        "database_direct_clearance_state_mismatch"
+                    )
             transition_commitment = self._latest_operation_digest(
                 connection,
                 snapshot.anti_rollback_epoch,
@@ -4603,6 +5283,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
 
     def verify_integrity(self) -> None:
         with closing(self._connect()) as connection:
+            direct_count, _ = self._validate_direct_clearance_state(connection)
             authority_rows = connection.execute(
                 "SELECT activation_sequence, governance_commitment, profile_code, epoch, "
                 "truth_root_0, truth_root_1, truth_root_2, truth_root_3, truth_root_4, "
@@ -4629,7 +5310,8 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 )
             migration_authorities = connection.execute(
                 "SELECT sequence_after, governance_after, epoch_after FROM transition_records "
-                "WHERE transition_kind!='SETTLEMENT' ORDER BY sequence_after"
+                "WHERE transition_kind NOT IN ('SETTLEMENT', 'DIRECT_CLEARANCE') "
+                "ORDER BY sequence_after"
             ).fetchall()
             expected_authority_sequences = {0}
             for sequence_after, governance_after, epoch_after in migration_authorities:
@@ -4649,9 +5331,6 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 )
             migration_count = connection.execute(
                 "SELECT COUNT(*) FROM migration_requests"
-            ).fetchone()[0]
-            direct_count = connection.execute(
-                "SELECT COUNT(*) FROM direct_clearance_requests"
             ).fetchone()[0]
             transition_count = connection.execute(
                 "SELECT COUNT(*) FROM transition_records"
@@ -4692,6 +5371,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 governance_authority=self._governance_authority,
                 initial_strong_nullifier_root=self._initial_nullifier_root,
                 initial_strong_payment_state_root=self._initial_payment_root,
+                initial_direct_clearance_root=self._initial_direct_clearance_root,
                 epoch=self._epoch,
                 profile_id=self._profile_id,
                 suite_id=self._suite_id,
@@ -4741,6 +5421,7 @@ class SQLiteSettlementStoreV2(TransactionalSettlementStoragePort):
                 governance_authority=self._governance_authority,
                 initial_strong_nullifier_root=self._initial_nullifier_root,
                 initial_strong_payment_state_root=self._initial_payment_root,
+                initial_direct_clearance_root=self._initial_direct_clearance_root,
                 epoch=self._epoch,
                 profile_id=self._profile_id,
                 suite_id=self._suite_id,

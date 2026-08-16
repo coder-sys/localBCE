@@ -6,6 +6,9 @@ OBJECTIVE: Compose the canonical plaintext continuity receipt and its independen
 existing transactional database boundary. The candidate must pin the verifier-owned direct context,
 recheck exact semantic/state bindings, commit one serializable append-only clearance/audit transition,
 preserve non-clear outcomes, and remain retry-safe, fail-closed, nonactivating, and synthetic-only.
+Direct clearance is a separate state lane: its version-1 durable clearance root/count is bound into
+the database state binding, while the payment root and settlement count remain unchanged and the
+transition kind is `DIRECT_CLEARANCE`.
 
 AUTHORITY: AGENTS.md owns execution and precedence; this file owns only this bounded objective and
 blockers; STATE.md owns verified evidence and nonclaims; ARCHITECTURE.md owns system boundaries;
@@ -37,9 +40,12 @@ touching the authoritative checkout or the three retained source archives.
 
 ## Candidate evidence
 
-The candidate is based on source commit `ce31abeb941ce7ad5927ca67d6f23872f430ed09`. Focused
-verification completed with 24 direct-state tests, 31 combined continuity/trust-boundary tests,
-34 transactional database/production/migration tests, and 12 implicated attack tests passing.
+The candidate is based on source commit `ce31abeb941ce7ad5927ca67d6f23872f430ed09`. The correction
+is based on candidate commit `33f46cb89c1ebed853a3b0e55fba0ed428693926`. Final isolated focused
+verification is 27 direct-state tests, 31 native continuity/trust-boundary tests, 46 database /
+production / migration / implicated-attack tests, and 35 active-core/security/documentation/
+release/readiness tests plus 17 subtests, all passing. The direct lane rejects the pre-correction
+direct-table shape rather than silently reinterpreting it.
 The existing plaintext telemetry covered 8 synthetic cases with a 195,889-byte Python heap peak
 and a 23,859,200-byte peak working set; its complete proof resource gate remains false because no
 proof backend is selected. The exact raw commands and outputs remain in the run handoff.

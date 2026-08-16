@@ -60,6 +60,7 @@ DIRECT_DATABASE_SCHEMA_ID = _wide("direct-state-owned-clearance-schema-v1")
 DIRECT_DATABASE_PROGRAM_ID = _wide("verifier-owned-plaintext-continuity-program-v1")
 DIRECT_DATABASE_DOMAIN = _field("direct-state-owned-database-domain-v1")
 DIRECT_INITIAL_NULLIFIER_ROOT = _wide("direct-state-owned-nullifier-genesis-v1")
+DIRECT_INITIAL_PAYMENT_ROOT = _wide("direct-state-owned-payment-genesis-v1")
 DIRECT_INITIAL_CLEARANCE_ROOT = _wide("direct-state-owned-clearance-genesis-v1")
 DIRECT_AUTHORITY_KEY = _wide("direct-state-owned-boundary-authority-v1")
 
@@ -92,6 +93,12 @@ class DirectClearanceReceiptV1:
     nullifier_root_after: bytes
     clearance_root_before: bytes
     clearance_root_after: bytes
+    clearance_count_before: int
+    clearance_count_after: int
+    payment_root_before: bytes
+    payment_root_after: bytes
+    settled_batch_count_before: int
+    settled_batch_count_after: int
     state_binding: bytes
     audit_head: bytes
     policy_result: int
@@ -115,6 +122,8 @@ class DirectClearanceReceiptV1:
             ("receipt_nullifier_after", self.nullifier_root_after),
             ("receipt_clearance_before", self.clearance_root_before),
             ("receipt_clearance_after", self.clearance_root_after),
+            ("receipt_payment_before", self.payment_root_before),
+            ("receipt_payment_after", self.payment_root_after),
             ("receipt_state_binding", self.state_binding),
             ("receipt_audit_head", self.audit_head),
         ):
@@ -124,6 +133,16 @@ class DirectClearanceReceiptV1:
             raise DirectStateOwnedClearanceError("receipt_sequence_before_invalid")
         if self.sequence_after != self.sequence_before + 1:
             raise DirectStateOwnedClearanceError("receipt_sequence_after_invalid")
+        if type(self.clearance_count_before) is not int or self.clearance_count_before < 0:
+            raise DirectStateOwnedClearanceError("receipt_clearance_count_before_invalid")
+        if self.clearance_count_after != self.clearance_count_before + 1:
+            raise DirectStateOwnedClearanceError("receipt_clearance_count_after_invalid")
+        if type(self.settled_batch_count_before) is not int or self.settled_batch_count_before < 0:
+            raise DirectStateOwnedClearanceError("receipt_settled_count_before_invalid")
+        if self.settled_batch_count_after != self.settled_batch_count_before:
+            raise DirectStateOwnedClearanceError("receipt_settled_count_changed")
+        if self.payment_root_after != self.payment_root_before:
+            raise DirectStateOwnedClearanceError("receipt_payment_root_changed")
         if self.policy_result not in (1, 2, 3, 4):
             raise DirectStateOwnedClearanceError("receipt_policy_result_invalid")
         if self.effective_directive not in (1, 2, 3, 4, 5):
@@ -158,7 +177,8 @@ class DirectStateOwnedAtomicClearanceV1:
             settlement_domain=DIRECT_DATABASE_DOMAIN,
             governance_authority=DIRECT_GOVERNANCE_AUTHORITY,
             initial_strong_nullifier_root=DIRECT_INITIAL_NULLIFIER_ROOT,
-            initial_strong_payment_state_root=DIRECT_INITIAL_CLEARANCE_ROOT,
+            initial_strong_payment_state_root=DIRECT_INITIAL_PAYMENT_ROOT,
+            initial_direct_clearance_root=DIRECT_INITIAL_CLEARANCE_ROOT,
             epoch=DIRECT_EPOCH,
             profile_id=self._profile_id,
             suite_id=DIRECT_DATABASE_CONTEXT_ID,
@@ -273,6 +293,12 @@ class DirectStateOwnedAtomicClearanceV1:
             nullifier_root_after=committed.nullifier_root_after,
             clearance_root_before=committed.clearance_root_before,
             clearance_root_after=committed.clearance_root_after,
+            clearance_count_before=committed.clearance_count_before,
+            clearance_count_after=committed.clearance_count_after,
+            payment_root_before=committed.payment_root_before,
+            payment_root_after=committed.payment_root_after,
+            settled_batch_count_before=committed.settled_batch_count_before,
+            settled_batch_count_after=committed.settled_batch_count_after,
             state_binding=committed.state_binding,
             audit_head=committed.audit_head,
             policy_result=details.policy_result,
@@ -282,6 +308,9 @@ class DirectStateOwnedAtomicClearanceV1:
 
     def snapshot(self):
         return self._store.snapshot()
+
+    def clearance_snapshot(self):
+        return self._store.direct_clearance_snapshot()
 
     def identity_snapshot(self):
         return self._store.identity_snapshot()
@@ -321,6 +350,7 @@ __all__ = (
     "DIRECT_EPOCH",
     "DIRECT_GOVERNANCE_AUTHORITY",
     "DIRECT_INITIAL_CLEARANCE_ROOT",
+    "DIRECT_INITIAL_PAYMENT_ROOT",
     "DIRECT_INITIAL_NULLIFIER_ROOT",
     "DirectClearanceReceiptV1",
     "DirectStateOwnedAtomicClearanceV1",

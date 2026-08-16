@@ -10,6 +10,8 @@ from threading import Lock
 import pytest
 
 from app.direct_state_owned_clearance_v1 import (
+    DIRECT_INITIAL_CLEARANCE_ROOT,
+    DIRECT_INITIAL_PAYMENT_ROOT,
     DirectStateOwnedAtomicClearanceV1,
     DirectStateOwnedClearanceError,
 )
@@ -218,6 +220,53 @@ def _direct_count(path: Path) -> int:
         )
 
 
+def _direct_state_values(path: Path) -> tuple[bytes, int, bytes, int, int, str]:
+    with sqlite3.connect(path) as connection:
+        state = connection.execute(
+            "SELECT strong_payment_state_root, settled_batch_count, sequence "
+            "FROM state WHERE id=1"
+        ).fetchone()
+        direct = connection.execute(
+            "SELECT clearance_root, direct_clearance_count, payment_root, "
+            "settled_batch_count, sequence FROM direct_clearance_state WHERE id=1"
+        ).fetchone()
+        transition = connection.execute(
+            "SELECT transition_kind FROM transition_records WHERE sequence_after=1"
+        ).fetchone()
+    assert state is not None and direct is not None and transition is not None
+    return (
+        bytes(state[0]),
+        int(state[1]),
+        bytes(direct[0]),
+        int(direct[1]),
+        int(direct[3]),
+        str(transition[0]),
+    )
+
+
+def _tamper_direct_state(path: Path, field: str) -> None:
+    assert field in {"clearance_root", "direct_clearance_count"}
+    with sqlite3.connect(path) as connection:
+        if field == "clearance_root":
+            connection.execute(
+                "UPDATE direct_clearance_state SET clearance_root=? WHERE id=1",
+                (sqlite3.Binary(b"\xA5" * 64),),
+            )
+        else:
+            connection.execute(
+                "UPDATE direct_clearance_state SET direct_clearance_count=9 WHERE id=1"
+            )
+
+
+def _tamper_transition_kind(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TRIGGER transition_records_no_update")
+        connection.execute(
+            "UPDATE transition_records SET transition_kind='SETTLEMENT' "
+            "WHERE sequence_after=1"
+        )
+
+
 class _FinalizeFailureAnchor:
     def __init__(self) -> None:
         self.delegate = InMemoryAntiRollbackReference()
@@ -273,6 +322,7 @@ def test_all_five_directives_and_exception_sentinel(tmp_path: Path) -> None:
         )
         result = service.submit(raw)
         details = parse_bundle_details(raw)
+        payment_root, settled_count, clearance_root, clearance_count, direct_settled_count, transition_kind = _direct_state_values(service.path)
         observed.add(result.effective_directive)
         assert result.receipt_id == producer_receipt.receipt_id
         assert result.bundle_id == details.bundle_id
@@ -280,9 +330,26 @@ def test_all_five_directives_and_exception_sentinel(tmp_path: Path) -> None:
         assert result.proof_suite_id is None
         assert result.proof_session_accepted is False
         assert result.economic_mutation is False
+        assert payment_root == DIRECT_INITIAL_PAYMENT_ROOT
+        assert result.payment_root_before == DIRECT_INITIAL_PAYMENT_ROOT
+        assert result.payment_root_after == DIRECT_INITIAL_PAYMENT_ROOT
+        assert result.clearance_root_before == DIRECT_INITIAL_CLEARANCE_ROOT
+        assert settled_count == 0
+        assert direct_settled_count == 0
+        assert result.settled_batch_count_before == 0
+        assert result.settled_batch_count_after == 0
+        assert clearance_count == 1
+        assert result.clearance_count_before == 0
+        assert result.clearance_count_after == 1
+        assert result.clearance_root_after == clearance_root
+        assert transition_kind == "DIRECT_CLEARANCE"
         assert result.clearance_advanced == (
             result.effective_directive in (DIRECTIVE_CLEAR, DIRECTIVE_EXCEPTION_APPROVED)
         )
+        if result.clearance_advanced:
+            assert result.clearance_root_after != result.clearance_root_before
+        else:
+            assert result.clearance_root_after == result.clearance_root_before
         if name == "governed-exception":
             assert details.decision["exception_id"] != NO_EXCEPTION_SENTINEL
         else:
@@ -324,6 +391,12 @@ def test_deterministic_parse_serialize_and_exact_retry(tmp_path: Path) -> None:
     first = service.submit(raw_one)
     second = service.submit(raw_two)
     assert second == first
+    payment_root, settled_count, _, clearance_count, direct_settled_count, transition_kind = _direct_state_values(service.path)
+    assert payment_root == DIRECT_INITIAL_PAYMENT_ROOT
+    assert settled_count == 0
+    assert direct_settled_count == 0
+    assert clearance_count == 1
+    assert transition_kind == "DIRECT_CLEARANCE"
     assert service.snapshot().sequence == 1
     service.verify_integrity()
 
@@ -333,6 +406,7 @@ def test_deterministic_parse_serialize_and_exact_retry(tmp_path: Path) -> None:
     fresh = fresh_service.submit(raw_two)
     assert fresh == first
     assert fresh_service.snapshot() == service.snapshot()
+    assert fresh_service.clearance_snapshot() == service.clearance_snapshot()
     fresh_service.verify_integrity()
     fresh_service.close()
     service.close()
@@ -548,3 +622,54 @@ def test_backup_restore_preserves_direct_identity_and_retry(tmp_path: Path) -> N
     assert retry == committed
     assert recovered.snapshot().sequence == 1
     recovered.verify_integrity()
+
+
+@pytest.mark.parametrize("field", ("clearance_root", "direct_clearance_count"))
+def test_direct_clearance_state_corruption_fails_verify_restart_and_backup(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+
+    verify_path = tmp_path / f"verify-{field}.sqlite3"
+    verifying = DirectStateOwnedAtomicClearanceV1(path=verify_path)
+    verifying.submit(raw)
+    _tamper_direct_state(verify_path, field)
+    with pytest.raises(ProductionBoundaryError):
+        verifying.verify_integrity()
+    verifying.close()
+
+    restart_path = tmp_path / f"restart-{field}.sqlite3"
+    restarting = DirectStateOwnedAtomicClearanceV1(path=restart_path)
+    restarting.submit(raw)
+    restarting.close()
+    _tamper_direct_state(restart_path, field)
+    with pytest.raises(ProductionBoundaryError):
+        DirectStateOwnedAtomicClearanceV1(path=restart_path)
+
+    source_path = tmp_path / f"backup-source-{field}.sqlite3"
+    backup_path = tmp_path / f"backup-{field}.sqlite3"
+    restored_path = tmp_path / f"restored-{field}.sqlite3"
+    source = DirectStateOwnedAtomicClearanceV1(path=source_path)
+    source.submit(raw)
+    source.create_backup(backup_path)
+    source.close()
+    _tamper_direct_state(backup_path, field)
+    recovery_source = DirectStateOwnedAtomicClearanceV1(path=source_path)
+    with pytest.raises(ProductionBoundaryError):
+        recovery_source.recover_from_backup(
+            backup_path=backup_path,
+            recovered_path=restored_path,
+        )
+    recovery_source.close()
+
+
+def test_direct_transition_kind_substitution_fails_closed(tmp_path: Path) -> None:
+    raw, _, _, _, _ = _case("valid-continuity")
+    path = tmp_path / "transition-kind.sqlite3"
+    service = DirectStateOwnedAtomicClearanceV1(path=path)
+    service.submit(raw)
+    service.close()
+    _tamper_transition_kind(path)
+    with pytest.raises(ProductionBoundaryError, match="database_direct_transition_kind_invalid"):
+        DirectStateOwnedAtomicClearanceV1(path=path)
