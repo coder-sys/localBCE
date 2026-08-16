@@ -34,7 +34,8 @@ def test_native_v3_roadmap_has_no_retired_package_ledger() -> None:
     roadmap = _text(ROADMAP)
     rows = _package_rows(roadmap)
     assert rows == {}
-    assert "Retired BL-PQ512/H4 package counts" in roadmap
+    assert "Rejected architectures are recorded separately" in roadmap
+    assert "## Current release gate" in roadmap
     assert "## Completed foundation" in roadmap
     assert "## Current private-proof blocker" in roadmap
     assert "33 of 81" not in roadmap
@@ -79,6 +80,7 @@ def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() ->
     assert planning["release_candidate_state"] == "NOT_DEPLOYMENT_READY"
     assert planning["proof_suite_state"] == "UNSELECTED"
     assert planning["production_usable"] is False
+    assert planning["contract"] == "docs/IMPLEMENTATION_ROADMAP.md"
 
     blockers = payload["blockers"]
     external = [item for item in blockers if item["external_required"]]

@@ -1,11 +1,20 @@
 # Native-v3 implementation roadmap
 
-Updated: 2026-08-14
+Updated: 2026-08-15
 Owner: dependency order for Native-v3, the later Lean gate, and the nonpayment Mirror wedge. It is
 not a proof-backend selection or activation record.
 
 This roadmap follows the smallest dependency chain that can produce a trustworthy state-side
-clearance system. Retired BL-PQ512/H4 package counts and capture campaigns are not milestones.
+clearance system. Rejected architectures are recorded separately and are not milestones.
+
+## Current release gate
+
+`ops/launch_blockers.json` is the machine-readable launch-blocker authority; this section is its
+current human-readable summary. The release candidate remains `NOT_DEPLOYMENT_READY`,
+`proofSuiteId` remains unset, and `production_usable` remains false until the internal engineering
+and independent-assurance gates close. Activation inputs such as live endpoints, signers, payment
+accounts, and legal authorization are supplied only after those gates; official payment rails move
+funds later and are not part of Blind Ledger clearance.
 
 ## Completed foundation
 

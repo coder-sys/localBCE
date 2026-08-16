@@ -113,7 +113,6 @@ CURRENT_TOP_LEVELS = frozenset(
 # They remain selectable only when a release review explicitly includes them.
 RETAINED_PREFIXES = (
     "app/batch/",
-    "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
     "experiments/bl_pq512_crypto_foundation/",
     "experiments/fixed_shape_claim_air/",
     "zk-cairo-sharp/",

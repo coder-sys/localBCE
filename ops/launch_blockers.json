@@ -8,7 +8,7 @@
     "release_candidate_state": "NOT_DEPLOYMENT_READY",
     "proof_suite_state": "UNSELECTED",
     "production_usable": false,
-    "contract": "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md"
+    "contract": "docs/IMPLEMENTATION_ROADMAP.md"
   },
   "classification_definitions": {
     "internal_engineering": "Must be designed, implemented, tested, and packaged by Blind Ledger; outside help is not a closure dependency.",

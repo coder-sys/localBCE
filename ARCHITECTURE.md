@@ -247,22 +247,21 @@ assumptions, CI gates, and implementation order.
 The root authorities are `AGENTS.md` (execution), `CURRENT_TASK.md` (bounded work), `STATE.md`
 (verified evidence), this file (system ownership), and `README.md` (entry route). The independent
 design authority is `docs/DESIGN_IDEOLOGY.md`; the private-proof, database, Lean, Native-v3,
-roadmap, dependency, and pending-domain-decision owners are linked from `README.md`.
+roadmap, dependency, rejection, and pending-domain-decision owners are linked from `README.md`.
 
 The following local documents have one component owner and one narrow purpose:
 
 | Component | Local authority | Purpose |
 | --- | --- | --- |
 | Protected batch implementation | `app/batch/` source and focused tests | The code and tests own the retained compatibility format and pepper behavior; no separate legacy Markdown is current |
-| Protected deployment marker | [`docs/DEPLOYMENT_READY_BUILD_CONTRACT.md`](docs/DEPLOYMENT_READY_BUILD_CONTRACT.md) | Byte-bound launch-blocker compatibility marker retained for `ops/launch_blockers.json` |
-| Experimental lanes | [`experiments/README.md`](experiments/README.md) | Native-v3 entry route and explicit non-authority status for retained experiments |
 | Operations | [`ops/DEPLOYMENT_RUNBOOK.md`](ops/DEPLOYMENT_RUNBOOK.md), [`ops/KEY_CUSTODY_AND_ROTATION.md`](ops/KEY_CUSTODY_AND_ROTATION.md), [`ops/MONITORING_AUDIT_EVENTS.md`](ops/MONITORING_AUDIT_EVENTS.md), [`ops/PRODUCTION_CONFIG_CHECKLIST.md`](ops/PRODUCTION_CONFIG_CHECKLIST.md), [`ops/RISK_REGISTER.md`](ops/RISK_REGISTER.md) | Synthetic deployment, custody, monitoring, configuration, and risk procedures |
 | Portal | [`portal_shared/FONT_SOURCES.md`](portal_shared/FONT_SOURCES.md) | Font provenance and local-serving license record |
-| Protected Cairo reference | [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md) | Differential reference status and attack coverage; never a selected backend |
+| Rejected architectures | [`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md) | Concise current prohibitions against restarting retired directions |
 | Pending domain decision | [`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md) and `rarc_mapping.tsv` | Open mapping rows, source material, G8 split rationale, and required sign-off |
 
-The release and documentation gates register every retained Markdown path. A new document or a
-document under a retired lane is a policy failure until its owner and purpose are reviewed.
+The release and documentation gates register every retained Markdown path. Markdown under retired
+experiment or protected-proof lanes is forbidden; current prohibitions live only in
+`docs/REJECTED_ARCHITECTURES.md`.
 
 ## Active target
 
@@ -279,12 +278,9 @@ document under a retired lane is a policy failure until its owner and purpose ar
   5,000,000,000-byte memory cap.
 - RightRail corporate, routine support, monitoring, analytics, and AI systems receive zero PHI.
 
-The old 12-field Privacy V2 ABI, felt/Poseidon projections, dual legacy/strong state, exact 64 MiB
-container, mandatory interactive-coin service, dual Category-5 signing outside an explicit threat
-model, CUDA H4 lane,
-and synthetic exact-K128 Keccak manifest are retained only as historical, differential, or migration
-evidence. They do not constrain native v3. They may be deleted only after their actual consumers and
-replacement tests are enumerated and the replacement boundary accepts.
+The rejected directions and their governing reasons are recorded once in
+[`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md); they are not active owners,
+release inputs, or qualification evidence.
 
 Current qualification status, nonactivation flags, the process-tree ceiling, and the private-proof
 blocker are authoritative in `STATE.md`; the current bounded phase is recorded in `CURRENT_TASK.md`.

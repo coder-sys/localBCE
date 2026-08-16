@@ -70,7 +70,9 @@ def test_legacy_security_prose_is_retired_while_machine_evidence_remains_nonacti
     assert hardening["observed_current_profile"]["witness_hiding"] is False
     assert not (ROOT / "experiments" / "stwo_batch_air").exists()
     assert not (ROOT / "docs" / "BL_PQ512_SECURITY_FREEZE.md").exists()
-    assert not (ROOT / "docs" / "REJECTED_ARCHITECTURES.md").exists()
+    rejected = ROOT / "docs" / "REJECTED_ARCHITECTURES.md"
+    assert rejected.exists()
+    assert "BL-PQ512, Cairo, H4, K128, and K512" in _read(rejected)
 
 
 def test_hardening_machine_artifact_is_snapshot_consistent_and_markdown_is_retired() -> None:

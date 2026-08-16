@@ -46,11 +46,6 @@ MARKDOWN_REGISTRY = {
     "CURRENT_TASK.md": _registration(None, "current-task", "current bounded objective and blockers"),
     "README.md": _registration(None, "entry", "product identity and reading route"),
     "STATE.md": _registration(None, "state", "verified implementation evidence and nonclaims"),
-    "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md": _registration(
-        "ARCHITECTURE.md",
-        "protected-compatibility",
-        "byte-bound launch-blocker compatibility marker",
-    ),
     "docs/DATABASE_ZK_ARCHITECTURE.md": _registration(
         "README.md", "database-boundary", "verifier-to-database transaction boundary"
     ),
@@ -78,9 +73,6 @@ MARKDOWN_REGISTRY = {
     "docs/PYTHON_DEPENDENCY_LOCKING.md": _registration(
         "README.md", "python-dependencies", "offline Python lock and wheelhouse contract"
     ),
-    "experiments/README.md": _registration(
-        "ARCHITECTURE.md", "experiments", "experimental entry route and authority labels"
-    ),
     "ops/DEPLOYMENT_RUNBOOK.md": _registration(
         "ARCHITECTURE.md", "deployment-runbook", "synthetic deployment preflight"
     ),
@@ -102,8 +94,8 @@ MARKDOWN_REGISTRY = {
     "docs/RARC_PENDING_DECISION.md": _registration(
         "README.md", "pending-domain-decision", "open RARC/CARC mapping ratification decisions"
     ),
-    "zk-cairo-sharp/README.md": _registration(
-        "README.md", "protected-cairo", "protected differential-reference entry point"
+    "docs/REJECTED_ARCHITECTURES.md": _registration(
+        "README.md", "rejected-architectures", "current prohibitions against retired directions"
     ),
 }
 
@@ -115,7 +107,6 @@ REMOVED_MARKDOWN_PATHS = frozenset(
         "rarc_ratification_proposal.md",
         "docs/BL_PQ512_S07_S12_PREIMPLEMENTATION_FREEZE.md",
         "docs/BL_PQ512_SECURITY_FREEZE.md",
-        "docs/REJECTED_ARCHITECTURES.md",
         "docs/security-freeze/BL-PQ512-v1/context.md",
         "docs/security-freeze/BL-PQ512-v1/hardening.md",
         "docs/security-freeze/BL-PQ512-v1/proposals/001-wide-challenge-and-proof-commitments.md",
@@ -126,10 +117,13 @@ REMOVED_MARKDOWN_PATHS = frozenset(
         "docs/SUPPLY_CHAIN_BASELINE.md",
         "app/batch/PEPPER_ROTATION.md",
         "app/batch/leaf_format.md",
+        "docs/DEPLOYMENT_READY_BUILD_CONTRACT.md",
         "experiments/bl_pq512_crypto_foundation/README.md",
         "experiments/fixed_shape_claim_air/README.md",
+        "experiments/README.md",
         "zk-cairo-sharp/PROVING_STATUS.md",
         "zk-cairo-sharp/SECURITY_ATTACK_NOTES.md",
+        "zk-cairo-sharp/README.md",
     }
 )
 
@@ -155,15 +149,23 @@ _REPOSITORY_TOP_LEVELS = {
     "portal_shared",
     "zk-cairo-sharp",
 }
-_PROTECTED_ROLES = frozenset({"protected-compatibility", "protected-cairo"})
+_PROTECTED_ROLES = frozenset()
+_REJECTED_ARCHITECTURES_PATH = "docs/REJECTED_ARCHITECTURES.md"
+_RETIRED_MARKDOWN_PREFIXES = ("experiments/", "zk-cairo-sharp/")
+_RETIRED_MARKDOWN_STRUCTURE = (
+    re.compile(r"(?im)^\s*#\s+(?:retired|historical|differential|compatibility)\b"),
+    re.compile(
+        r"(?im)^\s*(?:Status|Purpose|Role|Owner):\s*(?:the\s+)?"
+        r"(?:retired|historical|differential|compatibility)\b"
+    ),
+)
 
 # Two current negative tests intentionally construct deleted paths to prove absence.  They are
 # the only construction references exempted; all production/tooling constructions remain visible.
 _ALLOWED_PATH_CONSTRUCTION_REFERENCES = {
     ("tests/test_security_freeze_spec.py", "docs/BL_PQ512_SECURITY_FREEZE.md"),
-    ("tests/test_security_freeze_spec.py", "docs/REJECTED_ARCHITECTURES.md"),
     ("tests/test_documentation_governance.py", "docs/CURRENT_TECH_STACK.md"),
-    ("tests/test_documentation_governance.py", "docs/REJECTED_ARCHITECTURES.md"),
+    ("tests/test_documentation_governance.py", "experiments/README.md"),
 }
 
 
@@ -306,6 +308,14 @@ def validate_markdown_tree(
         elif registration.role not in _PROTECTED_ROLES and text.startswith("# Retired architecture evidence"):
             errors.append(f"historical marker masquerades as active Markdown: {path}")
         if registration.role not in _PROTECTED_ROLES:
+            if path != _REJECTED_ARCHITECTURES_PATH and any(
+                path.startswith(prefix) for prefix in _RETIRED_MARKDOWN_PREFIXES
+            ):
+                errors.append(f"retired implementation Markdown path is forbidden: {path}")
+            if path != _REJECTED_ARCHITECTURES_PATH and any(
+                marker.search(text) for marker in _RETIRED_MARKDOWN_STRUCTURE
+            ):
+                errors.append(f"retired-status Markdown structure is forbidden: {path}")
             for marker in _EXACT_ACTIVE_LEGACY_MARKERS:
                 if marker.search(text):
                     errors.append(f"active Markdown contains an exact superseded backend claim: {path}")

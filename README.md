@@ -35,10 +35,11 @@ rewrite.
 Supporting authorities are [`docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md`](docs/NATIVE_V3_PLAINTEXT_CONTINUITY.md),
 [`docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md`](docs/NATIVE_V3_TRUST_BOUNDARY_PROFILE.md),
 [`docs/PYTHON_DEPENDENCY_LOCKING.md`](docs/PYTHON_DEPENDENCY_LOCKING.md),
-[`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md), and the independent
+[`docs/RARC_PENDING_DECISION.md`](docs/RARC_PENDING_DECISION.md),
+[`docs/REJECTED_ARCHITECTURES.md`](docs/REJECTED_ARCHITECTURES.md), and the independent
 [`docs/DESIGN_IDEOLOGY.md`](docs/DESIGN_IDEOLOGY.md). Git history and retained source archives
-preserve superseded narratives; the protected Cairo README is the sole differential-evidence
-authority for that reference: [`zk-cairo-sharp/README.md`](zk-cairo-sharp/README.md).
+preserve superseded source and narrative; the rejected-architectures record is the only live
+place for concise prohibitions against restarting those directions.
 
 ## Local verification
 
@@ -66,8 +67,8 @@ checked-in locks and wheelhouse, not network resolution, are the installation au
 ## Retained component references
 
 The concise component-local documents linked from [`ARCHITECTURE.md`](ARCHITECTURE.md) are exact
-operations, custody, monitoring, licensing, deployment-marker, or protected-reference notes.
-Compatibility material is clearly marked and cannot select a backend or supply production credit.
+operations, custody, monitoring, or licensing notes. They cannot select a backend or supply
+production credit.
 
 ## Source authority
 
