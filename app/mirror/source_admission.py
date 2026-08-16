@@ -28,6 +28,7 @@ class EvidenceMode(str, Enum):
     """Evidence modes currently admitted by this nonproduction boundary."""
 
     SYNTHETIC_TEST_ONLY = "synthetic_test_only"
+    OBSERVATION_ONLY = "observation_only"
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ class SourceProfile:
     allow_nonmembership: bool = True
     canonical_order: str = "lexicographic-v1"
     root_rule: str = "source-root-v1"
+    source_contract_digest: str | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -114,12 +116,20 @@ class SourceProfile:
             raise ValueError("profile:completeness")
         if type(self.verifier_epoch) is not int or self.verifier_epoch < 0:
             raise ValueError("profile:verifier")
-        if self.evidence_mode is not EvidenceMode.SYNTHETIC_TEST_ONLY:
+        if self.evidence_mode not in (EvidenceMode.SYNTHETIC_TEST_ONLY, EvidenceMode.OBSERVATION_ONLY):
             raise ValueError("profile:evidence-mode-not-qualified")
         if type(self.allow_nonmembership) is not bool:
             raise ValueError("profile:nonmembership-policy")
         if self.canonical_order != "lexicographic-v1" or self.root_rule != "source-root-v1":
             raise ValueError("profile:canonical-rules")
+        if self.source_contract_digest is not None:
+            if (
+                self.source_role_details is None
+                or type(self.source_contract_digest) is not str
+                or len(self.source_contract_digest) != 128
+                or any(character not in "0123456789abcdef" for character in self.source_contract_digest)
+            ):
+                raise ValueError("profile:source-contract")
         if self.source_role_details is None:
             if self.observation_time is None:
                 raise ValueError("profile:observation-window")
@@ -165,7 +175,7 @@ class SourceProfile:
                 "verifier_epoch": self.verifier_epoch,
                 "evidence_mode": self.evidence_mode.value,
             }
-        return {
+        material = {
             "profile_id": self.profile_id,
             "version": self.version,
             "subject": self.subject,
@@ -184,6 +194,9 @@ class SourceProfile:
             "canonical_order": self.canonical_order,
             "root_rule": self.root_rule,
         }
+        if self.source_contract_digest is not None:
+            material["source_contract_digest"] = self.source_contract_digest
+        return material
 
     @property
     def profile_digest(self) -> str:
@@ -285,7 +298,7 @@ class SourceAdmissionService:
             raise SourceAdmissionError("composition:verifier") from exc
         if identity != profile.verifier_id or epoch != profile.verifier_epoch:
             raise SourceAdmissionError("composition:verifier-mismatch")
-        if profile.evidence_mode is not EvidenceMode.SYNTHETIC_TEST_ONLY:
+        if profile.evidence_mode not in (EvidenceMode.SYNTHETIC_TEST_ONLY, EvidenceMode.OBSERVATION_ONLY):
             raise SourceAdmissionError("composition:production-mode-unavailable")
         self.profile = profile
         self._verifier = verifier

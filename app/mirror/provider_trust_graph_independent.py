@@ -220,7 +220,7 @@ class _GraphProfile:
 
 def _profile_material(profile: object) -> dict[str, object]:
     details = getattr(profile, "source_role_details")
-    return {
+    material = {
         "profile_id": getattr(profile, "profile_id"),
         "version": getattr(profile, "version"),
         "subject": getattr(profile, "subject"),
@@ -248,6 +248,10 @@ def _profile_material(profile: object) -> dict[str, object]:
         "canonical_order": getattr(profile, "canonical_order"),
         "root_rule": getattr(profile, "root_rule"),
     }
+    source_contract_digest = getattr(profile, "source_contract_digest", None)
+    if source_contract_digest is not None:
+        material["source_contract_digest"] = source_contract_digest
+    return material
 
 
 def _profile_digest(profile: object) -> str:
