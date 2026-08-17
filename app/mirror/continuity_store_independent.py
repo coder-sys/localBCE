@@ -19,6 +19,7 @@ from typing import Any, Mapping
 from app.governance import provider_continuity_control_pack_independent as governance_independent
 from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
+from app.mirror import discrepancy_case_independent as case_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import source_evidence_custody_independent as source_independent
 from app.mirror import source_reconciliation_independent as reconciliation_independent
@@ -30,7 +31,8 @@ ARTIFACT_GRAPH = "PROVIDER_TRUST_GRAPH_V1"
 ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
 ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
 ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION)
+ARTIFACT_CASE = case_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
@@ -370,6 +372,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_RECONCILIATION:
         if dict(value) != reconciliation_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_CASE:
+        if dict(value) != case_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -391,11 +396,14 @@ def _normalize_artifact(
             value = source_independent._parse(raw)
         elif kind == ARTIFACT_RECONCILIATION:
             value = reconciliation_independent._parse(raw)
+        elif kind == ARTIFACT_CASE:
+            value = case_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
         source_independent.IndependentSourceCustodyError,
         reconciliation_independent.IndependentSourceReconciliationError,
+        case_independent.IndependentDiscrepancyCaseError,
     ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
@@ -420,6 +428,20 @@ def _normalize_artifact(
                 result = graph_independent.verify_bytes_v2(raw, graph_profile_registry or {})
             else:
                 result = graph_independent.verify_bytes(raw)
+        elif kind == ARTIFACT_CASE:
+            if not isinstance(reconciliation_context, Mapping):
+                raise IndependentStoreError("case:context-required")
+            result = case_independent.verify_artifact(
+                raw,
+                graph_raw=reconciliation_context["graph_raw"],
+                reconciliation_raw=reconciliation_context["reconciliation_raw"],
+                reconciliation_context=reconciliation_context["reconciliation_context"],
+                governance_raw=reconciliation_context["governance_raw"],
+                graph_profile_registry=graph_profile_registry or {},
+                prior_case_raw=reconciliation_context.get("prior_case_raw"),
+                retest_reconciliation_raw=reconciliation_context.get("retest_reconciliation_raw"),
+                retest_context=reconciliation_context.get("retest_context"),
+            )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
         elif value.get("schema") == withdrawal_independent.SCHEMA:
@@ -483,6 +505,20 @@ def _normalize_artifact(
                 profile_value = graph_independent._expect_keys(value.get("profile"), graph_independent.PROFILE_KEYS, "artifact:profile")
                 profile_id = profile_value["profile_id"]
                 profile_version = profile_value.get("version")
+        elif kind == ARTIFACT_CASE:
+            artifact_id = result["artifact_id"]
+            report_id = result["case_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = result["schema"]
+            subject_id = result["subject"]
+            scope = result["scope"]
+            profile_id = result["profile_id"]
+            profile_version = result["profile_version"]
+            authority_json = _authority_json(value["authority"], kind)
         elif value.get("schema") in (withdrawal_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result_artifact_id = result.get("artifact_id")
             if not isinstance(result_artifact_id, str):
@@ -599,6 +635,19 @@ def _normalize_artifact(
                 "chronology_anchor_custody_stage_id": result["chronology_anchor_custody_stage_id"],
             }
         )
+    elif kind == ARTIFACT_CASE:
+        normalized.update(
+            {
+                "case_id": result["case_id"],
+                "graph_artifact_id": result["graph_artifact_id"],
+                "reconciliation_artifact_id": result["reconciliation_artifact_id"],
+                "finding_id": result["finding_id"],
+                "result_status": result["result_status"],
+                "retest_reconciliation_artifact_id": result["retest_reconciliation_artifact_id"],
+                "responsibility_boundary": result["responsibility_boundary"],
+                "parity_status": result["parity_status"],
+            }
+        )
     return normalized
 
 
@@ -673,6 +722,162 @@ def _require_row_keys(rows: list[Mapping[str, object]], table: str) -> None:
             raise IndependentStoreError(f"database:{table}-columns")
 
 
+def _case_reconciliation_context(
+    artifacts: Mapping[tuple[str, str], Mapping[str, object]],
+    raw_by_key: Mapping[tuple[str, str], bytes],
+    reconciliation_raw: bytes,
+    graph_profile_registry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    try:
+        value = reconciliation_independent._parse(reconciliation_raw)
+        current_summary = value["current_custody"]
+        if not isinstance(current_summary, dict):
+            raise IndependentStoreError("database:case-reconciliation-current")
+        current_key = (ARTIFACT_SOURCE_EVIDENCE, str(current_summary["artifact_id"]))
+        current = artifacts.get(current_key)
+        if current is None or current["current_stage_id"] != current_summary["stage_id"]:
+            raise IndependentStoreError("database:case-reconciliation-current-custody")
+        current_graph = None
+        linked_graph_id = current.get("linked_graph_artifact_id")
+        if linked_graph_id is not None:
+            current_graph = artifacts.get((ARTIFACT_GRAPH, str(linked_graph_id)))
+            if current_graph is None:
+                raise IndependentStoreError("database:case-current-graph")
+            source_independent.verify_artifact(
+                raw_by_key[current_key],
+                graph_raw=raw_by_key[(ARTIFACT_GRAPH, str(linked_graph_id))],
+                graph_profile_registry=graph_profile_registry,
+            )
+        prior_key = None
+        prior = None
+        prior_id = current.get("prior_artifact_id")
+        if prior_id is not None:
+            prior_key = (ARTIFACT_SOURCE_EVIDENCE, str(prior_id))
+            prior = artifacts.get(prior_key)
+            if prior is None or prior["current_stage_id"] != current.get("prior_stage_id"):
+                raise IndependentStoreError("database:case-prior-custody")
+        prior_graph = None
+        if prior is not None and prior.get("linked_graph_artifact_id") is not None:
+            prior_graph = artifacts.get((ARTIFACT_GRAPH, str(prior["linked_graph_artifact_id"])))
+            if prior_graph is None:
+                raise IndependentStoreError("database:case-prior-graph")
+        prior_reconciliation_raw = None
+        prior_reconciliation_id = value.get("prior_artifact_id")
+        if prior_reconciliation_id is not None:
+            prior_reconciliation_raw = raw_by_key.get((ARTIFACT_RECONCILIATION, str(prior_reconciliation_id)))
+            if prior_reconciliation_raw is None:
+                raise IndependentStoreError("database:case-prior-reconciliation")
+        qualified_baseline_raw = None
+        chronology_anchor_raw = None
+        if prior_reconciliation_raw is not None:
+            prior_value = reconciliation_independent._parse(prior_reconciliation_raw)
+            anchors = reconciliation_independent._validate_anchors(prior_value["anchors"])
+            for name, target in (
+                ("qualified_content_baseline", anchors["qualified_content_baseline"]),
+                ("chronology_anchor", anchors["chronology_anchor"]),
+            ):
+                if target is None:
+                    continue
+                anchor_key = (ARTIFACT_SOURCE_EVIDENCE, str(target["custody_artifact_id"]))
+                anchor = artifacts.get(anchor_key)
+                if anchor is None or anchor["current_stage_id"] != target["custody_stage_id"]:
+                    raise IndependentStoreError(f"database:case-{name}")
+                if name == "qualified_content_baseline":
+                    qualified_baseline_raw = raw_by_key[anchor_key]
+                else:
+                    chronology_anchor_raw = raw_by_key[anchor_key]
+        return {
+            "current_custody_raw": raw_by_key[current_key],
+            "prior_custody_raw": raw_by_key[prior_key] if prior_key is not None else None,
+            "current_graph_raw": raw_by_key[(ARTIFACT_GRAPH, str(linked_graph_id))] if linked_graph_id is not None else None,
+            "prior_graph_raw": raw_by_key[(ARTIFACT_GRAPH, str(prior["linked_graph_artifact_id"]))] if prior is not None and prior.get("linked_graph_artifact_id") is not None else None,
+            "prior_reconciliation_raw": prior_reconciliation_raw,
+            "qualified_baseline_custody_raw": qualified_baseline_raw,
+            "chronology_anchor_custody_raw": chronology_anchor_raw,
+        }
+    except IndependentStoreError:
+        raise
+    except Exception as exc:
+        raise IndependentStoreError("database:case-reconciliation-context") from exc
+
+
+def _case_governance_raw(
+    artifacts: Mapping[tuple[str, str], Mapping[str, object]],
+    raw_by_key: Mapping[tuple[str, str], bytes],
+    event_sequence_by_key: Mapping[tuple[str, str], int],
+    graph_artifact: Mapping[str, object],
+    graph_profile_registry: Mapping[str, object] | None,
+) -> bytes:
+    graph_key = (ARTIFACT_GRAPH, str(graph_artifact["artifact_id"]))
+    graph_sequence = event_sequence_by_key.get(graph_key)
+    if graph_sequence is None:
+        raise IndependentStoreError("database:case-graph-event")
+    graph_value = _parse_canonical(graph_artifact["payload"])
+    profile = graph_value.get("profile")
+    if not isinstance(profile, dict):
+        raise IndependentStoreError("database:case-graph-profile")
+    selected = None
+    for key, sequence in sorted(event_sequence_by_key.items(), key=lambda item: item[1]):
+        if sequence >= graph_sequence or key[0] != ARTIFACT_GOVERNANCE:
+            continue
+        candidate = artifacts.get(key)
+        if candidate is None or candidate["subject"] != graph_artifact["subject"] or candidate["scope"] != graph_artifact["scope"] or candidate.get("profile_id") != profile.get("profile_id"):
+            continue
+        raw = raw_by_key[key]
+        value = _parse_canonical(raw)
+        if value.get("schema") not in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
+            continue
+        governed = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
+        if value.get("schema") == governance_v2_independent.SCHEMA and governed.get("current_stage_kind") == governance_v2_independent.STAGE_APPROVED:
+            selected = raw
+        elif value.get("schema") == governance_v2_independent.WITHDRAWAL_SCHEMA:
+            selected = None
+    if selected is None:
+        raise IndependentStoreError("database:case-governance-not-effective")
+    return selected
+
+
+def _case_context(
+    artifacts: Mapping[tuple[str, str], Mapping[str, object]],
+    raw_by_key: Mapping[tuple[str, str], bytes],
+    event_sequence_by_key: Mapping[tuple[str, str], int],
+    case_raw: bytes,
+    graph_profile_registry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    value = case_independent._parse(case_raw)
+    upstream = value["upstream"]
+    graph_key = (ARTIFACT_GRAPH, str(upstream["graph"]["artifact_id"]))
+    recon_key = (ARTIFACT_RECONCILIATION, str(upstream["reconciliation"]["artifact_id"]))
+    graph_artifact = artifacts.get(graph_key)
+    if graph_artifact is None or recon_key not in artifacts:
+        raise IndependentStoreError("database:case-upstream-missing")
+    graph_raw = raw_by_key[graph_key]
+    reconciliation_raw = raw_by_key[recon_key]
+    reconciliation_context = _case_reconciliation_context(artifacts, raw_by_key, reconciliation_raw, graph_profile_registry)
+    governance_raw = _case_governance_raw(artifacts, raw_by_key, event_sequence_by_key, graph_artifact, graph_profile_registry)
+    result: dict[str, object] = {
+        "graph_raw": graph_raw,
+        "reconciliation_raw": reconciliation_raw,
+        "reconciliation_context": reconciliation_context,
+        "governance_raw": governance_raw,
+    }
+    retest_id = value["retest"].get("reconciliation_artifact_id") if isinstance(value.get("retest"), dict) else None
+    if retest_id is not None:
+        retest_key = (ARTIFACT_RECONCILIATION, str(retest_id))
+        if retest_key not in artifacts:
+            raise IndependentStoreError("database:case-retest-reconciliation")
+        retest_raw = raw_by_key[retest_key]
+        result["retest_reconciliation_raw"] = retest_raw
+        result["retest_context"] = _case_reconciliation_context(artifacts, raw_by_key, retest_raw, graph_profile_registry)
+    prior_id = value["transition"].get("prior_artifact_id")
+    if prior_id is not None:
+        prior_key = (ARTIFACT_CASE, str(prior_id))
+        if prior_key not in raw_by_key:
+            raise IndependentStoreError("database:case-prior")
+        result["prior_case_raw"] = raw_by_key[prior_key]
+    return result
+
+
 def _verify_rows(
     snapshot: Mapping[str, object],
     *,
@@ -698,6 +903,11 @@ def _verify_rows(
     artifacts: dict[tuple[str, str], dict[str, object]] = {}
     raw_by_key: dict[tuple[str, str], bytes] = {}
     reconciliation_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    case_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    event_sequence_hint = {
+        (str(row["artifact_kind"]), str(row["artifact_id"])): int(row["sequence"])
+        for row in rows["events"]
+    }
     artifact_hashes: set[tuple[str, str]] = set()
     for row in rows["artifacts"]:
         kind = row["kind"]
@@ -711,6 +921,9 @@ def _verify_rows(
         raw_by_key[key] = raw
         if kind == ARTIFACT_RECONCILIATION:
             reconciliation_rows.append((row, raw, key))
+            continue
+        if kind == ARTIFACT_CASE:
+            case_rows.append((row, raw, key))
             continue
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
@@ -818,6 +1031,39 @@ def _verify_rows(
             if stored != expected:
                 raise IndependentStoreError(f"database:artifact-{field}")
         hash_key = (ARTIFACT_RECONCILIATION, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
+
+    # Cases are processed after graph/source/reconciliation rows are available.
+    # Their governance selection is based on the event sequence that will be
+    # checked again by the complete event-chain verifier below.
+    for row, raw, key in case_rows:
+        try:
+            context = _case_context(
+                artifacts,
+                raw_by_key,
+                event_sequence_hint,
+                raw,
+                graph_profile_registry,
+            )
+            artifact = _normalize_artifact(
+                ARTIFACT_CASE,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                reconciliation_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:case-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_CASE, str(row["payload_hash"]))
         if hash_key in artifact_hashes:
             raise IndependentStoreError("database:artifact-hash-duplicate")
         artifact_hashes.add(hash_key)
@@ -950,6 +1196,37 @@ def _verify_rows(
 
     if set(operations) != seen_operations:
         raise IndependentStoreError("database:orphan-operation")
+
+    # A case may only be appended after every evidence and governance byte it
+    # names.  This is separate from the generic case-chain head check: the
+    # case chain owns lifecycle ordering, while these checks own evidence
+    # ordering and prevent a future-dated or rebound case from becoming a
+    # second authority.
+    for case_artifact in artifacts.values():
+        if case_artifact["kind"] != ARTIFACT_CASE:
+            continue
+        case_key = (ARTIFACT_CASE, str(case_artifact["artifact_id"]))
+        case_sequence = artifact_event_sequence.get(case_key)
+        if case_sequence is None:
+            raise IndependentStoreError("database:case-event")
+        case_value = case_independent._parse(case_artifact["payload"])
+        upstream = case_value["upstream"]
+        for artifact_kind, artifact_id in (
+            (ARTIFACT_GRAPH, upstream["graph"]["artifact_id"]),
+            (ARTIFACT_RECONCILIATION, upstream["reconciliation"]["artifact_id"]),
+        ):
+            upstream_sequence = artifact_event_sequence.get((artifact_kind, str(artifact_id)))
+            if upstream_sequence is None or upstream_sequence >= case_sequence:
+                raise IndependentStoreError("database:case-upstream-order")
+        graph_sequence = artifact_event_sequence[(ARTIFACT_GRAPH, str(upstream["graph"]["artifact_id"]))]
+        governance_sequence = artifact_event_sequence.get((ARTIFACT_GOVERNANCE, str(upstream["graph"]["governance_artifact_id"])))
+        if governance_sequence is None or governance_sequence >= graph_sequence:
+            raise IndependentStoreError("database:case-governance-order")
+        retest_id = case_value["retest"].get("reconciliation_artifact_id")
+        if retest_id is not None:
+            retest_sequence = artifact_event_sequence.get((ARTIFACT_RECONCILIATION, str(retest_id)))
+            if retest_sequence is None or retest_sequence >= case_sequence:
+                raise IndependentStoreError("database:case-retest-order")
 
     # A reconciliation transition may only consume the current source head at
     # the moment its own event is committed.  This prevents a late replay from
