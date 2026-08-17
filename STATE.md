@@ -1,6 +1,6 @@
 # Blind Ledger current state
 
-Updated: 2026-08-15
+Updated: 2026-08-17
 
 ## Product boundary
 
@@ -132,12 +132,45 @@ passed 35 tests plus 17 subtests. The existing offline Rust Phase-0 `kat` and `n
 also passed with their original five-directive and negative-rejection statuses. These checks do not
 select a proof backend or qualify a production deployment.
 
-This remains an isolated, synthetic, nonactivating candidate. `proofSuiteId=null`,
-`production_usable=false`, and activation remain false. The run did not select a proof backend,
-implement Lean, touch payment/PHI/Ethereum, or refresh archives. No production persistence,
-anti-rollback custody, source authentication, formal-kernel qualification, complete process-tree
-qualification, payment movement, or integration into the authoritative checkout is claimed. The
-next dependency is Sol review and explicit integration authorization.
+This remains a synthetic, nonactivating candidate. `proofSuiteId=null`,
+`production_usable=false`, and activation remain false. The controlled integration did not invoke
+a prover, select a proof backend, implement Lean, touch payment/PHI/Ethereum, or refresh archives.
+The accepted candidate evidence does not claim production persistence, anti-rollback custody,
+source authentication, formal-kernel qualification, deployment, payment movement, or production
+clearance authority. The authoritative checkout remains unchanged until every required integration
+gate is available and passes.
+
+## Controlled integration synthesis
+
+The controlled integration candidate preserves the authoritative `ce31abeb941ce7ad5927ca67d6f23872f430ed09`
+base and the accepted frozen tips: Mirror `3efd3a5179a3c1c26b4b5a353b62d59488de1f34` and Blind
+Ledger `784ada21fe9e21bf63f351cecbfd23f4be92ff94`. Mirror's older merge-base was reconciled by
+commit/path identity; the four Native-v3 paths already newer on the authoritative base were
+preserved, and rejected Mirror validator implementation files remain absent. No later Mirror work
+was included.
+
+Mirror remains a synthetic, read-only evidence/reconciliation/continuity candidate. In this
+integration run its focused unittest command passed 209 tests, including state-source admission,
+Provider Trust Graph, custody/reconciliation, discrepancy/denominator/contract, transaction and
+money evidence, State Value Ledger, Transition, Continuity Operational Foundation, and store-owned
+busy recovery. Live-source authorization, terms/completeness/cadence/failure behavior, HSM/FIPS
+custody, HA/DR operations, state privacy/support approval, and shadow-pilot evidence remain open.
+
+The accepted Blind Ledger route is the complete current minimal engineering proof route: one
+610-byte, nine-block private source/registry commitment, direct semantic constraints, 12,158,968
+terms, and one retained synthetic proof with approximately 1.041 GB observed job commit. The
+retained proof independently accepted in this run with 34/34 copy-only verifier mutations rejected;
+proof acceptance reported zero state mutations and zero CLEAR authorizations. The state-side
+transaction owns clearance/replay/recovery, and the accepted candidate's direct-state evidence
+keeps the payment root and `settled_batch_count` unchanged while using `DIRECT_CLEARANCE` and a
+dedicated clearance root/count. This is not a comparison to the rejected 18-endpoint design.
+
+The current run personally verified the native non-prover build, shape/evaluator/parity/preflight
+outputs, retained-proof identity and acceptance, and all 34 copy-only verifier rejections. It did
+not invoke a prover. The direct Python/database composition suites were not runnable in the
+available environment: the locked runtime lacks `pytest` and `pqcrypto`; the frozen candidate's
+earlier worker-reported direct evidence is retained but is not relabeled as personally rerun here.
+The complete focused composition gate therefore remains unverified for this integration attempt.
 
 ## Private-proof status
 
@@ -169,9 +202,12 @@ Verification fails closed for corrupt or noncanonical bytes, wrong roots or cont
 before-state, omission/reorder/duplicate, incomplete-feed absence, replay, strict-chronology errors,
 directive/exception/economic mismatch, retry conflict, and after-state mutation.
 
-The complete process tree, scratch, and pagefile gates for a private proof remain unmeasured because
-no complete backend exists. The CPU-only peak process-tree memory ceiling remains
-5,000,000,000 bytes.
+The complete process tree, scratch, and pagefile gates for a production backend remain
+unqualified. The accepted minimal engineering proof recorded an approximately 1.041 GB observed
+job commit for its one synthetic proof attempt, below the 5,000,000,000-byte ceiling. This
+integration did not invoke a prover and does not establish production deployment, complete
+process-tree qualification for a future backend, or the full theorem/security ledger. The CPU-only
+ceiling remains 5,000,000,000 bytes.
 
 ## Authority and next work
 
@@ -180,9 +216,10 @@ Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.m
 `docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
 Retained compatibility references are not design authority.
 
-The next private-proof step is research and closure of the six unresolved theorem/composition terms
-listed in `CURRENT_TASK.md`. Until then, the safe implementation boundary is the synthetic
-read-only plaintext wedge and narrow future-proof adapter.
+The next safe dependency is completion of the unavailable locked-runtime direct/database gate,
+followed by Sol review of the reconciled provenance. Separately, the six unresolved private-proof
+theorem/composition terms listed in `CURRENT_TASK.md` remain open; no backend is selected and the
+safe implementation boundary remains synthetic, state-owned, and nonactivating.
 
 Current archive authority is the external publication receipt plus independent physical readback
 of exactly the three retained roles: one Downloads copy, one Desktop-root copy, and one nested
