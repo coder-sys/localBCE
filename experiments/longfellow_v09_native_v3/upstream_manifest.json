@@ -15,8 +15,10 @@
     "domain_suffix": "06",
     "final_padding_byte": "80",
     "digest_bytes": 64,
-    "hidden_message_and_round_witnesses_constrained_in_circuit": true,
-    "patch": "patches/sha3_512_circuit.patch"
+    "hidden_message_and_keccak_computation_constrained_in_circuit": true,
+    "checkpoint_witnesses_in_optimized_shape": false,
+    "patch": "patches/sha3_512_circuit.patch",
+    "patch_sha256": "1505A983D144047E1015601E90A4D7B72805AFFBFE31D43A178208DD2AB85F87"
   },
   "build": {
     "platform": "Windows x64",
@@ -25,11 +27,12 @@
     "cmake": "4.3.3",
     "language_standard": "C++20",
     "cpu_only": true,
-    "network_service": false
+    "network_service": false,
+    "native_v3_no_sha3_witness": true
   },
   "engineering_disposition": "ENGINEERING_RED",
-  "evidence": "evidence/longfellow_v09_native_v3_failure.json",
-  "reproduction": "evidence/reproduce_failure.ps1",
+  "evidence": "evidence/longfellow_v09_native_v3_debloat_evidence.json",
+  "reproduction": "evidence/attribute_shape.ps1",
   "unqualified": [
     "published security level is not a production 128-bit proof ledger",
     "the upstream SHA3 circuit is experimental and not production vetted",

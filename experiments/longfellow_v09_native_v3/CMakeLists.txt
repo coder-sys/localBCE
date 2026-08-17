@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(longfellow_v09_native_v3 LANGUAGES CXX)
 
+option(LONGFELLOW_NATIVE_V3_NO_SHA3_WITNESS
+       "Use the full in-circuit Keccak path without checkpoint witnesses"
+       OFF)
+
 set(LONGFELLOW_SOURCE "" CACHE PATH "Patched pinned Longfellow source")
 if(NOT EXISTS "${LONGFELLOW_SOURCE}/lib/zk/zk_prover.h")
   message(FATAL_ERROR "LONGFELLOW_SOURCE must name the patched pinned source tree")
@@ -49,6 +53,10 @@ target_include_directories(longfellow_native_v3_relation PUBLIC
   "${LONGFELLOW_SOURCE}/lib"
 )
 target_compile_definitions(longfellow_native_v3_relation PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+if(LONGFELLOW_NATIVE_V3_NO_SHA3_WITNESS)
+  target_compile_definitions(longfellow_native_v3_relation
+                             PUBLIC BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS=1)
+endif()
 target_link_libraries(longfellow_native_v3_relation PUBLIC longfellow_task_crypto bcrypt)
 
 add_library(longfellow_native_v3_circuit STATIC
@@ -65,6 +73,10 @@ target_include_directories(longfellow_native_v3_circuit PUBLIC
 target_compile_definitions(longfellow_native_v3_circuit PUBLIC
   NOMINMAX WIN32_LEAN_AND_MEAN BLIND_LEDGER_RELATION_CIRCUIT_ONLY
 )
+if(LONGFELLOW_NATIVE_V3_NO_SHA3_WITNESS)
+  target_compile_definitions(longfellow_native_v3_circuit
+                             PUBLIC BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS=1)
+endif()
 target_link_libraries(longfellow_native_v3_circuit PUBLIC longfellow_task_crypto bcrypt)
 
 add_executable(longfellow_native_v3_relation_shape
@@ -77,6 +89,17 @@ target_include_directories(longfellow_native_v3_relation_shape PRIVATE
 )
 target_compile_definitions(longfellow_native_v3_relation_shape PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(longfellow_native_v3_relation_shape PRIVATE longfellow_native_v3_relation)
+
+add_executable(longfellow_native_v3_relation_attribution
+  src/native_v3_relation_attribution.cpp
+)
+target_include_directories(longfellow_native_v3_relation_attribution PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_native_v3_relation_attribution PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(longfellow_native_v3_relation_attribution PRIVATE longfellow_native_v3_relation psapi)
 
 add_executable(longfellow_native_v3_relation_eval
   src/native_v3_relation_eval.cpp

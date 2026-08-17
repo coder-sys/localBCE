@@ -193,6 +193,44 @@ bool DirectCheck(const KatVector& vector, int mutation) {
   return mutation == 0 ? !failed : failed;
 }
 
+bool DirectCheckNoWitness(const KatVector& vector, int mutation) {
+  using Field = proofs::GF2_128<>;
+  using EvalBackend = proofs::EvaluationBackend<Field>;
+  using Logic = proofs::Logic<Field, EvalBackend>;
+  const Field field;
+  EvalBackend eval_backend(field, false);
+  Logic logic(&eval_backend, field);
+
+  std::vector<uint8_t> message = ParseHex(vector.message_hex);
+  std::vector<uint8_t> expected = ParseHex(vector.digest_hex);
+  if (mutation == 1) {
+    expected[0] ^= 0x01;
+  } else if (mutation == 2) {
+    if (message.empty()) message.push_back(0x01);
+    else message[0] ^= 0x01;
+  }
+
+  std::vector<Logic::v8> seed;
+  seed.reserve(message.size());
+  for (uint8_t byte : message) seed.push_back(logic.vbit8(byte));
+
+  proofs::Sha3Circuit<Logic> circuit(logic);
+  std::vector<Logic::v8> output;
+  circuit.assert_sha3_512_no_witness(seed, output);
+  for (size_t i = 0; i < expected.size(); ++i) {
+    logic.vassert_eq(output[i], expected[i]);
+  }
+  const bool failed = eval_backend.assertion_failed();
+  if (mutation == 0) {
+    proofs::check(!failed, "valid SHA3-512 no-witness KAT failed");
+    for (size_t i = 0; i < expected.size(); ++i) {
+      proofs::check(EvalByte(output[i], logic, field) == expected[i],
+                    "SHA3-512 no-witness output mismatch");
+    }
+  }
+  return mutation == 0 ? !failed : failed;
+}
+
 template <class Field>
 std::unique_ptr<proofs::Circuit<Field>> MakeCircuit(size_t message_size,
                                                     const Field& field) {
@@ -272,6 +310,15 @@ int main() {
   proofs::check(DirectCheck(native_v3_vector, 0),
                 "native-v3-sized SHA3-512 KAT failed");
   ++positives;
+  size_t no_witness_positives = 0;
+  for (const KatVector& vector : kVectors) {
+    proofs::check(DirectCheckNoWitness(vector, 0),
+                  "no-witness SHA3-512 KAT failed");
+    ++no_witness_positives;
+  }
+  proofs::check(DirectCheckNoWitness(native_v3_vector, 0),
+                "native-v3-sized no-witness SHA3-512 KAT failed");
+  ++no_witness_positives;
   const KatVector& short_vector = kVectors[2];
   const KatVector& exact_rate_vector = kVectors[3];
   proofs::check(DirectCheck(kVectors[0], 1), "digest mutation escaped");
@@ -279,11 +326,16 @@ int main() {
   proofs::check(DirectCheck(short_vector, 3), "padding mutation escaped");
   proofs::check(DirectCheck(short_vector, 4), "rate mutation escaped");
   proofs::check(DirectCheck(exact_rate_vector, 5), "block-order mutation escaped");
+  proofs::check(DirectCheckNoWitness(kVectors[0], 1),
+                "no-witness digest mutation escaped");
+  proofs::check(DirectCheckNoWitness(short_vector, 2),
+                "no-witness message mutation escaped");
   if (!ProveAndVerify(kVectors[0])) return 3;
 
   std::printf(
       "SHA3_512_KAT_PASS vectors=%zu mutations=5 hidden_proof=1 rate=72 "
-      "capacity_bits=1024 domain=06 digest_bytes=64\n",
-      positives);
+      "capacity_bits=1024 domain=06 digest_bytes=64 no_witness_vectors=%zu "
+      "no_witness_mutations=2\n",
+      positives, no_witness_positives);
   return 0;
 }

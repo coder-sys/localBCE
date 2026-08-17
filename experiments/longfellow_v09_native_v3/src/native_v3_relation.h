@@ -19,6 +19,14 @@ using RelationField = proofs::GF2_128<>;
 // commitment-only as required by the native-v3 architecture.
 std::unique_ptr<proofs::Circuit<RelationField>> build_native_v3_circuit();
 
+// Shape-only attribution entry point. The first hash_count endpoints in the
+// canonical order are included; this is not a proving or acceptance path.
+std::unique_ptr<proofs::Circuit<RelationField>> build_native_v3_circuit_stage(
+    size_t hash_count);
+
+size_t native_v3_hash_endpoint_count();
+HashKind native_v3_hash_kind_at(size_t index);
+
 void fill_native_v3_witness(const RelationCase& fixture,
                             proofs::Dense<RelationField>& witness);
 

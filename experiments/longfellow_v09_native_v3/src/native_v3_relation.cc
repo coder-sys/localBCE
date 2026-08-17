@@ -1,6 +1,7 @@
 #include "native_v3_relation.h"
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 
@@ -60,6 +61,33 @@ template <class Logic>
 using V64 = typename Logic::template bitvec<64>;
 template <class Logic>
 using Byte64 = std::array<V8<Logic>, kDigestBytes>;
+
+constexpr size_t kHashKindCount =
+    static_cast<size_t>(HashKind::kSettlement) + 1;
+
+template <class Logic>
+using HashWires = std::array<Byte64<Logic>, kHashKindCount>;
+
+template <class Logic>
+const Byte64<Logic>& H(const HashWires<Logic>& hashes, HashKind kind) {
+  return hashes[static_cast<size_t>(kind)];
+}
+
+bool IsComputedDigestField(ByteField field) {
+  switch (field) {
+    case kSourceRoot:
+    case kCompletenessId:
+    case kRequestId:
+    case kDecisionId:
+    case kDecisionPathId:
+    case kAfterAudit:
+    case kAfterRoot:
+    case kJoinId:
+      return true;
+    default:
+      return false;
+  }
+}
 
 template <class Logic>
 struct PublicWires {
@@ -154,6 +182,8 @@ void InputPrivate(const Logic& logic, PrivateWires<Logic>& p) {
   p.read_mode = logic.template vinput<8>();
   p.write_mode = logic.template vinput<8>();
   for (auto& digest : p.bytes) {
+    const auto field = static_cast<ByteField>(&digest - p.bytes.data());
+    if (IsComputedDigestField(field)) continue;
     for (auto& byte : digest) byte = logic.template vinput<8>();
   }
 }
@@ -211,6 +241,7 @@ const Byte64<Logic>& B(const PrivateWires<Logic>& p, ByteField field) {
 template <class Logic>
 std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
                                const PrivateWires<Logic>& p,
+                               const HashWires<Logic>& hashes,
                                const Logic& logic) {
   std::vector<V8<Logic>> result;
   switch (kind) {
@@ -268,17 +299,17 @@ std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
       break;
     case HashKind::kReplay:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/REPLAY/v1", logic);
-      AppendBytes<Logic>(result, B(p, kRequestId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kRequest));
       AppendBytes<Logic>(result, pub.state_before_id);
-      AppendBytes<Logic>(result, B(p, kSourceRoot));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kSourceRoot));
       AppendBytes<Logic>(result, pub.control_set);
       break;
     case HashKind::kDecision:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/DECISION-ID/v1", logic);
-      AppendBytes<Logic>(result, B(p, kRequestId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kRequest));
       AppendBytes<Logic>(result, pub.state_before_id);
-      AppendBytes<Logic>(result, B(p, kSourceRoot));
-      AppendBytes<Logic>(result, B(p, kCompletenessId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kSourceRoot));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kCompleteness));
       AppendU8<Logic>(result, p.policy);
       AppendU8<Logic>(result, p.directive);
       AppendBytes<Logic>(result, B(p, kExceptionId));
@@ -287,8 +318,8 @@ std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
       AppendDomain<Logic>(result, "BL/NATIVE-V3/DECISION-PATH/v1", logic);
       AppendBytes<Logic>(result, pub.control_set);
       AppendBytes<Logic>(result, B(p, kRule));
-      AppendBytes<Logic>(result, B(p, kSourceRoot));
-      AppendBytes<Logic>(result, B(p, kCompletenessId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kSourceRoot));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kCompleteness));
       AppendBytes<Logic>(result, B(p, kReasonId));
       AppendU8<Logic>(result, p.policy);
       AppendU8<Logic>(result, p.directive);
@@ -297,14 +328,14 @@ std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
     case HashKind::kAfterAudit:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/AUDIT-HEAD/v1", logic);
       AppendBytes<Logic>(result, B(p, kBeforeAudit));
-      AppendBytes<Logic>(result, B(p, kDecisionId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kDecision));
       AppendU8<Logic>(result, p.directive);
       break;
     case HashKind::kAfterRoot:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/ROOT/v1", logic);
       AppendBytes<Logic>(result, B(p, kBeforeRoot));
-      AppendBytes<Logic>(result, B(p, kSourceRoot));
-      AppendBytes<Logic>(result, B(p, kDecisionId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kSourceRoot));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kDecision));
       break;
     case HashKind::kAfterState: {
       AppendDomain<Logic>(result, "BL/NATIVE-V3/STATE-ID/v1", logic);
@@ -316,8 +347,8 @@ std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
       V32<Logic> one32;
       for (size_t i = 0; i < 32; ++i) one32[i] = logic.bit(i == 0);
       AppendU32BE<Logic>(result, one32);
-      AppendBytes<Logic>(result, B(p, kAfterAudit));
-      AppendBytes<Logic>(result, B(p, kAfterRoot));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kAfterAudit));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kAfterRoot));
       break;
     }
     case HashKind::kSourceAddress:
@@ -342,7 +373,7 @@ std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
       break;
     case HashKind::kJoin:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/DECISION-ACCESS-JOIN/v1", logic);
-      AppendBytes<Logic>(result, B(p, kDecisionId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kDecision));
       AppendBytes<Logic>(result, B(p, kReadDecision));
       AppendBytes<Logic>(result, B(p, kReadAddress));
       AppendBytes<Logic>(result, B(p, kReadKey));
@@ -360,22 +391,22 @@ std::vector<V8<Logic>> SeedFor(HashKind kind, const PublicWires<Logic>& pub,
       AppendDomain<Logic>(result, "BL/NATIVE-V3/RECEIPT-ID/v1", logic);
       AppendBytes<Logic>(result, B(p, kPhase0));
       AppendBytes<Logic>(result, pub.control_set);
-      AppendBytes<Logic>(result, B(p, kDecisionId));
-      AppendBytes<Logic>(result, B(p, kJoinId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kDecision));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kJoin));
       AppendBytes<Logic>(result, pub.state_before_id);
       AppendBytes<Logic>(result, pub.state_after_id);
       break;
     case HashKind::kPrivateBatch:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/PRIVATE-BATCH/v1", logic);
       AppendBytes<Logic>(result, B(p, kSourcePayload));
-      AppendBytes<Logic>(result, B(p, kDecisionPathId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kDecisionPath));
       AppendBytes<Logic>(result, B(p, kExceptionId));
-      AppendBytes<Logic>(result, B(p, kRequestId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kRequest));
       break;
     case HashKind::kSettlement:
       AppendDomain<Logic>(result, "BL/NATIVE-V3/SETTLEMENT/v1", logic);
       AppendU8<Logic>(result, p.directive);
-      AppendBytes<Logic>(result, B(p, kDecisionId));
+      AppendBytes<Logic>(result, H<Logic>(hashes, HashKind::kDecision));
       AppendBytes<Logic>(result, pub.state_after_id);
       break;
   }
@@ -459,36 +490,48 @@ void AssertDirectiveSemantics(const Logic& logic, const PrivateWires<Logic>& p) 
 template <class Logic>
 void BindHash(const Logic& logic, proofs::Sha3Circuit<Logic>& sha3,
               HashKind kind, const PublicWires<Logic>& pub,
-              const PrivateWires<Logic>& p) {
-  const auto seed = SeedFor(kind, pub, p, logic);
+              const PrivateWires<Logic>& p, HashWires<Logic>& hashes) {
+  const auto seed = SeedFor(kind, pub, p, hashes, logic);
+#if defined(BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS)
+  std::vector<V8<Logic>> output;
+  sha3.assert_sha3_512_no_witness(seed, output);
+#else
   const size_t blocks = (seed.size() + 72) / 72;
   std::vector<typename proofs::Sha3Circuit<Logic>::BlockWitness> witnesses(
       blocks);
   for (auto& witness : witnesses) witness.input(logic);
   std::vector<V8<Logic>> output;
   sha3.assert_sha3_512(seed, output, witnesses);
+#endif
+  for (size_t i = 0; i < kDigestBytes; ++i) {
+    hashes[static_cast<size_t>(kind)][i] = output[i];
+  }
   const Byte64<Logic>* target = nullptr;
   switch (kind) {
-    case HashKind::kSourceRoot: target = &B(p, kSourceRoot); break;
-    case HashKind::kCompleteness: target = &B(p, kCompletenessId); break;
+    case HashKind::kSourceRoot: break;
+    case HashKind::kCompleteness: break;
     case HashKind::kChronology: target = &B(p, kChronologyId); break;
     case HashKind::kBeforeState: target = &pub.state_before_id; break;
-    case HashKind::kRequest: target = &B(p, kRequestId); break;
+    case HashKind::kRequest: break;
     case HashKind::kReplay: target = &B(p, kReplayId); break;
-    case HashKind::kDecision: target = &B(p, kDecisionId); break;
-    case HashKind::kDecisionPath: target = &B(p, kDecisionPathId); break;
-    case HashKind::kAfterAudit: target = &B(p, kAfterAudit); break;
-    case HashKind::kAfterRoot: target = &B(p, kAfterRoot); break;
+    case HashKind::kDecision: break;
+    case HashKind::kDecisionPath: break;
+    case HashKind::kAfterAudit: break;
+    case HashKind::kAfterRoot: break;
     case HashKind::kAfterState: target = &pub.state_after_id; break;
     case HashKind::kSourceAddress: target = &B(p, kReadAddress); break;
     case HashKind::kSubjectKey: target = &B(p, kReadKey); break;
     case HashKind::kAuditAddress: target = &B(p, kWriteAddress); break;
-    case HashKind::kJoin: target = &B(p, kJoinId); break;
+    case HashKind::kJoin: break;
     case HashKind::kReceipt: target = &B(p, kReceiptId); break;
     case HashKind::kPrivateBatch: target = &pub.private_batch_commitment; break;
     case HashKind::kSettlement: target = &pub.settlement_commitment; break;
   }
-  for (size_t i = 0; i < kDigestBytes; ++i) logic.vassert_eq((*target)[i], output[i]);
+  if (target != nullptr) {
+    for (size_t i = 0; i < kDigestBytes; ++i) {
+      logic.vassert_eq((*target)[i], output[i]);
+    }
+  }
 }
 
 const HashKind kHashOrder[] = {
@@ -522,17 +565,27 @@ void AssertRelation(const Logic& logic, const PublicWires<Logic>& pub,
   logic.vassert_eq(p.write_decision_index, 0);
   logic.vassert_eq(p.read_mode, 1);
   logic.vassert_eq(p.write_mode, 2);
+}
+
+template <class Logic>
+void AssertDerivedAccessRelation(const Logic& logic,
+                                 const HashWires<Logic>& hashes,
+                                 const PrivateWires<Logic>& p) {
   for (size_t i = 0; i < kDigestBytes; ++i) {
-    logic.vassert_eq(B(p, kReadDecision)[i], B(p, kDecisionId)[i]);
-    logic.vassert_eq(B(p, kWriteDecision)[i], B(p, kDecisionId)[i]);
-    logic.vassert_eq(B(p, kReadBefore)[i], B(p, kSourceRoot)[i]);
-    logic.vassert_eq(B(p, kReadAfter)[i], B(p, kSourceRoot)[i]);
-    logic.vassert_eq(B(p, kWriteKey)[i], B(p, kDecisionId)[i]);
+    logic.vassert_eq(B(p, kReadDecision)[i],
+                     H<Logic>(hashes, HashKind::kDecision)[i]);
+    logic.vassert_eq(B(p, kWriteDecision)[i],
+                     H<Logic>(hashes, HashKind::kDecision)[i]);
+    logic.vassert_eq(B(p, kReadBefore)[i],
+                     H<Logic>(hashes, HashKind::kSourceRoot)[i]);
+    logic.vassert_eq(B(p, kReadAfter)[i],
+                     H<Logic>(hashes, HashKind::kSourceRoot)[i]);
+    logic.vassert_eq(B(p, kWriteKey)[i],
+                     H<Logic>(hashes, HashKind::kDecision)[i]);
     logic.vassert_eq(B(p, kWriteBefore)[i], B(p, kBeforeAudit)[i]);
-    logic.vassert_eq(B(p, kWriteAfter)[i], B(p, kAfterAudit)[i]);
+    logic.vassert_eq(B(p, kWriteAfter)[i],
+                     H<Logic>(hashes, HashKind::kAfterAudit)[i]);
   }
-  // The final SHA3 endpoints below own the exact identity bindings; these
-  // local equalities own the logical decision/access relation itself.
 }
 
 template <class Logic>
@@ -628,13 +681,27 @@ void PushPrivate(proofs::DenseFiller<RelationField>& filler,
   filler.push_back(c.read_mode, 8, field);
   filler.push_back(c.write_mode, 8, field);
   for (size_t i = 0; i < kByteFieldCount; ++i) {
+    if (IsComputedDigestField(static_cast<ByteField>(i))) continue;
     PushDigest<Logic>(filler, FieldValue(c, static_cast<ByteField>(i)), field);
   }
 }
 
 }  // namespace
 
-std::unique_ptr<proofs::Circuit<RelationField>> build_native_v3_circuit() {
+size_t native_v3_hash_endpoint_count() {
+  return sizeof(kHashOrder) / sizeof(kHashOrder[0]);
+}
+
+HashKind native_v3_hash_kind_at(size_t index) {
+  proofs::check(index < native_v3_hash_endpoint_count(),
+                "native-v3 hash endpoint index out of range");
+  return kHashOrder[index];
+}
+
+std::unique_ptr<proofs::Circuit<RelationField>> build_native_v3_circuit_stage(
+    size_t hash_count) {
+  proofs::check(hash_count <= native_v3_hash_endpoint_count(),
+                "native-v3 hash stage exceeds endpoint count");
   using Backend = proofs::CompilerBackend<RelationField>;
   using Logic = proofs::Logic<RelationField, Backend>;
   auto field = std::make_unique<RelationField>();
@@ -652,14 +719,31 @@ std::unique_ptr<proofs::Circuit<RelationField>> build_native_v3_circuit() {
   proofs::Sha3Circuit<Logic> sha3(logic);
   std::fprintf(stderr, "RELATION_BUILD phase=assertions\n");
   AssertRelation(logic, *pub, *priv);
+  HashWires<Logic> hashes{};
   size_t hash_index = 0;
   for (HashKind kind : kHashOrder) {
+    if (hash_index == hash_count) break;
     std::fprintf(stderr, "RELATION_BUILD phase=sha3 index=%zu kind=%zu\n",
                  hash_index++, static_cast<size_t>(kind));
-    BindHash(logic, sha3, kind, *pub, *priv);
+    BindHash(logic, sha3, kind, *pub, *priv, hashes);
+  }
+  if (hash_count == native_v3_hash_endpoint_count()) {
+    AssertDerivedAccessRelation(logic, hashes, *priv);
   }
   std::fprintf(stderr, "RELATION_BUILD phase=mkcircuit\n");
-  return builder->mkcircuit(1);
+  const auto mkcircuit_start = std::chrono::steady_clock::now();
+  auto circuit = builder->mkcircuit(1);
+  const auto mkcircuit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() -
+                                mkcircuit_start)
+                                .count();
+  std::fprintf(stderr, "RELATION_BUILD phase=complete mkcircuit_ms=%lld\n",
+               static_cast<long long>(mkcircuit_ms));
+  return circuit;
+}
+
+std::unique_ptr<proofs::Circuit<RelationField>> build_native_v3_circuit() {
+  return build_native_v3_circuit_stage(native_v3_hash_endpoint_count());
 }
 
 #ifndef BLIND_LEDGER_RELATION_CIRCUIT_ONLY
@@ -679,10 +763,12 @@ void fill_native_v3_witness(const RelationCase& fixture,
   PushPublic<Logic>(filler, fixture, field);
   PushPrivate<Logic>(filler, fixture, field);
   for (HashKind kind : kHashOrder) {
+#if !defined(BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS)
     const auto input = build_hash_input(fixture, kind);
     std::vector<Sha3BlockWitness> witnesses;
     compute_sha3_512_witness(input, witnesses);
     proofs::Sha3Witness::fill_witness(filler, witnesses, field);
+#endif
   }
 }
 
