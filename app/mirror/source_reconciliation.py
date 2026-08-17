@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Mapping
 
 from app.mirror import continuity_store as store
@@ -55,30 +56,39 @@ class SourceReconciliationService:
 
         if type(custody_raw) is not bytes or not custody_raw:
             raise SourceReconciliationError("reconciliation:custody-bytes")
-        try:
-            existing = self.store.find_source_reconciliation(custody_raw, self.graph_profile_registry)
-            if existing is not None:
-                return existing
-            context = self.store.source_reconciliation_context(custody_raw, self.graph_profile_registry)
-            prior_id, prior_stage = _prior_identity(context.get("prior_reconciliation_raw"))
-            candidate = independent.build_artifact(
-                context["current_custody_raw"],
-                context.get("prior_custody_raw"),
-                current_graph_raw=context.get("current_graph_raw"),
-                prior_graph_raw=context.get("prior_graph_raw"),
-                prior_artifact_id=prior_id,
-                prior_stage_id=prior_stage,
-                graph_profile_registry=self.graph_profile_registry,
-            )
-            return self.store.admit_source_reconciliation(
-                custody_raw,
-                candidate,
-                self.graph_profile_registry,
-            )
-        except SourceReconciliationError:
-            raise
-        except Exception as exc:
-            raise SourceReconciliationError(f"reconciliation:admission:{exc}") from exc
+        for attempt in range(3):
+            try:
+                existing = self.store.find_source_reconciliation(custody_raw, self.graph_profile_registry)
+                if existing is not None:
+                    return existing
+                context = self.store.source_reconciliation_context(custody_raw, self.graph_profile_registry)
+                prior_id, prior_stage = _prior_identity(context.get("prior_reconciliation_raw"))
+                candidate = independent.build_artifact(
+                    context["current_custody_raw"],
+                    context.get("prior_custody_raw"),
+                    current_graph_raw=context.get("current_graph_raw"),
+                    prior_graph_raw=context.get("prior_graph_raw"),
+                    prior_artifact_id=prior_id,
+                    prior_stage_id=prior_stage,
+                    prior_reconciliation_raw=context.get("prior_reconciliation_raw"),
+                    qualified_baseline_custody_raw=context.get("qualified_baseline_custody_raw"),
+                    chronology_anchor_custody_raw=context.get("chronology_anchor_custody_raw"),
+                    graph_profile_registry=self.graph_profile_registry,
+                )
+                return self.store.admit_source_reconciliation(
+                    custody_raw,
+                    candidate,
+                    self.graph_profile_registry,
+                )
+            except store.StoreBusyError as exc:
+                if attempt == 2:
+                    raise SourceReconciliationError(f"reconciliation:admission:{exc}") from exc
+                time.sleep(0.05 * (attempt + 1))
+            except SourceReconciliationError:
+                raise
+            except Exception as exc:
+                raise SourceReconciliationError(f"reconciliation:admission:{exc}") from exc
+        raise SourceReconciliationError("reconciliation:busy-retry-exhausted")
 
     def reconcile_current(self, custody_raw: bytes) -> store.AdmissionReceipt:
         """Explicit alias used by callers that process the current source head."""

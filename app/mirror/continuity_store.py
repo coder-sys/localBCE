@@ -350,6 +350,8 @@ def verify_artifact(
                 current_graph_raw=reconciliation_context.get("current_graph_raw"),
                 prior_graph_raw=reconciliation_context.get("prior_graph_raw"),
                 prior_reconciliation_raw=reconciliation_context.get("prior_reconciliation_raw"),
+                qualified_baseline_custody_raw=reconciliation_context.get("qualified_baseline_custody_raw"),
+                chronology_anchor_custody_raw=reconciliation_context.get("chronology_anchor_custody_raw"),
                 graph_profile_registry=graph_profile_registry,
             )
         elif artifact_kind == ARTIFACT_GRAPH:
@@ -1313,6 +1315,8 @@ class ContinuityStore:
         )
         recon_head = self._head(connection, recon_chain)
         prior_reconciliation_raw: bytes | None = None
+        qualified_baseline_custody_raw: bytes | None = None
+        chronology_anchor_custody_raw: bytes | None = None
         if prior_source_artifact is None:
             if recon_head is not None:
                 raise StoreConflictError("reconciliation:unexpected-existing-head")
@@ -1333,6 +1337,36 @@ class ContinuityStore:
             prior_current = prior_value.get("current_custody")
             if not isinstance(prior_current, dict) or prior_current.get("artifact_id") != source_artifact.prior_artifact_id or prior_current.get("stage_id") != source_artifact.prior_stage_id:
                 raise StoreConflictError("reconciliation:prior-head-binding")
+            try:
+                anchors = reconciliation_independent._validate_anchors(prior_value.get("anchors"))
+            except Exception as exc:
+                raise StoreSchemaError("reconciliation:prior-anchors") from exc
+            for anchor_name, target in (
+                ("qualified_content_baseline", anchors["qualified_content_baseline"]),
+                ("chronology_anchor", anchors["chronology_anchor"]),
+            ):
+                if target is None:
+                    continue
+                anchor_row = connection.execute(
+                    "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_SOURCE_EVIDENCE, target["custody_artifact_id"]),
+                ).fetchone()
+                if anchor_row is None or anchor_row["current_stage_id"] != target["custody_stage_id"]:
+                    raise StoreConflictError(f"reconciliation:{anchor_name}-missing")
+                anchor_raw = bytes(anchor_row["payload"])
+                try:
+                    source_independent.verify_artifact(
+                        anchor_raw,
+                        graph_profile_registry=registry,
+                        allow_unresolved_graph=True,
+                    )
+                    reconciliation_independent._anchor_view(target, anchor_raw, registry)
+                except Exception as exc:
+                    raise StoreConflictError(f"reconciliation:{anchor_name}-binding") from exc
+                if anchor_name == "qualified_content_baseline":
+                    qualified_baseline_custody_raw = anchor_raw
+                else:
+                    chronology_anchor_custody_raw = anchor_raw
 
         return {
             "current_custody_raw": custody_raw,
@@ -1340,6 +1374,8 @@ class ContinuityStore:
             "current_graph_raw": current_graph_raw,
             "prior_graph_raw": prior_graph_raw,
             "prior_reconciliation_raw": prior_reconciliation_raw,
+            "qualified_baseline_custody_raw": qualified_baseline_custody_raw,
+            "chronology_anchor_custody_raw": chronology_anchor_custody_raw,
             "source_artifact": source_artifact,
             "source_preview": preview,
             "reconciliation_head": recon_head,

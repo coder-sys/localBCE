@@ -15,20 +15,22 @@ import json
 import re
 from typing import Mapping
 
+from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import source_evidence_custody_independent as custody
 
 
-ARTIFACT_KIND = "NC_MEDICAID_SOURCE_RECONCILIATION_V1"
-SCHEMA = "mirror-ncmedicaid-source-reconciliation-v1"
-SCHEMA_VERSION = 1
+ARTIFACT_KIND = "NC_MEDICAID_SOURCE_RECONCILIATION_V2"
+SCHEMA = "mirror-ncmedicaid-source-reconciliation-v2"
+SCHEMA_VERSION = 2
 STAGE_KIND = "SOURCE_RECONCILIATION"
 DOMAIN = "BL/MIRROR/SOURCE-RECONCILIATION/"
 MAX_ARTIFACT_BYTES = 262_144
 MAX_STRING_BYTES = 8_192
 MAX_GAP_SECONDS = 86_400
-RECONCILIATION_CONTRACT_ID = "mirror.source-reconciliation.temporal.v1"
-RECONCILIATION_CONTRACT_VERSION = 1
+RECONCILIATION_CONTRACT_ID = "mirror.source-reconciliation.temporal.v2"
+RECONCILIATION_CONTRACT_VERSION = 2
+FETCHED_AT_FALLBACK_TRUSTED = False
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
 
 STATUS_OBSERVED_NEW = "OBSERVED_NEW"
@@ -48,6 +50,8 @@ STATUSES = (
     STATUS_SOURCE_FAILURE,
 )
 CHRONOLOGY = ("INITIAL", "ADVANCES", "EQUAL", "LATE", "GAP", "UNKNOWN")
+LINKAGE_STATES = ("LINKED", "UNLINKED")
+LINKAGE_TRANSITIONS = ("INITIAL", "UNCHANGED", "LINKED", "UNLINKED", "CHANGED")
 
 AUTHORITY_FLAGS = dict(custody.AUTHORITY_FLAGS)
 FIXED_FLAGS = {
@@ -79,11 +83,24 @@ RECONCILIATION_KEYS = {
     "current_custody",
     "chronology",
     "result",
+    "source_content",
+    "linkage_transition",
+    "anchors",
     "flags",
     "authority",
     "artifact_id",
     "current_stage_id",
     "transition_id",
+}
+SOURCE_CONTENT_KEYS = {"current_root", "comparison_root"}
+LINKAGE_KEYS = {"status", "prior_state", "current_state"}
+ANCHOR_KEYS = {"custody_artifact_id", "custody_stage_id", "content_root"}
+CHRONOLOGY_ANCHOR_KEYS = {"custody_artifact_id", "custody_stage_id", "marker_kind", "marker_value"}
+ANCHORS_KEYS = {"qualified_content_baseline", "chronology_anchor"}
+CHRONOLOGY_KEYS = {
+    "order", "marker_kind", "prior_marker", "current_marker", "gap_seconds",
+    "prior_server_last_updated", "current_server_last_updated", "prior_fetched_at",
+    "current_fetched_at", "fetched_at_fallback_trusted",
 }
 
 
@@ -186,9 +203,11 @@ def _contract_binding() -> dict[str, object]:
     material = {
         "contract_id": RECONCILIATION_CONTRACT_ID,
         "version": RECONCILIATION_CONTRACT_VERSION,
-        "ordering": "SERVER_LAST_UPDATED_THEN_FETCHED_AT",
+        "ordering": "SERVER_LAST_UPDATED_ONLY_WHEN_BOTH_MARKERS_EXIST",
         "max_gap_seconds": MAX_GAP_SECONDS,
         "statuses": list(STATUSES),
+        "linkage_transitions": list(LINKAGE_TRANSITIONS),
+        "fetched_at_fallback_trusted": FETCHED_AT_FALLBACK_TRUSTED,
         "absence_inference": False,
         "business_truth": False,
     }
@@ -209,7 +228,44 @@ def _link_summary(link: object) -> dict[str, object] | None:
     }
 
 
-def _custody_view(raw: bytes | None, graph_raw: bytes | None, registry: Mapping[str, object]) -> dict[str, object] | None:
+def _content_root_from_custody(raw: bytes) -> str:
+    """Derive one aggregate root from independently verified full resources."""
+
+    try:
+        value = custody._parse(raw)
+        envelope = value["envelope"]
+        if not isinstance(envelope, dict) or set(envelope) != {"encoding", "byte_length", "bytes_hex"}:
+            raise IndependentSourceReconciliationError("reconciliation:content-envelope")
+        envelope_raw = bytes.fromhex(str(envelope["bytes_hex"]))
+        result = fhir.verify_bytes(envelope_raw, profile=profile.NC_MEDICAID_PROFILE)
+        resources = result.get("resources")
+    except IndependentSourceReconciliationError:
+        raise
+    except Exception as exc:
+        raise IndependentSourceReconciliationError("reconciliation:content-verification") from exc
+    if not isinstance(resources, list):
+        raise IndependentSourceReconciliationError("reconciliation:content-resources")
+    ordered: list[tuple[str, str, dict[str, object]]] = []
+    seen: set[tuple[str, str]] = set()
+    for resource in resources:
+        if not isinstance(resource, dict) or not isinstance(resource.get("resourceType"), str) or not isinstance(resource.get("id"), str):
+            raise IndependentSourceReconciliationError("reconciliation:content-resource")
+        key = (resource["resourceType"], resource["id"])
+        if key in seen:
+            raise IndependentSourceReconciliationError("reconciliation:content-duplicate")
+        seen.add(key)
+        ordered.append((key[0], key[1], resource))
+    ordered.sort(key=lambda item: (item[0], item[1]))
+    return _digest("source-content-root", {"resources": [item[2] for item in ordered]})
+
+
+def _custody_view(
+    raw: bytes | None,
+    graph_raw: bytes | None,
+    registry: Mapping[str, object],
+    *,
+    allow_unresolved_graph: bool = False,
+) -> dict[str, object] | None:
     if raw is None:
         if graph_raw is not None:
             raise IndependentSourceReconciliationError("reconciliation:orphan-graph")
@@ -220,7 +276,7 @@ def _custody_view(raw: bytes | None, graph_raw: bytes | None, registry: Mapping[
             raw,
             graph_raw=graph_raw,
             graph_profile_registry=registry,
-            allow_unresolved_graph=False,
+            allow_unresolved_graph=allow_unresolved_graph,
         )
     except Exception as exc:
         raise IndependentSourceReconciliationError("reconciliation:custody-reject") from exc
@@ -249,6 +305,81 @@ def _custody_view(raw: bytes | None, graph_raw: bytes | None, registry: Mapping[
         "page_complete": value["page_complete"],
         "server_last_updated": markers["last_updated"],
         "graph_link": _link_summary(value.get("graph_link")),
+        "content_root": _content_root_from_custody(raw),
+    }
+
+
+def _validate_anchor(value: object, label: str) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != ANCHOR_KEYS:
+        raise IndependentSourceReconciliationError(f"reconciliation:{label}")
+    _hex(value["custody_artifact_id"], f"{label}-artifact")
+    _hex(value["custody_stage_id"], f"{label}-stage")
+    _hex(value["content_root"], f"{label}-content")
+    return value
+
+
+def _validate_chronology_anchor(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != CHRONOLOGY_ANCHOR_KEYS:
+        raise IndependentSourceReconciliationError("reconciliation:chronology-anchor")
+    _hex(value["custody_artifact_id"], "chronology-anchor-artifact")
+    _hex(value["custody_stage_id"], "chronology-anchor-stage")
+    if value["marker_kind"] != "SERVER_LAST_UPDATED":
+        raise IndependentSourceReconciliationError("reconciliation:chronology-anchor-kind")
+    _time(value["marker_value"], "chronology-anchor-marker")
+    return value
+
+
+def _validate_anchors(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != ANCHORS_KEYS:
+        raise IndependentSourceReconciliationError("reconciliation:anchors")
+    return {
+        "qualified_content_baseline": _validate_anchor(value["qualified_content_baseline"], "qualified-anchor"),
+        "chronology_anchor": _validate_chronology_anchor(value["chronology_anchor"]),
+    }
+
+
+def _anchor_view(
+    anchor: dict[str, object] | None,
+    raw: bytes | None,
+    registry: Mapping[str, object],
+) -> dict[str, object] | None:
+    if anchor is None:
+        if raw is not None:
+            raise IndependentSourceReconciliationError("reconciliation:unexpected-anchor-bytes")
+        return None
+    if raw is None:
+        raise IndependentSourceReconciliationError("reconciliation:anchor-bytes-required")
+    view = _custody_view(raw, None, registry, allow_unresolved_graph=True)
+    if view is None or view["artifact_id"] != anchor["custody_artifact_id"] or view["stage_id"] != anchor["custody_stage_id"]:
+        raise IndependentSourceReconciliationError("reconciliation:anchor-custody-binding")
+    if "content_root" in anchor and view["content_root"] != anchor["content_root"]:
+        raise IndependentSourceReconciliationError("reconciliation:anchor-content-binding")
+    if "marker_value" in anchor and view["server_last_updated"] != anchor["marker_value"]:
+        raise IndependentSourceReconciliationError("reconciliation:anchor-marker-binding")
+    return view
+
+
+def _content_anchor(view: dict[str, object]) -> dict[str, object]:
+    return {
+        "custody_artifact_id": view["artifact_id"],
+        "custody_stage_id": view["stage_id"],
+        "content_root": view["content_root"],
+    }
+
+
+def _chronology_anchor(view: dict[str, object]) -> dict[str, object] | None:
+    marker = view["server_last_updated"]
+    if marker is None:
+        return None
+    return {
+        "custody_artifact_id": view["artifact_id"],
+        "custody_stage_id": view["stage_id"],
+        "marker_kind": "SERVER_LAST_UPDATED",
+        "marker_value": marker,
     }
 
 
@@ -261,41 +392,49 @@ def _time(value: object, label: str) -> datetime:
         raise IndependentSourceReconciliationError(f"reconciliation:{label}") from exc
 
 
-def _chronology(prior: dict[str, object] | None, current: dict[str, object]) -> dict[str, object]:
-    if prior is None:
-        return {
-            "order": "INITIAL",
-            "marker_kind": "SERVER_LAST_UPDATED" if current["server_last_updated"] is not None else "FETCHED_AT",
-            "prior_marker": None,
-            "current_marker": current["server_last_updated"],
-            "gap_seconds": None,
-        }
-    prior_marker = prior["server_last_updated"]
-    current_marker = current["server_last_updated"]
-    if prior_marker is not None and current_marker is not None:
-        prior_time = _time(prior_marker, "prior-marker")
-        current_time = _time(current_marker, "current-marker")
+def _chronology(
+    prior: dict[str, object] | None,
+    current: dict[str, object],
+    *,
+    has_prior_transition: bool,
+) -> dict[str, object]:
+    prior_server = prior["server_last_updated"] if prior is not None else None
+    current_server = current["server_last_updated"]
+    order = "INITIAL" if not has_prior_transition else "UNKNOWN"
+    marker_kind = "UNKNOWN"
+    prior_marker: str | None = None
+    current_marker: str | None = None
+    gap_seconds: int | None = None
+    if current_server is not None and not has_prior_transition:
+        marker_kind = "SERVER_LAST_UPDATED"
+        current_marker = current_server
+    elif prior_server is not None and current_server is not None:
+        prior_time = _time(prior_server, "prior-marker")
+        current_time = _time(current_server, "current-marker")
         difference = int((current_time - prior_time).total_seconds())
         marker_kind = "SERVER_LAST_UPDATED"
-    else:
-        prior_time = _time(prior["fetched_at"], "prior-fetched-at")
-        current_time = _time(current["fetched_at"], "current-fetched-at")
-        difference = int((current_time - prior_time).total_seconds())
-        marker_kind = "FETCHED_AT"
-    if difference < 0:
-        order = "LATE"
-    elif difference == 0:
-        order = "EQUAL"
-    elif difference > MAX_GAP_SECONDS:
-        order = "GAP"
-    else:
-        order = "ADVANCES"
+        prior_marker = prior_server
+        current_marker = current_server
+        gap_seconds = difference if difference > 0 else None
+        if difference < 0:
+            order = "LATE"
+        elif difference == 0:
+            order = "EQUAL"
+        elif difference > MAX_GAP_SECONDS:
+            order = "GAP"
+        else:
+            order = "ADVANCES"
     return {
         "order": order,
         "marker_kind": marker_kind,
         "prior_marker": prior_marker,
         "current_marker": current_marker,
-        "gap_seconds": difference if difference > 0 else None,
+        "gap_seconds": gap_seconds,
+        "prior_server_last_updated": prior_server,
+        "current_server_last_updated": current_server,
+        "prior_fetched_at": prior["fetched_at"] if prior is not None else None,
+        "current_fetched_at": current["fetched_at"],
+        "fetched_at_fallback_trusted": FETCHED_AT_FALLBACK_TRUSTED,
     }
 
 
@@ -303,7 +442,11 @@ def _qualified(value: dict[str, object]) -> bool:
     return value["source_status"] == "COMPLETE" and value["freshness"] in {"FRESH", "UNKNOWN"} and value["page_complete"] is True
 
 
-def _result(prior: dict[str, object] | None, current: dict[str, object], chronology: dict[str, object]) -> dict[str, object]:
+def _result(
+    baseline: dict[str, object] | None,
+    current: dict[str, object],
+    chronology: dict[str, object],
+) -> dict[str, object]:
     order = chronology["order"]
     if current["source_status"] == "FAILED":
         status, basis = STATUS_SOURCE_FAILURE, "SOURCE_FAILURE"
@@ -311,20 +454,20 @@ def _result(prior: dict[str, object] | None, current: dict[str, object], chronol
         status, basis = STATUS_STALE_OR_GAPPED, "SOURCE_MARKER_CHRONOLOGY"
     elif current["source_status"] == "PARTIAL":
         status, basis = STATUS_NOT_OBSERVED_INCOMPLETE, "CURRENT_INCOMPLETE_SNAPSHOT"
-    elif prior is not None and order == "EQUAL" and (
-        current["snapshot_root"] != prior["snapshot_root"] or current["graph_link"] != prior["graph_link"]
-    ):
+    elif baseline is not None and order == "EQUAL" and current["content_root"] != baseline["content_root"]:
         status, basis = STATUS_CONFLICTING, "EQUAL_SOURCE_MARKER"
     elif not _qualified(current):
         status, basis = STATUS_SOURCE_FAILURE, "UNQUALIFIED_SOURCE_STATUS"
-    elif prior is None or not _qualified(prior):
+    elif baseline is None:
         status, basis = STATUS_OBSERVED_NEW, "FIRST_QUALIFIED_OBSERVATION"
-    elif current["snapshot_root"] == prior["snapshot_root"] and current["graph_link"] == prior["graph_link"]:
-        status, basis = STATUS_OBSERVED_CONTINUED, "UNCHANGED_SNAPSHOT_AND_GRAPH"
+    elif current["content_root"] == baseline["content_root"]:
+        status, basis = STATUS_OBSERVED_CONTINUED, "UNCHANGED_VERIFIED_SOURCE_CONTENT"
     else:
-        status, basis = STATUS_OBSERVED_CHANGED, "SNAPSHOT_ROOT"
+        status, basis = STATUS_OBSERVED_CHANGED, "VERIFIED_SOURCE_CONTENT_ROOT"
+    if order == "UNKNOWN" and status in {STATUS_OBSERVED_CONTINUED, STATUS_OBSERVED_CHANGED}:
+        basis = basis + ":CHRONOLOGY_UNKNOWN"
     return {
-        "status": status,
+        "source_observation_status": status,
         "basis": basis,
         "source_status": current["source_status"],
         "freshness": current["freshness"],
@@ -333,6 +476,22 @@ def _result(prior: dict[str, object] | None, current: dict[str, object], chronol
         "business_truth_proven": False,
         "read_only": True,
     }
+
+
+def _linkage_transition(prior: dict[str, object] | None, current: dict[str, object]) -> dict[str, object]:
+    prior_state = None if prior is None else ("LINKED" if prior["graph_link"] is not None else "UNLINKED")
+    current_state = "LINKED" if current["graph_link"] is not None else "UNLINKED"
+    if prior is None:
+        status = "INITIAL"
+    elif prior_state == current_state and prior["graph_link"] == current["graph_link"]:
+        status = "UNCHANGED"
+    elif current_state == "LINKED" and prior_state == "UNLINKED":
+        status = "LINKED"
+    elif current_state == "UNLINKED" and prior_state == "LINKED":
+        status = "UNLINKED"
+    else:
+        status = "CHANGED"
+    return {"status": status, "prior_state": prior_state, "current_state": current_state}
 
 
 def _summary(value: dict[str, object] | None) -> dict[str, object] | None:
@@ -355,6 +514,91 @@ def _summary(value: dict[str, object] | None) -> dict[str, object] | None:
     }
 
 
+RESULT_KEYS = {
+    "source_observation_status", "basis", "source_status", "freshness",
+    "absence_inferred", "nonmembership_inferred", "business_truth_proven", "read_only",
+}
+
+
+def _validate_document_shape(value: dict[str, object]) -> None:
+    if set(value) != RECONCILIATION_KEYS or value.get("schema") != SCHEMA or value.get("schema_version") != SCHEMA_VERSION:
+        raise IndependentSourceReconciliationError("reconciliation:schema")
+    if value.get("stage_kind") != STAGE_KIND:
+        raise IndependentSourceReconciliationError("reconciliation:stage-kind")
+    if value.get("profile_binding") != _profile_binding() or value.get("reconciliation_contract") != _contract_binding():
+        raise IndependentSourceReconciliationError("reconciliation:contract")
+    source_content = value.get("source_content")
+    if not isinstance(source_content, dict) or set(source_content) != SOURCE_CONTENT_KEYS:
+        raise IndependentSourceReconciliationError("reconciliation:source-content")
+    _hex(source_content["current_root"], "source-content-current")
+    if source_content["comparison_root"] is not None:
+        _hex(source_content["comparison_root"], "source-content-comparison")
+    linkage = value.get("linkage_transition")
+    if not isinstance(linkage, dict) or set(linkage) != LINKAGE_KEYS or linkage["status"] not in LINKAGE_TRANSITIONS:
+        raise IndependentSourceReconciliationError("reconciliation:linkage")
+    if linkage["prior_state"] is not None and linkage["prior_state"] not in LINKAGE_STATES:
+        raise IndependentSourceReconciliationError("reconciliation:linkage-prior")
+    if linkage["current_state"] not in LINKAGE_STATES:
+        raise IndependentSourceReconciliationError("reconciliation:linkage-current")
+    chronology = value.get("chronology")
+    if not isinstance(chronology, dict) or set(chronology) != CHRONOLOGY_KEYS or chronology["order"] not in CHRONOLOGY:
+        raise IndependentSourceReconciliationError("reconciliation:chronology")
+    if chronology["marker_kind"] not in {"SERVER_LAST_UPDATED", "UNKNOWN"}:
+        raise IndependentSourceReconciliationError("reconciliation:chronology-kind")
+    if chronology["marker_kind"] == "SERVER_LAST_UPDATED":
+        if chronology["current_marker"] is None:
+            raise IndependentSourceReconciliationError("reconciliation:chronology-current-marker")
+        _time(chronology["current_marker"], "chronology-current-marker")
+        if chronology["prior_marker"] is not None:
+            _time(chronology["prior_marker"], "chronology-prior-marker")
+    elif chronology["prior_marker"] is not None or chronology["current_marker"] is not None:
+        raise IndependentSourceReconciliationError("reconciliation:chronology-unknown-marker")
+    if chronology["fetched_at_fallback_trusted"] is not FETCHED_AT_FALLBACK_TRUSTED:
+        raise IndependentSourceReconciliationError("reconciliation:fetched-at-fallback")
+    result = value.get("result")
+    if not isinstance(result, dict) or set(result) != RESULT_KEYS or result["source_observation_status"] not in STATUSES:
+        raise IndependentSourceReconciliationError("reconciliation:result")
+    if result["absence_inferred"] is not False or result["nonmembership_inferred"] is not False or result["business_truth_proven"] is not False or result["read_only"] is not True:
+        raise IndependentSourceReconciliationError("reconciliation:result-flags")
+    _validate_anchors(value.get("anchors"))
+
+
+def _identity_values(value: dict[str, object]) -> tuple[str, str, str]:
+    body = dict(value)
+    body.pop("artifact_id", None)
+    body.pop("current_stage_id", None)
+    body.pop("transition_id", None)
+    artifact_id = _digest("artifact-id", body)
+    current = value.get("current_custody")
+    if not isinstance(current, dict):
+        raise IndependentSourceReconciliationError("reconciliation:current-custody")
+    stage_id = _digest(
+        "stage-id",
+        {
+            "artifact_id": artifact_id,
+            "current_custody_artifact_id": current["artifact_id"],
+            "current_snapshot_root": current["snapshot_root"],
+            "current_content_root": value["source_content"]["current_root"],
+            "result_status": value["result"]["source_observation_status"],
+            "prior_artifact_id": value["prior_artifact_id"],
+            "prior_stage_id": value["prior_stage_id"],
+        },
+    )
+    predecessor = value.get("predecessor_custody")
+    transition_id = _digest(
+        "transition-id",
+        {
+            "artifact_id": artifact_id,
+            "current_stage_id": stage_id,
+            "prior_artifact_id": value["prior_artifact_id"],
+            "prior_stage_id": value["prior_stage_id"],
+            "predecessor_custody_artifact_id": predecessor["artifact_id"] if isinstance(predecessor, dict) else None,
+            "current_custody_artifact_id": current["artifact_id"],
+        },
+    )
+    return artifact_id, stage_id, transition_id
+
+
 def _body(
     current_custody_raw: bytes,
     prior_custody_raw: bytes | None,
@@ -363,6 +607,9 @@ def _body(
     prior_graph_raw: bytes | None,
     prior_artifact_id: str | None,
     prior_stage_id: str | None,
+    prior_reconciliation_raw: bytes | None,
+    qualified_baseline_custody_raw: bytes | None,
+    chronology_anchor_custody_raw: bytes | None,
     graph_profile_registry: Mapping[str, object],
 ) -> dict[str, object]:
     current = _custody_view(current_custody_raw, current_graph_raw, graph_profile_registry)
@@ -372,14 +619,51 @@ def _body(
         raise IndependentSourceReconciliationError("reconciliation:prior-head-pair")
     if current["prior_artifact_id"] != (prior["artifact_id"] if prior is not None else None) or current["prior_stage_id"] != (prior["stage_id"] if prior is not None else None):
         raise IndependentSourceReconciliationError("reconciliation:custody-predecessor")
-    if prior is None and prior_artifact_id is not None:
-        raise IndependentSourceReconciliationError("reconciliation:head-predecessor")
-    if prior is not None and prior_artifact_id is None:
-        raise IndependentSourceReconciliationError("reconciliation:head-predecessor")
     if prior is not None and (current["subject"], current["scope"], current["profile_id"], current["profile_version"]) != (prior["subject"], prior["scope"], prior["profile_id"], prior["profile_version"]):
         raise IndependentSourceReconciliationError("reconciliation:profile-isolation")
-    chronology = _chronology(prior, current)
-    result = _result(prior, current, chronology)
+    prior_value: dict[str, object] | None = None
+    baseline: dict[str, object] | None = None
+    chronology_anchor_view: dict[str, object] | None = None
+    if prior_reconciliation_raw is None:
+        if prior is not None or prior_artifact_id is not None or prior_stage_id is not None:
+            raise IndependentSourceReconciliationError("reconciliation:prior-transition-required")
+    else:
+        if prior is None or prior_artifact_id is None or prior_stage_id is None:
+            raise IndependentSourceReconciliationError("reconciliation:prior-head-pair")
+        prior_value = _parse(prior_reconciliation_raw)
+        _validate_document_shape(prior_value)
+        if prior_value["artifact_id"] != prior_artifact_id or prior_value["current_stage_id"] != prior_stage_id:
+            raise IndependentSourceReconciliationError("reconciliation:prior-binding")
+        if prior_value["current_custody"] != _summary(prior):
+            raise IndependentSourceReconciliationError("reconciliation:prior-custody-binding")
+        if prior_value["source_content"]["current_root"] != prior["content_root"]:
+            raise IndependentSourceReconciliationError("reconciliation:prior-content-binding")
+        if _identity_values(prior_value) != (prior_value["artifact_id"], prior_value["current_stage_id"], prior_value["transition_id"]):
+            raise IndependentSourceReconciliationError("reconciliation:prior-identity")
+        prior_anchors = _validate_anchors(prior_value["anchors"])
+        baseline = _anchor_view(prior_anchors["qualified_content_baseline"], qualified_baseline_custody_raw, graph_profile_registry)
+        chronology_anchor_view = _anchor_view(prior_anchors["chronology_anchor"], chronology_anchor_custody_raw, graph_profile_registry)
+    chronology = _chronology(chronology_anchor_view, current, has_prior_transition=prior_value is not None)
+    result = _result(baseline, current, chronology)
+    linkage = _linkage_transition(prior, current)
+    prior_anchors = _validate_anchors(prior_value["anchors"] if prior_value is not None else {"qualified_content_baseline": None, "chronology_anchor": None})
+    if result["source_observation_status"] in {STATUS_OBSERVED_NEW, STATUS_OBSERVED_CONTINUED, STATUS_OBSERVED_CHANGED} and _qualified(current) and chronology["order"] not in {"LATE", "GAP"}:
+        qualified_anchor = _content_anchor(current)
+    else:
+        qualified_anchor = prior_anchors["qualified_content_baseline"]
+    if current["server_last_updated"] is not None and chronology["order"] != "LATE":
+        next_chronology_anchor = _chronology_anchor(current)
+    else:
+        next_chronology_anchor = prior_anchors["chronology_anchor"]
+    if prior_value is None:
+        if qualified_baseline_custody_raw is not None:
+            if qualified_anchor is None:
+                raise IndependentSourceReconciliationError("reconciliation:unexpected-baseline-bytes")
+            _anchor_view(qualified_anchor, qualified_baseline_custody_raw, graph_profile_registry)
+        if chronology_anchor_custody_raw is not None:
+            if next_chronology_anchor is None:
+                raise IndependentSourceReconciliationError("reconciliation:unexpected-chronology-bytes")
+            _anchor_view(next_chronology_anchor, chronology_anchor_custody_raw, graph_profile_registry)
     body: dict[str, object] = {
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
@@ -394,6 +678,15 @@ def _body(
         "current_custody": _summary(current),
         "chronology": chronology,
         "result": result,
+        "source_content": {
+            "current_root": current["content_root"],
+            "comparison_root": baseline["content_root"] if baseline is not None else None,
+        },
+        "linkage_transition": linkage,
+        "anchors": {
+            "qualified_content_baseline": qualified_anchor,
+            "chronology_anchor": next_chronology_anchor,
+        },
         "flags": dict(FIXED_FLAGS),
         "authority": dict(AUTHORITY_FLAGS),
     }
@@ -408,6 +701,9 @@ def build_artifact(
     prior_graph_raw: bytes | None = None,
     prior_artifact_id: str | None = None,
     prior_stage_id: str | None = None,
+    prior_reconciliation_raw: bytes | None = None,
+    qualified_baseline_custody_raw: bytes | None = None,
+    chronology_anchor_custody_raw: bytes | None = None,
     graph_profile_registry: Mapping[str, object] | None = None,
 ) -> bytes:
     """Build a candidate; durable admission independently rebuilds it."""
@@ -420,6 +716,9 @@ def build_artifact(
         prior_graph_raw=prior_graph_raw,
         prior_artifact_id=prior_artifact_id,
         prior_stage_id=prior_stage_id,
+        prior_reconciliation_raw=prior_reconciliation_raw,
+        qualified_baseline_custody_raw=qualified_baseline_custody_raw,
+        chronology_anchor_custody_raw=chronology_anchor_custody_raw,
         graph_profile_registry=registry,
     )
     artifact_id = _digest("artifact-id", body)
@@ -429,7 +728,8 @@ def build_artifact(
             "artifact_id": artifact_id,
             "current_custody_artifact_id": body["current_custody"]["artifact_id"],  # type: ignore[index]
             "current_snapshot_root": body["current_custody"]["snapshot_root"],  # type: ignore[index]
-            "result_status": body["result"]["status"],  # type: ignore[index]
+            "current_content_root": body["source_content"]["current_root"],  # type: ignore[index]
+            "result_status": body["result"]["source_observation_status"],  # type: ignore[index]
             "prior_artifact_id": prior_artifact_id,
             "prior_stage_id": prior_stage_id,
         },
@@ -460,13 +760,14 @@ def verify_artifact(
     current_graph_raw: bytes | None = None,
     prior_graph_raw: bytes | None = None,
     prior_reconciliation_raw: bytes | None = None,
+    qualified_baseline_custody_raw: bytes | None = None,
+    chronology_anchor_custody_raw: bytes | None = None,
     graph_profile_registry: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Reconstruct custody views and verify every reconciliation identity."""
+    """Reconstruct custody content, anchors, chronology, and every identity."""
 
     value = _parse(raw)
-    if set(value) != RECONCILIATION_KEYS or value.get("schema") != SCHEMA or value.get("schema_version") != SCHEMA_VERSION:
-        raise IndependentSourceReconciliationError("reconciliation:schema")
+    _validate_document_shape(value)
     registry = dict(graph_profile_registry or profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
     expected_body = _body(
         current_custody_raw,
@@ -475,101 +776,24 @@ def verify_artifact(
         prior_graph_raw=prior_graph_raw,
         prior_artifact_id=value.get("prior_artifact_id"),
         prior_stage_id=value.get("prior_stage_id"),
+        prior_reconciliation_raw=prior_reconciliation_raw,
+        qualified_baseline_custody_raw=qualified_baseline_custody_raw,
+        chronology_anchor_custody_raw=chronology_anchor_custody_raw,
         graph_profile_registry=registry,
     )
-    for key in ("profile_binding", "reconciliation_contract", "subject", "scope", "prior_artifact_id", "prior_stage_id", "stage_kind", "predecessor_custody", "current_custody", "chronology", "result", "flags", "authority"):
-        if value[key] != expected_body[key]:
+    for key, expected in expected_body.items():
+        if value[key] != expected:
             raise IndependentSourceReconciliationError(f"reconciliation:{key}-binding")
-    if value["stage_kind"] != STAGE_KIND or value["profile_binding"] != _profile_binding() or value["reconciliation_contract"] != _contract_binding():
-        raise IndependentSourceReconciliationError("reconciliation:contract")
-    if value["result"]["status"] not in STATUSES or value["chronology"]["order"] not in CHRONOLOGY:  # type: ignore[index]
-        raise IndependentSourceReconciliationError("reconciliation:status")
-    prior_id = value["prior_artifact_id"]
-    prior_stage = value["prior_stage_id"]
-    if prior_id is not None:
-        _hex(prior_id, "prior-artifact-id")
-        _hex(prior_stage, "prior-stage-id")
-        if prior_reconciliation_raw is None:
-            raise IndependentSourceReconciliationError("reconciliation:prior-bytes-required")
-        prior_value = _parse(prior_reconciliation_raw)
-        if prior_value.get("schema") != SCHEMA or prior_value.get("artifact_id") != prior_id or prior_value.get("current_stage_id") != prior_stage:
-            raise IndependentSourceReconciliationError("reconciliation:prior-binding")
-        if prior_value.get("profile_binding") != _profile_binding() or prior_value.get("reconciliation_contract") != _contract_binding() or prior_value.get("authority") != AUTHORITY_FLAGS or prior_value.get("flags") != FIXED_FLAGS:
-            raise IndependentSourceReconciliationError("reconciliation:prior-contract")
-        prior_custody = value["predecessor_custody"]
-        if not isinstance(prior_custody, dict) or prior_value.get("current_custody") != prior_custody:
-            raise IndependentSourceReconciliationError("reconciliation:prior-custody-binding")
-        prior_body = dict(prior_value)
-        prior_body.pop("artifact_id")
-        prior_body.pop("current_stage_id")
-        prior_body.pop("transition_id")
-        prior_expected_id = _digest("artifact-id", prior_body)
-        prior_current = prior_value.get("current_custody")
-        if not isinstance(prior_current, dict):
-            raise IndependentSourceReconciliationError("reconciliation:prior-current")
-        prior_expected_stage = _digest(
-            "stage-id",
-            {
-                "artifact_id": prior_expected_id,
-                "current_custody_artifact_id": prior_current["artifact_id"],
-                "current_snapshot_root": prior_current["snapshot_root"],
-                "result_status": prior_value["result"]["status"],
-                "prior_artifact_id": prior_value["prior_artifact_id"],
-                "prior_stage_id": prior_value["prior_stage_id"],
-            },
-        )
-        prior_predecessor = prior_value.get("predecessor_custody")
-        prior_expected_transition = _digest(
-            "transition-id",
-            {
-                "artifact_id": prior_expected_id,
-                "current_stage_id": prior_expected_stage,
-                "prior_artifact_id": prior_value["prior_artifact_id"],
-                "prior_stage_id": prior_value["prior_stage_id"],
-                "predecessor_custody_artifact_id": prior_predecessor["artifact_id"] if isinstance(prior_predecessor, dict) else None,
-                "current_custody_artifact_id": prior_current["artifact_id"],
-            },
-        )
-        if prior_value.get("artifact_id") != prior_expected_id or prior_value.get("current_stage_id") != prior_expected_stage or prior_value.get("transition_id") != prior_expected_transition:
-            raise IndependentSourceReconciliationError("reconciliation:prior-identity")
-    else:
-        if prior_reconciliation_raw is not None:
-            raise IndependentSourceReconciliationError("reconciliation:unexpected-prior")
-    body = dict(value)
-    body.pop("artifact_id")
-    body.pop("current_stage_id")
-    body.pop("transition_id")
-    artifact_id = _digest("artifact-id", body)
-    current = value["current_custody"]
-    assert isinstance(current, dict)
-    predecessor = value["predecessor_custody"]
-    stage_id = _digest(
-        "stage-id",
-        {
-            "artifact_id": artifact_id,
-            "current_custody_artifact_id": current["artifact_id"],
-            "current_snapshot_root": current["snapshot_root"],
-            "result_status": value["result"]["status"],
-            "prior_artifact_id": prior_id,
-            "prior_stage_id": prior_stage,
-        },
-    )
-    transition_id = _digest(
-        "transition-id",
-        {
-            "artifact_id": artifact_id,
-            "current_stage_id": stage_id,
-            "prior_artifact_id": prior_id,
-            "prior_stage_id": prior_stage,
-            "predecessor_custody_artifact_id": predecessor["artifact_id"] if isinstance(predecessor, dict) else None,
-            "current_custody_artifact_id": current["artifact_id"],
-        },
-    )
-    if value["artifact_id"] != artifact_id or value["current_stage_id"] != stage_id or value["transition_id"] != transition_id:
+    artifact_id, stage_id, transition_id = _identity_values(value)
+    if (value["artifact_id"], value["current_stage_id"], value["transition_id"]) != (artifact_id, stage_id, transition_id):
         raise IndependentSourceReconciliationError("reconciliation:identity")
     _hex(value["artifact_id"], "artifact-id")
     _hex(value["current_stage_id"], "stage-id")
     _hex(value["transition_id"], "transition-id")
+    current = value["current_custody"]
+    predecessor = value["predecessor_custody"]
+    baseline = value["anchors"]["qualified_content_baseline"]
+    chronology_anchor = value["anchors"]["chronology_anchor"]
     return {
         "kind": ARTIFACT_KIND,
         "schema": SCHEMA,
@@ -591,16 +815,24 @@ def verify_artifact(
         "current_custody_stage_id": current["stage_id"],
         "predecessor_custody_artifact_id": predecessor["artifact_id"] if isinstance(predecessor, dict) else None,
         "predecessor_custody_stage_id": predecessor["stage_id"] if isinstance(predecessor, dict) else None,
-        "result_status": value["result"]["status"],
+        "result_status": value["result"]["source_observation_status"],
         "current_snapshot_root": current["snapshot_root"],
+        "current_content_root": value["source_content"]["current_root"],
         "current_source_status": current["source_status"],
+        "qualified_baseline_custody_artifact_id": baseline["custody_artifact_id"] if baseline is not None else None,
+        "qualified_baseline_custody_stage_id": baseline["custody_stage_id"] if baseline is not None else None,
+        "chronology_anchor_custody_artifact_id": chronology_anchor["custody_artifact_id"] if chronology_anchor is not None else None,
+        "chronology_anchor_custody_stage_id": chronology_anchor["custody_stage_id"] if chronology_anchor is not None else None,
     }
 
 
 __all__ = [
     "ARTIFACT_KIND",
     "AUTHORITY_FLAGS",
+    "FETCHED_AT_FALLBACK_TRUSTED",
     "FIXED_FLAGS",
+    "LINKAGE_STATES",
+    "LINKAGE_TRANSITIONS",
     "MAX_ARTIFACT_BYTES",
     "MAX_GAP_SECONDS",
     "RECONCILIATION_CONTRACT_ID",

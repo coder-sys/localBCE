@@ -411,6 +411,8 @@ def _normalize_artifact(
                 current_graph_raw=reconciliation_context.get("current_graph_raw"),
                 prior_graph_raw=reconciliation_context.get("prior_graph_raw"),
                 prior_reconciliation_raw=reconciliation_context.get("prior_reconciliation_raw"),
+                qualified_baseline_custody_raw=reconciliation_context.get("qualified_baseline_custody_raw"),
+                chronology_anchor_custody_raw=reconciliation_context.get("chronology_anchor_custody_raw"),
                 graph_profile_registry=graph_profile_registry,
             )
         elif kind == ARTIFACT_GRAPH:
@@ -589,7 +591,12 @@ def _normalize_artifact(
                 "predecessor_custody_stage_id": result["predecessor_custody_stage_id"],
                 "result_status": result["result_status"],
                 "current_snapshot_root": result["current_snapshot_root"],
+                "current_content_root": result["current_content_root"],
                 "current_source_status": result["current_source_status"],
+                "qualified_baseline_custody_artifact_id": result["qualified_baseline_custody_artifact_id"],
+                "qualified_baseline_custody_stage_id": result["qualified_baseline_custody_stage_id"],
+                "chronology_anchor_custody_artifact_id": result["chronology_anchor_custody_artifact_id"],
+                "chronology_anchor_custody_stage_id": result["chronology_anchor_custody_stage_id"],
             }
         )
     return normalized
@@ -770,12 +777,30 @@ def _verify_rows(
                 prior_reconciliation_raw = raw_by_key.get((ARTIFACT_RECONCILIATION, str(prior_reconciliation_id)))
                 if prior_reconciliation_raw is None:
                     raise IndependentStoreError("database:reconciliation-prior")
+            anchors = reconciliation_independent._validate_anchors(value.get("anchors"))
+            context_anchors = anchors
+            if prior_reconciliation_raw is not None:
+                prior_value = reconciliation_independent._parse(prior_reconciliation_raw)
+                context_anchors = reconciliation_independent._validate_anchors(prior_value.get("anchors"))
+            anchor_raws: dict[str, bytes | None] = {}
+            for anchor_name in ("qualified_content_baseline", "chronology_anchor"):
+                anchor = context_anchors[anchor_name]
+                if anchor is None:
+                    anchor_raws[anchor_name] = None
+                    continue
+                anchor_key = (ARTIFACT_SOURCE_EVIDENCE, str(anchor["custody_artifact_id"]))
+                anchor_artifact = artifacts.get(anchor_key)
+                if anchor_artifact is None or anchor_artifact["current_stage_id"] != anchor["custody_stage_id"]:
+                    raise IndependentStoreError(f"database:reconciliation-{anchor_name}")
+                anchor_raws[anchor_name] = raw_by_key[anchor_key]
             context = {
                 "current_custody_raw": raw_by_key[current_key],
                 "prior_custody_raw": raw_by_key[(ARTIFACT_SOURCE_EVIDENCE, str(predecessor_id))] if predecessor_id is not None else None,
                 "current_graph_raw": current_graph["payload"] if current_graph is not None else None,
                 "prior_graph_raw": prior_graph["payload"] if prior_graph is not None else None,
                 "prior_reconciliation_raw": prior_reconciliation_raw,
+                "qualified_baseline_custody_raw": anchor_raws["qualified_content_baseline"],
+                "chronology_anchor_custody_raw": anchor_raws["chronology_anchor"],
             }
             artifact = _normalize_artifact(
                 ARTIFACT_RECONCILIATION,
@@ -960,6 +985,22 @@ def _verify_rows(
         ]
         if not source_events_before or max(source_events_before) != current_sequence:
             raise IndependentStoreError("database:reconciliation-source-not-head")
+        for anchor_field in ("qualified_baseline_custody_artifact_id", "chronology_anchor_custody_artifact_id"):
+            anchor_id = reconciliation_artifact.get(anchor_field)
+            if anchor_id is None:
+                continue
+            anchor_key = (ARTIFACT_SOURCE_EVIDENCE, str(anchor_id))
+            anchor_artifact = artifacts.get(anchor_key)
+            anchor_sequence = artifact_event_sequence.get(anchor_key)
+            if anchor_artifact is None or anchor_sequence is None or anchor_sequence >= reconciliation_sequence:
+                raise IndependentStoreError("database:reconciliation-anchor-order")
+            if _chain_id(
+                ARTIFACT_SOURCE_EVIDENCE,
+                str(anchor_artifact["subject"]),
+                str(anchor_artifact["scope"]),
+                anchor_artifact.get("profile_id"),
+            ) != source_chain:
+                raise IndependentStoreError("database:reconciliation-anchor-profile")
         predecessor_id = reconciliation_artifact.get("predecessor_custody_artifact_id")
         if predecessor_id is not None:
             predecessor_key = (ARTIFACT_SOURCE_EVIDENCE, str(predecessor_id))
