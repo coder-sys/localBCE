@@ -19,6 +19,7 @@ from typing import Any, Mapping
 from app.governance import provider_continuity_control_pack_independent as governance_independent
 from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
+from app.mirror import contract_mirror_independent as contract_independent
 from app.mirror import discrepancy_case_independent as case_independent
 from app.mirror import denominator_ledger_independent as denominator_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
@@ -34,7 +35,8 @@ ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
 ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
 ARTIFACT_CASE = case_independent.ARTIFACT_KIND
 ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR)
+ARTIFACT_CONTRACT = contract_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR, ARTIFACT_CONTRACT)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
@@ -380,6 +382,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_DENOMINATOR:
         if dict(value) != denominator_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_CONTRACT:
+        if dict(value) != contract_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -392,6 +397,7 @@ def _normalize_artifact(
     graph_profile_registry: Mapping[str, object] | None = None,
     reconciliation_context: Mapping[str, object] | None = None,
     denominator_context: Mapping[str, object] | None = None,
+    contract_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if kind not in ARTIFACT_KINDS:
         raise IndependentStoreError("artifact:kind")
@@ -406,6 +412,8 @@ def _normalize_artifact(
             value = case_independent._parse(raw)
         elif kind == ARTIFACT_DENOMINATOR:
             value = denominator_independent._parse(raw)
+        elif kind == ARTIFACT_CONTRACT:
+            value = contract_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -413,6 +421,7 @@ def _normalize_artifact(
         reconciliation_independent.IndependentSourceReconciliationError,
         case_independent.IndependentDiscrepancyCaseError,
         denominator_independent.IndependentDenominatorError,
+        contract_independent.IndependentContractMirrorError,
     ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
@@ -461,6 +470,18 @@ def _normalize_artifact(
                 governance_raw=denominator_context["governance_raw"],
                 registry=graph_profile_registry or {},
                 prior_denominator_raw=denominator_context.get("prior_denominator_raw"),
+            )
+        elif kind == ARTIFACT_CONTRACT:
+            if not isinstance(contract_context, Mapping):
+                raise IndependentStoreError("contract:context-required")
+            result = contract_independent.verify_artifact(
+                raw,
+                denominator_raw=contract_context["denominator_raw"],
+                denominator_context=contract_context["denominator_context"],
+                case_raw=contract_context["case_raw"],
+                case_context=contract_context["case_context"],
+                registry=graph_profile_registry or {},
+                prior_contract_raw=contract_context.get("prior_contract_raw"),
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -540,6 +561,20 @@ def _normalize_artifact(
             profile_version = result["profile_version"]
             authority_json = _authority_json(value["authority"], kind)
         elif kind == ARTIFACT_DENOMINATOR:
+            artifact_id = result["artifact_id"]
+            report_id = result["report_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = result["schema"]
+            subject_id = result["subject"]
+            scope = result["scope"]
+            profile_id = result["profile_id"]
+            profile_version = result["profile_version"]
+            authority_json = _authority_json(value["authority"], kind)
+        elif kind == ARTIFACT_CONTRACT:
             artifact_id = result["artifact_id"]
             report_id = result["report_id"]
             current_stage_id = result["current_stage_id"]
@@ -691,6 +726,18 @@ def _normalize_artifact(
                 "child_population_root": result["child_population_root"],
                 "input_record_count": result["input_record_count"],
                 "outcome_counts": result["outcome_counts"],
+            }
+        )
+    elif kind == ARTIFACT_CONTRACT:
+        normalized.update(
+            {
+                "contract_stage": result["contract_stage"],
+                "denominator_artifact_id": result["denominator_artifact_id"],
+                "denominator_population_root": result["denominator_population_root"],
+                "case_artifact_id": result["case_artifact_id"],
+                "case_id": result["case_id"],
+                "reconciliation_artifact_id": result["reconciliation_artifact_id"],
+                "evaluation_status": result["evaluation_status"],
             }
         )
     return normalized
@@ -923,6 +970,84 @@ def _case_context(
     return result
 
 
+def _contract_context(
+    artifacts: Mapping[tuple[str, str], Mapping[str, object]],
+    raw_by_key: Mapping[tuple[str, str], bytes],
+    event_sequence_hint: Mapping[tuple[str, str], int],
+    contract_raw: bytes,
+    graph_profile_registry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Reconstruct all stored bytes named by one Contract Mirror artifact."""
+
+    try:
+        value = contract_independent._parse(contract_raw)
+        denominator_binding = value["denominator"]
+        case_link = value["case_link"]
+        denominator_key = (ARTIFACT_DENOMINATOR, str(denominator_binding["artifact_id"]))
+        case_key = (ARTIFACT_CASE, str(case_link["artifact_id"]))
+        denominator_artifact = artifacts.get(denominator_key)
+        case_artifact = artifacts.get(case_key)
+        if denominator_artifact is None or case_artifact is None:
+            raise IndependentStoreError("database:contract-upstream-missing")
+        denominator_raw = raw_by_key[denominator_key]
+        denominator_value = denominator_independent._parse(denominator_raw)
+        source_binding = denominator_value.get("source_binding")
+        governance_binding = denominator_value.get("governance_binding")
+        if not isinstance(source_binding, dict) or not isinstance(governance_binding, dict):
+            raise IndependentStoreError("database:contract-denominator-binding")
+        source_key = (ARTIFACT_SOURCE_EVIDENCE, str(source_binding["artifact_id"]))
+        source_artifact = artifacts.get(source_key)
+        if source_artifact is None or source_artifact["current_stage_id"] != source_binding["stage_id"]:
+            raise IndependentStoreError("database:contract-source-missing")
+        graph_id = source_binding.get("graph_artifact_id")
+        graph_key = (ARTIFACT_GRAPH, str(graph_id)) if graph_id is not None else None
+        if graph_key is not None and graph_key not in artifacts:
+            raise IndependentStoreError("database:contract-graph-missing")
+        governance_key = (ARTIFACT_GOVERNANCE, str(governance_binding["artifact_id"]))
+        governance_artifact = artifacts.get(governance_key)
+        if governance_artifact is None or governance_artifact["current_stage_id"] != governance_binding["stage_id"]:
+            raise IndependentStoreError("database:contract-governance-missing")
+        prior_denominator_raw = None
+        prior_id = denominator_value.get("prior_artifact_id")
+        if prior_id is not None:
+            prior_key = (ARTIFACT_DENOMINATOR, str(prior_id))
+            if prior_key not in raw_by_key:
+                raise IndependentStoreError("database:contract-denominator-prior")
+            prior_denominator_raw = raw_by_key[prior_key]
+        denominator_context = {
+            "source_raw": raw_by_key[source_key],
+            "graph_raw": raw_by_key[graph_key] if graph_key is not None else None,
+            "governance_raw": raw_by_key[governance_key],
+            "prior_denominator_raw": prior_denominator_raw,
+        }
+        case_raw = raw_by_key[case_key]
+        case_context = _case_context(
+            artifacts,
+            raw_by_key,
+            event_sequence_hint,
+            case_raw,
+            graph_profile_registry,
+        )
+        prior_contract_raw = None
+        prior_contract_id = value.get("prior_artifact_id")
+        if prior_contract_id is not None:
+            prior_contract_key = (ARTIFACT_CONTRACT, str(prior_contract_id))
+            if prior_contract_key not in raw_by_key:
+                raise IndependentStoreError("database:contract-prior")
+            prior_contract_raw = raw_by_key[prior_contract_key]
+        return {
+            "denominator_raw": denominator_raw,
+            "denominator_context": denominator_context,
+            "case_raw": case_raw,
+            "case_context": case_context,
+            "prior_contract_raw": prior_contract_raw,
+        }
+    except IndependentStoreError:
+        raise
+    except Exception as exc:
+        raise IndependentStoreError("database:contract-context") from exc
+
+
 def _verify_rows(
     snapshot: Mapping[str, object],
     *,
@@ -950,6 +1075,7 @@ def _verify_rows(
     reconciliation_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     case_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     denominator_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    contract_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     event_sequence_hint = {
         (str(row["artifact_kind"]), str(row["artifact_id"])): int(row["sequence"])
         for row in rows["events"]
@@ -973,6 +1099,9 @@ def _verify_rows(
             continue
         if kind == ARTIFACT_DENOMINATOR:
             denominator_rows.append((row, raw, key))
+            continue
+        if kind == ARTIFACT_CONTRACT:
+            contract_rows.append((row, raw, key))
             continue
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
@@ -1176,6 +1305,39 @@ def _verify_rows(
             if stored != expected:
                 raise IndependentStoreError(f"database:artifact-{field}")
         hash_key = (ARTIFACT_CASE, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
+
+    # Contract artifacts are checked only after their denominator and case
+    # bytes have been independently reconstructed.  The carried IDs are
+    # labels; the context loader above selects and verifies the actual rows.
+    for row, raw, key in sorted(contract_rows, key=lambda item: int(event_sequence_hint.get(item[2], 0))):
+        try:
+            context = _contract_context(
+                artifacts,
+                raw_by_key,
+                event_sequence_hint,
+                raw,
+                graph_profile_registry,
+            )
+            artifact = _normalize_artifact(
+                ARTIFACT_CONTRACT,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                contract_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:contract-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_CONTRACT, str(row["payload_hash"]))
         if hash_key in artifact_hashes:
             raise IndependentStoreError("database:artifact-hash-duplicate")
         artifact_hashes.add(hash_key)
@@ -1463,6 +1625,52 @@ def _verify_rows(
                 raise IndependentStoreError("database:denominator-prior-order")
             if value.get("prior_stage_id") != prior.get("current_stage_id") or prior.get("denominator_stage") != denominator_independent.STAGE_BASELINE:
                 raise IndependentStoreError("database:denominator-prior-binding")
+
+    # Contract evaluation is a derived observation.  It may only appear after
+    # the exact denominator, case, and governing Control Pack bytes it names;
+    # a retest also remains append-only on the Contract chain.
+    for contract_artifact in artifacts.values():
+        if contract_artifact["kind"] != ARTIFACT_CONTRACT:
+            continue
+        contract_sequence = artifact_event_sequence.get((ARTIFACT_CONTRACT, str(contract_artifact["artifact_id"])))
+        contract_value = contract_independent._parse(contract_artifact["payload"])
+        denominator_id = contract_value["denominator"]["artifact_id"]
+        case_artifact_id = contract_value["case_link"]["artifact_id"]
+        governance_id = contract_value["governance_binding"]["artifact_id"]
+        denominator_sequence = artifact_event_sequence.get((ARTIFACT_DENOMINATOR, str(denominator_id)))
+        case_sequence = artifact_event_sequence.get((ARTIFACT_CASE, str(case_artifact_id)))
+        governance_sequence = artifact_event_sequence.get((ARTIFACT_GOVERNANCE, str(governance_id)))
+        if contract_sequence is None or denominator_sequence is None or case_sequence is None or governance_sequence is None:
+            raise IndependentStoreError("database:contract-dependency-missing")
+        if denominator_sequence >= contract_sequence or case_sequence >= contract_sequence or governance_sequence >= contract_sequence:
+            raise IndependentStoreError("database:contract-dependency-order")
+        case_artifact = artifacts.get((ARTIFACT_CASE, str(case_artifact_id)))
+        if case_artifact is None:
+            raise IndependentStoreError("database:contract-case-missing")
+        case_chain = _chain_id(
+            ARTIFACT_CASE,
+            str(case_artifact["subject"]),
+            str(case_artifact["scope"]),
+            case_artifact.get("profile_id"),
+        )
+        case_head_at_contract: Mapping[str, object] | None = None
+        for sequence in range(1, contract_sequence):
+            event = events.get(sequence)
+            if event is not None and event["chain_id"] == case_chain:
+                case_head_at_contract = artifacts.get((ARTIFACT_CASE, str(event["artifact_id"])))
+        if case_head_at_contract is None or case_head_at_contract["artifact_id"] != case_artifact_id or case_head_at_contract["current_stage_id"] != case_artifact["current_stage_id"]:
+            raise IndependentStoreError("database:contract-case-head")
+        if contract_value["stage_kind"] == contract_independent.STAGE_EVALUATED:
+            if contract_artifact["prior_artifact_id"] is not None:
+                raise IndependentStoreError("database:contract-initial-prior")
+        elif contract_value["stage_kind"] == contract_independent.STAGE_RETESTED:
+            prior_id = contract_artifact["prior_artifact_id"]
+            prior = artifacts.get((ARTIFACT_CONTRACT, str(prior_id))) if prior_id is not None else None
+            prior_sequence = artifact_event_sequence.get((ARTIFACT_CONTRACT, str(prior_id))) if prior_id is not None else None
+            if prior is None or prior_sequence is None or prior_sequence >= contract_sequence or contract_independent._parse(prior["payload"])["stage_kind"] != contract_independent.STAGE_EVALUATED:
+                raise IndependentStoreError("database:contract-prior-order")
+        else:
+            raise IndependentStoreError("database:contract-stage")
 
     # A linked V2 graph is independently eligible only while a matching
     # verifier-owned approval was effective at the source-custody event.  This

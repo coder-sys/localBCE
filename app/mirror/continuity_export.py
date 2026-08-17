@@ -15,6 +15,8 @@ from typing import Mapping
 
 from app.mirror import continuity_store as store
 from app.mirror import continuity_store_independent as independent
+from app.mirror import contract_mirror as contract_mirror
+from app.mirror import contract_mirror_independent as contract_mirror_independent
 from app.mirror import discrepancy_case as discrepancy_case
 from app.mirror import discrepancy_case_independent as discrepancy_case_independent
 from app.mirror import denominator_ledger as denominator_ledger
@@ -131,6 +133,8 @@ SOFTWARE_IDENTITIES = {
     "discrepancy_case_independent_identity": _module_identity(discrepancy_case_independent.__file__),
     "denominator_ledger_module_identity": _module_identity(denominator_ledger.__file__),
     "denominator_ledger_independent_identity": _module_identity(denominator_ledger_independent.__file__),
+    "contract_mirror_module_identity": _module_identity(contract_mirror.__file__),
+    "contract_mirror_independent_identity": _module_identity(contract_mirror_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 

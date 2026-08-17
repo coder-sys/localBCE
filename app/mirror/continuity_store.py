@@ -19,6 +19,7 @@ from types import MappingProxyType
 from app.governance import provider_continuity_control_pack_independent as governance_independent
 from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
+from app.mirror import contract_mirror_independent as contract_independent
 from app.mirror import denominator_ledger_independent as denominator_independent
 from app.mirror import discrepancy_case_independent as case_independent
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
@@ -36,7 +37,8 @@ ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
 ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
 ARTIFACT_CASE = case_independent.ARTIFACT_KIND
 ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR)
+ARTIFACT_CONTRACT = contract_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR, ARTIFACT_CONTRACT)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 MAX_ARTIFACT_BYTES = 524_288
@@ -291,6 +293,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind == ARTIFACT_DENOMINATOR:
         if dict(value) != denominator_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_CONTRACT:
+        if dict(value) != contract_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -329,6 +334,7 @@ def verify_artifact(
     graph_profile_registry: Mapping[str, object] | None = None,
     reconciliation_context: Mapping[str, object] | None = None,
     denominator_context: Mapping[str, object] | None = None,
+    contract_context: Mapping[str, object] | None = None,
 ) -> VerifiedArtifact:
     """Run the matching independent verifier and normalize its exact identities."""
 
@@ -345,6 +351,8 @@ def verify_artifact(
             value = case_independent._parse(raw)
         elif artifact_kind == ARTIFACT_DENOMINATOR:
             value = denominator_independent._parse(raw)
+        elif artifact_kind == ARTIFACT_CONTRACT:
+            value = contract_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -353,6 +361,7 @@ def verify_artifact(
         reconciliation_independent.IndependentSourceReconciliationError,
         case_independent.IndependentDiscrepancyCaseError,
         denominator_independent.IndependentDenominatorError,
+        contract_independent.IndependentContractMirrorError,
     ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
@@ -401,6 +410,18 @@ def verify_artifact(
                 governance_raw=denominator_context["governance_raw"],
                 registry=graph_profile_registry or {},
                 prior_denominator_raw=denominator_context.get("prior_denominator_raw"),
+            )
+        elif artifact_kind == ARTIFACT_CONTRACT:
+            if not isinstance(contract_context, Mapping):
+                raise ArtifactAdmissionError("contract:context-required")
+            result = contract_independent.verify_artifact(
+                raw,
+                denominator_raw=contract_context["denominator_raw"],
+                denominator_context=contract_context["denominator_context"],
+                case_raw=contract_context["case_raw"],
+                case_context=contract_context["case_context"],
+                registry=graph_profile_registry or {},
+                prior_contract_raw=contract_context.get("prior_contract_raw"),
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -475,6 +496,19 @@ def verify_artifact(
             profile_id = str(result["profile_id"])
             authority_json = _authority_json(value["authority"], kind=artifact_kind)
         elif artifact_kind == ARTIFACT_DENOMINATOR:
+            artifact_id = str(result["artifact_id"])
+            report_id = artifact_id
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_CONTRACT:
             artifact_id = str(result["artifact_id"])
             report_id = artifact_id
             current_stage_id = str(result["current_stage_id"])
@@ -1749,6 +1783,522 @@ class ContinuityStore:
             governance_raw=bytes(governance_row["payload"]),
             require_current_source_head=False,
         ) | {"prior_denominator_raw": prior_raw}
+
+    def _contract_denominator_context(
+        self,
+        connection: sqlite3.Connection,
+        denominator_raw: bytes,
+    ) -> dict[str, object]:
+        """Load every source/governance byte named by a stored denominator."""
+
+        try:
+            value = denominator_independent._parse(denominator_raw)
+            source_binding = value["source_binding"]
+            governance_binding = value["governance_binding"]
+            if not isinstance(source_binding, dict) or not isinstance(governance_binding, dict):
+                raise StoreConflictError("contract:denominator-binding")
+            governance_row = connection.execute(
+                "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_GOVERNANCE, governance_binding["artifact_id"]),
+            ).fetchone()
+            if governance_row is None or governance_row["current_stage_id"] != governance_binding["stage_id"]:
+                raise StoreConflictError("contract:governance-missing")
+            prior_raw = None
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                prior_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_DENOMINATOR, prior_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("contract:denominator-prior")
+                prior_raw = bytes(prior_row["payload"])
+            loaded_context = self._denominator_source_context(
+                connection,
+                str(source_binding["artifact_id"]),
+                governance_raw=bytes(governance_row["payload"]),
+                require_current_source_head=False,
+            )
+            # Contract Mirror receives only the exact independently verified
+            # denominator inputs it consumes.  The source preview is useful
+            # to the denominator owner, but it is not part of this seam.
+            return {
+                "source_raw": loaded_context["source_raw"],
+                "graph_raw": loaded_context.get("graph_raw"),
+                "governance_raw": loaded_context["governance_raw"],
+                "prior_denominator_raw": prior_raw,
+            }
+        except StoreConflictError:
+            raise
+        except Exception as exc:
+            raise StoreConflictError("contract:denominator-context") from exc
+
+    def _contract_case_context_for_raw(
+        self,
+        connection: sqlite3.Connection,
+        case_raw: bytes,
+    ) -> dict[str, object]:
+        """Load the exact case predecessor/retest context for Contract verification."""
+
+        value = case_independent._parse(case_raw)
+        upstream = value["upstream"]
+        context = self._case_upstream_context(
+            connection,
+            str(upstream["graph"]["artifact_id"]),
+            str(upstream["reconciliation"]["artifact_id"]),
+            str(upstream["finding"]["finding_id"]),
+        )
+        prior_case_raw = None
+        prior_id = value["transition"].get("prior_artifact_id")
+        if prior_id is not None:
+            row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_CASE, prior_id),
+            ).fetchone()
+            if row is None:
+                raise StoreConflictError("contract:case-prior")
+            prior_case_raw = bytes(row["payload"])
+        retest_raw = None
+        retest_context = None
+        retest_id = value["retest"].get("reconciliation_artifact_id")
+        if retest_id is not None:
+            row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_RECONCILIATION, retest_id),
+            ).fetchone()
+            if row is None:
+                raise StoreConflictError("contract:case-retest")
+            retest_raw = bytes(row["payload"])
+            retest_context = self._case_reconciliation_context_for_raw(connection, retest_raw)
+        return {
+            **context,
+            "prior_case_raw": prior_case_raw,
+            "retest_reconciliation_raw": retest_raw,
+            "retest_context": retest_context,
+        }
+
+    def _contract_reconciliation_context(
+        self,
+        connection: sqlite3.Connection,
+        reconciliation_artifact_id: str,
+    ) -> tuple[bytes, dict[str, object]]:
+        row = connection.execute(
+            "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_RECONCILIATION, reconciliation_artifact_id),
+        ).fetchone()
+        if row is None:
+            raise StoreConflictError("contract:reconciliation-missing")
+        raw = bytes(row["payload"])
+        context = self._case_reconciliation_context_for_raw(connection, raw)
+        try:
+            value = reconciliation_independent._parse(raw)
+            recon_result = reconciliation_independent.verify_artifact(
+                raw,
+                current_custody_raw=context["current_custody_raw"],
+                prior_custody_raw=context.get("prior_custody_raw"),
+                current_graph_raw=context.get("current_graph_raw"),
+                prior_graph_raw=context.get("prior_graph_raw"),
+                prior_reconciliation_raw=context.get("prior_reconciliation_raw"),
+                qualified_baseline_custody_raw=context.get("qualified_baseline_custody_raw"),
+                chronology_anchor_custody_raw=context.get("chronology_anchor_custody_raw"),
+                graph_profile_registry=self.graph_profile_registry,
+            )
+            profile_id = recon_result["profile_id"]
+            chain_id = _chain_id(ARTIFACT_RECONCILIATION, value["subject"], value["scope"], profile_id)
+            head = self._head(connection, chain_id)
+            if head is None or head["artifact_id"] != value["artifact_id"] or head["current_stage_id"] != value["current_stage_id"]:
+                raise StoreConflictError("contract:reconciliation-not-head")
+        except StoreConflictError:
+            raise
+        except Exception as exc:
+            raise StoreConflictError("contract:reconciliation-reject") from exc
+        return raw, context
+
+    def _contract_active_governance(self, connection: sqlite3.Connection, observation_raw: bytes) -> bytes:
+        try:
+            value = reconciliation_independent._parse(observation_raw)
+            current = value["current_custody"]
+            source_row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_SOURCE_EVIDENCE, current["artifact_id"]),
+            ).fetchone()
+            if source_row is None:
+                raise StoreConflictError("contract:observation-source")
+            source_value = source_independent._parse(bytes(source_row["payload"]))
+            return self._denominator_active_governance(connection, int(source_value["observation_time"]))
+        except GovernanceObservationOnly:
+            raise
+        except StoreConflictError:
+            raise
+        except Exception as exc:
+            raise StoreConflictError("contract:governance-context") from exc
+
+    def _contract_context_for_raw(
+        self,
+        connection: sqlite3.Connection,
+        contract_raw: bytes,
+    ) -> dict[str, object]:
+        value = contract_independent._parse(contract_raw)
+        denominator_id = value["denominator"]["artifact_id"]
+        case_artifact_id = value["case_link"]["artifact_id"]
+        denominator_row = connection.execute(
+            "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_DENOMINATOR, denominator_id),
+        ).fetchone()
+        case_row = connection.execute(
+            "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_CASE, case_artifact_id),
+        ).fetchone()
+        if denominator_row is None or case_row is None:
+            raise StoreConflictError("contract:upstream-missing")
+        denominator_raw = bytes(denominator_row["payload"])
+        case_raw = bytes(case_row["payload"])
+        prior_contract_raw = None
+        prior_id = value.get("prior_artifact_id")
+        if prior_id is not None:
+            prior_row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_CONTRACT, prior_id),
+            ).fetchone()
+            if prior_row is None:
+                raise StoreConflictError("contract:prior-missing")
+            prior_contract_raw = bytes(prior_row["payload"])
+        return {
+            "denominator_raw": denominator_raw,
+            "denominator_context": self._contract_denominator_context(connection, denominator_raw),
+            "case_raw": case_raw,
+            "case_context": self._contract_case_context_for_raw(connection, case_raw),
+            "prior_contract_raw": prior_contract_raw,
+        }
+
+    def _contract_head_row(self, connection: sqlite3.Connection, contract_artifact_id: str) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT h.*, a.payload FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.artifact_kind=? AND h.artifact_id=?",
+            (ARTIFACT_CONTRACT, contract_artifact_id),
+        ).fetchone()
+        if row is None:
+            raise StoreConflictError("contract:head-missing")
+        return row
+
+    def admit_contract(
+        self,
+        stage: str,
+        *,
+        denominator_artifact_id: str | None = None,
+        reconciliation_artifact_id: str | None = None,
+        finding_id: str | None = None,
+        contract_artifact_id: str | None = None,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt:
+        """Atomically append one Contract Mirror evaluation and its case seam."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        if stage not in contract_independent.STAGES:
+            raise StoreConflictError("contract:stage")
+        if stage == contract_independent.STAGE_EVALUATED:
+            if not all(isinstance(item, str) and item for item in (denominator_artifact_id, reconciliation_artifact_id, finding_id)) or contract_artifact_id is not None:
+                raise StoreConflictError("contract:evaluation-selectors")
+        elif not isinstance(contract_artifact_id, str) or not contract_artifact_id or any(item is not None for item in (denominator_artifact_id, reconciliation_artifact_id, finding_id)):
+            raise StoreConflictError("contract:retest-selector")
+
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("transaction:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+
+            if stage == contract_independent.STAGE_EVALUATED:
+                assert denominator_artifact_id is not None and reconciliation_artifact_id is not None and finding_id is not None
+                # Exact evaluation retry is resolved before the current
+                # governance check, so withdrawal cannot make a committed
+                # receipt disappear.
+                existing_eval: sqlite3.Row | None = None
+                for row in connection.execute("SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (ARTIFACT_CONTRACT,)):
+                    candidate_value = contract_independent._parse(bytes(row["payload"]))
+                    if (
+                        candidate_value.get("stage_kind") == contract_independent.STAGE_EVALUATED
+                        and candidate_value.get("denominator", {}).get("artifact_id") == denominator_artifact_id
+                        and candidate_value.get("observation", {}).get("reconciliation_artifact_id") == reconciliation_artifact_id
+                        and candidate_value.get("case_link", {}).get("finding_id") == finding_id
+                    ):
+                        existing_eval = row
+                        break
+                if existing_eval is not None:
+                    existing_raw = bytes(existing_eval["payload"])
+                    existing_context = self._contract_context_for_raw(connection, existing_raw)
+                    artifact = verify_artifact(
+                        ARTIFACT_CONTRACT,
+                        existing_raw,
+                        graph_profile_registry=self.graph_profile_registry,
+                        contract_context=existing_context,
+                    )
+                    receipt = self._receipt_for_artifact(connection, artifact)
+                    connection.commit()
+                    return receipt
+
+                denominator_row = connection.execute(
+                    "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_DENOMINATOR, denominator_artifact_id),
+                ).fetchone()
+                if denominator_row is None:
+                    raise StoreConflictError("contract:denominator-missing")
+                denominator_raw = bytes(denominator_row["payload"])
+                denominator_value = denominator_independent._parse(denominator_raw)
+                denominator_chain = _chain_id(
+                    ARTIFACT_DENOMINATOR,
+                    denominator_independent.SUBJECT,
+                    denominator_independent.SCOPE,
+                    denominator_independent.PROFILE_ID,
+                )
+                denominator_head = self._head(connection, denominator_chain)
+                if denominator_head is None or denominator_head["artifact_id"] != denominator_artifact_id or denominator_head["current_stage_id"] != denominator_row["current_stage_id"]:
+                    raise StoreConflictError("contract:denominator-not-head")
+                denominator_context = self._contract_denominator_context(connection, denominator_raw)
+                reconciliation_raw, reconciliation_context = self._contract_reconciliation_context(connection, reconciliation_artifact_id)
+                self._contract_active_governance(connection, reconciliation_raw)
+                source_binding = denominator_value.get("source_binding")
+                if not isinstance(source_binding, dict) or not isinstance(source_binding.get("graph_artifact_id"), str):
+                    raise StoreConflictError("contract:graph-required")
+                graph_artifact_id = str(source_binding["graph_artifact_id"])
+                case_context = self._case_upstream_context(connection, graph_artifact_id, reconciliation_artifact_id, finding_id)
+                case_candidate = case_independent.build_artifact(
+                    case_independent.STAGE_OPEN,
+                    graph_raw=case_context["graph_raw"],
+                    reconciliation_raw=case_context["reconciliation_raw"],
+                    reconciliation_context=case_context["reconciliation_context"],
+                    governance_raw=case_context["governance_raw"],
+                    graph_profile_registry=self.graph_profile_registry,
+                    finding_id=finding_id,
+                )
+                case_value = case_independent._parse(case_candidate)
+                case_id = str(case_value["case_id"])
+                case_head_rows = connection.execute(
+                    "SELECT h.*, a.payload FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.artifact_kind=? AND a.report_id=?",
+                    (ARTIFACT_CASE, case_id),
+                ).fetchall()
+                if len(case_head_rows) > 1:
+                    raise StoreConflictError("contract:case-head-ambiguous")
+                if case_head_rows:
+                    case_raw = bytes(case_head_rows[0]["payload"])
+                    case_context = self._contract_case_context_for_raw(connection, case_raw)
+                else:
+                    case_context = {
+                        **case_context,
+                        "prior_case_raw": None,
+                        "retest_reconciliation_raw": None,
+                        "retest_context": None,
+                    }
+                    case_artifact = verify_artifact(
+                        ARTIFACT_CASE,
+                        case_candidate,
+                        graph_profile_registry=self.graph_profile_registry,
+                        reconciliation_context=case_context,
+                    )
+                    self._admit_in_transaction(connection, case_artifact, _payload_hash(case_candidate), enforce_governance=False)
+                    case_raw = case_candidate
+                contract_context = {
+                    "denominator_raw": denominator_raw,
+                    "denominator_context": denominator_context,
+                    "case_raw": case_raw,
+                    "case_context": case_context,
+                    "prior_contract_raw": None,
+                }
+                from app.mirror import contract_mirror as producer
+                candidate_raw = producer.build_artifact(
+                    stage,
+                    denominator_raw=denominator_raw,
+                    denominator_context=denominator_context,
+                    case_raw=case_raw,
+                    case_context=case_context,
+                    registry=self.graph_profile_registry,
+                )
+                artifact = verify_artifact(
+                    ARTIFACT_CONTRACT,
+                    candidate_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    contract_context=contract_context,
+                )
+            else:
+                assert contract_artifact_id is not None
+                # A committed retest is returned exactly even after a later
+                # governance withdrawal.  This lookup remains transactional.
+                existing_retest: sqlite3.Row | None = None
+                for row in connection.execute("SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (ARTIFACT_CONTRACT,)):
+                    candidate_value = contract_independent._parse(bytes(row["payload"]))
+                    if candidate_value.get("stage_kind") == contract_independent.STAGE_RETESTED and candidate_value.get("prior_artifact_id") == contract_artifact_id:
+                        existing_retest = row
+                        break
+                if existing_retest is not None:
+                    existing_raw = bytes(existing_retest["payload"])
+                    existing_context = self._contract_context_for_raw(connection, existing_raw)
+                    artifact = verify_artifact(
+                        ARTIFACT_CONTRACT,
+                        existing_raw,
+                        graph_profile_registry=self.graph_profile_registry,
+                        contract_context=existing_context,
+                    )
+                    receipt = self._receipt_for_artifact(connection, artifact)
+                    connection.commit()
+                    return receipt
+                prior_row = connection.execute(
+                    "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_CONTRACT, contract_artifact_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("contract:prior-missing")
+                prior_raw = bytes(prior_row["payload"])
+                prior_value = contract_independent._parse(prior_raw)
+                if prior_value.get("stage_kind") != contract_independent.STAGE_EVALUATED:
+                    raise StoreConflictError("contract:prior-stage")
+                prior_head = self._contract_head_row(connection, contract_artifact_id)
+                if prior_head["current_stage_id"] != prior_row["current_stage_id"]:
+                    raise StoreConflictError("contract:prior-identity")
+                prior_context = self._contract_context_for_raw(connection, prior_raw)
+                verify_artifact(
+                    ARTIFACT_CONTRACT,
+                    prior_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    contract_context=prior_context,
+                )
+                denominator_raw = prior_context["denominator_raw"]
+                denominator_context = prior_context["denominator_context"]
+                case_id = str(prior_value["case_link"]["case_id"])
+                case_head = self._case_head_row(connection, case_id)
+                case_raw = bytes(case_head["payload"])
+                case_value = case_independent._parse(case_raw)
+                case_context = self._contract_case_context_for_raw(connection, case_raw)
+                latest_recon_raw, latest_recon_context = self._case_latest_reconciliation(
+                    connection,
+                    case_context["reconciliation_raw"],
+                )
+                self._contract_active_governance(connection, latest_recon_raw)
+                if case_value["lifecycle_state"] == case_independent.STAGE_REMEDIATION_EVIDENCE:
+                    retest_candidate = case_independent.build_artifact(
+                        case_independent.STAGE_RETEST,
+                        graph_raw=case_context["graph_raw"],
+                        reconciliation_raw=case_context["reconciliation_raw"],
+                        reconciliation_context=case_context["reconciliation_context"],
+                        governance_raw=case_context["governance_raw"],
+                        graph_profile_registry=self.graph_profile_registry,
+                        prior_case_raw=case_raw,
+                        retest_reconciliation_raw=latest_recon_raw,
+                        retest_context=latest_recon_context,
+                    )
+                    retest_context_for_case = {
+                        **case_context,
+                        "prior_case_raw": case_raw,
+                        "retest_reconciliation_raw": latest_recon_raw,
+                        "retest_context": latest_recon_context,
+                    }
+                    retest_artifact = verify_artifact(
+                        ARTIFACT_CASE,
+                        retest_candidate,
+                        graph_profile_registry=self.graph_profile_registry,
+                        reconciliation_context=retest_context_for_case,
+                    )
+                    self._admit_in_transaction(connection, retest_artifact, _payload_hash(retest_candidate), enforce_governance=False)
+                    case_raw = retest_candidate
+                    case_value = case_independent._parse(case_raw)
+                    case_context = retest_context_for_case
+                elif case_value["lifecycle_state"] == case_independent.STAGE_RETEST:
+                    case_context = {
+                        **case_context,
+                        "retest_reconciliation_raw": latest_recon_raw,
+                        "retest_context": latest_recon_context,
+                    }
+                elif case_value["lifecycle_state"] not in {case_independent.STAGE_PARITY, case_independent.STAGE_PERSISTS}:
+                    raise StoreConflictError("contract:case-retest-state")
+                if case_value["lifecycle_state"] in {case_independent.STAGE_RETEST, case_independent.STAGE_REMEDIATION_EVIDENCE}:
+                    parity = case_value["retest"].get("parity")
+                    if not isinstance(parity, dict):
+                        raise StoreConflictError("contract:case-retest-result")
+                    final_action = case_independent.STAGE_PARITY if parity["status"] == case_independent.PARITY_FULL else case_independent.STAGE_PERSISTS
+                    final_candidate = case_independent.build_artifact(
+                        final_action,
+                        graph_raw=case_context["graph_raw"],
+                        reconciliation_raw=case_context["reconciliation_raw"],
+                        reconciliation_context=case_context["reconciliation_context"],
+                        governance_raw=case_context["governance_raw"],
+                        graph_profile_registry=self.graph_profile_registry,
+                        prior_case_raw=case_raw,
+                        retest_reconciliation_raw=latest_recon_raw,
+                        retest_context=latest_recon_context,
+                    )
+                    final_context = {
+                        **case_context,
+                        "prior_case_raw": case_raw,
+                        "retest_reconciliation_raw": latest_recon_raw,
+                        "retest_context": latest_recon_context,
+                    }
+                    final_artifact = verify_artifact(
+                        ARTIFACT_CASE,
+                        final_candidate,
+                        graph_profile_registry=self.graph_profile_registry,
+                        reconciliation_context=final_context,
+                    )
+                    self._admit_in_transaction(connection, final_artifact, _payload_hash(final_candidate), enforce_governance=False)
+                    case_raw = final_candidate
+                    case_context = final_context
+                contract_context = {
+                    "denominator_raw": denominator_raw,
+                    "denominator_context": denominator_context,
+                    "case_raw": case_raw,
+                    "case_context": case_context,
+                    "prior_contract_raw": prior_raw,
+                }
+                from app.mirror import contract_mirror as producer
+                candidate_raw = producer.build_artifact(
+                    stage,
+                    denominator_raw=denominator_raw,
+                    denominator_context=denominator_context,
+                    case_raw=case_raw,
+                    case_context=case_context,
+                    registry=self.graph_profile_registry,
+                    prior_contract_raw=prior_raw,
+                )
+                artifact = verify_artifact(
+                    ARTIFACT_CONTRACT,
+                    candidate_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    contract_context=contract_context,
+                )
+
+            receipt = self._admit_in_transaction(connection, artifact, _payload_hash(candidate_raw), enforce_governance=False)
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (InjectedFault, GovernanceObservationOnly, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("transaction:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("transaction:operational") from exc
+        finally:
+            connection.close()
 
     def admit_denominator(
         self,
