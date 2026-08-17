@@ -17,9 +17,12 @@ namespace blind_ledger_longfellow::minimal_linked {
 
 constexpr size_t kDigestBytes = 64;
 constexpr char kProofRole[] =
-    "BL/NATIVE-V3/MINIMAL-LINKED-CLEARANCE/v1";
+    "BL/NATIVE-V3/MINIMAL-CLEARANCE/v1";
 constexpr size_t kProofRoleBytes = sizeof(kProofRole) - 1;
-constexpr size_t kSha3EndpointCount = 4;
+// One canonical private source/registry commitment is the only hidden hash
+// endpoint. Request/replay identity is typed public context plus state-side
+// reconstruction and consumption, not a second in-circuit hash.
+constexpr size_t kSha3EndpointCount = 1;
 constexpr size_t kStateCommitmentDigestCount = 23;
 // Header/version + scalar flags + epoch/sequence-before/sequence-after + eight
 // semantic u64s + seven u32s + two roles + two clearance counters + the 23
@@ -51,7 +54,7 @@ struct PublicStatement {
   Digest request_id{};
   Digest source_root_id{};
   Digest completeness_id{};
-  Digest source_commitment{};
+  Digest private_batch_commitment{};
   Digest source_address{};
   Digest source_key{};
   Digest audit_address{};
@@ -148,7 +151,7 @@ void fill_public(const Case& value,
 void fill_witness(const Case& value,
                   proofs::Dense<RelationField>& witness);
 
-std::vector<uint8_t> source_commitment_input(const Case& value);
+std::vector<uint8_t> private_batch_commitment_input(const Case& value);
 std::vector<uint8_t> endpoint_input(const Case& value, size_t endpoint_index);
 const char* endpoint_name(size_t endpoint_index);
 std::vector<uint8_t> state_commitment_bytes(const Case& value);

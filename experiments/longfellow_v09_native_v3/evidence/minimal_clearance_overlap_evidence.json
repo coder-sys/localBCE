@@ -1,0 +1,211 @@
+{
+  "schema": "BL/NATIVE-V3/LONGFELLOW/MINIMAL-CLEARANCE-OVERLAP/v1",
+  "baseline_commit": "6e0aed093b0ce3d01cab9a4596799fbcf0e249b5",
+  "disposition": "ENGINEERING_YELLOW_SHAPE_ONLY",
+  "multi_component_transcript": {
+    "used": false,
+    "owner": "single monolithic Longfellow relation plus independent state-side evaluator",
+    "reason": "No separate proof components are being composed. The private source commitment and direct semantic wires share one circuit witness; transcript-bound public context is not being presented as a component-link proof."
+  },
+  "request_identity": {
+    "domain": "BL/NATIVE-V3/REQUEST-ID/v2",
+    "message_bytes": 235,
+    "fields": [
+      "subject_id",
+      "attempt_id",
+      "epoch",
+      "sequence_before",
+      "state_before_id"
+    ],
+    "in_circuit_hash_endpoints": 0,
+    "owner": "verifier-owned typed statement reconstruction plus state replay consumer",
+    "producer": "request admission/state context",
+    "consumer": "replay/nullifier table and stale-state transaction gate",
+    "hidden": false,
+    "reason": "Every field is public, typed, transcript-bound, and independently reconstructed before proof admission. Direct circuit constraints own the semantic fields; the state-side replay consumer owns idempotency, stale-state, and anti-rollback use. No undisclosed request assertion crosses this proof boundary, so a second in-circuit hash would duplicate the state-side owner."
+  },
+  "upstream": {
+    "remote": "https://github.com/google/longfellow-zk.git",
+    "commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+    "tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+    "source_path": "C:/Temp/longfellow-v09-native-v3-patched",
+    "compiler": "MSVC 19.44.35228.0",
+    "generator": "Visual Studio 17 2022 x64",
+    "gpu": false,
+    "network_service": false
+  },
+  "preimage_byte_ledger": [
+    {
+      "endpoint": "source_root_membership (prior shape)",
+      "domain": "BL/NATIVE-V3/SOURCE-ROOT/v1",
+      "message_bytes": 224,
+      "sha3_blocks": 4,
+      "fields": [
+        {"name":"domain","offset":0,"length":28,"property":"domain separation","owner":"canonical endpoint encoder","producer":"fixed relation source","consumer":"proof relation and verifier KAT","hidden":false,"why_not_direct":"The tag is public but is required to prevent cross-purpose commitment substitution."},
+        {"name":"provider_id","offset":28,"length":64,"property":"hidden provider identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source membership/state evaluator","hidden":true,"why_not_direct":"Direct equality cannot bind hidden identity to the selected public source target."},
+        {"name":"credential_id","offset":92,"length":64,"property":"hidden credential identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"subject-scoped source membership","hidden":true,"why_not_direct":"Direct equality cannot bind hidden identity to the selected public source target."},
+        {"name":"enrollment_id","offset":156,"length":64,"property":"hidden enrollment identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"subject-scoped source membership","hidden":true,"why_not_direct":"Direct equality cannot bind hidden identity to the selected public source target."},
+        {"name":"active","offset":220,"length":1,"property":"source active status","owner":"direct semantic constraints plus canonical private source commitment","producer":"authenticated registry record","consumer":"directive mapping","hidden":true,"why_not_direct":"The flag must be constrained to the hidden record and the selected commitment; a public flag alone is caller material."},
+        {"name":"complete","offset":221,"length":1,"property":"source completeness","owner":"direct completeness constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"absence/directive mapping","hidden":true,"why_not_direct":"A public completeness bit cannot establish authoritative coverage."},
+        {"name":"authoritative_membership","offset":222,"length":1,"property":"membership result","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"source read/directive mapping","hidden":true,"why_not_direct":"A public membership bit cannot establish registry membership."},
+        {"name":"authoritative_absence","offset":223,"length":1,"property":"authoritative absence result","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned complete snapshot","consumer":"HOLD/BLOCK/HUMAN_REVIEW mapping","hidden":true,"why_not_direct":"Absence requires a bound complete authoritative snapshot, not an unbound flag."}
+      ],
+      "disposition": "remove as an independent endpoint; all fields are covered by the canonical endpoint below"
+    },
+    {
+      "endpoint": "completeness_nonmembership (prior shape)",
+      "domain": "BL/NATIVE-V3/COMPLETENESS/v1",
+      "message_bytes": 159,
+      "sha3_blocks": 3,
+      "fields": [
+        {"name":"domain","offset":0,"length":29,"property":"domain separation","owner":"canonical endpoint encoder","producer":"fixed relation source","consumer":"proof relation and verifier KAT","hidden":false,"why_not_direct":"The tag is public but is required to prevent cross-purpose commitment substitution."},
+        {"name":"provider_id","offset":29,"length":64,"property":"hidden provider identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source registry closure","hidden":true,"why_not_direct":"Duplicate of source-root identity; one canonical commitment is sufficient."},
+        {"name":"credential_id","offset":93,"length":64,"property":"hidden credential identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source registry closure","hidden":true,"why_not_direct":"Duplicate of source-root identity; one canonical commitment is sufficient."},
+        {"name":"complete","offset":157,"length":1,"property":"completeness","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"absence soundness","hidden":true,"why_not_direct":"Duplicate of source-root status; direct constraints plus one authenticated commitment suffice."},
+        {"name":"authoritative_absence","offset":158,"length":1,"property":"authoritative absence","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned complete snapshot","consumer":"directive mapping","hidden":true,"why_not_direct":"Duplicate of source-root status; no separate hash is needed."}
+      ],
+      "disposition": "remove as an independent endpoint; completeness and absence remain direct constraints and are committed once"
+    },
+    {
+      "endpoint": "request_replay_binding (prior shape)",
+      "domain": "BL/NATIVE-V3/REQUEST-ID/v1",
+      "message_bytes": 395,
+      "sha3_blocks": 6,
+      "fields": [
+        {"name":"domain","offset":0,"length":27,"property":"request-ID domain separation","owner":"state-side request-ID derivation","producer":"canonical request encoder","consumer":"state replay table","hidden":false,"why_not_direct":"The external identifier remains domain-separated state-side; it need not be recomputed inside this relation."},
+        {"name":"provider_id","offset":27,"length":64,"property":"source identity in request","owner":"canonical private source commitment and state-side request derivation","producer":"authenticated registry record","consumer":"request/replay lookup","hidden":true,"why_not_direct":"Already covered by the canonical private source commitment; duplicate in-circuit absorption adds no owner."},
+        {"name":"credential_id","offset":91,"length":64,"property":"subject identity in request","owner":"canonical private source commitment and state-side request derivation","producer":"authenticated registry record","consumer":"request/replay lookup","hidden":true,"why_not_direct":"Already covered by the canonical private source commitment; duplicate in-circuit absorption adds no owner."},
+        {"name":"enrollment_id","offset":155,"length":64,"property":"enrollment identity in request","owner":"canonical private source commitment and state-side request derivation","producer":"authenticated registry record","consumer":"request/replay lookup","hidden":true,"why_not_direct":"Already covered by the canonical private source commitment; duplicate in-circuit absorption adds no owner."},
+        {"name":"attempt_id","offset":219,"length":64,"property":"attempt/idempotency identity","owner":"verifier-owned public statement plus state replay consumer","producer":"request admission","consumer":"retry/nullifier table","hidden":false,"why_not_direct":"The field is public, transcript-bound, and consumed by the state replay owner; no hidden request assertion crosses this experiment boundary."},
+        {"name":"epoch","offset":283,"length":8,"property":"anti-rollback epoch","owner":"typed circuit field plus database anti-rollback check","producer":"state context","consumer":"state transaction","hidden":false,"why_not_direct":"Direct typed equality and state recheck own the value; hashing it again does not add authority."},
+        {"name":"sequence_before","offset":291,"length":8,"property":"before sequence","owner":"typed circuit field plus database stale-state check","producer":"state context","consumer":"state transaction","hidden":false,"why_not_direct":"Direct typed equality and state recheck own the value; hashing it again does not add authority."},
+        {"name":"event_time","offset":299,"length":8,"property":"event chronology","owner":"direct strict chronology constraints plus state evaluator","producer":"canonical operation row","consumer":"decision/access semantics","hidden":true,"why_not_direct":"Chronology is an inequality relation, not a commitment property."},
+        {"name":"observation_time","offset":307,"length":8,"property":"observation chronology","owner":"direct strict chronology constraints plus state evaluator","producer":"canonical operation row","consumer":"READ access timing","hidden":true,"why_not_direct":"Chronology and access-time equality are direct typed relations."},
+        {"name":"rule_effective_time","offset":315,"length":8,"property":"rule validity chronology","owner":"direct strict chronology constraints plus state evaluator","producer":"governed rule artifact","consumer":"policy evaluation","hidden":true,"why_not_direct":"Chronology is a direct inequality relation."},
+        {"name":"decision_time","offset":323,"length":8,"property":"decision chronology","owner":"direct strict chronology constraints plus state evaluator","producer":"canonical operation row","consumer":"WRITE access timing","hidden":true,"why_not_direct":"Chronology and access-time equality are direct typed relations."},
+        {"name":"state_before_id","offset":331,"length":64,"property":"before-state binding","owner":"verifier-selected statement plus database stale-state check","producer":"state context","consumer":"state transition/replay","hidden":false,"why_not_direct":"The verifier reconstructs the public statement and the database compares the selected state; no second hidden hash is required."}
+      ],
+      "disposition": "remove from the circuit; retain state-side canonical RequestId derivation and replay consumption"
+    },
+    {
+      "endpoint": "source_registry_commitment (current prior shape)",
+      "domain": "BL/NATIVE-V3/SOURCE-REGISTRY-COMMITMENT/v2",
+      "message_bytes": 495,
+      "sha3_blocks": 7,
+      "fields": [
+        {"name":"domain","offset":0,"length":43,"property":"source registry domain separation","owner":"canonical private source commitment","producer":"fixed relation source","consumer":"proof relation and verifier KAT","hidden":false,"why_not_direct":"The tag separates the hidden source commitment from other identifiers."},
+        {"name":"source_registry_snapshot","offset":43,"length":64,"property":"verifier-selected registry snapshot","owner":"verifier public statement plus canonical private source commitment","producer":"immutable verifier registry","consumer":"source closure","hidden":false,"why_not_direct":"Transcript binding alone does not associate this selected snapshot with hidden source payload; the canonical commitment must carry it."},
+        {"name":"source_profile","offset":107,"length":64,"property":"verifier-selected source profile","owner":"verifier public statement plus canonical private source commitment","producer":"immutable verifier registry","consumer":"source closure","hidden":false,"why_not_direct":"The selected profile must be bound to hidden source material once."},
+        {"name":"subject_id","offset":171,"length":64,"property":"subject scope","owner":"verifier public statement plus canonical private source commitment","producer":"request admission","consumer":"source closure/state evaluator","hidden":false,"why_not_direct":"The hidden record must be scoped to the selected subject."},
+        {"name":"provider_id","offset":235,"length":64,"property":"hidden provider identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source closure","hidden":true,"why_not_direct":"Unique hidden source binding retained in the canonical endpoint."},
+        {"name":"credential_id","offset":299,"length":64,"property":"hidden credential identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source closure","hidden":true,"why_not_direct":"Unique hidden source binding retained in the canonical endpoint."},
+        {"name":"enrollment_id","offset":363,"length":64,"property":"hidden enrollment identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source closure","hidden":true,"why_not_direct":"Unique hidden source binding retained in the canonical endpoint."},
+        {"name":"source_payload","offset":427,"length":64,"property":"hidden canonical source payload","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"proof-bound source assertion","hidden":true,"why_not_direct":"This is the hidden payload that must not be replaced by a public host digest."},
+        {"name":"active","offset":491,"length":1,"property":"source active status","owner":"direct semantic constraints plus canonical private source commitment","producer":"authenticated registry record","consumer":"directive mapping","hidden":true,"why_not_direct":"Retained once with all source flags."},
+        {"name":"complete","offset":492,"length":1,"property":"source completeness","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"absence soundness","hidden":true,"why_not_direct":"Retained once with authoritative absence."},
+        {"name":"authoritative_membership","offset":493,"length":1,"property":"membership result","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"source read/directive mapping","hidden":true,"why_not_direct":"Retained once with the selected roots in the canonical endpoint."},
+        {"name":"authoritative_absence","offset":494,"length":1,"property":"authoritative absence result","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned complete snapshot","consumer":"directive mapping","hidden":true,"why_not_direct":"Retained once with completeness in the canonical endpoint."}
+      ],
+      "disposition": "replace with the canonical endpoint below; current form lacks direct source_root_id/completeness_id linkage"
+    },
+    {
+      "endpoint": "canonical_private_source_registry_commitment",
+      "domain": "BL/NATIVE-V3/PRIVATE-BATCH/v2",
+      "message_bytes": 610,
+      "sha3_blocks": 9,
+      "fields": [
+        {"name":"domain","offset":0,"length":30,"property":"private source/batch domain separation","owner":"canonical private source commitment","producer":"fixed relation source","consumer":"proof relation and verifier KAT","hidden":false,"why_not_direct":"The tag prevents cross-purpose commitment substitution."},
+        {"name":"source_registry_snapshot","offset":30,"length":64,"property":"verifier-selected registry snapshot","owner":"verifier public statement plus canonical private source commitment","producer":"immutable verifier registry","consumer":"source closure","hidden":false,"why_not_direct":"Binds the selected registry to hidden source bytes."},
+        {"name":"source_profile","offset":94,"length":64,"property":"verifier-selected source profile","owner":"verifier public statement plus canonical private source commitment","producer":"immutable verifier registry","consumer":"source closure","hidden":false,"why_not_direct":"Binds the selected profile to hidden source bytes."},
+        {"name":"subject_id","offset":158,"length":64,"property":"subject scope","owner":"verifier public statement plus canonical private source commitment","producer":"request admission","consumer":"source closure/state evaluator","hidden":false,"why_not_direct":"Binds hidden source material to the selected subject."},
+        {"name":"source_root_id","offset":222,"length":64,"property":"selected source membership root","owner":"verifier-owned registry plus canonical private source commitment","producer":"immutable registry snapshot","consumer":"READ access and source membership","hidden":false,"why_not_direct":"A public root target alone cannot bind hidden source material; this is the one hash link."},
+        {"name":"completeness_id","offset":286,"length":64,"property":"selected completeness/nonmembership target","owner":"verifier-owned registry plus canonical private source commitment","producer":"immutable complete snapshot","consumer":"absence/directive mapping","hidden":false,"why_not_direct":"A public completeness target alone cannot bind hidden absence facts; this is the one hash link."},
+        {"name":"provider_id","offset":350,"length":64,"property":"hidden provider identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source closure","hidden":true,"why_not_direct":"Required hidden preimage material."},
+        {"name":"credential_id","offset":414,"length":64,"property":"hidden credential identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source closure","hidden":true,"why_not_direct":"Required hidden preimage material."},
+        {"name":"enrollment_id","offset":478,"length":64,"property":"hidden enrollment identity","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"source closure","hidden":true,"why_not_direct":"Required hidden preimage material."},
+        {"name":"source_payload","offset":542,"length":64,"property":"hidden canonical source payload","owner":"canonical private source commitment","producer":"authenticated registry record","consumer":"proof-bound source assertion","hidden":true,"why_not_direct":"Required hidden preimage material; not a host-side digest shortcut."},
+        {"name":"active","offset":606,"length":1,"property":"source active status","owner":"direct semantic constraints plus canonical private source commitment","producer":"authenticated registry record","consumer":"directive mapping","hidden":true,"why_not_direct":"Retained once."},
+        {"name":"complete","offset":607,"length":1,"property":"source completeness","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"absence soundness","hidden":true,"why_not_direct":"Retained once."},
+        {"name":"authoritative_membership","offset":608,"length":1,"property":"membership result","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned registry snapshot","consumer":"source read/directive mapping","hidden":true,"why_not_direct":"Retained once."},
+        {"name":"authoritative_absence","offset":609,"length":1,"property":"authoritative absence result","owner":"direct semantic constraints plus canonical private source commitment","producer":"verifier-owned complete snapshot","consumer":"directive mapping","hidden":true,"why_not_direct":"Retained once and constrained with completeness."}
+      ],
+      "disposition": "accepted shape candidate; one endpoint owns the hidden source/registry link"
+    }
+  ],
+  "shape_variants": [
+    {
+      "name": "semantic_direct_constraints",
+      "hash_endpoints": 0,
+      "inputs": 36969,
+      "public_inputs": 26721,
+      "layers": 129,
+      "terms": 229775,
+      "circuit_id": "bf788a1ce6f230647791c00cb8c50369aadf5c924c92f107d095b497bf4c3dfa",
+      "peak_working_set_bytes": 56385536,
+      "peak_private_commit_bytes": 57864192,
+      "measurement": "exact final construction output; zero children"
+    },
+    {
+      "name": "canonical_private_source_registry_commitment",
+      "hash_endpoints": 1,
+      "message_bytes": 610,
+      "sha3_blocks": 9,
+      "inputs": 36969,
+      "public_inputs": 26721,
+      "layers": 217,
+      "terms": 12158968,
+      "circuit_id": "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0",
+      "peak_working_set_bytes": 980586496,
+      "peak_private_commit_bytes": 1040179200,
+      "measurement": "exact final construction output; zero children"
+    },
+    {
+      "name": "prior_four_endpoint_shape",
+      "hash_endpoints": 4,
+      "sha3_blocks": 20,
+      "inputs": 37537,
+      "public_inputs": 26777,
+      "layers": 169,
+      "terms": 26001511,
+      "circuit_id": "7b7f731cc0adf3856be9ac41073bf19fe5220da4600bacff29be411f91df9a200",
+      "peak_working_set_bytes": 2049642496,
+      "peak_private_commit_bytes": 2204680192,
+      "measurement": "exact prior committed shape evidence; not rerun in this correction"
+    }
+  ],
+  "verification": {
+    "prover_invocations": 0,
+    "verifier_invocations": 0,
+    "determinism_cases": 5,
+    "valid_cases": 5,
+    "mutation_cases": 39,
+    "sha3_kat_vectors": 7,
+    "sha3_kat_mutations": 5,
+    "source_assertion_kat_vectors": 6,
+    "source_assertion_kat_mutations": 5,
+    "proof_acceptance_is_separate": true,
+    "database_mutation": false
+  },
+  "warning_bound": {
+    "original_source": "lib/sumcheck/quad_builder.h:106",
+    "original_issue": "size_t delta_table_->size() implicitly converted to uint32_t",
+    "patch_file": "experiments/longfellow_v09_native_v3/patches/quad_builder_uint32_bound.patch",
+    "patch_sha256": "EFBF683E8220584EF2FEA15B5B393B2835A9C0FBEF60F02A53BCC5B3D49117D4",
+    "patched_source_sha256": "7F8DB09BB44943B9FF5F3A98814DD2DBA307477957FBCCDFFCCAA4F8AE1DF53",
+    "replacement": "explicit size_t bound against uint32_t max followed by explicit cast; overflow fails closed",
+    "post_patch_build_warning_count": 0,
+    "prover_admission": "not authorized or attempted"
+  },
+  "nonclaims": [
+    "No multi-component transcript composition claim is made; this is one monolithic circuit.",
+    "The synthetic registry is not a production Merkle/nonmembership construction.",
+    "No prover, proof artifact, independent proof verifier, database transaction, retry/concurrency/recovery, Lean qualification, backend selection, theorem qualification, payment, PHI, or activation claim is made.",
+    "The one-endpoint shape is engineering evidence only and does not close the approximately 115-to-128-bit ledger, QROM/malicious-verifier, retry/grinding, or SHA3 assurance gaps."
+  ],
+  "skips": [
+    {"item":"full prover and proof verifier","count":1,"reason":"explicitly prohibited in this shape-only correction"},
+    {"item":"proof/artifact mutation matrix","count":1,"reason":"no proof artifact exists"},
+    {"item":"database retry/concurrency/recovery tests","count":1,"reason":"state-side evaluator only; database composition is outside this phase"},
+    {"item":"production registry membership/nonmembership proof","count":1,"reason":"synthetic verifier-owned registry model only"}
+  ]
+}

@@ -299,50 +299,51 @@ target_compile_definitions(longfellow_source_assertion_prover_runner PRIVATE
 target_link_libraries(longfellow_source_assertion_prover_runner PRIVATE
   longfellow_task_crypto psapi)
 
-# Fresh shape-only architecture experiment. This target intentionally does
-# not link or call the legacy 18-endpoint native_v3_relation builder.
-add_library(longfellow_minimal_linked_relation STATIC
+# Fresh shape-only architecture experiment. This is one monolithic relation;
+# it does not claim multi-component transcript linkage and does not link or
+# call the legacy 18-endpoint native_v3_relation builder.
+add_library(longfellow_minimal_clearance_relation STATIC
   src/native_v3_minimal_linked_relation.cc
   src/native_v3_fixture.cc
   "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_reference.cc"
   "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_round_constants.cc"
 )
-target_include_directories(longfellow_minimal_linked_relation PUBLIC
+target_include_directories(longfellow_minimal_clearance_relation PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${CMAKE_CURRENT_SOURCE_DIR}/shim"
   "${LONGFELLOW_SOURCE}/lib"
 )
-target_compile_definitions(longfellow_minimal_linked_relation PUBLIC
+target_compile_definitions(longfellow_minimal_clearance_relation PUBLIC
   NOMINMAX WIN32_LEAN_AND_MEAN
   BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS=1
 )
-target_link_libraries(longfellow_minimal_linked_relation PUBLIC
+target_link_libraries(longfellow_minimal_clearance_relation PUBLIC
   longfellow_task_crypto bcrypt)
 
-add_executable(longfellow_minimal_linked_shape
+add_executable(longfellow_minimal_clearance_shape
   src/native_v3_minimal_linked_shape.cpp
 )
-target_include_directories(longfellow_minimal_linked_shape PRIVATE
+target_include_directories(longfellow_minimal_clearance_shape PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${CMAKE_CURRENT_SOURCE_DIR}/shim"
   "${LONGFELLOW_SOURCE}/lib"
 )
-target_compile_definitions(longfellow_minimal_linked_shape PRIVATE
+target_compile_definitions(longfellow_minimal_clearance_shape PRIVATE
   NOMINMAX WIN32_LEAN_AND_MEAN
 )
-target_link_libraries(longfellow_minimal_linked_shape PRIVATE
-  longfellow_minimal_linked_relation psapi)
+target_link_libraries(longfellow_minimal_clearance_shape PRIVATE
+  longfellow_minimal_clearance_relation psapi)
 
-add_executable(longfellow_minimal_linked_eval
+add_executable(longfellow_minimal_clearance_eval
   src/native_v3_minimal_linked_eval.cpp
 )
-target_include_directories(longfellow_minimal_linked_eval PRIVATE
+target_include_directories(longfellow_minimal_clearance_eval PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${CMAKE_CURRENT_SOURCE_DIR}/shim"
   "${LONGFELLOW_SOURCE}/lib"
 )
-target_compile_definitions(longfellow_minimal_linked_eval PRIVATE
+target_compile_definitions(longfellow_minimal_clearance_eval PRIVATE
   NOMINMAX WIN32_LEAN_AND_MEAN
 )
-target_link_libraries(longfellow_minimal_linked_eval PRIVATE
-  longfellow_minimal_linked_relation)
+target_link_libraries(longfellow_minimal_clearance_eval PRIVATE
+  longfellow_minimal_clearance_relation)

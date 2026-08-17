@@ -124,17 +124,11 @@ std::vector<uint8_t> CompletenessInput(const Case& value) {
 }
 
 std::vector<uint8_t> RequestInput(const Case& value) {
-  std::vector<uint8_t> output = Domain("BL/NATIVE-V3/REQUEST-ID/v1");
-  Append(output, value.provider_id);
-  Append(output, value.credential_id);
-  Append(output, value.enrollment_id);
+  std::vector<uint8_t> output = Domain("BL/NATIVE-V3/REQUEST-ID/v2");
+  Append(output, value.statement.subject_id);
   Append(output, value.statement.attempt_id);
   AppendU64(output, value.statement.epoch);
   AppendU64(output, value.statement.sequence_before);
-  AppendU64(output, value.event_time);
-  AppendU64(output, value.observation_time);
-  AppendU64(output, value.rule_effective_time);
-  AppendU64(output, value.decision_time);
   Append(output, value.statement.state_before_id);
   return output;
 }
@@ -238,7 +232,7 @@ struct PublicWires {
   Byte64<Logic> request_id;
   Byte64<Logic> source_root_id;
   Byte64<Logic> completeness_id;
-  Byte64<Logic> source_commitment;
+  Byte64<Logic> private_batch_commitment;
   Byte64<Logic> source_address;
   Byte64<Logic> source_key;
   Byte64<Logic> audit_address;
@@ -262,7 +256,6 @@ struct PrivateWires {
   Byte64<Logic> provider;
   Byte64<Logic> credential;
   Byte64<Logic> enrollment;
-  Byte64<Logic> attempt;
   Byte64<Logic> source_payload;
   V8<Logic> active;
   V8<Logic> complete;
@@ -339,7 +332,7 @@ void PushPublic(proofs::DenseFiller<RelationField>& filler, const Case& value,
   PushDigest<Logic>(filler, value.statement.request_id, field);
   PushDigest<Logic>(filler, value.statement.source_root_id, field);
   PushDigest<Logic>(filler, value.statement.completeness_id, field);
-  PushDigest<Logic>(filler, value.statement.source_commitment, field);
+  PushDigest<Logic>(filler, value.statement.private_batch_commitment, field);
   PushDigest<Logic>(filler, value.statement.source_address, field);
   PushDigest<Logic>(filler, value.statement.source_key, field);
   PushDigest<Logic>(filler, value.statement.audit_address, field);
@@ -385,7 +378,7 @@ void InputPublic(const Logic& logic, PublicWires<Logic>& value) {
   value.request_id = input_digest();
   value.source_root_id = input_digest();
   value.completeness_id = input_digest();
-  value.source_commitment = input_digest();
+  value.private_batch_commitment = input_digest();
   value.source_address = input_digest();
   value.source_key = input_digest();
   value.audit_address = input_digest();
@@ -414,7 +407,6 @@ void InputPrivate(const Logic& logic, PrivateWires<Logic>& value) {
   InputDigest(logic, value.provider);
   InputDigest(logic, value.credential);
   InputDigest(logic, value.enrollment);
-  InputDigest(logic, value.attempt);
   InputDigest(logic, value.source_payload);
   value.active = logic.template vinput<8>();
   value.complete = logic.template vinput<8>();
@@ -667,24 +659,26 @@ void AssertStateCommitment(const Logic& logic,
                            const PrivateWires<Logic>& p) {
   const auto expected = StateCommitmentWires(logic, pub, p);
   proofs::check(expected.size() == kStateCommitmentBytes,
-                "minimal linked state commitment shape mismatch");
+                "minimal clearance state commitment shape mismatch");
   for (size_t index = 0; index < expected.size(); ++index) {
     logic.vassert_eq(pub.state_commitment[index], expected[index]);
   }
 }
 
 template <class Logic>
-void AssertSourceCommitment(const Logic& logic,
-                            const PublicWires<Logic>& pub,
-                            const PrivateWires<Logic>& p,
-                            proofs::Sha3Circuit<Logic>& sha3) {
+void AssertPrivateBatchCommitment(const Logic& logic,
+                                  const PublicWires<Logic>& pub,
+                                  const PrivateWires<Logic>& p,
+                                  proofs::Sha3Circuit<Logic>& sha3) {
   std::vector<V8<Logic>> input;
-  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/SOURCE-REGISTRY-COMMITMENT/v2",
-                sizeof("BL/NATIVE-V3/SOURCE-REGISTRY-COMMITMENT/v2") - 1);
+  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/PRIVATE-BATCH/v2",
+                       sizeof("BL/NATIVE-V3/PRIVATE-BATCH/v2") - 1);
   AppendByte<Logic>(input, logic.vbit8(0));
   AppendDigest<Logic>(input, pub.source_registry_snapshot);
   AppendDigest<Logic>(input, pub.source_profile);
   AppendDigest<Logic>(input, pub.subject_id);
+  AppendDigest<Logic>(input, pub.source_root_id);
+  AppendDigest<Logic>(input, pub.completeness_id);
   AppendDigest<Logic>(input, p.provider);
   AppendDigest<Logic>(input, p.credential);
   AppendDigest<Logic>(input, p.enrollment);
@@ -696,77 +690,7 @@ void AssertSourceCommitment(const Logic& logic,
   std::vector<V8<Logic>> output;
   sha3.assert_sha3_512_no_witness(input, output);
   for (size_t index = 0; index < kDigestBytes; ++index) {
-    logic.vassert_eq(pub.source_commitment[index], output[index]);
-  }
-}
-
-template <class Logic>
-void AssertSourceRootCommitment(const Logic& logic,
-                                const PublicWires<Logic>& pub,
-                                const PrivateWires<Logic>& p,
-                                proofs::Sha3Circuit<Logic>& sha3) {
-  std::vector<V8<Logic>> input;
-  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/SOURCE-ROOT/v1",
-                       sizeof("BL/NATIVE-V3/SOURCE-ROOT/v1") - 1);
-  AppendByte<Logic>(input, logic.vbit8(0));
-  AppendDigest<Logic>(input, p.provider);
-  AppendDigest<Logic>(input, p.credential);
-  AppendDigest<Logic>(input, p.enrollment);
-  AppendByte<Logic>(input, p.active);
-  AppendByte<Logic>(input, p.complete);
-  AppendByte<Logic>(input, p.membership);
-  AppendByte<Logic>(input, p.absence);
-  std::vector<V8<Logic>> output;
-  sha3.assert_sha3_512_no_witness(input, output);
-  for (size_t index = 0; index < kDigestBytes; ++index) {
-    logic.vassert_eq(pub.source_root_id[index], output[index]);
-  }
-}
-
-template <class Logic>
-void AssertCompletenessCommitment(const Logic& logic,
-                                  const PublicWires<Logic>& pub,
-                                  const PrivateWires<Logic>& p,
-                                  proofs::Sha3Circuit<Logic>& sha3) {
-  std::vector<V8<Logic>> input;
-  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/COMPLETENESS/v1",
-                       sizeof("BL/NATIVE-V3/COMPLETENESS/v1") - 1);
-  AppendByte<Logic>(input, logic.vbit8(0));
-  AppendDigest<Logic>(input, p.provider);
-  AppendDigest<Logic>(input, p.credential);
-  AppendByte<Logic>(input, p.complete);
-  AppendByte<Logic>(input, p.absence);
-  std::vector<V8<Logic>> output;
-  sha3.assert_sha3_512_no_witness(input, output);
-  for (size_t index = 0; index < kDigestBytes; ++index) {
-    logic.vassert_eq(pub.completeness_id[index], output[index]);
-  }
-}
-
-template <class Logic>
-void AssertRequestCommitment(const Logic& logic,
-                             const PublicWires<Logic>& pub,
-                             const PrivateWires<Logic>& p,
-                             proofs::Sha3Circuit<Logic>& sha3) {
-  std::vector<V8<Logic>> input;
-  AppendLiteral<Logic>(input, logic, "BL/NATIVE-V3/REQUEST-ID/v1",
-                       sizeof("BL/NATIVE-V3/REQUEST-ID/v1") - 1);
-  AppendByte<Logic>(input, logic.vbit8(0));
-  AppendDigest<Logic>(input, p.provider);
-  AppendDigest<Logic>(input, p.credential);
-  AppendDigest<Logic>(input, p.enrollment);
-  AppendDigest<Logic>(input, p.attempt);
-  AppendU64BE<Logic>(input, pub.epoch);
-  AppendU64BE<Logic>(input, pub.sequence_before);
-  AppendU64BE<Logic>(input, p.event);
-  AppendU64BE<Logic>(input, p.observation);
-  AppendU64BE<Logic>(input, p.rule_effective);
-  AppendU64BE<Logic>(input, p.decision);
-  AppendDigest<Logic>(input, pub.state_before_id);
-  std::vector<V8<Logic>> output;
-  sha3.assert_sha3_512_no_witness(input, output);
-  for (size_t index = 0; index < kDigestBytes; ++index) {
-    logic.vassert_eq(pub.request_id[index], output[index]);
+    logic.vassert_eq(pub.private_batch_commitment[index], output[index]);
   }
 }
 
@@ -906,12 +830,13 @@ void AssertAccessAndTransition(const Logic& logic,
 
 }  // namespace
 
-std::vector<uint8_t> source_commitment_input(const Case& value) {
-  std::vector<uint8_t> output =
-      Domain("BL/NATIVE-V3/SOURCE-REGISTRY-COMMITMENT/v2");
+std::vector<uint8_t> private_batch_commitment_input(const Case& value) {
+  std::vector<uint8_t> output = Domain("BL/NATIVE-V3/PRIVATE-BATCH/v2");
   Append(output, value.statement.source_registry_snapshot);
   Append(output, value.statement.source_profile);
   Append(output, value.statement.subject_id);
+  Append(output, value.statement.source_root_id);
+  Append(output, value.statement.completeness_id);
   Append(output, value.provider_id);
   Append(output, value.credential_id);
   Append(output, value.enrollment_id);
@@ -925,16 +850,10 @@ std::vector<uint8_t> source_commitment_input(const Case& value) {
 
 std::vector<uint8_t> endpoint_input(const Case& value, size_t endpoint_index) {
   proofs::check(endpoint_index < kSha3EndpointCount,
-                "minimal linked endpoint index out of range");
+                "minimal clearance endpoint index out of range");
   switch (endpoint_index) {
     case 0:
-      return SourceRootInput(value);
-    case 1:
-      return CompletenessInput(value);
-    case 2:
-      return RequestInput(value);
-    case 3:
-      return source_commitment_input(value);
+      return private_batch_commitment_input(value);
   }
   return {};
 }
@@ -942,13 +861,7 @@ std::vector<uint8_t> endpoint_input(const Case& value, size_t endpoint_index) {
 const char* endpoint_name(size_t endpoint_index) {
   switch (endpoint_index) {
     case 0:
-      return "source_root_membership";
-    case 1:
-      return "completeness_nonmembership";
-    case 2:
-      return "request_replay_binding";
-    case 3:
-      return "source_registry_commitment";
+      return "private_source_registry_commitment";
   }
   return "unknown";
 }
@@ -1028,7 +941,7 @@ std::vector<uint8_t> public_statement_bytes(const Case& value) {
       &value.statement.request_id,
       &value.statement.source_root_id,
       &value.statement.completeness_id,
-      &value.statement.source_commitment,
+      &value.statement.private_batch_commitment,
       &value.statement.source_address,
       &value.statement.source_key,
       &value.statement.audit_address,
@@ -1159,9 +1072,9 @@ Fixture make_fixture() {
     value.statement.source_root_id = HashBytes(SourceRootInput(value));
     value.statement.completeness_id = HashBytes(CompletenessInput(value));
     proofs::check(value.statement.source_root_id == source.source_root,
-                  "minimal linked source-root fixture mismatch");
+                  "minimal clearance source-root fixture mismatch");
     proofs::check(value.statement.completeness_id == source.completeness_id,
-                  "minimal linked completeness fixture mismatch");
+                  "minimal clearance completeness fixture mismatch");
     value.statement.source_address = source.read_address;
     value.statement.source_key = source.read_key;
     value.statement.audit_address = source.write_address;
@@ -1183,7 +1096,8 @@ Fixture make_fixture() {
     value.after_audit_head = AfterAudit(value);
     value.write_after = value.after_audit_head;
     value.after_continuity_root = AfterRoot(value);
-    value.statement.source_commitment = HashBytes(source_commitment_input(value));
+    value.statement.private_batch_commitment =
+        HashBytes(private_batch_commitment_input(value));
     rebuild_state_binding(value);
   }
   return fixture;
@@ -1207,39 +1121,30 @@ void AssertRelation(const Logic& logic, const PublicWires<Logic>& pub,
 std::unique_ptr<proofs::Circuit<RelationField>> build_circuit_stage(
     size_t endpoint_count) {
   proofs::check(endpoint_count <= kSha3EndpointCount,
-                "minimal linked endpoint stage exceeds endpoint count");
+                "minimal clearance endpoint stage exceeds endpoint count");
   using Backend = proofs::CompilerBackend<RelationField>;
   using Logic = proofs::Logic<RelationField, Backend>;
   auto field = std::make_unique<RelationField>();
   auto builder = std::make_unique<proofs::QuadCircuit<RelationField>>(*field);
   const Backend backend(builder.get());
   const Logic logic(&backend, *field);
-  std::fprintf(stderr, "MINIMAL_LINKED_BUILD phase=public\n");
+  std::fprintf(stderr, "MINIMAL_CLEARANCE_BUILD phase=public\n");
   auto pub = std::make_unique<PublicWires<Logic>>();
   InputPublic(logic, *pub);
   builder->private_input();
-  std::fprintf(stderr, "MINIMAL_LINKED_BUILD phase=private\n");
+  std::fprintf(stderr, "MINIMAL_CLEARANCE_BUILD phase=private\n");
   auto priv = std::make_unique<PrivateWires<Logic>>();
   InputPrivate(logic, *priv);
   proofs::Sha3Circuit<Logic> sha3(logic);
-  std::fprintf(stderr, "MINIMAL_LINKED_BUILD phase=assertions\n");
+  std::fprintf(stderr, "MINIMAL_CLEARANCE_BUILD phase=assertions\n");
   AssertRelation(logic, *pub, *priv);
   if (endpoint_count >= 1) {
-    AssertSourceRootCommitment(logic, *pub, *priv, sha3);
+    AssertPrivateBatchCommitment(logic, *pub, *priv, sha3);
   }
-  if (endpoint_count >= 2) {
-    AssertCompletenessCommitment(logic, *pub, *priv, sha3);
-  }
-  if (endpoint_count >= 3) {
-    AssertRequestCommitment(logic, *pub, *priv, sha3);
-  }
-  if (endpoint_count >= 4) {
-    AssertSourceCommitment(logic, *pub, *priv, sha3);
-  }
-  std::fprintf(stderr, "MINIMAL_LINKED_BUILD phase=mkcircuit\n");
+  std::fprintf(stderr, "MINIMAL_CLEARANCE_BUILD phase=mkcircuit\n");
   auto circuit = builder->mkcircuit(1);
   std::fprintf(stderr,
-               "MINIMAL_LINKED_BUILD phase=complete inputs=%zu public_inputs=%zu layers=%zu terms=%zu\n",
+               "MINIMAL_CLEARANCE_BUILD phase=complete inputs=%zu public_inputs=%zu layers=%zu terms=%zu\n",
                circuit->ninputs, circuit->npub_in, circuit->nl,
                circuit->nterms());
   return circuit;
@@ -1264,7 +1169,6 @@ void PushPrivate(proofs::DenseFiller<RelationField>& filler, const Case& value,
   PushDigest<Logic>(filler, value.provider_id, field);
   PushDigest<Logic>(filler, value.credential_id, field);
   PushDigest<Logic>(filler, value.enrollment_id, field);
-  PushDigest<Logic>(filler, value.statement.attempt_id, field);
   PushDigest<Logic>(filler, value.source_payload, field);
   filler.push_back(value.statement.active, 8, field);
   filler.push_back(value.statement.complete, 8, field);
@@ -1483,8 +1387,9 @@ bool evaluate_case(const Case& value, std::string& reason) {
           value.clearance_count_before + clear_transition) {
     return fail("state.clearance-transition");
   }
-  if (HashBytes(source_commitment_input(value)) != value.statement.source_commitment) {
-    return fail("source.commitment");
+  if (HashBytes(private_batch_commitment_input(value)) !=
+      value.statement.private_batch_commitment) {
+    return fail("private-batch.commitment");
   }
   const std::vector<uint8_t> expected_state = state_commitment_bytes(value);
   if (!std::equal(expected_state.begin(), expected_state.end(),

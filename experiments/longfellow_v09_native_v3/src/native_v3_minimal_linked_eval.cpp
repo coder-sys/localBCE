@@ -68,19 +68,19 @@ int main() {
             derive_identities(retry_fixture.cases[index]).decision_id ||
         endpoint_input(fixture.cases[index], 0) !=
             endpoint_input(retry_fixture.cases[index], 0)) {
-      std::printf("MINIMAL_LINKED_DETERMINISM_FAIL case=%zu\n", index);
+      std::printf("MINIMAL_CLEARANCE_DETERMINISM_FAIL case=%zu\n", index);
       return 1;
     }
   }
   std::printf(
-      "MINIMAL_LINKED_DETERMINISM_PASS cases=%zu public_bytes=%zu "
-      "state_commitment_bytes=%zu endpoints=%zu\n",
+      "MINIMAL_CLEARANCE_DETERMINISM_PASS cases=%zu public_bytes=%zu "
+      "state_commitment_bytes=%zu private_source_endpoints=%zu request_hash_endpoints=0\n",
       fixture.cases.size(), public_statement_bytes(fixture.cases[0]).size(),
       state_commitment_bytes(fixture.cases[0]).size(), kSha3EndpointCount);
   auto circuit = build_circuit();
-  auto semantic_circuit = build_circuit_stage(false);
+  auto semantic_circuit = build_circuit_stage(0);
   std::printf(
-      "MINIMAL_LINKED_CASE0 directive=%u policy=%u active=%u complete=%u "
+      "MINIMAL_CLEARANCE_CASE0 directive=%u policy=%u active=%u complete=%u "
       "membership=%u absence=%u exception_present=%u exception_authorized=%u "
       "economic_mutation=%u times=%llu,%llu,%llu,%llu sequence=%llu->%llu "
       "counts=%llu->%llu markers=%u->%u\n",
@@ -101,7 +101,7 @@ int main() {
       fixture.cases[0].clearance_marker_before,
       fixture.cases[0].clearance_marker_after);
   std::printf(
-      "MINIMAL_LINKED_EVAL_START cases=%zu inputs=%zu public_inputs=%zu "
+      "MINIMAL_CLEARANCE_EVAL_START cases=%zu inputs=%zu public_inputs=%zu "
       "layers=%zu terms=%zu proof_acceptance_is_separate=1 "
       "state_ids_external_after_acceptance=1 proof_attempts=0\n",
       fixture.cases.size(), circuit->ninputs, circuit->npub_in, circuit->nl,
@@ -110,27 +110,27 @@ int main() {
   std::string semantic_reason;
   if (!CircuitAccepts(*semantic_circuit, fixture.cases[0], semantic_reason)) {
     std::printf(
-        "MINIMAL_LINKED_EVAL_FAIL case=0 owner=semantic-circuit reason=%s\n",
+        "MINIMAL_CLEARANCE_EVAL_FAIL case=0 owner=semantic-circuit reason=%s\n",
         semantic_reason.c_str());
     return 1;
   }
-  std::printf("MINIMAL_LINKED_SEMANTIC_CIRCUIT_PASS case=0\n");
+  std::printf("MINIMAL_CLEARANCE_SEMANTIC_CIRCUIT_PASS case=0\n");
 
   for (size_t index = 0; index < fixture.cases.size(); ++index) {
     std::string reason;
     if (!evaluate_case(fixture.cases[index], reason)) {
-      std::printf("MINIMAL_LINKED_EVAL_FAIL case=%zu owner=state-evaluator reason=%s\n",
+      std::printf("MINIMAL_CLEARANCE_EVAL_FAIL case=%zu owner=state-evaluator reason=%s\n",
                   index, reason.c_str());
       return 1;
     }
     if (!CircuitAccepts(*circuit, fixture.cases[index], reason)) {
-      std::printf("MINIMAL_LINKED_EVAL_FAIL case=%zu owner=circuit reason=%s\n",
+      std::printf("MINIMAL_CLEARANCE_EVAL_FAIL case=%zu owner=circuit reason=%s\n",
                   index, reason.c_str());
       return 1;
     }
     const DerivedIdentities ids = derive_identities(fixture.cases[index]);
     std::printf(
-        "MINIMAL_LINKED_EVAL_PASS case=%zu directive=%u policy=%u "
+        "MINIMAL_CLEARANCE_EVAL_PASS case=%zu directive=%u policy=%u "
         "source_membership=%u source_absence=%u decision_id_first=%02x "
         "join_id_first=%02x receipt_id_first=%02x settlement_id_first=%02x\n",
         index, fixture.cases[index].effective_directive,
@@ -145,6 +145,10 @@ int main() {
   Flip(source_registry.value.statement.source_registry_snapshot);
   mutations.push_back(source_registry);
 
+  Mutation source_profile{"source_profile_substitution", fixture.cases[0]};
+  Flip(source_profile.value.statement.source_profile);
+  mutations.push_back(source_profile);
+
   Mutation source_root{"source_root_substitution", fixture.cases[0]};
   Flip(source_root.value.statement.source_root_id);
   mutations.push_back(source_root);
@@ -152,6 +156,10 @@ int main() {
   Mutation source_payload{"source_payload_substitution", fixture.cases[0]};
   Flip(source_payload.value.source_payload);
   mutations.push_back(source_payload);
+
+  Mutation private_batch{"private_batch_commitment_substitution", fixture.cases[0]};
+  Flip(private_batch.value.statement.private_batch_commitment);
+  mutations.push_back(private_batch);
 
   Mutation completeness{"completeness_target_substitution", fixture.cases[0]};
   Flip(completeness.value.statement.completeness_id);
@@ -338,19 +346,19 @@ int main() {
     if (host_accepts ||
         (mutation.require_circuit_rejection && circuit_accepts)) {
       std::printf(
-        "MINIMAL_LINKED_MUTATION_FAIL name=%s host_accepts=%d "
+        "MINIMAL_CLEARANCE_MUTATION_FAIL name=%s host_accepts=%d "
           "circuit_accepts=%d owner=%s host_reason=%s circuit_reason=%s\n",
           candidate.name, host_accepts ? 1 : 0, circuit_accepts ? 1 : 0,
           candidate.owner, host_reason.c_str(), circuit_reason.c_str());
       return 2;
     }
     std::printf(
-      "MINIMAL_LINKED_MUTATION_PASS name=%s host_reason=%s "
+      "MINIMAL_CLEARANCE_MUTATION_PASS name=%s host_reason=%s "
         "circuit_accepts=%d owner=%s circuit_reason=%s\n",
         candidate.name, host_reason.c_str(), circuit_accepts ? 1 : 0,
         candidate.owner, circuit_reason.c_str());
   }
-  std::printf("MINIMAL_LINKED_EVAL_PASS valid_cases=5 mutation_cases=%zu\n",
+  std::printf("MINIMAL_CLEARANCE_EVAL_PASS valid_cases=5 mutation_cases=%zu\n",
               mutations.size());
   return 0;
 }

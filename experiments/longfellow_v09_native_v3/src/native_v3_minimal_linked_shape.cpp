@@ -31,12 +31,12 @@ void PrintMemory(const char* label) {
           reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
           sizeof(counters))) {
     std::printf(
-        "MINIMAL_LINKED_SHAPE_MEMORY label=%s telemetry=unavailable error=%lu\n",
+        "MINIMAL_CLEARANCE_SHAPE_MEMORY label=%s telemetry=unavailable error=%lu\n",
         label, static_cast<unsigned long>(GetLastError()));
     return;
   }
   std::printf(
-      "MINIMAL_LINKED_SHAPE_MEMORY label=%s process_tree_complete=1 "
+      "MINIMAL_CLEARANCE_SHAPE_MEMORY label=%s process_tree_complete=1 "
       "child_count=0 peak_working_set_bytes=%llu "
       "private_usage_bytes_at_sample=%llu peak_private_commit_bytes=%llu\n",
       label, static_cast<unsigned long long>(counters.PeakWorkingSetSize),
@@ -49,12 +49,13 @@ void PrintMemory(const char* label) {
 int main() {
   using namespace blind_ledger_longfellow::minimal_linked;
   const Fixture fixture = make_fixture();
-  const std::vector<uint8_t> source_input = source_commitment_input(fixture.cases[0]);
+  const std::vector<uint8_t> source_input =
+      private_batch_commitment_input(fixture.cases[0]);
   const std::vector<uint8_t> state_bytes = state_commitment_bytes(fixture.cases[0]);
   const std::vector<uint8_t> public_bytes = public_statement_bytes(fixture.cases[0]);
 
   std::printf(
-      "MINIMAL_LINKED_SHAPE_START relation=SOURCE-REGISTRY-PLUS-SEMANTIC "
+      "MINIMAL_CLEARANCE_SHAPE_START relation=SEMANTIC-PLUS-PRIVATE-SOURCE "
       "cases=%zu state_commitment_bytes=%zu public_statement_bytes=%zu\n",
       fixture.cases.size(), state_bytes.size(), public_bytes.size());
 
@@ -63,25 +64,28 @@ int main() {
     auto stage = build_circuit_stage(endpoint_count);
     if (endpoint_count == 0) {
       std::printf(
-          "MINIMAL_LINKED_SHAPE_ENDPOINT name=semantic_direct_constraints "
-          "hash_endpoints=0 inputs=%zu public_inputs=%zu layers=%zu terms=%zu\n",
-          stage->ninputs, stage->npub_in, stage->nl, stage->nterms());
+          "MINIMAL_CLEARANCE_SHAPE_VARIANT name=semantic_direct_constraints "
+          "hash_endpoints=0 inputs=%zu public_inputs=%zu layers=%zu terms=%zu "
+          "circuit_id=%s\n",
+          stage->ninputs, stage->npub_in, stage->nl, stage->nterms(),
+          Hex(stage->id, sizeof(stage->id)).c_str());
     } else {
       const auto input = endpoint_input(fixture.cases[0], endpoint_count - 1);
       std::printf(
-          "MINIMAL_LINKED_SHAPE_ENDPOINT name=%s hash_endpoints=%zu "
+          "MINIMAL_CLEARANCE_SHAPE_VARIANT name=%s hash_endpoints=%zu "
           "message_bytes=%zu block_count=%zu inputs=%zu public_inputs=%zu "
-          "layers=%zu terms=%zu\n",
+          "layers=%zu terms=%zu circuit_id=%s\n",
           endpoint_name(endpoint_count - 1), endpoint_count, input.size(),
           Sha3Blocks(input.size()), stage->ninputs, stage->npub_in, stage->nl,
-          stage->nterms());
+          stage->nterms(), Hex(stage->id, sizeof(stage->id)).c_str());
     }
     PrintMemory(endpoint_count == 0 ? "after_base" : "after_endpoint");
     if (endpoint_count == kSha3EndpointCount) {
       std::printf(
-          "MINIMAL_LINKED_SHAPE_PASS inputs=%zu public_inputs=%zu layers=%zu "
+      "MINIMAL_CLEARANCE_SHAPE_PASS inputs=%zu public_inputs=%zu layers=%zu "
           "terms=%zu circuit_id=%s source_input_bytes=%zu source_blocks=%zu "
-          "semantic_owner=direct_constraints state_owner=typed_commitment_bytes "
+      "semantic_owner=direct_constraints source_owner=private_batch_commitment "
+      "state_owner=typed_commitment_bytes "
           "external_ids=state_side_after_acceptance process_tree_complete=1 "
           "child_count=0 shape_only=1\n",
           stage->ninputs, stage->npub_in, stage->nl, stage->nterms(),
