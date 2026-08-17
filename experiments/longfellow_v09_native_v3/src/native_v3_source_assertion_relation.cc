@@ -416,6 +416,7 @@ void PushPrivate(proofs::DenseFiller<RelationField>& filler,
   filler.push_back(witness.decision_time, 64, field);
 }
 
+#ifndef BLIND_LEDGER_SOURCE_ASSERTION_VERIFIER_ONLY
 std::vector<uint8_t> EndpointInput(const SourceAssertionCase& source_case,
                                    Endpoint endpoint) {
   const Witness& witness = source_case.witness;
@@ -463,9 +464,11 @@ std::vector<uint8_t> EndpointInput(const SourceAssertionCase& source_case,
   }
   return result;
 }
+#endif  // BLIND_LEDGER_SOURCE_ASSERTION_VERIFIER_ONLY
 
 }  // namespace
 
+#ifndef BLIND_LEDGER_SOURCE_ASSERTION_VERIFIER_ONLY
 SourceAssertionFixture make_source_assertion_fixture() {
   SourceAssertionFixture fixture;
   const Digest provider =
@@ -602,6 +605,7 @@ std::vector<uint8_t> source_assertion_statement_bytes(
   Append(output, statement.private_batch_commitment);
   return output;
 }
+#endif  // BLIND_LEDGER_SOURCE_ASSERTION_VERIFIER_ONLY
 
 size_t source_assertion_endpoint_count() { return kEndpointCount; }
 
@@ -655,7 +659,8 @@ build_source_assertion_circuit() {
   return build_source_assertion_circuit_stage(kEndpointCount);
 }
 
-#ifndef BLIND_LEDGER_RELATION_CIRCUIT_ONLY
+#if !defined(BLIND_LEDGER_RELATION_CIRCUIT_ONLY) && \
+    !defined(BLIND_LEDGER_SOURCE_ASSERTION_VERIFIER_ONLY)
 void fill_source_assertion_public(const SourceAssertionCase& source_case,
                                   proofs::Dense<RelationField>& public_input) {
   const RelationField field;
@@ -683,7 +688,7 @@ void fill_source_assertion_witness(const SourceAssertionCase& source_case,
   }
 #endif
 }
-#endif  // BLIND_LEDGER_RELATION_CIRCUIT_ONLY
+#endif  // producer witness helpers
 
 std::string source_assertion_hex(const uint8_t* bytes, size_t length) {
   static constexpr char kHex[] = "0123456789abcdef";

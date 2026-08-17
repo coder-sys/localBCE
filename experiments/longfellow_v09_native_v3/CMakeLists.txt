@@ -203,3 +203,81 @@ target_compile_definitions(longfellow_source_assertion_attribution PRIVATE
 )
 target_link_libraries(longfellow_source_assertion_attribution PRIVATE
   longfellow_source_assertion_relation psapi)
+
+add_library(longfellow_source_assertion_proof_artifact STATIC
+  src/native_v3_source_assertion_proof_artifact.cc
+)
+target_include_directories(longfellow_source_assertion_proof_artifact PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_compile_definitions(longfellow_source_assertion_proof_artifact PUBLIC
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+
+# The verifier circuit deliberately excludes fixture construction and witness
+# filling. It contains only the fixed relation compiler and the circuit's
+# pinned SHA3 implementation; public values are reconstructed independently by
+# native_v3_source_assertion_verifier.cpp.
+add_library(longfellow_source_assertion_verifier_circuit STATIC
+  src/native_v3_source_assertion_relation.cc
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_reference.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_round_constants.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_witness.cc"
+)
+target_include_directories(longfellow_source_assertion_verifier_circuit PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_verifier_circuit PUBLIC
+  NOMINMAX WIN32_LEAN_AND_MEAN
+  BLIND_LEDGER_SOURCE_ASSERTION_VERIFIER_ONLY=1
+  BLIND_LEDGER_RELATION_CIRCUIT_ONLY=1
+  BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS=1
+)
+target_link_libraries(longfellow_source_assertion_verifier_circuit PUBLIC
+  longfellow_task_crypto bcrypt)
+
+add_executable(longfellow_source_assertion_prover
+  src/native_v3_source_assertion_prover.cpp
+)
+target_include_directories(longfellow_source_assertion_prover PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_prover PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_prover PRIVATE
+  longfellow_source_assertion_relation
+  longfellow_source_assertion_proof_artifact)
+
+add_executable(longfellow_source_assertion_verifier
+  src/native_v3_source_assertion_verifier.cpp
+)
+target_include_directories(longfellow_source_assertion_verifier PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_verifier PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_verifier PRIVATE
+  longfellow_source_assertion_verifier_circuit
+  longfellow_source_assertion_proof_artifact)
+
+add_executable(longfellow_source_assertion_prover_runner
+  src/native_v3_source_assertion_prover_runner.cpp
+)
+target_include_directories(longfellow_source_assertion_prover_runner PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_prover_runner PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_prover_runner PRIVATE
+  longfellow_task_crypto psapi)
