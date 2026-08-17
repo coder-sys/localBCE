@@ -28,6 +28,7 @@ from app.mirror import continuity_store_independent as store_independent
 from app.mirror import source_evidence_custody_independent as source_independent
 from app.mirror import source_reconciliation_independent as reconciliation_independent
 from app.mirror import transaction_mirror_independent as transaction_independent
+from app.mirror import money_mirror_independent as money_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -41,6 +42,7 @@ ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
 ARTIFACT_CONTRACT = contract_independent.ARTIFACT_KIND
 ARTIFACT_TRANSACTION_OBSERVATION = transaction_independent.OBSERVATION_ARTIFACT_KIND
 ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
+ARTIFACT_MONEY_OBSERVATION = money_independent.ARTIFACT_KIND
 ARTIFACT_KINDS = (
     ARTIFACT_GRAPH,
     ARTIFACT_GOVERNANCE,
@@ -51,6 +53,7 @@ ARTIFACT_KINDS = (
     ARTIFACT_CONTRACT,
     ARTIFACT_TRANSACTION_OBSERVATION,
     ARTIFACT_TRANSACTION_TRACE,
+    ARTIFACT_MONEY_OBSERVATION,
 )
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
@@ -312,6 +315,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
         if dict(value) != transaction_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_MONEY_OBSERVATION:
+        if dict(value) != money_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -372,6 +378,8 @@ def verify_artifact(
             value = contract_independent._parse(raw)
         elif artifact_kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
             value = transaction_independent._parse(raw)
+        elif artifact_kind == ARTIFACT_MONEY_OBSERVATION:
+            value = money_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -382,6 +390,7 @@ def verify_artifact(
         denominator_independent.IndependentDenominatorError,
         contract_independent.IndependentContractMirrorError,
         transaction_independent.IndependentTransactionMirrorError,
+        money_independent.IndependentMoneyMirrorError,
     ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
@@ -466,6 +475,16 @@ def verify_artifact(
                 registry=graph_profile_registry or {},
                 prior_trace_raw=transaction_context.get("prior_trace_raw"),
                 prior_observation_raw=transaction_context.get("prior_observation_raw"),
+            )
+        elif artifact_kind == ARTIFACT_MONEY_OBSERVATION:
+            if not isinstance(transaction_context, Mapping):
+                raise ArtifactAdmissionError("money:context-required")
+            result = money_independent.verify_artifact(
+                raw,
+                transaction_raw=transaction_context["transaction_raw"],
+                transaction_context=transaction_context["transaction_context"],
+                prior_money_raw=transaction_context.get("prior_money_raw"),
+                registry=graph_profile_registry,
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -566,6 +585,19 @@ def verify_artifact(
             profile_id = str(result["profile_id"])
             authority_json = _authority_json(value["authority"], kind=artifact_kind)
         elif artifact_kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["report_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_MONEY_OBSERVATION:
             artifact_id = str(result["artifact_id"])
             report_id = str(result["report_id"])
             current_stage_id = str(result["current_stage_id"])
@@ -1236,6 +1268,8 @@ class ContinuityStore:
             raise StoreConflictError("denominator:transaction-required")
         if artifact_kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
             raise StoreConflictError("transaction:transaction-required")
+        if artifact_kind == ARTIFACT_MONEY_OBSERVATION:
+            raise StoreConflictError("money:transaction-required")
         artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE and source_independent.has_graph_link(artifact_raw):
             raise StoreConflictError("custody:graph-link-transaction-required")
@@ -2356,6 +2390,200 @@ class ContinuityStore:
             except sqlite3.Error:
                 pass
             raise StoreBusyError("transaction:operational") from exc
+        finally:
+            connection.close()
+
+    def _transaction_trace_for_money(
+        self,
+        connection: sqlite3.Connection,
+        trace_artifact_id: str,
+        *,
+        require_contract_head: bool,
+    ) -> tuple[bytes, dict[str, object], VerifiedArtifact]:
+        row = connection.execute(
+            "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_TRANSACTION_TRACE, trace_artifact_id),
+        ).fetchone()
+        if row is None:
+            raise StoreConflictError("money:trace-missing")
+        trace_raw = bytes(row["payload"])
+        context = self._transaction_context_for_raw(connection, trace_raw, require_contract_head=require_contract_head)
+        trace = verify_artifact(
+            ARTIFACT_TRANSACTION_TRACE,
+            trace_raw,
+            graph_profile_registry=self.graph_profile_registry,
+            transaction_context=context,
+        )
+        chain_id = _chain_id(trace.kind, trace.subject, trace.scope, trace.profile_id)
+        head = self._head(connection, chain_id)
+        if head is None or (head["artifact_id"], head["current_stage_id"]) != (trace.artifact_id, trace.current_stage_id):
+            raise StoreConflictError("money:trace-not-head")
+        return trace_raw, context, trace
+
+    def _money_context_for_raw(self, connection: sqlite3.Connection, money_raw: bytes) -> dict[str, object]:
+        value = money_independent._parse(money_raw)
+        binding = value.get("transaction_binding")
+        if not isinstance(binding, Mapping):
+            raise StoreConflictError("money:transaction-binding")
+        trace_id = binding.get("trace_artifact_id")
+        if not isinstance(trace_id, str) or not trace_id:
+            raise StoreConflictError("money:trace-selector")
+        trace_raw, transaction_context, _trace = self._transaction_trace_for_money(
+            connection,
+            trace_id,
+            require_contract_head=False,
+        )
+        prior_money_raw = None
+        prior_id = value.get("prior_artifact_id")
+        if prior_id is not None:
+            row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_MONEY_OBSERVATION, prior_id),
+            ).fetchone()
+            if row is None:
+                raise StoreConflictError("money:prior-missing")
+            prior_money_raw = bytes(row["payload"])
+        return {
+            "transaction_raw": trace_raw,
+            "transaction_context": {
+                **transaction_context,
+                "prior_money_raw": prior_money_raw,
+            },
+            "prior_money_raw": prior_money_raw,
+        }
+
+    def admit_money(
+        self,
+        action: str,
+        *,
+        trace_artifact_id: str | None = None,
+        money_artifact_id: str | None = None,
+        fixture_id: str | None = None,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt:
+        """Atomically append one selector-driven synthetic official-money observation."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        if action == "MONEY_INITIAL":
+            if not isinstance(trace_artifact_id, str) or not trace_artifact_id or money_artifact_id is not None or fixture_id not in money_independent.INITIAL_FIXTURES:
+                raise StoreConflictError("money:initial-selectors")
+        elif action in {"MONEY_VOID", "MONEY_ADJUSTMENT", "MONEY_REPORT_MISMATCH", "MONEY_CORRECTION"}:
+            expected_fixture = {
+                "MONEY_VOID": money_independent.FIXTURE_VOID,
+                "MONEY_ADJUSTMENT": money_independent.FIXTURE_ADJUSTMENT,
+                "MONEY_REPORT_MISMATCH": money_independent.FIXTURE_REPORT_MISMATCH,
+                "MONEY_CORRECTION": money_independent.FIXTURE_CORRECTION,
+            }[action]
+            if not isinstance(money_artifact_id, str) or not money_artifact_id or trace_artifact_id is not None or fixture_id != expected_fixture:
+                raise StoreConflictError("money:transition-selectors")
+        else:
+            raise StoreConflictError("money:action")
+
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("money:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+            from app.mirror import money_mirror as producer
+
+            if action == "MONEY_INITIAL":
+                assert trace_artifact_id is not None and fixture_id is not None
+                trace_raw, transaction_context, _trace = self._transaction_trace_for_money(
+                    connection,
+                    trace_artifact_id,
+                    require_contract_head=True,
+                )
+                money_raw = producer.build_artifact(
+                    fixture_id,
+                    transaction_raw=trace_raw,
+                    transaction_context=transaction_context,
+                )
+                money_context = {
+                    "transaction_raw": trace_raw,
+                    "transaction_context": transaction_context,
+                    "prior_money_raw": None,
+                }
+            else:
+                assert money_artifact_id is not None and fixture_id is not None
+                prior_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_MONEY_OBSERVATION, money_artifact_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("money:prior-missing")
+                prior_money_raw = bytes(prior_row["payload"])
+                prior_context = self._money_context_for_raw(connection, prior_money_raw)
+                prior_verified = verify_artifact(
+                    ARTIFACT_MONEY_OBSERVATION,
+                    prior_money_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    transaction_context=prior_context,
+                )
+                trace_raw = prior_context["transaction_raw"]
+                transaction_context = prior_context["transaction_context"]
+                money_raw = producer.build_artifact(
+                    fixture_id,
+                    transaction_raw=trace_raw,
+                    transaction_context=transaction_context,
+                    prior_money_raw=prior_money_raw,
+                )
+                money_context = {
+                    "transaction_raw": trace_raw,
+                    "transaction_context": transaction_context,
+                    "prior_money_raw": prior_money_raw,
+                }
+
+            money = verify_artifact(
+                ARTIFACT_MONEY_OBSERVATION,
+                money_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                transaction_context=money_context,
+            )
+            request_hash = _payload_hash(money_raw)
+            existing = self._transaction_existing_receipt(connection, money, request_hash)
+            if existing is not None:
+                connection.commit()
+                return existing
+            if action != "MONEY_INITIAL":
+                chain_id = _chain_id(prior_verified.kind, prior_verified.subject, prior_verified.scope, prior_verified.profile_id)
+                head = self._head(connection, chain_id)
+                if head is None or (head["artifact_id"], head["current_stage_id"]) != (prior_verified.artifact_id, prior_verified.current_stage_id):
+                    raise StoreConflictError("money:prior-not-head")
+            self._transaction_require_active(connection, money_context["transaction_context"])
+            receipt = self._admit_in_transaction(connection, money, request_hash, enforce_governance=False)
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("money:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("money:operational") from exc
         finally:
             connection.close()
 
