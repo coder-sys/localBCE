@@ -59,6 +59,7 @@
     "public_statement_bytes": 3340,
     "proof_bytes": 408264,
     "artifact_sha256": "69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E",
+    "artifact_read_only_corrected": true,
     "rate": 4,
     "queries": 189,
     "transcript_version": 6
@@ -117,7 +118,7 @@
   },
   "nonclaims": [
     "This proves only the one-endpoint SOURCE/registry commitment plus the committed minimal-clearance relation shape.",
-    "It is not a full 18-endpoint native-v3 proof and does not establish full-route feasibility.",
+    "This establishes engineering feasibility of the complete current minimal one-endpoint semantic relation, but does not exercise atomic database composition, deployment, or production theorem qualification.",
     "It does not select or activate a production backend, close the approximately 115-to-128-bit security gap, qualify malicious-verifier/QROM or retry/grinding composition, or provide Lean/formal-kernel qualification.",
     "It does not exercise post-proof atomic database composition, payment movement, PHI, live sources, Ethereum, or production clearance authority."
   ]

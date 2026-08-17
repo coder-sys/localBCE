@@ -1,0 +1,121 @@
+{
+  "experiment": "longfellow_v09_native_v3",
+  "run": "atomic_state_side_composition_retained_minimal_proof",
+  "schema_version": 1,
+  "proof_invocations_this_run": 0,
+  "retained_artifact": {
+    "path": "C:/Temp/blind-ledger-minimal-clearance-proof-20260817c/minimal_clearance_case0.blmc",
+    "bytes": 411672,
+    "sha256": "69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E",
+    "read_only": true,
+    "mutation_target": false,
+    "retained_prior_prover_attempts": 1
+  },
+  "pinned_source": {
+    "remote": "https://github.com/google/longfellow-zk.git",
+    "commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+    "tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+    "circuit_id": "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0",
+    "patches": {
+      "sha3_512_circuit.patch": "1505A983D144047E1015601E90A4D7B72805AFFBFE31D43A178208DD2AB85F87",
+      "quad_builder_uint32_bound.patch": "EFBF683E8220584EF2FEA15B5B393B2835A9C0FBEF60F02A53BCC5B3D49117D4"
+    }
+  },
+  "independent_verifier": {
+    "circuit_inputs": 36969,
+    "public_inputs": 26721,
+    "layers": 217,
+    "terms": 12158968,
+    "public_statement_bytes": 3340,
+    "public_statement_sha256": "55239D2A3DC904B15FD979EA278392A1778EB8C5C48F1900893F1B3A0EE72558",
+    "baseline_accept": true,
+    "proof_consumption_exact": true,
+    "state_mutations": 0,
+    "clear_authorizations": 0
+  },
+  "state_transaction": {
+    "owner": "MinimalClearanceStateStoreV1",
+    "tables": [
+      "minimal_proof_clearance_state",
+      "minimal_proof_clearance_requests",
+      "minimal_proof_clearance_audit",
+      "minimal_proof_clearance_transitions"
+    ],
+    "transition_kind": "DIRECT_CLEARANCE",
+    "payment_root_unchanged": true,
+    "payment_root_hex": "ac29f26528f877efd5b40529ade6b2fd07e5b29baae89f960814763ddb6572993476bf925da0a962901d80f200d63f6bc2c3543b50454cbfe1c9200719c419b3",
+    "settled_batch_count_before": 0,
+    "settled_batch_count_after": 0,
+    "clear_directives": ["CLEAR", "EXCEPTION_APPROVED"],
+    "nonclear_directives": ["HOLD", "HUMAN_REVIEW", "BLOCK"],
+    "exact_retry_byte_identity": true,
+    "same_store_replay_rejected_or_converged": true,
+    "proof_suite_id": null,
+    "economic_mutation": false,
+    "production_usable": false,
+    "activation": false
+  },
+  "worker_verification": {
+    "python_unittest_cases": 6,
+    "python_unittest_failures": 0,
+    "python_unittest_errors": 0,
+    "focused_pytest_total": 110,
+    "focused_pytest_subtests": 5,
+    "focused_native_mutations": 5,
+    "focused_native_mutation_rejections": 5,
+    "focused_native_mutation_acceptances": 0,
+    "focused_native_mutation_names": [
+      "proof_flip_middle",
+      "trailing_bytes",
+      "epoch_endian",
+      "state_commitment",
+      "read_write_role"
+    ],
+    "prior_retained_copy_only_matrix": {
+      "cases": 34,
+      "rejections": 34,
+      "acceptances": 0,
+      "raw_log": "C:/Temp/blind-ledger-minimal-clearance-proof-20260817c/mutation-matrix.raw.txt",
+      "rerun_this_task": false
+    },
+    "raw_decisive_lines": [
+      "MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0",
+      "MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept",
+      "MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=36969 public_inputs=26721 layers=217 terms=12158968 public_bytes=3340 proof_bytes=408264 rate=4 queries=189 transcript_version=6 circuit_id=1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0 state_mutations=0 clear_authorizations=0",
+      "NATIVE_STATE_FINAL_PASS 11 12 ac29f26528f877efd5b40529ade6b2fd07e5b29baae89f960814763ddb6572993476bf925da0a962901d80f200d63f6bc2c3543b50454cbfe1c9200719c419b3 0 1 False None"
+    ]
+  },
+  "driver_personal_audit_correction": {
+    "provenance": "authorized correction packet from Sol driver; historical audit evidence is retained separately from this worker run",
+    "worker_personally_inspected": false,
+    "driver_reported": true,
+    "artifact_path": "C:/Temp/blind-ledger-sol-audit-proof-649bc39-20260817/source_assertion_clear.blv3",
+    "artifact_bytes": 318870,
+    "proof_bytes": 317784,
+    "artifact_sha256": "2876AD084A72694A9E12792729A397922EFC19444854574449F06D298DE61417",
+    "statement_bytes": 1018,
+    "statement_sha256": "5B84F43CE53B5B37B745ECCD1F54F6286FD2282C555ABA20AF45B3FDC9A81A84",
+    "producer_public_fields_sha256": "05AAE9C8CD5D56BD62A765AB205B20E80F04FA581BD746F2BC1AF680C8905F8B",
+    "verifier_public_fields_sha256": "276B48D2E84820C600ADA93A3AC452EF8EC9169373F320342A2409447014026F",
+    "first_mismatch_field_byte_offset": 70416,
+    "first_mismatch_field_index": 4401,
+    "first_mismatch_statement_byte": 550,
+    "raw_decisive_output": [
+      "SOURCE_ASSERTION_PROOF_ROUNDTRIP_IDENTICAL bytes=317784",
+      "upstream: verify done: ok",
+      "SOURCE_ASSERTION_VERIFIER_ACCEPT inputs=10993 public_inputs=8145 layers=169 terms=21954328 public_bytes=1018 proof_bytes=317784 rate=4 queries=189 transcript_version=6"
+    ],
+    "interpretation": "typed big-endian epoch and sequence_before reconstruction closed the reported public-vector mismatch in the driver's personal audit; this worker records it as driver-reported and did not rerun that audit artifact"
+  },
+  "warnings": {
+    "verifier_build": "no compiler warnings observed in the focused target output",
+    "c4267": "retained and bounded by quad_builder_uint32_bound.patch; no new warning observed",
+    "pagefile": "not claimed; this no-prover state-composition run did not measure OS pagefile growth"
+  },
+  "nonclaims": [
+    "This is a worker-run nonactivating state-side composition candidate, not production clearance authority.",
+    "Proof acceptance remains evidence acceptance and never equals CLEAR; the state transaction owns effective action.",
+    "No payment moved, no PHI/live source was used, and no prover was invoked in this run.",
+    "Lean/formal-kernel qualification, deployment, backend selection, the approximately 115-to-128-bit theorem gap, malicious-verifier/QROM composition, retry/grinding accounting, and production qualification remain open."
+  ]
+}
