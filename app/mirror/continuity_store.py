@@ -1477,6 +1477,48 @@ class ContinuityStore:
         finally:
             connection.close()
 
+    def artifact_head_raw(
+        self,
+        artifact_kind: str,
+        subject: str,
+        scope: str,
+        profile_id: str | None = None,
+    ) -> bytes | None:
+        """Return one state-owned artifact head payload for a selector.
+
+        Head identity and database conformance remain owned by the store.  A
+        service may select a fixed artifact/profile tuple, but it cannot reach
+        the store's private connection or chain-id helpers to invent a head.
+        """
+
+        chain_id = _chain_id(artifact_kind, subject, scope, profile_id)
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("transaction:read-busy") from exc
+            self._validate_transaction_snapshot(connection)
+            row = connection.execute(
+                "SELECT h.artifact_kind,h.artifact_id,a.subject,a.scope,a.payload FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.chain_id=?",
+                (chain_id,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            if row["artifact_kind"] != artifact_kind or row["subject"] != subject or row["scope"] != scope:
+                raise StoreSchemaError("head:selector-binding")
+            connection.commit()
+            return bytes(row["payload"])
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
     def source_evidence_head(
         self,
         subject: str,

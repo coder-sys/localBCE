@@ -1,10 +1,11 @@
-"""Independent verifier for the synthetic Mirror Qualification V1 artifact.
+"""Independent verifier for the nonactivating Mirror qualification artifact.
 
 This module is intentionally independent of the producer, custody facade, and
 ContinuityStore.  It owns the bounded manifest grammar, fixed dependency and
 component registry, synthetic evidence bindings, custody-envelope check, and
-pilot lifecycle transition rules.  It never upgrades a synthetic result into
-source authentication, state approval, production custody, HA, or activation.
+rehearsal lifecycle transition rules, and the unavailable external-port
+registry.  It never upgrades a fixture result into source authentication,
+state approval, production custody, HA, a controlled shadow, or activation.
 """
 
 from __future__ import annotations
@@ -15,44 +16,60 @@ import re
 from typing import Mapping
 
 
-ARTIFACT_KIND = "MIRROR_QUALIFICATION_V1"
-SCHEMA = "mirror-qualification-manifest-v1"
-SCHEMA_VERSION = 1
+ARTIFACT_KIND = "MIRROR_QUALIFICATION_V2"
+SCHEMA = "mirror-qualification-manifest-v2"
+SCHEMA_VERSION = 2
 DOMAIN = "BL/MIRROR/QUALIFICATION/"
-PROFILE_ID = "mirror.qualification.synthetic-operations.v1"
-PROFILE_VERSION = 1
-SUBJECT = "SYNTH_MIRROR_QUALIFICATION_SCOPE_V1"
-SCOPE = "MIRROR_QUALIFICATION_V1"
+PROFILE_ID = "mirror.qualification.synthetic-rehearsal.v2"
+PROFILE_VERSION = 2
+SUBJECT = "SYNTH_MIRROR_QUALIFICATION_REHEARSAL_SCOPE_V2"
+SCOPE = "MIRROR_QUALIFICATION_REHEARSAL_V2"
+CUSTODY_PURPOSE = "MIRROR_SYNTHETIC_REHEARSAL_MANIFEST_V2"
 MAX_ARTIFACT_BYTES = 524_288
 MAX_STRING_BYTES = 8_192
 MAX_NODES = 16_384
 MAX_DEPTH = 24
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
 
-PILOT_NOT_READY = "NOT_READY"
-PILOT_READY = "READY_FOR_CONTROLLED_SHADOW"
-PILOT_RUNNING = "RUNNING"
-PILOT_PAUSED = "PAUSED"
-PILOT_ROLLED_BACK = "ROLLED_BACK"
-PILOT_COMPLETED = "COMPLETED"
-PILOT_STATES = (
-    PILOT_NOT_READY,
-    PILOT_READY,
-    PILOT_RUNNING,
-    PILOT_PAUSED,
-    PILOT_ROLLED_BACK,
-    PILOT_COMPLETED,
+READINESS_NOT_READY = "NOT_READY"
+SYNTHETIC_REHEARSAL_READY = "SYNTHETIC_REHEARSAL_READY"
+CONTROLLED_SHADOW_READY = "CONTROLLED_SHADOW_READY"
+PRODUCTION_READY = "PRODUCTION_READY"
+READINESS_LEVELS = (
+    READINESS_NOT_READY,
+    SYNTHETIC_REHEARSAL_READY,
+    CONTROLLED_SHADOW_READY,
+    PRODUCTION_READY,
+)
+
+REHEARSAL_NOT_READY = "REHEARSAL_NOT_READY"
+REHEARSAL_READY = "REHEARSAL_READY"
+REHEARSAL_RUNNING = "REHEARSAL_RUNNING"
+REHEARSAL_PAUSED = "REHEARSAL_PAUSED"
+REHEARSAL_ROLLED_BACK = "REHEARSAL_ROLLED_BACK"
+REHEARSAL_COMPLETED = "REHEARSAL_COMPLETED"
+REHEARSAL_STATES = (
+    REHEARSAL_NOT_READY,
+    REHEARSAL_READY,
+    REHEARSAL_RUNNING,
+    REHEARSAL_PAUSED,
+    REHEARSAL_ROLLED_BACK,
+    REHEARSAL_COMPLETED,
 )
 LEGAL_TRANSITIONS = {
-    PILOT_NOT_READY: {PILOT_READY},
-    PILOT_READY: {PILOT_RUNNING},
-    PILOT_RUNNING: {PILOT_PAUSED, PILOT_ROLLED_BACK, PILOT_COMPLETED},
-    PILOT_PAUSED: {PILOT_RUNNING, PILOT_ROLLED_BACK, PILOT_COMPLETED},
-    PILOT_ROLLED_BACK: {PILOT_COMPLETED},
-    PILOT_COMPLETED: set(),
+    REHEARSAL_NOT_READY: {REHEARSAL_READY},
+    REHEARSAL_READY: {REHEARSAL_RUNNING},
+    REHEARSAL_RUNNING: {REHEARSAL_PAUSED, REHEARSAL_ROLLED_BACK, REHEARSAL_COMPLETED},
+    REHEARSAL_PAUSED: {REHEARSAL_RUNNING, REHEARSAL_ROLLED_BACK, REHEARSAL_COMPLETED},
+    REHEARSAL_ROLLED_BACK: set(),
+    REHEARSAL_COMPLETED: set(),
 }
 
-DEPENDENCY_STATES = {"MISSING", "PRESENT_UNVERIFIED", "VERIFIED", "EXPIRED", "REVOKED"}
+DEPENDENCY_STATES = {"MISSING", "PRESENT_UNVERIFIED", "REHEARSAL_VERIFIED", "VERIFIED", "EXPIRED", "REVOKED"}
+OPERATION_STATES = {"PRESENT_UNVERIFIED", "REHEARSAL_VERIFIED", "VERIFIED", "EXPIRED", "REVOKED"}
+REHEARSAL_EVIDENCE_CLASS = "SYNTHETIC_REHEARSAL"
+REHEARSAL_PAYLOAD_KIND = "FIXTURE_REHEARSAL"
+REHEARSAL_VERIFIED_STATE = "REHEARSAL_VERIFIED"
 DEPENDENCY_IDS = (
     "SOURCE_AUTHORIZATION",
     "LEGAL_TERMS",
@@ -111,7 +128,7 @@ COMPONENT_CONTRACTS = [
     {"component_id": "STATE_VALUE_LEDGER", "owner": "MIRROR_STATE_VALUE", "contract_version": 1, "verification_boundary": "INDEPENDENT_STATE_VALUE_VERIFIER"},
     {"component_id": "CONTINUITY_STORE", "owner": "MIRROR_CONTINUITY_STORE", "contract_version": 2, "verification_boundary": "INDEPENDENT_DATABASE_VERIFIER"},
     {"component_id": "EXPORT_RESTORE_SUPPORT", "owner": "MIRROR_OPERATIONS", "contract_version": 2, "verification_boundary": "INDEPENDENT_EXPORT_SUPPORT_VERIFIER"},
-    {"component_id": "MIRROR_QUALIFICATION", "owner": "MIRROR_QUALIFICATION_SERVICE", "contract_version": 1, "verification_boundary": "INDEPENDENT_QUALIFICATION_VERIFIER"},
+    {"component_id": "MIRROR_QUALIFICATION", "owner": "MIRROR_QUALIFICATION_SERVICE", "contract_version": 2, "verification_boundary": "INDEPENDENT_QUALIFICATION_VERIFIER"},
 ]
 OPERATION_IDS = (
     "ATOMIC_PERSISTENCE",
@@ -124,6 +141,51 @@ OPERATION_IDS = (
     "RESOURCE_BOUNDARY",
 )
 
+# These are verifier-owned substitution seams, not caller-selectable trust
+# roots.  No production implementation is registered in this repository.
+EXTERNAL_PORT_CONTRACTS = [
+    {
+        "port_id": "STATE_SOURCE_AUTHORIZATION_TERMS_PORT_V1",
+        "authority": "STATE_SOURCE_AUTHORITY",
+        "verification_method": "AUTHENTICATED_EXTERNAL_EVIDENCE_V1",
+        "trust_root_id": "UNCONFIGURED",
+        "implemented": False,
+        "dependencies": ["SOURCE_AUTHORIZATION", "LEGAL_TERMS", "SOURCE_SCOPE", "COMPLETENESS", "CADENCE", "FAILURE_BEHAVIOR"],
+    },
+    {
+        "port_id": "STATE_GOVERNANCE_APPROVAL_PORT_V1",
+        "authority": "STATE_GOVERNANCE_AUTHORITY",
+        "verification_method": "AUTHENTICATED_EXTERNAL_EVIDENCE_V1",
+        "trust_root_id": "UNCONFIGURED",
+        "implemented": False,
+        "dependencies": ["STATE_APPROVAL"],
+    },
+    {
+        "port_id": "STATE_PRIVACY_SUPPORT_APPROVAL_PORT_V1",
+        "authority": "STATE_PRIVACY_AUTHORITY",
+        "verification_method": "AUTHENTICATED_EXTERNAL_EVIDENCE_V1",
+        "trust_root_id": "UNCONFIGURED",
+        "implemented": False,
+        "dependencies": ["PRIVACY", "SUPPORT"],
+    },
+    {
+        "port_id": "PRODUCTION_CUSTODY_PORT_V1",
+        "authority": "STATE_CUSTODY_AUTHORITY",
+        "verification_method": "AUTHENTICATED_CUSTODY_EVIDENCE_V1",
+        "trust_root_id": "UNCONFIGURED",
+        "implemented": False,
+        "dependencies": ["CUSTODY"],
+    },
+    {
+        "port_id": "STATE_OPERATIONS_QUALIFICATION_PORT_V1",
+        "authority": "STATE_OPERATIONS_AUTHORITY",
+        "verification_method": "AUTHENTICATED_OPERATIONS_EVIDENCE_V1",
+        "trust_root_id": "UNCONFIGURED",
+        "implemented": False,
+        "dependencies": ["HA", "BACKUP_DR", "MONITORING", "ROLLBACK"],
+    },
+]
+
 AUTHORITY_FLAGS = {
     "automaticControlSetId": None,
     "automatic_enforcement_eligible": False,
@@ -132,6 +194,9 @@ AUTHORITY_FLAGS = {
     "economic_mutation": False,
     "production_usable": False,
     "synthetic_only": True,
+    "rehearsal_only": True,
+    "controlled_shadow_authority": False,
+    "production_authority": False,
     "production_source_authentication": False,
     "proofSuiteId": None,
 }
@@ -145,6 +210,7 @@ FIXED_FLAGS = {
     "economic_mutation": False,
     "state_approval": False,
     "controlled_shadow_pilot": False,
+    "rehearsal_only": True,
     "automatic_decision_authority": False,
     "production_usable": False,
     "synthetic_only": True,
@@ -155,16 +221,19 @@ FIXED_FLAGS = {
 }
 
 GAP_LEDGER = {
-    "schema": "mirror-qualification-gap-ledger-v1",
+    "schema": "mirror-qualification-gap-ledger-v2",
     "implemented_software_seams": [
-        {"gap_id": item["component_id"], "status": "SYNTHETIC_CANDIDATE", "claim": "bounded local contract and independent checks"}
+        {"gap_id": item["component_id"], "status": "REHEARSAL_SOFTWARE_ONLY", "claim": "bounded local contract and independent checks; no external authority"}
         for item in COMPONENT_CONTRACTS
     ],
     "software_gaps": [
-        {"gap_id": "REAL_AUTHENTICATED_SOURCE_ADAPTER", "status": "UNIMPLEMENTED", "claim": "live source substitution"},
-        {"gap_id": "PRODUCTION_CUSTODY_ADAPTER", "status": "UNIMPLEMENTED", "claim": "deployment key custody"},
-        {"gap_id": "PRODUCTION_HA_BACKUP_DR", "status": "UNIMPLEMENTED", "claim": "state operations"},
-        {"gap_id": "CONTROLLED_SHADOW_PILOT_OPERATIONS", "status": "UNIMPLEMENTED", "claim": "real pilot"},
+        {"gap_id": "EXTERNAL_SOURCE_EVIDENCE_ADAPTER", "status": "UNIMPLEMENTED", "claim": "authenticated source authorization, terms, scope, completeness, cadence, and failure evidence"},
+        {"gap_id": "EXTERNAL_GOVERNANCE_APPROVAL_ADAPTER", "status": "UNIMPLEMENTED", "claim": "state approval evidence"},
+        {"gap_id": "EXTERNAL_PRIVACY_SUPPORT_ADAPTER", "status": "UNIMPLEMENTED", "claim": "state privacy and support approval evidence"},
+        {"gap_id": "PRODUCTION_CUSTODY_ADAPTER", "status": "UNIMPLEMENTED", "claim": "production envelope custody and HSM/FIPS evidence"},
+        {"gap_id": "PRODUCTION_HA_BACKUP_DR_ADAPTER", "status": "UNIMPLEMENTED", "claim": "production HA, backup, restore, DR, monitoring, and rollback evidence"},
+        {"gap_id": "CONTROLLED_SHADOW_PILOT_RUNTIME", "status": "UNIMPLEMENTED", "claim": "externally authorized read-only shadow operations"},
+        {"gap_id": "PRODUCTION_QUALIFICATION", "status": "UNIMPLEMENTED", "claim": "production claim level"},
     ],
     "external_blockers": [
         {"gap_id": "STATE_SOURCE_AUTHORIZATION", "status": "EXTERNAL_REQUIRED", "claim": "legal access and source authority"},
@@ -188,7 +257,7 @@ GAP_LEDGER = {
 
 TOP_KEYS = {
     "schema", "schema_version", "profile_binding", "subject", "scope", "as_of",
-    "owners", "components", "dependencies", "operations", "custody", "readiness",
+    "owners", "components", "external_ports", "dependencies", "operations", "custody", "readiness",
     "pilot_state", "gap_ledger", "flags", "authority", "manifest_id", "prior_artifact_id",
     "prior_stage_id", "artifact_id", "current_stage_id", "transition_id",
 }
@@ -199,7 +268,14 @@ OPERATION_KEYS = {"operation_id", "owner", "required", "state", "evidence_class"
 CUSTODY_KEYS = {"mode", "key_id", "key_epoch", "key_state", "envelope", "audit", "audit_root", "envelope_digest", "encryption_at_rest_qualified", "production_key_custody"}
 ENVELOPE_KEYS = {"schema", "key_id", "key_epoch", "ciphertext", "tag", "plaintext_digest"}
 AUDIT_KEYS = {"action", "key_id", "key_epoch", "status"}
-READINESS_KEYS = {"state", "required_checks", "verified_checks", "current", "claim_level"}
+READINESS_KEYS = {
+    "software_contract_verified",
+    "synthetic_rehearsal_evidence_verified",
+    "external_evidence_authenticated_current",
+    "operational_qualification_verified",
+    "unresolved_blockers",
+    "final_claim",
+}
 
 
 class IndependentQualificationError(ValueError):
@@ -323,8 +399,10 @@ def _profile_material() -> dict[str, object]:
         "component_ids": [item["component_id"] for item in COMPONENT_CONTRACTS],
         "dependency_ids": list(DEPENDENCY_IDS),
         "operation_ids": list(OPERATION_IDS),
-        "pilot_states": list(PILOT_STATES),
-        "semantics": "SYNTHETIC_READ_ONLY_QUALIFICATION_EVIDENCE_ONLY",
+        "rehearsal_states": list(REHEARSAL_STATES),
+        "readiness_levels": list(READINESS_LEVELS),
+        "external_port_contracts": EXTERNAL_PORT_CONTRACTS,
+        "semantics": "SYNTHETIC_REHEARSAL_ONLY_EXTERNAL_AUTHORITY_UNIMPLEMENTED",
     }
 
 
@@ -343,6 +421,12 @@ def _core_without_custody(value: Mapping[str, object]) -> dict[str, object]:
     return {key: value[key] for key in value if key not in {"custody", "manifest_id", "artifact_id", "current_stage_id", "transition_id"}}
 
 
+def _validate_external_ports(value: object) -> list[dict[str, object]]:
+    if value != EXTERNAL_PORT_CONTRACTS:
+        raise IndependentQualificationError("qualification:external-port-registry")
+    return value
+
+
 def _validate_evidence(value: object, dependency_id: str, owner: str) -> dict[str, object] | None:
     if value is None:
         return None
@@ -353,8 +437,13 @@ def _validate_evidence(value: object, dependency_id: str, owner: str) -> dict[st
     state = value["state"]
     if state not in DEPENDENCY_STATES:
         raise IndependentQualificationError("qualification:evidence-state")
-    if value["evidence_class"] != "SYNTHETIC" or value["payload_kind"] != "FIXTURE_ATTESTATION":
+    if value["evidence_class"] != REHEARSAL_EVIDENCE_CLASS or value["payload_kind"] != REHEARSAL_PAYLOAD_KIND:
         raise IndependentQualificationError("qualification:evidence-class")
+    if state == "VERIFIED":
+        # No external verifier/trust root is registered.  A fixture proof may
+        # establish rehearsal evidence only and cannot be relabelled as
+        # authenticated external evidence.
+        raise IndependentQualificationError("qualification:external-evidence-unavailable")
     issued = _expect_int(value["issued_at"], "evidence-issued")
     valid_until = _expect_int(value["valid_until"], "evidence-expiry", minimum=issued + 1)
     if type(value["revoked"]) is not bool:
@@ -396,16 +485,16 @@ def _validate_dependencies(value: object, as_of: int) -> tuple[list[dict[str, ob
             raise IndependentQualificationError("qualification:missing-evidence")
         if state == "PRESENT_UNVERIFIED" and evidence is None:
             raise IndependentQualificationError("qualification:evidence-required")
-        if state in {"VERIFIED", "EXPIRED", "REVOKED"} and evidence is None:
+        if state in {"VERIFIED", "REHEARSAL_VERIFIED", "EXPIRED", "REVOKED"} and evidence is None:
             raise IndependentQualificationError("qualification:evidence-required")
         if evidence is not None and evidence["state"] != state:
             raise IndependentQualificationError("qualification:evidence-state-binding")
-        if state == "VERIFIED" and evidence is not None and (as_of < evidence["issued_at"] or as_of >= evidence["valid_until"] or evidence["revoked"]):
-            raise IndependentQualificationError("qualification:verified-not-current")
+        if state == REHEARSAL_VERIFIED_STATE and evidence is not None and (as_of < evidence["issued_at"] or as_of >= evidence["valid_until"] or evidence["revoked"]):
+            raise IndependentQualificationError("qualification:rehearsal-not-current")
         result.append(item)
     if [item["dependency_id"] for item in result] != sorted(DEPENDENCY_IDS):
         raise IndependentQualificationError("qualification:dependency-order")
-    return result, sum(1 for item in result if item["state"] == "VERIFIED")
+    return result, sum(1 for item in result if item["state"] == REHEARSAL_VERIFIED_STATE)
 
 
 def _validate_operations(value: object) -> tuple[list[dict[str, object]], int]:
@@ -423,15 +512,17 @@ def _validate_operations(value: object) -> tuple[list[dict[str, object]], int]:
         if item["owner"] != "STATE_OPERATIONS_AUTHORITY" or item["required"] is not True:
             raise IndependentQualificationError("qualification:operation-owner")
         state = item["state"]
-        if state not in {"PRESENT_UNVERIFIED", "VERIFIED", "EXPIRED", "REVOKED"}:
+        if state not in OPERATION_STATES:
             raise IndependentQualificationError("qualification:operation-state")
+        if state == "VERIFIED":
+            raise IndependentQualificationError("qualification:external-operations-unavailable")
         for key in ("observed_rpo_seconds", "observed_rto_ms"):
             if item[key] is not None:
                 _expect_int(item[key], f"operation:{key}", maximum=86_400_000)
         fault_codes = item["fault_codes"]
         if not isinstance(fault_codes, list) or any(not isinstance(code, str) for code in fault_codes) or fault_codes != sorted(set(fault_codes)) or len(fault_codes) > 16:
             raise IndependentQualificationError("qualification:operation-fault-codes")
-        if item["evidence_class"] != "SYNTHETIC":
+        if item["evidence_class"] != REHEARSAL_EVIDENCE_CLASS:
             raise IndependentQualificationError("qualification:operation-evidence-class")
         proof = item["proof"]
         if state == "PRESENT_UNVERIFIED":
@@ -443,7 +534,7 @@ def _validate_operations(value: object) -> tuple[list[dict[str, object]], int]:
         result.append(item)
     if [item["operation_id"] for item in result] != sorted(OPERATION_IDS):
         raise IndependentQualificationError("qualification:operation-order")
-    return result, sum(1 for item in result if item["state"] == "VERIFIED")
+    return result, sum(1 for item in result if item["state"] == REHEARSAL_VERIFIED_STATE)
 
 
 def _validate_custody(value: object, core: Mapping[str, object]) -> dict[str, object]:
@@ -487,7 +578,7 @@ def _validate_custody(value: object, core: Mapping[str, object]) -> dict[str, ob
         raise IndependentQualificationError("qualification:envelope-seed") from exc
     if _canonical(seed) != plaintext:
         raise IndependentQualificationError("qualification:envelope-seed")
-    if not isinstance(seed, dict) or set(seed) != {"profile_id", "manifest_core_digest", "purpose"} or seed["profile_id"] != PROFILE_ID or seed["purpose"] != "MIRROR_QUALIFICATION_MANIFEST":
+    if not isinstance(seed, dict) or set(seed) != {"profile_id", "manifest_core_digest", "purpose"} or seed["profile_id"] != PROFILE_ID or seed["purpose"] != CUSTODY_PURPOSE:
         raise IndependentQualificationError("qualification:envelope-seed")
     if seed["manifest_core_digest"] != _digest("manifest-core", dict(core)):
         raise IndependentQualificationError("qualification:envelope-core-binding")
@@ -524,24 +615,45 @@ def _validate_value(
     as_of = _expect_int(value["as_of"], "as-of")
     if value["owners"] != OWNER_REGISTRY or value["components"] != COMPONENT_CONTRACTS or value["gap_ledger"] != GAP_LEDGER:
         raise IndependentQualificationError("qualification:fixed-registry")
-    dependencies, verified_dependencies = _validate_dependencies(value["dependencies"], as_of)
-    operations, verified_operations = _validate_operations(value["operations"])
+    _validate_external_ports(value["external_ports"])
+    dependencies, rehearsal_dependencies = _validate_dependencies(value["dependencies"], as_of)
+    operations, rehearsal_operations = _validate_operations(value["operations"])
     core = _core_without_custody(value)
     _validate_custody(value["custody"], core)
     readiness = value["readiness"]
     if not isinstance(readiness, dict) or set(readiness) != READINESS_KEYS:
         raise IndependentQualificationError("qualification:readiness-keys")
-    required_checks = len(DEPENDENCY_IDS) + len(OPERATION_IDS)
-    verified_checks = verified_dependencies + verified_operations
-    expected_ready = verified_checks == required_checks and all(
-        item["state"] == "VERIFIED" and item["evidence"] is not None
-        for item in dependencies
+    software_contract_verified = True
+    synthetic_rehearsal_verified = (
+        rehearsal_dependencies == len(DEPENDENCY_IDS)
+        and rehearsal_operations == len(OPERATION_IDS)
     )
-    expected_state = "READY_FOR_CONTROLLED_SHADOW" if expected_ready else "NOT_READY"
-    if readiness != {"state": expected_state, "required_checks": required_checks, "verified_checks": verified_checks, "current": expected_ready, "claim_level": "SYNTHETIC_CANDIDATE"}:
+    # This profile has no external adapters or trust roots.  These values are
+    # verifier-owned constants, never evidence fields supplied by a caller.
+    external_evidence_authenticated_current = False
+    operational_qualification_verified = False
+    blockers = [
+        "EXTERNAL_AUTHENTICATED_EVIDENCE_UNAVAILABLE",
+        "PRODUCTION_CUSTODY_UNQUALIFIED",
+        "PRODUCTION_OPERATIONS_UNQUALIFIED",
+        "CONTROLLED_SHADOW_NOT_AUTHORIZED",
+        "PRODUCTION_QUALIFICATION_UNIMPLEMENTED",
+    ]
+    if not synthetic_rehearsal_verified:
+        blockers.insert(0, "SYNTHETIC_REHEARSAL_EVIDENCE_INCOMPLETE")
+    expected_state = SYNTHETIC_REHEARSAL_READY if software_contract_verified and synthetic_rehearsal_verified else READINESS_NOT_READY
+    expected_readiness = {
+        "software_contract_verified": software_contract_verified,
+        "synthetic_rehearsal_evidence_verified": synthetic_rehearsal_verified,
+        "external_evidence_authenticated_current": external_evidence_authenticated_current,
+        "operational_qualification_verified": operational_qualification_verified,
+        "unresolved_blockers": blockers,
+        "final_claim": expected_state,
+    }
+    if readiness != expected_readiness:
         raise IndependentQualificationError("qualification:readiness")
     pilot_state = value["pilot_state"]
-    if pilot_state not in PILOT_STATES:
+    if pilot_state not in REHEARSAL_STATES:
         raise IndependentQualificationError("qualification:pilot-state")
     flags = value["flags"]
     if flags != FIXED_FLAGS or value["authority"] != AUTHORITY_FLAGS:
@@ -550,7 +662,7 @@ def _validate_value(
     prior_stage = value["prior_stage_id"]
     if check_prior:
         if prior_value is None:
-            if prior_id is not None or prior_stage is not None or pilot_state != PILOT_NOT_READY:
+            if prior_id is not None or prior_stage is not None or pilot_state != REHEARSAL_NOT_READY:
                 raise IndependentQualificationError("qualification:initial-state")
         else:
             if prior_id != prior_value["artifact_id"] or prior_stage != prior_value["current_stage_id"]:
@@ -558,7 +670,7 @@ def _validate_value(
             prior_state = prior_value["pilot_state"]
             if pilot_state not in LEGAL_TRANSITIONS[prior_state]:
                 raise IndependentQualificationError("qualification:illegal-transition")
-            if pilot_state in {PILOT_READY, PILOT_RUNNING} and not expected_ready:
+            if pilot_state in {REHEARSAL_READY, REHEARSAL_RUNNING, REHEARSAL_COMPLETED} and not synthetic_rehearsal_verified:
                 raise IndependentQualificationError("qualification:readiness-required")
     manifest_id = _expect_text(value["manifest_id"], "manifest-id")
     if not HEX128.fullmatch(manifest_id) or manifest_id != _digest("manifest-id", core):
@@ -587,6 +699,8 @@ def _validate_value(
         "profile_id": PROFILE_ID,
         "profile_version": PROFILE_VERSION,
         "readiness_state": expected_state,
+        "claim_level": expected_state,
+        "external_evidence_authenticated_current": external_evidence_authenticated_current,
         "dependency_states": {item["dependency_id"]: item["state"] for item in dependencies},
     }
 
@@ -618,10 +732,11 @@ def verify_bytes(raw: bytes, *, prior_raw: bytes | None = None) -> dict[str, obj
 
 
 __all__ = [
-    "ARTIFACT_KIND", "SCHEMA", "SCHEMA_VERSION", "PROFILE_ID", "PROFILE_VERSION", "SUBJECT", "SCOPE",
-    "PILOT_NOT_READY", "PILOT_READY", "PILOT_RUNNING", "PILOT_PAUSED", "PILOT_ROLLED_BACK", "PILOT_COMPLETED",
-    "PILOT_STATES", "DEPENDENCY_IDS", "DEPENDENCY_STATES", "OWNER_REGISTRY", "COMPONENT_CONTRACTS",
-    "OPERATION_IDS", "AUTHORITY_FLAGS", "FIXED_FLAGS", "GAP_LEDGER", "PROFILE_DIGEST",
+    "ARTIFACT_KIND", "SCHEMA", "SCHEMA_VERSION", "PROFILE_ID", "PROFILE_VERSION", "SUBJECT", "SCOPE", "CUSTODY_PURPOSE",
+    "READINESS_NOT_READY", "SYNTHETIC_REHEARSAL_READY", "CONTROLLED_SHADOW_READY", "PRODUCTION_READY", "READINESS_LEVELS",
+    "REHEARSAL_NOT_READY", "REHEARSAL_READY", "REHEARSAL_RUNNING", "REHEARSAL_PAUSED", "REHEARSAL_ROLLED_BACK", "REHEARSAL_COMPLETED",
+    "REHEARSAL_STATES", "DEPENDENCY_IDS", "DEPENDENCY_STATES", "OPERATION_STATES", "OWNER_REGISTRY", "COMPONENT_CONTRACTS",
+    "OPERATION_IDS", "EXTERNAL_PORT_CONTRACTS", "AUTHORITY_FLAGS", "FIXED_FLAGS", "GAP_LEDGER", "PROFILE_DIGEST",
     "IndependentQualificationError", "verify_artifact", "verify_bytes",
     "inspect_artifact",
 ]

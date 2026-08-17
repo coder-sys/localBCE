@@ -1,8 +1,10 @@
-"""Producer-side synthetic Mirror Qualification V1 composition boundary.
+"""Producer-side Mirror qualification composition boundary.
 
 The qualification manifest is a bounded readiness record for the existing
-Mirror seams.  It records synthetic evidence and explicit nonclaims; it does
-not authenticate a live source, grant state approval, or activate a pilot.
+Mirror seams.  This module owns only canonical assembly and explicit
+verifier-owned ports; it does not issue evidence, authenticate a live source,
+grant state approval, or activate a pilot.  Fixture issuers live in
+``qualification_fixtures`` and can prove rehearsal behavior only.
 The independent grammar and identity owner is
 ``qualification_independent``.  This module only assembles candidates and
 delegates final lifecycle authority to ContinuityStore.
@@ -16,7 +18,7 @@ import json
 from pathlib import Path
 import tempfile
 import time
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol
 
 from app.mirror import qualification_independent as independent
 
@@ -26,7 +28,12 @@ class QualificationError(ValueError):
 
 
 class EnvelopeCustodyPort(Protocol):
-    """Narrow state-owned custody seam used by the synthetic candidate."""
+    """Verifier-owned custody substitution seam.
+
+    The repository supplies no production implementation.  A fixture-only
+    implementation lives in ``qualification_fixtures`` and is explicitly
+    limited to rehearsal evidence.
+    """
 
     def seal(self, seed: Mapping[str, object]) -> dict[str, object]: ...
 
@@ -35,6 +42,46 @@ class EnvelopeCustodyPort(Protocol):
     def revoke(self) -> dict[str, object]: ...
 
     def open(self, envelope: Mapping[str, object]) -> bytes: ...
+
+
+class SourceAuthorizationPort(Protocol):
+    """Future authenticated source authorization/terms evidence port."""
+
+    port_id: str
+
+    def read(self, dependency_id: str) -> bytes: ...
+
+
+class StateGovernanceApprovalPort(Protocol):
+    """Future state governance approval evidence port."""
+
+    port_id: str
+
+    def read(self, dependency_id: str) -> bytes: ...
+
+
+class PrivacySupportApprovalPort(Protocol):
+    """Future state privacy/support approval evidence port."""
+
+    port_id: str
+
+    def read(self, dependency_id: str) -> bytes: ...
+
+
+class ProductionCustodyPort(Protocol):
+    """Future production custody/HSM evidence port."""
+
+    port_id: str
+
+    def read(self, dependency_id: str) -> bytes: ...
+
+
+class OperationsQualificationPort(Protocol):
+    """Future HA/backup/DR/monitoring/rollback evidence port."""
+
+    port_id: str
+
+    def read(self, dependency_id: str) -> bytes: ...
 
 
 def _canonical(value: object) -> bytes:
@@ -58,28 +105,13 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return digest.hexdigest()
 
 
-def _synthetic_key(key_id: str, epoch: int) -> bytes:
-    return hashlib.sha3_512((independent.DOMAIN + "synthetic-key/v1\0" + key_id + "|" + str(epoch)).encode("ascii")).digest()
-
-
-def _crypt(raw: bytes, key: bytes) -> bytes:
-    output = bytearray()
-    counter = 0
-    while len(output) < len(raw):
-        output.extend(hashlib.sha3_512(key + counter.to_bytes(8, "big")).digest())
-        counter += 1
-    return bytes(left ^ right for left, right in zip(raw, output))
-
-
-def _tag(key: bytes, header: Mapping[str, object], ciphertext: bytes) -> str:
-    digest = hashlib.sha3_512()
-    digest.update(key)
-    digest.update(_canonical(header))
-    digest.update(ciphertext)
-    return digest.hexdigest()
-
-
 def _restate_evidence(evidence: Mapping[str, object], state: str, revoked: bool) -> dict[str, object]:
+    """Rebind a supplied rehearsal observation when its time/status is derived.
+
+    This is a canonical assembly helper, not an authority or issuer.  The
+    independent verifier still recomputes the result from the bytes.
+    """
+
     material = {
         "dependency_id": evidence["dependency_id"],
         "owner": evidence["owner"],
@@ -90,162 +122,7 @@ def _restate_evidence(evidence: Mapping[str, object], state: str, revoked: bool)
         "revoked": revoked,
         "payload_kind": evidence["payload_kind"],
     }
-    return {
-        **material,
-        "proof": _digest("evidence-proof", material),
-        "evidence_id": _digest("evidence-id", material),
-    }
-
-
-class SyntheticEvidenceAuthority:
-    """Deterministic fixture-only issuer; not a real state authority."""
-
-    @staticmethod
-    def issue(
-        dependency_id: str,
-        *,
-        state: str = "VERIFIED",
-        issued_at: int = 1_000,
-        valid_until: int = 9_000,
-        revoked: bool = False,
-    ) -> dict[str, object]:
-        if dependency_id not in independent.DEPENDENCY_IDS:
-            raise QualificationError("qualification:dependency")
-        if state not in independent.DEPENDENCY_STATES or state == "MISSING":
-            raise QualificationError("qualification:evidence-state")
-        if type(issued_at) is not int or type(valid_until) is not int or valid_until <= issued_at:
-            raise QualificationError("qualification:evidence-time")
-        if type(revoked) is not bool or (revoked and state != "REVOKED") or (state == "REVOKED" and not revoked):
-            raise QualificationError("qualification:evidence-revocation")
-        owner = independent.DEPENDENCY_OWNERS[dependency_id]
-        material = {
-            "dependency_id": dependency_id,
-            "owner": owner,
-            "state": state,
-            "evidence_class": "SYNTHETIC",
-            "issued_at": issued_at,
-            "valid_until": valid_until,
-            "revoked": revoked,
-            "payload_kind": "FIXTURE_ATTESTATION",
-        }
-        return {
-            **material,
-            "proof": _digest("evidence-proof", material),
-            "evidence_id": _digest("evidence-id", material),
-        }
-
-
-class SyntheticOperationsEvidence:
-    """Deterministic local observations for the operational harness."""
-
-    @staticmethod
-    def issue(
-        operation_id: str,
-        *,
-        state: str = "VERIFIED",
-        observed_rpo_seconds: int | None = 0,
-        observed_rto_ms: int | None = 1,
-        fault_codes: Sequence[str] = (),
-    ) -> dict[str, object]:
-        if operation_id not in independent.OPERATION_IDS:
-            raise QualificationError("qualification:operation")
-        if state not in {"PRESENT_UNVERIFIED", "VERIFIED", "EXPIRED", "REVOKED"}:
-            raise QualificationError("qualification:operation-state")
-        codes = sorted(set(fault_codes))
-        if any(type(code) is not str for code in codes):
-            raise QualificationError("qualification:fault-code")
-        material = {
-            "operation_id": operation_id,
-            "owner": "STATE_OPERATIONS_AUTHORITY",
-            "required": True,
-            "state": state,
-            "evidence_class": "SYNTHETIC",
-            "observed_rpo_seconds": observed_rpo_seconds,
-            "observed_rto_ms": observed_rto_ms,
-            "fault_codes": codes,
-        }
-        return {**material, "proof": None if state == "PRESENT_UNVERIFIED" else _digest("operation-proof", material)}
-
-
-class SyntheticEnvelopeCustody:
-    """Deterministic test custody, explicitly not encryption-at-rest qualification."""
-
-    def __init__(self, *, key_id: str = "SYNTHETIC_QUALIFICATION_KEY_V1", epoch: int = 1) -> None:
-        if not key_id.startswith("SYNTHETIC_QUALIFICATION_KEY_V") or epoch < 1:
-            raise QualificationError("qualification:custody-key")
-        self.key_id = key_id
-        self.epoch = epoch
-        self.key_state = "ACTIVE"
-        self._audit: list[dict[str, object]] = []
-
-    def _audit_entry(self, action: str) -> dict[str, object]:
-        return {"action": action, "key_id": self.key_id, "key_epoch": self.epoch, "status": "OBSERVED"}
-
-    def rotate(self) -> dict[str, object]:
-        version = int(self.key_id.rsplit("V", 1)[1]) + 1
-        self.key_id = f"SYNTHETIC_QUALIFICATION_KEY_V{version}"
-        self.epoch += 1
-        self.key_state = "ACTIVE"
-        self._audit = [self._audit_entry("ROTATE")]
-        return {"key_id": self.key_id, "key_epoch": self.epoch, "key_state": self.key_state}
-
-    def revoke(self) -> dict[str, object]:
-        self.key_state = "REVOKED"
-        self._audit = [self._audit_entry("REVOKE")]
-        return {"key_id": self.key_id, "key_epoch": self.epoch, "key_state": self.key_state}
-
-    def seal(self, seed: Mapping[str, object]) -> dict[str, object]:
-        if self.key_state != "ACTIVE":
-            raise QualificationError("qualification:custody-key-revoked")
-        plaintext = _canonical(dict(seed))
-        if len(plaintext) > 32_768:
-            raise QualificationError("qualification:custody-byte-cap")
-        key = _synthetic_key(self.key_id, self.epoch)
-        header = {"schema": "synthetic-envelope-encryption-v1", "key_id": self.key_id, "key_epoch": self.epoch}
-        ciphertext = _crypt(plaintext, key)
-        envelope = {
-            **header,
-            "ciphertext": ciphertext.hex(),
-            "tag": _tag(key, header, ciphertext),
-            "plaintext_digest": _raw_digest("envelope-plaintext", plaintext),
-        }
-        prior = [item for item in self._audit if item["action"] != "SEAL"]
-        self._audit = [*prior, self._audit_entry("SEAL")]
-        return {
-            "mode": "SYNTHETIC_DETERMINISTIC_ENVELOPE",
-            "key_id": self.key_id,
-            "key_epoch": self.epoch,
-            "key_state": self.key_state,
-            "envelope": envelope,
-            "audit": deepcopy(self._audit),
-            "audit_root": _digest("custody-audit", self._audit),
-            "envelope_digest": _digest("custody-envelope", envelope),
-            "encryption_at_rest_qualified": False,
-            "production_key_custody": False,
-        }
-
-    def open(self, envelope: Mapping[str, object]) -> bytes:
-        if not isinstance(envelope, Mapping):
-            raise QualificationError("qualification:custody-envelope")
-        key_id = envelope.get("key_id")
-        epoch = envelope.get("key_epoch")
-        body = envelope.get("envelope")
-        if not isinstance(key_id, str) or type(epoch) is not int or not isinstance(body, Mapping):
-            raise QualificationError("qualification:custody-envelope")
-        if body.get("key_id") != key_id or body.get("key_epoch") != epoch:
-            raise QualificationError("qualification:custody-binding")
-        try:
-            ciphertext = bytes.fromhex(str(body["ciphertext"]))
-        except (KeyError, ValueError) as exc:
-            raise QualificationError("qualification:custody-ciphertext") from exc
-        key = _synthetic_key(key_id, epoch)
-        header = {"schema": body["schema"], "key_id": key_id, "key_epoch": epoch}
-        if body.get("tag") != _tag(key, header, ciphertext):
-            raise QualificationError("qualification:custody-tag")
-        plaintext = _crypt(ciphertext, key)
-        if body.get("plaintext_digest") != _raw_digest("envelope-plaintext", plaintext):
-            raise QualificationError("qualification:custody-digest")
-        return plaintext
+    return {**material, "proof": _digest("evidence-proof", material), "evidence_id": _digest("evidence-id", material)}
 
 
 def _dependency_rows(evidence: Mapping[str, Mapping[str, object]] | None, as_of: int) -> list[dict[str, object]]:
@@ -265,7 +142,7 @@ def _dependency_rows(evidence: Mapping[str, Mapping[str, object]] | None, as_of:
             revoked = bool(item["revoked"])
             if revoked:
                 state = "REVOKED"
-            elif state == "VERIFIED" and as_of >= int(item["valid_until"]):
+            elif state == independent.REHEARSAL_VERIFIED_STATE and as_of >= int(item["valid_until"]):
                 state = "EXPIRED"
             evidence_value = dict(item) if state == item["state"] else _restate_evidence(item, state, False)
         rows.append({
@@ -285,20 +162,42 @@ def _operation_rows(operations: Mapping[str, Mapping[str, object]] | None) -> li
     rows: list[dict[str, object]] = []
     for operation_id in sorted(independent.OPERATION_IDS):
         item = supplied.get(operation_id)
-        rows.append(dict(item) if item is not None else SyntheticOperationsEvidence.issue(operation_id, state="PRESENT_UNVERIFIED", observed_rpo_seconds=None, observed_rto_ms=None))
+        rows.append(dict(item) if item is not None else {
+            "operation_id": operation_id,
+            "owner": "STATE_OPERATIONS_AUTHORITY",
+            "required": True,
+            "state": "PRESENT_UNVERIFIED",
+            "evidence_class": independent.REHEARSAL_EVIDENCE_CLASS,
+            "observed_rpo_seconds": None,
+            "observed_rto_ms": None,
+            "fault_codes": [],
+            "proof": None,
+        })
     return rows
 
 
 def _readiness(dependencies: Sequence[Mapping[str, object]], operations: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    verified = sum(1 for item in dependencies if item["state"] == "VERIFIED") + sum(1 for item in operations if item["state"] == "VERIFIED")
-    required = len(independent.DEPENDENCY_IDS) + len(independent.OPERATION_IDS)
-    ready = verified == required
+    rehearsal = (
+        all(item["state"] == independent.REHEARSAL_VERIFIED_STATE and item["evidence"] is not None for item in dependencies)
+        and all(item["state"] == independent.REHEARSAL_VERIFIED_STATE for item in operations)
+    )
+    blockers = [
+        "EXTERNAL_AUTHENTICATED_EVIDENCE_UNAVAILABLE",
+        "PRODUCTION_CUSTODY_UNQUALIFIED",
+        "PRODUCTION_OPERATIONS_UNQUALIFIED",
+        "CONTROLLED_SHADOW_NOT_AUTHORIZED",
+        "PRODUCTION_QUALIFICATION_UNIMPLEMENTED",
+    ]
+    if not rehearsal:
+        blockers.insert(0, "SYNTHETIC_REHEARSAL_EVIDENCE_INCOMPLETE")
+    ready = rehearsal
     return {
-        "state": independent.PILOT_READY if ready else independent.PILOT_NOT_READY,
-        "required_checks": required,
-        "verified_checks": verified,
-        "current": ready,
-        "claim_level": "SYNTHETIC_CANDIDATE",
+        "software_contract_verified": True,
+        "synthetic_rehearsal_evidence_verified": ready,
+        "external_evidence_authenticated_current": False,
+        "operational_qualification_verified": False,
+        "unresolved_blockers": blockers,
+        "final_claim": independent.SYNTHETIC_REHEARSAL_READY if ready else independent.READINESS_NOT_READY,
     }
 
 
@@ -309,12 +208,18 @@ def build_manifest(
     as_of: int = 1_000,
     custody: EnvelopeCustodyPort | None = None,
     prior_raw: bytes | None = None,
-    pilot_state: str = independent.PILOT_NOT_READY,
+    pilot_state: str = independent.REHEARSAL_NOT_READY,
 ) -> bytes:
-    """Build one deterministic synthetic manifest candidate."""
+    """Assemble a bounded manifest from an explicitly supplied custody port.
+
+    No production authority is selected here.  The fixture module is the only
+    repository implementation that supplies rehearsal evidence and custody.
+    """
 
     if type(as_of) is not int or as_of < 0:
         raise QualificationError("qualification:as-of")
+    if custody is None:
+        raise QualificationError("qualification:custody-port-required")
     prior_value = independent._parse(prior_raw) if prior_raw is not None else None
     dependencies = _dependency_rows(evidence, as_of)
     operation_rows = _operation_rows(operations)
@@ -330,6 +235,7 @@ def build_manifest(
         "as_of": as_of,
         "owners": deepcopy(independent.OWNER_REGISTRY),
         "components": deepcopy(independent.COMPONENT_CONTRACTS),
+        "external_ports": deepcopy(independent.EXTERNAL_PORT_CONTRACTS),
         "dependencies": dependencies,
         "operations": operation_rows,
         "readiness": readiness,
@@ -341,11 +247,11 @@ def build_manifest(
         "prior_stage_id": prior_stage,
     }
     manifest_id = _digest("manifest-id", core)
-    seed = {"profile_id": independent.PROFILE_ID, "manifest_core_digest": _digest("manifest-core", core), "purpose": "MIRROR_QUALIFICATION_MANIFEST"}
-    custody_value = (custody or SyntheticEnvelopeCustody()).seal(seed)
+    seed = {"profile_id": independent.PROFILE_ID, "manifest_core_digest": _digest("manifest-core", core), "purpose": independent.CUSTODY_PURPOSE}
+    custody_value = custody.seal(seed)
     value: dict[str, object] = {**core, "custody": custody_value, "manifest_id": manifest_id}
     artifact_id = _digest("artifact-id", {key: value[key] for key in value if key not in {"artifact_id", "current_stage_id", "transition_id"}})
-    stage_id = _digest("stage-id", {"manifest_id": manifest_id, "pilot_state": pilot_state, "readiness": readiness["state"], "prior_artifact_id": prior_id, "prior_stage_id": prior_stage})
+    stage_id = _digest("stage-id", {"manifest_id": manifest_id, "pilot_state": pilot_state, "readiness": readiness["final_claim"], "prior_artifact_id": prior_id, "prior_stage_id": prior_stage})
     transition_id = _digest("transition-id", {"artifact_id": artifact_id, "prior_artifact_id": prior_id, "prior_stage_id": prior_stage, "current_stage_id": stage_id})
     value.update({"artifact_id": artifact_id, "current_stage_id": stage_id, "transition_id": transition_id})
     return _canonical(value)
@@ -358,22 +264,14 @@ class QualificationService:
         from app.mirror import continuity_store as store
 
         self.store = store_or_path if isinstance(store_or_path, store.ContinuityStore) else store.ContinuityStore(str(store_or_path))
-        self._key_id = "SYNTHETIC_QUALIFICATION_KEY_V1"
-        self._key_epoch = 1
 
     def _head_raw(self) -> bytes | None:
-        from app.mirror import continuity_store as store
-
-        chain_id = store._chain_id(independent.ARTIFACT_KIND, independent.SUBJECT, independent.SCOPE, independent.PROFILE_ID)
-        connection = self.store._connect()
-        try:
-            row = connection.execute(
-                "SELECT a.payload FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.chain_id=?",
-                (chain_id,),
-            ).fetchone()
-            return bytes(row[0]) if row is not None else None
-        finally:
-            connection.close()
+        return self.store.artifact_head_raw(
+            independent.ARTIFACT_KIND,
+            independent.SUBJECT,
+            independent.SCOPE,
+            independent.PROFILE_ID,
+        )
 
     @staticmethod
     def _maps(raw: bytes) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
@@ -394,6 +292,7 @@ class QualificationService:
         evidence: Mapping[str, Mapping[str, object]] | None,
         operations: Mapping[str, Mapping[str, object]] | None,
         as_of: int,
+        custody: EnvelopeCustodyPort | None = None,
     ) -> bytes:
         if prior_raw is not None and evidence is None and operations is None:
             evidence, operations = self._maps(prior_raw)
@@ -401,7 +300,7 @@ class QualificationService:
             evidence=evidence,
             operations=operations,
             as_of=as_of,
-            custody=SyntheticEnvelopeCustody(key_id=self._key_id, epoch=self._key_epoch),
+            custody=custody,
             prior_raw=prior_raw,
             pilot_state=target_state,
         )
@@ -417,8 +316,9 @@ class QualificationService:
         evidence: Mapping[str, Mapping[str, object]] | None = None,
         operations: Mapping[str, Mapping[str, object]] | None = None,
         as_of: int = 1_000,
+        custody: EnvelopeCustodyPort | None = None,
     ):
-        return self._admit(self._candidate(prior_raw=None, target_state=independent.PILOT_NOT_READY, evidence=evidence, operations=operations, as_of=as_of))
+        return self._admit(self._candidate(prior_raw=None, target_state=independent.REHEARSAL_NOT_READY, evidence=evidence, operations=operations, as_of=as_of, custody=custody))
 
     def advance(
         self,
@@ -427,8 +327,9 @@ class QualificationService:
         evidence: Mapping[str, Mapping[str, object]] | None = None,
         operations: Mapping[str, Mapping[str, object]] | None = None,
         as_of: int | None = None,
+        custody: EnvelopeCustodyPort | None = None,
     ):
-        if target_state not in independent.PILOT_STATES or target_state == independent.PILOT_NOT_READY:
+        if target_state not in independent.REHEARSAL_STATES or target_state == independent.REHEARSAL_NOT_READY:
             raise QualificationError("qualification:target-state")
         prior_raw = self._head_raw()
         if prior_raw is None:
@@ -441,6 +342,7 @@ class QualificationService:
             evidence=evidence,
             operations=operations,
             as_of=effective_as_of,
+            custody=custody,
         )
         return self._admit(raw)
 
@@ -449,10 +351,22 @@ class QualificationService:
         *,
         evidence: Mapping[str, Mapping[str, object]],
         as_of: int,
-        target_state: str = independent.PILOT_PAUSED,
+        target_state: str | None = None,
         operations: Mapping[str, Mapping[str, object]] | None = None,
+        custody: EnvelopeCustodyPort | None = None,
     ):
-        return self.advance(target_state, evidence=evidence, operations=operations, as_of=as_of)
+        prior_raw = self._head_raw()
+        if prior_raw is None:
+            raise QualificationError("qualification:head-missing")
+        prior = independent._parse(prior_raw)
+        if target_state is None:
+            if prior["pilot_state"] == independent.REHEARSAL_RUNNING:
+                target_state = independent.REHEARSAL_PAUSED
+            elif prior["pilot_state"] == independent.REHEARSAL_PAUSED:
+                target_state = independent.REHEARSAL_ROLLED_BACK
+            else:
+                target_state = independent.REHEARSAL_PAUSED
+        return self.advance(target_state, evidence=evidence, operations=operations, as_of=as_of, custody=custody)
 
     def current_raw(self) -> bytes | None:
         return self._head_raw()
@@ -529,14 +443,14 @@ def build_support_bundle(raw: bytes) -> bytes:
     dependency_counts = {state: 0 for state in sorted(independent.DEPENDENCY_STATES)}
     for item in parsed["dependencies"]:
         dependency_counts[item["state"]] += 1
-    operation_counts = {state: 0 for state in ("PRESENT_UNVERIFIED", "VERIFIED", "EXPIRED", "REVOKED")}
+    operation_counts = {state: 0 for state in sorted(independent.OPERATION_STATES)}
     for item in parsed["operations"]:
         operation_counts[item["state"]] += 1
     support = {
         "schema": SUPPORT_SCHEMA,
         "schema_version": independent.SCHEMA_VERSION,
         "pilot_state": parsed["pilot_state"],
-        "readiness_state": parsed["readiness"]["state"],
+        "readiness_state": parsed["readiness"]["final_claim"],
         "dependency_counts": dependency_counts,
         "operation_counts": operation_counts,
         "custody_state": {
@@ -571,7 +485,7 @@ def verify_support_bytes(raw: bytes) -> dict[str, object]:
         raise QualificationError("qualification:support-keys")
     if parsed["schema"] != SUPPORT_SCHEMA or parsed["schema_version"] != independent.SCHEMA_VERSION:
         raise QualificationError("qualification:support-schema")
-    if parsed["pilot_state"] not in independent.PILOT_STATES or parsed["readiness_state"] not in {independent.PILOT_NOT_READY, independent.PILOT_READY}:
+    if parsed["pilot_state"] not in independent.REHEARSAL_STATES or parsed["readiness_state"] not in {independent.READINESS_NOT_READY, independent.SYNTHETIC_REHEARSAL_READY}:
         raise QualificationError("qualification:support-state")
     expected_dependencies = {state: 0 for state in sorted(independent.DEPENDENCY_STATES)}
     if parsed["dependency_counts"] != expected_dependencies and not (
@@ -581,7 +495,7 @@ def verify_support_bytes(raw: bytes) -> dict[str, object]:
         and sum(parsed["dependency_counts"].values()) == len(independent.DEPENDENCY_IDS)
     ):
         raise QualificationError("qualification:support-dependencies")
-    if not isinstance(parsed["operation_counts"], dict) or set(parsed["operation_counts"]) != {"PRESENT_UNVERIFIED", "VERIFIED", "EXPIRED", "REVOKED"} or any(type(value) is not int or value < 0 or value > len(independent.OPERATION_IDS) for value in parsed["operation_counts"].values()) or sum(parsed["operation_counts"].values()) != len(independent.OPERATION_IDS):
+    if not isinstance(parsed["operation_counts"], dict) or set(parsed["operation_counts"]) != set(independent.OPERATION_STATES) or any(type(value) is not int or value < 0 or value > len(independent.OPERATION_IDS) for value in parsed["operation_counts"].values()) or sum(parsed["operation_counts"].values()) != len(independent.OPERATION_IDS):
         raise QualificationError("qualification:support-operations")
     custody = parsed["custody_state"]
     if custody != {"key_state": custody.get("key_state") if isinstance(custody, dict) else None, "encryption_at_rest_qualified": False, "production_key_custody": False} or custody["key_state"] not in {"ACTIVE", "REVOKED"}:
@@ -611,7 +525,8 @@ def _reject_unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 __all__ = [
-    "QualificationError", "EnvelopeCustodyPort", "SyntheticEvidenceAuthority", "SyntheticOperationsEvidence",
-    "SyntheticEnvelopeCustody", "build_manifest", "QualificationService", "QualificationOperationsHarness",
+    "QualificationError", "EnvelopeCustodyPort", "SourceAuthorizationPort", "StateGovernanceApprovalPort",
+    "PrivacySupportApprovalPort", "ProductionCustodyPort", "OperationsQualificationPort", "build_manifest",
+    "QualificationService", "QualificationOperationsHarness",
     "build_support_bundle", "verify_support_bytes",
 ]
