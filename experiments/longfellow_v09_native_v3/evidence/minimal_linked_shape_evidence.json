@@ -1,0 +1,160 @@
+{
+  "experiment": "BL/NATIVE-V3/MINIMAL-LINKED-CLEARANCE/v1",
+  "disposition": "ENGINEERING_YELLOW_SHAPE_ONLY",
+  "upstream": {
+    "remote": "https://github.com/google/longfellow-zk.git",
+    "commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+    "tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+    "source_path": "C:/Temp/longfellow-v09-native-v3-patched"
+  },
+  "proof": {
+    "prover_invocations": 0,
+    "verifier_invocations": 0,
+    "production_usable": false,
+    "activation": false,
+    "proof_suite_id": null
+  },
+  "shape": {
+    "measurement": "exact construction output from one process with zero children; sequential prefix circuits",
+    "state_commitment_bytes": 1622,
+    "public_statement_bytes": 3347,
+    "inputs": 37537,
+    "public_inputs": 26777,
+    "layers": 169,
+    "terms": 26001511,
+    "circuit_id": "7b7f731cc0adf3856be9ac41073bf19fe5220da4600bacff29be411f91df9a200",
+    "process_tree_complete": true,
+    "child_count": 0,
+    "peak_working_set_bytes": 2049642496,
+    "peak_private_commit_bytes": 2204680192,
+    "admission_target_bytes": 4500000000,
+    "hard_cap_bytes": 5000000000
+  },
+  "endpoint_ledger": [
+    {
+      "order": 0,
+      "name": "source_root_membership",
+      "domain": "BL/NATIVE-V3/SOURCE-ROOT/v1",
+      "message_bytes": 224,
+      "sha3_blocks": 4,
+      "inputs": 37537,
+      "public_inputs": 26777,
+      "layers": 129,
+      "terms": 5332006,
+      "measurement": "exact"
+    },
+    {
+      "order": 1,
+      "name": "completeness_nonmembership",
+      "domain": "BL/NATIVE-V3/COMPLETENESS/v1",
+      "message_bytes": 159,
+      "sha3_blocks": 3,
+      "inputs": 37537,
+      "public_inputs": 26777,
+      "layers": 129,
+      "terms": 9099519,
+      "measurement": "exact"
+    },
+    {
+      "order": 2,
+      "name": "request_replay_binding",
+      "domain": "BL/NATIVE-V3/REQUEST-ID/v1",
+      "message_bytes": 395,
+      "sha3_blocks": 6,
+      "inputs": 37537,
+      "public_inputs": 26777,
+      "layers": 145,
+      "terms": 16854499,
+      "measurement": "exact"
+    },
+    {
+      "order": 3,
+      "name": "source_registry_commitment",
+      "domain": "BL/NATIVE-V3/SOURCE-REGISTRY-COMMITMENT/v2",
+      "message_bytes": 495,
+      "sha3_blocks": 7,
+      "inputs": 37537,
+      "public_inputs": 26777,
+      "layers": 169,
+      "terms": 26001511,
+      "measurement": "exact"
+    }
+  ],
+  "property_owner_matrix": [
+    {
+      "property": "verifier-selected public registry/profile/governance/control/schema/program/policy/domain context",
+      "owner": "independent verifier public-statement reconstruction",
+      "link": "public inputs are transcript-bound; state evaluator rejects substituted context; semantic circuit does not claim these opaque registry IDs"
+    },
+    {
+      "property": "authoritative source membership",
+      "owner": "source_root_membership endpoint plus verifier-owned synthetic registry closure",
+      "link": "hidden provider/credential/enrollment/status tuple is SHA3-512 constrained to source_root_id"
+    },
+    {
+      "property": "authoritative absence and completeness",
+      "owner": "completeness_nonmembership endpoint plus direct flag constraints and state evaluator",
+      "link": "complete and authoritative_absence are constrained; incomplete absence is rejected"
+    },
+    {
+      "property": "hidden source payload/registry binding",
+      "owner": "source_registry_commitment endpoint",
+      "link": "hidden source_payload and verifier-selected registry/profile values are SHA3-512 constrained; source_root_id and completeness_id are owned by their dedicated endpoints"
+    },
+    {
+      "property": "request/attempt/epoch/sequence binding",
+      "owner": "request_replay_binding endpoint plus state evaluator",
+      "link": "private attempt and strict numeric context are constrained to request_id; replay consumption remains state-side"
+    },
+    {
+      "property": "five directives and policyResult/effectiveDirective separation",
+      "owner": "semantic circuit direct constraints, defensively rechecked state-side",
+      "link": "CLEAR, HOLD, HUMAN_REVIEW, BLOCK, and EXCEPTION_APPROVED have distinct mappings"
+    },
+    {
+      "property": "strict chronology and ordered READ/WRITE join",
+      "owner": "semantic circuit direct constraints, defensively rechecked state-side",
+      "link": "times, indices, count, roles, addresses, keys, decision IDs, and before/after values are direct equalities/inequalities"
+    },
+    {
+      "property": "exception authorization, interval, and sentinel",
+      "owner": "semantic circuit interval/sentinel constraints plus verifier/state exception registry",
+      "link": "authorization and interval are constrained; exception_scope_id derivation remains state-side"
+    },
+    {
+      "property": "typed before/after transition commitment",
+      "owner": "semantic circuit StateCommitmentWires plus state evaluator",
+      "link": "all typed scalar/row/root/audit fields are bound to stateCommitmentBytes"
+    },
+    {
+      "property": "state IDs, receipt ID, settlement reference, retries, concurrency, recovery",
+      "owner": "state-side post-acceptance evaluator/database boundary",
+      "link": "state_before_id is verifier-selected; state_after_id, receipt, and settlement references are derived only after acceptance; no database mutation or proof was exercised"
+    }
+  ],
+  "warnings": [
+    {
+      "source": "pinned lib/sumcheck/quad_builder.h:106",
+      "warning": "C4267 size_t delta_table_->size() to uint32_t",
+      "disposition": "retained open; no suppression or source patch; bounded circuit total terms does not prove the delta-table size bound"
+    }
+  ],
+  "verification": {
+    "build_exit": 0,
+    "shape_exit": 0,
+    "shape_decisive_output": "MINIMAL_LINKED_SHAPE_PASS inputs=37537 public_inputs=26777 layers=169 terms=26001511 circuit_id=7b7f731cc0adf3856be9ac41073bf19fe5220da4600bacff29be411f91df9a200 source_input_bytes=495 source_blocks=7 semantic_owner=direct_constraints state_owner=typed_commitment_bytes external_ids=state_side_after_acceptance process_tree_complete=1 child_count=0 shape_only=1",
+    "evaluator_exit": 0,
+    "determinism_cases": 5,
+    "valid_cases": 5,
+    "mutation_cases": 37,
+    "evaluator_decisive_output": "MINIMAL_LINKED_EVAL_PASS valid_cases=5 mutation_cases=37",
+    "proof_attempts": 0,
+    "verifier_attempts": 0
+  },
+  "nonclaims": [
+    "This is not a prover or verifier result and does not establish proof feasibility.",
+    "The synthetic registry is not a production Merkle/nonmembership construction.",
+    "No database composition, retry transaction, concurrency, recovery, Lean qualification, backend selection, theorem qualification, payment, PHI, or activation claim is made.",
+    "The approximately 115-bit pinned parameter review, the 128-bit production ledger, malicious-verifier/QROM composition, retry/grinding accounting, and SHA3 assurance remain open."
+  ]
+}
