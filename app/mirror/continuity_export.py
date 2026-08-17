@@ -29,6 +29,8 @@ from app.mirror import transaction_mirror as transaction_mirror
 from app.mirror import transaction_mirror_independent as transaction_mirror_independent
 from app.mirror import money_mirror as money_mirror
 from app.mirror import money_mirror_independent as money_mirror_independent
+from app.mirror import transition_mirror as transition_mirror
+from app.mirror import transition_mirror_independent as transition_mirror_independent
 
 
 EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
@@ -143,6 +145,8 @@ SOFTWARE_IDENTITIES = {
     "transaction_mirror_independent_identity": _module_identity(transaction_mirror_independent.__file__),
     "money_mirror_module_identity": _module_identity(money_mirror.__file__),
     "money_mirror_independent_identity": _module_identity(money_mirror_independent.__file__),
+    "transition_mirror_module_identity": _module_identity(transition_mirror.__file__),
+    "transition_mirror_independent_identity": _module_identity(transition_mirror_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 
