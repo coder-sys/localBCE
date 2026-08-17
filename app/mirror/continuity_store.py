@@ -32,6 +32,7 @@ from app.mirror import transaction_mirror_independent as transaction_independent
 from app.mirror import money_mirror_independent as money_independent
 from app.mirror import transition_mirror_independent as transition_independent
 from app.mirror import state_value_ledger_independent as state_value_independent
+from app.mirror import qualification_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -48,6 +49,7 @@ ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
 ARTIFACT_MONEY_OBSERVATION = money_independent.ARTIFACT_KIND
 ARTIFACT_TRANSITION = transition_independent.ARTIFACT_KIND
 ARTIFACT_STATE_VALUE = state_value_independent.ARTIFACT_KIND
+ARTIFACT_QUALIFICATION = qualification_independent.ARTIFACT_KIND
 ARTIFACT_KINDS = (
     ARTIFACT_GRAPH,
     ARTIFACT_GOVERNANCE,
@@ -61,6 +63,7 @@ ARTIFACT_KINDS = (
     ARTIFACT_MONEY_OBSERVATION,
     ARTIFACT_TRANSITION,
     ARTIFACT_STATE_VALUE,
+    ARTIFACT_QUALIFICATION,
 )
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
@@ -379,6 +382,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind == ARTIFACT_STATE_VALUE:
         if dict(value) != state_value_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_QUALIFICATION:
+        if dict(value) != qualification_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -447,6 +453,8 @@ def verify_artifact(
             value = transition_independent._parse(raw)
         elif artifact_kind == ARTIFACT_STATE_VALUE:
             value = state_value_independent._parse(raw)
+        elif artifact_kind == ARTIFACT_QUALIFICATION:
+            value = qualification_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -460,6 +468,7 @@ def verify_artifact(
         money_independent.IndependentMoneyMirrorError,
         transition_independent.IndependentTransitionMirrorError,
         state_value_independent.IndependentStateValueLedgerError,
+        qualification_independent.IndependentQualificationError,
     ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
@@ -575,6 +584,8 @@ def verify_artifact(
                 transition_contexts=state_value_context.get("transition_contexts"),
                 registry=graph_profile_registry,
             )
+        elif artifact_kind == ARTIFACT_QUALIFICATION:
+            result = qualification_independent.inspect_artifact(raw)
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
         elif value.get("schema") == withdrawal_independent.SCHEMA:
@@ -715,6 +726,19 @@ def verify_artifact(
         elif artifact_kind == ARTIFACT_STATE_VALUE:
             artifact_id = str(result["artifact_id"])
             report_id = str(result["report_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_QUALIFICATION:
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["manifest_id"])
             current_stage_id = str(result["current_stage_id"])
             transition_id = str(result["transition_id"])
             stage_kind = str(result["stage_kind"])
@@ -1279,6 +1303,20 @@ class ContinuityStore:
             if head is None or (head["artifact_id"], head["current_stage_id"]) != (artifact.prior_artifact_id, artifact.prior_stage_id):
                 raise StoreConflictError("head:stale-or-wrong-prior")
             expected_head = (str(head["artifact_id"]), str(head["current_stage_id"]))
+        if artifact.kind == ARTIFACT_QUALIFICATION:
+            prior_raw: bytes | None = None
+            if artifact.prior_artifact_id is not None:
+                prior_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_QUALIFICATION, artifact.prior_artifact_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("qualification:prior-missing")
+                prior_raw = bytes(prior_row[0])
+            try:
+                qualification_independent.verify_artifact(artifact.payload, prior_raw=prior_raw)
+            except qualification_independent.IndependentQualificationError as exc:
+                raise StoreConflictError(str(exc)) from exc
         operation_id = _operation_id(artifact, chain_id, expected_head)
         by_operation = connection.execute("SELECT request_hash FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
         if by_operation is not None:
@@ -1402,7 +1440,12 @@ class ContinuityStore:
                 raise StoreBusyError("transaction:busy") from exc
             self._fault("after_begin")
             self._validate_transaction_snapshot(connection)
-            receipt = self._admit_in_transaction(connection, artifact, request_hash)
+            receipt = self._admit_in_transaction(
+                connection,
+                artifact,
+                request_hash,
+                enforce_governance=artifact_kind != ARTIFACT_QUALIFICATION,
+            )
             self._validate_transaction_snapshot(connection)
             self._fault("after_event_receipt_before_commit")
             connection.commit()

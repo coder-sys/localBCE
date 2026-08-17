@@ -29,6 +29,7 @@ from app.mirror import transaction_mirror_independent as transaction_independent
 from app.mirror import money_mirror_independent as money_independent
 from app.mirror import transition_mirror_independent as transition_independent
 from app.mirror import state_value_ledger_independent as state_value_independent
+from app.mirror import qualification_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -45,6 +46,7 @@ ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
 ARTIFACT_MONEY_OBSERVATION = money_independent.ARTIFACT_KIND
 ARTIFACT_TRANSITION = transition_independent.ARTIFACT_KIND
 ARTIFACT_STATE_VALUE = state_value_independent.ARTIFACT_KIND
+ARTIFACT_QUALIFICATION = qualification_independent.ARTIFACT_KIND
 ARTIFACT_KINDS = (
     ARTIFACT_GRAPH,
     ARTIFACT_GOVERNANCE,
@@ -58,6 +60,7 @@ ARTIFACT_KINDS = (
     ARTIFACT_MONEY_OBSERVATION,
     ARTIFACT_TRANSITION,
     ARTIFACT_STATE_VALUE,
+    ARTIFACT_QUALIFICATION,
 )
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
@@ -419,6 +422,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_STATE_VALUE:
         if dict(value) != state_value_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_QUALIFICATION:
+        if dict(value) != qualification_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -459,6 +465,8 @@ def _normalize_artifact(
             value = transition_independent._parse(raw)
         elif kind == ARTIFACT_STATE_VALUE:
             value = state_value_independent._parse(raw)
+        elif kind == ARTIFACT_QUALIFICATION:
+            value = qualification_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -471,6 +479,7 @@ def _normalize_artifact(
         money_independent.IndependentMoneyMirrorError,
         transition_independent.IndependentTransitionMirrorError,
         state_value_independent.IndependentStateValueLedgerError,
+        qualification_independent.IndependentQualificationError,
     ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
@@ -586,6 +595,8 @@ def _normalize_artifact(
                 transition_contexts=state_value_context.get("transition_contexts"),
                 registry=graph_profile_registry,
             )
+        elif kind == ARTIFACT_QUALIFICATION:
+            result = qualification_independent.inspect_artifact(raw)
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
         elif value.get("schema") == withdrawal_independent.SCHEMA:
@@ -736,6 +747,20 @@ def _normalize_artifact(
         elif kind == ARTIFACT_STATE_VALUE:
             artifact_id = str(result["artifact_id"])
             report_id = str(result["report_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            profile_version = int(result["profile_version"])
+            authority_json = _authority_json(value["authority"], kind)
+        elif kind == ARTIFACT_QUALIFICATION:
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["manifest_id"])
             current_stage_id = str(result["current_stage_id"])
             transition_id = str(result["transition_id"])
             stage_kind = str(result["stage_kind"])
@@ -1535,6 +1560,7 @@ def _verify_rows(
     money_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     transition_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     state_value_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    qualification_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     event_sequence_hint = {
         (str(row["artifact_kind"]), str(row["artifact_id"])): int(row["sequence"])
         for row in rows["events"]
@@ -1577,6 +1603,9 @@ def _verify_rows(
         if kind == ARTIFACT_STATE_VALUE:
             state_value_rows.append((row, raw, key))
             continue
+        if kind == ARTIFACT_QUALIFICATION:
+            qualification_rows.append((row, raw, key))
+
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
             stored = row[field]
@@ -1588,6 +1617,28 @@ def _verify_rows(
             raise IndependentStoreError("database:artifact-hash-duplicate")
         artifact_hashes.add(hash_key)
         artifacts[key] = artifact
+
+    # Qualification transitions are normalized before the event-chain pass,
+    # but their predecessor legality is rechecked here from the independently
+    # stored predecessor bytes.  This keeps the producer's candidate builder
+    # from being an authority and makes restore/reopen verify the same chain.
+    for row, raw, key in sorted(qualification_rows, key=lambda item: int(event_sequence_hint.get(item[2], 0))):
+        artifact = artifacts.get(key)
+        if artifact is None:
+            raise IndependentStoreError("database:qualification-artifact")
+        prior_raw = None
+        prior_id = artifact["prior_artifact_id"]
+        if prior_id is not None:
+            prior_key = (ARTIFACT_QUALIFICATION, str(prior_id))
+            prior_raw = raw_by_key.get(prior_key)
+            current_sequence = event_sequence_hint.get(key)
+            prior_sequence = event_sequence_hint.get(prior_key)
+            if prior_raw is None or current_sequence is None or prior_sequence is None or prior_sequence >= current_sequence:
+                raise IndependentStoreError("database:qualification-prior-order")
+        try:
+            qualification_independent.verify_artifact(raw, prior_raw=prior_raw)
+        except qualification_independent.IndependentQualificationError as exc:
+            raise IndependentStoreError("database:qualification-reject") from exc
 
     # A source artifact may point at exactly one graph artifact.  Re-run the
     # full source-to-graph binding here with the independently stored graph

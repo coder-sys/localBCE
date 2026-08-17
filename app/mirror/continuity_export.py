@@ -33,6 +33,8 @@ from app.mirror import transition_mirror as transition_mirror
 from app.mirror import transition_mirror_independent as transition_mirror_independent
 from app.mirror import state_value_ledger as state_value_ledger
 from app.mirror import state_value_ledger_independent as state_value_ledger_independent
+from app.mirror import qualification as qualification
+from app.mirror import qualification_independent as qualification_independent
 
 
 EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
@@ -151,6 +153,8 @@ SOFTWARE_IDENTITIES = {
     "transition_mirror_independent_identity": _module_identity(transition_mirror_independent.__file__),
     "state_value_ledger_module_identity": _module_identity(state_value_ledger.__file__),
     "state_value_ledger_independent_identity": _module_identity(state_value_ledger_independent.__file__),
+    "qualification_module_identity": _module_identity(qualification.__file__),
+    "qualification_independent_module_identity": _module_identity(qualification_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 
