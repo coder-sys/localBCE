@@ -27,6 +27,7 @@ from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import continuity_store_independent as store_independent
 from app.mirror import source_evidence_custody_independent as source_independent
 from app.mirror import source_reconciliation_independent as reconciliation_independent
+from app.mirror import transaction_mirror_independent as transaction_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -38,7 +39,19 @@ ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
 ARTIFACT_CASE = case_independent.ARTIFACT_KIND
 ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
 ARTIFACT_CONTRACT = contract_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR, ARTIFACT_CONTRACT)
+ARTIFACT_TRANSACTION_OBSERVATION = transaction_independent.OBSERVATION_ARTIFACT_KIND
+ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
+ARTIFACT_KINDS = (
+    ARTIFACT_GRAPH,
+    ARTIFACT_GOVERNANCE,
+    ARTIFACT_SOURCE_EVIDENCE,
+    ARTIFACT_RECONCILIATION,
+    ARTIFACT_CASE,
+    ARTIFACT_DENOMINATOR,
+    ARTIFACT_CONTRACT,
+    ARTIFACT_TRANSACTION_OBSERVATION,
+    ARTIFACT_TRANSACTION_TRACE,
+)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 MAX_ARTIFACT_BYTES = 524_288
@@ -296,6 +309,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind == ARTIFACT_CONTRACT:
         if dict(value) != contract_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+        if dict(value) != transaction_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -335,6 +351,7 @@ def verify_artifact(
     reconciliation_context: Mapping[str, object] | None = None,
     denominator_context: Mapping[str, object] | None = None,
     contract_context: Mapping[str, object] | None = None,
+    transaction_context: Mapping[str, object] | None = None,
 ) -> VerifiedArtifact:
     """Run the matching independent verifier and normalize its exact identities."""
 
@@ -353,6 +370,8 @@ def verify_artifact(
             value = denominator_independent._parse(raw)
         elif artifact_kind == ARTIFACT_CONTRACT:
             value = contract_independent._parse(raw)
+        elif artifact_kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            value = transaction_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -362,6 +381,7 @@ def verify_artifact(
         case_independent.IndependentDiscrepancyCaseError,
         denominator_independent.IndependentDenominatorError,
         contract_independent.IndependentContractMirrorError,
+        transaction_independent.IndependentTransactionMirrorError,
     ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
@@ -422,6 +442,30 @@ def verify_artifact(
                 case_context=contract_context["case_context"],
                 registry=graph_profile_registry or {},
                 prior_contract_raw=contract_context.get("prior_contract_raw"),
+            )
+        elif artifact_kind == ARTIFACT_TRANSACTION_OBSERVATION:
+            if not isinstance(transaction_context, Mapping):
+                raise ArtifactAdmissionError("transaction:context-required")
+            result = transaction_independent.verify_observation_artifact(
+                raw,
+                source_raw=transaction_context["source_raw"],
+                contract_raw=transaction_context["contract_raw"],
+                contract_context=transaction_context["contract_context"],
+                registry=graph_profile_registry or {},
+                prior_observation_raw=transaction_context.get("prior_observation_raw"),
+            )
+        elif artifact_kind == ARTIFACT_TRANSACTION_TRACE:
+            if not isinstance(transaction_context, Mapping):
+                raise ArtifactAdmissionError("transaction:context-required")
+            result = transaction_independent.verify_trace_artifact(
+                raw,
+                source_raw=transaction_context["source_raw"],
+                contract_raw=transaction_context["contract_raw"],
+                contract_context=transaction_context["contract_context"],
+                observation_raw=transaction_context["observation_raw"],
+                registry=graph_profile_registry or {},
+                prior_trace_raw=transaction_context.get("prior_trace_raw"),
+                prior_observation_raw=transaction_context.get("prior_observation_raw"),
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -511,6 +555,19 @@ def verify_artifact(
         elif artifact_kind == ARTIFACT_CONTRACT:
             artifact_id = str(result["artifact_id"])
             report_id = artifact_id
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["report_id"])
             current_stage_id = str(result["current_stage_id"])
             transition_id = str(result["transition_id"])
             stage_kind = str(result["stage_kind"])
@@ -1177,6 +1234,8 @@ class ContinuityStore:
             raise StoreConflictError("reconciliation:transaction-required")
         if artifact_kind == ARTIFACT_DENOMINATOR:
             raise StoreConflictError("denominator:transaction-required")
+        if artifact_kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            raise StoreConflictError("transaction:transaction-required")
         artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE and source_independent.has_graph_link(artifact_raw):
             raise StoreConflictError("custody:graph-link-transaction-required")
@@ -1979,6 +2038,326 @@ class ContinuityStore:
         if row is None:
             raise StoreConflictError("contract:head-missing")
         return row
+
+    def _transaction_contract_context(
+        self,
+        connection: sqlite3.Connection,
+        contract_artifact_id: str,
+        *,
+        require_head: bool,
+    ) -> dict[str, object]:
+        row = connection.execute(
+            "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_CONTRACT, contract_artifact_id),
+        ).fetchone()
+        if row is None:
+            raise StoreConflictError("transaction:contract-missing")
+        contract_raw = bytes(row["payload"])
+        contract_value = contract_independent._parse(contract_raw)
+        if require_head:
+            head = self._contract_head_row(connection, contract_artifact_id)
+            if head["current_stage_id"] != row["current_stage_id"]:
+                raise StoreConflictError("transaction:contract-not-head")
+        contract_context = self._contract_context_for_raw(connection, contract_raw)
+        verify_artifact(
+            ARTIFACT_CONTRACT,
+            contract_raw,
+            graph_profile_registry=self.graph_profile_registry,
+            contract_context=contract_context,
+        )
+        source_raw = contract_context["denominator_context"]["source_raw"]
+        if not isinstance(source_raw, bytes):
+            raise StoreConflictError("transaction:source-missing")
+        return {
+            "source_raw": source_raw,
+            "contract_raw": contract_raw,
+            "contract_value": contract_value,
+            "contract_context": contract_context,
+        }
+
+    def _transaction_context_for_raw(
+        self,
+        connection: sqlite3.Connection,
+        transaction_raw: bytes,
+        *,
+        require_contract_head: bool,
+    ) -> dict[str, object]:
+        value = transaction_independent._parse(transaction_raw)
+        contract_id = str(value["contract_binding"]["artifact_id"])
+        context = self._transaction_contract_context(
+            connection,
+            contract_id,
+            require_head=require_contract_head,
+        )
+        result: dict[str, object] = {
+            "source_raw": context["source_raw"],
+            "contract_raw": context["contract_raw"],
+            "contract_value": context["contract_value"],
+            "contract_context": context["contract_context"],
+            "prior_observation_raw": None,
+            "prior_trace_raw": None,
+            "observation_raw": None,
+        }
+        if value["schema"] == transaction_independent.OBSERVATION_SCHEMA:
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_TRANSACTION_OBSERVATION, prior_id),
+                ).fetchone()
+                if row is None:
+                    raise StoreConflictError("transaction:observation-prior-missing")
+                result["prior_observation_raw"] = bytes(row["payload"])
+        elif value["schema"] == transaction_independent.TRACE_SCHEMA:
+            observation_id = str(value["observation_binding"]["artifact_id"])
+            observation_row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_TRANSACTION_OBSERVATION, observation_id),
+            ).fetchone()
+            if observation_row is None:
+                raise StoreConflictError("transaction:observation-missing")
+            result["observation_raw"] = bytes(observation_row["payload"])
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                prior_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_TRANSACTION_TRACE, prior_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("transaction:trace-prior-missing")
+                prior_raw = bytes(prior_row["payload"])
+                result["prior_trace_raw"] = prior_raw
+                prior_value = transaction_independent._parse(prior_raw)
+                prior_observation_id = str(prior_value["observation_binding"]["artifact_id"])
+                prior_observation_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_TRANSACTION_OBSERVATION, prior_observation_id),
+                ).fetchone()
+                if prior_observation_row is None:
+                    raise StoreConflictError("transaction:prior-observation-missing")
+                result["prior_observation_raw"] = bytes(prior_observation_row["payload"])
+        else:
+            raise StoreConflictError("transaction:schema")
+        return result
+
+    def _transaction_require_active(self, connection: sqlite3.Connection, context: Mapping[str, object]) -> None:
+        contract_context = context["contract_context"]
+        case_context = contract_context["case_context"]
+        reconciliation_raw = case_context.get("reconciliation_raw")
+        if not isinstance(reconciliation_raw, bytes):
+            raise StoreConflictError("transaction:reconciliation-missing")
+        self._contract_active_governance(connection, reconciliation_raw)
+
+    def _transaction_existing_receipt(
+        self,
+        connection: sqlite3.Connection,
+        artifact: VerifiedArtifact,
+        request_hash: str,
+    ) -> AdmissionReceipt | None:
+        chain_id = _chain_id(artifact.kind, artifact.subject, artifact.scope, artifact.profile_id)
+        row = connection.execute(
+            "SELECT operation_id,request_hash FROM operations WHERE chain_id=? AND artifact_kind=? AND artifact_id=? AND payload_hash=? AND (prior_artifact_id IS ? OR prior_artifact_id=?) AND (prior_stage_id IS ? OR prior_stage_id=?)",
+            (
+                chain_id,
+                artifact.kind,
+                artifact.artifact_id,
+                artifact.payload_hash,
+                artifact.prior_artifact_id,
+                artifact.prior_artifact_id,
+                artifact.prior_stage_id,
+                artifact.prior_stage_id,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["request_hash"] != request_hash:
+            raise StoreConflictError("transaction:request-conflict")
+        receipt_row = connection.execute("SELECT receipt FROM receipts WHERE operation_id=?", (row["operation_id"],)).fetchone()
+        if receipt_row is None:
+            raise StoreSchemaError("transaction:receipt-missing")
+        return AdmissionReceipt(bytes(receipt_row["receipt"]))
+
+    def admit_transaction(
+        self,
+        action: str,
+        *,
+        contract_artifact_id: str | None = None,
+        trace_artifact_id: str | None = None,
+        fixture_id: str | None = None,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt:
+        """Atomically append a fixed synthetic boundary observation and trace."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        if action == "TRACE_INITIAL":
+            if not isinstance(contract_artifact_id, str) or not contract_artifact_id or not isinstance(fixture_id, str) or fixture_id not in transaction_independent.FIXTURES[:3] or trace_artifact_id is not None:
+                raise StoreConflictError("transaction:initial-selectors")
+        elif action == "TRACE_CORRECTION":
+            if not isinstance(trace_artifact_id, str) or not trace_artifact_id or fixture_id != transaction_independent.FIXTURE_CORRECTION or contract_artifact_id is not None:
+                raise StoreConflictError("transaction:correction-selectors")
+        elif action == "TRACE_APPEAL":
+            if not isinstance(trace_artifact_id, str) or not trace_artifact_id or fixture_id != transaction_independent.FIXTURE_APPEAL or contract_artifact_id is not None:
+                raise StoreConflictError("transaction:appeal-selectors")
+        else:
+            raise StoreConflictError("transaction:action")
+
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("transaction:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+
+            if action == "TRACE_INITIAL":
+                assert contract_artifact_id is not None and fixture_id is not None
+                context = self._transaction_contract_context(connection, contract_artifact_id, require_head=False)
+                from app.mirror import transaction_mirror as producer
+
+                observation_raw = producer.build_observation_artifact(
+                    fixture_id,
+                    source_raw=context["source_raw"],
+                    contract_raw=context["contract_raw"],
+                )
+                observation_context = {
+                    "source_raw": context["source_raw"],
+                    "contract_raw": context["contract_raw"],
+                    "contract_context": context["contract_context"],
+                    "prior_observation_raw": None,
+                }
+                observation = verify_artifact(
+                    ARTIFACT_TRANSACTION_OBSERVATION,
+                    observation_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    transaction_context=observation_context,
+                )
+                trace_raw = producer.build_trace_artifact(
+                    source_raw=context["source_raw"],
+                    contract_raw=context["contract_raw"],
+                    observation_raw=observation_raw,
+                )
+                trace_context = {
+                    **observation_context,
+                    "observation_raw": observation_raw,
+                    "prior_trace_raw": None,
+                    "prior_observation_raw": None,
+                }
+                trace = verify_artifact(
+                    ARTIFACT_TRANSACTION_TRACE,
+                    trace_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    transaction_context=trace_context,
+                )
+                observation_request_hash = _payload_hash(observation_raw)
+                trace_request_hash = _payload_hash(trace_raw)
+                existing_observation = self._transaction_existing_receipt(connection, observation, observation_request_hash)
+                existing_trace = self._transaction_existing_receipt(connection, trace, trace_request_hash)
+                if existing_observation is not None and existing_trace is not None:
+                    connection.commit()
+                    return existing_trace
+                self._transaction_contract_context(connection, contract_artifact_id, require_head=True)
+                self._transaction_require_active(connection, context)
+                self._admit_in_transaction(connection, observation, observation_request_hash, enforce_governance=False)
+                receipt = self._admit_in_transaction(connection, trace, trace_request_hash, enforce_governance=False)
+            else:
+                assert trace_artifact_id is not None and fixture_id is not None
+                prior_row = connection.execute(
+                    "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_TRANSACTION_TRACE, trace_artifact_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("transaction:trace-missing")
+                prior_trace_raw = bytes(prior_row["payload"])
+                prior_trace_value = transaction_independent._parse(prior_trace_raw)
+                if prior_trace_value["stage_kind"] not in transaction_independent.TRACE_STAGES[:2]:
+                    raise StoreConflictError("transaction:trace-stage")
+                prior_context = self._transaction_context_for_raw(connection, prior_trace_raw, require_contract_head=False)
+                prior_observation_raw = prior_context["observation_raw"]
+                if not isinstance(prior_observation_raw, bytes):
+                    raise StoreConflictError("transaction:prior-observation")
+                from app.mirror import transaction_mirror as producer
+
+                observation_raw = producer.build_observation_artifact(
+                    fixture_id,
+                    source_raw=prior_context["source_raw"],
+                    contract_raw=prior_context["contract_raw"],
+                    prior_observation_raw=prior_observation_raw,
+                )
+                observation_context = {
+                    "source_raw": prior_context["source_raw"],
+                    "contract_raw": prior_context["contract_raw"],
+                    "contract_context": prior_context["contract_context"],
+                    "prior_observation_raw": prior_observation_raw,
+                }
+                observation = verify_artifact(
+                    ARTIFACT_TRANSACTION_OBSERVATION,
+                    observation_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    transaction_context=observation_context,
+                )
+                trace_raw = producer.build_trace_artifact(
+                    source_raw=prior_context["source_raw"],
+                    contract_raw=prior_context["contract_raw"],
+                    observation_raw=observation_raw,
+                    prior_trace_raw=prior_trace_raw,
+                )
+                trace_context = {
+                    **observation_context,
+                    "observation_raw": observation_raw,
+                    "prior_trace_raw": prior_trace_raw,
+                    "prior_observation_raw": prior_observation_raw,
+                }
+                trace = verify_artifact(
+                    ARTIFACT_TRANSACTION_TRACE,
+                    trace_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    transaction_context=trace_context,
+                )
+                observation_request_hash = _payload_hash(observation_raw)
+                trace_request_hash = _payload_hash(trace_raw)
+                existing_observation = self._transaction_existing_receipt(connection, observation, observation_request_hash)
+                existing_trace = self._transaction_existing_receipt(connection, trace, trace_request_hash)
+                if existing_observation is not None and existing_trace is not None:
+                    connection.commit()
+                    return existing_trace
+                self._transaction_contract_context(connection, prior_context["contract_value"]["artifact_id"], require_head=True)
+                self._transaction_require_active(connection, prior_context)
+                self._admit_in_transaction(connection, observation, observation_request_hash, enforce_governance=False)
+                receipt = self._admit_in_transaction(connection, trace, trace_request_hash, enforce_governance=False)
+
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("transaction:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("transaction:operational") from exc
+        finally:
+            connection.close()
 
     def admit_contract(
         self,

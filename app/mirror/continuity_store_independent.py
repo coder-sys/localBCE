@@ -25,6 +25,7 @@ from app.mirror import denominator_ledger_independent as denominator_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import source_evidence_custody_independent as source_independent
 from app.mirror import source_reconciliation_independent as reconciliation_independent
+from app.mirror import transaction_mirror_independent as transaction_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -36,7 +37,19 @@ ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
 ARTIFACT_CASE = case_independent.ARTIFACT_KIND
 ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
 ARTIFACT_CONTRACT = contract_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR, ARTIFACT_CONTRACT)
+ARTIFACT_TRANSACTION_OBSERVATION = transaction_independent.OBSERVATION_ARTIFACT_KIND
+ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
+ARTIFACT_KINDS = (
+    ARTIFACT_GRAPH,
+    ARTIFACT_GOVERNANCE,
+    ARTIFACT_SOURCE_EVIDENCE,
+    ARTIFACT_RECONCILIATION,
+    ARTIFACT_CASE,
+    ARTIFACT_DENOMINATOR,
+    ARTIFACT_CONTRACT,
+    ARTIFACT_TRANSACTION_OBSERVATION,
+    ARTIFACT_TRANSACTION_TRACE,
+)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
@@ -385,6 +398,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_CONTRACT:
         if dict(value) != contract_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+        if dict(value) != transaction_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -398,6 +414,7 @@ def _normalize_artifact(
     reconciliation_context: Mapping[str, object] | None = None,
     denominator_context: Mapping[str, object] | None = None,
     contract_context: Mapping[str, object] | None = None,
+    transaction_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if kind not in ARTIFACT_KINDS:
         raise IndependentStoreError("artifact:kind")
@@ -414,6 +431,8 @@ def _normalize_artifact(
             value = denominator_independent._parse(raw)
         elif kind == ARTIFACT_CONTRACT:
             value = contract_independent._parse(raw)
+        elif kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            value = transaction_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -422,6 +441,7 @@ def _normalize_artifact(
         case_independent.IndependentDiscrepancyCaseError,
         denominator_independent.IndependentDenominatorError,
         contract_independent.IndependentContractMirrorError,
+        transaction_independent.IndependentTransactionMirrorError,
     ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
@@ -482,6 +502,30 @@ def _normalize_artifact(
                 case_context=contract_context["case_context"],
                 registry=graph_profile_registry or {},
                 prior_contract_raw=contract_context.get("prior_contract_raw"),
+            )
+        elif kind == ARTIFACT_TRANSACTION_OBSERVATION:
+            if not isinstance(transaction_context, Mapping):
+                raise IndependentStoreError("transaction:context-required")
+            result = transaction_independent.verify_observation_artifact(
+                raw,
+                source_raw=transaction_context["source_raw"],
+                contract_raw=transaction_context["contract_raw"],
+                contract_context=transaction_context["contract_context"],
+                registry=graph_profile_registry or {},
+                prior_observation_raw=transaction_context.get("prior_observation_raw"),
+            )
+        elif kind == ARTIFACT_TRANSACTION_TRACE:
+            if not isinstance(transaction_context, Mapping):
+                raise IndependentStoreError("transaction:context-required")
+            result = transaction_independent.verify_trace_artifact(
+                raw,
+                source_raw=transaction_context["source_raw"],
+                contract_raw=transaction_context["contract_raw"],
+                contract_context=transaction_context["contract_context"],
+                observation_raw=transaction_context["observation_raw"],
+                registry=graph_profile_registry or {},
+                prior_trace_raw=transaction_context.get("prior_trace_raw"),
+                prior_observation_raw=transaction_context.get("prior_observation_raw"),
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -587,6 +631,20 @@ def _normalize_artifact(
             scope = result["scope"]
             profile_id = result["profile_id"]
             profile_version = result["profile_version"]
+            authority_json = _authority_json(value["authority"], kind)
+        elif kind in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["report_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            profile_version = int(result["profile_version"])
             authority_json = _authority_json(value["authority"], kind)
         elif value.get("schema") in (withdrawal_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result_artifact_id = result.get("artifact_id")
@@ -738,6 +796,27 @@ def _normalize_artifact(
                 "case_id": result["case_id"],
                 "reconciliation_artifact_id": result["reconciliation_artifact_id"],
                 "evaluation_status": result["evaluation_status"],
+            }
+        )
+    elif kind == ARTIFACT_TRANSACTION_OBSERVATION:
+        normalized.update(
+            {
+                "transaction_stage": value["stage_kind"],
+                "transaction_trace_id": result["trace_id"],
+                "transaction_fixture_id": result["fixture_id"],
+                "transaction_source_artifact_id": result["source_artifact_id"],
+                "transaction_contract_artifact_id": result["contract_artifact_id"],
+            }
+        )
+    elif kind == ARTIFACT_TRANSACTION_TRACE:
+        normalized.update(
+            {
+                "transaction_stage": result["trace_stage"],
+                "transaction_trace_id": result["trace_id"],
+                "transaction_observation_artifact_id": result["observation_artifact_id"],
+                "transaction_contract_artifact_id": result["contract_artifact_id"],
+                "transaction_divergence_status": result["divergence_status"],
+                "transaction_case_artifact_id": result["case_artifact_id"],
             }
         )
     return normalized
@@ -1048,6 +1127,75 @@ def _contract_context(
         raise IndependentStoreError("database:contract-context") from exc
 
 
+def _transaction_context(
+    artifacts: Mapping[tuple[str, str], Mapping[str, object]],
+    raw_by_key: Mapping[tuple[str, str], bytes],
+    event_sequence_hint: Mapping[tuple[str, str], int],
+    transaction_raw: bytes,
+    graph_profile_registry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Reconstruct source, Contract, observation, and trace predecessor bytes."""
+
+    try:
+        value = transaction_independent._parse(transaction_raw)
+        contract_binding = value["contract_binding"]
+        contract_key = (ARTIFACT_CONTRACT, str(contract_binding["artifact_id"]))
+        if contract_key not in artifacts:
+            raise IndependentStoreError("database:transaction-contract-missing")
+        contract_raw = raw_by_key[contract_key]
+        contract_context = _contract_context(
+            artifacts,
+            raw_by_key,
+            event_sequence_hint,
+            contract_raw,
+            graph_profile_registry,
+        )
+        source_raw = contract_context["denominator_context"]["source_raw"]
+        if not isinstance(source_raw, bytes):
+            raise IndependentStoreError("database:transaction-source-missing")
+        result: dict[str, object] = {
+            "source_raw": source_raw,
+            "contract_raw": contract_raw,
+            "contract_context": contract_context,
+            "prior_observation_raw": None,
+            "prior_trace_raw": None,
+            "observation_raw": None,
+        }
+        if value["schema"] == transaction_independent.OBSERVATION_SCHEMA:
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                prior_key = (ARTIFACT_TRANSACTION_OBSERVATION, str(prior_id))
+                if prior_key not in raw_by_key:
+                    raise IndependentStoreError("database:transaction-observation-prior")
+                result["prior_observation_raw"] = raw_by_key[prior_key]
+        elif value["schema"] == transaction_independent.TRACE_SCHEMA:
+            observation_id = value["observation_binding"]["artifact_id"]
+            observation_key = (ARTIFACT_TRANSACTION_OBSERVATION, str(observation_id))
+            if observation_key not in raw_by_key:
+                raise IndependentStoreError("database:transaction-observation-missing")
+            result["observation_raw"] = raw_by_key[observation_key]
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                prior_key = (ARTIFACT_TRANSACTION_TRACE, str(prior_id))
+                if prior_key not in raw_by_key:
+                    raise IndependentStoreError("database:transaction-trace-prior")
+                prior_raw = raw_by_key[prior_key]
+                result["prior_trace_raw"] = prior_raw
+                prior_value = transaction_independent._parse(prior_raw)
+                prior_observation_id = prior_value["observation_binding"]["artifact_id"]
+                prior_observation_key = (ARTIFACT_TRANSACTION_OBSERVATION, str(prior_observation_id))
+                if prior_observation_key not in raw_by_key:
+                    raise IndependentStoreError("database:transaction-prior-observation")
+                result["prior_observation_raw"] = raw_by_key[prior_observation_key]
+        else:
+            raise IndependentStoreError("database:transaction-schema")
+        return result
+    except IndependentStoreError:
+        raise
+    except Exception as exc:
+        raise IndependentStoreError("database:transaction-context") from exc
+
+
 def _verify_rows(
     snapshot: Mapping[str, object],
     *,
@@ -1076,6 +1224,8 @@ def _verify_rows(
     case_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     denominator_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     contract_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    transaction_observation_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    transaction_trace_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     event_sequence_hint = {
         (str(row["artifact_kind"]), str(row["artifact_id"])): int(row["sequence"])
         for row in rows["events"]
@@ -1102,6 +1252,12 @@ def _verify_rows(
             continue
         if kind == ARTIFACT_CONTRACT:
             contract_rows.append((row, raw, key))
+            continue
+        if kind == ARTIFACT_TRANSACTION_OBSERVATION:
+            transaction_observation_rows.append((row, raw, key))
+            continue
+        if kind == ARTIFACT_TRANSACTION_TRACE:
+            transaction_trace_rows.append((row, raw, key))
             continue
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
@@ -1343,6 +1499,70 @@ def _verify_rows(
         artifact_hashes.add(hash_key)
         artifacts[key] = artifact
 
+    # Transaction boundary observations and traces are reconstructed only
+    # after Contract Mirror and all of its source/case dependencies exist.
+    # Their carried bindings are labels; the independent verifier receives the
+    # exact stored upstream bytes selected here.
+    for row, raw, key in sorted(transaction_observation_rows, key=lambda item: int(event_sequence_hint.get(item[2], 0))):
+        try:
+            context = _transaction_context(
+                artifacts,
+                raw_by_key,
+                event_sequence_hint,
+                raw,
+                graph_profile_registry,
+            )
+            artifact = _normalize_artifact(
+                ARTIFACT_TRANSACTION_OBSERVATION,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                transaction_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:transaction-observation-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_TRANSACTION_OBSERVATION, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
+
+    for row, raw, key in sorted(transaction_trace_rows, key=lambda item: int(event_sequence_hint.get(item[2], 0))):
+        try:
+            context = _transaction_context(
+                artifacts,
+                raw_by_key,
+                event_sequence_hint,
+                raw,
+                graph_profile_registry,
+            )
+            artifact = _normalize_artifact(
+                ARTIFACT_TRANSACTION_TRACE,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                transaction_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:transaction-trace-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_TRANSACTION_TRACE, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
+
     operations = {row["operation_id"]: row for row in rows["operations"]}
     receipts = {row["operation_id"]: row for row in rows["receipts"]}
     events = {row["sequence"]: row for row in rows["events"]}
@@ -1470,6 +1690,43 @@ def _verify_rows(
 
     if set(operations) != seen_operations:
         raise IndependentStoreError("database:orphan-operation")
+
+    # A transaction observation must follow its independently stored source
+    # custody and Contract Mirror bytes.  A trace must follow its observation
+    # and the same upstream bytes.  These checks make phase ancestry and
+    # correction/appeal ordering independent of the producer's labels.
+    for transaction_artifact in artifacts.values():
+        if transaction_artifact["kind"] not in (ARTIFACT_TRANSACTION_OBSERVATION, ARTIFACT_TRANSACTION_TRACE):
+            continue
+        transaction_key = (transaction_artifact["kind"], str(transaction_artifact["artifact_id"]))
+        transaction_sequence = artifact_event_sequence.get(transaction_key)
+        if transaction_sequence is None:
+            raise IndependentStoreError("database:transaction-event")
+        value = transaction_independent._parse(transaction_artifact["payload"])
+        contract_id = str(value["contract_binding"]["artifact_id"])
+        contract_sequence = artifact_event_sequence.get((ARTIFACT_CONTRACT, contract_id))
+        if contract_sequence is None or contract_sequence >= transaction_sequence:
+            raise IndependentStoreError("database:transaction-contract-order")
+        source_id = str(value["input_binding"]["artifact_id"] if value["schema"] == transaction_independent.TRACE_SCHEMA else value["source_binding"]["artifact_id"])
+        source_sequence = artifact_event_sequence.get((ARTIFACT_SOURCE_EVIDENCE, source_id))
+        if source_sequence is None or source_sequence >= transaction_sequence:
+            raise IndependentStoreError("database:transaction-source-order")
+        prior_id = value.get("prior_artifact_id")
+        if prior_id is not None:
+            prior_kind = ARTIFACT_TRANSACTION_OBSERVATION if value["schema"] == transaction_independent.OBSERVATION_SCHEMA else ARTIFACT_TRANSACTION_TRACE
+            prior_sequence = artifact_event_sequence.get((prior_kind, str(prior_id)))
+            if prior_sequence is None or prior_sequence >= transaction_sequence:
+                raise IndependentStoreError("database:transaction-prior-order")
+        if value["schema"] == transaction_independent.TRACE_SCHEMA:
+            observation_id = str(value["observation_binding"]["artifact_id"])
+            observation_sequence = artifact_event_sequence.get((ARTIFACT_TRANSACTION_OBSERVATION, observation_id))
+            if observation_sequence is None or observation_sequence >= transaction_sequence:
+                raise IndependentStoreError("database:transaction-observation-order")
+            if value["case_link"] is not None:
+                case_id = str(value["case_link"]["artifact_id"])
+                case_sequence = artifact_event_sequence.get((ARTIFACT_CASE, case_id))
+                if case_sequence is None or case_sequence >= transaction_sequence:
+                    raise IndependentStoreError("database:transaction-case-order")
 
     # A case may only be appended after every evidence and governance byte it
     # names.  This is separate from the generic case-chain head check: the

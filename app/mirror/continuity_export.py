@@ -25,6 +25,8 @@ from app.mirror import source_evidence_custody as source_custody
 from app.mirror import source_evidence_custody_independent as source_custody_independent
 from app.mirror import source_reconciliation as source_reconciliation
 from app.mirror import source_reconciliation_independent as source_reconciliation_independent
+from app.mirror import transaction_mirror as transaction_mirror
+from app.mirror import transaction_mirror_independent as transaction_mirror_independent
 
 
 EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
@@ -135,6 +137,8 @@ SOFTWARE_IDENTITIES = {
     "denominator_ledger_independent_identity": _module_identity(denominator_ledger_independent.__file__),
     "contract_mirror_module_identity": _module_identity(contract_mirror.__file__),
     "contract_mirror_independent_identity": _module_identity(contract_mirror_independent.__file__),
+    "transaction_mirror_module_identity": _module_identity(transaction_mirror.__file__),
+    "transaction_mirror_independent_identity": _module_identity(transaction_mirror_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 
