@@ -135,3 +135,71 @@ target_include_directories(longfellow_native_v3_verifier PRIVATE
 )
 target_compile_definitions(longfellow_native_v3_verifier PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(longfellow_native_v3_verifier PRIVATE longfellow_native_v3_circuit)
+
+add_library(longfellow_source_assertion_relation STATIC
+  src/native_v3_source_assertion_relation.cc
+  src/sha3_512_witness.cc
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_reference.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_round_constants.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_witness.cc"
+)
+target_include_directories(longfellow_source_assertion_relation PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_relation PUBLIC
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+if(LONGFELLOW_NATIVE_V3_NO_SHA3_WITNESS)
+  target_compile_definitions(longfellow_source_assertion_relation
+                             PUBLIC BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS=1)
+endif()
+target_link_libraries(longfellow_source_assertion_relation PUBLIC
+  longfellow_task_crypto bcrypt)
+
+add_executable(longfellow_source_assertion_kat
+  src/native_v3_source_assertion_kat.cpp
+  src/sha3_512_witness.cc
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_reference.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_round_constants.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_witness.cc"
+)
+target_include_directories(longfellow_source_assertion_kat PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_kat PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_kat PRIVATE
+  longfellow_task_crypto bcrypt)
+
+add_executable(longfellow_source_assertion_eval
+  src/native_v3_source_assertion_eval.cpp
+)
+target_include_directories(longfellow_source_assertion_eval PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_eval PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_eval PRIVATE
+  longfellow_source_assertion_relation)
+
+add_executable(longfellow_source_assertion_attribution
+  src/native_v3_source_assertion_attribution.cpp
+)
+target_include_directories(longfellow_source_assertion_attribution PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_attribution PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_attribution PRIVATE
+  longfellow_source_assertion_relation psapi)

@@ -1,0 +1,521 @@
+{
+  "schema": "longfellow-v09-native-v3-source-assertion-evidence-v1",
+  "experiment": "longfellow_v09_native_v3",
+  "candidate": "SOURCE-ASSERTION-ONLY/v1",
+  "disposition": "ENGINEERING_YELLOW",
+  "disposition_basis": [
+    "The dedicated four-endpoint relation and independent state-side evaluator passed the recorded semantic matrix.",
+    "The complete shape-only construction stayed below the 4500000000-byte pre-proof cap with complete observed process-tree telemetry.",
+    "No Longfellow prover or proof verifier was authorized or run, so this is not GREEN and does not establish proof feasibility."
+  ],
+  "baseline": {
+    "candidate_head": "3728828f22be557cfc3d5f6c669802fdadf931ce",
+    "candidate_parent": "cd91d55abb19fb36c3e976b3daa51e7cddd6830c",
+    "authoritative_head": "ce31abeb941ce7ad5927ca67d6f23872f430ed09",
+    "candidate_status_at_start": "clean",
+    "authoritative_status_at_start": "clean",
+    "candidate_diff_check_at_start": "clean",
+    "authoritative_diff_check_at_start": "clean"
+  },
+  "upstream": {
+    "remote": "https://github.com/google/longfellow-zk.git",
+    "commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+    "tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+    "external_worktree": "C:/Temp/longfellow-v09-native-v3-patched",
+    "patch_artifact": {
+      "path": "patches/sha3_512_circuit.patch",
+      "sha256": "1505A983D144047E1015601E90A4D7B72805AFFBFE31D43A178208DD2AB85F87"
+    },
+    "external_worktree_changes": [
+      {
+        "path": "lib/circuits/tests/sha3/sha3_circuit.h",
+        "insertions": 115,
+        "deletions": 0,
+        "semantic": true,
+        "purpose": "fixed in-circuit FIPS 202 SHA3-512 with Keccak-f[1600], rate 72, suffix 06, final 80, digest 64"
+      },
+      {
+        "path": "lib/circuits/tests/sha3/sha3_slicing.h",
+        "semantic": false,
+        "purpose": "line-ending-only working-tree difference"
+      }
+    ]
+  },
+  "toolchain": {
+    "platform": "Windows x64",
+    "generator": "Visual Studio 17 2022",
+    "compiler": "MSVC 19.44.35228.0",
+    "cmake": "4.3.3",
+    "git": "2.54.0.windows.1",
+    "language_standard": "C++20",
+    "cpu_only": true,
+    "network_service": false,
+    "build_directory": "C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817"
+  },
+  "build": {
+    "configure_command": "cmake -S experiments/longfellow_v09_native_v3 -B C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817 -G \"Visual Studio 17 2022\" -A x64 -DLONGFELLOW_SOURCE=C:/Temp/longfellow-v09-native-v3-patched -DLONGFELLOW_NATIVE_V3_NO_SHA3_WITNESS=ON",
+    "configure_exit": 0,
+    "build_command": "cmake --build C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817 --config Release --target longfellow_source_assertion_kat longfellow_source_assertion_eval longfellow_source_assertion_attribution -- /m:2",
+    "build_exit": 0,
+    "incremental_eval_rebuild_command": "cmake --build C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817 --config Release --target longfellow_source_assertion_eval -- /m:2",
+    "incremental_eval_rebuild_exit": 0,
+    "built_targets": [
+      "longfellow_source_assertion_kat",
+      "longfellow_source_assertion_eval",
+      "longfellow_source_assertion_attribution"
+    ],
+    "prover_target": {
+      "built": false,
+      "run": false,
+      "reason": "The latest authorized run explicitly forbids running the prover."
+    }
+  },
+  "relation": {
+    "proof_role": "BL/NATIVE-V3/SOURCE-ASSERTION-ONLY/v1",
+    "protocol_version": 3,
+    "statement_bytes": 1018,
+    "endpoint_count": 4,
+    "no_sha3_witness_mode": true,
+    "public_statement_fields": [
+      "protocol_version",
+      "proof_suite",
+      "proof_role",
+      "execution_context",
+      "source_registry_snapshot",
+      "source_profile",
+      "governance_snapshot",
+      "automatic_control_set",
+      "settlement_domain",
+      "subject_scope",
+      "epoch",
+      "sequence_before",
+      "state_before_id",
+      "request_id",
+      "source_root_id",
+      "completeness_id",
+      "decision_path_id",
+      "exception_id",
+      "active",
+      "complete",
+      "authoritative_membership",
+      "authoritative_absence",
+      "private_batch_commitment"
+    ],
+    "private_witness_fields": [
+      "provider_id",
+      "credential_id",
+      "enrollment_id",
+      "attempt_id",
+      "source_payload",
+      "active",
+      "complete",
+      "authoritative_membership",
+      "authoritative_absence",
+      "event_time",
+      "observation_time",
+      "rule_effective_time",
+      "decision_time"
+    ],
+    "in_circuit_ownership": [
+      "The hidden source payload and hidden provider/credential/enrollment material feed the source_root and completeness endpoints.",
+      "The hidden attempt identity and hidden four times feed the request endpoint.",
+      "The request digest wire, hidden source payload, and public decision_path_id/exception_id feed private_batch.",
+      "The first three digest wires and private_batch digest wire are equality-constrained to their public targets.",
+      "Source assertion flags are equality-constrained to hidden values, boolean-constrained, and constrained so absence implies complete and membership implies non-absence.",
+      "Protocol version, null proof suite, and exact proof role are circuit-constrained constants."
+    ],
+    "state_side_ownership": [
+      "Verifier-owned registry snapshot closure selects subject-scoped source_root_id, completeness_id, profile, governance, control set, settlement domain, state, request, exception, and permitted assertion flags.",
+      "Strict chronology, policyResult/effectiveDirective separation, exception authorization, exact decision/access join, receipt, before/after state, settlement commitment, retry, concurrency, and recovery are state-side evaluator invariants.",
+      "Proof acceptance is not a directive and does not authorize CLEAR."
+    ],
+    "endpoints": [
+      {
+        "index": 0,
+        "name": "source_root",
+        "domain": "BL/NATIVE-V3/SOURCE-ROOT/v1",
+        "message_bytes": 224,
+        "blocks": 4,
+        "layers": 97,
+        "terms": 5134403,
+        "circuit_id": "85a92ec77d2487c19dce0069e06bdab33311ae0291dcc16f80939f2637f5db81"
+      },
+      {
+        "index": 1,
+        "name": "completeness",
+        "domain": "BL/NATIVE-V3/COMPLETENESS/v1",
+        "message_bytes": 159,
+        "blocks": 3,
+        "layers": 97,
+        "terms": 8901916,
+        "circuit_id": "2bf2a305eac854294e03345039fa101f272d980e377f10528518d4ba0d57bbac"
+      },
+      {
+        "index": 2,
+        "name": "request",
+        "domain": "BL/NATIVE-V3/REQUEST-ID/v1",
+        "message_bytes": 395,
+        "blocks": 6,
+        "layers": 145,
+        "terms": 16659389,
+        "circuit_id": "52561f3d47d3b33e1140fe53054ccdcd0a51b48e55ed38e691304a38775d916c"
+      },
+      {
+        "index": 3,
+        "name": "private_batch",
+        "domain": "BL/NATIVE-V3/PRIVATE-BATCH/v1",
+        "message_bytes": 286,
+        "blocks": 4,
+        "layers": 169,
+        "terms": 21954328,
+        "circuit_id": "d06fc14d9d1a8dcd3161a197247035d724c9b8ee110e356c5a4e9290f3b91102"
+      }
+    ]
+  },
+  "registry_closure": {
+    "immutable_verifier_owned_snapshot": true,
+    "valid_membership_cases": 1,
+    "valid_authoritative_absence_cases": 1,
+    "incomplete_absence_rejected": true,
+    "caller_selected_registry_or_assertion": false,
+    "source_profile_substitution_rejected": true
+  },
+  "sha3_kat": {
+    "command": "& C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817/Release/longfellow_source_assertion_kat.exe",
+    "exit": 0,
+    "raw": [
+      "SOURCE_ASSERTION_SHA3_KAT_PASS vectors=6 mutations=5 hidden_message=1 prover=0 rate=72 capacity_bits=1024 domain=06 digest_bytes=64",
+      "EXIT=0"
+    ],
+    "vectors": [
+      "empty",
+      "abc",
+      "binary_non_ascii",
+      "exact_rate_72_bytes",
+      "multi_block_145_bytes",
+      "native_v3_sized_556_bytes"
+    ],
+    "negative_mutations": [
+      "wrong_digest",
+      "wrong_message",
+      "wrong_padding_or_domain",
+      "wrong_rate",
+      "wrong_block_order"
+    ],
+    "hidden_message_constrained": true
+  },
+  "evaluator": {
+    "command": "& C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817/Release/longfellow_source_assertion_eval.exe",
+    "exit": 0,
+    "stderr_raw": [
+      "RELATION_BUILD phase=public",
+      "RELATION_BUILD phase=private",
+      "RELATION_BUILD phase=assertions",
+      "RELATION_BUILD phase=sha3 index=0 endpoint=0",
+      "RELATION_BUILD phase=sha3 index=1 endpoint=1",
+      "RELATION_BUILD phase=sha3 index=2 endpoint=2",
+      "RELATION_BUILD phase=sha3 index=3 endpoint=3",
+      "RELATION_BUILD phase=mkcircuit",
+      "RELATION_BUILD phase=complete mkcircuit_ms=17085"
+    ],
+    "raw_stdout": [
+      "SOURCE_ASSERTION_VALID_PASS label=clear directive=1 complete=1 membership=1 absence=0",
+      "SOURCE_ASSERTION_VALID_PASS label=hold directive=2 complete=1 membership=0 absence=1",
+      "SOURCE_ASSERTION_VALID_PASS label=human-review directive=3 complete=0 membership=0 absence=0",
+      "SOURCE_ASSERTION_VALID_PASS label=block directive=4 complete=1 membership=1 absence=0",
+      "SOURCE_ASSERTION_VALID_PASS label=exception-approved directive=5 complete=1 membership=1 absence=0",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=source_root_target reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=completeness_target reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=request_target reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=decision_path_target reason=circuit.assertion-failed",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=exception_target reason=circuit.assertion-failed",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=private_batch_target reason=circuit.assertion-failed",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=public_assertion_flag reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=request_epoch reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=request_sequence reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=proof_suite reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_CIRCUIT_MUTATION_PASS name=proof_role reason=circuit.evaluator-null",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_subject reason=registry.subject_scope_unknown",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_source_root reason=registry.source_root_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_completeness reason=registry.completeness_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_registry_snapshot reason=registry.snapshot_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_governance_snapshot reason=registry.governance_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_source_profile reason=registry.profile_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_execution_context reason=registry.execution_context_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_settlement_domain reason=registry.settlement_domain_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_request_attempt_binding reason=request.attempt_binding_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_state_before reason=registry.state_before_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_epoch reason=registry.epoch_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_sequence reason=registry.sequence_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_public_assertion_flag reason=registry.assertion_flag_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_decision_path reason=registry.decision_path_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_exception_identity reason=exception.identity",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_private_batch reason=registry.private_batch_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=incomplete_feed_absence reason=incomplete_authoritative_absence",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=wrong_role_casing reason=statement.proof-role",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=non_null_proof_suite reason=statement.proof-suite-not-null",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=truncated_statement reason=statement.length",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=reordered_request_bytes reason=request.attempt_binding_mismatch",
+      "SOURCE_ASSERTION_RAW_MUTATION_PASS name=cross_request_scope_reuse reason=registry.assertion_flag_mismatch",
+      "SOURCE_ASSERTION_STATE_PASS label=clear directive=1 economic_mutation=true clearance_advanced=true payment_movement=false",
+      "SOURCE_ASSERTION_STATE_PASS label=hold directive=2 economic_mutation=false clearance_advanced=false payment_movement=false",
+      "SOURCE_ASSERTION_STATE_PASS label=human-review directive=3 economic_mutation=false clearance_advanced=false payment_movement=false",
+      "SOURCE_ASSERTION_STATE_PASS label=block directive=4 economic_mutation=false clearance_advanced=false payment_movement=false",
+      "SOURCE_ASSERTION_STATE_PASS label=exception-approved directive=5 economic_mutation=true clearance_advanced=true payment_movement=false",
+      "SOURCE_ASSERTION_STATE_PASS name=clear economic_mutation=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=equal_or_out_of_order_chronology reason=chronology.strict unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=policy_result_conflation reason=policy.directive-relation unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=effective_directive_conflation reason=policy.directive-relation unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=unauthorized_exception reason=exception.identity unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_decision_index reason=decision.index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_decision_count reason=decision.count unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_access_count reason=join.access-count unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=coherent_access_row_swap reason=join.read-index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=duplicated_access_row reason=join.write-index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=omitted_write_row reason=join.access-count unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_index reason=join.read-index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_index reason=join.write-index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_decision_index reason=join.read-decision-index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_decision_index reason=join.write-decision-index unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=read_write_role_swap reason=join.read-role unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=read_read_role_confusion reason=join.write-role unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_decision_id reason=join.read-decision-id unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_decision_id reason=join.write-decision-id unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_address reason=join.read-address unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_key reason=join.read-key unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_before reason=join.read-source-value unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_read_after reason=join.read-source-value unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_address reason=join.write-address unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_key reason=join.write-key unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_before reason=join.write-before unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_write_after reason=join.write-after unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_clearance_before_root reason=state.clearance-before unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=wrong_after_state reason=state.after-binding unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=forged_receipt reason=receipt.binding unchanged=true",
+      "SOURCE_ASSERTION_ARTIFACT_MUTATION_PASS name=forged_settlement reason=settlement.binding unchanged=true",
+      "SOURCE_ASSERTION_RETRY_PASS exact=true receipt=86de9513c9df2c52ee67ae2d7f3e3d62f56a2c63fe4829807eda91f85512f2c5bfc36e2282e8d8ac7b5011058178ad8ec97986d9d6af818e338b5ce9d309fdba",
+      "SOURCE_ASSERTION_RETRY_PASS conflicting=true unchanged=true",
+      "SOURCE_ASSERTION_CONCURRENCY_PASS stale_competitor=true unchanged=true",
+      "SOURCE_ASSERTION_POST_VERIFY_PASS rejected=true unchanged=true",
+      "SOURCE_ASSERTION_EVAL_PASS valid_cases=5 raw_mutations=22 circuit_mutations=11 state_valid_cases=5 artifact_mutations=30 directives=5 membership=1 authoritative_absence=1 exact_retry=1 conflicting_retry=1 competing_transition=1 post_verify_mutation=1 prover=0",
+      "EXIT=0"
+    ],
+    "counts": {
+      "valid_cases": 5,
+      "circuit_mutations": 11,
+      "raw_mutations": 22,
+      "state_valid_cases": 5,
+      "artifact_mutations": 30,
+      "directives": 5,
+      "membership_cases": 1,
+      "authoritative_absence_cases": 1,
+      "exact_retry": 1,
+      "conflicting_retry": 1,
+      "competing_transition": 1,
+      "post_verify_mutation": 1
+    }
+  },
+  "shape_attribution": {
+    "command": "& experiments/longfellow_v09_native_v3/evidence/source_assertion_shape.ps1 -AttributionExe C:/Temp/longfellow-v09-native-v3-source-assertion-build-20260817/Release/longfellow_source_assertion_attribution.exe -JsonPath C:/Temp/longfellow-v09-native-v3-source-assertion-shape-20260817-final2.json -EndpointCount 4 -WorkingSetCap 4500000000 -SampleMilliseconds 100",
+    "exit": 0,
+    "ledger": "C:/Temp/longfellow-v09-native-v3-source-assertion-shape-20260817-final2.json",
+    "schema": "longfellow-v09-native-v3-source-assertion-shape-v1",
+    "complete": true,
+    "telemetry_complete_all_stages": true,
+    "process_tree_complete_all_stages": true,
+    "os_pagefile_available_all_stages": true,
+    "stages": [
+      {
+        "stage": 0,
+        "endpoint": "base_non_hash_relation",
+        "exit": 0,
+        "inputs": 10993,
+        "public_inputs": 8145,
+        "layers": 8,
+        "terms": 34395,
+        "circuit_id": "084d7d8239a41f454bd26520dcc4701d880ae678ef00667a9bd8061d1fb82beb",
+        "peak_working": 16039936,
+        "peak_private": 1224704,
+        "peak_pagefile": 12345344,
+        "scratch_peak_bytes": 508,
+        "os_pagefile_growth": 0,
+        "samples": 1,
+        "process_ids": [
+          7160
+        ],
+        "processes": [
+          "longfellow_source_assertion_attribution:16039936/1224704/12345344"
+        ]
+      },
+      {
+        "stage": 1,
+        "endpoint": "source_root",
+        "message_bytes": 224,
+        "blocks": 4,
+        "exit": 0,
+        "inputs": 10993,
+        "public_inputs": 8145,
+        "layers": 97,
+        "terms": 5134403,
+        "circuit_id": "85a92ec77d2487c19dce0069e06bdab33311ae0291dcc16f80939f2637f5db81",
+        "peak_working": 429113344,
+        "peak_private": 445059072,
+        "peak_pagefile": 450011136,
+        "scratch_peak_bytes": 1199,
+        "os_pagefile_growth": 0,
+        "samples": 12,
+        "process_ids": [
+          28856,
+          30976
+        ],
+        "processes": [
+          "conhost:9994240/1818624/1818624",
+          "longfellow_source_assertion_attribution:419119104/443240448/444313600"
+        ]
+      },
+      {
+        "stage": 2,
+        "endpoint": "completeness",
+        "message_bytes": 159,
+        "blocks": 3,
+        "exit": 0,
+        "inputs": 10993,
+        "public_inputs": 8145,
+        "layers": 97,
+        "terms": 8901916,
+        "circuit_id": "2bf2a305eac854294e03345039fa101f272d980e377f10528518d4ba0d57bbac",
+        "peak_working": 687857664,
+        "peak_private": 710545408,
+        "peak_pagefile": 709672960,
+        "scratch_peak_bytes": 1938,
+        "os_pagefile_growth": 0,
+        "samples": 19,
+        "process_ids": [
+          15392,
+          29724
+        ],
+        "processes": [
+          "conhost:9994240/1732608/1732608",
+          "longfellow_source_assertion_attribution:677863424/708812800/701902848"
+        ]
+      },
+      {
+        "stage": 3,
+        "endpoint": "request",
+        "message_bytes": 395,
+        "blocks": 6,
+        "exit": 0,
+        "inputs": 10993,
+        "public_inputs": 8145,
+        "layers": 145,
+        "terms": 16659389,
+        "circuit_id": "52561f3d47d3b33e1140fe53054ccdcd0a51b48e55ed38e691304a38775d916c",
+        "peak_working": 1272709120,
+        "peak_private": 1281409024,
+        "peak_pagefile": 1293250560,
+        "scratch_peak_bytes": 2721,
+        "os_pagefile_growth": 0,
+        "samples": 36,
+        "process_ids": [
+          4128,
+          13784
+        ],
+        "processes": [
+          "longfellow_source_assertion_attribution:1257140224/1279578112/1280319488",
+          "conhost:9994240/1830912/1830912"
+        ]
+      },
+      {
+        "stage": 4,
+        "endpoint": "private_batch",
+        "message_bytes": 286,
+        "blocks": 4,
+        "exit": 0,
+        "inputs": 10993,
+        "public_inputs": 8145,
+        "layers": 169,
+        "terms": 21954328,
+        "circuit_id": "d06fc14d9d1a8dcd3161a197247035d724c9b8ee110e356c5a4e9290f3b91102",
+        "peak_working": 1752760320,
+        "peak_private": 1805754368,
+        "peak_pagefile": 1815449600,
+        "scratch_peak_bytes": 3560,
+        "os_pagefile_growth": 0,
+        "samples": 46,
+        "process_ids": [
+          23988,
+          24176
+        ],
+        "processes": [
+          "longfellow_source_assertion_attribution:1739939840/1804017664/1804976128",
+          "conhost:9977856/1736704/1736704"
+        ]
+      }
+    ],
+    "hard_cap_bytes": 4500000000,
+    "max_peak_working": 1752760320,
+    "max_peak_private": 1805754368,
+    "max_peak_pagefile": 1815449600,
+    "max_scratch_peak_bytes": 3560
+  },
+  "warnings_and_failures": [
+    {
+      "kind": "corrected_compile_failure",
+      "exit": 1,
+      "raw": [
+        "native_v3_source_assertion_relation.cc(275,7): error C2672: 'AppendBytes': no matching overloaded function found",
+        "psapi.h ... error C4430: missing type specifier"
+      ],
+      "impact": "No final artifact or semantic result relied on this failed build; explicit template arguments and Windows include ordering were corrected, then the affected targets built with exit 0."
+    },
+    {
+      "kind": "observed_warning",
+      "raw": [
+        "warning C4267: 'initializing': conversion from 'size_t' to '_Ty2', possible loss of data"
+      ],
+      "impact": "Observed in the upstream Longfellow QuadCircuit/Scheduler/QuadBuilder template instantiation during an earlier corrected build; no final source assertion semantic warning was emitted in the incremental final build."
+    },
+    {
+      "kind": "corrected_compile_failure",
+      "exit": 1,
+      "raw": [
+        "array(570,9): error C2078: too many initializers"
+      ],
+      "impact": "The focused mutation expansion initially left the fixed array bound at 25; it was corrected to 30, rebuilt with BUILD_EVAL_EXIT=0, and rerun with all 30 artifact mutations passing."
+    },
+    {
+      "kind": "excluded_preliminary_shape_run",
+      "count": 1,
+      "raw_retained": false,
+      "reason": "An earlier attribution attempt reported incomplete transient telemetry and was not used. Its exact command and complete raw output were not retained; it is unverified and excluded from disposition."
+    }
+  ],
+  "skips": [
+    {
+      "item": "Longfellow prover",
+      "count": 1,
+      "reason": "Explicitly prohibited by the source-assertion-only shape/evaluator prompt."
+    },
+    {
+      "item": "Longfellow proof verifier",
+      "count": 1,
+      "reason": "No proof artifact exists because prover execution was prohibited."
+    },
+    {
+      "item": "Rust trust-boundary KAT",
+      "count": 1,
+      "reason": "The dedicated relation/evaluator does not touch the Rust trust-boundary parser contract; the latest prompt authorizes only this generic shape/evaluator phase."
+    },
+    {
+      "item": "Production theorem qualification and activation",
+      "count": 1,
+      "reason": "Out of scope; proofSuiteId remains null, production_usable remains false, activation remains false."
+    }
+  ],
+  "security_nonclaims": [
+    "No proof was generated or independently verified.",
+    "No production backend was selected.",
+    "The approximately 115-bit published/pinned parameter issue, the 128-bit production ledger, malicious-verifier/QROM composition, retry/abort/grinding accounting, SHA3 assurance, and full state-composition qualification remain open.",
+    "This experiment uses synthetic data only and does not activate PHI, payments, settlement rails, Ethereum, Lean, or production clearance authority."
+  ]
+}
