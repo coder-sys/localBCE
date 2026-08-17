@@ -30,6 +30,7 @@ from app.mirror import source_reconciliation_independent as reconciliation_indep
 from app.mirror import transaction_mirror_independent as transaction_independent
 from app.mirror import money_mirror_independent as money_independent
 from app.mirror import transition_mirror_independent as transition_independent
+from app.mirror import state_value_ledger_independent as state_value_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -45,6 +46,7 @@ ARTIFACT_TRANSACTION_OBSERVATION = transaction_independent.OBSERVATION_ARTIFACT_
 ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
 ARTIFACT_MONEY_OBSERVATION = money_independent.ARTIFACT_KIND
 ARTIFACT_TRANSITION = transition_independent.ARTIFACT_KIND
+ARTIFACT_STATE_VALUE = state_value_independent.ARTIFACT_KIND
 ARTIFACT_KINDS = (
     ARTIFACT_GRAPH,
     ARTIFACT_GOVERNANCE,
@@ -57,6 +59,7 @@ ARTIFACT_KINDS = (
     ARTIFACT_TRANSACTION_TRACE,
     ARTIFACT_MONEY_OBSERVATION,
     ARTIFACT_TRANSITION,
+    ARTIFACT_STATE_VALUE,
 )
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
@@ -324,6 +327,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind == ARTIFACT_TRANSITION:
         if dict(value) != transition_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_STATE_VALUE:
+        if dict(value) != state_value_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -365,6 +371,7 @@ def verify_artifact(
     contract_context: Mapping[str, object] | None = None,
     transaction_context: Mapping[str, object] | None = None,
     transition_context: Mapping[str, object] | None = None,
+    state_value_context: Mapping[str, object] | None = None,
 ) -> VerifiedArtifact:
     """Run the matching independent verifier and normalize its exact identities."""
 
@@ -389,6 +396,8 @@ def verify_artifact(
             value = money_independent._parse(raw)
         elif artifact_kind == ARTIFACT_TRANSITION:
             value = transition_independent._parse(raw)
+        elif artifact_kind == ARTIFACT_STATE_VALUE:
+            value = state_value_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -401,6 +410,7 @@ def verify_artifact(
         transaction_independent.IndependentTransactionMirrorError,
         money_independent.IndependentMoneyMirrorError,
         transition_independent.IndependentTransitionMirrorError,
+        state_value_independent.IndependentStateValueLedgerError,
     ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
@@ -504,6 +514,16 @@ def verify_artifact(
                 money_raw=transition_context["money_raw"],
                 money_context=transition_context["money_context"],
                 prior_transition_raw=transition_context.get("prior_transition_raw"),
+                registry=graph_profile_registry,
+            )
+        elif artifact_kind == ARTIFACT_STATE_VALUE:
+            if not isinstance(state_value_context, Mapping):
+                raise ArtifactAdmissionError("state-value:context-required")
+            result = state_value_independent.verify_artifact(
+                raw,
+                money_contexts=state_value_context["money_contexts"],
+                prior_value_raw=state_value_context.get("prior_value_raw"),
+                transition_contexts=state_value_context.get("transition_contexts"),
                 registry=graph_profile_registry,
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
@@ -631,6 +651,19 @@ def verify_artifact(
             profile_id = str(result["profile_id"])
             authority_json = _authority_json(value["authority"], kind=artifact_kind)
         elif artifact_kind == ARTIFACT_TRANSITION:
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["report_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_STATE_VALUE:
             artifact_id = str(result["artifact_id"])
             report_id = str(result["report_id"])
             current_stage_id = str(result["current_stage_id"])
@@ -1305,6 +1338,8 @@ class ContinuityStore:
             raise StoreConflictError("money:transaction-required")
         if artifact_kind == ARTIFACT_TRANSITION:
             raise StoreConflictError("transition:transaction-required")
+        if artifact_kind == ARTIFACT_STATE_VALUE:
+            raise StoreConflictError("state-value:transaction-required")
         artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE and source_independent.has_graph_link(artifact_raw):
             raise StoreConflictError("custody:graph-link-transaction-required")
@@ -2794,6 +2829,252 @@ class ContinuityStore:
             except sqlite3.Error:
                 pass
             raise StoreBusyError("transition:operational") from exc
+        finally:
+            connection.close()
+
+    def _state_value_context_for_raw(
+        self,
+        connection: sqlite3.Connection,
+        state_value_raw: bytes,
+    ) -> dict[str, object]:
+        """Reconstruct every exact upstream byte named by a value artifact."""
+
+        try:
+            value = state_value_independent._parse(state_value_raw)
+            money_contexts: dict[str, dict[str, object]] = {}
+            transition_contexts: dict[str, dict[str, object]] = {}
+            for entry in value["entries"]:
+                upstream = entry["upstream"]
+                money_ref = upstream["money"]
+                money_id = str(money_ref["artifact_id"])
+                money_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_MONEY_OBSERVATION, money_id),
+                ).fetchone()
+                if money_row is None:
+                    raise StoreConflictError("state-value:money-missing")
+                money_raw = bytes(money_row["payload"])
+                money_contexts[money_id] = {
+                    "money_raw": money_raw,
+                    "money_context": self._money_context_for_raw(connection, money_raw),
+                }
+                transition_ref = upstream.get("transition")
+                if transition_ref is not None:
+                    transition_id = str(transition_ref["artifact_id"])
+                    transition_row = connection.execute(
+                        "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                        (ARTIFACT_TRANSITION, transition_id),
+                    ).fetchone()
+                    if transition_row is None:
+                        raise StoreConflictError("state-value:transition-missing")
+                    transition_raw = bytes(transition_row["payload"])
+                    transition_contexts[transition_id] = {
+                        "transition_raw": transition_raw,
+                        "transition_context": self._transition_context_for_raw(connection, transition_raw),
+                    }
+            prior_value_raw = None
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                prior_row = connection.execute(
+                    "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_STATE_VALUE, prior_id),
+                ).fetchone()
+                if prior_row is None or prior_row["current_stage_id"] != value.get("prior_stage_id"):
+                    raise StoreConflictError("state-value:prior-missing")
+                prior_value_raw = bytes(prior_row["payload"])
+                prior_value = state_value_independent._parse(prior_value_raw)
+                for prior_entry in prior_value["entries"]:
+                    prior_upstream = prior_entry["upstream"]
+                    prior_money_id = str(prior_upstream["money"]["artifact_id"])
+                    if prior_money_id not in money_contexts:
+                        prior_money_row = connection.execute(
+                            "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                            (ARTIFACT_MONEY_OBSERVATION, prior_money_id),
+                        ).fetchone()
+                        if prior_money_row is None:
+                            raise StoreConflictError("state-value:prior-money-missing")
+                        prior_money_raw = bytes(prior_money_row["payload"])
+                        money_contexts[prior_money_id] = {
+                            "money_raw": prior_money_raw,
+                            "money_context": self._money_context_for_raw(connection, prior_money_raw),
+                        }
+                    prior_transition_ref = prior_upstream.get("transition")
+                    if prior_transition_ref is not None:
+                        prior_transition_id = str(prior_transition_ref["artifact_id"])
+                        if prior_transition_id not in transition_contexts:
+                            prior_transition_row = connection.execute(
+                                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                                (ARTIFACT_TRANSITION, prior_transition_id),
+                            ).fetchone()
+                            if prior_transition_row is None:
+                                raise StoreConflictError("state-value:prior-transition-missing")
+                            prior_transition_raw = bytes(prior_transition_row["payload"])
+                            transition_contexts[prior_transition_id] = {
+                                "transition_raw": prior_transition_raw,
+                                "transition_context": self._transition_context_for_raw(connection, prior_transition_raw),
+                            }
+            return {
+                "money_contexts": money_contexts,
+                "prior_value_raw": prior_value_raw,
+                "transition_contexts": transition_contexts,
+            }
+        except StoreConflictError:
+            raise
+        except Exception as exc:
+            raise StoreConflictError("state-value:context") from exc
+
+    def admit_state_value(
+        self,
+        action: str,
+        *,
+        money_artifact_id: str | None = None,
+        value_artifact_id: str | None = None,
+        transition_artifact_id: str | None = None,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt:
+        """Atomically append or recalculate the fixed counting-once artifact."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        if action == "STATE_VALUE_INITIAL":
+            if not isinstance(money_artifact_id, str) or not money_artifact_id or value_artifact_id is not None:
+                raise StoreConflictError("state-value:initial-selectors")
+        elif action == "STATE_VALUE_RECALCULATE":
+            if not isinstance(money_artifact_id, str) or not money_artifact_id or not isinstance(value_artifact_id, str) or not value_artifact_id:
+                raise StoreConflictError("state-value:recalculation-selectors")
+        else:
+            raise StoreConflictError("state-value:action")
+        if transition_artifact_id is not None and (not isinstance(transition_artifact_id, str) or not transition_artifact_id):
+            raise StoreConflictError("state-value:transition-selector")
+
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("state-value:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+            from app.mirror import state_value_ledger as producer
+
+            assert money_artifact_id is not None
+            money_row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_MONEY_OBSERVATION, money_artifact_id),
+            ).fetchone()
+            if money_row is None:
+                raise StoreConflictError("state-value:money-missing")
+            money_raw = bytes(money_row["payload"])
+            money_context = self._money_context_for_raw(connection, money_raw)
+            money_verified = verify_artifact(
+                ARTIFACT_MONEY_OBSERVATION,
+                money_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                transaction_context=money_context,
+            )
+            transition_raw = None
+            transition_verified: VerifiedArtifact | None = None
+            if transition_artifact_id is not None:
+                transition_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_TRANSITION, transition_artifact_id),
+                ).fetchone()
+                if transition_row is None:
+                    raise StoreConflictError("state-value:transition-missing")
+                transition_raw = bytes(transition_row["payload"])
+                transition_context = self._transition_context_for_raw(connection, transition_raw)
+                transition_verified = verify_artifact(
+                    ARTIFACT_TRANSITION,
+                    transition_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    transition_context=transition_context,
+                )
+                if transition_verified.transition_id != transition_independent._parse(transition_raw)["transition_id"]:
+                    raise StoreConflictError("state-value:transition-identity")
+
+            prior_value_raw = None
+            prior_verified: VerifiedArtifact | None = None
+            if action == "STATE_VALUE_RECALCULATE":
+                assert value_artifact_id is not None
+                prior_row = connection.execute(
+                    "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                    (ARTIFACT_STATE_VALUE, value_artifact_id),
+                ).fetchone()
+                if prior_row is None:
+                    raise StoreConflictError("state-value:prior-missing")
+                prior_value_raw = bytes(prior_row["payload"])
+                prior_context = self._state_value_context_for_raw(connection, prior_value_raw)
+                prior_verified = verify_artifact(
+                    ARTIFACT_STATE_VALUE,
+                    prior_value_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                    state_value_context=prior_context,
+                )
+
+            candidate_raw = producer.build_artifact(
+                money_raw,
+                money_context=money_context,
+                prior_value_raw=prior_value_raw,
+                transition_raw=transition_raw,
+            )
+            candidate_context = self._state_value_context_for_raw(connection, candidate_raw)
+            artifact = verify_artifact(
+                ARTIFACT_STATE_VALUE,
+                candidate_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                state_value_context=candidate_context,
+            )
+            request_hash = _payload_hash(candidate_raw)
+            existing = self._transaction_existing_receipt(connection, artifact, request_hash)
+            if existing is not None:
+                connection.commit()
+                return existing
+
+            money_chain = _chain_id(money_verified.kind, money_verified.subject, money_verified.scope, money_verified.profile_id)
+            money_head = self._head(connection, money_chain)
+            if money_head is None or (money_head["artifact_id"], money_head["current_stage_id"]) != (money_verified.artifact_id, money_verified.current_stage_id):
+                raise StoreConflictError("state-value:money-not-head")
+            if prior_verified is not None:
+                value_chain = _chain_id(prior_verified.kind, prior_verified.subject, prior_verified.scope, prior_verified.profile_id)
+                value_head = self._head(connection, value_chain)
+                if value_head is None or (value_head["artifact_id"], value_head["current_stage_id"]) != (prior_verified.artifact_id, prior_verified.current_stage_id):
+                    raise StoreConflictError("state-value:prior-not-head")
+            self._transaction_require_active(connection, money_context["transaction_context"])
+            if transition_verified is not None:
+                transition_chain = _chain_id(transition_verified.kind, transition_verified.subject, transition_verified.scope, transition_verified.profile_id)
+                transition_head = self._head(connection, transition_chain)
+                if transition_head is None or (transition_head["artifact_id"], transition_head["current_stage_id"]) != (transition_verified.artifact_id, transition_verified.current_stage_id):
+                    raise StoreConflictError("state-value:transition-not-head")
+            receipt = self._admit_in_transaction(connection, artifact, request_hash, enforce_governance=False)
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (ArtifactAdmissionError, InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("state-value:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("state-value:operational") from exc
         finally:
             connection.close()
 

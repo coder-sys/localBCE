@@ -28,6 +28,7 @@ from app.mirror import source_reconciliation_independent as reconciliation_indep
 from app.mirror import transaction_mirror_independent as transaction_independent
 from app.mirror import money_mirror_independent as money_independent
 from app.mirror import transition_mirror_independent as transition_independent
+from app.mirror import state_value_ledger_independent as state_value_independent
 
 
 STORE_SCHEMA = "mirror-continuity-operational-foundation-v2"
@@ -43,6 +44,7 @@ ARTIFACT_TRANSACTION_OBSERVATION = transaction_independent.OBSERVATION_ARTIFACT_
 ARTIFACT_TRANSACTION_TRACE = transaction_independent.TRACE_ARTIFACT_KIND
 ARTIFACT_MONEY_OBSERVATION = money_independent.ARTIFACT_KIND
 ARTIFACT_TRANSITION = transition_independent.ARTIFACT_KIND
+ARTIFACT_STATE_VALUE = state_value_independent.ARTIFACT_KIND
 ARTIFACT_KINDS = (
     ARTIFACT_GRAPH,
     ARTIFACT_GOVERNANCE,
@@ -55,6 +57,7 @@ ARTIFACT_KINDS = (
     ARTIFACT_TRANSACTION_TRACE,
     ARTIFACT_MONEY_OBSERVATION,
     ARTIFACT_TRANSITION,
+    ARTIFACT_STATE_VALUE,
 )
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
@@ -413,6 +416,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_TRANSITION:
         if dict(value) != transition_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_STATE_VALUE:
+        if dict(value) != state_value_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -428,6 +434,7 @@ def _normalize_artifact(
     contract_context: Mapping[str, object] | None = None,
     transaction_context: Mapping[str, object] | None = None,
     transition_context: Mapping[str, object] | None = None,
+    state_value_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if kind not in ARTIFACT_KINDS:
         raise IndependentStoreError("artifact:kind")
@@ -450,6 +457,8 @@ def _normalize_artifact(
             value = money_independent._parse(raw)
         elif kind == ARTIFACT_TRANSITION:
             value = transition_independent._parse(raw)
+        elif kind == ARTIFACT_STATE_VALUE:
+            value = state_value_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -461,6 +470,7 @@ def _normalize_artifact(
         transaction_independent.IndependentTransactionMirrorError,
         money_independent.IndependentMoneyMirrorError,
         transition_independent.IndependentTransitionMirrorError,
+        state_value_independent.IndependentStateValueLedgerError,
     ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
@@ -564,6 +574,16 @@ def _normalize_artifact(
                 money_raw=transition_context["money_raw"],
                 money_context=transition_context["money_context"],
                 prior_transition_raw=transition_context.get("prior_transition_raw"),
+                registry=graph_profile_registry,
+            )
+        elif kind == ARTIFACT_STATE_VALUE:
+            if not isinstance(state_value_context, Mapping):
+                raise IndependentStoreError("state-value:context-required")
+            result = state_value_independent.verify_artifact(
+                raw,
+                money_contexts=state_value_context["money_contexts"],
+                prior_value_raw=state_value_context.get("prior_value_raw"),
+                transition_contexts=state_value_context.get("transition_contexts"),
                 registry=graph_profile_registry,
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
@@ -700,6 +720,20 @@ def _normalize_artifact(
             profile_version = int(result["profile_version"])
             authority_json = _authority_json(value["authority"], kind)
         elif kind == ARTIFACT_TRANSITION:
+            artifact_id = str(result["artifact_id"])
+            report_id = str(result["report_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            profile_version = int(result["profile_version"])
+            authority_json = _authority_json(value["authority"], kind)
+        elif kind == ARTIFACT_STATE_VALUE:
             artifact_id = str(result["artifact_id"])
             report_id = str(result["report_id"])
             current_stage_id = str(result["current_stage_id"])
@@ -1371,6 +1405,103 @@ def _transition_context(
         raise IndependentStoreError("database:transition-context") from exc
 
 
+def _state_value_context(
+    artifacts: Mapping[tuple[str, str], Mapping[str, object]],
+    raw_by_key: Mapping[tuple[str, str], bytes],
+    event_sequence_hint: Mapping[tuple[str, str], int],
+    state_value_raw: bytes,
+    graph_profile_registry: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Reconstruct all Money and optional Transition bytes named by a value artifact."""
+
+    try:
+        value = state_value_independent._parse(state_value_raw)
+        money_contexts: dict[str, dict[str, object]] = {}
+        transition_contexts: dict[str, dict[str, object]] = {}
+        for entry in value["entries"]:
+            upstream = entry["upstream"]
+            money_id = str(upstream["money"]["artifact_id"])
+            money_key = (ARTIFACT_MONEY_OBSERVATION, money_id)
+            if money_key not in artifacts:
+                raise IndependentStoreError("database:state-value-money-missing")
+            money_raw = raw_by_key[money_key]
+            money_contexts[money_id] = {
+                "money_raw": money_raw,
+                "money_context": _money_context(artifacts, raw_by_key, event_sequence_hint, money_raw, graph_profile_registry),
+            }
+            transition_ref = upstream.get("transition")
+            if transition_ref is not None:
+                transition_id = str(transition_ref["artifact_id"])
+                transition_key = (ARTIFACT_TRANSITION, transition_id)
+                if transition_key not in artifacts:
+                    raise IndependentStoreError("database:state-value-transition-missing")
+                transition_raw = raw_by_key[transition_key]
+                transition_contexts[transition_id] = {
+                    "transition_raw": transition_raw,
+                    "transition_context": _transition_context(
+                        artifacts,
+                        raw_by_key,
+                        event_sequence_hint,
+                        transition_raw,
+                        graph_profile_registry,
+                    ),
+                }
+        prior_value_raw = None
+        prior_id = value.get("prior_artifact_id")
+        if prior_id is not None:
+            prior_key = (ARTIFACT_STATE_VALUE, str(prior_id))
+            if prior_key not in artifacts:
+                raise IndependentStoreError("database:state-value-prior-missing")
+            prior_artifact = artifacts[prior_key]
+            if prior_artifact["current_stage_id"] != value.get("prior_stage_id"):
+                raise IndependentStoreError("database:state-value-prior-stage")
+            prior_value_raw = raw_by_key[prior_key]
+            prior_value = state_value_independent._parse(prior_value_raw)
+            for prior_entry in prior_value["entries"]:
+                prior_upstream = prior_entry["upstream"]
+                prior_money_id = str(prior_upstream["money"]["artifact_id"])
+                prior_money_key = (ARTIFACT_MONEY_OBSERVATION, prior_money_id)
+                if prior_money_key not in artifacts:
+                    raise IndependentStoreError("database:state-value-prior-money-missing")
+                prior_money_raw = raw_by_key[prior_money_key]
+                money_contexts.setdefault(
+                    prior_money_id,
+                    {
+                        "money_raw": prior_money_raw,
+                        "money_context": _money_context(artifacts, raw_by_key, event_sequence_hint, prior_money_raw, graph_profile_registry),
+                    },
+                )
+                prior_transition_ref = prior_upstream.get("transition")
+                if prior_transition_ref is not None:
+                    prior_transition_id = str(prior_transition_ref["artifact_id"])
+                    prior_transition_key = (ARTIFACT_TRANSITION, prior_transition_id)
+                    if prior_transition_key not in artifacts:
+                        raise IndependentStoreError("database:state-value-prior-transition-missing")
+                    prior_transition_raw = raw_by_key[prior_transition_key]
+                    transition_contexts.setdefault(
+                        prior_transition_id,
+                        {
+                            "transition_raw": prior_transition_raw,
+                            "transition_context": _transition_context(
+                                artifacts,
+                                raw_by_key,
+                                event_sequence_hint,
+                                prior_transition_raw,
+                                graph_profile_registry,
+                            ),
+                        },
+                    )
+        return {
+            "money_contexts": money_contexts,
+            "prior_value_raw": prior_value_raw,
+            "transition_contexts": transition_contexts,
+        }
+    except IndependentStoreError:
+        raise
+    except Exception as exc:
+        raise IndependentStoreError("database:state-value-context") from exc
+
+
 def _verify_rows(
     snapshot: Mapping[str, object],
     *,
@@ -1403,6 +1534,7 @@ def _verify_rows(
     transaction_trace_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     money_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     transition_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    state_value_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     event_sequence_hint = {
         (str(row["artifact_kind"]), str(row["artifact_id"])): int(row["sequence"])
         for row in rows["events"]
@@ -1441,6 +1573,9 @@ def _verify_rows(
             continue
         if kind == ARTIFACT_TRANSITION:
             transition_rows.append((row, raw, key))
+            continue
+        if kind == ARTIFACT_STATE_VALUE:
+            state_value_rows.append((row, raw, key))
             continue
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
@@ -1813,6 +1948,40 @@ def _verify_rows(
         artifact_hashes.add(hash_key)
         artifacts[key] = artifact
 
+    # State Value artifacts consume the exact stored Money/Contract/Denominator/
+    # Transaction/governance bytes above, plus an optional current Transition
+    # artifact.  Their own predecessor is reconstructed from this same state
+    # map before the event-chain pass checks head order.
+    for row, raw, key in sorted(state_value_rows, key=lambda item: int(event_sequence_hint.get(item[2], 0))):
+        try:
+            context = _state_value_context(
+                artifacts,
+                raw_by_key,
+                event_sequence_hint,
+                raw,
+                graph_profile_registry,
+            )
+            artifact = _normalize_artifact(
+                ARTIFACT_STATE_VALUE,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                state_value_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:state-value-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_STATE_VALUE, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
+
     operations = {row["operation_id"]: row for row in rows["operations"]}
     receipts = {row["operation_id"]: row for row in rows["receipts"]}
     events = {row["sequence"]: row for row in rows["events"]}
@@ -2070,6 +2239,82 @@ def _verify_rows(
             case_sequence = artifact_event_sequence.get((ARTIFACT_CASE, str(case_link["artifact_id"])))
             if case_sequence is None or case_sequence >= transition_sequence:
                 raise IndependentStoreError("database:transition-case-order")
+
+    # State Value observations consume the current Money head and any named
+    # optional Transition head.  Their own predecessor is the current value
+    # head, so an old snapshot cannot be rebound into a second counting chain.
+    for state_value_artifact in artifacts.values():
+        if state_value_artifact["kind"] != ARTIFACT_STATE_VALUE:
+            continue
+        state_value_key = (ARTIFACT_STATE_VALUE, str(state_value_artifact["artifact_id"]))
+        state_value_sequence = artifact_event_sequence.get(state_value_key)
+        if state_value_sequence is None:
+            raise IndependentStoreError("database:state-value-event")
+        value = state_value_independent._parse(state_value_artifact["payload"])
+        for entry in value["entries"]:
+            upstream = entry["upstream"]
+            for kind, reference in (
+                (ARTIFACT_MONEY_OBSERVATION, upstream["money"]),
+                (ARTIFACT_TRANSACTION_TRACE, upstream["transaction"]),
+                (ARTIFACT_CONTRACT, upstream["contract"]),
+                (ARTIFACT_DENOMINATOR, upstream["denominator"]),
+                (ARTIFACT_GOVERNANCE, upstream["governance"]),
+            ):
+                artifact_id = str(reference["artifact_id"])
+                upstream_key = (kind, artifact_id)
+                upstream_artifact = artifacts.get(upstream_key)
+                upstream_sequence = artifact_event_sequence.get(upstream_key)
+                if upstream_artifact is None or upstream_sequence is None or upstream_sequence >= state_value_sequence:
+                    raise IndependentStoreError("database:state-value-upstream-order")
+                if upstream_artifact["current_stage_id"] != reference["stage_id"]:
+                    raise IndependentStoreError("database:state-value-upstream-stage")
+            money_id = str(upstream["money"]["artifact_id"])
+            money_artifact = artifacts[(ARTIFACT_MONEY_OBSERVATION, money_id)]
+            money_chain = _chain_id(ARTIFACT_MONEY_OBSERVATION, str(money_artifact["subject"]), str(money_artifact["scope"]), money_artifact.get("profile_id"))
+            money_head_at_append: Mapping[str, object] | None = None
+            for sequence in range(1, state_value_sequence):
+                event = events.get(sequence)
+                if event is not None and event["chain_id"] == money_chain:
+                    money_head_at_append = artifacts.get((ARTIFACT_MONEY_OBSERVATION, str(event["artifact_id"])))
+            if money_head_at_append is None or money_head_at_append["artifact_id"] != money_artifact["artifact_id"] or money_head_at_append["current_stage_id"] != money_artifact["current_stage_id"]:
+                raise IndependentStoreError("database:state-value-money-not-head")
+            transition_ref = upstream.get("transition")
+            if transition_ref is not None:
+                transition_id = str(transition_ref["artifact_id"])
+                transition_artifact = artifacts.get((ARTIFACT_TRANSITION, transition_id))
+                transition_sequence = artifact_event_sequence.get((ARTIFACT_TRANSITION, transition_id))
+                if transition_artifact is None or transition_sequence is None or transition_sequence >= state_value_sequence:
+                    raise IndependentStoreError("database:state-value-transition-order")
+                if transition_artifact["current_stage_id"] != transition_ref["stage_id"]:
+                    raise IndependentStoreError("database:state-value-transition-stage")
+                transition_chain = _chain_id(ARTIFACT_TRANSITION, str(transition_artifact["subject"]), str(transition_artifact["scope"]), transition_artifact.get("profile_id"))
+                transition_head_at_append: Mapping[str, object] | None = None
+                for sequence in range(1, state_value_sequence):
+                    event = events.get(sequence)
+                    if event is not None and event["chain_id"] == transition_chain:
+                        transition_head_at_append = artifacts.get((ARTIFACT_TRANSITION, str(event["artifact_id"])))
+                if transition_head_at_append is None or transition_head_at_append["artifact_id"] != transition_artifact["artifact_id"] or transition_head_at_append["current_stage_id"] != transition_artifact["current_stage_id"]:
+                    raise IndependentStoreError("database:state-value-transition-not-head")
+        prior_id = value.get("prior_artifact_id")
+        if prior_id is None:
+            if value["stage_kind"] != state_value_independent.STAGE_OBSERVED:
+                raise IndependentStoreError("database:state-value-missing-prior")
+        else:
+            prior_key = (ARTIFACT_STATE_VALUE, str(prior_id))
+            prior = artifacts.get(prior_key)
+            prior_sequence = artifact_event_sequence.get(prior_key)
+            if prior is None or prior_sequence is None or prior_sequence >= state_value_sequence or prior["current_stage_id"] != value["prior_stage_id"]:
+                raise IndependentStoreError("database:state-value-prior-order")
+            state_chain = _chain_id(ARTIFACT_STATE_VALUE, str(prior["subject"]), str(prior["scope"]), prior.get("profile_id"))
+            prior_head_at_append: Mapping[str, object] | None = None
+            for sequence in range(1, state_value_sequence):
+                event = events.get(sequence)
+                if event is not None and event["chain_id"] == state_chain:
+                    prior_head_at_append = artifacts.get((ARTIFACT_STATE_VALUE, str(event["artifact_id"])))
+            if prior_head_at_append is None or prior_head_at_append["artifact_id"] != prior["artifact_id"] or prior_head_at_append["current_stage_id"] != prior["current_stage_id"]:
+                raise IndependentStoreError("database:state-value-prior-not-head")
+            if value["stage_kind"] != state_value_independent.STAGE_RECALCULATED:
+                raise IndependentStoreError("database:state-value-prior-stage")
 
     # A case may only be appended after every evidence and governance byte it
     # names.  This is separate from the generic case-chain head check: the
