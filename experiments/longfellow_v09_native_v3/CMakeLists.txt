@@ -255,6 +255,8 @@ target_link_libraries(longfellow_source_assertion_prover PRIVATE
 
 add_executable(longfellow_source_assertion_verifier
   src/native_v3_source_assertion_verifier.cpp
+  src/native_v3_source_assertion_canonical.cpp
+  src/native_v3_source_assertion_public_parity_codec.cpp
 )
 target_include_directories(longfellow_source_assertion_verifier PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -267,6 +269,21 @@ target_compile_definitions(longfellow_source_assertion_verifier PRIVATE
 target_link_libraries(longfellow_source_assertion_verifier PRIVATE
   longfellow_source_assertion_verifier_circuit
   longfellow_source_assertion_proof_artifact)
+
+add_executable(longfellow_source_assertion_public_parity
+  src/native_v3_source_assertion_public_parity.cpp
+  src/native_v3_source_assertion_public_parity_codec.cpp
+)
+target_include_directories(longfellow_source_assertion_public_parity PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_source_assertion_public_parity PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_source_assertion_public_parity PRIVATE
+  longfellow_source_assertion_relation)
 
 add_executable(longfellow_source_assertion_prover_runner
   src/native_v3_source_assertion_prover_runner.cpp

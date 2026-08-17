@@ -61,24 +61,36 @@ std::vector<DWORD> Descendants(DWORD root, std::map<DWORD, ProcEntry>& entries) 
 }
 
 bool SampleProcesses(DWORD root, std::map<DWORD, Peak>& peaks,
-                     size_t& sample_count) {
+                     size_t& sample_count, size_t& snapshot_failures,
+                     size_t& open_failures, size_t& info_failures,
+                     std::set<DWORD>& seen_processes) {
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snapshot == INVALID_HANDLE_VALUE) return false;
+  if (snapshot == INVALID_HANDLE_VALUE) {
+    ++snapshot_failures;
+    return false;
+  }
   std::map<DWORD, ProcEntry> entries;
   PROCESSENTRY32W entry{};
   entry.dwSize = sizeof(entry);
-  if (Process32FirstW(snapshot, &entry)) {
-    do {
-      entries.emplace(entry.th32ProcessID,
-                      ProcEntry{entry.th32ParentProcessID, entry.szExeFile});
-    } while (Process32NextW(snapshot, &entry));
+  if (!Process32FirstW(snapshot, &entry)) {
+    ++snapshot_failures;
+    CloseHandle(snapshot);
+    return false;
   }
+  do {
+    entries.emplace(entry.th32ProcessID,
+                    ProcEntry{entry.th32ParentProcessID, entry.szExeFile});
+  } while (Process32NextW(snapshot, &entry));
   CloseHandle(snapshot);
   const std::vector<DWORD> pids = Descendants(root, entries);
   for (DWORD pid : pids) {
+    seen_processes.insert(pid);
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
                                  FALSE, pid);
-    if (!process) continue;
+    if (!process) {
+      ++open_failures;
+      continue;
+    }
     PROCESS_MEMORY_COUNTERS_EX counters{};
     counters.cb = sizeof(counters);
     if (GetProcessMemoryInfo(process,
@@ -89,6 +101,8 @@ bool SampleProcesses(DWORD root, std::map<DWORD, Peak>& peaks,
       peak.working = (std::max)(peak.working, counters.WorkingSetSize);
       peak.private_bytes = (std::max)(peak.private_bytes, counters.PrivateUsage);
       peak.pagefile = (std::max)(peak.pagefile, counters.PagefileUsage);
+    } else {
+      ++info_failures;
     }
     CloseHandle(process);
   }
@@ -156,7 +170,8 @@ std::string Hex(const std::array<uint8_t, 32>& bytes) {
 void PrintPeaks(const std::map<DWORD, Peak>& peaks) {
   for (const auto& [pid, peak] : peaks) {
     std::printf("SOURCE_ASSERTION_PROVER_PROCESS pid=%lu parent=%lu "
-                "peak_working=%zu peak_private=%zu peak_pagefile=%zu\n",
+                "peak_working_set_bytes=%zu peak_private_usage_bytes=%zu "
+                "peak_pagefile_usage_bytes=%zu\n",
                 static_cast<unsigned long>(pid),
                 static_cast<unsigned long>(peak.parent), peak.working,
                 peak.private_bytes, peak.pagefile);
@@ -295,24 +310,31 @@ int main(int argc, char** argv) {
   }
 
   std::printf("SOURCE_ASSERTION_PROVER_RUNNER attempt=1 attempts_total=1 "
-              "job_memory_cap=%llu hard_cap=5000000000 enforcement=job-object\n",
+              "job_commit_cap_bytes=%llu hard_cap_bytes=5000000000 "
+              "enforcement=job-object-commit-limit\n",
               kSafetyMemoryCap);
   const auto start = std::chrono::steady_clock::now();
   std::map<DWORD, Peak> peaks;
   size_t samples = 0;
-  bool sample_complete = true;
+  size_t snapshot_failures = 0;
+  size_t open_failures = 0;
+  size_t info_failures = 0;
+  size_t wait_failures = 0;
+  std::set<DWORD> seen_processes;
   for (;;) {
-    if (!SampleProcesses(process_info.dwProcessId, peaks, samples)) {
-      sample_complete = false;
-    }
+    SampleProcesses(process_info.dwProcessId, peaks, samples,
+                    snapshot_failures, open_failures, info_failures,
+                    seen_processes);
     const DWORD wait = WaitForSingleObject(process_info.hProcess, 250);
     if (wait == WAIT_OBJECT_0) break;
     if (wait == WAIT_FAILED) {
-      sample_complete = false;
+      ++wait_failures;
       break;
     }
   }
-  SampleProcesses(process_info.dwProcessId, peaks, samples);
+  SampleProcesses(process_info.dwProcessId, peaks, samples,
+                  snapshot_failures, open_failures, info_failures,
+                  seen_processes);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - start)
                            .count();
@@ -321,6 +343,18 @@ int main(int argc, char** argv) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION after{};
   bool job_query = QueryInformationJobObject(
       job, JobObjectExtendedLimitInformation, &after, sizeof(after), nullptr) != FALSE;
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+  bool accounting_query = QueryInformationJobObject(
+      job, JobObjectBasicAccountingInformation, &accounting,
+      sizeof(accounting), nullptr) != FALSE;
+  const size_t job_total_processes =
+      accounting_query ? static_cast<size_t>(accounting.TotalProcesses) : 0;
+  const bool process_tree_complete =
+      job_query && accounting_query && samples > 0 &&
+      snapshot_failures == 0 && open_failures == 0 && info_failures == 0 &&
+      wait_failures == 0 &&
+      job_total_processes == seen_processes.size();
+  const bool telemetry_complete = process_tree_complete;
   const bool cap_breached =
       job_query && after.PeakJobMemoryUsed >= kSafetyMemoryCap;
   CloseHandle(process_info.hThread);
@@ -334,17 +368,24 @@ int main(int argc, char** argv) {
                                             : 0;
   std::array<uint8_t, 32> artifact_hash{};
   const bool artifact_hash_ok = artifact_present && Sha256File(artifact_path, artifact_hash);
-  std::printf("SOURCE_ASSERTION_PROVER_RESOURCE peak_job_memory=%zu "
-              "peak_process_memory=%zu process_count=%zu samples=%zu "
-              "telemetry_complete=%d process_tree_complete=%d pagefile_signal=available "
-              "scratch_peak_bytes=%llu wall_ms=%lld\n",
-              job_query ? after.PeakJobMemoryUsed : 0,
-              job_query ? after.PeakProcessMemoryUsed : 0,
-              peaks.size(),
-              samples, job_query && sample_complete ? 1 : 0,
-              job_query && sample_complete ? 1 : 0,
-              static_cast<unsigned long long>(ScratchBytes(scratch_path)),
-              static_cast<long long>(elapsed));
+  std::printf("SOURCE_ASSERTION_PROVER_RESOURCE peak_job_commit_bytes=%zu "
+              "peak_process_commit_bytes=%zu sampled_processes=%zu "
+              "job_total_processes=%zu observed_processes=%zu samples=%zu "
+              "telemetry_complete=%d process_tree_complete=%d "
+              "snapshot_failures=%zu open_process_failures=%zu "
+              "memory_info_failures=%zu wait_failures=%zu "
+              "pagefile_growth_evidence=unavailable "
+              "final_scratch_bytes=%llu wall_ms=%lld\n",
+               job_query ? after.PeakJobMemoryUsed : 0,
+               job_query ? after.PeakProcessMemoryUsed : 0,
+               peaks.size(),
+               job_total_processes,
+               seen_processes.size(),
+               samples, telemetry_complete ? 1 : 0,
+               process_tree_complete ? 1 : 0,
+               snapshot_failures, open_failures, info_failures, wait_failures,
+               static_cast<unsigned long long>(ScratchBytes(scratch_path)),
+               static_cast<long long>(elapsed));
   PrintPeaks(peaks);
   std::printf("SOURCE_ASSERTION_PROVER_OUTPUT exit_code=%lu cap_breached=%d "
               "artifact_present=%d artifact_size=%llu artifact_hash_ok=%d "
@@ -362,5 +403,8 @@ int main(int argc, char** argv) {
               ReadText(stderr_path).c_str());
   CloseHandle(job);
   std::printf("SOURCE_ASSERTION_PROVER_ATTEMPT_COUNT=1\n");
-  return !cap_breached && exit_code == 0 && artifact_present && artifact_hash_ok ? 0 : 1;
+  return !cap_breached && exit_code == 0 && artifact_present && artifact_hash_ok &&
+                 telemetry_complete
+             ? 0
+             : 1;
 }
