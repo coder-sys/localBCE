@@ -82,7 +82,7 @@
       "MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0",
       "MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept",
       "MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=36969 public_inputs=26721 layers=217 terms=12158968 public_bytes=3340 proof_bytes=408264 rate=4 queries=189 transcript_version=6 circuit_id=1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0 state_mutations=0 clear_authorizations=0",
-      "NATIVE_STATE_FINAL_PASS 11 12 ac29f26528f877efd5b40529ade6b2fd07e5b29baae89f960814763ddb6572993476bf925da0a962901d80f200d63f6bc2c3543b50454cbfe1c9200719c419b3 0 1 False None"
+      "NATIVE_STATE_FINAL2_PASS 11 12 ac29f26528f877efd5b40529ade6b2fd07e5b29baae89f960814763ddb6572993476bf925da0a962901d80f200d63f6bc2c3543b50454cbfe1c9200719c419b3 0 1 False None"
     ]
   },
   "driver_personal_audit_correction": {

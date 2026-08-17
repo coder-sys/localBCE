@@ -949,6 +949,8 @@ class MinimalClearanceStateStoreV1:
                     or int(state[9]) != int(acceptance.statement.state("clearance_count_before"))
                 ):
                     raise MinimalClearanceProofStateError("proof_state_binding_mismatch")
+                if state[4] != acceptance.statement.state_before_id or state[5] != acceptance.statement.epoch or state[6] != acceptance.statement.sequence_before:
+                    raise MinimalClearanceProofStateError("proof_stale_state")
                 statement = acceptance.statement
                 expected_join = _sha(
                     b"BL/NATIVE-V3/MINIMAL-DECISION-ACCESS-JOIN/v1\x00",
@@ -977,8 +979,6 @@ class MinimalClearanceStateStoreV1:
                     or expected_settlement != statement.settlement_id
                 ):
                     raise MinimalClearanceProofStateError("proof_statement_derivation")
-                if state[4] != acceptance.statement.state_before_id or state[5] != acceptance.statement.epoch or state[6] != acceptance.statement.sequence_before:
-                    raise MinimalClearanceProofStateError("proof_stale_state")
                 replay_after = _sha(_PROOF_REPLAY_DOMAIN, bytes(state[10]), acceptance.statement.attempt_id, acceptance.statement.request_id, acceptance.statement.receipt_id)
                 advanced = acceptance.statement.directive in (1, 5)
                 clearance_after = (
