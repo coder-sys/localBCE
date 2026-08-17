@@ -5,7 +5,7 @@
 #include <windows.h>
 #include <psapi.h>
 
-#include "native_v3_minimal_linked_relation.h"
+#include "native_v3_minimal_clearance_relation.h"
 
 namespace {
 
@@ -47,7 +47,7 @@ void PrintMemory(const char* label) {
 }  // namespace
 
 int main() {
-  using namespace blind_ledger_longfellow::minimal_linked;
+  using namespace blind_ledger_longfellow::minimal_clearance;
   const Fixture fixture = make_fixture();
   const std::vector<uint8_t> source_input =
       private_batch_commitment_input(fixture.cases[0]);

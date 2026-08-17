@@ -303,7 +303,7 @@ target_link_libraries(longfellow_source_assertion_prover_runner PRIVATE
 # it does not claim multi-component transcript linkage and does not link or
 # call the legacy 18-endpoint native_v3_relation builder.
 add_library(longfellow_minimal_clearance_relation STATIC
-  src/native_v3_minimal_linked_relation.cc
+  src/native_v3_minimal_clearance_relation.cc
   src/native_v3_fixture.cc
   "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_reference.cc"
   "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_round_constants.cc"
@@ -321,7 +321,7 @@ target_link_libraries(longfellow_minimal_clearance_relation PUBLIC
   longfellow_task_crypto bcrypt)
 
 add_executable(longfellow_minimal_clearance_shape
-  src/native_v3_minimal_linked_shape.cpp
+  src/native_v3_minimal_clearance_shape.cpp
 )
 target_include_directories(longfellow_minimal_clearance_shape PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -335,7 +335,7 @@ target_link_libraries(longfellow_minimal_clearance_shape PRIVATE
   longfellow_minimal_clearance_relation psapi)
 
 add_executable(longfellow_minimal_clearance_eval
-  src/native_v3_minimal_linked_eval.cpp
+  src/native_v3_minimal_clearance_eval.cpp
 )
 target_include_directories(longfellow_minimal_clearance_eval PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"

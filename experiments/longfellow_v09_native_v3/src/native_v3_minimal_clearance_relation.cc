@@ -1,4 +1,4 @@
-#include "native_v3_minimal_linked_relation.h"
+#include "native_v3_minimal_clearance_relation.h"
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 #include "circuits/tests/sha3/sha3_reference.h"
 #include "util/panic.h"
 
-namespace blind_ledger_longfellow::minimal_linked {
+namespace blind_ledger_longfellow::minimal_clearance {
 namespace {
 
 constexpr uint8_t kClear = 1;
@@ -1040,7 +1040,7 @@ Fixture make_fixture() {
     FillRole(value.statement.proof_role);
     value.statement.proof_suite.fill(0);
     value.statement.execution_context =
-        HashText("BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-linked");
+        HashText("BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance");
     value.statement.source_registry_snapshot =
         HashText("BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v1", "snapshot-1");
     value.statement.source_profile =
@@ -1053,11 +1053,11 @@ Fixture make_fixture() {
     value.statement.settlement_domain =
         HashText("BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail");
     value.statement.evaluator_id =
-        HashText("BL/NATIVE-V3/EVALUATOR/v1", "minimal-linked-evaluator");
+        HashText("BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator");
     value.statement.schema_id =
-        HashText("BL/NATIVE-V3/SCHEMA/v1", "minimal-linked-schema");
+        HashText("BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema");
     value.statement.program_id =
-        HashText("BL/NATIVE-V3/PROGRAM/v1", "minimal-linked-program");
+        HashText("BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program");
     value.statement.policy_id =
         HashText("BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy");
     value.statement.subject_id = source.credential_id;
@@ -1407,4 +1407,4 @@ bool evaluate_case(const Case& value, std::string& reason) {
   return true;
 }
 
-}  // namespace blind_ledger_longfellow::minimal_linked
+}  // namespace blind_ledger_longfellow::minimal_clearance

@@ -1,5 +1,5 @@
-#ifndef BLIND_LEDGER_LONGFELLOW_V09_NATIVE_V3_MINIMAL_LINKED_RELATION_H_
-#define BLIND_LEDGER_LONGFELLOW_V09_NATIVE_V3_MINIMAL_LINKED_RELATION_H_
+#ifndef BLIND_LEDGER_LONGFELLOW_V09_NATIVE_V3_MINIMAL_CLEARANCE_RELATION_H_
+#define BLIND_LEDGER_LONGFELLOW_V09_NATIVE_V3_MINIMAL_CLEARANCE_RELATION_H_
 
 #include <array>
 #include <cstddef>
@@ -13,7 +13,7 @@
 #include "native_v3_fixture.h"
 #include "sumcheck/circuit.h"
 
-namespace blind_ledger_longfellow::minimal_linked {
+namespace blind_ledger_longfellow::minimal_clearance {
 
 constexpr size_t kDigestBytes = 64;
 constexpr char kProofRole[] =
@@ -163,6 +163,6 @@ DerivedIdentities derive_identities(const Case& value);
 // Longfellow circuit and does not call the legacy 18-endpoint relation.
 bool evaluate_case(const Case& value, std::string& reason);
 
-}  // namespace blind_ledger_longfellow::minimal_linked
+}  // namespace blind_ledger_longfellow::minimal_clearance
 
-#endif  // BLIND_LEDGER_LONGFELLOW_V09_NATIVE_V3_MINIMAL_LINKED_RELATION_H_
+#endif  // BLIND_LEDGER_LONGFELLOW_V09_NATIVE_V3_MINIMAL_CLEARANCE_RELATION_H_

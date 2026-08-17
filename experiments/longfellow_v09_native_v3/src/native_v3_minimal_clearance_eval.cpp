@@ -4,21 +4,21 @@
 #include <string>
 #include <vector>
 
-#include "native_v3_minimal_linked_relation.h"
+#include "native_v3_minimal_clearance_relation.h"
 #include "sumcheck/prover_layers.h"
 
 namespace {
 
-using blind_ledger_longfellow::minimal_linked::Case;
-using blind_ledger_longfellow::minimal_linked::Fixture;
-using blind_ledger_longfellow::minimal_linked::RelationField;
+using blind_ledger_longfellow::minimal_clearance::Case;
+using blind_ledger_longfellow::minimal_clearance::Fixture;
+using blind_ledger_longfellow::minimal_clearance::RelationField;
 constexpr uint8_t kHold = 2;
 
 bool CircuitAccepts(const proofs::Circuit<RelationField>& circuit,
                     const Case& value, std::string& reason) {
   const RelationField field;
   proofs::Dense<RelationField> witness(1, circuit.ninputs);
-  blind_ledger_longfellow::minimal_linked::fill_witness(value, witness);
+  blind_ledger_longfellow::minimal_clearance::fill_witness(value, witness);
   if (witness.n1_ != circuit.ninputs) {
     reason = "witness.input-count";
     return false;
@@ -41,7 +41,7 @@ bool CircuitAccepts(const proofs::Circuit<RelationField>& circuit,
 
 void Flip(blind_ledger_longfellow::Digest& value) { value[0] ^= 0x01; }
 
-void FlipRole(blind_ledger_longfellow::minimal_linked::ProofRole& value) {
+void FlipRole(blind_ledger_longfellow::minimal_clearance::ProofRole& value) {
   value[0] ^= 0x01;
 }
 
@@ -56,7 +56,7 @@ struct Mutation {
 }  // namespace
 
 int main() {
-  using namespace blind_ledger_longfellow::minimal_linked;
+  using namespace blind_ledger_longfellow::minimal_clearance;
   const Fixture fixture = make_fixture();
   const Fixture retry_fixture = make_fixture();
   for (size_t index = 0; index < fixture.cases.size(); ++index) {

@@ -141,9 +141,9 @@
       "layers": 129,
       "terms": 229775,
       "circuit_id": "bf788a1ce6f230647791c00cb8c50369aadf5c924c92f107d095b497bf4c3dfa",
-      "peak_working_set_bytes": 56385536,
-      "peak_private_commit_bytes": 57864192,
-      "measurement": "exact final construction output; zero children"
+      "peak_working_set_bytes": 56832000,
+      "peak_private_commit_bytes": 58277888,
+      "measurement": "exact final renamed construction output; zero children"
     },
     {
       "name": "canonical_private_source_registry_commitment",
@@ -155,9 +155,9 @@
       "layers": 217,
       "terms": 12158968,
       "circuit_id": "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0",
-      "peak_working_set_bytes": 980586496,
-      "peak_private_commit_bytes": 1040179200,
-      "measurement": "exact final construction output; zero children"
+      "peak_working_set_bytes": 981446656,
+      "peak_private_commit_bytes": 1041203200,
+      "measurement": "exact final renamed construction output; zero children"
     },
     {
       "name": "prior_four_endpoint_shape",
