@@ -17,6 +17,8 @@ from app.mirror import continuity_store as store
 from app.mirror import continuity_store_independent as independent
 from app.mirror import discrepancy_case as discrepancy_case
 from app.mirror import discrepancy_case_independent as discrepancy_case_independent
+from app.mirror import denominator_ledger as denominator_ledger
+from app.mirror import denominator_ledger_independent as denominator_ledger_independent
 from app.mirror import source_evidence_custody as source_custody
 from app.mirror import source_evidence_custody_independent as source_custody_independent
 from app.mirror import source_reconciliation as source_reconciliation
@@ -127,6 +129,8 @@ SOFTWARE_IDENTITIES = {
     "source_reconciliation_independent_identity": _module_identity(source_reconciliation_independent.__file__),
     "discrepancy_case_module_identity": _module_identity(discrepancy_case.__file__),
     "discrepancy_case_independent_identity": _module_identity(discrepancy_case_independent.__file__),
+    "denominator_ledger_module_identity": _module_identity(denominator_ledger.__file__),
+    "denominator_ledger_independent_identity": _module_identity(denominator_ledger_independent.__file__),
     "export_module_identity": _module_identity(__file__),
 }
 

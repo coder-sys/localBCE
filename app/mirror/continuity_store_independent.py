@@ -20,6 +20,7 @@ from app.governance import provider_continuity_control_pack_independent as gover
 from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
 from app.mirror import discrepancy_case_independent as case_independent
+from app.mirror import denominator_ledger_independent as denominator_independent
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import source_evidence_custody_independent as source_independent
 from app.mirror import source_reconciliation_independent as reconciliation_independent
@@ -32,7 +33,8 @@ ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
 ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
 ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
 ARTIFACT_CASE = case_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE)
+ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
@@ -375,6 +377,9 @@ def _authority_json(value: Mapping[str, object], kind: str) -> str:
     elif kind == ARTIFACT_CASE:
         if dict(value) != case_independent.AUTHORITY_FLAGS:
             raise IndependentStoreError("artifact:authority-flags")
+    elif kind == ARTIFACT_DENOMINATOR:
+        if dict(value) != denominator_independent.AUTHORITY_FLAGS:
+            raise IndependentStoreError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise IndependentStoreError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -386,6 +391,7 @@ def _normalize_artifact(
     *,
     graph_profile_registry: Mapping[str, object] | None = None,
     reconciliation_context: Mapping[str, object] | None = None,
+    denominator_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if kind not in ARTIFACT_KINDS:
         raise IndependentStoreError("artifact:kind")
@@ -398,12 +404,15 @@ def _normalize_artifact(
             value = reconciliation_independent._parse(raw)
         elif kind == ARTIFACT_CASE:
             value = case_independent._parse(raw)
+        elif kind == ARTIFACT_DENOMINATOR:
+            value = denominator_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
         source_independent.IndependentSourceCustodyError,
         reconciliation_independent.IndependentSourceReconciliationError,
         case_independent.IndependentDiscrepancyCaseError,
+        denominator_independent.IndependentDenominatorError,
     ) as exc:
         raise IndependentStoreError(str(exc)) from exc
     try:
@@ -441,6 +450,17 @@ def _normalize_artifact(
                 prior_case_raw=reconciliation_context.get("prior_case_raw"),
                 retest_reconciliation_raw=reconciliation_context.get("retest_reconciliation_raw"),
                 retest_context=reconciliation_context.get("retest_context"),
+            )
+        elif kind == ARTIFACT_DENOMINATOR:
+            if not isinstance(denominator_context, Mapping):
+                raise IndependentStoreError("denominator:context-required")
+            result = denominator_independent.verify_artifact(
+                raw,
+                source_raw=denominator_context["source_raw"],
+                graph_raw=denominator_context.get("graph_raw"),
+                governance_raw=denominator_context["governance_raw"],
+                registry=graph_profile_registry or {},
+                prior_denominator_raw=denominator_context.get("prior_denominator_raw"),
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -508,6 +528,20 @@ def _normalize_artifact(
         elif kind == ARTIFACT_CASE:
             artifact_id = result["artifact_id"]
             report_id = result["case_id"]
+            current_stage_id = result["current_stage_id"]
+            transition_id = result["transition_id"]
+            stage_kind = result["stage_kind"]
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = result["schema"]
+            subject_id = result["subject"]
+            scope = result["scope"]
+            profile_id = result["profile_id"]
+            profile_version = result["profile_version"]
+            authority_json = _authority_json(value["authority"], kind)
+        elif kind == ARTIFACT_DENOMINATOR:
+            artifact_id = result["artifact_id"]
+            report_id = result["report_id"]
             current_stage_id = result["current_stage_id"]
             transition_id = result["transition_id"]
             stage_kind = result["stage_kind"]
@@ -646,6 +680,17 @@ def _normalize_artifact(
                 "retest_reconciliation_artifact_id": result["retest_reconciliation_artifact_id"],
                 "responsibility_boundary": result["responsibility_boundary"],
                 "parity_status": result["parity_status"],
+            }
+        )
+    elif kind == ARTIFACT_DENOMINATOR:
+        normalized.update(
+            {
+                "denominator_stage": result["denominator_stage"],
+                "source_artifact_id": result["source_artifact_id"],
+                "population_root": result["population_root"],
+                "child_population_root": result["child_population_root"],
+                "input_record_count": result["input_record_count"],
+                "outcome_counts": result["outcome_counts"],
             }
         )
     return normalized
@@ -904,6 +949,7 @@ def _verify_rows(
     raw_by_key: dict[tuple[str, str], bytes] = {}
     reconciliation_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     case_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
+    denominator_rows: list[tuple[Mapping[str, object], bytes, tuple[str, str]]] = []
     event_sequence_hint = {
         (str(row["artifact_kind"]), str(row["artifact_id"])): int(row["sequence"])
         for row in rows["events"]
@@ -924,6 +970,9 @@ def _verify_rows(
             continue
         if kind == ARTIFACT_CASE:
             case_rows.append((row, raw, key))
+            continue
+        if kind == ARTIFACT_DENOMINATOR:
+            denominator_rows.append((row, raw, key))
             continue
         artifact = _normalize_artifact(kind, raw, graph_profile_registry=graph_profile_registry)
         for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
@@ -960,6 +1009,69 @@ def _verify_rows(
             )
         except Exception as exc:
             raise IndependentStoreError("database:source-graph-binding") from exc
+
+    # Denominator artifacts are checked only after their source, optional
+    # graph, and governing approval bytes have been independently normalized.
+    # The denominator payload carries labels for audit, but those labels are
+    # never used as authority without reconstructing the named rows here.
+    for row, raw, key in sorted(denominator_rows, key=lambda item: int(event_sequence_hint.get(item[2], 0))):
+        try:
+            value = denominator_independent._parse(raw)
+            source_binding = value["source_binding"]
+            governance_binding = value["governance_binding"]
+            if not isinstance(source_binding, dict) or not isinstance(governance_binding, dict):
+                raise IndependentStoreError("database:denominator-binding")
+            source_key = (ARTIFACT_SOURCE_EVIDENCE, str(source_binding["artifact_id"]))
+            source_artifact = artifacts.get(source_key)
+            if source_artifact is None or source_artifact["current_stage_id"] != source_binding["stage_id"]:
+                raise IndependentStoreError("database:denominator-source")
+            graph_id = source_binding.get("graph_artifact_id")
+            graph_artifact = None
+            if graph_id is not None:
+                graph_artifact = artifacts.get((ARTIFACT_GRAPH, str(graph_id)))
+                if graph_artifact is None:
+                    raise IndependentStoreError("database:denominator-graph")
+                if graph_artifact["current_stage_id"] != source_binding.get("graph_stage_id"):
+                    raise IndependentStoreError("database:denominator-graph-stage")
+            governance_key = (ARTIFACT_GOVERNANCE, str(governance_binding["artifact_id"]))
+            governance_artifact = artifacts.get(governance_key)
+            if governance_artifact is None or governance_artifact["current_stage_id"] != governance_binding["stage_id"]:
+                raise IndependentStoreError("database:denominator-governance")
+            prior_raw = None
+            prior_id = value.get("prior_artifact_id")
+            if prior_id is not None:
+                prior_key = (ARTIFACT_DENOMINATOR, str(prior_id))
+                if prior_key not in raw_by_key:
+                    raise IndependentStoreError("database:denominator-prior")
+                prior_raw = raw_by_key[prior_key]
+                if prior_key not in artifacts:
+                    raise IndependentStoreError("database:denominator-prior-order")
+            context = {
+                "source_raw": raw_by_key[source_key],
+                "graph_raw": graph_artifact["payload"] if graph_artifact is not None else None,
+                "governance_raw": governance_artifact["payload"],
+                "prior_denominator_raw": prior_raw,
+            }
+            artifact = _normalize_artifact(
+                ARTIFACT_DENOMINATOR,
+                raw,
+                graph_profile_registry=graph_profile_registry,
+                denominator_context=context,
+            )
+        except IndependentStoreError:
+            raise
+        except Exception as exc:
+            raise IndependentStoreError("database:denominator-context") from exc
+        for field in ("artifact_id", "payload_hash", "artifact_schema", "report_id", "current_stage_id", "transition_id", "prior_artifact_id", "prior_stage_id", "subject", "scope", "stage_kind", "authority_json"):
+            stored = row[field]
+            expected = artifact[field] if field != "artifact_schema" else artifact["schema"]
+            if stored != expected:
+                raise IndependentStoreError(f"database:artifact-{field}")
+        hash_key = (ARTIFACT_DENOMINATOR, str(row["payload_hash"]))
+        if hash_key in artifact_hashes:
+            raise IndependentStoreError("database:artifact-hash-duplicate")
+        artifact_hashes.add(hash_key)
+        artifacts[key] = artifact
 
     # Reconciliation artifacts are verified only after all source and graph
     # payloads are available.  Their carried labels are not authority: the
@@ -1294,6 +1406,63 @@ def _verify_rows(
                 raise IndependentStoreError("database:reconciliation-prior-binding")
             if artifact_event_sequence.get((ARTIFACT_RECONCILIATION, str(prior_reconciliation_id)), 0) >= reconciliation_sequence:
                 raise IndependentStoreError("database:reconciliation-prior-order")
+
+    # Denominator events consume state-owned source/governance evidence and
+    # append to one fixed denominator chain.  A narrowing transition must
+    # follow its baseline; a later withdrawal cannot erase either history.
+    for denominator_artifact in artifacts.values():
+        if denominator_artifact["kind"] != ARTIFACT_DENOMINATOR:
+            continue
+        denominator_sequence = artifact_event_sequence.get((ARTIFACT_DENOMINATOR, str(denominator_artifact["artifact_id"])))
+        value = denominator_independent._parse(denominator_artifact["payload"])
+        source_id = denominator_artifact.get("source_artifact_id")
+        source_key = (ARTIFACT_SOURCE_EVIDENCE, str(source_id))
+        source_artifact = artifacts.get(source_key)
+        source_sequence = artifact_event_sequence.get(source_key)
+        governance_id = value.get("governance_binding", {}).get("artifact_id") if isinstance(value.get("governance_binding"), dict) else None
+        governance_key = (ARTIFACT_GOVERNANCE, str(governance_id))
+        governance_sequence = artifact_event_sequence.get(governance_key)
+        if denominator_sequence is None or source_artifact is None or source_sequence is None or source_sequence >= denominator_sequence:
+            raise IndependentStoreError("database:denominator-source-order")
+        if governance_sequence is None or governance_sequence >= denominator_sequence:
+            raise IndependentStoreError("database:denominator-governance-order")
+        source_chain = _chain_id(
+            ARTIFACT_SOURCE_EVIDENCE,
+            str(source_artifact["subject"]),
+            str(source_artifact["scope"]),
+            source_artifact.get("profile_id"),
+        )
+        source_events_before = [
+            sequence
+            for key, sequence in artifact_event_sequence.items()
+            if key[0] == ARTIFACT_SOURCE_EVIDENCE
+            and sequence < denominator_sequence
+            and _chain_id(
+                ARTIFACT_SOURCE_EVIDENCE,
+                str(artifacts[key]["subject"]),
+                str(artifacts[key]["scope"]),
+                artifacts[key].get("profile_id"),
+            ) == source_chain
+        ]
+        if not source_events_before or max(source_events_before) != source_sequence:
+            raise IndependentStoreError("database:denominator-source-not-head")
+        graph_id = value.get("source_binding", {}).get("graph_artifact_id") if isinstance(value.get("source_binding"), dict) else None
+        if graph_id is not None:
+            graph_sequence = artifact_event_sequence.get((ARTIFACT_GRAPH, str(graph_id)))
+            if graph_sequence is None or graph_sequence >= denominator_sequence:
+                raise IndependentStoreError("database:denominator-graph-order")
+        prior_id = denominator_artifact.get("prior_artifact_id")
+        if prior_id is None:
+            if denominator_artifact.get("denominator_stage") != denominator_independent.STAGE_BASELINE:
+                raise IndependentStoreError("database:denominator-missing-prior")
+        else:
+            prior_key = (ARTIFACT_DENOMINATOR, str(prior_id))
+            prior = artifacts.get(prior_key)
+            prior_sequence = artifact_event_sequence.get(prior_key)
+            if prior is None or prior_sequence is None or prior_sequence >= denominator_sequence:
+                raise IndependentStoreError("database:denominator-prior-order")
+            if value.get("prior_stage_id") != prior.get("current_stage_id") or prior.get("denominator_stage") != denominator_independent.STAGE_BASELINE:
+                raise IndependentStoreError("database:denominator-prior-binding")
 
     # A linked V2 graph is independently eligible only while a matching
     # verifier-owned approval was effective at the source-custody event.  This

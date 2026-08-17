@@ -19,7 +19,9 @@ from types import MappingProxyType
 from app.governance import provider_continuity_control_pack_independent as governance_independent
 from app.governance import provider_continuity_control_pack_v2_independent as governance_v2_independent
 from app.governance import provider_continuity_control_pack_withdrawal_independent as withdrawal_independent
+from app.mirror import denominator_ledger_independent as denominator_independent
 from app.mirror import discrepancy_case_independent as case_independent
+from app.mirror import nc_medicaid_fhir_profile as nc_profile
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import continuity_store_independent as store_independent
 from app.mirror import source_evidence_custody_independent as source_independent
@@ -33,7 +35,8 @@ ARTIFACT_GOVERNANCE = "PROVIDER_CONTINUITY_CONTROL_PACK_V1"
 ARTIFACT_SOURCE_EVIDENCE = source_independent.ARTIFACT_KIND
 ARTIFACT_RECONCILIATION = reconciliation_independent.ARTIFACT_KIND
 ARTIFACT_CASE = case_independent.ARTIFACT_KIND
-ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE)
+ARTIFACT_DENOMINATOR = denominator_independent.ARTIFACT_KIND
+ARTIFACT_KINDS = (ARTIFACT_GRAPH, ARTIFACT_GOVERNANCE, ARTIFACT_SOURCE_EVIDENCE, ARTIFACT_RECONCILIATION, ARTIFACT_CASE, ARTIFACT_DENOMINATOR)
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 MAX_ARTIFACT_BYTES = 524_288
@@ -285,6 +288,9 @@ def _authority_json(value: Mapping[str, object], *, kind: str) -> str:
     elif kind == ARTIFACT_CASE:
         if dict(value) != case_independent.AUTHORITY_FLAGS:
             raise ArtifactAdmissionError("artifact:authority-flags")
+    elif kind == ARTIFACT_DENOMINATOR:
+        if dict(value) != denominator_independent.AUTHORITY_FLAGS:
+            raise ArtifactAdmissionError("artifact:authority-flags")
     elif dict(value) != governance_independent.AUTHORITY_FLAGS:
         raise ArtifactAdmissionError("artifact:authority-flags")
     return _canonical(AUTHORITY_FLAGS).decode("ascii")
@@ -322,6 +328,7 @@ def verify_artifact(
     *,
     graph_profile_registry: Mapping[str, object] | None = None,
     reconciliation_context: Mapping[str, object] | None = None,
+    denominator_context: Mapping[str, object] | None = None,
 ) -> VerifiedArtifact:
     """Run the matching independent verifier and normalize its exact identities."""
 
@@ -336,6 +343,8 @@ def verify_artifact(
             value = reconciliation_independent._parse(raw)
         elif artifact_kind == ARTIFACT_CASE:
             value = case_independent._parse(raw)
+        elif artifact_kind == ARTIFACT_DENOMINATOR:
+            value = denominator_independent._parse(raw)
         else:
             value = _parse_canonical(raw)
     except (
@@ -343,6 +352,7 @@ def verify_artifact(
         source_independent.IndependentSourceCustodyError,
         reconciliation_independent.IndependentSourceReconciliationError,
         case_independent.IndependentDiscrepancyCaseError,
+        denominator_independent.IndependentDenominatorError,
     ) as exc:
         raise ArtifactAdmissionError(str(exc)) from exc
     try:
@@ -380,6 +390,17 @@ def verify_artifact(
                 prior_case_raw=reconciliation_context.get("prior_case_raw"),
                 retest_reconciliation_raw=reconciliation_context.get("retest_reconciliation_raw"),
                 retest_context=reconciliation_context.get("retest_context"),
+            )
+        elif artifact_kind == ARTIFACT_DENOMINATOR:
+            if not isinstance(denominator_context, Mapping):
+                raise ArtifactAdmissionError("denominator:context-required")
+            result = denominator_independent.verify_artifact(
+                raw,
+                source_raw=denominator_context["source_raw"],
+                graph_raw=denominator_context.get("graph_raw"),
+                governance_raw=denominator_context["governance_raw"],
+                registry=graph_profile_registry or {},
+                prior_denominator_raw=denominator_context.get("prior_denominator_raw"),
             )
         elif value.get("schema") in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
             result = governance_v2_independent.verify_bytes(raw, graph_profile_registry or {})
@@ -443,6 +464,19 @@ def verify_artifact(
         elif artifact_kind == ARTIFACT_CASE:
             artifact_id = str(result["artifact_id"])
             report_id = str(result["case_id"])
+            current_stage_id = str(result["current_stage_id"])
+            transition_id = str(result["transition_id"])
+            stage_kind = str(result["stage_kind"])
+            prior_artifact_id = result["prior_artifact_id"]
+            prior_stage_id = result["prior_stage_id"]
+            schema = str(result["schema"])
+            subject_id = str(result["subject"])
+            scope = str(result["scope"])
+            profile_id = str(result["profile_id"])
+            authority_json = _authority_json(value["authority"], kind=artifact_kind)
+        elif artifact_kind == ARTIFACT_DENOMINATOR:
+            artifact_id = str(result["artifact_id"])
+            report_id = artifact_id
             current_stage_id = str(result["current_stage_id"])
             transition_id = str(result["transition_id"])
             stage_kind = str(result["stage_kind"])
@@ -1107,6 +1141,8 @@ class ContinuityStore:
 
         if artifact_kind == ARTIFACT_RECONCILIATION:
             raise StoreConflictError("reconciliation:transaction-required")
+        if artifact_kind == ARTIFACT_DENOMINATOR:
+            raise StoreConflictError("denominator:transaction-required")
         artifact = verify_artifact(artifact_kind, artifact_raw, graph_profile_registry=self.graph_profile_registry)
         if artifact_kind == ARTIFACT_SOURCE_EVIDENCE and source_independent.has_graph_link(artifact_raw):
             raise StoreConflictError("custody:graph-link-transaction-required")
@@ -1567,6 +1603,292 @@ class ContinuityStore:
         except IndeterminateCommitError:
             raise
         except (InjectedFault, StoreConflictError, StoreSchemaError, StoreBusyError):
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        except sqlite3.IntegrityError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreConflictError("transaction:integrity") from exc
+        except sqlite3.OperationalError as exc:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise StoreBusyError("transaction:operational") from exc
+        finally:
+            connection.close()
+
+    def _denominator_active_governance(
+        self,
+        connection: sqlite3.Connection,
+        observation_time: int,
+    ) -> bytes:
+        """Select the verifier-owned current approval for a new baseline."""
+
+        profile_value = nc_profile.NC_MEDICAID_GRAPH_PROFILE
+        chain_id = _chain_id(
+            ARTIFACT_GOVERNANCE,
+            profile_value.subject,
+            profile_value.scope,
+            profile_value.profile_id,
+        )
+        row = connection.execute(
+            "SELECT h.*, a.payload, a.artifact_schema FROM heads h JOIN artifacts a ON a.kind=h.artifact_kind AND a.artifact_id=h.artifact_id WHERE h.chain_id=?",
+            (chain_id,),
+        ).fetchone()
+        if row is None:
+            raise GovernanceObservationOnly("not-approved")
+        if row["artifact_schema"] not in (governance_v2_independent.SCHEMA, governance_v2_independent.WITHDRAWAL_SCHEMA):
+            raise StoreConflictError("governance:v1-not-v2")
+        raw = bytes(row["payload"])
+        try:
+            value = _parse_canonical(raw)
+            result = governance_v2_independent.verify_bytes(raw, self.graph_profile_registry)
+        except Exception as exc:
+            raise StoreSchemaError("governance:independent-reject") from exc
+        if value.get("schema") == governance_v2_independent.WITHDRAWAL_SCHEMA:
+            raise GovernanceObservationOnly("withdrawn")
+        if result.get("current_stage_kind") != governance_v2_independent.STAGE_APPROVED:
+            raise GovernanceObservationOnly("not-approved")
+        if result.get("profile_id") != profile_value.profile_id or result.get("profile_digest") != profile_value.profile_digest:
+            raise StoreConflictError("governance:profile-binding")
+        if type(observation_time) is not int or not result["effective_start"] <= observation_time <= result["effective_end"]:
+            raise StoreConflictError("governance:effective-interval")
+        return raw
+
+    def _denominator_source_context(
+        self,
+        connection: sqlite3.Connection,
+        source_artifact_id: str,
+        *,
+        governance_raw: bytes | None = None,
+        require_current_source_head: bool = True,
+    ) -> dict[str, object]:
+        """Load source, optional graph, and governing approval inside a transaction."""
+
+        row = connection.execute(
+            "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_SOURCE_EVIDENCE, source_artifact_id),
+        ).fetchone()
+        if row is None:
+            raise StoreConflictError("denominator:source-missing")
+        source_raw = bytes(row["payload"])
+        try:
+            source_value = source_independent._parse(source_raw)
+            preview = source_independent.verify_artifact(
+                source_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                allow_unresolved_graph=True,
+            )
+        except Exception as exc:
+            raise StoreConflictError("denominator:source-reject") from exc
+        if preview["artifact_id"] != source_artifact_id or row["current_stage_id"] != preview["current_stage_id"]:
+            raise StoreConflictError("denominator:source-identity")
+        source_chain = _chain_id(ARTIFACT_SOURCE_EVIDENCE, preview["subject"], preview["scope"], preview["profile_id"])
+        source_head = self._head(connection, source_chain)
+        if require_current_source_head and (source_head is None or (source_head["artifact_id"], source_head["current_stage_id"]) != (source_artifact_id, preview["current_stage_id"])):
+            raise StoreConflictError("denominator:source-not-head")
+        graph_raw: bytes | None = None
+        linked_graph_id = preview.get("linked_graph_artifact_id")
+        if linked_graph_id is not None:
+            graph_row = connection.execute(
+                "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                (ARTIFACT_GRAPH, linked_graph_id),
+            ).fetchone()
+            if graph_row is None:
+                raise StoreConflictError("denominator:graph-missing")
+            graph_raw = bytes(graph_row["payload"])
+            try:
+                source_independent.verify_artifact(
+                    source_raw,
+                    graph_raw=graph_raw,
+                    graph_profile_registry=self.graph_profile_registry,
+                )
+            except Exception as exc:
+                raise StoreConflictError("denominator:graph-binding") from exc
+        if governance_raw is None:
+            governance_raw = self._denominator_active_governance(connection, int(source_value["observation_time"]))
+        else:
+            try:
+                governed = governance_v2_independent.verify_bytes(governance_raw, self.graph_profile_registry)
+            except Exception as exc:
+                raise StoreConflictError("denominator:governance-reject") from exc
+            if governed.get("current_stage_kind") != governance_v2_independent.STAGE_APPROVED:
+                raise StoreConflictError("denominator:governance-history")
+        return {
+            "source_raw": source_raw,
+            "graph_raw": graph_raw,
+            "governance_raw": governance_raw,
+            "source_preview": preview,
+        }
+
+    def _denominator_context_for_prior(
+        self,
+        connection: sqlite3.Connection,
+        prior_raw: bytes,
+    ) -> dict[str, object]:
+        value = denominator_independent._parse(prior_raw)
+        source_binding = value.get("source_binding")
+        governance_binding = value.get("governance_binding")
+        if not isinstance(source_binding, dict) or not isinstance(governance_binding, dict):
+            raise StoreConflictError("denominator:prior-binding")
+        governance_row = connection.execute(
+            "SELECT payload,current_stage_id FROM artifacts WHERE kind=? AND artifact_id=?",
+            (ARTIFACT_GOVERNANCE, governance_binding["artifact_id"]),
+        ).fetchone()
+        if governance_row is None or governance_row["current_stage_id"] != governance_binding["stage_id"]:
+            raise StoreConflictError("denominator:prior-governance")
+        return self._denominator_source_context(
+            connection,
+            str(source_binding["artifact_id"]),
+            governance_raw=bytes(governance_row["payload"]),
+            require_current_source_head=False,
+        ) | {"prior_denominator_raw": prior_raw}
+
+    def admit_denominator(
+        self,
+        stage: str,
+        *,
+        source_artifact_id: str | None = None,
+        denominator_artifact_id: str | None = None,
+        graph_profile_registry: Mapping[str, object] | None = None,
+    ) -> AdmissionReceipt:
+        """Atomically append a verifier-bound baseline or explicit narrowing."""
+
+        if graph_profile_registry is not None and dict(graph_profile_registry) != dict(self.graph_profile_registry):
+            raise StoreConflictError("profile:registry-mismatch")
+        if stage not in (denominator_independent.STAGE_BASELINE, denominator_independent.STAGE_NARROWED):
+            raise StoreConflictError("denominator:stage")
+        if stage == denominator_independent.STAGE_BASELINE and (not isinstance(source_artifact_id, str) or not source_artifact_id or denominator_artifact_id is not None):
+            raise StoreConflictError("denominator:source-selector")
+        if stage == denominator_independent.STAGE_NARROWED and (not isinstance(denominator_artifact_id, str) or not denominator_artifact_id or source_artifact_id is not None):
+            raise StoreConflictError("denominator:artifact-selector")
+        self._fault("before_transaction")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("transaction:busy") from exc
+            self._fault("after_begin")
+            self._validate_transaction_snapshot(connection)
+            prior_raw: bytes | None = None
+            if stage == denominator_independent.STAGE_BASELINE:
+                assert source_artifact_id is not None
+                existing = None
+                for row in connection.execute("SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (ARTIFACT_DENOMINATOR,)):
+                    value = denominator_independent._parse(bytes(row["payload"]))
+                    if value.get("stage_kind") == denominator_independent.STAGE_BASELINE and value.get("source_binding", {}).get("artifact_id") == source_artifact_id:
+                        existing = row
+                        break
+                if existing is not None:
+                    artifact = verify_artifact(
+                        ARTIFACT_DENOMINATOR,
+                        bytes(existing["payload"]),
+                        graph_profile_registry=self.graph_profile_registry,
+                        denominator_context=self._denominator_context_for_prior(connection, bytes(existing["payload"])) | {"prior_denominator_raw": None},
+                    )
+                    receipt = self._receipt_for_artifact(connection, artifact)
+                    connection.commit()
+                    return receipt
+                context = self._denominator_source_context(connection, source_artifact_id)
+                from app.mirror import denominator_ledger as producer
+                candidate_raw = producer.build_artifact(
+                    stage,
+                    source_raw=context["source_raw"],
+                    graph_raw=context["graph_raw"],
+                    governance_raw=context["governance_raw"],
+                    registry=self.graph_profile_registry,
+                )
+            else:
+                assert denominator_artifact_id is not None
+                # The requested baseline is the immutable transition input.
+                # Once that transition has committed, an exact retry must
+                # return its receipt even though the chain head is now the
+                # narrowed artifact.  This lookup is inside BEGIN IMMEDIATE,
+                # so a concurrent caller cannot observe a half-written event.
+                existing_narrow: sqlite3.Row | None = None
+                for row in connection.execute("SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (ARTIFACT_DENOMINATOR,)):
+                    candidate_value = denominator_independent._parse(bytes(row["payload"]))
+                    if candidate_value.get("stage_kind") == denominator_independent.STAGE_NARROWED and candidate_value.get("prior_artifact_id") == denominator_artifact_id:
+                        existing_narrow = row
+                        break
+                if existing_narrow is not None:
+                    existing_raw = bytes(existing_narrow["payload"])
+                    baseline_row = connection.execute(
+                        "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                        (ARTIFACT_DENOMINATOR, denominator_artifact_id),
+                    ).fetchone()
+                    if baseline_row is None:
+                        raise StoreConflictError("denominator:prior-missing")
+                    context = self._denominator_context_for_prior(connection, bytes(baseline_row["payload"]))
+                    artifact = verify_artifact(
+                        ARTIFACT_DENOMINATOR,
+                        existing_raw,
+                        graph_profile_registry=self.graph_profile_registry,
+                        denominator_context=context,
+                    )
+                    receipt = self._receipt_for_artifact(connection, artifact)
+                    connection.commit()
+                    return receipt
+                head_chain = _chain_id(ARTIFACT_DENOMINATOR, denominator_independent.SUBJECT, denominator_independent.SCOPE, denominator_independent.PROFILE_ID)
+                head = self._head(connection, head_chain)
+                if head is None or head["artifact_id"] != denominator_artifact_id:
+                    raise StoreConflictError("denominator:head-stale")
+                prior_row = connection.execute("SELECT * FROM artifacts WHERE kind=? AND artifact_id=?", (ARTIFACT_DENOMINATOR, denominator_artifact_id)).fetchone()
+                if prior_row is None or prior_row["current_stage_id"] != head["current_stage_id"]:
+                    raise StoreConflictError("denominator:prior-missing")
+                prior_raw = bytes(prior_row["payload"])
+                prior_value = denominator_independent._parse(prior_raw)
+                if prior_value.get("stage_kind") == denominator_independent.STAGE_NARROWED:
+                    artifact = verify_artifact(
+                        ARTIFACT_DENOMINATOR,
+                        prior_raw,
+                        graph_profile_registry=self.graph_profile_registry,
+                        denominator_context=self._denominator_context_for_prior(connection, prior_raw),
+                    )
+                    receipt = self._receipt_for_artifact(connection, artifact)
+                    connection.commit()
+                    return receipt
+                context = self._denominator_context_for_prior(connection, prior_raw)
+                from app.mirror import denominator_ledger as producer
+                candidate_raw = producer.build_artifact(
+                    stage,
+                    source_raw=context["source_raw"],
+                    graph_raw=context["graph_raw"],
+                    governance_raw=context["governance_raw"],
+                    registry=self.graph_profile_registry,
+                    prior_denominator_raw=prior_raw,
+                )
+            context_for_verify = {
+                "source_raw": context["source_raw"],
+                "graph_raw": context.get("graph_raw"),
+                "governance_raw": context["governance_raw"],
+                "prior_denominator_raw": prior_raw,
+            }
+            artifact = verify_artifact(
+                ARTIFACT_DENOMINATOR,
+                candidate_raw,
+                graph_profile_registry=self.graph_profile_registry,
+                denominator_context=context_for_verify,
+            )
+            receipt = self._admit_in_transaction(connection, artifact, _payload_hash(candidate_raw), enforce_governance=False)
+            self._validate_transaction_snapshot(connection)
+            self._fault("after_event_receipt_before_commit")
+            connection.commit()
+            try:
+                self._fault("after_commit_before_response")
+            except InjectedFault as exc:
+                raise IndeterminateCommitError(receipt.operation_id) from exc
+            return receipt
+        except IndeterminateCommitError:
+            raise
+        except (InjectedFault, GovernanceObservationOnly, StoreConflictError, StoreSchemaError, StoreBusyError):
             try:
                 connection.rollback()
             except sqlite3.Error:
