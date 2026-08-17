@@ -347,3 +347,94 @@ target_compile_definitions(longfellow_minimal_clearance_eval PRIVATE
 )
 target_link_libraries(longfellow_minimal_clearance_eval PRIVATE
   longfellow_minimal_clearance_relation)
+
+# Proof-envelope seam for the one-endpoint minimal-clearance experiment. The
+# verifier circuit is compiled from the relation only; it excludes fixture
+# construction and witness filling, while the verifier executable rebuilds
+# the typed public statement from its immutable synthetic registry constants.
+add_library(longfellow_minimal_clearance_verifier_circuit STATIC
+  src/native_v3_minimal_clearance_relation.cc
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_reference.cc"
+  "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_round_constants.cc"
+)
+target_include_directories(longfellow_minimal_clearance_verifier_circuit PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_minimal_clearance_verifier_circuit PUBLIC
+  NOMINMAX WIN32_LEAN_AND_MEAN
+  BLIND_LEDGER_MINIMAL_CLEARANCE_VERIFIER_ONLY=1
+  BLIND_LEDGER_RELATION_CIRCUIT_ONLY=1
+  BLIND_LEDGER_LONGFELLOW_NO_SHA3_WITNESS=1
+)
+target_link_libraries(longfellow_minimal_clearance_verifier_circuit PUBLIC
+  longfellow_task_crypto bcrypt)
+
+add_library(longfellow_minimal_clearance_proof_artifact STATIC
+  src/native_v3_minimal_clearance_proof_artifact.cc
+)
+target_include_directories(longfellow_minimal_clearance_proof_artifact PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_compile_definitions(longfellow_minimal_clearance_proof_artifact PUBLIC
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+
+add_executable(longfellow_minimal_clearance_prover
+  src/native_v3_minimal_clearance_prover.cpp
+)
+target_include_directories(longfellow_minimal_clearance_prover PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_minimal_clearance_prover PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_minimal_clearance_prover PRIVATE
+  longfellow_minimal_clearance_relation
+  longfellow_minimal_clearance_proof_artifact)
+
+add_executable(longfellow_minimal_clearance_verifier
+  src/native_v3_minimal_clearance_verifier.cpp
+)
+target_include_directories(longfellow_minimal_clearance_verifier PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_minimal_clearance_verifier PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_minimal_clearance_verifier PRIVATE
+  longfellow_minimal_clearance_verifier_circuit
+  longfellow_minimal_clearance_proof_artifact)
+
+add_executable(longfellow_minimal_clearance_public_parity
+  src/native_v3_minimal_clearance_public_parity.cpp
+)
+target_include_directories(longfellow_minimal_clearance_public_parity PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_minimal_clearance_public_parity PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_minimal_clearance_public_parity PRIVATE
+  longfellow_minimal_clearance_relation)
+
+add_executable(longfellow_minimal_clearance_prover_runner
+  src/native_v3_minimal_clearance_prover_runner.cpp
+)
+target_include_directories(longfellow_minimal_clearance_prover_runner PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+)
+target_compile_definitions(longfellow_minimal_clearance_prover_runner PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN
+)
+target_link_libraries(longfellow_minimal_clearance_prover_runner PRIVATE
+  psapi)

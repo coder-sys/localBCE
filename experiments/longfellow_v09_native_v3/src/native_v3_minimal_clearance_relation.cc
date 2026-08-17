@@ -58,7 +58,11 @@ void AppendU64(std::vector<uint8_t>& output, uint64_t value) {
 }
 
 Digest HashBytes(const std::vector<uint8_t>& input) {
-  return hash_sha3_512(input);
+  proofs::Sha3Reference reference(kDigestBytes);
+  reference.update(reinterpret_cast<const char*>(input.data()), input.size());
+  Digest output{};
+  reference.final(output.data());
+  return output;
 }
 
 Digest HashParts(const std::vector<uint8_t>& domain,
@@ -311,44 +315,45 @@ void PushDigest(proofs::DenseFiller<RelationField>& filler, const Digest& value,
 }
 
 template <class Logic>
-void PushPublic(proofs::DenseFiller<RelationField>& filler, const Case& value,
+void PushPublic(proofs::DenseFiller<RelationField>& filler,
+                const PublicStatement& statement,
                 const RelationField& field) {
   filler.push_back(field.one());
-  filler.push_back(value.statement.protocol_version, 8, field);
-  for (uint8_t byte : value.statement.proof_role) filler.push_back(byte, 8, field);
-  PushDigest<Logic>(filler, value.statement.proof_suite, field);
-  PushDigest<Logic>(filler, value.statement.execution_context, field);
-  PushDigest<Logic>(filler, value.statement.source_registry_snapshot, field);
-  PushDigest<Logic>(filler, value.statement.source_profile, field);
-  PushDigest<Logic>(filler, value.statement.governance_snapshot, field);
-  PushDigest<Logic>(filler, value.statement.automatic_control_set, field);
-  PushDigest<Logic>(filler, value.statement.settlement_domain, field);
-  PushDigest<Logic>(filler, value.statement.evaluator_id, field);
-  PushDigest<Logic>(filler, value.statement.schema_id, field);
-  PushDigest<Logic>(filler, value.statement.program_id, field);
-  PushDigest<Logic>(filler, value.statement.policy_id, field);
-  PushDigest<Logic>(filler, value.statement.subject_id, field);
-  PushDigest<Logic>(filler, value.statement.attempt_id, field);
-  PushDigest<Logic>(filler, value.statement.request_id, field);
-  PushDigest<Logic>(filler, value.statement.source_root_id, field);
-  PushDigest<Logic>(filler, value.statement.completeness_id, field);
-  PushDigest<Logic>(filler, value.statement.private_batch_commitment, field);
-  PushDigest<Logic>(filler, value.statement.source_address, field);
-  PushDigest<Logic>(filler, value.statement.source_key, field);
-  PushDigest<Logic>(filler, value.statement.audit_address, field);
-  PushDigest<Logic>(filler, value.statement.exception_id, field);
-  PushDigest<Logic>(filler, value.statement.exception_scope_id, field);
-  PushDigest<Logic>(filler, value.statement.rule_id, field);
-  PushDigest<Logic>(filler, value.statement.decision_id, field);
-  PushDigest<Logic>(filler, value.statement.state_before_id, field);
-  PushDigest<Logic>(filler, value.statement.state_after_id, field);
-  filler.push_back(value.statement.epoch, 64, field);
-  filler.push_back(value.statement.sequence_before, 64, field);
-  filler.push_back(value.statement.active, 8, field);
-  filler.push_back(value.statement.complete, 8, field);
-  filler.push_back(value.statement.authoritative_membership, 8, field);
-  filler.push_back(value.statement.authoritative_absence, 8, field);
-  for (uint8_t byte : value.statement.state_commitment_bytes) {
+  filler.push_back(statement.protocol_version, 8, field);
+  for (uint8_t byte : statement.proof_role) filler.push_back(byte, 8, field);
+  PushDigest<Logic>(filler, statement.proof_suite, field);
+  PushDigest<Logic>(filler, statement.execution_context, field);
+  PushDigest<Logic>(filler, statement.source_registry_snapshot, field);
+  PushDigest<Logic>(filler, statement.source_profile, field);
+  PushDigest<Logic>(filler, statement.governance_snapshot, field);
+  PushDigest<Logic>(filler, statement.automatic_control_set, field);
+  PushDigest<Logic>(filler, statement.settlement_domain, field);
+  PushDigest<Logic>(filler, statement.evaluator_id, field);
+  PushDigest<Logic>(filler, statement.schema_id, field);
+  PushDigest<Logic>(filler, statement.program_id, field);
+  PushDigest<Logic>(filler, statement.policy_id, field);
+  PushDigest<Logic>(filler, statement.subject_id, field);
+  PushDigest<Logic>(filler, statement.attempt_id, field);
+  PushDigest<Logic>(filler, statement.request_id, field);
+  PushDigest<Logic>(filler, statement.source_root_id, field);
+  PushDigest<Logic>(filler, statement.completeness_id, field);
+  PushDigest<Logic>(filler, statement.private_batch_commitment, field);
+  PushDigest<Logic>(filler, statement.source_address, field);
+  PushDigest<Logic>(filler, statement.source_key, field);
+  PushDigest<Logic>(filler, statement.audit_address, field);
+  PushDigest<Logic>(filler, statement.exception_id, field);
+  PushDigest<Logic>(filler, statement.exception_scope_id, field);
+  PushDigest<Logic>(filler, statement.rule_id, field);
+  PushDigest<Logic>(filler, statement.decision_id, field);
+  PushDigest<Logic>(filler, statement.state_before_id, field);
+  PushDigest<Logic>(filler, statement.state_after_id, field);
+  filler.push_back(statement.epoch, 64, field);
+  filler.push_back(statement.sequence_before, 64, field);
+  filler.push_back(statement.active, 8, field);
+  filler.push_back(statement.complete, 8, field);
+  filler.push_back(statement.authoritative_membership, 8, field);
+  filler.push_back(statement.authoritative_absence, 8, field);
+  for (uint8_t byte : statement.state_commitment_bytes) {
     filler.push_back(byte, 8, field);
   }
 }
@@ -993,6 +998,7 @@ DerivedIdentities derive_identities(const Case& value) {
   return output;
 }
 
+#ifndef BLIND_LEDGER_MINIMAL_CLEARANCE_VERIFIER_ONLY
 Fixture make_fixture() {
   Fixture fixture;
   const NativeV3Fixture base = make_native_v3_fixture();
@@ -1102,6 +1108,7 @@ Fixture make_fixture() {
   }
   return fixture;
 }
+#endif
 
 template <class Logic>
 void AssertRelation(const Logic& logic, const PublicWires<Logic>& pub,
@@ -1154,13 +1161,19 @@ std::unique_ptr<proofs::Circuit<RelationField>> build_circuit() {
   return build_circuit_stage(kSha3EndpointCount);
 }
 
-void fill_public(const Case& value,
-                 proofs::Dense<RelationField>& public_input) {
+void fill_public_statement(const PublicStatement& value,
+                           proofs::Dense<RelationField>& public_input) {
   const RelationField field;
   proofs::DenseFiller<RelationField> filler(public_input);
   using Logic = proofs::Logic<RelationField,
                               proofs::CompilerBackend<RelationField>>;
   PushPublic<Logic>(filler, value, field);
+}
+
+#ifndef BLIND_LEDGER_MINIMAL_CLEARANCE_VERIFIER_ONLY
+void fill_public(const Case& value,
+                 proofs::Dense<RelationField>& public_input) {
+  fill_public_statement(value.statement, public_input);
 }
 
 template <class Logic>
@@ -1223,10 +1236,12 @@ void fill_witness(const Case& value,
   proofs::DenseFiller<RelationField> filler(witness);
   using Logic = proofs::Logic<RelationField,
                               proofs::CompilerBackend<RelationField>>;
-  PushPublic<Logic>(filler, value, field);
+  PushPublic<Logic>(filler, value.statement, field);
   PushPrivate<Logic>(filler, value, field);
 }
+#endif
 
+#ifndef BLIND_LEDGER_MINIMAL_CLEARANCE_VERIFIER_ONLY
 bool evaluate_case(const Case& value, std::string& reason) {
   const auto fail = [&](const char* text) {
     reason = text;
@@ -1406,5 +1421,6 @@ bool evaluate_case(const Case& value, std::string& reason) {
   if (ids.decision_id != value.statement.decision_id) return fail("decision.id");
   return true;
 }
+#endif
 
 }  // namespace blind_ledger_longfellow::minimal_clearance

@@ -148,6 +148,10 @@ std::unique_ptr<proofs::Circuit<RelationField>> build_circuit_stage(
 
 void fill_public(const Case& value,
                  proofs::Dense<RelationField>& public_input);
+// Verifier-side public packing deliberately accepts only the typed public
+// statement.  It does not require a producer fixture or private witness.
+void fill_public_statement(const PublicStatement& value,
+                           proofs::Dense<RelationField>& public_input);
 void fill_witness(const Case& value,
                   proofs::Dense<RelationField>& witness);
 
