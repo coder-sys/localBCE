@@ -329,13 +329,13 @@ class TransitionMirrorService:
     def _admit(self, action: str, **selectors: str):
         from app.mirror import continuity_store as store
 
-        for attempt in range(3):
+        for attempt in range(10):
             try:
                 return self._store.admit_transition(action, graph_profile_registry=self._registry, **selectors)
             except store.StoreBusyError:
-                if attempt == 2:
+                if attempt == 9:
                     raise
-                time.sleep(0.05 * (attempt + 1))
+                time.sleep(0.1 * (attempt + 1))
         raise TransitionMirrorError("transition:busy-retry-exhausted")
 
 
