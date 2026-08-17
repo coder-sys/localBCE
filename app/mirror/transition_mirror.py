@@ -8,7 +8,6 @@ verification before durable admission.
 from __future__ import annotations
 
 from copy import deepcopy
-import time
 from typing import Mapping
 
 from app.mirror import contract_mirror_independent as contract
@@ -329,14 +328,9 @@ class TransitionMirrorService:
     def _admit(self, action: str, **selectors: str):
         from app.mirror import continuity_store as store
 
-        for attempt in range(10):
-            try:
-                return self._store.admit_transition(action, graph_profile_registry=self._registry, **selectors)
-            except store.StoreBusyError:
-                if attempt == 9:
-                    raise
-                time.sleep(0.1 * (attempt + 1))
-        raise TransitionMirrorError("transition:busy-retry-exhausted")
+        return store.run_with_busy_recovery(
+            lambda: self._store.admit_transition(action, graph_profile_registry=self._registry, **selectors)
+        )
 
 
 __all__ = ["TransitionMirrorError", "TransitionMirrorService", "build_artifact"]

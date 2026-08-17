@@ -13,7 +13,8 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from typing import Any, Mapping
+import time
+from typing import Any, Callable, Mapping, TypeVar
 from types import MappingProxyType
 
 from app.governance import provider_continuity_control_pack_independent as governance_independent
@@ -70,6 +71,24 @@ MAX_RECEIPT_BYTES = 32_768
 MAX_DB_BYTES = 64 * 1024 * 1024
 MAX_WAL_BYTES = 64 * 1024 * 1024
 BUSY_TIMEOUT_MS = 250
+# Transition and State Value both own the same BEGIN IMMEDIATE admission and
+# exact-retry contract.  Keep their busy recovery here, beside SQLite's
+# bounded busy timeout, so callers cannot copy or silently extend the policy.
+BUSY_RECOVERY_MAX_ATTEMPTS = 10
+BUSY_RECOVERY_INITIAL_BACKOFF_MS = 100
+BUSY_RECOVERY_MAX_BACKOFF_MS = 900
+BUSY_RECOVERY_BACKOFF_MS = tuple(
+    min(BUSY_RECOVERY_INITIAL_BACKOFF_MS * attempt, BUSY_RECOVERY_MAX_BACKOFF_MS)
+    for attempt in range(1, BUSY_RECOVERY_MAX_ATTEMPTS)
+)
+# The finite nominal budget is ten bounded SQLite waits plus the deterministic
+# capped backoff schedule: 10*250ms + (100+...+900)ms = 7,000ms.  The
+# monotonic deadline below prevents a slow scheduler from adding another
+# unbounded retry; the SQLite timeout remains bounded by BUSY_TIMEOUT_MS.
+BUSY_RECOVERY_BUDGET_MS = (
+    BUSY_RECOVERY_MAX_ATTEMPTS * BUSY_TIMEOUT_MS
+    + sum(BUSY_RECOVERY_BACKOFF_MS)
+)
 STORE_DOMAIN = "BL/MIRROR/CONTINUITY-STORE-V2/"
 RECEIPT_EVENT_PLACEHOLDER = "EVENT_ROOT_PENDING_V2"
 LIFECYCLE_STATUS_ABSENT = "ABSENT"
@@ -122,6 +141,36 @@ class GovernanceObservationOnly(StoreConflictError):
 
 class StoreBusyError(ContinuityStoreError):
     pass
+
+
+_BusyResult = TypeVar("_BusyResult")
+
+
+def run_with_busy_recovery(operation: Callable[[], _BusyResult]) -> _BusyResult:
+    """Run one exact admission with the store-owned bounded busy policy.
+
+    Only StoreBusyError is retryable.  StoreConflictError and every other
+    failure propagate unchanged, so contention recovery cannot turn an
+    integrity, identity, or concurrent-writer conflict into observation-only
+    success.  The fixed attempts, capped schedule, and monotonic deadline are
+    deliberately owned by this SQLite store boundary.
+    """
+
+    if not callable(operation):
+        raise TypeError("busy-recovery:operation")
+    started = time.monotonic()
+    for attempt in range(BUSY_RECOVERY_MAX_ATTEMPTS):
+        try:
+            return operation()
+        except StoreBusyError:
+            if attempt + 1 >= BUSY_RECOVERY_MAX_ATTEMPTS:
+                raise
+            elapsed_ms = (time.monotonic() - started) * 1000
+            backoff_ms = BUSY_RECOVERY_BACKOFF_MS[attempt]
+            if elapsed_ms + backoff_ms + BUSY_TIMEOUT_MS > BUSY_RECOVERY_BUDGET_MS:
+                raise
+            time.sleep(backoff_ms / 1000)
+    raise AssertionError("busy-recovery:unreachable")
 
 
 class InjectedFault(ContinuityStoreError):

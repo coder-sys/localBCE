@@ -11,7 +11,6 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
-import time
 from typing import Mapping
 
 from app.mirror import state_value_ledger_independent as independent
@@ -365,14 +364,9 @@ class StateValueLedgerService:
     def _admit(self, action: str, **selectors: str | None):
         from app.mirror import continuity_store as store
 
-        for attempt in range(10):
-            try:
-                return self.store.admit_state_value(action, graph_profile_registry=self.graph_profile_registry, **selectors)
-            except store.StoreBusyError:
-                if attempt == 9:
-                    raise
-                time.sleep(0.1 * (attempt + 1))
-        raise StateValueLedgerError("state-value:busy-retry-exhausted")
+        return store.run_with_busy_recovery(
+            lambda: self.store.admit_state_value(action, graph_profile_registry=self.graph_profile_registry, **selectors)
+        )
 
 
 __all__ = ["StateValueLedgerError", "StateValueLedgerService", "build_artifact"]
