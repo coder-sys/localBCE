@@ -68,7 +68,11 @@ ARTIFACT_KINDS = (
 GENESIS_EVENT_ROOT = "GENESIS_EVENT_ROOT_V2"
 NO_PRIOR = "NO_PRIOR_V2"
 MAX_ARTIFACT_BYTES = 524_288
-MAX_ARTIFACTS = 16
+# The full Mirror rehearsal retains one immutable artifact for each governed
+# source/graph/reconciliation/denominator/case/contract/transaction/money/
+# transition/state-value/qualification stage.  Keep the cap fixed and bounded
+# while allowing that complete chain to coexist in one ContinuityStore.
+MAX_ARTIFACTS = 32
 MAX_EVENTS = 32
 MAX_RECEIPT_BYTES = 32_768
 MAX_DB_BYTES = 64 * 1024 * 1024
@@ -1510,6 +1514,43 @@ class ContinuityStore:
                 raise StoreSchemaError("head:selector-binding")
             connection.commit()
             return bytes(row["payload"])
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
+    def artifact_raw(self, artifact_kind: str, artifact_id: str) -> bytes:
+        """Return one verified state-owned payload by its immutable identity.
+
+        This is a bounded read selector for composition roots that need a
+        canonical payload field not exposed by an admission receipt (for
+        example, a case's stable lifecycle identity).  The store remains the
+        owner of the read transaction and snapshot check; callers cannot use
+        it to select or mutate a head.
+        """
+
+        if type(artifact_kind) is not str or not artifact_kind or type(artifact_id) is not str or not artifact_id:
+            raise StoreConflictError("artifact:selector")
+        connection = self._connect()
+        try:
+            try:
+                connection.execute("BEGIN")
+            except sqlite3.OperationalError as exc:
+                raise StoreBusyError("artifact:read-busy") from exc
+            self._validate_transaction_snapshot(connection)
+            row = connection.execute(
+                "SELECT payload FROM artifacts WHERE kind=? AND artifact_id=?",
+                (artifact_kind, artifact_id),
+            ).fetchone()
+            if row is None:
+                raise StoreConflictError("artifact:missing")
+            payload = bytes(row["payload"])
+            connection.commit()
+            return payload
         except Exception:
             try:
                 connection.rollback()

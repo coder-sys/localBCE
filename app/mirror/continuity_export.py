@@ -40,7 +40,7 @@ from app.mirror import qualification_independent as qualification_independent
 EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
 EXPORT_DOMAIN = "BL/MIRROR/CONTINUITY-EXPORT-V2/"
 MAX_EXPORT_BYTES = 20 * 1024 * 1024
-MAX_EXPORT_ARTIFACTS = 16
+MAX_EXPORT_ARTIFACTS = 32
 MAX_EXPORT_EVENTS = 32
 MAX_EXPORT_RECEIPTS = 32
 MAX_HEX_BYTES = 2 * store.MAX_ARTIFACT_BYTES
