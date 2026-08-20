@@ -24,10 +24,12 @@ mandatory only for an undisclosed payment-relevant assertion crossing the cleara
 affecting automation. Ethereum is a later governed L1 checkpoint, never settlement/L2. Lean is a
 later mandatory gate and is not implemented.
 
-CURRENT BLOCKERS: The controlled candidate is isolated; authoritative checkout remains clean at
-`ce31abeb941ce7ad5927ca67d6f23872f430ed09` until every required gate passes. The direct Python/
-database composition gate is unverified because the available Python runtimes lack locked `pytest`
-and `pqcrypto`. No production proof backend is selected; `proofSuiteId=null`,
+CURRENT BLOCKERS: The corrected candidate remains nonactivating and preserves the authoritative
+`ce31abeb941ce7ad5927ca67d6f23872f430ed09` base. The direct Python/database composition gate is
+personally verified in a fresh governed CPython 3.14.4 development environment: the exact
+seven-module no-exclusion pytest gate accounted for 104 items, with 104 passed, 0 failed, 0
+errors, 0 skipped, and no warnings in 17.02 seconds. No production proof backend is selected;
+`proofSuiteId=null`,
 `production_usable=false`, activation is false, and the complete <=2^-128 private-proof theorem
 ledger remains open. Lean, backend selection, real PHI, real payments, payment movement, archive
 rebuild, publication, and later Mirror work are not authorized in this phase.
@@ -38,9 +40,9 @@ fail-closed parsing and mutation, deterministic retry/recovery, and the complete
 ceiling of 5,000,000,000 bytes.
 
 EXIT: keep the reconciled candidate clean, report exact provenance and focused evidence, and
-fast-forward the authoritative checkout only if the unavailable direct/database gate is later
-run successfully and all other gates remain clean. Never touch the retained proof binary or the
-three retained source archives.
+fast-forward the authoritative checkout only after the docs-only evidence correction and all
+compact integration checks remain clean. Never touch the retained proof binary or the three
+retained source archives.
 
 ## Candidate evidence
 
@@ -63,8 +65,9 @@ the short-path Ninja build passed. The SHA3 KAT executable was built but not run
 The frozen candidate evidence reports the direct-state proof/database seam, five directives,
 exact retry/conflict/concurrency/fault/restart/recovery behavior, payment-root/settled-count
 preservation, and the 1.041 GB one-proof job-commit measurement. Those worker results are accepted
-inputs, not relabeled as personally rerun. The direct/database test command was attempted here and
-failed at setup with five import errors: four modules lack `pytest`, and the unittest proof-state
-module reaches a missing `pqcrypto` dependency. No source failure is inferred; the gate is
-unverified. No prover was invoked during integration, and the retained proof remains external audit
-evidence rather than a committed binary.
+inputs, not relabeled as personally rerun. In this correction, the exact seven-module no-exclusion
+pytest command was personally run once in the fresh locked venv with process-local TEMP/TMP and
+an explicit external basetemp: 104 items passed in 17.02 seconds with 0 failures, 0 errors, 0
+skips, and no warnings. The repository scratch directory and external pytest temp root were
+writable; the repository scratch was empty after the run and removed. No prover was invoked during
+integration, and the retained proof remains external audit evidence rather than a committed binary.

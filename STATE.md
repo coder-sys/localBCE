@@ -167,10 +167,12 @@ dedicated clearance root/count. This is not a comparison to the rejected 18-endp
 
 The current run personally verified the native non-prover build, shape/evaluator/parity/preflight
 outputs, retained-proof identity and acceptance, and all 34 copy-only verifier rejections. It did
-not invoke a prover. The direct Python/database composition suites were not runnable in the
-available environment: the locked runtime lacks `pytest` and `pqcrypto`; the frozen candidate's
-earlier worker-reported direct evidence is retained but is not relabeled as personally rerun here.
-The complete focused composition gate therefore remains unverified for this integration attempt.
+not invoke a prover. It also personally verified the direct Python/database composition gate in a
+fresh governed CPython 3.14.4 development venv: the exact seven-module no-exclusion pytest gate
+accounted for 104 items, with 104 passed, 0 failures, 0 errors, 0 skips, and no warnings in
+17.02 seconds. Process-local TEMP/TMP and an explicit external basetemp were used without changing
+tests, code, fixtures, dependencies, or selectors; the repository scratch directory was writable,
+empty after the run, and removed.
 
 ## Private-proof status
 
@@ -216,8 +218,7 @@ Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.m
 `docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
 Retained compatibility references are not design authority.
 
-The next safe dependency is completion of the unavailable locked-runtime direct/database gate,
-followed by Sol review of the reconciled provenance. Separately, the six unresolved private-proof
+The next safe dependency is Sol review of the corrected reconciled provenance. Separately, the six unresolved private-proof
 theorem/composition terms listed in `CURRENT_TASK.md` remain open; no backend is selected and the
 safe implementation boundary remains synthetic, state-owned, and nonactivating.
 
