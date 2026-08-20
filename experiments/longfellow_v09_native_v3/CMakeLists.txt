@@ -10,10 +10,9 @@ if(NOT EXISTS "${LONGFELLOW_SOURCE}/lib/zk/zk_prover.h")
   message(FATAL_ERROR "LONGFELLOW_SOURCE must name the patched pinned source tree")
 endif()
 
-# The attestation record is generated from the pinned manifest, the actual
-# patched source files, and the circuit compiled by each boundary. Keeping
-# this provenance in a generated header avoids a second hand-maintained copy
-# of implementation parameters in either executable.
+# Source provenance is generated from the pinned manifest and the actual
+# patched source files. Keeping it in a generated header avoids a second
+# hand-maintained copy of source identities in the reporter.
 set(NATIVE_V3_UPSTREAM_MANIFEST
     "${CMAKE_CURRENT_SOURCE_DIR}/upstream_manifest.json")
 if(NOT EXISTS "${NATIVE_V3_UPSTREAM_MANIFEST}")
@@ -89,12 +88,12 @@ file(SHA256 "${NATIVE_V3_QUAD_BUILDER_HEADER}"
      NATIVE_V3_QUAD_BUILDER_HEADER_SHA256)
 string(SHA256 NATIVE_V3_PATCHED_SOURCE_IDENTITY
        "commit=${NATIVE_V3_SOURCE_COMMIT};tree=${NATIVE_V3_SOURCE_TREE};sha3_patch=${NATIVE_V3_SHA3_PATCH_SHA256};quad_patch=${NATIVE_V3_QUAD_PATCH_SHA256};sha3_circuit=${NATIVE_V3_SHA3_CIRCUIT_HEADER_SHA256};sha3_slicing=${NATIVE_V3_SHA3_SLICING_HEADER_SHA256};quad_builder=${NATIVE_V3_QUAD_BUILDER_HEADER_SHA256}")
-set(NATIVE_V3_ATTESTATION_GENERATED_DIR
+set(NATIVE_V3_BUILD_PROVENANCE_GENERATED_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${NATIVE_V3_ATTESTATION_GENERATED_DIR}")
+file(MAKE_DIRECTORY "${NATIVE_V3_BUILD_PROVENANCE_GENERATED_DIR}")
 configure_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/native_v3_parameter_attestation_build_config.h.in"
-  "${NATIVE_V3_ATTESTATION_GENERATED_DIR}/native_v3_parameter_attestation_build_config.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/native_v3_build_provenance.h.in"
+  "${NATIVE_V3_BUILD_PROVENANCE_GENERATED_DIR}/native_v3_build_provenance.h"
   @ONLY)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -526,36 +525,19 @@ target_compile_definitions(longfellow_minimal_clearance_prover_runner PRIVATE
 target_link_libraries(longfellow_minimal_clearance_prover_runner PRIVATE
   psapi)
 
-# Parameter attestation is a no-prover boundary. The producer builds the
-# relation with fixture-capable sources; the verifier builds the same circuit
-# through its verifier-only target and independently parses/reconstructs the
-# record before comparing it with its own compiled facts.
-add_executable(longfellow_native_v3_parameter_attestation_producer
-  src/native_v3_parameter_attestation_producer.cpp
+# Fixed compiled-fact reporter. It links only the verifier-side circuit and
+# never constructs a fixture, witness, proof, or producer acceptance record.
+add_executable(longfellow_minimal_clearance_parameter_reporter
+  src/native_v3_minimal_clearance_parameter_reporter.cpp
 )
-target_include_directories(longfellow_native_v3_parameter_attestation_producer
+target_include_directories(longfellow_minimal_clearance_parameter_reporter
   PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${CMAKE_CURRENT_SOURCE_DIR}/shim"
   "${LONGFELLOW_SOURCE}/lib"
-  "${NATIVE_V3_ATTESTATION_GENERATED_DIR}"
+  "${NATIVE_V3_BUILD_PROVENANCE_GENERATED_DIR}"
 )
-target_compile_definitions(longfellow_native_v3_parameter_attestation_producer
+target_compile_definitions(longfellow_minimal_clearance_parameter_reporter
   PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(longfellow_native_v3_parameter_attestation_producer
-  PRIVATE longfellow_minimal_clearance_relation)
-
-add_executable(longfellow_native_v3_parameter_attestation_verifier
-  src/native_v3_parameter_attestation_verifier.cpp
-)
-target_include_directories(longfellow_native_v3_parameter_attestation_verifier
-  PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/src"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
-  "${LONGFELLOW_SOURCE}/lib"
-  "${NATIVE_V3_ATTESTATION_GENERATED_DIR}"
-)
-target_compile_definitions(longfellow_native_v3_parameter_attestation_verifier
-  PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(longfellow_native_v3_parameter_attestation_verifier
+target_link_libraries(longfellow_minimal_clearance_parameter_reporter
   PRIVATE longfellow_minimal_clearance_verifier_circuit)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,6 +21,7 @@ from experiments.native_v3_phase0.native_v3_fixture import (
 from experiments.native_v3_trust_boundary.profile import (
     MAX_RETRIES,
     ProfileError,
+    _validate_compiled_parameter_report,
     build_profile_bindings,
     build_security_ledger,
     DECISION_ACCESS_JOIN_BYTES,
@@ -95,39 +97,61 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         self.assertFalse(bindings["completeness_or_nonmembership"]["absence_authorized"])
         self.assertEqual(bindings["chronology"]["sequence_after"], bindings["chronology"]["sequence_before"] + 1)
 
-    def test_implementation_parameter_attestation_is_verified_and_non_theorem(self) -> None:
-        ledger = build_security_ledger()
-        attestation = ledger["implementation_attestation"]
-        self.assertEqual(attestation["implementation_status"], "IMPLEMENTATION_ATTESTED")
-        self.assertEqual(attestation["record_bytes"], 802)
-        self.assertEqual(
-            attestation["record_identity_sha3_512"],
-            "5f5a45afd01cfa441f1c9671cce63495708fa7a9378c3305ce6a8f4f6e306ef8df64e3ff616e0e61f0f22462e351ca83b19d7b85b22a23b8d608d8d4f70377dd",
+    def test_compiled_parameter_report_rejects_exactly_seven_categories(self) -> None:
+        report_path = Path(
+            "experiments/longfellow_v09_native_v3/evidence/"
+            "implementation_parameter_attestation.json"
         )
-        self.assertEqual(attestation["facts"]["proof_rate"], 4)
-        self.assertEqual(attestation["facts"]["proof_queries"], 189)
-        self.assertEqual(attestation["adversarial_matrix"], {
-            "cases": 17,
-            "proof_invocations": 0,
-            "rejected": 17,
-            "state_mutations": 0,
-        })
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        mutations = []
+
+        missing = copy.deepcopy(report)
+        missing.pop("proof_rate")
+        mutations.append(("missing key", missing))
+
+        extra = copy.deepcopy(report)
+        extra["unexpected"] = False
+        mutations.append(("extra key", extra))
+
+        wrong_type = copy.deepcopy(report)
+        wrong_type["proof_queries"] = "189"
+        mutations.append(("wrong type", wrong_type))
+
+        source_hash = copy.deepcopy(report)
+        source_hash["sha3_patch_sha256"] = "0" * 64
+        mutations.append(("changed source hash", source_hash))
+
+        dimension = copy.deepcopy(report)
+        dimension["circuit_terms"] += 1
+        mutations.append(("changed circuit dimension", dimension))
+
+        circuit_id = copy.deepcopy(report)
+        circuit_id["circuit_id"] = "0" + circuit_id["circuit_id"][1:]
+        mutations.append(("changed circuit ID", circuit_id))
+
+        activation = copy.deepcopy(report)
+        activation["activation"] = True
+        mutations.append(("non-null/true activation field", activation))
+
+        self.assertEqual(len(mutations), 7)
+        for category, mutation in mutations:
+            with self.subTest(category=category):
+                with self.assertRaises(ProfileError):
+                    _validate_compiled_parameter_report(mutation)
+
+        attestation = build_security_ledger()["implementation_attestation"]
+        self.assertEqual(attestation["status"], "IMPLEMENTATION_ATTESTED")
+        self.assertEqual(attestation["report"]["proof_rate"], 4)
         self.assertFalse(attestation["production_usable"])
         self.assertFalse(attestation["activation"])
         self.assertIsNone(attestation["proof_suite_id"])
-        self.assertTrue(all(value == "UNKNOWN" for key, value in attestation["dp24_mapping"].items() if key != "note"))
-
-        bad = copy.deepcopy(ledger)
-        bad["implementation_attestation"]["facts"]["proof_rate"] = 5
-        with self.assertRaisesRegex(ProfileError, "ledger:implementation-attestation"):
-            validate_security_ledger(bad)
-
-        with patch(
-            "experiments.native_v3_trust_boundary.profile.IMPLEMENTATION_ATTESTATION_EVIDENCE_SHA256",
-            "0" * 64,
-        ):
-            with self.assertRaisesRegex(ProfileError, "ledger:implementation-attestation-evidence-mismatch"):
-                build_security_ledger()
+        self.assertTrue(
+            all(
+                value == "UNKNOWN"
+                for key, value in attestation["dp24_mapping"].items()
+                if key != "note"
+            )
+        )
 
     def test_symbolic_ledger_rejects_zero_or_complete_placeholders(self) -> None:
         ledger = build_security_ledger()

@@ -1,14 +1,14 @@
 SOURCE WORKSPACE: C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26
 CONTROLLED INTEGRATION WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\controlled-integration-parameter-attestation-20260820
-ROLLBACK WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\rollback-638-parameter-attestation-20260820
-PHASE: Implementation-parameter attestation candidate; no archive or prover action.
+ROLLBACK WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\rollback-64d-attestation-minimalism-20260820
+PHASE: Compiled-parameter reporter cleanup; no archive or prover action.
 
 OBJECTIVE: From the clean authoritative baseline
-`638445f235a8cb183dc6a03f9a82a60016d38aad`, bind the current experimental Longfellow
-producer and independent verifier to one canonical implementation-parameter attestation record.
-The record is derived from compiled types/constants, exact pinned patched-source identity, and the
-compiled minimal-clearance circuit. It is evidence of implementation facts only, not a theorem,
-proof-backend selection, or activation decision.
+`64d054783856127678bcbc1a3c300a08fddc2c4b`, retain a fixed compiled verifier-side Longfellow
+parameter report, separately validated by the Python profile gate. The report is derived from
+compiled types/constants, exact pinned patched-source identity, and the compiled minimal-clearance
+circuit. It is evidence of implementation facts only, not a theorem, proof-backend selection, or
+activation decision.
 
 AUTHORITY: AGENTS.md owns execution and precedence; this file owns only this bounded objective and
 blockers; STATE.md owns verified evidence and nonclaims; ARCHITECTURE.md owns system boundaries;
@@ -23,10 +23,11 @@ mandatory only for an undisclosed payment-relevant assertion crossing the cleara
 affecting automation. Ethereum is a later governed L1 checkpoint, never settlement/L2. Lean is a
 later mandatory gate and is not implemented.
 
-CONTROLLED INTEGRATION STATUS: The clean baseline `638445f235a8cb183dc6a03f9a82a60016d38aad`
+CONTROLLED INTEGRATION STATUS: The clean baseline `64d054783856127678bcbc1a3c300a08fddc2c4b`
 was verified before the isolated candidate was changed. Implementation/evidence commit
-`5363970705f9bdb8cdff2f99252f4425790f541d` adds the no-prover producer/verifier attestation and
-binds its identity into the experimental profile/security ledger. The six DP24 values remain
+`5363970705f9bdb8cdff2f99252f4425790f541d` added implementation facts; this cleanup removes its
+unnecessary binary record/protocol and retains one fixed reporter plus strict Python validation.
+The six DP24 values remain
 `UNKNOWN`; the implementation `proof_rate=4` is explicitly not DP24 `rate_R`. No production
 proof backend is selected; `proofSuiteId=null`, `production_usable=false`, activation is false,
 and the complete <=2^-128 private-proof theorem ledger remains open. Lean, backend selection, real
@@ -85,26 +86,25 @@ UNKNOWN with candidate literals marked `HYPOTHETICAL_CANDIDATE_INPUT`, and no nu
 epsilon/security-bit claim is emitted. No prover, archive, activation, or authoritative-checkout
 write occurred during this correction.
 
-## Implementation parameter attestation evidence
+## Compiled Longfellow parameter report
 
-The personally inspected candidate commit `5363970705f9bdb8cdff2f99252f4425790f541d` is based
-directly on `638445f235a8cb183dc6a03f9a82a60016d38aad`. The compiled producer and verifier targets
-were built from pinned Longfellow commit `fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0`, tree
-`829f5dd115f3b5bdd77dc57c72293a5ccc3ca244`, with the recorded SHA3 and quad-builder patches.
-The producer and independent verifier matched a canonical 802-byte record with identity
-`5f5a45afd01cfa441f1c9671cce63495708fa7a9378c3305ce6a8f4f6e306ef8df64e3ff616e0e61f0f22462e351ca83b19d7b85b22a23b8d608d8d4f70377dd` and record SHA-256
-`A8174650E9861156846D7F208D711F79C26EDC719C214B8515E1E512AAF5FEAA`.
+The cleanup removes the bespoke binary record, identity trailer, paired native encoders/parsers,
+and mutation-matrix script. The sole native reporter is
+longfellow_minimal_clearance_parameter_reporter; it links only the verifier-side circuit target
+and never invokes a prover. It emits one fixed canonical UTF-8 JSON object with 28 keys. Two
+reporter runs exited 0, were byte-identical at 1,215 bytes, and had SHA-256
+0E8856979A1C1082CFA43CC92BA0AC6CD67F6B17CA1E59A151E2C6A41977B3D3.
 
-The attested compiled facts are `GF2_128`, degree 128, 16 serialized bytes, implementation rate
-4, 189 queries, transcript version 6, artifact version 1, 68-byte artifact header, 3340-byte
-public statement, circuit inputs/public inputs/layers/terms `36969/26721/217/12158968`, and
-circuit ID `1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0`. The independent
-copy-only matrix rejected 17/17 record mutations, with zero prover invocations and zero state
-mutations. The machine-readable evidence is
-`experiments/longfellow_v09_native_v3/evidence/implementation_parameter_attestation.json`;
-the profile independently checks its file hash, record encoding, domain-separated identity, TLV
-types/order, facts, and nonactivating flags before binding the compact attestation into the
-security ledger and profile manifest.
+The compiled facts are GF2_128, degree 128, 16 serialized bytes, implementation rate 4, 189
+queries, transcript version 6, artifact version 1, 68-byte artifact header, 3340-byte public
+statement, circuit inputs/public inputs/layers/terms 36969/26721/217/12158968, and circuit ID
+1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0. The strict Python profile
+gate validates the exact JSON key set/types, pinned source and patch identities, dimensions,
+circuit ID, and nonactivating flags; seven focused malformed-report categories were rejected.
+This is a compiled verifier-side parameter report, separately validated by the Python profile
+gate. It does not claim independent native circuit reconstruction or an independent native
+verifier. The evidence is
+experiments/longfellow_v09_native_v3/evidence/implementation_parameter_attestation.json.
 
 This is implementation-attested evidence only. It does not map any Longfellow fact to DP24
 `ell`, `rate_R`, `theta`, `gamma`, `instances`, or DP24 field degree; all six remain `UNKNOWN`.
