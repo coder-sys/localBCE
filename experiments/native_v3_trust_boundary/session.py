@@ -8,7 +8,7 @@ backend can be considered.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import hmac
 import os
@@ -20,6 +20,7 @@ from .profile import (
     FIXED_CHALLENGE_BYTES,
     FIXED_SALT_BYTES,
     FIXED_SESSION_ID_BYTES,
+    JOIN_DOMAIN,
     MAX_RETRIES,
     ProfileBindings,
     ProfileError,
@@ -32,7 +33,7 @@ from .profile import (
     u32,
     u64,
 )
-from experiments.native_v3_phase0.native_v3_fixture import build_fixture
+from experiments.native_v3_phase0.native_v3_fixture import ACCESS_READ, ACCESS_WRITE, build_fixture
 
 
 FRAME_MAGIC = b"BLTBFRM1"
@@ -79,6 +80,125 @@ def _sha(domain: bytes, *parts: bytes) -> bytes:
     for part in parts:
         h.update(part)
     return h.digest()
+
+
+_INDEPENDENT_ACCESS_ROW_BYTES = 94
+_INDEPENDENT_OPERATION_ROW_BYTES = 480
+_INDEPENDENT_JOIN_BYTES = 4 + _INDEPENDENT_OPERATION_ROW_BYTES + 4 + (2 * _INDEPENDENT_ACCESS_ROW_BYTES)
+
+
+def _independent_access_row_bytes(index: int, count: int, operation_index: int, mode: int, value: bytes) -> bytes:
+    if type(index) is not int or type(count) is not int or type(operation_index) is not int:
+        raise ProfileError("verifier:join-access-integer")
+    if count != 2 or index not in (0, 1) or operation_index != 0:
+        raise ProfileError("verifier:join-access-geometry")
+    expected_mode = ACCESS_READ if index == 0 else ACCESS_WRITE
+    if mode != expected_mode:
+        raise ProfileError("verifier:join-access-role-order")
+    if len(value) != 64:
+        raise ProfileError("verifier:join-access-value-width")
+    return b"".join(
+        (
+            b"BLTBAC01",
+            u16(1),
+            u16(0),
+            u32(index),
+            u32(count),
+            u32(operation_index),
+            bytes((mode, 0)),
+            u32(len(value)),
+            value,
+        )
+    )
+
+
+def _independent_validate_operation(operation_bytes: bytes, operation) -> tuple[bytes, bytes]:  # type: ignore[no-untyped-def]
+    if len(operation_bytes) != _INDEPENDENT_OPERATION_ROW_BYTES:
+        raise ProfileError("verifier:join-operation-length")
+    if operation_bytes[:8] != b"BLNV3OR1" or operation_bytes[8:10] != u16(1) or operation_bytes[10:12] != b"\0\0":
+        raise ProfileError("verifier:join-operation-header")
+    if operation_bytes[12:16] != u32(0) or operation_bytes[16:20] != u32(1):
+        raise ProfileError("verifier:join-operation-geometry")
+    if operation_bytes[20:24] != bytes((1, ACCESS_WRITE, 0, 0)):
+        raise ProfileError("verifier:join-operation-kind-or-mode")
+    expected_fields = (
+        (24, 88, operation.settlement_domain_id),
+        (88, 152, operation.source_record_id),
+        (152, 216, operation.address),
+        (216, 280, operation.key),
+        (280, 344, operation.value_before),
+        (344, 408, operation.value_after),
+    )
+    for start, end, expected in expected_fields:
+        if operation_bytes[start:end] != expected:
+            raise ProfileError("verifier:join-operation-binding")
+    if operation_bytes[408] != operation.policy_result or operation_bytes[409] != operation.effective_directive:
+        raise ProfileError("verifier:join-operation-directive")
+    if operation_bytes[410:474] != operation.exception_authorization_id or operation_bytes[474:480] != b"\0" * 6:
+        raise ProfileError("verifier:join-operation-reserved")
+    return operation.value_before, operation.value_after
+
+
+def recompute_decision_access_join_id(join_bytes: bytes | None = None) -> bytes:
+    """Recompute the join ID with verifier-owned raw parsing, independent of the producer validator."""
+
+    fixture = build_fixture()
+    operation = fixture.operation
+    if join_bytes is None:
+        operation_bytes = operation.canonical_bytes()
+        expected_fixture_accesses = (
+            (0, ACCESS_READ, operation.value_before),
+            (0, ACCESS_WRITE, operation.value_after),
+        )
+        actual_fixture_accesses = tuple(
+            (access.operation_index, access.mode, access.value) for access in fixture.accesses
+        )
+        if actual_fixture_accesses != expected_fixture_accesses:
+            raise ProfileError("verifier:fixture-join-semantics")
+        rows = tuple(
+            _independent_access_row_bytes(index, 2, operation_index, mode, value)
+            for index, (operation_index, mode, value) in enumerate(expected_fixture_accesses)
+        )
+        join_bytes = b"".join((u32(1), operation_bytes, u32(2), *rows))
+    if len(join_bytes) != _INDEPENDENT_JOIN_BYTES:
+        raise ProfileError("verifier:join-length")
+    if join_bytes[:4] != u32(1):
+        raise ProfileError("verifier:join-decision-count")
+    operation_start = 4
+    operation_end = operation_start + _INDEPENDENT_OPERATION_ROW_BYTES
+    before_value, after_value = _independent_validate_operation(join_bytes[operation_start:operation_end], operation)
+    access_count_start = operation_end
+    if join_bytes[access_count_start:access_count_start + 4] != u32(2):
+        raise ProfileError("verifier:join-access-count")
+    rows_start = access_count_start + 4
+    expected_rows = ((ACCESS_READ, before_value), (ACCESS_WRITE, after_value))
+    for index, (expected_mode, expected_value) in enumerate(expected_rows):
+        row_start = rows_start + index * _INDEPENDENT_ACCESS_ROW_BYTES
+        row_end = row_start + _INDEPENDENT_ACCESS_ROW_BYTES
+        row = join_bytes[row_start:row_end]
+        if len(row) != _INDEPENDENT_ACCESS_ROW_BYTES or row[:8] != b"BLTBAC01" or row[8:10] != u16(1) or row[10:12] != b"\0\0":
+            raise ProfileError("verifier:join-access-header")
+        row_index = int.from_bytes(row[12:16], "big")
+        row_count = int.from_bytes(row[16:20], "big")
+        row_operation_index = int.from_bytes(row[20:24], "big")
+        row_mode = row[24]
+        if row[25:26] != b"\0" or row_index != index or row_count != 2 or row_operation_index != 0:
+            raise ProfileError("verifier:join-access-geometry")
+        if row_mode != expected_mode:
+            raise ProfileError("verifier:join-access-role-order")
+        if int.from_bytes(row[26:30], "big") != 64 or row[30:94] != expected_value:
+            raise ProfileError("verifier:join-access-value")
+        if _independent_access_row_bytes(row_index, row_count, row_operation_index, row_mode, row[30:94]) != row:
+            raise ProfileError("verifier:join-access-noncanonical")
+    return _sha(JOIN_DOMAIN, join_bytes)
+
+
+def build_verifier_bindings() -> ProfileBindings:
+    producer_bindings = build_profile_bindings()
+    verifier_join_id = recompute_decision_access_join_id()
+    if verifier_join_id != producer_bindings.decision_access_join_id:
+        raise ProfileError("verifier:join-producer-disagreement")
+    return replace(producer_bindings, decision_access_join_id=verifier_join_id)
 
 
 def _hmac_sha3(key: bytes, message: bytes) -> bytes:
@@ -568,7 +688,9 @@ class Transcript:
         return body + _sha(TRANSCRIPT_DOMAIN, self.session_id, self.statement, *frames)
 
     @classmethod
-    def parse(cls, data: bytes) -> "Transcript":
+    def parse(cls, data: bytes, bindings: ProfileBindings | None = None) -> "Transcript":
+        if bindings is None:
+            bindings = build_verifier_bindings()
         offset = 0
         magic, offset = read_exact(data, offset, 8, "transcript:magic")
         version, offset = read_exact(data, offset, 2, "transcript:version")
@@ -592,7 +714,7 @@ class Transcript:
         expected = _sha(TRANSCRIPT_DOMAIN, session_id, statement, *frames)
         if not hmac.compare_digest(digest, expected):
             raise ProfileError("transcript:digest")
-        statement_obj = ProfileStatement.parse(statement)
+        statement_obj = ProfileStatement.parse(statement, bindings)
         commitment = CommitmentMessage.parse(frames[0])
         challenge = ChallengeMessage.parse(frames[1])
         response = ResponseMessage.parse(frames[2])
@@ -749,7 +871,7 @@ class VerifierSession:
             self.challenged_sessions = set()
 
     def issue_challenge(self, commitment_bytes: bytes, statement_bytes: bytes) -> ChallengeMessage:
-        statement = ProfileStatement.parse(statement_bytes)
+        statement = ProfileStatement.parse(statement_bytes, build_verifier_bindings())
         commitment = CommitmentMessage.parse(commitment_bytes)
         if commitment.session_id != statement.session_id:
             raise ProfileError("verifier:statement-commitment-session")
@@ -805,12 +927,12 @@ def verify_session(
     bindings: ProfileBindings | None = None,
 ) -> VerificationResult:
     if bindings is None:
-        bindings = build_profile_bindings()
+        bindings = build_verifier_bindings()
     statement = ProfileStatement.parse(statement_bytes, bindings)
     commitment = CommitmentMessage.parse(commitment_bytes)
     challenge = ChallengeMessage.parse(challenge_bytes, auth_key)
     response = ResponseMessage.parse(response_bytes)
-    transcript = Transcript.parse(transcript_bytes)
+    transcript = Transcript.parse(transcript_bytes, bindings)
     if commitment.session_id != statement.session_id or challenge.session_id != statement.session_id or response.session_id != statement.session_id or transcript.session_id != statement.session_id:
         raise ProfileError("verify:session-binding")
     if commitment.statement_digest != _sha(STATEMENT_DOMAIN, statement_bytes):

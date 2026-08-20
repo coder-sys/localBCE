@@ -2,35 +2,29 @@
   "activation": false,
   "complete_bound_available": false,
   "dp24": {
-    "bits_single_decimal": "134.47214976634539720898858216070537446713919040269651174941026",
-    "bits_union_decimal": "128.66479484428779310154661284347354365849816377673037096573297",
+    "bits_single_decimal": null,
+    "bits_union_decimal": null,
     "construction": "4.12",
-    "ell": 28,
-    "epsilon_extraction_plus_sumcheck_fraction": {
-      "denominator": 14474011154664524427946373126085988481658748083205070504932198000989141204992,
-      "numerator": 67108871
+    "epsilon_extraction_plus_sumcheck_fraction": null,
+    "epsilon_query_fraction": null,
+    "epsilon_single_decimal": null,
+    "epsilon_single_fraction": null,
+    "epsilon_union_decimal": null,
+    "epsilon_union_fraction": null,
+    "exact_rational_arithmetic": {
+      "reason": "at least one DP24 parameter is UNKNOWN; numeric epsilon and security bits are suppressed",
+      "status": "DEFERRED_UNTIL_PARAMETER_PROVENANCE",
+      "used": false
     },
-    "epsilon_query_fraction": {
-      "denominator": 1167984798111281975972139931059274579172666497855631342228273284582214442805421410945513679697247078343332431250840168271536308408672112127552681297848886832192510636636227827221215793215130566656,
-      "numerator": 38662196978715633273404758790074316960214213096178319621856934259807530937321861485192508542873470637501160980081794035970219670238407078788135931371782481
+    "formulas": {
+      "epsilon_extraction_plus_sumcheck": "((2^(ell+rate_R))+(2*ell))/2^field_degree",
+      "epsilon_query": "(1/2+1/(2*2^rate_R))^gamma",
+      "epsilon_union": "instances*(epsilon_extraction_plus_sumcheck+epsilon_query)"
     },
-    "epsilon_single_decimal": "0.000000000000000000000000000000000000000033101626871544280859079149296156999764207237886627270526053073392347985222300467",
-    "epsilon_single_fraction": {
-      "denominator": 1167984798111281975972139931059274579172666497855631342228273284582214442805421410945513679697247078343332431250840168271536308408672112127552681297848886832192510636636227827221215793215130566656,
-      "numerator": 38662196978715633273404758795489688021411090450303663812493713493740669609788395414964994905468137122575690841265755373127288313740024914300946151638761809
-    },
-    "epsilon_union_decimal": "0.0000000000000000000000000000000000000018536911048064797281084323605847919867956053216511271494589721099714871724488262",
-    "epsilon_union_fraction": {
-      "denominator": 145998099763910246996517491382409322396583312231953917778534160572776805350677676368189209962155884792916553906355021033942038551084014015944085162231110854024063829579528478402651974151891320832,
-      "numerator": 270635378851009432913833311568427816149877633152125646687455994456184687268518767904754964338276959858029835888860287611891018196180174400106623061471332663
-    },
-    "field_degree": 256,
-    "gamma": 324,
-    "instances": 56,
     "model": "ideal-vector-oracle-only",
-    "rate_R": 1,
-    "theorem": "ePrint_2024_504_Theorem_4_17",
-    "theta": 4
+    "parameter_set_id": "3a8b4c62c78efded8b26d0a428b7bad17dc338b86ba945467ec8b815b8850080ad553452ac9dfc0d300df90cce3dc85b830ac9d24d543f8957fcef2e45b9e4ac",
+    "status": "UNKNOWN",
+    "theorem": "ePrint_2024_504_Theorem_4_17"
   },
   "nonclaims": [
     "no proof backend",
@@ -41,6 +35,68 @@
     "no production challenge authentication",
     "no production usability or activation"
   ],
+  "parameter_set": {
+    "fields": {
+      "ell": {
+        "candidate_value": 28,
+        "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+        "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+        "status": "UNKNOWN",
+        "value": null
+      },
+      "field_degree": {
+        "candidate_value": 256,
+        "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+        "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+        "status": "UNKNOWN",
+        "value": null
+      },
+      "gamma": {
+        "candidate_value": 324,
+        "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+        "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+        "status": "UNKNOWN",
+        "value": null
+      },
+      "instances": {
+        "candidate_value": 56,
+        "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+        "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+        "status": "UNKNOWN",
+        "value": null
+      },
+      "rate_R": {
+        "candidate_value": 1,
+        "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+        "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+        "status": "UNKNOWN",
+        "value": null
+      },
+      "theta": {
+        "candidate_value": 4,
+        "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+        "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+        "status": "UNKNOWN",
+        "value": null
+      }
+    },
+    "id": "3a8b4c62c78efded8b26d0a428b7bad17dc338b86ba945467ec8b815b8850080ad553452ac9dfc0d300df90cce3dc85b830ac9d24d543f8957fcef2e45b9e4ac",
+    "identity_algorithm": "SHA3-512(BL/NATIVE-V3/TBP/DP24-PARAMETER-SET/v1\\0 || canonical-json(descriptor))",
+    "provenance": {
+      "authoritative_repository_bytes": [
+        {
+          "path": "experiments/longfellow_v09_native_v3/upstream_manifest.json",
+          "role": "pinned upstream identity only; no DP24 tuple derivation",
+          "sha256": "A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D"
+        }
+      ],
+      "pinned_upstream_commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+      "pinned_upstream_tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+      "source": "No authoritative repository byte derives the DP24 tuple; the pinned Longfellow manifest records only upstream pin/build/SHA3 facts."
+    },
+    "schema": "BL/NATIVE-V3/TBP/DP24-PARAMETER-SET/v1",
+    "status": "UNKNOWN_NOT_AUTHORITY_BOUND"
+  },
   "production_usable": false,
   "profile_id": "8b07c423294e2d2cecf320e495b56c31b5ecbd75f28cee5b166785e0de872619a0149b1e3dacd195207c7c2f34a9b46a8843ef8dd1c6fbac613aa66111d4163c",
   "proof_backend_selected": false,

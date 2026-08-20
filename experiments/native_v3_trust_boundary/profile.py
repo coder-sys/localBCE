@@ -13,6 +13,7 @@ from decimal import Decimal, localcontext
 from fractions import Fraction
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from experiments.native_v3_phase0.native_v3_fixture import (
@@ -25,6 +26,9 @@ from experiments.native_v3_phase0.native_v3_fixture import (
     EXPECTED_REASON_ID,
     EXPECTED_RULE_ID,
     NO_EXCEPTION_SENTINEL,
+    OP_ROW_BYTES,
+    AccessEvent,
+    OrderedOperationRow,
     build_fixture,
 )
 
@@ -58,6 +62,23 @@ EVENT_TIME = 7_000
 OBSERVATION_TIME = 7_001
 RULE_EFFECTIVE_TIME = 6_999
 DECISION_TIME = 7_002
+
+ACCESS_ROW_BYTES = 94
+DECISION_ACCESS_JOIN_BYTES = 4 + OP_ROW_BYTES + 4 + (2 * ACCESS_ROW_BYTES)
+
+PARAMETER_SET_DOMAIN = b"BL/NATIVE-V3/TBP/DP24-PARAMETER-SET/v1\0"
+UPSTREAM_MANIFEST_RELATIVE_PATH = "experiments/longfellow_v09_native_v3/upstream_manifest.json"
+UPSTREAM_MANIFEST_SHA256 = "A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D"
+PARAMETER_SET_ID_EXPECTED = "3a8b4c62c78efded8b26d0a428b7bad17dc338b86ba945467ec8b815b8850080ad553452ac9dfc0d300df90cce3dc85b830ac9d24d543f8957fcef2e45b9e4ac"
+
+_DP24_CANDIDATE_VALUES = {
+    "ell": 28,
+    "rate_R": 1,
+    "field_degree": 256,
+    "theta": 4,
+    "gamma": 324,
+    "instances": 56,
+}
 
 
 CANONICAL_GRAMMAR: dict[str, Any] = {
@@ -269,11 +290,111 @@ def _ascii_field(value: bytes, label: str) -> bytes:
 
 
 def access_row_bytes(index: int, count: int, operation_index: int, mode: int, value: bytes) -> bytes:
+    if (
+        type(index) is not int
+        or type(count) is not int
+        or type(operation_index) is not int
+        or type(mode) is not int
+    ):
+        raise ProfileError("access-row:integer-fields")
     if count != 2 or index not in (0, 1) or operation_index != 0:
         raise ProfileError("access-row:geometry")
-    if mode not in (ACCESS_READ, ACCESS_WRITE) or len(value) != 64:
+    expected_mode = ACCESS_READ if index == 0 else ACCESS_WRITE
+    if mode != expected_mode:
+        raise ProfileError("access-row:role-order")
+    if not isinstance(value, bytes) or len(value) != 64:
         raise ProfileError("access-row:fields")
     return b"BLTBAC01" + u16(1) + u16(0) + u32(index) + u32(count) + u32(operation_index) + bytes((mode, 0)) + u32(len(value)) + value
+
+
+def _parse_access_row(data: bytes) -> AccessEvent:
+    if len(data) != ACCESS_ROW_BYTES:
+        raise ProfileError("access-row:length")
+    if data[:8] != b"BLTBAC01" or data[8:10] != u16(1) or data[10:12] != b"\0\0":
+        raise ProfileError("access-row:header")
+    index = int.from_bytes(data[12:16], "big")
+    count = int.from_bytes(data[16:20], "big")
+    operation_index = int.from_bytes(data[20:24], "big")
+    mode = data[24]
+    if data[25:26] != b"\0":
+        raise ProfileError("access-row:reserved")
+    value_length = int.from_bytes(data[26:30], "big")
+    if value_length != 64:
+        raise ProfileError("access-row:value")
+    access = AccessEvent(operation_index, mode, data[30:94])
+    if access_row_bytes(index, count, operation_index, mode, access.value) != data:
+        raise ProfileError("access-row:noncanonical")
+    return access
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionAccessJoin:
+    """The producer-owned, exact one-decision/two-access join boundary."""
+
+    operation: OrderedOperationRow
+    accesses: tuple[AccessEvent, ...]
+    decision_count: int = 1
+    access_count: int = 2
+
+    def canonical_bytes(self) -> bytes:
+        if type(self.decision_count) is not int or self.decision_count != 1:
+            raise ProfileError("join:decision-count")
+        if type(self.access_count) is not int or self.access_count != 2:
+            raise ProfileError("join:access-count")
+        if not isinstance(self.operation, OrderedOperationRow):
+            raise ProfileError("join:operation-type")
+        if self.operation.operation_index != 0 or self.operation.operation_count != 1:
+            raise ProfileError("join:operation-geometry")
+        operation_bytes = self.operation.canonical_bytes()
+        accesses = tuple(self.accesses)
+        if len(accesses) != self.access_count:
+            raise ProfileError("join:access-count")
+        expected = (
+            (ACCESS_READ, self.operation.value_before),
+            (ACCESS_WRITE, self.operation.value_after),
+        )
+        rows: list[bytes] = []
+        for index, (access, (expected_mode, expected_value)) in enumerate(zip(accesses, expected, strict=True)):
+            if type(access) is not AccessEvent:
+                raise ProfileError("join:access-type")
+            if access.operation_index != self.operation.operation_index:
+                raise ProfileError("join:access-operation")
+            if access.mode != expected_mode:
+                raise ProfileError("join:access-role-order")
+            if access.value != expected_value:
+                raise ProfileError("join:access-value")
+            rows.append(access_row_bytes(index, self.access_count, access.operation_index, access.mode, access.value))
+        result = b"".join((u32(self.decision_count), operation_bytes, u32(self.access_count), *rows))
+        if len(result) != DECISION_ACCESS_JOIN_BYTES:
+            raise AssertionError("decision/access join length")
+        return result
+
+    @property
+    def join_id(self) -> bytes:
+        return _sha(JOIN_DOMAIN, self.canonical_bytes())
+
+
+def parse_decision_access_join(data: bytes) -> DecisionAccessJoin:
+    if len(data) != DECISION_ACCESS_JOIN_BYTES:
+        raise ProfileError("join:length")
+    decision_count = int.from_bytes(data[:4], "big")
+    operation_start = 4
+    operation_end = operation_start + OP_ROW_BYTES
+    try:
+        operation = OrderedOperationRow.parse(data[operation_start:operation_end])
+    except ValueError as exc:
+        raise ProfileError("join:operation") from exc
+    access_count_start = operation_end
+    access_count = int.from_bytes(data[access_count_start:access_count_start + 4], "big")
+    rows_start = access_count_start + 4
+    accesses = tuple(
+        _parse_access_row(data[rows_start + index * ACCESS_ROW_BYTES:rows_start + (index + 1) * ACCESS_ROW_BYTES])
+        for index in range(2)
+    )
+    join = DecisionAccessJoin(operation, accesses, decision_count=decision_count, access_count=access_count)
+    if join.canonical_bytes() != data:
+        raise ProfileError("join:noncanonical")
+    return join
 
 
 def control_set_bytes() -> bytes:
@@ -362,12 +483,10 @@ def build_profile_bindings() -> ProfileBindings:
     fixture = build_fixture()
     phase0_statement = fixture.statement.canonical_bytes()
     operation = fixture.operation.canonical_bytes()
-    access_rows = b"".join(
-        access_row_bytes(index, 2, access.operation_index, access.mode, access.value)
-        for index, access in enumerate(fixture.accesses)
-    )
-    join_bytes = b"".join((u32(1), operation, u32(2), access_rows))
-    decision_access_join_id = _sha(JOIN_DOMAIN, join_bytes)
+    decision_access_join = DecisionAccessJoin(fixture.operation, fixture.accesses)
+    if decision_access_join.operation.canonical_bytes() != operation:
+        raise ProfileError("join:operation-binding")
+    decision_access_join_id = decision_access_join.join_id
     auth_bytes = (
         NO_EXCEPTION_SENTINEL
         if fixture.exception_authorization is None
@@ -459,18 +578,63 @@ def _decimal_log2(value: Fraction, digits: int = 50) -> str:
         return format(+result, "f")
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def _verified_upstream_manifest_sha256() -> str:
+    repository_root = Path(__file__).resolve().parents[2]
+    manifest_path = repository_root / UPSTREAM_MANIFEST_RELATIVE_PATH
+    try:
+        digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest().upper()
+    except OSError as exc:
+        raise ProfileError("ledger:provenance-source-unavailable") from exc
+    if digest != UPSTREAM_MANIFEST_SHA256:
+        raise ProfileError("ledger:provenance-source-mismatch")
+    return digest
+
+
+def _parameter_set_descriptor() -> dict[str, Any]:
+    manifest_sha256 = _verified_upstream_manifest_sha256()
+    return {
+        "schema": "BL/NATIVE-V3/TBP/DP24-PARAMETER-SET/v1",
+        "status": "UNKNOWN_NOT_AUTHORITY_BOUND",
+        "identity_algorithm": "SHA3-512(BL/NATIVE-V3/TBP/DP24-PARAMETER-SET/v1\\0 || canonical-json(descriptor))",
+        "provenance": {
+            "source": "No authoritative repository byte derives the DP24 tuple; the pinned Longfellow manifest records only upstream pin/build/SHA3 facts.",
+            "authoritative_repository_bytes": [
+                {
+                    "path": UPSTREAM_MANIFEST_RELATIVE_PATH,
+                    "sha256": manifest_sha256,
+                    "role": "pinned upstream identity only; no DP24 tuple derivation",
+                }
+            ],
+            "pinned_upstream_commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+            "pinned_upstream_tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244",
+        },
+        "fields": {
+            name: {
+                "value": None,
+                "status": "UNKNOWN",
+                "candidate_value": value,
+                "candidate_value_status": "HYPOTHETICAL_CANDIDATE_INPUT",
+                "source": "historical symbolic-ledger literal; not derivable from the authoritative pinned bytes",
+            }
+            for name, value in _DP24_CANDIDATE_VALUES.items()
+        },
+    }
+
+
+def _parameter_set() -> dict[str, Any]:
+    descriptor = _parameter_set_descriptor()
+    parameter_set_id = hashlib.sha3_512(PARAMETER_SET_DOMAIN + _canonical_json_bytes(descriptor)).hexdigest()
+    if parameter_set_id != PARAMETER_SET_ID_EXPECTED:
+        raise ProfileError("ledger:parameter-provenance-identity")
+    return {"id": parameter_set_id, **descriptor}
+
+
 def build_security_ledger() -> dict[str, Any]:
-    ell = 28
-    rate = 1
-    field_degree = 256
-    theta = 4
-    gamma = 324
-    instances = 56
-    extraction_plus_sumcheck = Fraction((1 << (ell + rate)) + (2 * ell), 1 << field_degree)
-    query = Fraction(1, 2) + Fraction(1, 2 * (1 << rate))
-    query = query**gamma
-    epsilon_single = extraction_plus_sumcheck + query
-    epsilon_union = instances * epsilon_single
+    parameter_set = _parameter_set()
     unresolved = [
         {
             "id": "vc_collapse_binding",
@@ -529,24 +693,31 @@ def build_security_ledger() -> dict[str, Any]:
         "complete_bound_available": False,
         "production_usable": False,
         "activation": False,
+        "parameter_set": parameter_set,
         "dp24": {
             "theorem": "ePrint_2024_504_Theorem_4_17",
             "construction": "4.12",
             "model": "ideal-vector-oracle-only",
-            "ell": ell,
-            "rate_R": rate,
-            "field_degree": field_degree,
-            "theta": theta,
-            "gamma": gamma,
-            "instances": instances,
-            "epsilon_extraction_plus_sumcheck_fraction": {"numerator": extraction_plus_sumcheck.numerator, "denominator": extraction_plus_sumcheck.denominator},
-            "epsilon_query_fraction": {"numerator": query.numerator, "denominator": query.denominator},
-            "epsilon_single_fraction": {"numerator": epsilon_single.numerator, "denominator": epsilon_single.denominator},
-            "epsilon_union_fraction": {"numerator": epsilon_union.numerator, "denominator": epsilon_union.denominator},
-            "epsilon_single_decimal": _decimal_fraction(epsilon_single),
-            "epsilon_union_decimal": _decimal_fraction(epsilon_union),
-            "bits_single_decimal": _decimal_log2(Fraction(1, 1) / epsilon_single),
-            "bits_union_decimal": _decimal_log2(Fraction(1, 1) / epsilon_union),
+            "parameter_set_id": parameter_set["id"],
+            "status": "UNKNOWN",
+            "formulas": {
+                "epsilon_extraction_plus_sumcheck": "((2^(ell+rate_R))+(2*ell))/2^field_degree",
+                "epsilon_query": "(1/2+1/(2*2^rate_R))^gamma",
+                "epsilon_union": "instances*(epsilon_extraction_plus_sumcheck+epsilon_query)",
+            },
+            "exact_rational_arithmetic": {
+                "status": "DEFERRED_UNTIL_PARAMETER_PROVENANCE",
+                "used": False,
+                "reason": "at least one DP24 parameter is UNKNOWN; numeric epsilon and security bits are suppressed",
+            },
+            "epsilon_extraction_plus_sumcheck_fraction": None,
+            "epsilon_query_fraction": None,
+            "epsilon_single_fraction": None,
+            "epsilon_union_fraction": None,
+            "epsilon_single_decimal": None,
+            "epsilon_union_decimal": None,
+            "bits_single_decimal": None,
+            "bits_union_decimal": None,
         },
         "unresolved_terms": unresolved,
         "zero_placeholders_allowed": False,
@@ -571,6 +742,14 @@ def validate_security_ledger(ledger: dict[str, Any]) -> None:
         raise ProfileError("ledger:production-flags")
     if ledger.get("proof_backend_selected") is not False or ledger.get("proof_suite_id") is not None:
         raise ProfileError("ledger:backend-selected")
+    expected_parameter_set = _parameter_set()
+    if ledger.get("parameter_set") != expected_parameter_set:
+        raise ProfileError("ledger:parameter-provenance")
+    dp24 = ledger.get("dp24")
+    if not isinstance(dp24, dict) or dp24.get("status") != "UNKNOWN" or dp24.get("parameter_set_id") != expected_parameter_set["id"]:
+        raise ProfileError("ledger:dp24-unknown-status")
+    if any(dp24.get(name) is not None for name in ("epsilon_single_fraction", "epsilon_union_fraction", "bits_single_decimal", "bits_union_decimal")):
+        raise ProfileError("ledger:numeric-claim-with-unknown-parameters")
     terms = ledger.get("unresolved_terms")
     if not isinstance(terms, list) or not terms:
         raise ProfileError("ledger:terms-missing")
@@ -587,6 +766,7 @@ def validate_security_ledger(ledger: dict[str, Any]) -> None:
 
 def profile_manifest() -> dict[str, Any]:
     bindings = build_profile_bindings()
+    security_ledger = build_security_ledger()
     return {
         "schema": "BL/NATIVE-V3/TRUST-BOUNDARY-PROFILE/v1",
         "profile_name": PROFILE_NAME,
@@ -640,6 +820,11 @@ def profile_manifest() -> dict[str, Any]:
                 "decision_row_count": 1,
                 "state_access_row_count": 2,
                 "access_order": ["read", "write"],
+                "access_indices": [0, 1],
+                "access_value_binding": [
+                    "access[0].value == operation.value_before",
+                    "access[1].value == operation.value_after",
+                ],
                 "operation_index": 0,
                 "canonical_join": "u32(decision_count)||operation_row||u32(access_count)||ordered_state_access_rows",
             },
@@ -675,6 +860,8 @@ def profile_manifest() -> dict[str, Any]:
         },
         "retry_cap": MAX_RETRIES,
         "security_ledger": "security_ledger.json",
+        "security_ledger_status": security_ledger["dp24"]["status"],
+        "security_parameter_set_id": security_ledger["parameter_set"]["id"],
         "nonclaims": [
             "protocol-boundary evidence only",
             "no ZK or native hiding claim",

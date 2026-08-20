@@ -486,6 +486,8 @@
   "retry_cap": 4,
   "schema": "BL/NATIVE-V3/TRUST-BOUNDARY-PROFILE/v1",
   "security_ledger": "security_ledger.json",
+  "security_ledger_status": "UNKNOWN",
+  "security_parameter_set_id": "3a8b4c62c78efded8b26d0a428b7bad17dc338b86ba945467ec8b815b8850080ad553452ac9dfc0d300df90cce3dc85b830ac9d24d543f8957fcef2e45b9e4ac",
   "status": "TRUST_BOUNDARY_ONLY",
   "verifier_owned_public_bindings": {
     "automatic_control_set": {
@@ -537,9 +539,17 @@
       ],
       "canonical_join": "u32(decision_count)||operation_row||u32(access_count)||ordered_state_access_rows",
       "decision_row_count": 1,
-      "join_id": "d62d56dee1cc8b18869c128dbc178aa3ee993865bfe38216596b7f9b8788fb6b58fc8849b0db30c6b652e40dfa30bf8f8bea1b94f8a5e0f5b8421039ddc09245",
-      "operation_index": 0,
-      "state_access_row_count": 2
+    "join_id": "d62d56dee1cc8b18869c128dbc178aa3ee993865bfe38216596b7f9b8788fb6b58fc8849b0db30c6b652e40dfa30bf8f8bea1b94f8a5e0f5b8421039ddc09245",
+    "access_indices": [
+      0,
+      1
+    ],
+    "operation_index": 0,
+    "access_value_binding": [
+      "access[0].value == operation.value_before",
+      "access[1].value == operation.value_after"
+    ],
+    "state_access_row_count": 2
     },
     "frozen_receipt": "b55b99adcb9085039947a09e718169fe4b882c49f8a1bb7b8fc221ed518555203ed51565280ba0f25228a9f3f735b205a0abe6620c68c2e8963d4e8635aa8808",
     "phase0_statement_digest": "396587f05dbadeede82477853d400692608f6b25c3ed88f228ac1f8af113293c17512972ba9cb808a12685fe842ddd10061136261ef6c5deae1e160bd84495c3",
