@@ -226,6 +226,10 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         bad = bytearray(encoded)
         bad[4 + 16:4 + 20] = (2).to_bytes(4, "big")
         malformed.append(bytes(bad))
+        bad = bytearray(encoded)
+        bad[4 + 480:4 + 484] = (1).to_bytes(4, "big")
+        malformed.append(bytes(bad))
+        self.assertEqual(len(malformed), 11)
         for mutation in malformed:
             with self.assertRaises(ProfileError):
                 parse_decision_access_join(mutation)
@@ -242,6 +246,7 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         for offset, value in (
             (0, 2),
             (4 + 16, 2),
+            (4 + 480, 1),
             (rows_start + 12, 1),
             (rows_start + 20, 1),
             (rows_start + 24, ACCESS_WRITE),
@@ -249,7 +254,7 @@ class TrustBoundaryProfileTests(unittest.TestCase):
             (rows_start + 24, 9),
         ):
             mutation = bytearray(valid)
-            if offset in (0, 4 + 16, rows_start + 12, rows_start + 20):
+            if offset in (0, 4 + 16, 4 + 480, rows_start + 12, rows_start + 20):
                 mutation[offset:offset + 4] = value.to_bytes(4, "big")
             else:
                 mutation[offset] = value
@@ -264,6 +269,7 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         mutation[4 + 280] ^= 1
         mutations.append(bytes(mutation))
         mutations.extend((valid[:-1], valid + b"\0"))
+        self.assertEqual(len(mutations), 13)
 
         for mutation in mutations:
             with self.assertRaisesRegex(ProfileError, "verifier:join-"):

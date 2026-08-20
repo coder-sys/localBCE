@@ -69,7 +69,7 @@ The 2026-08-20 trust-boundary hardening gives the producer one canonical decisio
 exactly one decision row and two access rows, with access index 0 as READ bound to the operation's
 before value and access index 1 as WRITE bound to its after value. The independent verifier
 recomputes the same relation without calling the producer validator; its focused raw mutation
-matrix rejects 12/12 malformed or semantically altered joins. The valid 676-byte join and its
+matrix rejects 13/13 malformed or semantically altered joins. The valid 676-byte join and its
 existing SHA3-512 ID remain unchanged. The DP24 ledger now binds an immutable parameter-set
 identity to the pinned upstream manifest (SHA-256
 `A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D`), labels all six numeric

@@ -78,8 +78,8 @@ compilation exit 0; generated/static security-ledger and profile-manifest JSON e
 Native-v3 trust-boundary plus plaintext-continuity pytest of 33/33 passing with no warnings; the
 Phase-0 `kat` command exit 0; the Phase-0 `negatives` command exit 0 with 14/14 rejection classes;
 the compact governance/release/security unittest command reporting 35 tests, `OK`, exit 0; and
-the active-core command reporting 8 passed, exit 0. The producer join matrix rejected 22 malformed
-or semantically invalid join encodings, and the independent raw-join matrix rejected 12/12
+the active-core command reporting 8 passed, exit 0. The producer join matrix rejected 23 malformed
+or semantically invalid join encodings, and the independent raw-join matrix rejected 13/13
 mutations, while the valid 676-byte join and `d62d56...ddc09245` SHA3-512 ID remained unchanged.
 The pinned upstream manifest was independently bound by SHA-256
 `A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D`; all six DP24 values remain
