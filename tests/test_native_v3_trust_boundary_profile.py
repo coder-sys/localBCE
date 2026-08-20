@@ -95,6 +95,40 @@ class TrustBoundaryProfileTests(unittest.TestCase):
         self.assertFalse(bindings["completeness_or_nonmembership"]["absence_authorized"])
         self.assertEqual(bindings["chronology"]["sequence_after"], bindings["chronology"]["sequence_before"] + 1)
 
+    def test_implementation_parameter_attestation_is_verified_and_non_theorem(self) -> None:
+        ledger = build_security_ledger()
+        attestation = ledger["implementation_attestation"]
+        self.assertEqual(attestation["implementation_status"], "IMPLEMENTATION_ATTESTED")
+        self.assertEqual(attestation["record_bytes"], 802)
+        self.assertEqual(
+            attestation["record_identity_sha3_512"],
+            "5f5a45afd01cfa441f1c9671cce63495708fa7a9378c3305ce6a8f4f6e306ef8df64e3ff616e0e61f0f22462e351ca83b19d7b85b22a23b8d608d8d4f70377dd",
+        )
+        self.assertEqual(attestation["facts"]["proof_rate"], 4)
+        self.assertEqual(attestation["facts"]["proof_queries"], 189)
+        self.assertEqual(attestation["adversarial_matrix"], {
+            "cases": 17,
+            "proof_invocations": 0,
+            "rejected": 17,
+            "state_mutations": 0,
+        })
+        self.assertFalse(attestation["production_usable"])
+        self.assertFalse(attestation["activation"])
+        self.assertIsNone(attestation["proof_suite_id"])
+        self.assertTrue(all(value == "UNKNOWN" for key, value in attestation["dp24_mapping"].items() if key != "note"))
+
+        bad = copy.deepcopy(ledger)
+        bad["implementation_attestation"]["facts"]["proof_rate"] = 5
+        with self.assertRaisesRegex(ProfileError, "ledger:implementation-attestation"):
+            validate_security_ledger(bad)
+
+        with patch(
+            "experiments.native_v3_trust_boundary.profile.IMPLEMENTATION_ATTESTATION_EVIDENCE_SHA256",
+            "0" * 64,
+        ):
+            with self.assertRaisesRegex(ProfileError, "ledger:implementation-attestation-evidence-mismatch"):
+                build_security_ledger()
+
     def test_symbolic_ledger_rejects_zero_or_complete_placeholders(self) -> None:
         ledger = build_security_ledger()
         self.assertFalse(ledger["complete_bound_available"])

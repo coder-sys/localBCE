@@ -19,6 +19,8 @@ constexpr size_t kDigestBytes = 64;
 constexpr char kProofRole[] =
     "BL/NATIVE-V3/MINIMAL-CLEARANCE/v1";
 constexpr size_t kProofRoleBytes = sizeof(kProofRole) - 1;
+constexpr char kPublicStatementGrammar[] =
+    "BL/NATIVE-V3/MINIMAL-CLEARANCE/STATEMENT/v1";
 // One canonical private source/registry commitment is the only hidden hash
 // endpoint. Request/replay identity is typed public context plus state-side
 // reconstruction and consumption, not a second in-circuit hash.

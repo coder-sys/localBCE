@@ -15,9 +15,6 @@
 
 namespace {
 
-constexpr char kTranscriptLabel[] =
-    "BL/NATIVE-V3/MINIMAL-CLEARANCE/TRANSCRIPT/v1";
-
 using RelationField =
     blind_ledger_longfellow::minimal_clearance::RelationField;
 using namespace blind_ledger_longfellow::minimal_clearance;

@@ -16,6 +16,10 @@ constexpr uint32_t kFormatVersion = 1;
 constexpr uint32_t kLigeroRate = 4;
 constexpr uint32_t kLigeroQueries = 189;
 constexpr uint32_t kTranscriptVersion = 6;
+inline constexpr char kTranscriptLabel[] =
+    "BL/NATIVE-V3/MINIMAL-CLEARANCE/TRANSCRIPT/v1";
+inline constexpr std::array<uint8_t, 8> kArtifactMagic = {
+    'B', 'L', 'M', 'C', 'V', '3', 'P', '1'};
 
 struct Artifact {
   std::array<uint8_t, kCircuitIdBytes> circuit_id{};

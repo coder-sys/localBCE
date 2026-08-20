@@ -7,8 +7,6 @@
 namespace blind_ledger_longfellow::minimal_clearance_proof {
 namespace {
 
-constexpr char kMagic[] = "BLMCV3P1";
-
 uint32_t ReadU32(const std::vector<uint8_t>& bytes, size_t offset) {
   return (static_cast<uint32_t>(bytes[offset]) << 24) |
          (static_cast<uint32_t>(bytes[offset + 1]) << 16) |
@@ -54,8 +52,8 @@ bool parse_artifact_bytes(const std::vector<uint8_t>& bytes, Artifact& artifact,
     error = "header-truncated";
     return false;
   }
-  if (!std::equal(bytes.begin(), bytes.begin() + sizeof(kMagic) - 1,
-                  reinterpret_cast<const uint8_t*>(kMagic))) {
+  if (!std::equal(bytes.begin(), bytes.begin() + kArtifactMagic.size(),
+                  kArtifactMagic.begin())) {
     error = "magic";
     return false;
   }
@@ -140,8 +138,7 @@ bool serialize_artifact(const Artifact& artifact, std::vector<uint8_t>& bytes,
     return false;
   }
   bytes.clear();
-  bytes.insert(bytes.end(), reinterpret_cast<const uint8_t*>(kMagic),
-               reinterpret_cast<const uint8_t*>(kMagic) + sizeof(kMagic) - 1);
+  bytes.insert(bytes.end(), kArtifactMagic.begin(), kArtifactMagic.end());
   AppendU32(bytes, kFormatVersion);
   bytes.insert(bytes.end(), artifact.circuit_id.begin(), artifact.circuit_id.end());
   AppendU32(bytes, artifact.rate);

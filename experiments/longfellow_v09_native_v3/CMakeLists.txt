@@ -10,6 +10,93 @@ if(NOT EXISTS "${LONGFELLOW_SOURCE}/lib/zk/zk_prover.h")
   message(FATAL_ERROR "LONGFELLOW_SOURCE must name the patched pinned source tree")
 endif()
 
+# The attestation record is generated from the pinned manifest, the actual
+# patched source files, and the circuit compiled by each boundary. Keeping
+# this provenance in a generated header avoids a second hand-maintained copy
+# of implementation parameters in either executable.
+set(NATIVE_V3_UPSTREAM_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/upstream_manifest.json")
+if(NOT EXISTS "${NATIVE_V3_UPSTREAM_MANIFEST}")
+  message(FATAL_ERROR "upstream manifest missing")
+endif()
+file(READ "${NATIVE_V3_UPSTREAM_MANIFEST}" NATIVE_V3_MANIFEST_JSON)
+string(JSON NATIVE_V3_MANIFEST_REMOTE GET "${NATIVE_V3_MANIFEST_JSON}"
+       upstream remote)
+string(JSON NATIVE_V3_MANIFEST_COMMIT GET "${NATIVE_V3_MANIFEST_JSON}"
+       upstream commit)
+string(JSON NATIVE_V3_MANIFEST_TREE GET "${NATIVE_V3_MANIFEST_JSON}"
+       upstream tree)
+string(JSON NATIVE_V3_MANIFEST_SHA3_PATCH GET "${NATIVE_V3_MANIFEST_JSON}"
+       sha3_512 patch_sha256)
+if(NOT NATIVE_V3_MANIFEST_REMOTE STREQUAL
+       "https://github.com/google/longfellow-zk.git" OR
+   NOT NATIVE_V3_MANIFEST_COMMIT STREQUAL
+       "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0" OR
+   NOT NATIVE_V3_MANIFEST_TREE STREQUAL
+       "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244")
+  message(FATAL_ERROR "pinned upstream manifest identity mismatch")
+endif()
+
+set(NATIVE_V3_SHA3_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/sha3_512_circuit.patch")
+set(NATIVE_V3_QUAD_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/quad_builder_uint32_bound.patch")
+file(SHA256 "${NATIVE_V3_SHA3_PATCH}" NATIVE_V3_SHA3_PATCH_SHA256)
+file(SHA256 "${NATIVE_V3_QUAD_PATCH}" NATIVE_V3_QUAD_PATCH_SHA256)
+string(TOLOWER "${NATIVE_V3_MANIFEST_SHA3_PATCH}"
+       NATIVE_V3_MANIFEST_SHA3_PATCH_LOWER)
+if(NOT NATIVE_V3_SHA3_PATCH_SHA256 STREQUAL
+       NATIVE_V3_MANIFEST_SHA3_PATCH_LOWER)
+  message(FATAL_ERROR "SHA3 patch identity mismatch")
+endif()
+
+execute_process(
+  COMMAND git -c safe.directory=${LONGFELLOW_SOURCE} -C ${LONGFELLOW_SOURCE}
+          rev-parse HEAD
+  OUTPUT_VARIABLE NATIVE_V3_SOURCE_COMMIT
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE NATIVE_V3_SOURCE_COMMIT_RESULT)
+execute_process(
+  COMMAND git -c safe.directory=${LONGFELLOW_SOURCE} -C ${LONGFELLOW_SOURCE}
+          rev-parse HEAD^{tree}
+  OUTPUT_VARIABLE NATIVE_V3_SOURCE_TREE
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE NATIVE_V3_SOURCE_TREE_RESULT)
+if(NOT NATIVE_V3_SOURCE_COMMIT_RESULT EQUAL 0 OR
+   NOT NATIVE_V3_SOURCE_TREE_RESULT EQUAL 0 OR
+   NOT NATIVE_V3_SOURCE_COMMIT STREQUAL NATIVE_V3_MANIFEST_COMMIT OR
+   NOT NATIVE_V3_SOURCE_TREE STREQUAL NATIVE_V3_MANIFEST_TREE)
+  message(FATAL_ERROR "patched source commit/tree identity mismatch")
+endif()
+
+set(NATIVE_V3_SHA3_CIRCUIT_HEADER
+    "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_circuit.h")
+set(NATIVE_V3_SHA3_SLICING_HEADER
+    "${LONGFELLOW_SOURCE}/lib/circuits/tests/sha3/sha3_slicing.h")
+set(NATIVE_V3_QUAD_BUILDER_HEADER
+    "${LONGFELLOW_SOURCE}/lib/sumcheck/quad_builder.h")
+foreach(NATIVE_V3_SOURCE_FILE IN ITEMS NATIVE_V3_SHA3_CIRCUIT_HEADER
+        NATIVE_V3_SHA3_SLICING_HEADER NATIVE_V3_QUAD_BUILDER_HEADER)
+  if(NOT EXISTS "${${NATIVE_V3_SOURCE_FILE}}")
+    message(FATAL_ERROR "patched source file missing: ${NATIVE_V3_SOURCE_FILE}")
+  endif()
+endforeach()
+file(SHA256 "${NATIVE_V3_SHA3_CIRCUIT_HEADER}"
+     NATIVE_V3_SHA3_CIRCUIT_HEADER_SHA256)
+file(SHA256 "${NATIVE_V3_SHA3_SLICING_HEADER}"
+     NATIVE_V3_SHA3_SLICING_HEADER_SHA256)
+file(SHA256 "${NATIVE_V3_QUAD_BUILDER_HEADER}"
+     NATIVE_V3_QUAD_BUILDER_HEADER_SHA256)
+string(SHA256 NATIVE_V3_PATCHED_SOURCE_IDENTITY
+       "commit=${NATIVE_V3_SOURCE_COMMIT};tree=${NATIVE_V3_SOURCE_TREE};sha3_patch=${NATIVE_V3_SHA3_PATCH_SHA256};quad_patch=${NATIVE_V3_QUAD_PATCH_SHA256};sha3_circuit=${NATIVE_V3_SHA3_CIRCUIT_HEADER_SHA256};sha3_slicing=${NATIVE_V3_SHA3_SLICING_HEADER_SHA256};quad_builder=${NATIVE_V3_QUAD_BUILDER_HEADER_SHA256}")
+set(NATIVE_V3_ATTESTATION_GENERATED_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${NATIVE_V3_ATTESTATION_GENERATED_DIR}")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/native_v3_parameter_attestation_build_config.h.in"
+  "${NATIVE_V3_ATTESTATION_GENERATED_DIR}/native_v3_parameter_attestation_build_config.h"
+  @ONLY)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -438,3 +525,37 @@ target_compile_definitions(longfellow_minimal_clearance_prover_runner PRIVATE
 )
 target_link_libraries(longfellow_minimal_clearance_prover_runner PRIVATE
   psapi)
+
+# Parameter attestation is a no-prover boundary. The producer builds the
+# relation with fixture-capable sources; the verifier builds the same circuit
+# through its verifier-only target and independently parses/reconstructs the
+# record before comparing it with its own compiled facts.
+add_executable(longfellow_native_v3_parameter_attestation_producer
+  src/native_v3_parameter_attestation_producer.cpp
+)
+target_include_directories(longfellow_native_v3_parameter_attestation_producer
+  PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+  "${NATIVE_V3_ATTESTATION_GENERATED_DIR}"
+)
+target_compile_definitions(longfellow_native_v3_parameter_attestation_producer
+  PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(longfellow_native_v3_parameter_attestation_producer
+  PRIVATE longfellow_minimal_clearance_relation)
+
+add_executable(longfellow_native_v3_parameter_attestation_verifier
+  src/native_v3_parameter_attestation_verifier.cpp
+)
+target_include_directories(longfellow_native_v3_parameter_attestation_verifier
+  PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shim"
+  "${LONGFELLOW_SOURCE}/lib"
+  "${NATIVE_V3_ATTESTATION_GENERATED_DIR}"
+)
+target_compile_definitions(longfellow_native_v3_parameter_attestation_verifier
+  PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(longfellow_native_v3_parameter_attestation_verifier
+  PRIVATE longfellow_minimal_clearance_verifier_circuit)

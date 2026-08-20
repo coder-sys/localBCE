@@ -26,6 +26,64 @@
     "status": "UNKNOWN",
     "theorem": "ePrint_2024_504_Theorem_4_17"
   },
+  "implementation_attestation": {
+    "activation": false,
+    "adversarial_matrix": {
+      "cases": 17,
+      "proof_invocations": 0,
+      "rejected": 17,
+      "state_mutations": 0
+    },
+    "dp24_mapping": {
+      "ell": "UNKNOWN",
+      "field_degree": "UNKNOWN",
+      "gamma": "UNKNOWN",
+      "instances": "UNKNOWN",
+      "note": "proof_rate=4 is an implementation fact and is not DP24 rate_R",
+      "rate_R": "UNKNOWN",
+      "theta": "UNKNOWN"
+    },
+    "evidence_sha256": "A64315F8C4ECD5F8C373E3751FA7D34BA4B5B917A5F04DE9EE6372E0D91BAFA0",
+    "facts": {
+      "artifact_header_bytes": 68,
+      "artifact_magic_hex": "424c4d4356335031",
+      "artifact_public_statement_bytes": 3340,
+      "artifact_version": 1,
+      "circuit_id": "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0",
+      "circuit_inputs": 36969,
+      "circuit_layers": 217,
+      "circuit_public_inputs": 26721,
+      "circuit_terms": 12158968,
+      "field_degree": 128,
+      "field_family": "GF2_128",
+      "field_serialized_bytes": 16,
+      "proof_queries": 189,
+      "proof_rate": 4,
+      "proof_role": "BL/NATIVE-V3/MINIMAL-CLEARANCE/v1",
+      "public_statement_grammar": "BL/NATIVE-V3/MINIMAL-CLEARANCE/STATEMENT/v1",
+      "quad_patch_sha256": "efbf683e8220584ef2fea15b5b393b2835a9c0fbef60f02a53bcc5b3d49117d4",
+      "sha3_patch_sha256": "1505a983d144047e1015601e90a4d7b72805affbfe31d43a178208dd2ab85f87",
+      "transcript_label": "BL/NATIVE-V3/MINIMAL-CLEARANCE/TRANSCRIPT/v1",
+      "transcript_version": 6,
+      "upstream_commit": "fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0",
+      "upstream_remote": "https://github.com/google/longfellow-zk.git",
+      "upstream_tree": "829f5dd115f3b5bdd77dc57c72293a5ccc3ca244"
+    },
+    "identity_algorithm": "SHA3-512(identity_domain || record_body)",
+    "identity_domain": "BL/NATIVE-V3/LONGFELLOW/IMPLEMENTATION-PARAMETER-ATTESTATION/v1\\0",
+    "implementation_status": "IMPLEMENTATION_ATTESTED",
+    "producer_verifier_parity": {
+      "independent_verifier": true,
+      "record_bytes_equal": true,
+      "record_identity_equal": true
+    },
+    "production_usable": false,
+    "proof_suite_id": null,
+    "record_bytes": 802,
+    "record_identity_sha3_512": "5f5a45afd01cfa441f1c9671cce63495708fa7a9378c3305ce6a8f4f6e306ef8df64e3ff616e0e61f0f22462e351ca83b19d7b85b22a23b8d608d8d4f70377dd",
+    "record_sha256": "A8174650E9861156846D7F208D711F79C26EDC719C214B8515E1E512AAF5FEAA",
+    "schema": "BL/NATIVE-V3/LONGFELLOW/IMPLEMENTATION-PARAMETER-ATTESTATION-EVIDENCE/v1"
+  },
   "nonclaims": [
     "no proof backend",
     "no ZK",

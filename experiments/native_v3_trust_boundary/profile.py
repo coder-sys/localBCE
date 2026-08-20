@@ -70,6 +70,16 @@ PARAMETER_SET_DOMAIN = b"BL/NATIVE-V3/TBP/DP24-PARAMETER-SET/v1\0"
 UPSTREAM_MANIFEST_RELATIVE_PATH = "experiments/longfellow_v09_native_v3/upstream_manifest.json"
 UPSTREAM_MANIFEST_SHA256 = "A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D"
 PARAMETER_SET_ID_EXPECTED = "3a8b4c62c78efded8b26d0a428b7bad17dc338b86ba945467ec8b815b8850080ad553452ac9dfc0d300df90cce3dc85b830ac9d24d543f8957fcef2e45b9e4ac"
+IMPLEMENTATION_ATTESTATION_DOMAIN = (
+    b"BL/NATIVE-V3/LONGFELLOW/IMPLEMENTATION-PARAMETER-ATTESTATION/v1\0"
+)
+IMPLEMENTATION_ATTESTATION_RELATIVE_PATH = (
+    "experiments/longfellow_v09_native_v3/evidence/"
+    "implementation_parameter_attestation.json"
+)
+IMPLEMENTATION_ATTESTATION_EVIDENCE_SHA256 = (
+    "A64315F8C4ECD5F8C373E3751FA7D34BA4B5B917A5F04DE9EE6372E0D91BAFA0"
+)
 
 _DP24_CANDIDATE_VALUES = {
     "ell": 28,
@@ -594,6 +604,170 @@ def _verified_upstream_manifest_sha256() -> str:
     return digest
 
 
+def _read_attestation_u32(record: bytes, offset: int) -> tuple[int, int]:
+    end = offset + 4
+    if end > len(record):
+        raise ProfileError("ledger:implementation-attestation-truncated-u32")
+    return int.from_bytes(record[offset:end], "big"), end
+
+
+def _read_attestation_u64(record: bytes, offset: int) -> tuple[int, int]:
+    end = offset + 8
+    if end > len(record):
+        raise ProfileError("ledger:implementation-attestation-truncated-u64")
+    return int.from_bytes(record[offset:end], "big"), end
+
+
+def _parse_implementation_attestation_record(record: bytes) -> dict[str, Any]:
+    magic = b"BLPAV301"
+    identity_bytes = 64
+    if len(record) < len(magic) + 8 + identity_bytes:
+        raise ProfileError("ledger:implementation-attestation-record-size")
+    if record[: len(magic)] != magic:
+        raise ProfileError("ledger:implementation-attestation-record-magic")
+    version, offset = _read_attestation_u32(record, len(magic))
+    field_count, offset = _read_attestation_u32(record, offset)
+    if version != 1 or field_count != 24:
+        raise ProfileError("ledger:implementation-attestation-record-header")
+    body_end = len(record) - identity_bytes
+    fields: dict[int, tuple[int, bytes]] = {}
+    for expected_id in range(1, field_count + 1):
+        if offset + 7 > body_end:
+            raise ProfileError("ledger:implementation-attestation-field-header")
+        field_id = int.from_bytes(record[offset : offset + 2], "big")
+        field_type = record[offset + 2]
+        length = int.from_bytes(record[offset + 3 : offset + 7], "big")
+        offset += 7
+        if field_id != expected_id or offset + length > body_end:
+            raise ProfileError("ledger:implementation-attestation-field-order")
+        fields[field_id] = (field_type, record[offset : offset + length])
+        offset += length
+    if offset != body_end:
+        raise ProfileError("ledger:implementation-attestation-record-trailing")
+    if hashlib.sha3_512(
+        IMPLEMENTATION_ATTESTATION_DOMAIN + record[:body_end]
+    ).digest() != record[body_end:]:
+        raise ProfileError("ledger:implementation-attestation-record-identity")
+
+    bytes_fields = {1, 6, 8, 12, 13, 14, 19, 20, 21, 22, 23, 24}
+    u32_fields = {2, 3, 4, 5, 7, 9}
+    u64_fields = {10, 11, 15, 16, 17, 18}
+    if set(fields) != bytes_fields | u32_fields | u64_fields:
+        raise ProfileError("ledger:implementation-attestation-field-set")
+    for field_id, (field_type, payload) in fields.items():
+        expected_type = 1 if field_id in bytes_fields else 2 if field_id in u32_fields else 3
+        expected_length = None if field_id in bytes_fields else 4 if field_id in u32_fields else 8
+        if field_type != expected_type or (
+            expected_length is not None and len(payload) != expected_length
+        ):
+            raise ProfileError("ledger:implementation-attestation-field-type")
+    def text(field_id: int) -> str:
+        try:
+            return fields[field_id][1].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ProfileError("ledger:implementation-attestation-field-ascii") from exc
+
+    def u32_field(field_id: int) -> int:
+        return int.from_bytes(fields[field_id][1], "big")
+
+    def u64_field(field_id: int) -> int:
+        return int.from_bytes(fields[field_id][1], "big")
+
+    return {
+        "artifact_header_bytes": u64_field(10),
+        "artifact_magic_hex": fields[8][1].hex(),
+        "artifact_public_statement_bytes": u64_field(11),
+        "artifact_version": u32_field(9),
+        "circuit_id": fields[14][1].hex(),
+        "circuit_inputs": u64_field(15),
+        "circuit_layers": u64_field(17),
+        "circuit_public_inputs": u64_field(16),
+        "circuit_terms": u64_field(18),
+        "field_degree": u32_field(2),
+        "field_family": text(1),
+        "field_serialized_bytes": u32_field(3),
+        "proof_queries": u32_field(5),
+        "proof_rate": u32_field(4),
+        "proof_role": text(12),
+        "public_statement_grammar": text(13),
+        "quad_patch_sha256": text(23),
+        "sha3_patch_sha256": text(22),
+        "transcript_label": text(6),
+        "transcript_version": u32_field(7),
+        "upstream_commit": text(20),
+        "upstream_remote": text(19),
+        "upstream_tree": text(21),
+    }
+
+
+def _verified_implementation_attestation() -> dict[str, Any]:
+    repository_root = Path(__file__).resolve().parents[2]
+    evidence_path = repository_root / IMPLEMENTATION_ATTESTATION_RELATIVE_PATH
+    try:
+        evidence_bytes = evidence_path.read_bytes()
+        evidence = json.loads(evidence_bytes)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProfileError("ledger:implementation-attestation-evidence-unavailable") from exc
+    if hashlib.sha256(evidence_bytes).hexdigest().upper() != IMPLEMENTATION_ATTESTATION_EVIDENCE_SHA256:
+        raise ProfileError("ledger:implementation-attestation-evidence-mismatch")
+    if evidence.get("schema") != "BL/NATIVE-V3/LONGFELLOW/IMPLEMENTATION-PARAMETER-ATTESTATION-EVIDENCE/v1":
+        raise ProfileError("ledger:implementation-attestation-schema")
+    if evidence.get("implementation_status") != "IMPLEMENTATION_ATTESTED":
+        raise ProfileError("ledger:implementation-attestation-status")
+    if evidence.get("proof_suite_id") is not None or evidence.get("production_usable") is not False or evidence.get("activation") is not False:
+        raise ProfileError("ledger:implementation-attestation-flags")
+    try:
+        record_hex = evidence["record_hex"]
+        record = bytes.fromhex(record_hex)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProfileError("ledger:implementation-attestation-record-encoding") from exc
+    if record_hex != record.hex() or evidence.get("record_bytes") != len(record):
+        raise ProfileError("ledger:implementation-attestation-record-canonical")
+    if evidence.get("record_sha256") != hashlib.sha256(record).hexdigest().upper():
+        raise ProfileError("ledger:implementation-attestation-record-sha256")
+    identity = record[-64:].hex()
+    if evidence.get("record_identity_sha3_512") != identity:
+        raise ProfileError("ledger:implementation-attestation-record-sha3")
+    if evidence.get("identity_domain") != (IMPLEMENTATION_ATTESTATION_DOMAIN[:-1].decode("ascii") + r"\0"):
+        raise ProfileError("ledger:implementation-attestation-domain")
+    parsed_facts = _parse_implementation_attestation_record(record)
+    if evidence.get("facts") != parsed_facts:
+        raise ProfileError("ledger:implementation-attestation-facts")
+    parity = evidence.get("producer_verifier_parity")
+    if parity != {
+        "record_bytes_equal": True,
+        "record_identity_equal": True,
+        "independent_verifier": True,
+    }:
+        raise ProfileError("ledger:implementation-attestation-parity")
+    matrix = evidence.get("adversarial_matrix")
+    if matrix != {"cases": 17, "rejected": 17, "proof_invocations": 0, "state_mutations": 0}:
+        raise ProfileError("ledger:implementation-attestation-matrix")
+    dp24_mapping = evidence.get("dp24_mapping")
+    if not isinstance(dp24_mapping, dict) or any(
+        dp24_mapping.get(name) != "UNKNOWN"
+        for name in ("ell", "rate_R", "field_degree", "theta", "gamma", "instances")
+    ):
+        raise ProfileError("ledger:implementation-attestation-dp24-mapping")
+    return {
+        "activation": False,
+        "adversarial_matrix": matrix,
+        "evidence_sha256": IMPLEMENTATION_ATTESTATION_EVIDENCE_SHA256,
+        "facts": parsed_facts,
+        "identity_algorithm": evidence["identity_algorithm"],
+        "identity_domain": evidence["identity_domain"],
+        "implementation_status": evidence["implementation_status"],
+        "production_usable": False,
+        "proof_suite_id": None,
+        "record_bytes": len(record),
+        "record_identity_sha3_512": identity,
+        "record_sha256": hashlib.sha256(record).hexdigest().upper(),
+        "producer_verifier_parity": parity,
+        "dp24_mapping": dp24_mapping,
+        "schema": evidence["schema"],
+    }
+
+
 def _parameter_set_descriptor() -> dict[str, Any]:
     manifest_sha256 = _verified_upstream_manifest_sha256()
     return {
@@ -635,6 +809,7 @@ def _parameter_set() -> dict[str, Any]:
 
 def build_security_ledger() -> dict[str, Any]:
     parameter_set = _parameter_set()
+    implementation_attestation = _verified_implementation_attestation()
     unresolved = [
         {
             "id": "vc_collapse_binding",
@@ -719,6 +894,7 @@ def build_security_ledger() -> dict[str, Any]:
             "bits_single_decimal": None,
             "bits_union_decimal": None,
         },
+        "implementation_attestation": implementation_attestation,
         "unresolved_terms": unresolved,
         "zero_placeholders_allowed": False,
         "nonclaims": [
@@ -745,6 +921,8 @@ def validate_security_ledger(ledger: dict[str, Any]) -> None:
     expected_parameter_set = _parameter_set()
     if ledger.get("parameter_set") != expected_parameter_set:
         raise ProfileError("ledger:parameter-provenance")
+    if ledger.get("implementation_attestation") != _verified_implementation_attestation():
+        raise ProfileError("ledger:implementation-attestation")
     dp24 = ledger.get("dp24")
     if not isinstance(dp24, dict) or dp24.get("status") != "UNKNOWN" or dp24.get("parameter_set_id") != expected_parameter_set["id"]:
         raise ProfileError("ledger:dp24-unknown-status")
@@ -778,6 +956,7 @@ def profile_manifest() -> dict[str, Any]:
         "production_usable": False,
         "activation": False,
         "fixture_only": True,
+        "implementation_attestation": security_ledger["implementation_attestation"],
         "phase0_binding_ids": {
             "attempt_id": bindings.attempt_id.hex(),
             "phase0_statement_digest": bindings.phase0_statement_digest.hex(),

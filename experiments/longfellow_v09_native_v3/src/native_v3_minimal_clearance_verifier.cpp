@@ -28,8 +28,6 @@ using RelationField =
 using namespace blind_ledger_longfellow::minimal_clearance;
 using namespace blind_ledger_longfellow::minimal_clearance_proof;
 
-constexpr char kTranscriptLabel[] =
-    "BL/NATIVE-V3/MINIMAL-CLEARANCE/TRANSCRIPT/v1";
 constexpr char kExpectedCircuitId[] =
     "1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0";
 constexpr size_t kDigestCount = 26;
