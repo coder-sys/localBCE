@@ -27,7 +27,8 @@ from app.mirror import transition_mirror_independent as transition
 DOMAIN = "BL/MIRROR/END-TO-END-REHEARSAL/"
 SCHEMA = "mirror-end-to-end-rehearsal-receipt-v1"
 SCHEMA_VERSION = 1
-EVIDENCE_SCHEMA = "mirror-end-to-end-rehearsal-evidence-ledger-v1"
+EVIDENCE_SCHEMA = "mirror-end-to-end-rehearsal-evidence-ledger-v2"
+EVIDENCE_SCHEMA_VERSION = 2
 PROFILE_ID = "mirror.rehearsal.synthetic-end-to-end.v1"
 PROFILE_VERSION = 1
 SUBJECT = "SYNTH_MIRROR_REHEARSAL_SCOPE_V1"
@@ -41,6 +42,47 @@ MAX_EXPORT_HEX_BYTES = 2 * store.MAX_ARTIFACT_BYTES
 MAX_LEDGER_ITEMS = 64
 MAX_COMMAND_BYTES = 512
 MAX_REASON_BYTES = 512
+
+MATRIX_CASE_OPERATIONS = (
+    "export_omitted", "export_duplicated", "export_reordered", "export_substituted",
+    "export_truncated", "export_corrupt", "export_stale", "export_cross_profile",
+    "export_cross_subject", "receipt_cross_rehearsal", "duplicate_json_key", "oversized_receipt",
+    "deep_receipt", "wrong_control_pack_version", "withdrawn_approval", "incomplete_source",
+    "forged_absence", "responsibility_mismatch", "remediation_mismatch", "retest_mismatch",
+    "parity_mismatch", "transaction_identity", "money_counting", "transition_identity",
+    "contract_identity", "denominator_conservation", "state_value_counting", "controlled_relabel",
+    "production_relabel", "backup_corrupt", "backup_truncated", "stale_backup_target",
+    "wrong_database_registry", "custody_key_rotation_revocation", "cap_33", "selector_wrong_kind",
+    "selector_wrong_id", "selector_cap", "selector_corrupt",
+)
+MATRIX_CASE_CATEGORIES = {
+    **{operation: "artifact-chain" for operation in MATRIX_CASE_OPERATIONS[:13]},
+    **{operation: "governance-source" for operation in MATRIX_CASE_OPERATIONS[13:17]},
+    **{operation: "lifecycle" for operation in MATRIX_CASE_OPERATIONS[17:21]},
+    **{operation: "economic-views" for operation in MATRIX_CASE_OPERATIONS[21:27]},
+    **{operation: "qualification" for operation in MATRIX_CASE_OPERATIONS[27:29]},
+    **{operation: "backup-restore" for operation in MATRIX_CASE_OPERATIONS[29:34]},
+    **{operation: "cap-selector" for operation in MATRIX_CASE_OPERATIONS[34:]},
+}
+STORE_FAULT_POINTS = (
+    "before_transaction", "after_begin", "after_artifact_insert",
+    "after_event_receipt_before_commit", "after_commit_before_response",
+)
+RESTORE_FAULT_POINTS = (
+    "before_staging_creation", "after_empty_staging_db_creation", "after_snapshot_transaction",
+    "after_independent_verification_checkpoint", "after_atomic_publication_before_response",
+)
+REQUIRED_CASE_IDS = tuple(
+    [f"matrix:{operation}" for operation in MATRIX_CASE_OPERATIONS]
+    + ["concurrency:IDENTICAL_CONVERGENCE", "concurrency:CONFLICTING_SINGLE_WINNER"]
+    + [f"fault:store:{point}" for point in STORE_FAULT_POINTS]
+    + [f"fault:restore:{point}" for point in RESTORE_FAULT_POINTS]
+    + [f"recovery:store:{point}" for point in STORE_FAULT_POINTS]
+    + [f"recovery:restore:{point}" for point in RESTORE_FAULT_POINTS]
+    + ["recovery:reopen", "recovery:restore-roundtrip"]
+)
+CASE_RESULT_KEYS = {"case_id", "category", "kind", "outcome", "verifier_result"}
+BASELINE_CASE_IDS = ("baseline:full-chain",)
 
 PROFILE_MATERIAL = {
     "profile_id": PROFILE_ID,
@@ -508,15 +550,68 @@ def _validate_items(value: object, label: str, *, maximum: int = MAX_LEDGER_ITEM
     return result
 
 
+def _validate_case_results(value: object, *, execution_scope: str) -> tuple[list[dict[str, object]], dict[str, int], dict[str, int]]:
+    required_ids = BASELINE_CASE_IDS if execution_scope == "chain" else REQUIRED_CASE_IDS if execution_scope == "matrix" else ()
+    if not required_ids or not isinstance(value, list) or len(value) != len(required_ids):
+        raise IndependentRehearsalError("ledger:case-results-count")
+    required = set(required_ids)
+    seen: set[str] = set()
+    records: list[dict[str, object]] = []
+    category_counts: dict[str, int] = {}
+    kind_counts = {"mutation": 0, "fault": 0, "recovery": 0, "concurrency": 0, "chain": 0}
+    for item in value:
+        if not isinstance(item, dict) or set(item) != CASE_RESULT_KEYS:
+            raise IndependentRehearsalError("ledger:case-result-shape")
+        case_id = _text(item["case_id"], "case-id")
+        if case_id not in required or case_id in seen:
+            raise IndependentRehearsalError("ledger:case-result-id")
+        seen.add(case_id)
+        category = item["category"]
+        kind = item["kind"]
+        outcome = item["outcome"]
+        verifier_result = item["verifier_result"]
+        if execution_scope == "chain" and case_id == "baseline:full-chain":
+            expected = ("baseline", "chain", "VERIFIED", "VERIFIED")
+        elif case_id.startswith("matrix:"):
+            operation = case_id.removeprefix("matrix:")
+            expected = (MATRIX_CASE_CATEGORIES.get(operation), "mutation", "REJECTED", "REJECTED")
+        elif case_id == "concurrency:IDENTICAL_CONVERGENCE":
+            expected = ("concurrency", "concurrency", "CONVERGED", "CONVERGED")
+        elif case_id == "concurrency:CONFLICTING_SINGLE_WINNER":
+            expected = ("concurrency", "concurrency", "SINGLE_WINNER", "SINGLE_WINNER")
+        elif case_id.startswith("fault:"):
+            expected = ("fault", "fault", "FAULT_HANDLED", "FAULT_HANDLED")
+        elif case_id.startswith("recovery:"):
+            expected = ("recovery", "recovery", "RECOVERED", "RECOVERED")
+        else:
+            raise IndependentRehearsalError("ledger:case-result-unknown")
+        expected_category, expected_kind, expected_outcome, expected_status = expected
+        if (category, kind, outcome) != (expected_category, expected_kind, expected_outcome):
+            raise IndependentRehearsalError("ledger:case-result-relabel")
+        if not isinstance(verifier_result, dict) or set(verifier_result) != {"status", "error_code"}:
+            raise IndependentRehearsalError("ledger:case-result-verifier")
+        if verifier_result["status"] != expected_status:
+            raise IndependentRehearsalError("ledger:case-result-status")
+        _text(verifier_result["error_code"], "case-result-error")
+        records.append(dict(item))
+        category_counts[expected_category] = category_counts.get(expected_category, 0) + 1
+        kind_counts[expected_kind] += 1
+    if seen != required:
+        raise IndependentRehearsalError("ledger:case-result-missing")
+    return records, category_counts, kind_counts
+
+
 def verify_evidence_ledger(raw: bytes, receipt_raw: bytes) -> dict[str, object]:
     value = _parse(raw, maximum=MAX_LEDGER_BYTES)
     expected_keys = {
-        "schema", "schema_version", "receipt_id", "receipt_digest", "owner_map", "counts",
+        "schema", "schema_version", "execution_scope", "receipt_id", "receipt_digest", "owner_map", "counts",
         "canonical_identities", "canonical_roots", "worker_commands", "warnings", "failures", "skips", "external_blockers", "nonclaims",
-        "resource_telemetry", "ledger_id",
+        "case_results", "category_counts", "resource_telemetry", "ledger_id",
     }
-    if set(value) != expected_keys or value["schema"] != EVIDENCE_SCHEMA or value["schema_version"] != SCHEMA_VERSION:
+    if set(value) != expected_keys or value["schema"] != EVIDENCE_SCHEMA or value["schema_version"] != EVIDENCE_SCHEMA_VERSION:
         raise IndependentRehearsalError("ledger:schema")
+    if value["execution_scope"] not in {"chain", "matrix"}:
+        raise IndependentRehearsalError("ledger:execution-scope")
     receipt = _parse(receipt_raw, maximum=MAX_RECEIPT_BYTES)
     if set(receipt) != RECEIPT_KEYS or receipt.get("schema") != SCHEMA or receipt.get("schema_version") != SCHEMA_VERSION:
         raise IndependentRehearsalError("ledger:receipt-schema")
@@ -548,10 +643,26 @@ def verify_evidence_ledger(raw: bytes, receipt_raw: bytes) -> dict[str, object]:
     }
     if value["canonical_roots"] != expected_roots:
         raise IndependentRehearsalError("ledger:canonical-roots")
+    _case_results, category_counts, kind_counts = _validate_case_results(
+        value["case_results"], execution_scope=str(value["execution_scope"])
+    )
+    if value["category_counts"] != category_counts:
+        raise IndependentRehearsalError("ledger:category-counts")
     counts = value["counts"]
     count_keys = {"artifact_count", "event_count", "transition_count", "mutation_cases", "fault_cases", "recovery_cases", "concurrency_cases"}
     if not isinstance(counts, dict) or set(counts) != count_keys or any(type(item) is not int or item < 0 or item > 10_000 for item in counts.values()):
         raise IndependentRehearsalError("ledger:counts")
+    expected_counts = {
+        "artifact_count": chain["artifact_count"],
+        "event_count": chain["event_count"],
+        "transition_count": chain["event_count"],
+        "mutation_cases": kind_counts["mutation"],
+        "fault_cases": kind_counts["fault"],
+        "recovery_cases": kind_counts["recovery"],
+        "concurrency_cases": kind_counts["concurrency"],
+    }
+    if counts != expected_counts:
+        raise IndependentRehearsalError("ledger:counts-binding")
     commands = value["worker_commands"]
     if not isinstance(commands, list) or len(commands) > MAX_LEDGER_ITEMS:
         raise IndependentRehearsalError("ledger:commands")
@@ -563,10 +674,20 @@ def verify_evidence_ledger(raw: bytes, receipt_raw: bytes) -> dict[str, object]:
     _validate_items(value["failures"], "failures")
     _validate_items(value["skips"], "skips")
     telemetry = value["resource_telemetry"]
-    if not isinstance(telemetry, dict) or set(telemetry) != {"counter_name", "measured", "process_tree_peak_bytes"} or telemetry["counter_name"] != "complete_process_tree_peak_bytes" or type(telemetry["measured"]) is not bool:
+    if not isinstance(telemetry, dict) or set(telemetry) != {
+        "counter_name", "semantics", "cap_bytes", "cap_enforced", "measured", "process_tree_peak_bytes", "exit_code",
+    } or telemetry["counter_name"] != "PeakJobMemoryUsed" or telemetry["semantics"] != "job_commit_charge_bytes":
         raise IndependentRehearsalError("ledger:telemetry")
+    if telemetry["cap_bytes"] != 5_000_000_000 or type(telemetry["cap_enforced"]) is not bool or type(telemetry["measured"]) is not bool:
+        raise IndependentRehearsalError("ledger:telemetry")
+    if value["execution_scope"] == "matrix" and (telemetry["cap_enforced"] is not True or telemetry["measured"] is not True):
+        raise IndependentRehearsalError("ledger:telemetry-unmeasured")
     peak = telemetry["process_tree_peak_bytes"]
-    if peak is not None and (type(peak) is not int or peak < 0 or peak > 5_000_000_000):
+    if telemetry["measured"] is True and (type(peak) is not int or peak < 0 or peak > 5_000_000_000):
+        raise IndependentRehearsalError("ledger:telemetry")
+    if telemetry["measured"] is False and peak is not None:
+        raise IndependentRehearsalError("ledger:telemetry")
+    if type(telemetry["exit_code"]) is not int or (telemetry["measured"] is True and telemetry["exit_code"] != 0):
         raise IndependentRehearsalError("ledger:telemetry")
     body = dict(value)
     ledger_id = body.pop("ledger_id", None)
@@ -578,13 +699,14 @@ def verify_evidence_ledger(raw: bytes, receipt_raw: bytes) -> dict[str, object]:
         "ledger_id": ledger_id,
         "receipt_id": receipt["receipt_id"],
         "counts": dict(counts),
+        "category_counts": dict(category_counts),
     }
 
 
 __all__ = [
-    "AUTHORITY_FLAGS", "COMPONENT_KINDS", "EVIDENCE_SCHEMA",
+    "AUTHORITY_FLAGS", "BASELINE_CASE_IDS", "CASE_RESULT_KEYS", "COMPONENT_KINDS", "EVIDENCE_SCHEMA", "EVIDENCE_SCHEMA_VERSION",
     "EXTERNAL_BLOCKERS", "IndependentRehearsalError", "NONCLAIMS", "OWNER_MAP", "PROFILE_ID", "PROFILE_MATERIAL",
-    "PROFILE_VERSION", "RECEIPT_KEYS", "SCHEMA", "SCHEMA_VERSION", "SCOPE", "SOURCE_PROFILE_ID", "SUBJECT",
+    "PROFILE_VERSION", "RECEIPT_KEYS", "REQUIRED_CASE_IDS", "MATRIX_CASE_CATEGORIES", "MATRIX_CASE_OPERATIONS", "SCHEMA", "SCHEMA_VERSION", "SCOPE", "SOURCE_PROFILE_ID", "SUBJECT",
     "component_projection", "derive_outcomes", "verify_evidence_ledger", "verify_receipt", "_canonical", "_digest",
     "_parse", "_raw_digest",
 ]

@@ -205,16 +205,19 @@ class SourceEvidenceCustodyService:
         self.profile = source_profile
         self.graph_profile_registry = registry
 
-    def ingest(self, envelope_raw: bytes):
+    def ingest(self, envelope_raw: bytes, *, fixed_envelope_digest: str | None = None):
         """Verify, compose, and atomically custody one synthetic envelope."""
 
         if type(envelope_raw) is not bytes or not envelope_raw:
             raise SourceEvidenceCustodyError("custody:envelope-bytes")
         if len(envelope_raw) > independent.MAX_ENVELOPE_BYTES:
             raise SourceEvidenceCustodyError("custody:envelope-byte-cap")
-        existing = self.store.find_source_evidence(envelope_raw, self.graph_profile_registry)
-        if existing is not None:
-            return existing
+        if fixed_envelope_digest is None:
+            existing = self.store.find_source_evidence(envelope_raw, self.graph_profile_registry)
+            if existing is not None:
+                return existing
+        elif type(fixed_envelope_digest) is not str or fixed_envelope_digest != _raw_digest("envelope", envelope_raw):
+            raise SourceEvidenceCustodyError("custody:fixed-envelope-binding")
         try:
             result = fhir.verify_bytes(envelope_raw, profile=self.profile)
         except Exception as exc:
@@ -228,12 +231,14 @@ class SourceEvidenceCustodyService:
                 ).admit(envelope_raw)
             except SourceAdmissionError as exc:
                 raise SourceEvidenceCustodyError(f"custody:graph-admission:{exc}") from exc
-        prior = self.store.source_evidence_head(
-            self.profile.graph_profile.subject,
-            self.profile.graph_profile.scope,
-            self.profile.graph_profile.profile_id,
-            self.graph_profile_registry,
-        )
+        prior = None
+        if fixed_envelope_digest is None:
+            prior = self.store.source_evidence_head(
+                self.profile.graph_profile.subject,
+                self.profile.graph_profile.scope,
+                self.profile.graph_profile.profile_id,
+                self.graph_profile_registry,
+            )
         candidate = build_artifact(
             envelope_raw,
             result,
@@ -246,6 +251,7 @@ class SourceEvidenceCustodyService:
                 candidate.raw,
                 None,
                 self.graph_profile_registry,
+                fixed_envelope_digest=fixed_envelope_digest,
             )
         # The store performs the governance check and any observation-only
         # retention in one transaction.  Only its typed, independently
@@ -262,6 +268,7 @@ class SourceEvidenceCustodyService:
             admission.graph_artifact,
             fallback.raw,
             self.graph_profile_registry,
+            fixed_envelope_digest=fixed_envelope_digest,
         )
 
 

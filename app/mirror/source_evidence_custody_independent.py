@@ -523,10 +523,9 @@ def verify_artifact(
 
 
 def envelope_digest_from_artifact(raw: bytes) -> str:
-    value = _parse(raw)
-    if set(value) != CUSTODY_KEYS or value.get("schema") != SCHEMA:
-        raise IndependentSourceCustodyError("custody:schema")
-    return _hex(value.get("envelope_digest"), "envelope-digest")
+    verified = verify_artifact(raw, allow_unresolved_graph=True)
+    digest = verified.get("envelope_digest")
+    return _hex(digest, "envelope-digest")
 
 
 def has_graph_link(raw: bytes) -> bool:

@@ -33,6 +33,7 @@ from app.mirror import qualification_independent as qualification_independent
 from app.mirror import rehearsal_independent as independent
 from app.mirror import source_admission
 from app.mirror import source_evidence_custody as custody
+from app.mirror import source_evidence_custody_independent as custody_independent
 from app.mirror import source_reconciliation as reconciliation
 from app.mirror import state_value_ledger as state_value
 from app.mirror import transaction_mirror as transaction
@@ -125,36 +126,6 @@ def _store(store_or_path: object) -> store.ContinuityStore:
         )
     except Exception as exc:
         raise RehearsalError("rehearsal:store-open") from exc
-
-
-def _assert_fixed_source_retry(
-    instance: store.ContinuityStore,
-    source_envelope: bytes,
-    registry: Mapping[str, object],
-) -> None:
-    """Reject a second source identity before the fixed rehearsal mutates state.
-
-    General source custody intentionally admits successive observations.  This
-    rehearsal is different: its canonical receipt is an exact retry of one
-    fixed synthetic chain.  The store owns both the exact-envelope lookup and
-    the source head; this composition check only combines those public
-    selectors before governance or downstream admissions begin.
-    """
-
-    profile = source_profile.NC_MEDICAID_PROFILE.graph_profile
-
-    def check() -> None:
-        exact = instance.find_source_evidence(source_envelope, registry)
-        head = instance.source_evidence_head(
-            profile.subject,
-            profile.scope,
-            profile.profile_id,
-            registry,
-        )
-        if head is not None and exact is None:
-            raise RehearsalError("rehearsal:source-conflict")
-
-    _store_owned_call(check)
 
 
 def _admit_governance(instance: store.ContinuityStore, graph_raw: bytes) -> None:
@@ -286,51 +257,52 @@ def _build_receipt(export_raw: bytes, recovery: Mapping[str, bool], registry: Ma
 def build_evidence_ledger(
     receipt_raw: bytes,
     *,
-    artifact_count: int,
-    event_count: int,
-    transition_count: int,
-    mutation_cases: int = 0,
-    fault_cases: int = 0,
-    recovery_cases: int = 0,
-    concurrency_cases: int = 0,
+    execution_scope: str,
+    case_results: Sequence[Mapping[str, object]],
+    resource_telemetry: Mapping[str, object],
     worker_commands: Sequence[Mapping[str, object]] = (),
     warnings: Sequence[Mapping[str, object]] = (),
     failures: Sequence[Mapping[str, object]] = (),
     skips: Sequence[Mapping[str, object]] = (),
-    process_tree_peak_bytes: int | None = None,
-    measured_process_tree: bool = False,
 ) -> bytes:
     """Build the non-Markdown machine ledger for one worker run.
 
-    Operational counts are evidence about the run, not readiness authority.
-    A caller may attach counts from a separately executed focused matrix; those
-    counts are evidence metadata and never readiness authority.
+    Operational counts are derived from canonical executed case records and the
+    independently checked receipt chain.  Callers cannot supply summary counts.
     """
 
     receipt = independent._parse(receipt_raw, maximum=independent.MAX_RECEIPT_BYTES)
+    records, category_counts, kind_counts = independent._validate_case_results(
+        [dict(item) for item in case_results], execution_scope=execution_scope
+    )
+    chain = receipt.get("chain")
+    if not isinstance(chain, dict):
+        raise RehearsalError("rehearsal:ledger-chain")
     counts = {
-        "artifact_count": artifact_count,
-        "event_count": event_count,
-        "transition_count": transition_count,
-        "mutation_cases": mutation_cases,
-        "fault_cases": fault_cases,
-        "recovery_cases": recovery_cases,
-        "concurrency_cases": concurrency_cases,
+        "artifact_count": chain.get("artifact_count"),
+        "event_count": chain.get("event_count"),
+        "transition_count": chain.get("event_count"),
+        "mutation_cases": kind_counts["mutation"],
+        "fault_cases": kind_counts["fault"],
+        "recovery_cases": kind_counts["recovery"],
+        "concurrency_cases": kind_counts["concurrency"],
     }
     if any(type(value) is not int or value < 0 for value in counts.values()):
         raise RehearsalError("rehearsal:ledger-counts")
     components = receipt.get("components")
-    chain = receipt.get("chain")
     export_binding = receipt.get("export_binding")
     if not isinstance(components, dict) or not isinstance(chain, dict) or not isinstance(export_binding, dict):
         raise RehearsalError("rehearsal:ledger-source")
     ledger_body: dict[str, object] = {
         "schema": independent.EVIDENCE_SCHEMA,
-        "schema_version": independent.SCHEMA_VERSION,
+        "schema_version": independent.EVIDENCE_SCHEMA_VERSION,
+        "execution_scope": execution_scope,
         "receipt_id": receipt["receipt_id"],
         "receipt_digest": independent._raw_digest("receipt", receipt_raw),
         "owner_map": list(independent.OWNER_MAP),
         "counts": counts,
+        "case_results": records,
+        "category_counts": category_counts,
         "canonical_identities": {
             label: [item["artifact_id"] for item in items]
             for label, items in components.items()
@@ -349,11 +321,7 @@ def build_evidence_ledger(
         "skips": [dict(item) for item in skips],
         "external_blockers": list(independent.EXTERNAL_BLOCKERS),
         "nonclaims": list(independent.NONCLAIMS),
-        "resource_telemetry": {
-            "counter_name": "complete_process_tree_peak_bytes",
-            "measured": measured_process_tree,
-            "process_tree_peak_bytes": process_tree_peak_bytes,
-        },
+        "resource_telemetry": dict(resource_telemetry),
     }
     return _canonical({**ledger_body, "ledger_id": independent._digest("ledger-id", ledger_body)})
 
@@ -368,7 +336,6 @@ def run_rehearsal(source_envelope: bytes, store_or_path: object) -> RehearsalRes
     graph_profile = source_profile.NC_MEDICAID_PROFILE.graph_profile
 
     try:
-        _assert_fixed_source_retry(instance, source_envelope, registry)
         configured_admission = source_admission.SourceAdmissionService(
             graph_profile,
             fhir_independent.NcMedicaidFhirVerifier(),
@@ -376,7 +343,13 @@ def run_rehearsal(source_envelope: bytes, store_or_path: object) -> RehearsalRes
         _admit_governance(instance, configured_admission.graph_artifact)
 
         custody_service = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry)
-        custody_admission = store.run_with_busy_recovery(lambda: custody_service.ingest(source_envelope))
+        fixed_envelope_digest = custody_independent._raw_digest("envelope", source_envelope)
+        custody_admission = store.run_with_busy_recovery(
+            lambda: custody_service.ingest(
+                source_envelope,
+                fixed_envelope_digest=fixed_envelope_digest,
+            )
+        )
         if not custody_admission.graph_admitted or custody_admission.graph_receipt is None:
             raise RehearsalError("rehearsal:graph-not-admitted")
         graph_id = _selector(custody_admission.graph_receipt)
@@ -462,18 +435,29 @@ def run_rehearsal(source_envelope: bytes, store_or_path: object) -> RehearsalRes
         independent.verify_receipt(receipt_raw, export_raw, graph_profile_registry=registry)
         ledger_raw = build_evidence_ledger(
             receipt_raw,
-            artifact_count=int(database_result["artifact_count"]),
-            event_count=int(database_result["event_count"]),
-            transition_count=int(database_result["event_count"]),
-            recovery_cases=sum(
-                1
-                for key in ("export_verified", "restore_verified", "reopen_verified", "rollback_safe")
-                if recovery[key]
+            execution_scope="chain",
+            case_results=(
+                {
+                    "case_id": "baseline:full-chain",
+                    "category": "baseline",
+                    "kind": "chain",
+                    "outcome": "VERIFIED",
+                    "verifier_result": {"status": "VERIFIED", "error_code": "independent-reconstruction"},
+                },
             ),
+            resource_telemetry={
+                "counter_name": "PeakJobMemoryUsed",
+                "semantics": "job_commit_charge_bytes",
+                "cap_bytes": 5_000_000_000,
+                "cap_enforced": False,
+                "measured": False,
+                "process_tree_peak_bytes": None,
+                "exit_code": -1,
+            },
         )
         independent.verify_evidence_ledger(ledger_raw, receipt_raw)
         return RehearsalResult(receipt_raw, ledger_raw, export_raw, support_raw, recovery)
-    except RehearsalError:
+    except (RehearsalError, store.StoreConflictError, store.StoreBusyError, store.IndeterminateCommitError):
         raise
     except Exception as exc:
         raise RehearsalError("rehearsal:failed") from exc

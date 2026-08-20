@@ -4142,6 +4142,8 @@ class ContinuityStore:
         custody_raw: bytes,
         graph_raw: bytes | None = None,
         graph_profile_registry: Mapping[str, object] | None = None,
+        *,
+        fixed_envelope_digest: str | None = None,
     ) -> SourceCustodyAdmission:
         """Atomically custody source evidence and, when present, its graph artifact."""
 
@@ -4150,6 +4152,7 @@ class ContinuityStore:
             graph_raw,
             graph_profile_registry,
             observation_raw=None,
+            fixed_envelope_digest=fixed_envelope_digest,
         )
 
     def admit_source_evidence_with_governance_observation(
@@ -4158,6 +4161,8 @@ class ContinuityStore:
         graph_raw: bytes,
         observation_raw: bytes,
         graph_profile_registry: Mapping[str, object] | None = None,
+        *,
+        fixed_envelope_digest: str | None = None,
     ) -> SourceCustodyAdmission:
         """Atomically retain observation evidence only for a typed governance outcome."""
 
@@ -4166,6 +4171,7 @@ class ContinuityStore:
             graph_raw,
             graph_profile_registry,
             observation_raw=observation_raw,
+            fixed_envelope_digest=fixed_envelope_digest,
         )
 
     def _admit_source_evidence(
@@ -4175,6 +4181,7 @@ class ContinuityStore:
         graph_profile_registry: Mapping[str, object] | None,
         *,
         observation_raw: bytes | None,
+        fixed_envelope_digest: str | None,
     ) -> SourceCustodyAdmission:
         """Run source/graph admission with any observation fallback inside one transaction."""
 
@@ -4183,6 +4190,13 @@ class ContinuityStore:
         registry = self.graph_profile_registry
         if observation_raw is not None and graph_raw is None:
             raise StoreConflictError("custody:observation-without-graph")
+        if fixed_envelope_digest is not None:
+            try:
+                derived_fixed_digest = source_independent.envelope_digest_from_artifact(custody_raw)
+            except Exception as exc:
+                raise StoreConflictError("custody:fixed-envelope-binding") from exc
+            if type(fixed_envelope_digest) is not str or fixed_envelope_digest != derived_fixed_digest:
+                raise StoreConflictError("custody:fixed-envelope-binding")
         try:
             source_preview = source_independent.verify_artifact(custody_raw, graph_raw=graph_raw, graph_profile_registry=registry)
         except Exception as exc:
@@ -4240,6 +4254,35 @@ class ContinuityStore:
             self._fault("after_begin")
             self._validate_transaction_snapshot(connection)
             expected_envelope_digest = source_preview["envelope_digest"]
+            if fixed_envelope_digest is not None:
+                chain_id = _chain_id(
+                    ARTIFACT_SOURCE_EVIDENCE,
+                    source_artifact.subject,
+                    source_artifact.scope,
+                    source_artifact.profile_id,
+                )
+                head = self._head(connection, chain_id)
+                if head is not None:
+                    if head["artifact_kind"] != ARTIFACT_SOURCE_EVIDENCE:
+                        raise StoreSchemaError("custody:fixed-head-kind")
+                    head_row = connection.execute(
+                        "SELECT * FROM artifacts WHERE kind=? AND artifact_id=?",
+                        (ARTIFACT_SOURCE_EVIDENCE, head["artifact_id"]),
+                    ).fetchone()
+                    if head_row is None:
+                        raise StoreSchemaError("custody:fixed-head-missing")
+                    try:
+                        head_digest = source_independent.envelope_digest_from_artifact(bytes(head_row["payload"]))
+                    except Exception as exc:
+                        raise StoreSchemaError("custody:fixed-head-corrupt") from exc
+                    if head_digest != fixed_envelope_digest:
+                        raise StoreConflictError("custody:fixed-envelope-conflict")
+                    if (
+                        head_row["artifact_id"] != source_artifact.artifact_id
+                        or head_row["payload_hash"] != source_artifact.payload_hash
+                        or bytes(head_row["payload"]) != custody_raw
+                    ):
+                        raise StoreConflictError("custody:envelope-collision")
             for row in connection.execute(
                 "SELECT artifact_id,payload_hash,payload FROM artifacts WHERE kind=? ORDER BY artifact_id",
                 (ARTIFACT_SOURCE_EVIDENCE,),

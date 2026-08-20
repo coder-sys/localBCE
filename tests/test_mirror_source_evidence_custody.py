@@ -113,6 +113,27 @@ class MirrorSourceEvidenceCustodyTests(unittest.TestCase):
         self.assertEqual("STATE_SIDE_MIRROR_CUSTODY", custody_value["custody_policy"]["owner"])
         self.assertFalse(custody_value["custody_policy"]["encryption_at_rest_qualified"])
 
+    def test_fixed_envelope_binding_and_head_conflict_are_atomic(self) -> None:
+        instance, registry, _graph_raw = _approved_store(self.root)
+        service = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry)
+        envelope = _envelope()
+        before_binding = store_independent.verify_database(instance.path, registry)
+        with self.assertRaises(custody.SourceEvidenceCustodyError) as binding:
+            service.ingest(envelope, fixed_envelope_digest="0" * 128)
+        self.assertEqual("custody:fixed-envelope-binding", str(binding.exception))
+        self.assertEqual(before_binding, store_independent.verify_database(instance.path, registry))
+        fixed_digest = custody_independent._raw_digest("envelope", envelope)
+        first = service.ingest(envelope, fixed_envelope_digest=fixed_digest)
+        before_conflict = store_independent.verify_database(instance.path, registry)
+        alternate = _distinct_complete_envelope()
+        alternate_digest = custody_independent._raw_digest("envelope", alternate)
+        with self.assertRaises(store.StoreConflictError) as conflict:
+            service.ingest(alternate, fixed_envelope_digest=alternate_digest)
+        self.assertEqual("custody:fixed-envelope-conflict", str(conflict.exception))
+        self.assertEqual(before_conflict, store_independent.verify_database(instance.path, registry))
+        replay = service.ingest(envelope, fixed_envelope_digest=fixed_digest)
+        self.assertEqual(first.custody_receipt.raw, replay.custody_receipt.raw)
+
     def test_partial_fixture_is_custodied_without_graph_or_absence_claim(self) -> None:
         registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
         instance = store.ContinuityStore(self.root / "partial.db", graph_profile_registry=registry)
