@@ -127,6 +127,36 @@ def _store(store_or_path: object) -> store.ContinuityStore:
         raise RehearsalError("rehearsal:store-open") from exc
 
 
+def _assert_fixed_source_retry(
+    instance: store.ContinuityStore,
+    source_envelope: bytes,
+    registry: Mapping[str, object],
+) -> None:
+    """Reject a second source identity before the fixed rehearsal mutates state.
+
+    General source custody intentionally admits successive observations.  This
+    rehearsal is different: its canonical receipt is an exact retry of one
+    fixed synthetic chain.  The store owns both the exact-envelope lookup and
+    the source head; this composition check only combines those public
+    selectors before governance or downstream admissions begin.
+    """
+
+    profile = source_profile.NC_MEDICAID_PROFILE.graph_profile
+
+    def check() -> None:
+        exact = instance.find_source_evidence(source_envelope, registry)
+        head = instance.source_evidence_head(
+            profile.subject,
+            profile.scope,
+            profile.profile_id,
+            registry,
+        )
+        if head is not None and exact is None:
+            raise RehearsalError("rehearsal:source-conflict")
+
+    _store_owned_call(check)
+
+
 def _admit_governance(instance: store.ContinuityStore, graph_raw: bytes) -> None:
     profile = source_profile.NC_MEDICAID_PROFILE.graph_profile
     candidate, _ = governance.build_candidate(graph_raw, profile)
@@ -273,8 +303,8 @@ def build_evidence_ledger(
     """Build the non-Markdown machine ledger for one worker run.
 
     Operational counts are evidence about the run, not readiness authority.
-    The default rehearsal path reports zero mutation/fault/concurrency cases;
-    the focused test harness can supply its actual executed counts explicitly.
+    A caller may attach counts from a separately executed focused matrix; those
+    counts are evidence metadata and never readiness authority.
     """
 
     receipt = independent._parse(receipt_raw, maximum=independent.MAX_RECEIPT_BYTES)
@@ -338,6 +368,7 @@ def run_rehearsal(source_envelope: bytes, store_or_path: object) -> RehearsalRes
     graph_profile = source_profile.NC_MEDICAID_PROFILE.graph_profile
 
     try:
+        _assert_fixed_source_retry(instance, source_envelope, registry)
         configured_admission = source_admission.SourceAdmissionService(
             graph_profile,
             fhir_independent.NcMedicaidFhirVerifier(),
@@ -434,8 +465,11 @@ def run_rehearsal(source_envelope: bytes, store_or_path: object) -> RehearsalRes
             artifact_count=int(database_result["artifact_count"]),
             event_count=int(database_result["event_count"]),
             transition_count=int(database_result["event_count"]),
-            recovery_cases=3,
-            skips=({"scope": "extended-mutation-fault-matrix", "reason": "covered by directly implicated component suites"},),
+            recovery_cases=sum(
+                1
+                for key in ("export_verified", "restore_verified", "reopen_verified", "rollback_safe")
+                if recovery[key]
+            ),
         )
         independent.verify_evidence_ledger(ledger_raw, receipt_raw)
         return RehearsalResult(receipt_raw, ledger_raw, export_raw, support_raw, recovery)

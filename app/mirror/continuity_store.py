@@ -73,6 +73,7 @@ MAX_ARTIFACT_BYTES = 524_288
 # transition/state-value/qualification stage.  Keep the cap fixed and bounded
 # while allowing that complete chain to coexist in one ContinuityStore.
 MAX_ARTIFACTS = 32
+MAX_SELECTOR_BYTES = 256
 MAX_EVENTS = 32
 MAX_RECEIPT_BYTES = 32_768
 MAX_DB_BYTES = 64 * 1024 * 1024
@@ -1533,8 +1534,15 @@ class ContinuityStore:
         it to select or mutate a head.
         """
 
-        if type(artifact_kind) is not str or not artifact_kind or type(artifact_id) is not str or not artifact_id:
+        if type(artifact_kind) is not str or artifact_kind not in ARTIFACT_KINDS:
             raise StoreConflictError("artifact:selector")
+        if type(artifact_id) is not str or not artifact_id:
+            raise StoreConflictError("artifact:selector")
+        try:
+            if len(artifact_kind.encode("ascii")) > MAX_SELECTOR_BYTES or len(artifact_id.encode("ascii")) > MAX_SELECTOR_BYTES:
+                raise StoreConflictError("artifact:selector-cap")
+        except UnicodeEncodeError as exc:
+            raise StoreConflictError("artifact:selector") from exc
         connection = self._connect()
         try:
             try:
