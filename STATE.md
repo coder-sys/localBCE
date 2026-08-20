@@ -1,6 +1,6 @@
 # Blind Ledger current state
 
-Updated: 2026-08-17
+Updated: 2026-08-20
 
 ## Product boundary
 
@@ -64,6 +64,17 @@ and producer/independent rejection of fact/nonmembership contradiction with
 The trust-boundary profile implements canonical framing, prover commitment, authenticated
 verifier-fresh challenge, prover response, independent Rust parsing, and replay/domain/order/root/
 mutation negatives. It is an executable interface profile, not a private proof.
+
+The 2026-08-20 trust-boundary hardening gives the producer one canonical decision/access join:
+exactly one decision row and two access rows, with access index 0 as READ bound to the operation's
+before value and access index 1 as WRITE bound to its after value. The independent verifier
+recomputes the same relation without calling the producer validator; its focused raw mutation
+matrix rejects 12/12 malformed or semantically altered joins. The valid 676-byte join and its
+existing SHA3-512 ID remain unchanged. The DP24 ledger now binds an immutable parameter-set
+identity to the pinned upstream manifest (SHA-256
+`A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D`), labels all six numeric
+parameters `UNKNOWN` with candidate literals marked `HYPOTHETICAL_CANDIDATE_INPUT`, and suppresses
+numeric epsilon/security-bit output until authority-bound provenance exists.
 
 Mirror Continuity Operational Foundation V2, Restore V1, and Withdrawal V1 are accepted as a synthetic,
 nonactivating operational candidate. The focused unittest is 30/30 passing, including exact
@@ -137,8 +148,9 @@ This remains a synthetic, nonactivating candidate. `proofSuiteId=null`,
 a prover, select a proof backend, implement Lean, touch payment/PHI/Ethereum, or refresh archives.
 The accepted candidate evidence does not claim production persistence, anti-rollback custody,
 source authentication, formal-kernel qualification, deployment, payment movement, or production
-clearance authority. The authoritative checkout remains unchanged until every required integration
-gate is available and passes.
+clearance authority. The authoritative checkout is changed only by the authorized exact
+non-destructive fast-forward to this corrected candidate after every required integration gate
+passes.
 
 ## Controlled integration synthesis
 
@@ -165,22 +177,22 @@ transaction owns clearance/replay/recovery, and the accepted candidate's direct-
 keeps the payment root and `settled_batch_count` unchanged while using `DIRECT_CLEARANCE` and a
 dedicated clearance root/count. This is not a comparison to the rejected 18-endpoint design.
 
-The current run personally verified the native non-prover build, shape/evaluator/parity/preflight
-outputs, retained-proof identity and acceptance, and all 34 copy-only verifier rejections. It did
-not invoke a prover. It also personally verified the direct Python/database composition gate in a
-fresh governed CPython 3.14.4 development venv: the exact seven-module no-exclusion pytest gate
-accounted for 104 items, with 104 passed, 0 failures, 0 errors, 0 skips, and no warnings in
-17.02 seconds. Process-local TEMP/TMP and an explicit external basetemp were used without changing
-tests, code, fixtures, dependencies, or selectors; the repository scratch directory was writable,
-empty after the run, and removed.
+Earlier accepted integration records report the native non-prover build, shape/evaluator/parity/
+preflight outputs, retained-proof identity and acceptance, and all 34 copy-only verifier
+rejections; those were not rerun in this correction. The current hardening run personally verified
+the corrected join/provenance code and focused gates described above, did not invoke a prover, and
+did not inspect archives. The exact seven-module direct composition gate remains earlier
+worker/integration evidence rather than a result relabeled as personally rerun here.
 
 ## Private-proof status
 
-No production proof backend is selected. DP24 evidence is an ideal-vector-oracle experiment only.
-Its 56-instance calculator reports 128.664794844 ideal-model bits, but the repository has no
-complete bound covering concrete SHA3-512 Merkle/BCS binding, salted-leaf hiding, collapse-position
-binding, malicious-verifier zero knowledge, semantic/state composition, atomic product proof, and
-abort/retry composition.
+No production proof backend is selected. DP24 remains an ideal-vector-oracle formula record only.
+Its parameter-set identity is `3a8b4c62c78efded8b26d0a428b7bad17dc338b86ba945467ec8b815b8850080ad553452ac9dfc0d300df90cce3dc85b830ac9d24d543f8957fcef2e45b9e4ac`, but the
+repository bytes do not authority-bind the six DP24 numeric inputs. They are therefore UNKNOWN,
+the exact-rational calculation is deferred, and numeric epsilon/security-bit precision is
+suppressed. The repository still has no complete bound covering concrete SHA3-512 Merkle/BCS
+binding, salted-leaf hiding, collapse-position binding, malicious-verifier zero knowledge,
+semantic/state composition, atomic product proof, and abort/retry composition.
 
 Accordingly:
 
