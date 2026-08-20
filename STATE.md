@@ -184,6 +184,31 @@ the corrected join/provenance code and focused gates described above, did not in
 did not inspect archives. The exact seven-module direct composition gate remains earlier
 worker/integration evidence rather than a result relabeled as personally rerun here.
 
+## Longfellow implementation parameter attestation
+
+The isolated parameter-attestation candidate is commit
+`5363970705f9bdb8cdff2f99252f4425790f541d`, directly based on the clean authoritative
+`638445f235a8cb183dc6a03f9a82a60016d38aad`. Its compiled no-prover producer and independent
+verifier use pinned Longfellow commit `fe83ec6c4efa5f98bc2439c8b06e5eccd153aca0` and tree
+`829f5dd115f3b5bdd77dc57c72293a5ccc3ca244`. They produced and independently matched an 802-byte
+canonical record with record SHA-256
+`A8174650E9861156846D7F208D711F79C26EDC719C214B8515E1E512AAF5FEAA` and domain-separated
+identity SHA3-512
+`5f5a45afd01cfa441f1c9671cce63495708fa7a9378c3305ce6a8f4f6e306ef8df64e3ff616e0e61f0f22462e351ca83b19d7b85b22a23b8d608d8d4f70377dd`.
+
+The compiled facts are field `GF2_128`, degree 128, serialized width 16 bytes, implementation
+rate 4, 189 queries, transcript version 6, artifact version 1, artifact header/public-statement
+sizes 68/3340, circuit dimensions `36969/26721/217/12158968`, and circuit ID
+`1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0`. The independent envelope
+matrix rejected 17/17 mutations, with zero prover invocations and zero state mutations. Python
+profile validation independently checks the evidence file hash, canonical record, TLV types/order,
+identity, facts, and nonactivating flags before binding the compact implementation attestation
+into the security ledger and profile manifest.
+
+This remains implementation evidence only. The implementation rate is not DP24 `rate_R`; all
+six DP24 numeric mappings remain `UNKNOWN`, and no theorem/security-bit claim, proof-backend
+selection, production usability, or activation follows from this record.
+
 ## Private-proof status
 
 No production proof backend is selected. DP24 remains an ideal-vector-oracle formula record only.
@@ -230,7 +255,8 @@ Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.m
 `docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
 Retained compatibility references are not design authority.
 
-The next safe dependency is Sol review of the corrected reconciled provenance. Separately, the six unresolved private-proof
+The next safe dependency is Sol review of the implementation-parameter attestation and its
+controlled integration provenance. Separately, the six unresolved private-proof
 theorem/composition terms listed in `CURRENT_TASK.md` remain open; no backend is selected and the
 safe implementation boundary remains synthetic, state-owned, and nonactivating.
 
