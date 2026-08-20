@@ -3,6 +3,11 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#endif
 #include <memory>
 #include <string>
 #include <vector>
@@ -647,6 +652,39 @@ bool ValidateArtifact(const Artifact& artifact, const PublicStatement& expected,
   return VerifyProof(artifact, expected, circuit, reason, diagnostic_logs);
 }
 
+bool WriteNewStatementFile(const std::string& path,
+                           const std::vector<uint8_t>& statement,
+                           std::string& reason) {
+#ifdef _WIN32
+  int descriptor = -1;
+  const errno_t open_result = _sopen_s(
+      &descriptor, path.c_str(), _O_BINARY | _O_WRONLY | _O_CREAT | _O_EXCL,
+      _SH_DENYRW, _S_IREAD);
+  if (open_result != 0 || descriptor < 0) {
+    reason = "create";
+    return false;
+  }
+  const int written = _write(
+      descriptor, statement.data(), static_cast<unsigned int>(statement.size()));
+  bool success = written == static_cast<int>(statement.size());
+  if (_commit(descriptor) != 0) success = false;
+  if (_close(descriptor) != 0) success = false;
+  if (!success) {
+    descriptor = -1;
+    reason = "write";
+    std::remove(path.c_str());
+    return false;
+  }
+  descriptor = -1;
+  return true;
+#else
+  (void)path;
+  (void)statement;
+  reason = "windows-only";
+  return false;
+#endif
+}
+
 bool Flip(std::vector<uint8_t>& bytes, size_t offset) {
   if (offset >= bytes.size()) return false;
   bytes[offset] ^= 1;
@@ -893,6 +931,40 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--preflight") return Preflight();
   if (argc == 3 && std::string(argv[1]) == "--public-parity") {
     return PublicParity(argv[2]);
+  }
+  if (argc == 4 && std::string(argv[1]) == "--verified-statement-file") {
+    std::ifstream existing(argv[2], std::ios::binary);
+    if (existing.good()) return Reject("statement-output-exists");
+    std::vector<uint8_t> bytes;
+    std::string error;
+    if (!read_artifact_bytes(argv[3], bytes, error)) {
+      return Reject("artifact." + error);
+    }
+    Artifact artifact;
+    if (!parse_artifact_bytes(bytes, artifact, error)) {
+      return Reject("artifact." + error);
+    }
+    const PublicStatement expected = BuildVerifierOwnedStatement();
+    const std::vector<uint8_t> expected_bytes = SerializeStatement(expected);
+    auto circuit = build_circuit();
+    std::string reason;
+    if (!ValidateArtifact(artifact, expected, circuit, reason, diagnostic_logs) ||
+        artifact.public_statement != expected_bytes) {
+      if (reason.empty()) reason = "statement-byte-mismatch";
+      return Reject(reason);
+    }
+    if (!WriteNewStatementFile(argv[2], expected_bytes, reason)) {
+      return Reject("statement-output." + reason);
+    }
+    std::printf("MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=%zu public_inputs=%zu "
+                "layers=%zu terms=%zu public_bytes=%zu proof_bytes=%zu rate=%u "
+                "queries=%u transcript_version=%u circuit_id=%s "
+                "state_mutations=0 clear_authorizations=0\n",
+                circuit->ninputs, circuit->npub_in, circuit->nl, circuit->nterms(),
+                artifact.public_statement.size(), artifact.proof.size(),
+                kLigeroRate, kLigeroQueries, kTranscriptVersion,
+                CircuitId(circuit).c_str());
+    return 0;
   }
   if (argc == 3 && std::string(argv[1]) == "--public-statement-file") {
     const std::vector<uint8_t> bytes =

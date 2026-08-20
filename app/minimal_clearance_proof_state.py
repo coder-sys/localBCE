@@ -13,10 +13,10 @@ from dataclasses import dataclass, fields
 from contextlib import closing
 import hashlib
 import json
-import os
 from pathlib import Path
+import re
 import sqlite3
-import subprocess
+import stat
 import tempfile
 from typing import Callable, Final, Protocol
 
@@ -33,6 +33,12 @@ from app.direct_state_owned_clearance_v1 import (
 )
 from app.production_boundary import ProductionBoundaryError
 from app.transactional_database_boundary import SQLiteSettlementStoreV2
+from app.minimal_clearance_verifier_process import (
+    CAP_BYTES,
+    ContainedVerifierResult,
+    VerifierProcessError,
+    run_contained_verifier,
+)
 
 
 class MinimalClearanceProofStateError(ProductionBoundaryError):
@@ -68,7 +74,7 @@ _PROOF_AUDIT_HEAD_DOMAIN = b"BL/MINIMAL-CLEARANCE/AUDIT-HEAD/v1\x00"
 _PROOF_RECEIPT_DOMAIN = b"BL/MINIMAL-CLEARANCE/RECEIPT/v1\x00"
 _ACCEPTANCE_MAGIC = b"BLPACV1\x00"
 _ACCEPTANCE_VERSION: Final[int] = 1
-_SCHEMA_VERSION: Final[int] = 1
+_SCHEMA_VERSION: Final[int] = 2
 _KIND = "DIRECT_CLEARANCE"
 
 _STATEMENT_DIGEST_NAMES = (
@@ -571,6 +577,9 @@ def parse_acceptance_bytes(encoded: bytes) -> MinimalProofAcceptanceV1:
 
 
 class MinimalClearanceVerifierPort(Protocol):
+    def identity_sha256(self) -> bytes:
+        """Return the verifier executable identity bound to proof state."""
+
     def expected_statement(self) -> bytes:
         """Return immutable verifier-owned public statement bytes."""
 
@@ -584,6 +593,49 @@ def _regular_file(path: Path, label: str) -> None:
     size = path.stat().st_size
     if size <= 0 or size > _MAX_ARTIFACT_BYTES:
         raise MinimalClearanceProofStateError(f"{label}_size")
+
+
+def _write_private_snapshot(directory: Path, name: str, raw: bytes, label: str) -> Path:
+    target = directory / name
+    try:
+        with target.open("xb") as output:
+            output.write(raw)
+            output.flush()
+            import os
+
+            os.fsync(output.fileno())
+        target.chmod(stat.S_IREAD)
+        reread = target.read_bytes()
+    except (OSError, ValueError) as exc:
+        raise MinimalClearanceProofStateError(f"{label}_snapshot") from exc
+    if reread != raw:
+        raise MinimalClearanceProofStateError(f"{label}_snapshot_mismatch")
+    return target
+
+
+def _snapshot_verified_file(
+    source: Path,
+    directory: Path,
+    *,
+    label: str,
+    expected_sha256: bytes | None = None,
+) -> tuple[Path, bytes]:
+    _regular_file(source, label)
+    try:
+        raw = source.read_bytes()
+    except OSError as exc:
+        raise MinimalClearanceProofStateError(f"{label}_read") from exc
+    digest = hashlib.sha256(raw).digest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise MinimalClearanceProofStateError(f"{label}_identity")
+    target = _write_private_snapshot(directory, f"{label}.bin", raw, label)
+    try:
+        reread = target.read_bytes()
+    except OSError as exc:
+        raise MinimalClearanceProofStateError(f"{label}_snapshot_read") from exc
+    if hashlib.sha256(reread).digest() != digest or reread != raw:
+        raise MinimalClearanceProofStateError(f"{label}_snapshot_identity")
+    return target, reread
 
 
 def _artifact_public_bytes(raw: bytes) -> tuple[bytes, bytes, bytes]:
@@ -603,52 +655,102 @@ def _artifact_public_bytes(raw: bytes) -> tuple[bytes, bytes, bytes]:
 class NativeMinimalClearanceVerifier:
     """Runs the pinned independent verifier and uses its reconstruction output."""
 
-    def __init__(self, executable: Path, *, timeout_seconds: float = 30.0 * 60.0) -> None:
+    def __init__(
+        self,
+        executable: Path,
+        *,
+        executable_sha256: str,
+        timeout_seconds: float = 30.0 * 60.0,
+    ) -> None:
         _regular_file(executable, "verifier_executable")
+        if type(executable_sha256) is not str or re.fullmatch(r"[0-9a-fA-F]{64}", executable_sha256) is None:
+            raise MinimalClearanceProofStateError("verifier_executable_hash")
         if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
             raise MinimalClearanceProofStateError("verifier_timeout")
         self.executable = executable
+        self._executable_sha256 = bytes.fromhex(executable_sha256)
         self.timeout_seconds = timeout_seconds
-
-    def _run(self, *args: str) -> subprocess.CompletedProcess[bytes]:
-        try:
-            result = subprocess.run(
-                [str(self.executable), *args],
-                cwd=str(self.executable.parent),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                env={"PATH": os.environ.get("PATH", ""), "BL_NETWORK_DISABLED": "1"},
+        self.last_containment_result: ContainedVerifierResult | None = None
+        with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-identity-") as directory:
+            _snapshot_verified_file(
+                executable, Path(directory), label="verifier-executable",
+                expected_sha256=self._executable_sha256,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+
+    def identity_sha256(self) -> bytes:
+        return bytes(self._executable_sha256)
+
+    def _run(self, workspace: Path, executable_snapshot: Path, *args: str):
+        try:
+            result = run_contained_verifier(
+                executable_snapshot, tuple(args), workspace=workspace,
+                timeout_seconds=self.timeout_seconds,
+            )
+        except VerifierProcessError as exc:
             raise MinimalClearanceProofStateError("verifier_process_unavailable") from exc
-        if len(result.stdout) > 64 * 1024 or len(result.stderr) > 256 * 1024:
-            raise MinimalClearanceProofStateError("verifier_output_cap")
+        self.last_containment_result = result
+        if result.timed_out:
+            raise MinimalClearanceProofStateError("verifier_timeout")
+        if not result.cap_enforced or result.cap_bytes != CAP_BYTES or result.active_process_limit != 1:
+            raise MinimalClearanceProofStateError("verifier_containment")
+        if result.peak_job_commit_bytes > CAP_BYTES:
+            raise MinimalClearanceProofStateError("verifier_memory_cap")
         return result
 
     def expected_statement(self) -> bytes:
         with tempfile.TemporaryDirectory(prefix="blind-ledger-minimal-statement-") as directory:
-            path = Path(directory) / "statement.bin"
-            result = self._run("--public-statement-file", str(path))
-            if result.returncode != 0 or not path.is_file():
+            workspace = Path(directory)
+            executable_snapshot, _ = _snapshot_verified_file(
+                self.executable, workspace, label="verifier-executable",
+                expected_sha256=self._executable_sha256,
+            )
+            path = workspace / "statement.bin"
+            result = self._run(workspace, executable_snapshot, "--public-statement-file", str(path))
+            if result.exit_code != 0 or not path.is_file() or path.is_symlink():
                 raise MinimalClearanceProofStateError("verifier_statement_reconstruction")
-            return path.read_bytes()
+            try:
+                statement = path.read_bytes()
+            except OSError as exc:
+                raise MinimalClearanceProofStateError("verifier_statement_read") from exc
+            if len(statement) != _PUBLIC_BYTES:
+                raise MinimalClearanceProofStateError("verifier_statement_length")
+            return statement
 
     def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-        _regular_file(artifact_path, "proof_artifact")
-        raw = artifact_path.read_bytes()
-        circuit_id, public_bytes, _ = _artifact_public_bytes(raw)
-        if circuit_id != _CIRCUIT_ID:
-            raise MinimalClearanceProofStateError("proof_circuit_id")
-        result = self._run(str(artifact_path))
-        stdout = result.stdout.decode("ascii", "strict")
-        if result.returncode != 0 or "MINIMAL_CLEARANCE_VERIFIER_ACCEPT " not in stdout:
-            raise MinimalClearanceProofStateError("proof_verifier_rejected")
-        expected = self.expected_statement()
-        if expected != public_bytes:
-            raise MinimalClearanceProofStateError("proof_public_statement_mismatch")
-        statement = _parse_statement(expected)
+        with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-acceptance-") as directory:
+            workspace = Path(directory)
+            executable_snapshot, _ = _snapshot_verified_file(
+                self.executable, workspace, label="verifier-executable",
+                expected_sha256=self._executable_sha256,
+            )
+            artifact_snapshot, raw = _snapshot_verified_file(
+                artifact_path, workspace, label="proof-artifact",
+            )
+            circuit_id, public_bytes, _ = _artifact_public_bytes(raw)
+            if circuit_id != _CIRCUIT_ID:
+                raise MinimalClearanceProofStateError("proof_circuit_id")
+            statement_output = workspace / "verified-statement.bin"
+            result = self._run(
+                workspace, executable_snapshot, "--verified-statement-file",
+                str(statement_output), str(artifact_snapshot),
+            )
+            try:
+                stdout = result.stdout.decode("ascii", "strict")
+            except UnicodeDecodeError as exc:
+                raise MinimalClearanceProofStateError("proof_verifier_output_encoding") from exc
+            if result.exit_code != 0 or "MINIMAL_CLEARANCE_VERIFIER_ACCEPT " not in stdout:
+                raise MinimalClearanceProofStateError("proof_verifier_rejected")
+            if not statement_output.is_file() or statement_output.is_symlink():
+                raise MinimalClearanceProofStateError("proof_verified_statement_missing")
+            try:
+                verified_statement = statement_output.read_bytes()
+            except OSError as exc:
+                raise MinimalClearanceProofStateError("proof_verified_statement_read") from exc
+            if len(verified_statement) != _PUBLIC_BYTES:
+                raise MinimalClearanceProofStateError("proof_verified_statement_length")
+            if verified_statement != public_bytes:
+                raise MinimalClearanceProofStateError("proof_public_statement_mismatch")
+            statement = _parse_statement(verified_statement)
         return MinimalProofAcceptanceV1(
             statement=statement,
             artifact_sha256=hashlib.sha256(raw).digest(),
@@ -759,10 +861,15 @@ class MinimalClearanceStateStoreV1:
             raise MinimalClearanceProofStateError("proof_database_path")
         if not path.parent.is_dir():
             raise MinimalClearanceProofStateError("proof_database_parent")
-        if not callable(getattr(verifier, "expected_statement", None)) or not callable(getattr(verifier, "verify", None)):
+        if (
+            not callable(getattr(verifier, "identity_sha256", None))
+            or not callable(getattr(verifier, "expected_statement", None))
+            or not callable(getattr(verifier, "verify", None))
+        ):
             raise MinimalClearanceProofStateError("proof_verifier_port")
         self.path = path
         self.verifier = verifier
+        self.expected_verifier_sha256 = self._read_verifier_identity()
         self._before_fault = before_fault
         self._after_commit_fault = after_commit_fault
         self._database = SQLiteSettlementStoreV2(
@@ -780,24 +887,48 @@ class MinimalClearanceStateStoreV1:
         )
         self._initialize_proof_tables()
 
+    def _read_verifier_identity(self) -> bytes:
+        identity = self.verifier.identity_sha256()
+        if type(identity) is not bytes or len(identity) != _SHA256_BYTES:
+            raise MinimalClearanceProofStateError("proof_verifier_identity")
+        return bytes(identity)
+
+    def _require_verifier_identity(self) -> None:
+        if self._read_verifier_identity() != self.expected_verifier_sha256:
+            raise MinimalClearanceProofStateError("proof_verifier_identity_changed")
+
     def _connect(self):
         return self._database._connect()
 
     def _initialize_proof_tables(self) -> None:
+        with closing(self._connect()) as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='minimal_proof_clearance_state'"
+            ).fetchone()
+            if existing is not None:
+                columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(minimal_proof_clearance_state)"
+                    ).fetchall()
+                }
+                if "expected_verifier_sha256" not in columns:
+                    raise MinimalClearanceProofStateError("proof_unsupported_schema_v1")
         expected = self.verifier.expected_statement()
         expected_statement = _parse_statement(expected)
         with closing(self._connect()) as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS minimal_proof_clearance_state (
-                    id INTEGER PRIMARY KEY CHECK (id=1), schema_version INTEGER NOT NULL CHECK(schema_version=1),
+                    id INTEGER PRIMARY KEY CHECK (id=1), schema_version INTEGER NOT NULL CHECK(schema_version=2),
                     expected_statement BLOB NOT NULL, circuit_id BLOB NOT NULL CHECK(length(circuit_id)=32),
                     state_id BLOB NOT NULL CHECK(length(state_id)=64), epoch INTEGER NOT NULL CHECK(epoch>0),
                     sequence INTEGER NOT NULL CHECK(sequence>=0), continuity_root BLOB NOT NULL CHECK(length(continuity_root)=64),
                     clearance_root BLOB NOT NULL CHECK(length(clearance_root)=64), clearance_count INTEGER NOT NULL CHECK(clearance_count>=0),
                     replay_root BLOB NOT NULL CHECK(length(replay_root)=64), payment_root BLOB NOT NULL CHECK(length(payment_root)=64),
                     settled_batch_count INTEGER NOT NULL CHECK(settled_batch_count>=0), state_binding BLOB NOT NULL CHECK(length(state_binding)=64),
-                    audit_head BLOB NOT NULL CHECK(length(audit_head)=64), last_operation_digest BLOB CHECK(last_operation_digest IS NULL OR length(last_operation_digest)=64)
+                    audit_head BLOB NOT NULL CHECK(length(audit_head)=64), last_operation_digest BLOB CHECK(last_operation_digest IS NULL OR length(last_operation_digest)=64),
+                    expected_verifier_sha256 BLOB NOT NULL CHECK(length(expected_verifier_sha256)=32)
                 );
                 CREATE TABLE IF NOT EXISTS minimal_proof_clearance_requests (
                     operation_digest BLOB PRIMARY KEY CHECK(length(operation_digest)=64), acceptance_bytes BLOB NOT NULL,
@@ -844,22 +975,30 @@ class MinimalClearanceStateStoreV1:
                     _u64(expected_statement.epoch), _u64(expected_statement.sequence_before),
                     expected_statement.continuity_root if "continuity_root" in dict(expected_statement.state_values) else bytes(expected_statement.state("before_continuity_root")),
                     clearance_root, replay_root, DIRECT_INITIAL_PAYMENT_ROOT, _u64(0),
+                    self.expected_verifier_sha256,
                 )
                 connection.execute(
-                    "INSERT INTO minimal_proof_clearance_state VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (1, expected, _CIRCUIT_ID, expected_statement.state_before_id, expected_statement.epoch,
+                    "INSERT INTO minimal_proof_clearance_state VALUES (" + ",".join("?" for _ in range(17)) + ")",
+                    (1, _SCHEMA_VERSION, expected, _CIRCUIT_ID, expected_statement.state_before_id, expected_statement.epoch,
                      expected_statement.sequence_before, bytes(expected_statement.state("before_continuity_root")),
                      clearance_root, int(expected_statement.state("clearance_count_before")), replay_root,
-                     DIRECT_INITIAL_PAYMENT_ROOT, 0, binding, bytes(expected_statement.state("before_audit_head")), None),
+                     DIRECT_INITIAL_PAYMENT_ROOT, 0, binding, bytes(expected_statement.state("before_audit_head")), None,
+                     self.expected_verifier_sha256),
                 )
             else:
-                if bytes(row[2]) != expected or bytes(row[3]) != _CIRCUIT_ID:
+                if (
+                    len(row) != 17
+                    or bytes(row[2]) != expected
+                    or bytes(row[3]) != _CIRCUIT_ID
+                    or int(row[1]) != _SCHEMA_VERSION
+                    or bytes(row[16]) != self.expected_verifier_sha256
+                ):
                     raise MinimalClearanceProofStateError("proof_verifier_context_changed")
         self.verify_integrity()
 
     def _state(self, connection) -> tuple[object, ...]:
         row = connection.execute("SELECT * FROM minimal_proof_clearance_state WHERE id=1").fetchone()
-        if row is None or len(row) != 16:
+        if row is None or len(row) != 17:
             raise MinimalClearanceProofStateError("proof_state_missing")
         return tuple(value if type(value) is int or value is None else bytes(value) for value in row)
 
@@ -901,12 +1040,15 @@ class MinimalClearanceStateStoreV1:
         return receipt
 
     def submit(self, artifact_path: Path) -> MinimalClearanceReceiptV1:
+        self._require_verifier_identity()
         acceptance = self.verifier.verify(artifact_path)
         if type(acceptance) is not MinimalProofAcceptanceV1:
             raise MinimalClearanceProofStateError("proof_verifier_result")
-        return self.apply_acceptance(acceptance)
+        self._require_verifier_identity()
+        return self._apply_verified_acceptance(acceptance)
 
-    def apply_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
+    def _apply_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
+        self._require_verifier_identity()
         encoded = acceptance.canonical_bytes()
         reparsed = parse_acceptance_bytes(encoded)
         if reparsed != acceptance:
@@ -931,6 +1073,7 @@ class MinimalClearanceStateStoreV1:
                     raise MinimalClearanceProofStateError("proof_payment_state_changed")
                 operation_digest = _sha(
                     _PROOF_OPERATION_DOMAIN, encoded, bytes(state[13]), bytes(state[14]), bytes(state[11]),
+                    self.expected_verifier_sha256,
                 )
                 existing = connection.execute(
                     "SELECT operation_digest, acceptance_bytes FROM minimal_proof_clearance_requests WHERE operation_digest=? OR artifact_digest=? OR request_id=? OR attempt_id=? OR receipt_id=?",
@@ -990,7 +1133,7 @@ class MinimalClearanceStateStoreV1:
                 state_binding_after = _sha(
                     _PROOF_STATE_BINDING_DOMAIN, bytes(state[13]), operation_digest, acceptance.statement.state_after_id,
                     replay_after, clearance_after, _u64(count_after), bytes(state[11]), _u64(int(state[12])),
-                    _u64(int(state[5])), _u64(sequence_after),
+                    _u64(int(state[5])), _u64(sequence_after), self.expected_verifier_sha256,
                 )
                 event_payload = json.dumps({
                     "event_kind": "MINIMAL_PROOF_DIRECT_CLEARANCE_V1", "version": 1,
@@ -1081,6 +1224,7 @@ class MinimalClearanceStateStoreV1:
         return receipt
 
     def verify_integrity(self) -> None:
+        self._require_verifier_identity()
         self._database.verify_integrity()
         with closing(self._connect()) as connection:
             state = self._state(connection)
@@ -1088,7 +1232,11 @@ class MinimalClearanceStateStoreV1:
             expected_statement = _parse_statement(bytes(state[2]))
             if bytes(state[2]) != expected_bytes:
                 raise MinimalClearanceProofStateError("proof_verifier_context_changed")
-            if bytes(state[3]) != _CIRCUIT_ID or int(state[1]) != _SCHEMA_VERSION:
+            if (
+                bytes(state[3]) != _CIRCUIT_ID
+                or int(state[1]) != _SCHEMA_VERSION
+                or bytes(state[16]) != self.expected_verifier_sha256
+            ):
                 raise MinimalClearanceProofStateError("proof_state_schema")
             if (
                 int(state[5]) != expected_statement.epoch
@@ -1107,7 +1255,7 @@ class MinimalClearanceStateStoreV1:
                 _PROOF_STATE_BINDING_DOMAIN, expected_bytes, expected_statement.state_before_id,
                 _u64(expected_statement.epoch), _u64(expected_statement.sequence_before),
                 bytes(expected_statement.state("before_continuity_root")), genesis_clearance,
-                genesis_replay, DIRECT_INITIAL_PAYMENT_ROOT, _u64(0),
+                genesis_replay, DIRECT_INITIAL_PAYMENT_ROOT, _u64(0), self.expected_verifier_sha256,
             )
             if not rows:
                 if (
@@ -1137,6 +1285,7 @@ class MinimalClearanceStateStoreV1:
                     raise MinimalClearanceProofStateError("proof_acceptance_bytes_mismatch")
                 operation_digest = _sha(
                     _PROOF_OPERATION_DOMAIN, bytes(row[1]), previous_binding, previous_head, DIRECT_INITIAL_PAYMENT_ROOT,
+                    self.expected_verifier_sha256,
                 )
                 if (
                     bytes(row[0]) != operation_digest
@@ -1179,7 +1328,7 @@ class MinimalClearanceStateStoreV1:
                     _PROOF_STATE_BINDING_DOMAIN, previous_binding, operation_digest,
                     acceptance.statement.state_after_id, replay_after, clearance_after,
                     _u64(count_after), DIRECT_INITIAL_PAYMENT_ROOT, _u64(0),
-                    _u64(expected_statement.epoch), _u64(expected_sequence),
+                    _u64(expected_statement.epoch), _u64(expected_sequence), self.expected_verifier_sha256,
                 )
                 if (
                     bytes(row[19]) != replay_after
@@ -1273,19 +1422,6 @@ class MinimalClearanceStateStoreV1:
         self._database.close()
 
 
-class StaticMinimalClearanceVerifier:
-    """Test-only verifier port for state semantics; never production authority."""
-
-    def __init__(self, acceptance: MinimalProofAcceptanceV1) -> None:
-        self.acceptance = acceptance
-
-    def expected_statement(self) -> bytes:
-        return self.acceptance.statement.statement_bytes
-
-    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-        return self.acceptance
-
-
 __all__ = (
     "MinimalClearanceIndeterminateError",
     "MinimalClearanceProofStateError",
@@ -1296,6 +1432,5 @@ __all__ = (
     "MinimalProofAcceptanceV1",
     "MinimalProofStatementV1",
     "NativeMinimalClearanceVerifier",
-    "StaticMinimalClearanceVerifier",
     "parse_acceptance_bytes",
 )

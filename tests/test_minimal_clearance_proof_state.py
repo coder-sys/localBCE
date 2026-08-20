@@ -10,13 +10,13 @@ import sqlite3
 import tempfile
 import unittest
 
+import app.minimal_clearance_proof_state as proof_state
 from app.direct_state_owned_clearance_v1 import DIRECT_INITIAL_PAYMENT_ROOT
 from app.minimal_clearance_proof_state import (
     MinimalClearanceIndeterminateError,
     MinimalClearanceProofStateError,
     MinimalClearanceStateStoreV1,
     MinimalProofAcceptanceV1,
-    StaticMinimalClearanceVerifier,
     _CIRCUIT_ID,
     _PROOF_ROLE,
     _STATE_BYTES,
@@ -185,9 +185,28 @@ def _synthetic_acceptance(
 def _new_store(directory: str, acceptance: MinimalProofAcceptanceV1, **kwargs: object) -> MinimalClearanceStateStoreV1:
     return MinimalClearanceStateStoreV1(
         path=Path(directory) / "clearance.sqlite3",
-        verifier=StaticMinimalClearanceVerifier(acceptance),
+        verifier=_TestVerifier(acceptance),
         **kwargs,
     )
+
+
+class _TestVerifier:
+    """Test-only injected verifier; application code has no static bypass."""
+
+    def __init__(self, acceptance: MinimalProofAcceptanceV1, identity: bytes = b"T" * 32) -> None:
+        self.acceptance = acceptance
+        self.identity = identity
+
+    def identity_sha256(self) -> bytes:
+        return self.identity
+
+    def expected_statement(self) -> bytes:
+        return self.acceptance.statement.statement_bytes
+
+    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
+        if artifact_path != _ARTIFACT:
+            raise MinimalClearanceProofStateError("test_artifact_path")
+        return self.acceptance
 
 
 def _corrupt_transition_kind(path: Path) -> None:
@@ -224,6 +243,70 @@ def _corrupt_transition_kind(path: Path) -> None:
 
 
 class MinimalClearanceProofStateTests(unittest.TestCase):
+    def test_verifier_identity_is_state_bound_and_public_bypass_is_absent(self) -> None:
+        base = _base_acceptance()
+        with tempfile.TemporaryDirectory(prefix="blind-ledger-identity-") as directory:
+            store = _new_store(directory, base)
+            try:
+                self.assertFalse(hasattr(store, "apply_acceptance"))
+                self.assertFalse(hasattr(proof_state, "StaticMinimalClearanceVerifier"))
+                with closing(sqlite3.connect(store.path)) as connection:
+                    row = connection.execute(
+                        "SELECT expected_verifier_sha256 FROM minimal_proof_clearance_state WHERE id=1"
+                    ).fetchone()
+                self.assertEqual(bytes(row[0]), b"T" * 32)
+                before = store.snapshot()
+                store.verifier.identity = b"U" * 32  # type: ignore[attr-defined]
+                with self.assertRaisesRegex(MinimalClearanceProofStateError, "identity_changed"):
+                    store.submit(_ARTIFACT)
+                self.assertEqual(store.snapshot(), before)
+                with self.assertRaisesRegex(MinimalClearanceProofStateError, "identity_changed"):
+                    store.verify_integrity()
+            finally:
+                store.close()
+
+    def test_legacy_state_without_verifier_identity_is_unsupported(self) -> None:
+        base = _base_acceptance()
+        with tempfile.TemporaryDirectory(prefix="blind-ledger-schema-") as directory:
+            path = Path(directory) / "clearance.sqlite3"
+            initial = _new_store(directory, base)
+            initial.close()
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "ALTER TABLE minimal_proof_clearance_state DROP COLUMN expected_verifier_sha256"
+                )
+                connection.commit()
+            with self.assertRaisesRegex(MinimalClearanceProofStateError, "unsupported_schema_v1"):
+                _new_store(directory, base)
+
+    def test_rejected_verification_leaves_database_bytes_unchanged(self) -> None:
+        base = _base_acceptance()
+
+        class RejectingVerifier:
+            def identity_sha256(self) -> bytes:
+                return b"R" * 32
+
+            def expected_statement(self) -> bytes:
+                return base.statement.statement_bytes
+
+            def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
+                raise MinimalClearanceProofStateError("synthetic_verifier_rejected")
+
+        with tempfile.TemporaryDirectory(prefix="blind-ledger-no-mutation-") as directory:
+            path = Path(directory) / "clearance.sqlite3"
+            store = MinimalClearanceStateStoreV1(path=path, verifier=RejectingVerifier())
+            try:
+                before = path.read_bytes()
+                with self.assertRaisesRegex(MinimalClearanceProofStateError, "synthetic_verifier_rejected"):
+                    store.submit(_ARTIFACT)
+                self.assertEqual(path.read_bytes(), before)
+                with closing(sqlite3.connect(path)) as connection:
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM minimal_proof_clearance_requests").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM minimal_proof_clearance_audit").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM minimal_proof_clearance_transitions").fetchone()[0], 0)
+            finally:
+                store.close()
+
     def test_acceptance_roundtrip_and_five_directive_state_ownership(self) -> None:
         base = _base_acceptance()
         self.assertEqual(parse_acceptance_bytes(base.canonical_bytes()), base)
@@ -233,7 +316,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
                 store = _new_store(directory, acceptance)
                 try:
                     before = store.snapshot()
-                    receipt = store.apply_acceptance(acceptance)
+                    receipt = store.submit(_ARTIFACT)
                     after = store.snapshot()
                     store.verify_integrity()
                     self.assertEqual(receipt.effective_directive, directive)
@@ -264,12 +347,13 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             store = _new_store(directory, base)
             try:
                 before = store.snapshot()
-                receipt = store.apply_acceptance(base)
-                retry = store.apply_acceptance(base)
+                receipt = store.submit(_ARTIFACT)
+                retry = store.submit(_ARTIFACT)
                 self.assertEqual(retry.canonical_bytes(), receipt.canonical_bytes())
                 conflicting = replace(base, artifact_sha256=b"\x99" * 32)
+                store.verifier.acceptance = conflicting  # type: ignore[attr-defined]
                 with self.assertRaises(MinimalClearanceProofStateError) as conflict:
-                    store.apply_acceptance(conflicting)
+                    store.submit(_ARTIFACT)
                 self.assertIn("conflicting_retry", str(conflict.exception))
                 with closing(sqlite3.connect(store.path)) as connection:
                     count = connection.execute("SELECT COUNT(*) FROM minimal_proof_clearance_requests").fetchone()[0]
@@ -286,6 +370,9 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             )
 
         class RejectingVerifier:
+            def identity_sha256(self) -> bytes:
+                return b"R" * 32
+
             def expected_statement(self) -> bytes:
                 return base.statement.statement_bytes
 
@@ -317,7 +404,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
                 try:
                     before = store.snapshot()
                     with self.assertRaises(RuntimeError):
-                        store.apply_acceptance(base)
+                        store.submit(_ARTIFACT)
                     self.assertEqual(store.snapshot(), before)
                     store.verify_integrity()
                     with closing(sqlite3.connect(store.path)) as connection:
@@ -336,12 +423,12 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             store = _new_store(directory, base, after_commit_fault=fail_after_commit)
             try:
                 with self.assertRaises(MinimalClearanceIndeterminateError):
-                    store.apply_acceptance(base)
+                    store.submit(_ARTIFACT)
             finally:
                 store.close()
             reopened = _new_store(directory, base)
             try:
-                receipt = reopened.apply_acceptance(base)
+                receipt = reopened.submit(_ARTIFACT)
                 reopened.verify_integrity()
                 self.assertEqual(receipt.sequence_after, base.statement.sequence_before + 1)
                 self.assertEqual(reopened.snapshot().clearance_count, 1)
@@ -356,8 +443,8 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             try:
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     futures = [
-                        executor.submit(store_one.apply_acceptance, base),
-                        executor.submit(store_two.apply_acceptance, base),
+                        executor.submit(store_one.submit, _ARTIFACT),
+                        executor.submit(store_two.submit, _ARTIFACT),
                     ]
                     receipts = [future.result() for future in futures]
                 self.assertEqual(receipts[0].canonical_bytes(), receipts[1].canonical_bytes())
@@ -374,13 +461,18 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="blind-ledger-recovery-") as directory:
             root = Path(directory)
             store = _new_store(directory, base)
-            store.apply_acceptance(base)
+            store.submit(_ARTIFACT)
+            with closing(sqlite3.connect(store.path)) as connection:
+                identity = connection.execute(
+                    "SELECT expected_verifier_sha256 FROM minimal_proof_clearance_state WHERE id=1"
+                ).fetchone()[0]
+            self.assertEqual(bytes(identity), b"T" * 32)
             backup = root / "backup.sqlite3"
             recovered_path = root / "recovered.sqlite3"
             store.create_backup(backup)
             recovered = store.recover_from_backup(backup_path=backup, recovered_path=recovered_path)
             try:
-                retry = recovered.apply_acceptance(base)
+                retry = recovered.submit(_ARTIFACT)
                 recovered.verify_integrity()
                 self.assertEqual(retry.sequence_after, 12)
             finally:
@@ -391,7 +483,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             with self.assertRaises(MinimalClearanceProofStateError):
                 MinimalClearanceStateStoreV1(
                     path=root / "clearance.sqlite3",
-                    verifier=StaticMinimalClearanceVerifier(base),
+                    verifier=_TestVerifier(base),
                 )
 
             bad_backup = root / "bad-backup.sqlite3"
