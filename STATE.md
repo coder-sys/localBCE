@@ -154,36 +154,49 @@ passes.
 
 ## Controlled integration synthesis
 
-The controlled integration candidate preserves the authoritative `ce31abeb941ce7ad5927ca67d6f23872f430ed09`
-base and the accepted frozen tips: Mirror `3efd3a5179a3c1c26b4b5a353b62d59488de1f34` and Blind
-Ledger `784ada21fe9e21bf63f351cecbfd23f4be92ff94`. Mirror's older merge-base was reconciled by
-commit/path identity; the four Native-v3 paths already newer on the authoritative base were
-preserved, and rejected Mirror validator implementation files remain absent. No later Mirror work
-was included.
+The controlled candidate starts from the unchanged authoritative base
+`458a9cc81dbf4bf3f122b74223fb5d5cf68fa970` and cherry-picks exactly the six authorized Mirror
+source commits in order: `3ac97b7430cd692124f2518128802e3f2491d12c`,
+`c828c526536fc994a86ff2c1a934105e1c92f50f`, `426770ca3ee865124da143c5f813c4e55b1698d6`,
+`4bf2d6d9480550072e4de6cdc81579776d91ab6d`, `6567a1e159da540d3518b702c8beeea178bd9da6`,
+and `1a69fb3bc6a165dd50c4101311d9335526b0e28f`. Their detached candidate commit identities are,
+respectively, `3a82d9fbd571b38164530d41abe8c88ab7e59728`,
+`f33e2a49476297897f1e9a9431169f96b9d4d232`, `f7c2575f453c2202e1bebb9e5158570396b6bc39`,
+`b62bf312727bc1a8e5106ff25789c0e7268aa4e1`, `729ec82f8115af2bc6c4e2b24d3ebbebf0370c25`,
+and `eab18d2f1ac7f59d7dce4f59a4dd2b1215afa511`. The accepted predecessor remains
+`3efd3a5179a3c1c26b4b5a353b62d59488de1f34`; no authoritative fast-forward occurred.
 
-Mirror remains a synthetic, read-only evidence/reconciliation/continuity candidate. In this
-integration run its focused unittest command passed 209 tests, including state-source admission,
-Provider Trust Graph, custody/reconciliation, discrepancy/denominator/contract, transaction and
-money evidence, State Value Ledger, Transition, Continuity Operational Foundation, and store-owned
-busy recovery. Live-source authorization, terms/completeness/cadence/failure behavior, HSM/FIPS
-custody, HA/DR operations, state privacy/support approval, and shadow-pilot evidence remain open.
+This sequence provides the complete current synthetic Mirror rehearsal chain: fixture-only
+source admission and state-side custody; Provider Trust Graph V2 and governed profile lifecycle;
+independent source reconciliation, discrepancy/responsibility/remediation/retest/parity;
+Contract, Denominator, Transaction, Money, Transition, and State Value evidence views;
+synthetic qualification; and ContinuityStore atomic persistence, exact retry, busy recovery,
+export/restore, restart, rollback, and aggregate-only support. Mirror remains read-only evidence
+and continuity. It does not emit a Blind Ledger directive, authorize clearance, settle, or move
+money; Provider Trust Graph remains one wedge rather than the whole product.
 
-The accepted Blind Ledger route is the complete current minimal engineering proof route: one
-610-byte, nine-block private source/registry commitment, direct semantic constraints, 12,158,968
-terms, and one retained synthetic proof with approximately 1.041 GB observed job commit. The
-prior candidate qualification recorded the unchanged retained-proof acceptance, 34/34 copy-only
-verifier rejections, zero proof-caused state mutations, and zero CLEAR authorizations; those are
-accepted worker evidence and were not rerun in the current integration. The state-side transaction
-owns clearance/replay/recovery, and the accepted candidate's direct-state evidence keeps the
-payment root and `settled_batch_count` unchanged while using `DIRECT_CLEARANCE` and a dedicated
-clearance root/count. This is not a comparison to the rejected 18-endpoint design.
+Direct worker-run evidence in this candidate: Python 3.11.15 compiled all 14 changed Python files
+successfully. The 16 directly implicated non-rehearsal modules passed 162 tests when rerun serially
+after an initial parallel scheduling probe exposed two cross-suite SQLite busy errors
+(`transaction:busy` in Provider Trust Graph V2 and `money:busy` in Money Mirror); those exact
+modules passed without code changes when isolated. The complete `tests.test_mirror_rehearsal`
+module passed 13/13 in 930.637 seconds, including both matrix tests and the ABI regression. Its
+independent ledger is `753b3588b0e5963e52396bc9eaec34db05252331888b2e16688a9ab52c4ff9fb2fa771350f9bb7f5d8d3369be33e0646ec291ab765f984499dba67331e2f24d5`, with 39 mutation,
+10 fault, 12 recovery, and 2 concurrency cases; the final chain has 24 artifacts, 24 events,
+24 receipts, and 24 transitions. Conflicting fixed-envelope races in both launch orders returned
+`custody:fixed-envelope-conflict` for the loser and left the winner's 24-artifact chain only.
+No warnings or skips were emitted.
 
-Earlier accepted integration records report the native non-prover build, shape/evaluator/parity/
-preflight outputs, retained-proof identity and acceptance, and all 34 copy-only verifier
-rejections; those remain worker/integration evidence rather than results relabeled as personally
-rerun here. The current verifier-custody integration personally verified the verifier-only build,
-application compilation, containment diagnostic, focused proof-state tests, and compact gates below;
-it did not invoke a prover or inspect archives.
+The complete-process resource gate remains OPEN and fail-closed. The raw rehearsal result was
+`JOB_OBJECT_EVIDENCE {"blocker":"job-object:exception:PermissionError","cap_bytes":5000000000,"cap_enforced":true,"counter_name":"PeakJobMemoryUsed","exit_code":null,"measured":false,"peak_bytes":null,"semantics":"job_commit_charge_bytes"}`; the matrix ledger recorded child exit `-1`, `measured=false`, and no peak. Job configuration succeeded, but this sandbox did not permit the assigned-before-resume launch/`PeakJobMemoryUsed` query. No fallback measurement was used. The documented `py -3.14` launcher was unavailable; the equivalent compile/test commands used available Python 3.11.15 and this limitation is not a production qualification.
+
+The claim remains `SYNTHETIC_REHEARSAL_READY` only. Whole-Mirror completion, `CONTROLLED_SHADOW_READY`,
+`PRODUCTION_READY`, live source authentication/authorization, legal terms, completeness/cadence/
+failure qualification, state privacy approval, HSM/FIPS custody, production persistence/HA/
+backup/DR/monitoring/runbooks, the measured resource gate, payment/clearance/settlement authority,
+and any activation remain open or false. `proofSuiteId=null`, `production_usable=false`, and
+activation remain false. No live network, real record, PHI, credential, archive, or authoritative
+checkout mutation occurred.
 
 ## Verifier custody and state admission
 
