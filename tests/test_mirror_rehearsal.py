@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import ctypes
 from dataclasses import dataclass
 import json
 import os
@@ -29,6 +30,7 @@ from app.mirror import support_boundary
 from app.mirror import nc_medicaid_fhir_profile as source_profile
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_GRAPH_PROFILE_REGISTRY
 from tests.rehearsal_job_object import run_job_object
+from tests import rehearsal_job_object
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,30 @@ class _MatrixCase:
     category: str
     name: str
     operation: str
+
+
+class RehearsalJobObjectAbiTests(unittest.TestCase):
+    def test_extended_limit_information_matches_windows_abi_order(self) -> None:
+        fields = [name for name, _field_type in rehearsal_job_object._ExtendedLimitInformation._fields_]
+        self.assertEqual(
+            [
+                "BasicLimitInformation",
+                "IoInfo",
+                "ProcessMemoryLimit",
+                "JobMemoryLimit",
+                "PeakProcessMemoryUsed",
+                "PeakJobMemoryUsed",
+            ],
+            fields,
+        )
+        size = ctypes.sizeof(ctypes.c_size_t)
+        offsets = {
+            name: getattr(rehearsal_job_object._ExtendedLimitInformation, name).offset
+            for name in fields
+        }
+        self.assertEqual(offsets["ProcessMemoryLimit"] + size, offsets["JobMemoryLimit"])
+        self.assertEqual(offsets["JobMemoryLimit"] + size, offsets["PeakProcessMemoryUsed"])
+        self.assertEqual(offsets["PeakProcessMemoryUsed"] + size, offsets["PeakJobMemoryUsed"])
 
 
 class MirrorRehearsalTests(unittest.TestCase):

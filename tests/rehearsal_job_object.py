@@ -65,8 +65,8 @@ class _ExtendedLimitInformation(ctypes.Structure):
         ("BasicLimitInformation", _BasicLimitInformation),
         ("IoInfo", _IoCounters),
         ("ProcessMemoryLimit", ctypes.c_size_t),
-        ("PeakProcessMemoryUsed", ctypes.c_size_t),
         ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
         ("PeakJobMemoryUsed", ctypes.c_size_t),
     ]
 
