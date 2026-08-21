@@ -1,13 +1,14 @@
-SOURCE WORKSPACE: C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26
-CONTROLLED INTEGRATION WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\controlled-integration-parameter-attestation-20260820
-ROLLBACK WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\rollback-64d-attestation-minimalism-20260820
-PHASE: Compiled-parameter reporter cleanup; no archive or prover action.
+# Blind Ledger current task
 
-OBJECTIVE: From the clean authoritative baseline
-`64d054783856127678bcbc1a3c300a08fddc2c4b`, retain a fixed compiled verifier-side Longfellow
-parameter report, separately validated by the Python profile gate. The report is derived from
-compiled types/constants, exact pinned patched-source identity, and the compiled minimal-clearance
-circuit. It is evidence of implementation facts only, not a theorem, proof-backend selection, or
+SOURCE WORKSPACE: C:\Users\neers\Documents\Codex\2026-07-27\he\work\Blind-Ledger-Wave2-Workspace-2026-07-26
+CONTROLLED INTEGRATION WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\controlled-integration-verifier-custody-20260821
+ROLLBACK WORKTREE: C:\Users\neers\Documents\Codex\2026-08-15\blind-ledger-workhorse-clean\work\rollback-verifier-custody-integration-20260821
+PHASE: Verifier-custody/state-admission controlled integration; no prover or archive action.
+
+OBJECTIVE: Integrate the accepted verifier-custody candidate based on authoritative
+`efafe06448c92f95944c9ca1d72a08c9488c4557`, synthesize the two current-state authority records,
+run the focused integration gates, and fast-forward the clean authoritative checkout exactly once.
+The candidate is implementation and state-admission evidence, not a theorem, backend selection, or
 activation decision.
 
 AUTHORITY: AGENTS.md owns execution and precedence; this file owns only this bounded objective and
@@ -15,96 +16,73 @@ blockers; STATE.md owns verified evidence and nonclaims; ARCHITECTURE.md owns sy
 named technical authorities in docs/ own their interfaces. Git history and verified retained
 archives preserve retired source and narrative.
 
-FIXED DECISIONS: Blind Ledger is state-side clearance and the incumbent/official payment system
+FIXED DECISIONS: Blind Ledger is state-side clearance; the incumbent and official payment system
 retain adjudication and funds movement. Mirror / Provider Trust Graph is read-only evidence and
 continuity. The directives are CLEAR, HOLD, HUMAN_REVIEW, BLOCK, and EXCEPTION_APPROVED. Proof or
-session acceptance never equals CLEAR; policyResult stays separate from effectiveDirective. ZK is
-mandatory only for an undisclosed payment-relevant assertion crossing the clearance boundary and
-affecting automation. Ethereum is a later governed L1 checkpoint, never settlement/L2. Lean is a
-later mandatory gate and is not implemented.
+session acceptance never equals CLEAR; `policyResult` stays separate from `effectiveDirective`.
+ZK is mandatory only for an undisclosed payment-relevant assertion crossing the clearance boundary
+and affecting automation. Ethereum is a later governed L1 checkpoint, never settlement/L2. Lean is
+a later mandatory gate and is not implemented.
 
-CONTROLLED INTEGRATION STATUS: The clean baseline `64d054783856127678bcbc1a3c300a08fddc2c4b`
-was verified before the isolated candidate was changed. Implementation/evidence commit
-`5363970705f9bdb8cdff2f99252f4425790f541d` added implementation facts; this cleanup removes its
-unnecessary binary record/protocol and retains one fixed reporter plus strict Python validation.
-The six DP24 values remain
-`UNKNOWN`; the implementation `proof_rate=4` is explicitly not DP24 `rate_R`. No production
-proof backend is selected; `proofSuiteId=null`, `production_usable=false`, activation is false,
-and the complete <=2^-128 private-proof theorem ledger remains open. Lean, backend selection, real
-PHI, real payments, payment movement, archive rebuild, publication, and later Mirror work remain
-outside this phase.
+BASELINE: Authoritative `efafe06448c92f95944c9ca1d72a08c9488c4557` was clean with 513 tracked files,
+21 Markdown files, five root authorities, and clean diff checks. The accepted candidate
+`b8947081f490fe19d7be430500f5f71e3a67648d` is its direct child. Its net implementation diff is
+exactly four files, 757 insertions, and 75 deletions; the new tracked file is
+`app/minimal_clearance_verifier_process.py`.
 
-REQUIRED INVARIANTS: exact SHA3-512/order, authoritative completeness/nonmembership, event /
-observation / rule-effective / decision times, exact decision/access join, governed exceptions,
-fail-closed parsing and mutation, deterministic retry/recovery, and the complete process-tree
-ceiling of 5,000,000,000 bytes.
+## Accepted candidate evidence
 
-EXIT: preserve this candidate clean, report exact provenance and focused evidence, and use only the
-authorized exact non-destructive fast-forward of the clean authoritative checkout after the
-docs-only synthesis and compact integration checks pass. Never touch retained proof binaries or
-source archives.
+The prior candidate qualification, accepted as input to this integration and not rerun here,
+performed exactly one retained-proof submit through the contained native verifier. The retained
+artifact was 411,672 bytes, SHA-256
+`69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E`, and remained read-only.
+The pinned verifier executable identity was
+`7E03EF2AE1181ED0A107ECAD577C1FDA6CB8EEB174CA4D239BB4EA74E561513B`; containment enforced the
+5,000,000,000-byte cap and active-process limit 1, with 1,041,915,904 bytes of PeakJobMemoryUsed
+reported as job commit. Schema 2, verifier-identity binding, integrity, restart recovery,
+payment-root preservation, settled-count preservation, and exact state mutation were accepted;
+the focused proof-state suite was 9/9. That retained proof is external audit evidence and is not
+committed here.
 
-## Candidate evidence
+## Current integration evidence
 
-The integration preserves all 34 accepted causal candidate commits: Mirror's reconciled range from
-the known older merge-base `9945389c6cc0cb5895273fe179325554cfb99c7b` through `3efd3a5`, followed
-by Blind Ledger's `ce31ab...` through `784ada2`. The only conflicts were the two expected Mirror
-add/add/content cases; final-tree and authoritative-base identity selected the accepted source and
-the authoritative/final test bytes. Rejected Mirror implementation files are absent.
+This integration fast-forwarded the controlled tree to `b894708` without changing the accepted
+implementation paths. Python compilation of the two changed application modules passed. The
+verifier-only CMake/Ninja build passed 11/11; its target-specific command graph contained no
+prover target or prover source. A cheap containment diagnostic confirmed suspended creation,
+assignment before resume, queried job-commit telemetry, the hard cap, active-process limit 1, and
+fail-closed injected setup, assignment, query, and timeout cases. The exact
+`tests.test_minimal_clearance_proof_state` command passed 9/9 with no warnings, failures, errors,
+or skips. The compact active-core/security-freeze/documentation-governance/release-manifest gate
+passed 29 tests plus 17 subtests with no warnings, failures, errors, or skips.
 
-Earlier integration records report: 209 Mirror focused unittests; 31 Native-v3 module tests;
-51-file changed-Python compilation; 35 documentation/release/security governance tests; seven
-active-core functions; native non-prover build and shape/evaluator/parity/preflight checks; the
-unchanged retained-proof acceptance; and 34/34 copy-only verifier mutations with zero state
-mutations and zero CLEAR authorizations. Those are retained worker/integration evidence and were
-not rerun or relabeled as personally verified in this correction. The native build's first two
-setup attempts were environment/path-length failures; the short-path Ninja build passed. The SHA3
-KAT executable was built but not run because it invokes `ZkProver`, and the integration rule
-requires zero prover invocations.
+No retained-proof submit, prover invocation, archive inspection, or proof-binary mutation occurred
+in this integration. The final documentation synthesis and exact cleanliness/provenance checks are
+the only remaining integration steps before the authorized fast-forward of authoritative main.
 
-The frozen candidate evidence reports the direct-state proof/database seam, five directives,
-exact retry/conflict/concurrency/fault/restart/recovery behavior, payment-root/settled-count
-preservation, and the 1.041 GB one-proof job-commit measurement. Those worker results are accepted
-inputs, not relabeled as personally rerun. In this correction, the exact seven-module no-exclusion
-pytest command was personally run once in the fresh locked venv with process-local TEMP/TMP and
-an explicit external basetemp: 104 items passed in 17.02 seconds with 0 failures, 0 errors, 0
-skips, and no warnings. The repository scratch directory and external pytest temp root were
-writable; the repository scratch was empty after the run and removed. No prover was invoked during
-integration, and the retained proof remains external audit evidence rather than a committed binary.
+## Verifier custody/state-admission boundary
 
-This hardening correction was personally verified in the isolated candidate with changed-Python
-compilation exit 0; generated/static security-ledger and profile-manifest JSON equality; focused
-Native-v3 trust-boundary plus plaintext-continuity pytest of 33/33 passing with no warnings; the
-Phase-0 `kat` command exit 0; the Phase-0 `negatives` command exit 0 with 14/14 rejection classes;
-the compact governance/release/security unittest command reporting 35 tests, `OK`, exit 0; and
-the active-core command reporting 8 passed, exit 0. The producer join matrix rejected 23 malformed
-or semantically invalid join encodings, and the independent raw-join matrix rejected 13/13
-mutations, while the valid 676-byte join and `d62d56...ddc09245` SHA3-512 ID remained unchanged.
-The pinned upstream manifest was independently bound by SHA-256
-`A677B8A6BEA7DCA87E4370E8FA07FDFD17F345276B581629BE230022B8C0BB5D`; all six DP24 values remain
-UNKNOWN with candidate literals marked `HYPOTHETICAL_CANDIDATE_INPUT`, and no numeric DP24
-epsilon/security-bit claim is emitted. No prover, archive, activation, or authoritative-checkout
-write occurred during this correction.
+`NativeMinimalClearanceVerifier` requires a configured 64-hex executable SHA-256 identity, snapshots
+and rehashes the executable before each run, and launches only a fresh read-only verifier-owned
+snapshot. The combined native verifier reconstructs the public statement in the same process as
+proof verification and writes the exact 3,340-byte statement only after acceptance. The Windows-only
+containment module creates a Job Object, applies kill-on-close, the 5,000,000,000-byte job-commit
+cap, and active-process limit 1 before creating the child suspended; it assigns the suspended child
+before resume, uses a minimal environment, bounds output, and has no subprocess fallback.
 
-## Compiled Longfellow parameter report
+`MinimalClearanceStateStoreV1` schema 2 persists `expected_verifier_sha256` in the singleton row and
+binds it into operation/state identities. Submit, retry, restart, recovery, export/restore, and
+integrity checks fail closed on identity drift. The only public state-changing entrypoint is
+`submit(artifact_path)`; `apply_acceptance` is absent, `_apply_verified_acceptance` is internal,
+and `StaticMinimalClearanceVerifier` is not exported from application code. Rejected verification,
+identity drift, containment failure, timeout, malformed output, or state mismatch cannot mutate the
+proof-state tables.
 
-The cleanup removes the bespoke binary record, identity trailer, paired native encoders/parsers,
-and mutation-matrix script. The sole native reporter is
-longfellow_minimal_clearance_parameter_reporter; it links only the verifier-side circuit target
-and never invokes a prover. It emits one fixed canonical UTF-8 JSON object with 28 keys. Two
-reporter runs exited 0, were byte-identical at 1,215 bytes, and had SHA-256
-0E8856979A1C1082CFA43CC92BA0AC6CD67F6B17CA1E59A151E2C6A41977B3D3.
+## Nonclaims and next blocker
 
-The compiled facts are GF2_128, degree 128, 16 serialized bytes, implementation rate 4, 189
-queries, transcript version 6, artifact version 1, 68-byte artifact header, 3340-byte public
-statement, circuit inputs/public inputs/layers/terms 36969/26721/217/12158968, and circuit ID
-1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0. The strict Python profile
-gate validates the exact JSON key set/types, pinned source and patch identities, dimensions,
-circuit ID, and nonactivating flags; seven focused malformed-report categories were rejected.
-This is a compiled verifier-side parameter report, separately validated by the Python profile
-gate. It does not claim independent native circuit reconstruction or an independent native
-verifier. The evidence is
-experiments/longfellow_v09_native_v3/evidence/implementation_parameter_attestation.json.
-
-This is implementation-attested evidence only. It does not map any Longfellow fact to DP24
-`ell`, `rate_R`, `theta`, `gamma`, `instances`, or DP24 field degree; all six remain `UNKNOWN`.
+`proofSuiteId=null`, `production_usable=false`, and activation remain false. No production backend,
+Lean kernel, real PHI, real payment movement, Ethereum operation, formal theorem qualification,
+or deployment/custody qualification follows from this candidate. The complete private-proof
+security ledger, including the approximately 115-to-128-bit gap and malicious-verifier/QROM,
+SHA3-assurance, semantic-composition, retry/grinding, and independent-audit terms, remains open.
+The next safe dependency is Sol review of this verifier-custody/state-admission integration.

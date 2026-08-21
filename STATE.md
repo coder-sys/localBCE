@@ -1,6 +1,6 @@
 # Blind Ledger current state
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Product boundary
 
@@ -171,18 +171,59 @@ custody, HA/DR operations, state privacy/support approval, and shadow-pilot evid
 The accepted Blind Ledger route is the complete current minimal engineering proof route: one
 610-byte, nine-block private source/registry commitment, direct semantic constraints, 12,158,968
 terms, and one retained synthetic proof with approximately 1.041 GB observed job commit. The
-retained proof independently accepted in this run with 34/34 copy-only verifier mutations rejected;
-proof acceptance reported zero state mutations and zero CLEAR authorizations. The state-side
-transaction owns clearance/replay/recovery, and the accepted candidate's direct-state evidence
-keeps the payment root and `settled_batch_count` unchanged while using `DIRECT_CLEARANCE` and a
-dedicated clearance root/count. This is not a comparison to the rejected 18-endpoint design.
+prior candidate qualification recorded the unchanged retained-proof acceptance, 34/34 copy-only
+verifier rejections, zero proof-caused state mutations, and zero CLEAR authorizations; those are
+accepted worker evidence and were not rerun in the current integration. The state-side transaction
+owns clearance/replay/recovery, and the accepted candidate's direct-state evidence keeps the
+payment root and `settled_batch_count` unchanged while using `DIRECT_CLEARANCE` and a dedicated
+clearance root/count. This is not a comparison to the rejected 18-endpoint design.
 
 Earlier accepted integration records report the native non-prover build, shape/evaluator/parity/
 preflight outputs, retained-proof identity and acceptance, and all 34 copy-only verifier
-rejections; those were not rerun in this correction. The current hardening run personally verified
-the corrected join/provenance code and focused gates described above, did not invoke a prover, and
-did not inspect archives. The exact seven-module direct composition gate remains earlier
-worker/integration evidence rather than a result relabeled as personally rerun here.
+rejections; those remain worker/integration evidence rather than results relabeled as personally
+rerun here. The current verifier-custody integration personally verified the verifier-only build,
+application compilation, containment diagnostic, focused proof-state tests, and compact gates below;
+it did not invoke a prover or inspect archives.
+
+## Verifier custody and state admission
+
+Commit `b8947081f490fe19d7be430500f5f71e3a67648d`, parent
+`efafe06448c92f95944c9ca1d72a08c9488c4557`, adds the verifier-custody/state-admission boundary in
+exactly four implementation paths: `app/minimal_clearance_proof_state.py`, the new
+`app/minimal_clearance_verifier_process.py`,
+`experiments/longfellow_v09_native_v3/src/native_v3_minimal_clearance_verifier.cpp`, and
+`tests/test_minimal_clearance_proof_state.py`.
+
+`NativeMinimalClearanceVerifier` requires a configured 64-hex executable SHA-256 identity,
+snapshots and rehashes the regular non-symlink executable before every run, and launches only a
+fresh verifier-owned read-only snapshot. The combined native form reconstructs the verifier-owned
+public statement in the same process as proof verification and writes exactly 3,340 statement bytes
+only after proof acceptance. The Windows containment module creates and configures a Job Object
+before child execution, creates the child suspended, assigns it before resume, enforces
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, a 5,000,000,000-byte job-commit cap, and active-process limit
+1, bounds ASCII stdout/stderr, and has no subprocess fallback.
+
+`MinimalClearanceStateStoreV1` schema 2 persists `expected_verifier_sha256` in the singleton row and
+binds it into operation/state identities. Submit, exact retry, restart, recovery, export/restore,
+and integrity checks fail closed on identity drift. The only public state-changing entrypoint is
+`submit(artifact_path)`; `apply_acceptance` is absent, `_apply_verified_acceptance` is internal,
+and `StaticMinimalClearanceVerifier` is not exported from application code. Rejected verification,
+identity drift, containment failure, timeout, malformed output, or state mismatch cannot mutate the
+proof-state tables.
+
+The prior candidate qualification, used as accepted input rather than rerun here, performed one
+retained-proof submit. It recorded artifact size 411,672, SHA-256
+`69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E`, `ReadOnly=True`, executable
+identity `7E03EF2AE1181ED0A107ECAD577C1FDA6CB8EEB174CA4D239BB4EA74E561513B`, PeakJobMemoryUsed
+1,041,915,904 bytes as job commit, cap enforcement, active-process limit 1, schema 2, restart and
+integrity success, unchanged payment root and settled count, and one request/audit/transition.
+
+This integration run did not consume the retained proof and invoked no prover. It personally ran
+the verifier-only build (11/11 targets), compiled both changed application modules, passed the
+cheap real/injected containment diagnostic, passed `tests.test_minimal_clearance_proof_state` 9/9,
+and passed the compact active-core/security-freeze/documentation-governance/release-manifest gate
+with 29 tests and 17 subtests. No warnings, failures, errors, or skips were observed in those
+focused checks.
 
 ## Longfellow compiled parameter report
 
@@ -248,10 +289,10 @@ Current authority is `AGENTS.md`, `CURRENT_TASK.md`, `STATE.md`, `ARCHITECTURE.m
 `docs/LEAN_FORMAL_KERNEL.md`, and the named component authorities linked from `README.md`.
 Retained compatibility references are not design authority.
 
-The next safe dependency is Sol review of the compiled parameter report cleanup and its controlled
-integration provenance. Separately, the six unresolved private-proof
-theorem/composition terms listed in `CURRENT_TASK.md` remain open; no backend is selected and the
-safe implementation boundary remains synthetic, state-owned, and nonactivating.
+The next safe dependency is Sol review of the verifier-custody/state-admission controlled
+integration. Separately, the six unresolved private-proof theorem/composition terms listed in
+`CURRENT_TASK.md` remain open; no backend is selected and the safe implementation boundary remains
+synthetic, state-owned, and nonactivating.
 
 Current archive authority is the external publication receipt plus independent physical readback
 of exactly the three retained roles: one Downloads copy, one Desktop-root copy, and one nested
