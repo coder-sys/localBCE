@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import app.minimal_clearance_proof_state as proof_state
@@ -15,6 +16,7 @@ from app.direct_state_owned_clearance_v1 import DIRECT_INITIAL_PAYMENT_ROOT
 from app.minimal_clearance_proof_state import (
     MinimalClearanceIndeterminateError,
     MinimalClearanceProofStateError,
+    MinimalClearanceReceiptV1,
     MinimalClearanceStateStoreV1,
     MinimalProofAcceptanceV1,
     _CIRCUIT_ID,
@@ -30,6 +32,16 @@ from app.minimal_clearance_proof_state import (
     _u64,
     parse_acceptance_bytes,
 )
+from tests.minimal_clearance_qualification import (
+    CAP_BYTES,
+    MAX_STDERR_BYTES,
+    MAX_STDOUT_BYTES,
+    QualificationError,
+    build_qualification_record,
+    canonical_record_bytes,
+    _validate_acceptance_output,
+    _validate_containment,
+)
 
 
 _ARTIFACT = Path(
@@ -43,6 +55,20 @@ _DIRECTIVE_FLAGS = {
     4: (1, 1, 0, 0, 0, 0),
     5: (1, 1, 0, 0, 1, 1),
 }
+_QUALIFICATION_STDOUT = (
+    b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=10993 public_inputs=8145 "
+    b"layers=169 terms=21954328 public_bytes=3340 proof_bytes=317784\n"
+)
+_QUALIFICATION_STDERR = (
+    b"MINIMAL_CLEARANCE_BUILD phase=public\n"
+    b"MINIMAL_CLEARANCE_BUILD phase=private\n"
+    b"MINIMAL_CLEARANCE_BUILD phase=assertions\n"
+    b"MINIMAL_CLEARANCE_BUILD phase=mkcircuit\n"
+    b"MINIMAL_CLEARANCE_BUILD phase=complete inputs=10993 public_inputs=8145 layers=169 terms=21954328\n"
+    b"MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0\n"
+    b"MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received\n"
+    b"MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept\n"
+)
 
 
 def _base_acceptance() -> MinimalProofAcceptanceV1:
@@ -242,7 +268,196 @@ def _corrupt_transition_kind(path: Path) -> None:
         connection.commit()
 
 
+def _qualification_raw() -> bytes:
+    return b"synthetic-qualification-artifact"
+
+
+def _qualification_receipt(raw: bytes, **changes: object) -> MinimalClearanceReceiptV1:
+    wide = b"R" * 64
+    narrow = b"C" * 32
+    values: dict[str, object] = {
+        "operation_digest": wide,
+        "artifact_sha256": hashlib.sha256(raw).digest(),
+        "artifact_digest": hashlib.sha3_512(raw).digest(),
+        "statement_digest": wide,
+        "circuit_id": narrow,
+        "bundle_id": wide,
+        "receipt_id": wide,
+        "join_id": wide,
+        "settlement_id": wide,
+        "request_id": wide,
+        "attempt_id": wide,
+        "decision_id": wide,
+        "sequence_before": 11,
+        "sequence_after": 12,
+        "state_before_id": wide,
+        "state_after_id": wide,
+        "clearance_root_before": wide,
+        "clearance_root_after": wide,
+        "clearance_count_before": 0,
+        "clearance_count_after": 1,
+        "payment_root_before": wide,
+        "payment_root_after": wide,
+        "settled_batch_count_before": 0,
+        "settled_batch_count_after": 0,
+        "state_binding_after": wide,
+        "audit_head_after": wide,
+        "policy_result": 1,
+        "effective_directive": 1,
+    }
+    values.update(changes)
+    return MinimalClearanceReceiptV1(**values)  # type: ignore[arg-type]
+
+
+def _qualification_containment(**changes: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "exit_code": 0,
+        "stdout": _QUALIFICATION_STDOUT,
+        "stderr": _QUALIFICATION_STDERR,
+        "peak_job_commit_bytes": 123456,
+        "cap_bytes": CAP_BYTES,
+        "cap_enforced": True,
+        "active_process_limit": 1,
+        "timed_out": False,
+    }
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+def _qualification_state(**changes: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "payment_root": b"P" * 64,
+        "settled_batch_count": 0,
+    }
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+def _qualification_record_kwargs(raw: bytes) -> dict[str, object]:
+    return {
+        "artifact_raw": raw,
+        "artifact_sha256": hashlib.sha256(raw).hexdigest().upper(),
+        "artifact_sha3_512": hashlib.sha3_512(raw).hexdigest().upper(),
+        "artifact_readonly_before": True,
+        "artifact_readonly_after": True,
+        "artifact_file_identity_unchanged": True,
+        "verifier_sha256": "AA" * 32,
+        "receipt": _qualification_receipt(raw),
+        "containment": _qualification_containment(),
+        "stdout": _QUALIFICATION_STDOUT,
+        "stderr": _QUALIFICATION_STDERR,
+        "state_before": _qualification_state(),
+        "state_after": _qualification_state(),
+        "counts_before": {
+            "minimal_proof_clearance_requests": 0,
+            "minimal_proof_clearance_audit": 0,
+            "minimal_proof_clearance_transitions": 0,
+        },
+        "counts_after": {
+            "minimal_proof_clearance_requests": 1,
+            "minimal_proof_clearance_audit": 1,
+            "minimal_proof_clearance_transitions": 1,
+        },
+        "schema_version": 2,
+        "state_verifier_sha256": bytes.fromhex("AA" * 32),
+        "transition_kind": "DIRECT_CLEARANCE",
+        "integrity_pass": True,
+        "restart_pass": True,
+        "recovery_pass": True,
+    }
+
+
 class MinimalClearanceProofStateTests(unittest.TestCase):
+    def test_qualification_record_uses_raw_artifact_and_never_receipt_bytes(self) -> None:
+        raw = _qualification_raw()
+        record = build_qualification_record(**_qualification_record_kwargs(raw))
+        self.assertEqual(record["artifact_bytes"], len(raw))
+        self.assertEqual(record["artifact_sha256"], hashlib.sha256(raw).hexdigest().upper())
+        self.assertEqual(record["artifact_sha3_512"], hashlib.sha3_512(raw).hexdigest().upper())
+        source = Path("tests/minimal_clearance_qualification.py").read_text(encoding="utf-8")
+        self.assertNotIn("receipt.artifact_bytes", source)
+
+    def test_qualification_missing_incomplete_or_over_cap_telemetry_fails_closed(self) -> None:
+        with self.assertRaisesRegex(QualificationError, "verifier_containment_missing"):
+            _validate_containment(None)
+        for changes, label in (
+            ({"peak_job_commit_bytes": None}, "verifier_peak_unmeasured_or_over_cap"),
+            ({"cap_enforced": False}, "verifier_cap_not_enforced"),
+            ({"peak_job_commit_bytes": CAP_BYTES + 1}, "verifier_peak_unmeasured_or_over_cap"),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(QualificationError, label):
+                    _validate_containment(_qualification_containment(**changes))
+
+    def test_qualification_receipt_artifact_hash_mismatch_fails_closed(self) -> None:
+        raw = _qualification_raw()
+        arguments = _qualification_record_kwargs(raw)
+        arguments["receipt"] = _qualification_receipt(raw, artifact_sha256=b"X" * 32)
+        with self.assertRaisesRegex(QualificationError, "receipt_artifact_sha256_mismatch"):
+            build_qualification_record(**arguments)
+
+    def test_qualification_exact_build_trace_and_output_contract(self) -> None:
+        valid = _qualification_containment()
+        marker, dimensions, trace_digest, trace_line_count = _validate_acceptance_output(
+            valid.stdout, valid.stderr,
+        )
+        self.assertEqual(marker, "MINIMAL_CLEARANCE_VERIFIER_ACCEPT")
+        self.assertEqual(dimensions, {"inputs": 10993, "public_inputs": 8145, "layers": 169, "terms": 21954328})
+        self.assertEqual(trace_line_count, 8)
+        self.assertEqual(trace_digest, hashlib.sha3_512(valid.stderr).hexdigest().upper())
+        for stdout, stderr, label in (
+            (valid.stdout, b"\n".join(_QUALIFICATION_STDERR.splitlines()[:-1]) + b"\n", "verifier_trace_line_count"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(
+                b"phase=public\nMINIMAL_CLEARANCE_BUILD phase=private",
+                b"phase=private\nMINIMAL_CLEARANCE_BUILD phase=public",
+            ), "verifier_trace_public"),
+            (valid.stdout, _QUALIFICATION_STDERR + b"diagnostic=1\n", "verifier_trace_line_count"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"terms=21954328", b"terms=21954329"), "verifier_trace_dimensions"),
+            (valid.stdout, _QUALIFICATION_STDERR + b"--diagnostics\n", "verifier_trace_line_count"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"phase=private", b"warning: private"), "verifier_trace_private"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"phase=private", b"phase=private C:\\temp"), "verifier_trace_private"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"phase=private", b"phase=private \xff"), "verifier_output_not_ascii"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"proof.read=accept remaining=0", b"proof.read=reject remaining=0"), "verifier_trace_proof_stage"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"commitment=received", b"commitment=rejected"), "verifier_trace_commitment_stage"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"verify=accept", b"verify=reject"), "verifier_trace_verify_stage"),
+            (valid.stdout, b"x" * (MAX_STDERR_BYTES + 1), "verifier_stderr_cap"),
+            (valid.stdout + b"extra\n", valid.stderr, "verifier_stdout_unexpected"),
+            (valid.stdout.replace(b"inputs=10993", b"inputs=10994"), valid.stderr, "verifier_trace_dimensions"),
+            (b"", valid.stderr, "verifier_stdout_unexpected"),
+            (b"unexpected\n", valid.stderr, "verifier_acceptance_marker"),
+            (b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT \xff\n", valid.stderr, "verifier_output_not_ascii"),
+            (b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT " + b"x" * MAX_STDOUT_BYTES, valid.stderr, "verifier_stdout_cap"),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(QualificationError, label):
+                    _validate_acceptance_output(stdout, stderr)
+
+    def test_qualification_payment_or_settled_movement_fails_closed(self) -> None:
+        raw = _qualification_raw()
+        for changes, label in (
+            ({"payment_root": b"Q" * 64}, "state_payment_root"),
+            ({"settled_batch_count": 1}, "state_settled_count"),
+        ):
+            arguments = _qualification_record_kwargs(raw)
+            arguments["state_after"] = _qualification_state(**changes)
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(QualificationError, label):
+                    build_qualification_record(**arguments)
+
+    def test_qualification_record_is_bounded_path_free_and_zero_raw(self) -> None:
+        raw = b"secret-synthetic-artifact-bytes"
+        encoded = canonical_record_bytes(build_qualification_record(**_qualification_record_kwargs(raw)))
+        self.assertLessEqual(len(encoded), 8192)
+        self.assertNotIn(raw, encoded)
+        self.assertNotIn(_QUALIFICATION_STDOUT, encoded)
+        self.assertNotIn(_QUALIFICATION_STDERR, encoded)
+        self.assertNotIn(b"C:\\", encoded)
+        self.assertNotIn(b"\\\\", encoded)
+        self.assertNotIn(b"stdout", encoded)
+        self.assertNotIn(b"stderr", encoded)
+        self.assertNotIn(b"\n", encoded)
+        self.assertNotIn(b"\r", encoded)
+
     def test_verifier_identity_is_state_bound_and_public_bypass_is_absent(self) -> None:
         base = _base_acceptance()
         with tempfile.TemporaryDirectory(prefix="blind-ledger-identity-") as directory:
