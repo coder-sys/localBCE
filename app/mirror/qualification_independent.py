@@ -227,7 +227,7 @@ GAP_LEDGER = {
         for item in COMPONENT_CONTRACTS
     ],
     "software_gaps": [
-        {"gap_id": "EXTERNAL_SOURCE_EVIDENCE_ADAPTER", "status": "UNIMPLEMENTED", "claim": "authenticated source authorization, terms, scope, completeness, cadence, and failure evidence"},
+        {"gap_id": "EXTERNAL_SOURCE_EVIDENCE_ADAPTER", "status": "SOFTWARE_CONTRACT_ONLY", "claim": "bounded transport-neutral contract and independent checks only; live authorization/authentication, legal terms, completeness/cadence qualification, and operational failure evidence remain external"},
         {"gap_id": "EXTERNAL_GOVERNANCE_APPROVAL_ADAPTER", "status": "UNIMPLEMENTED", "claim": "state approval evidence"},
         {"gap_id": "EXTERNAL_PRIVACY_SUPPORT_ADAPTER", "status": "UNIMPLEMENTED", "claim": "state privacy and support approval evidence"},
         {"gap_id": "PRODUCTION_CUSTODY_ADAPTER", "status": "UNIMPLEMENTED", "claim": "production envelope custody and HSM/FIPS evidence"},
