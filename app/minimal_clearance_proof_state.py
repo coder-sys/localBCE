@@ -1011,6 +1011,18 @@ class MinimalClearanceStateStoreV1:
             settled_batch_count=row[12], state_binding=row[13], audit_head=row[14], last_operation_digest=row[15],
         )  # type: ignore[arg-type]
 
+    def state_store_identity(self) -> bytes:
+        """Return the verifier-bound identity of this configured state profile."""
+        self._require_verifier_identity()
+        expected = self.verifier.expected_statement()
+        if type(expected) is not bytes:
+            raise MinimalClearanceProofStateError("proof_verifier_statement")
+        return _sha(
+            b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00",
+            DIRECT_DATABASE_CONTEXT_ID, DIRECT_DATABASE_SCHEMA_ID, DIRECT_DATABASE_PROGRAM_ID,
+            _CIRCUIT_ID, expected, self.expected_verifier_sha256,
+        )
+
     def _receipt_from_request(self, connection, operation_digest: bytes) -> MinimalClearanceReceiptV1:
         row = connection.execute(
             "SELECT operation_digest, acceptance_bytes, receipt_bytes, artifact_sha256, artifact_digest, statement_digest, circuit_id, "
@@ -1042,10 +1054,18 @@ class MinimalClearanceStateStoreV1:
     def submit(self, artifact_path: Path) -> MinimalClearanceReceiptV1:
         self._require_verifier_identity()
         acceptance = self.verifier.verify(artifact_path)
+        return self.submit_verified_acceptance(acceptance)
+
+    def submit_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
+        """Apply an already accepted typed proof without invoking the verifier."""
+        self._require_verifier_identity()
         if type(acceptance) is not MinimalProofAcceptanceV1:
             raise MinimalClearanceProofStateError("proof_verifier_result")
-        self._require_verifier_identity()
-        return self._apply_verified_acceptance(acceptance)
+        encoded = acceptance.canonical_bytes()
+        reparsed = parse_acceptance_bytes(encoded)
+        if reparsed != acceptance or reparsed.canonical_bytes() != encoded:
+            raise MinimalClearanceProofStateError("proof_acceptance_roundtrip")
+        return self._apply_verified_acceptance(reparsed)
 
     def _apply_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
         self._require_verifier_identity()

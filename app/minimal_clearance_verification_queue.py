@@ -23,7 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Final, Mapping, Protocol
 
-from app.minimal_clearance_proof_state import MinimalProofAcceptanceV1
+from app.minimal_clearance_proof_state import MinimalProofAcceptanceV1, parse_acceptance_bytes
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 
 
@@ -138,14 +138,14 @@ def _hex(value: bytes) -> str:
     return value.hex().upper()
 
 
-def _parse_hex(value: object, length: int, label: str) -> bytes:
-    if type(value) is not str or re.fullmatch(rf"[0-9a-fA-F]{{{length * 2}}}\Z", value) is None:
+def _parse_hex(value: object, length: int | None, label: str) -> bytes:
+    if type(value) is not str or (length is not None and re.fullmatch(rf"[0-9a-fA-F]{{{length * 2}}}\Z", value) is None) or (length is None and re.fullmatch(r"[0-9a-fA-F]+\Z", value) is None):
         raise QueueIntegrityError(f"{label}_invalid")
     try:
         result = bytes.fromhex(value)
     except ValueError as exc:
         raise QueueIntegrityError(f"{label}_invalid") from exc
-    if len(result) != length:
+    if length is not None and len(result) != length:
         raise QueueIntegrityError(f"{label}_invalid")
     return result
 
@@ -267,6 +267,8 @@ class VerificationEvidence:
     artifact_sha256: bytes
     artifact_sha3_512: bytes
     verifier_sha256: bytes
+    circuit_id: bytes
+    acceptance_bytes: bytes
     proof_acceptance_digest: bytes
     peak_job_commit_bytes: int
     cap_bytes: int
@@ -282,10 +284,25 @@ class VerificationEvidence:
             raise QueueIntegrityError("evidence_artifact_bytes")
         for name, length in (
             ("artifact_sha256", 32), ("artifact_sha3_512", 64),
-            ("verifier_sha256", 32), ("proof_acceptance_digest", 64),
+            ("verifier_sha256", 32), ("circuit_id", 32), ("proof_acceptance_digest", 64),
             ("stdout_sha3_512", 64), ("stderr_sha3_512", 64),
         ):
             _bytes(getattr(self, name), length, f"evidence_{name}")
+        if type(self.acceptance_bytes) is not bytes or not 0 < len(self.acceptance_bytes) <= _MAX_ACCEPTANCE:
+            raise QueueIntegrityError("evidence_acceptance_bytes")
+        try:
+            parsed = parse_acceptance_bytes(self.acceptance_bytes)
+        except Exception as exc:
+            raise QueueIntegrityError("evidence_acceptance_invalid") from exc
+        if (
+            parsed.canonical_bytes() != self.acceptance_bytes
+            or parsed.artifact_bytes != self.artifact_bytes
+            or parsed.artifact_sha256 != self.artifact_sha256
+            or parsed.artifact_digest != self.artifact_sha3_512
+            or parsed.circuit_id != self.circuit_id
+            or _sha(_ACCEPTANCE_DOMAIN, self.acceptance_bytes) != self.proof_acceptance_digest
+        ):
+            raise QueueIntegrityError("evidence_acceptance_binding")
         if type(self.peak_job_commit_bytes) is not int or self.peak_job_commit_bytes < 0:
             raise QueueIntegrityError("evidence_peak")
         if type(self.cap_bytes) is not int or self.cap_bytes != _CAP_BYTES:
@@ -301,6 +318,8 @@ class VerificationEvidence:
             "artifact_sha256": _hex(self.artifact_sha256),
             "artifact_sha3_512": _hex(self.artifact_sha3_512),
             "verifier_sha256": _hex(self.verifier_sha256),
+            "circuit_id": _hex(self.circuit_id),
+            "acceptance_bytes": _hex(self.acceptance_bytes),
             "proof_acceptance_digest": _hex(self.proof_acceptance_digest),
             "peak_job_commit_bytes": self.peak_job_commit_bytes,
             "cap_bytes": self.cap_bytes,
@@ -504,6 +523,10 @@ def build_verification_evidence(
         stderr = containment.stderr
     except (AttributeError, TypeError, ValueError) as exc:
         raise QueueRetryableError("verifier_result_shape") from exc
+    try:
+        parsed_acceptance = parse_acceptance_bytes(canonical_acceptance)
+    except Exception as exc:
+        raise QueueHeldError("proof_acceptance_shape") from exc
     if (
         type(artifact_bytes) is not int
         or type(artifact_sha256) is not bytes or len(artifact_sha256) != 32
@@ -511,6 +534,8 @@ def build_verification_evidence(
         or type(circuit_id) is not bytes or len(circuit_id) != 32
         or type(canonical_acceptance) is not bytes
         or not 0 < len(canonical_acceptance) <= _MAX_ACCEPTANCE
+        or parsed_acceptance.canonical_bytes() != canonical_acceptance
+        or parsed_acceptance != acceptance
     ):
         raise QueueHeldError("proof_acceptance_shape")
     if (
@@ -537,6 +562,8 @@ def build_verification_evidence(
         artifact_sha256=artifact_sha256,
         artifact_sha3_512=artifact_sha3_512,
         verifier_sha256=bytes(expected_verifier_sha256),
+        circuit_id=bytes(circuit_id),
+        acceptance_bytes=canonical_acceptance,
         proof_acceptance_digest=_sha(_ACCEPTANCE_DOMAIN, canonical_acceptance),
         peak_job_commit_bytes=peak,
         cap_bytes=cap,
@@ -1275,7 +1302,7 @@ def _parse_receipt(raw: bytes, config: QueueConfig) -> VerificationReceipt:
     evidence = value["evidence"]
     evidence_keys = {
         "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "verifier_sha256",
-        "proof_acceptance_digest", "peak_job_commit_bytes", "cap_bytes", "cap_enforced",
+        "circuit_id", "acceptance_bytes", "proof_acceptance_digest", "peak_job_commit_bytes", "cap_bytes", "cap_enforced",
         "active_process_limit", "timed_out", "exit_code", "stdout_sha3_512", "stderr_sha3_512",
     }
     if type(evidence) is not dict or set(evidence) != evidence_keys:
@@ -1289,6 +1316,8 @@ def _parse_receipt(raw: bytes, config: QueueConfig) -> VerificationReceipt:
         artifact_bytes=evidence["artifact_bytes"], artifact_sha256=_parse_hex(evidence["artifact_sha256"], 32, "evidence_sha256"),
         artifact_sha3_512=_parse_hex(evidence["artifact_sha3_512"], 64, "evidence_sha3"),
         verifier_sha256=_parse_hex(evidence["verifier_sha256"], 32, "evidence_verifier"),
+        circuit_id=_parse_hex(evidence["circuit_id"], 32, "evidence_circuit"),
+        acceptance_bytes=_parse_hex(evidence["acceptance_bytes"], None, "evidence_acceptance_bytes"),
         proof_acceptance_digest=_parse_hex(evidence["proof_acceptance_digest"], 64, "evidence_acceptance"),
         peak_job_commit_bytes=evidence["peak_job_commit_bytes"], cap_bytes=evidence["cap_bytes"],
         cap_enforced=evidence["cap_enforced"], active_process_limit=evidence["active_process_limit"],

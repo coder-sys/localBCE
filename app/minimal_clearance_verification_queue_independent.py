@@ -10,14 +10,45 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import sqlite3
 from typing import Any, Final, Mapping
 
+from app.minimal_clearance_proof_state import parse_acceptance_bytes
+
 
 class IndependentQueueError(RuntimeError):
     """Bounded independent reconstruction failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class IndependentVerifiedQueueJob:
+    """A proof-only snapshot extracted after independent queue verification."""
+
+    queue_id: str
+    config_digest: bytes
+    verifier_sha256: bytes
+    job_id: str
+    operation_id: bytes
+    attempt: int
+    receipt_bytes: bytes
+    receipt_id: bytes
+    acceptance_bytes: bytes
+    proof_acceptance_digest: bytes
+    artifact_bytes: int
+    artifact_sha256: bytes
+    artifact_sha3_512: bytes
+    circuit_id: bytes
+    peak_job_commit_bytes: int
+    cap_bytes: int
+    cap_enforced: bool
+    active_process_limit: int
+    timed_out: bool
+    exit_code: int
+    stdout_sha3_512: bytes
+    stderr_sha3_512: bytes
 
 
 _SCHEMA: Final = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v1"
@@ -28,6 +59,7 @@ _TERMINAL: Final = frozenset({"VERIFIED", "REJECTED", "HELD"})
 _CAP_BYTES: Final = 5_000_000_000
 _ACTIVE_PROCESS_LIMIT: Final = 1
 _MAX_ERROR: Final = 96
+_MAX_ACCEPTANCE: Final[int] = 65_536
 _MAX_RECEIPT: Final = 16 * 1024
 _MAX_EXPORT: Final = 64 * 1024 * 1024
 _TOKEN = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
@@ -38,6 +70,7 @@ _GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v1\x00"
 _OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v1\x00"
 _EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v1\x00"
 _HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v1\x00"
+_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v1\x00"
 _RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v1\x00"
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
@@ -182,7 +215,7 @@ def _metadata_json(metadata: Mapping[str, Any]) -> dict[str, Any]:
 def _parse_evidence(value: Any, verifier: bytes) -> dict[str, Any]:
     keys = {
         "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "verifier_sha256",
-        "proof_acceptance_digest", "peak_job_commit_bytes", "cap_bytes", "cap_enforced",
+        "circuit_id", "acceptance_bytes", "proof_acceptance_digest", "peak_job_commit_bytes", "cap_bytes", "cap_enforced",
         "active_process_limit", "timed_out", "exit_code", "stdout_sha3_512", "stderr_sha3_512",
     }
     if type(value) is not dict or set(value) != keys:
@@ -196,6 +229,10 @@ def _parse_evidence(value: Any, verifier: bytes) -> dict[str, Any]:
     parsed["artifact_sha256"] = _blob(value["artifact_sha256"], 32, "receipt_artifact_sha256")
     parsed["artifact_sha3_512"] = _blob(value["artifact_sha3_512"], 64, "receipt_artifact_sha3")
     parsed["verifier_sha256"] = _blob(value["verifier_sha256"], 32, "receipt_verifier")
+    parsed["circuit_id"] = _blob(value["circuit_id"], 32, "receipt_circuit")
+    parsed["acceptance_bytes"] = _blob(value["acceptance_bytes"], None, "receipt_acceptance_bytes")
+    if not 0 < len(parsed["acceptance_bytes"]) <= _MAX_ACCEPTANCE:
+        _fail("receipt_acceptance_bounds")
     parsed["proof_acceptance_digest"] = _blob(value["proof_acceptance_digest"], 64, "receipt_acceptance")
     parsed["stdout_sha3_512"] = _blob(value["stdout_sha3_512"], 64, "receipt_stdout")
     parsed["stderr_sha3_512"] = _blob(value["stderr_sha3_512"], 64, "receipt_stderr")
@@ -205,6 +242,19 @@ def _parse_evidence(value: Any, verifier: bytes) -> dict[str, Any]:
         _fail("receipt_containment_binding")
     if parsed["timed_out"] is not False or parsed["exit_code"] != 0 or parsed["peak_job_commit_bytes"] > _CAP_BYTES:
         _fail("receipt_containment_binding")
+    try:
+        acceptance = parse_acceptance_bytes(parsed["acceptance_bytes"])
+    except Exception as exc:
+        raise IndependentQueueError("receipt_acceptance_invalid") from exc
+    if (
+        acceptance.canonical_bytes() != parsed["acceptance_bytes"]
+        or acceptance.artifact_bytes != parsed["artifact_bytes"]
+        or acceptance.artifact_sha256 != parsed["artifact_sha256"]
+        or acceptance.artifact_digest != parsed["artifact_sha3_512"]
+        or acceptance.circuit_id != parsed["circuit_id"]
+        or _sha(_ACCEPTANCE_DOMAIN, parsed["acceptance_bytes"]) != parsed["proof_acceptance_digest"]
+    ):
+        _fail("receipt_acceptance_binding")
     return parsed
 
 
@@ -611,6 +661,71 @@ def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = N
             pass
 
 
+def read_verified_job(
+    path: Path,
+    job_id: str,
+    *,
+    expected_config: Mapping[str, Any] | None = None,
+) -> IndependentVerifiedQueueJob:
+    """Verify a queue database, then extract one terminal VERIFIED result."""
+    summary = verify_database(path, expected_config=expected_config)
+    if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None:
+        _fail("job_id")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=5.0)
+        connection.execute("PRAGMA query_only=ON")
+        metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()
+        row = connection.execute(
+            "SELECT j.status,r.terminal_status,r.receipt_bytes FROM queue_jobs j "
+            "LEFT JOIN queue_results r ON r.operation_id=j.operation_id WHERE j.job_id=?",
+            (job_id,),
+        ).fetchone()
+        if metadata is None or row is None or str(row[0]) != "VERIFIED" or str(row[1]) != "VERIFIED" or row[2] is None:
+            _fail("job_not_verified")
+        config = json.loads(bytes(metadata[0]).decode("ascii"))
+        receipt_bytes = bytes(row[2])
+        try:
+            receipt_value = json.loads(receipt_bytes.decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise IndependentQueueError("job_receipt_encoding") from exc
+        if receipt_bytes != _json_bytes(receipt_value):
+            _fail("job_receipt_noncanonical")
+        receipt = _parse_receipt(receipt_value, config)
+        evidence = receipt["evidence"]
+        operation = receipt["operation_id"]
+        acceptance_bytes = bytes(evidence["acceptance_bytes"])
+        return IndependentVerifiedQueueJob(
+            queue_id=str(config["queue_id"]),
+            config_digest=bytes.fromhex(str(summary["config_digest"])),
+            verifier_sha256=bytes(evidence["verifier_sha256"]),
+            job_id=job_id,
+            operation_id=operation,
+            attempt=int(receipt["attempt"]),
+            receipt_bytes=receipt_bytes,
+            receipt_id=bytes(receipt["receipt_id"]),
+            acceptance_bytes=acceptance_bytes,
+            proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]),
+            artifact_bytes=int(evidence["artifact_bytes"]),
+            artifact_sha256=bytes(evidence["artifact_sha256"]),
+            artifact_sha3_512=bytes(evidence["artifact_sha3_512"]),
+            circuit_id=bytes(evidence["circuit_id"]),
+            peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]),
+            cap_bytes=int(evidence["cap_bytes"]),
+            cap_enforced=bool(evidence["cap_enforced"]),
+            active_process_limit=int(evidence["active_process_limit"]),
+            timed_out=bool(evidence["timed_out"]),
+            exit_code=int(evidence["exit_code"]),
+            stdout_sha3_512=bytes(evidence["stdout_sha3_512"]),
+            stderr_sha3_512=bytes(evidence["stderr_sha3_512"]),
+        )
+    except sqlite3.Error as exc:
+        raise IndependentQueueError("database_read") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _create_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -730,4 +845,7 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
     return verified
 
 
-__all__ = ("IndependentQueueError", "restore_export_to_fresh_database", "verify_database", "verify_export_bytes")
+__all__ = (
+    "IndependentQueueError", "IndependentVerifiedQueueJob", "read_verified_job",
+    "restore_export_to_fresh_database", "verify_database", "verify_export_bytes",
+)

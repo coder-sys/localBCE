@@ -7,6 +7,7 @@ never construct a clearance directive or call the clearance state store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
@@ -19,8 +20,10 @@ from unittest import TestCase
 
 from app.minimal_clearance_proof_state import (
     MinimalProofAcceptanceV1,
-    MinimalProofStatementV1,
     _CIRCUIT_ID,
+    _artifact_public_bytes,
+    _parse_statement,
+    parse_acceptance_bytes,
 )
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 
@@ -52,6 +55,9 @@ from app.minimal_clearance_verification_queue_independent import (
 
 
 _RAW = b"synthetic opaque proof bytes for queue tests"
+_RETAINED_ARTIFACT = Path(
+    r"C:\Temp\blind-ledger-minimal-clearance-proof-20260817c\minimal_clearance_case0.blmc"
+)
 _SHA256 = hashlib.sha256(_RAW).digest()
 _SHA3 = hashlib.sha3_512(_RAW).digest()
 _VERIFIER = bytes.fromhex("AB" * 32)
@@ -96,12 +102,10 @@ def _Acceptance(
     artifact_digest: bytes = _SHA3,
     proof_accepted: bool = True,
 ) -> MinimalProofAcceptanceV1:
+    retained = _RETAINED_ARTIFACT.read_bytes()
+    _, statement_bytes, _ = _artifact_public_bytes(retained)
     return MinimalProofAcceptanceV1(
-        statement=MinimalProofStatementV1(
-            statement_bytes=b"synthetic-statement",
-            values=(), state_values=(), join_id=b"J" * 64,
-            receipt_id=b"R" * 64, settlement_id=b"S" * 64,
-        ),
+        statement=_parse_statement(statement_bytes),
         artifact_sha256=artifact_sha256,
         artifact_digest=artifact_digest,
         artifact_bytes=artifact_bytes,
@@ -368,6 +372,30 @@ class VerificationQueueTests(TestCase):
         self.assertEqual(str(caught.exception), "proof_acceptance_type")
         with self.assertRaises(QueueHeldError):
             build_verification_evidence(_Acceptance(artifact_bytes=1), _Containment(), snapshot, _VERIFIER)
+
+    def test_verified_result_persists_canonical_acceptance_and_independent_tamper_rejects(self) -> None:
+        store = self._store()
+        self._admit(store)
+        result = QueueWorker(
+            store=store, worker_id="acceptance-worker", custody=_Custody(self.root / "acceptance-custody"), verifier_factory=_Factory(),
+        ).process_one()
+        self.assertEqual(result.status, "VERIFIED")
+        self.assertIsNotNone(result.receipt_bytes)
+        receipt = json.loads(result.receipt_bytes.decode("ascii"))
+        acceptance_bytes = bytes.fromhex(receipt["evidence"]["acceptance_bytes"])
+        self.assertEqual(parse_acceptance_bytes(acceptance_bytes).canonical_bytes(), acceptance_bytes)
+        exported = store.export_bytes()
+        with closing(sqlite3.connect(store.path)) as connection:
+            persisted_receipt = bytes(connection.execute("SELECT receipt_bytes FROM queue_results WHERE job_id='job-1'").fetchone()[0])
+        self.assertIn(receipt["evidence"]["acceptance_bytes"].encode("ascii"), persisted_receipt)
+        independent = verify_export_bytes(exported, expected_config=store.config.as_json())
+        self.assertEqual(independent["status_counts"]["VERIFIED"], 1)
+        tampered = json.loads(exported.decode("ascii"))
+        receipt_hex = tampered["results"][0]["receipt_bytes"]
+        tampered["results"][0]["receipt_bytes"] = ("0" if receipt_hex[0] != "0" else "1") + receipt_hex[1:]
+        tampered_bytes = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode("ascii")
+        with self.assertRaises(IndependentQueueError):
+            verify_export_bytes(tampered_bytes)
 
     def test_faults_roll_back_state_and_export(self) -> None:
         for label in ("after_admission_write", "after_transition"):
