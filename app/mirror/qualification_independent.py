@@ -225,6 +225,12 @@ GAP_LEDGER = {
     "implemented_software_seams": [
         {"gap_id": item["component_id"], "status": "REHEARSAL_SOFTWARE_ONLY", "claim": "bounded local contract and independent checks; no external authority"}
         for item in COMPONENT_CONTRACTS
+    ] + [
+        {
+            "gap_id": "EXTERNAL_SOURCE_QUARANTINE",
+            "status": "SOFTWARE_ONLY",
+            "claim": "durable state-owned quarantine and independent recovery checks only; no approval, downstream bridge, source truth, or production qualification",
+        },
     ],
     "software_gaps": [
         {"gap_id": "EXTERNAL_SOURCE_EVIDENCE_ADAPTER", "status": "SOFTWARE_CONTRACT_ONLY", "claim": "bounded transport-neutral contract and independent checks only; live authorization/authentication, legal terms, completeness/cadence qualification, and operational failure evidence remain external"},
