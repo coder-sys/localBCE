@@ -238,7 +238,7 @@ GAP_LEDGER = {
         {"gap_id": "EXTERNAL_PRIVACY_SUPPORT_ADAPTER", "status": "SOFTWARE_CONTRACT_ONLY", "claim": "bounded transport-neutral privacy and support assertion contract bound to one governance observation and quarantined snapshot; state approval, privacy/support qualification, live authentication, and production readiness remain external"},
         {"gap_id": "PRODUCTION_CUSTODY_ADAPTER", "status": "UNIMPLEMENTED", "claim": "production envelope custody and HSM/FIPS evidence"},
         {"gap_id": "PRODUCTION_HA_BACKUP_DR_ADAPTER", "status": "UNIMPLEMENTED", "claim": "production HA, backup, restore, DR, monitoring, and rollback evidence"},
-        {"gap_id": "CONTROLLED_SHADOW_PILOT_RUNTIME", "status": "UNIMPLEMENTED", "claim": "externally authorized read-only shadow operations"},
+        {"gap_id": "CONTROLLED_SHADOW_PILOT_RUNTIME", "status": "SOFTWARE_CONTRACT_ONLY", "claim": "durable bounded runtime mechanics and synthetic execution evidence only; no external live authorization, source completeness/cadence qualification, state approval, privacy/support qualification, production custody/HA/DR, or production readiness"},
         {"gap_id": "PRODUCTION_QUALIFICATION", "status": "UNIMPLEMENTED", "claim": "production claim level"},
     ],
     "external_blockers": [

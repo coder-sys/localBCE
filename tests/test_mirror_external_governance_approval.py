@@ -289,7 +289,7 @@ class GovernanceApprovalTests(unittest.TestCase):
         self.assertIn("remain external", gap["claim"])
         self.assertEqual(
             next(item for item in qualification_independent.GAP_LEDGER["software_gaps"] if item["gap_id"] == "CONTROLLED_SHADOW_PILOT_RUNTIME")["status"],
-            "UNIMPLEMENTED",
+            "SOFTWARE_CONTRACT_ONLY",
         )
 
 
