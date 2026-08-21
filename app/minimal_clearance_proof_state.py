@@ -823,6 +823,14 @@ class MinimalClearanceReceiptV1:
         return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
 
 
+@dataclass(frozen=True, slots=True)
+class MinimalClearanceAdmissionOutcomeV1:
+    """The atomic state-store disposition for one typed acceptance."""
+
+    receipt: MinimalClearanceReceiptV1
+    transition_applied: bool
+
+
 def _receipt_from_row(row: tuple[object, ...]) -> MinimalClearanceReceiptV1:
     if len(row) != 32:
         raise MinimalClearanceProofStateError("proof_receipt_row_shape")
@@ -1058,6 +1066,12 @@ class MinimalClearanceStateStoreV1:
 
     def submit_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
         """Apply an already accepted typed proof without invoking the verifier."""
+        return self.submit_verified_acceptance_outcome(acceptance).receipt
+
+    def submit_verified_acceptance_outcome(
+        self, acceptance: MinimalProofAcceptanceV1
+    ) -> MinimalClearanceAdmissionOutcomeV1:
+        """Apply a typed acceptance and return the transaction-owned disposition."""
         self._require_verifier_identity()
         if type(acceptance) is not MinimalProofAcceptanceV1:
             raise MinimalClearanceProofStateError("proof_verifier_result")
@@ -1065,9 +1079,15 @@ class MinimalClearanceStateStoreV1:
         reparsed = parse_acceptance_bytes(encoded)
         if reparsed != acceptance or reparsed.canonical_bytes() != encoded:
             raise MinimalClearanceProofStateError("proof_acceptance_roundtrip")
-        return self._apply_verified_acceptance(reparsed)
+        return self._apply_verified_acceptance_outcome(reparsed)
 
     def _apply_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
+        """Compatibility wrapper retaining the receipt-only internal shape."""
+        return self._apply_verified_acceptance_outcome(acceptance).receipt
+
+    def _apply_verified_acceptance_outcome(
+        self, acceptance: MinimalProofAcceptanceV1
+    ) -> MinimalClearanceAdmissionOutcomeV1:
         self._require_verifier_identity()
         encoded = acceptance.canonical_bytes()
         reparsed = parse_acceptance_bytes(encoded)
@@ -1105,7 +1125,7 @@ class MinimalClearanceStateStoreV1:
                     receipt = self._receipt_from_request(connection, bytes(existing[0][0]))
                     connection.execute("COMMIT")
                     began = False
-                    return receipt
+                    return MinimalClearanceAdmissionOutcomeV1(receipt=receipt, transition_applied=False)
                 if (
                     bytes(state[7]) != bytes(acceptance.statement.state("before_continuity_root"))
                     or bytes(state[14]) != bytes(acceptance.statement.state("before_audit_head"))
@@ -1241,7 +1261,7 @@ class MinimalClearanceStateStoreV1:
                 self._after_commit_fault("after_commit")
             except Exception as exc:
                 raise MinimalClearanceIndeterminateError("proof_commit_indeterminate") from exc
-        return receipt
+        return MinimalClearanceAdmissionOutcomeV1(receipt=receipt, transition_applied=True)
 
     def verify_integrity(self) -> None:
         self._require_verifier_identity()
@@ -1444,6 +1464,7 @@ class MinimalClearanceStateStoreV1:
 
 __all__ = (
     "MinimalClearanceIndeterminateError",
+    "MinimalClearanceAdmissionOutcomeV1",
     "MinimalClearanceProofStateError",
     "MinimalClearanceReceiptV1",
     "MinimalClearanceStateSnapshotV1",

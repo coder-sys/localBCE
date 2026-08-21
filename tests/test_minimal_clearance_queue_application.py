@@ -202,6 +202,118 @@ class QueueApplicationTests(unittest.TestCase):
         finally:
             state.close()
 
+    def test_reordered_same_acceptance_uses_atomic_state_disposition(self) -> None:
+        queue_path, queue_config, acceptance = self._queue(count=2)
+        state, verifier = self._state(acceptance)
+        app = self._application(queue_config, state)
+        try:
+            app.discover(queue_path, "job-0")
+            app.discover(queue_path, "job-1")
+            first = app.claim_next("worker-0")
+            second = app.claim_next("worker-1")
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            results = [
+                app.apply(second, queue_database=queue_path, state_store=state),  # type: ignore[arg-type]
+                app.apply(first, queue_database=queue_path, state_store=state),  # type: ignore[arg-type]
+            ]
+            self.assertEqual([result.status for result in results], ["APPLIED", "APPLIED"])
+            self.assertEqual(sum(not result.duplicate_convergence for result in results), 1)
+            self.assertEqual(sum(result.duplicate_convergence for result in results), 1)
+            self.assertEqual(len({result.state_receipt_bytes for result in results}), 1)
+            self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
+            self.assertEqual(verifier.verify_calls, 0)
+            app.verify_integrity()
+        finally:
+            state.close()
+
+    def test_expired_lease_requeues_and_old_token_cannot_apply(self) -> None:
+        queue_path, queue_config, acceptance = self._queue(count=1)
+        state, verifier = self._state(acceptance)
+        clock = _StoreClock()
+        app_config = QueueApplicationConfigV1(
+            "queue-application-test", queue_config.queue_id, queue_config.digest, _VERIFIER,
+            state.state_store_identity(), capacity=8, lease_seconds=1,
+        )
+        app = QueueApplicationStoreV1(path=self.root / "application.sqlite3", config=app_config, clock=clock)
+        try:
+            app.discover(queue_path, "job-0")
+            old = app.claim_next("worker-0")
+            self.assertIsNotNone(old)
+            clock.advance(1001)
+            fresh = app.claim_next("worker-1")
+            self.assertIsNotNone(fresh)
+            self.assertEqual(fresh.attempt, 2)  # type: ignore[union-attr]
+            with self.assertRaises(QueueApplicationLeaseError):
+                app.apply(old, queue_database=queue_path, state_store=state)  # type: ignore[arg-type]
+            result = app.apply(fresh, queue_database=queue_path, state_store=state)  # type: ignore[arg-type]
+            self.assertEqual(result.status, "APPLIED")
+            self.assertFalse(result.duplicate_convergence)
+            app.verify_integrity()
+            verify_database(app.path, expected_config=app.config.as_json())
+        finally:
+            state.close()
+
+    def test_expired_third_attempt_becomes_held_with_reconstruction_parity(self) -> None:
+        queue_path, queue_config, acceptance = self._queue(count=1)
+        state, _ = self._state(acceptance)
+        clock = _StoreClock()
+        app_config = QueueApplicationConfigV1(
+            "queue-application-test", queue_config.queue_id, queue_config.digest, _VERIFIER,
+            state.state_store_identity(), capacity=8, lease_seconds=1,
+        )
+        app = QueueApplicationStoreV1(path=self.root / "application.sqlite3", config=app_config, clock=clock)
+        try:
+            app.discover(queue_path, "job-0")
+            for expected_attempt in (1, 2, 3):
+                work = app.claim_next("worker")
+                self.assertIsNotNone(work)
+                self.assertEqual(work.attempt, expected_attempt)  # type: ignore[union-attr]
+                clock.advance(1001)
+            self.assertIsNone(app.claim_next("worker"))
+            self.assertEqual(app.snapshot()["status_counts"], {"APPLIED": 0, "DISCOVERED": 0, "HELD": 1, "LEASED": 0})
+            app.verify_integrity()
+            exported = app.export_bytes()
+            verify_export_bytes(exported, expected_config=app.config.as_json())
+            verify_database(app.path, expected_config=app.config.as_json())
+        finally:
+            state.close()
+
+    def test_state_commit_then_lease_expiry_recovers_as_duplicate(self) -> None:
+        queue_path, queue_config, acceptance = self._queue(count=1)
+        state, verifier = self._state(acceptance)
+        clock = _StoreClock()
+        app_config = QueueApplicationConfigV1(
+            "queue-application-test", queue_config.queue_id, queue_config.digest, _VERIFIER,
+            state.state_store_identity(), capacity=8, lease_seconds=1,
+        )
+        fired = {"value": False}
+        def expire_after_state(name: str) -> None:
+            if name == "after_state_commit_before_coordinator" and not fired["value"]:
+                fired["value"] = True
+                clock.advance(1001)
+        app = QueueApplicationStoreV1(
+            path=self.root / "application.sqlite3", config=app_config, clock=clock,
+            before_fault=expire_after_state,
+        )
+        try:
+            app.discover(queue_path, "job-0")
+            first = app.claim_next("worker-0")
+            self.assertIsNotNone(first)
+            with self.assertRaises(QueueApplicationIndeterminateError):
+                app.apply(first, queue_database=queue_path, state_store=state)  # type: ignore[arg-type]
+            self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
+            second = app.claim_next("worker-1")
+            self.assertIsNotNone(second)
+            result = app.apply(second, queue_database=queue_path, state_store=state)  # type: ignore[arg-type]
+            self.assertEqual(result.status, "APPLIED")
+            self.assertTrue(result.duplicate_convergence)
+            self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
+            self.assertEqual(verifier.verify_calls, 0)
+            app.verify_integrity()
+        finally:
+            state.close()
+
     def test_coordinator_precommit_loss_recovers_by_exact_state_retry(self) -> None:
         queue_path, queue_config, acceptance = self._queue(count=1)
         state, verifier = self._state(acceptance)
@@ -226,7 +338,7 @@ class QueueApplicationTests(unittest.TestCase):
             self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
             recovered = app.apply(work, queue_database=queue_path, state_store=state)  # type: ignore[arg-type]
             self.assertEqual(recovered.status, "APPLIED")
-            self.assertFalse(recovered.duplicate_convergence)
+            self.assertTrue(recovered.duplicate_convergence)
             self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
             self.assertEqual(verifier.verify_calls, 0)
             app.verify_integrity()
@@ -261,7 +373,11 @@ class QueueApplicationTests(unittest.TestCase):
         state, verifier = self._state(acceptance)
         try:
             before = state.snapshot()
-            receipt = state.submit_verified_acceptance(parse_acceptance_bytes(acceptance.canonical_bytes()))
+            first = state.submit_verified_acceptance_outcome(parse_acceptance_bytes(acceptance.canonical_bytes()))
+            second = state.submit_verified_acceptance_outcome(parse_acceptance_bytes(acceptance.canonical_bytes()))
+            self.assertTrue(first.transition_applied)
+            self.assertFalse(second.transition_applied)
+            receipt = second.receipt
             after = state.snapshot()
             self.assertEqual(verifier.verify_calls, 0)
             self.assertEqual(before.payment_root, after.payment_root)

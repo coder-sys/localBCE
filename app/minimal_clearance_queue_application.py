@@ -19,6 +19,7 @@ import sqlite3
 from typing import Any, Callable, Final, Mapping, Protocol
 
 from app.minimal_clearance_proof_state import (
+    MinimalClearanceAdmissionOutcomeV1,
     MinimalClearanceIndeterminateError,
     MinimalClearanceReceiptV1,
     MinimalClearanceStateStoreV1,
@@ -433,12 +434,14 @@ class QueueApplicationStoreV1:
                 connection.execute("BEGIN IMMEDIATE")
                 began = True
                 self._meta(connection)
+                self._recover_expired_leases(connection, now)
                 row = connection.execute(
                     "SELECT * FROM app_jobs WHERE status='DISCOVERED' AND next_eligible_ms<=? ORDER BY admission_sequence LIMIT 1",
                     (now,),
                 ).fetchone()
                 if row is None:
                     connection.execute("COMMIT")
+                    began = False
                     return None
                 job = self._job_from_row(tuple(row))
                 attempt = job.attempt + 1
@@ -446,11 +449,11 @@ class QueueApplicationStoreV1:
                     raise QueueApplicationLeaseError("application_attempts_exhausted")
                 token = secrets.token_bytes(24)
                 expires = now + self.config.lease_seconds * 1000
-                connection.execute(
+                changed = connection.execute(
                     "UPDATE app_jobs SET status='LEASED',attempt=?,updated_ms=? WHERE job_id=? AND status='DISCOVERED' AND attempt=?",
                     (attempt, now, job.job_id, job.attempt),
                 )
-                if connection.total_changes != 1:
+                if changed.rowcount != 1:
                     raise QueueApplicationLeaseError("application_claim_cas")
                 connection.execute(
                     "INSERT INTO app_leases VALUES (?,?,?,?,?,?)",
@@ -470,11 +473,108 @@ class QueueApplicationStoreV1:
                     connection.execute("ROLLBACK")
                 raise
 
-    def _live_lease(self, connection, work: QueueApplicationWorkV1) -> tuple[Any, ...]:
-        row = connection.execute("SELECT * FROM app_leases WHERE job_id=?", (work.job_id,)).fetchone()
-        if row is None or str(row[1]) != work.worker_id or bytes(row[2]) != work.lease_token or int(row[3]) != work.attempt:
-            raise QueueApplicationLeaseError("application_lease")
+    def _recover_expired_leases(self, connection, now: int) -> None:
+        """Recover expired leases while holding the claim transaction lock."""
+        rows = connection.execute(
+            "SELECT l.job_id,l.worker_id,l.attempt,l.leased_ms,l.expires_ms,j.operation_id,j.status "
+            "FROM app_leases l JOIN app_jobs j ON j.job_id=l.job_id "
+            "WHERE l.expires_ms<=? ORDER BY l.job_id",
+            (now,),
+        ).fetchall()
+        for row in rows:
+            job_id, worker_id, attempt, leased_ms, expires_ms, operation_id, status = row
+            if str(status) != "LEASED":
+                raise QueueApplicationIntegrityError("application_expired_lease_status")
+            connection.execute("DELETE FROM app_leases WHERE job_id=?", (str(job_id),))
+            if int(attempt) < self.config.max_attempts:
+                connection.execute(
+                    "UPDATE app_jobs SET status='DISCOVERED',next_eligible_ms=?,updated_ms=?,last_error_code=? "
+                    "WHERE job_id=? AND status='LEASED' AND attempt=?",
+                    (now, now, "application_lease_expired", str(job_id), int(attempt)),
+                )
+                self._append_transition(
+                    connection,
+                    kind="EXPIRED_REQUEUE",
+                    job_id=str(job_id),
+                    event={
+                        "at_ms": now, "status": "DISCOVERED", "attempt": int(attempt),
+                        "error_code": "application_lease_expired", "expired_ms": int(expires_ms),
+                    },
+                )
+            else:
+                connection.execute(
+                    "UPDATE app_jobs SET status='HELD',updated_ms=?,last_error_code=? "
+                    "WHERE job_id=? AND status='LEASED' AND attempt=?",
+                    (now, "application_lease_exhausted", str(job_id), int(attempt)),
+                )
+                connection.execute(
+                    "INSERT INTO app_results VALUES (?,?,?,?,?,?,?)",
+                    (str(job_id), "HELD", None, None, bytes(operation_id), 0, now),
+                )
+                self._append_transition(
+                    connection,
+                    kind="EXPIRED_HELD",
+                    job_id=str(job_id),
+                    event={
+                        "at_ms": now, "status": "HELD", "attempt": int(attempt),
+                        "error_code": "application_lease_exhausted", "expired_ms": int(expires_ms),
+                    },
+                )
+
+    def _validate_work_identity(self, work: QueueApplicationWorkV1) -> tuple[Any, ...]:
+        if type(work) is not QueueApplicationWorkV1:
+            raise QueueApplicationLeaseError("application_work_type")
+        if work.application_id != self.config.application_id:
+            raise QueueApplicationLeaseError("application_work_application")
+        _token(work.job_id, "job_id")
+        _token(work.worker_id, "worker_id")
+        _fixed_bytes(work.operation_id, 64, "work_operation")
+        _fixed_bytes(work.lease_token, 24, "work_token")
+        if type(work.attempt) is not int or not 1 <= work.attempt <= self.config.max_attempts:
+            raise QueueApplicationLeaseError("application_work_attempt")
+        if type(work.lease_expires_ms) is not int or work.lease_expires_ms <= 0:
+            raise QueueApplicationLeaseError("application_work_expiry")
+        if type(work.acceptance_bytes) is not bytes or not 0 < len(work.acceptance_bytes) <= _MAX_ACCEPTANCE:
+            raise QueueApplicationLeaseError("application_work_acceptance")
+        if type(work.queue_receipt_bytes) is not bytes or not 0 < len(work.queue_receipt_bytes) <= _MAX_RECEIPT:
+            raise QueueApplicationLeaseError("application_work_receipt")
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT * FROM app_jobs WHERE job_id=?", (work.job_id,)).fetchone()
+        if row is None or len(row) != 13:
+            raise QueueApplicationLeaseError("application_work_job")
+        if (
+            bytes(row[1]) != work.operation_id
+            or bytes(row[2]) != _sha(_APP_QUEUE_RECEIPT, work.queue_receipt_bytes)
+            or bytes(row[3]) != _sha(_APP_ACCEPTANCE, work.acceptance_bytes)
+            or bytes(row[4]) != work.acceptance_bytes
+            or bytes(row[5]) != work.queue_receipt_bytes
+            or int(row[8]) != work.attempt
+            or str(row[6]) not in _STATUS
+        ):
+            raise QueueApplicationLeaseError("application_work_binding")
         return tuple(row)
+
+    def _live_lease(self, connection, work: QueueApplicationWorkV1, *, now: int | None = None) -> tuple[Any, ...]:
+        if type(work) is not QueueApplicationWorkV1 or work.application_id != self.config.application_id:
+            raise QueueApplicationLeaseError("application_lease_identity")
+        current = int(self.clock.now_ms()) if now is None else now
+        row = connection.execute(
+            "SELECT l.*,j.status,j.operation_id,j.attempt FROM app_leases l "
+            "JOIN app_jobs j ON j.job_id=l.job_id WHERE l.job_id=?",
+            (work.job_id,),
+        ).fetchone()
+        if row is None:
+            raise QueueApplicationLeaseError("application_lease_missing")
+        if (
+            str(row[1]) != work.worker_id or bytes(row[2]) != work.lease_token
+            or int(row[3]) != work.attempt or int(row[5]) != work.lease_expires_ms
+            or str(row[6]) != "LEASED" or bytes(row[7]) != work.operation_id
+            or int(row[8]) != work.attempt
+        ):
+            raise QueueApplicationLeaseError("application_lease_binding")
+        if current >= int(row[5]):
+            raise QueueApplicationLeaseError("application_lease_expired")
+        return tuple(row[:6])
 
     def _held(self, work: QueueApplicationWorkV1, code: str) -> QueueApplicationResultV1:
         now = int(self.clock.now_ms())
@@ -545,11 +645,12 @@ class QueueApplicationStoreV1:
         state_store: MinimalClearanceStateStoreV1,
     ) -> QueueApplicationResultV1:
         """Recheck queue evidence and apply the typed acceptance exactly once."""
+        self._validate_work_identity(work)
         existing = self._existing_result(work.job_id)
         if existing is not None:
             return existing
-        if type(work) is not QueueApplicationWorkV1:
-            raise QueueApplicationLeaseError("application_work_type")
+        with closing(self._connect()) as connection:
+            self._live_lease(connection, work)
         try:
             verified = read_application_job(queue_database, work.job_id)
         except IndependentQueueApplicationError as exc:
@@ -561,18 +662,16 @@ class QueueApplicationStoreV1:
         except Exception:
             return self._held(work, "acceptance_reparse_failed")
         with closing(self._connect()) as connection:
-            primary_row = connection.execute(
-                "SELECT job_id FROM app_jobs WHERE acceptance_digest=? ORDER BY admission_sequence LIMIT 1",
-                (_sha(_APP_ACCEPTANCE, work.acceptance_bytes),),
-            ).fetchone()
-        duplicate = primary_row is None or str(primary_row[0]) != work.job_id
-        with closing(self._connect()) as connection:
             self._live_lease(connection, work)
         try:
             if bytes(state_store.expected_verifier_sha256) != self.config.verifier_sha256 or state_store.state_store_identity() != self.config.state_store_identity:
                 return self._held(work, "state_binding_drift")
             before = state_store.snapshot()
-            receipt = state_store.submit_verified_acceptance(acceptance)
+            outcome = state_store.submit_verified_acceptance_outcome(acceptance)
+            if type(outcome) is not MinimalClearanceAdmissionOutcomeV1:
+                raise QueueApplicationIntegrityError("state_admission_outcome")
+            receipt = outcome.receipt
+            duplicate = not outcome.transition_applied
             after = state_store.snapshot()
             self._validate_state_receipt(acceptance, receipt, before, after, duplicate)
         except MinimalClearanceIndeterminateError:
@@ -590,9 +689,14 @@ class QueueApplicationStoreV1:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 began = True
-                self._live_lease(connection, work)
+                try:
+                    self._live_lease(connection, work)
+                except QueueApplicationLeaseError as exc:
+                    raise QueueApplicationIndeterminateError("application_lease_lost_after_state") from exc
                 connection.execute("DELETE FROM app_leases WHERE job_id=?", (work.job_id,))
-                connection.execute("UPDATE app_jobs SET status='APPLIED',updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, work.job_id))
+                changed = connection.execute("UPDATE app_jobs SET status='APPLIED',updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, work.job_id))
+                if changed.rowcount != 1:
+                    raise QueueApplicationIndeterminateError("application_job_cas_after_state")
                 connection.execute("INSERT INTO app_results VALUES (?,?,?,?,?,?,?)", (work.job_id, "APPLIED", receipt_bytes, receipt_digest, work.operation_id, int(duplicate), now))
                 self._append_transition(connection, kind="APPLIED", job_id=work.job_id,
                                         event={"at_ms": now, "status": "APPLIED", "attempt": work.attempt,
@@ -705,6 +809,16 @@ class QueueApplicationStoreV1:
             result_map = {str(row[0]): tuple(row) for row in results}
             if len(lease_map) != len(leases) or len(result_map) != len(results):
                 raise QueueApplicationIntegrityError("application_duplicate")
+            for job_id, lease in lease_map.items():
+                if (
+                    len(lease) != 6 or job_id not in job_map
+                    or str(job_map[job_id][6]) != "LEASED"
+                    or not _TOKEN.fullmatch(str(lease[1]))
+                    or type(lease[2]) is not bytes or len(lease[2]) != 24
+                    or int(lease[3]) != int(job_map[job_id][8])
+                    or int(lease[5]) <= int(lease[4])
+                ):
+                    raise QueueApplicationIntegrityError("application_lease_shape")
             for job_id, row in job_map.items():
                 status = str(row[6])
                 if (status == "LEASED") != (job_id in lease_map):
@@ -715,6 +829,8 @@ class QueueApplicationStoreV1:
                 status = str(row[1])
                 if status not in {"APPLIED", "HELD"} or job_id not in job_map or str(job_map[job_id][6]) != status:
                     raise QueueApplicationIntegrityError("application_result_shape")
+                if bytes(row[4]) != bytes(job_map[job_id][1]) or type(row[5]) is not int:
+                    raise QueueApplicationIntegrityError("application_result_binding")
                 if status == "APPLIED":
                     if row[2] is None or row[3] is None or bytes(row[3]) != _sha(_APP_STATE_RECEIPT, bytes(row[2])):
                         raise QueueApplicationIntegrityError("application_state_receipt")
@@ -724,6 +840,46 @@ class QueueApplicationStoreV1:
                         raise QueueApplicationIntegrityError("application_state_receipt_encoding") from exc
                     if bytes(row[2]) != _json_bytes(decoded) or decoded.get("economic_mutation") is not False or decoded.get("proof_session_accepted") is not True or decoded.get("proof_suite_id") is not None:
                         raise QueueApplicationIntegrityError("application_state_receipt_claim")
+            replay: dict[str, str] = {}
+            for row in transitions:
+                kind = str(row[1])
+                job_id = str(row[2])
+                try:
+                    event = json.loads(bytes(row[5]).decode("ascii"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise QueueApplicationIntegrityError("application_transition_event") from exc
+                if bytes(row[5]) != _json_bytes(event) or not isinstance(event, dict):
+                    raise QueueApplicationIntegrityError("application_transition_event_canonical")
+                status = str(event.get("status"))
+                previous = replay.get(job_id)
+                if kind == "DISCOVER":
+                    if previous is not None or status != "DISCOVERED":
+                        raise QueueApplicationIntegrityError("application_transition_discover")
+                    replay[job_id] = "DISCOVERED"
+                elif kind == "CLAIM":
+                    if previous != "DISCOVERED" or status != "LEASED":
+                        raise QueueApplicationIntegrityError("application_transition_claim")
+                    replay[job_id] = "LEASED"
+                elif kind == "EXPIRED_REQUEUE":
+                    if previous != "LEASED" or status != "DISCOVERED":
+                        raise QueueApplicationIntegrityError("application_transition_requeue")
+                    replay[job_id] = "DISCOVERED"
+                elif kind == "EXPIRED_HELD":
+                    if previous != "LEASED" or status != "HELD" or job_id not in result_map:
+                        raise QueueApplicationIntegrityError("application_transition_expired_held")
+                    replay[job_id] = "HELD"
+                elif kind == "APPLIED":
+                    if previous != "LEASED" or status != "APPLIED":
+                        raise QueueApplicationIntegrityError("application_transition_applied")
+                    replay[job_id] = "APPLIED"
+                elif kind == "HELD":
+                    if previous != "LEASED" or status != "HELD":
+                        raise QueueApplicationIntegrityError("application_transition_held")
+                    replay[job_id] = "HELD"
+                else:
+                    raise QueueApplicationIntegrityError("application_transition_kind")
+            if set(replay) != set(job_map) or any(replay[jid] != str(row[6]) for jid, row in job_map.items()):
+                raise QueueApplicationIntegrityError("application_transition_final")
 
 __all__ = (
     "QueueApplicationConfigV1", "QueueApplicationError", "QueueApplicationConflictError",

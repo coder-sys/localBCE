@@ -232,7 +232,7 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
             _fail("job_status")
         for name in ("attempt", "next_eligible_ms", "created_ms", "updated_ms"):
             _integer(job[name], "job_" + name)
-        if job["status"] == "DISCOVERED" and job["attempt"] < 0:
+        if job["attempt"] > 3 or (job["status"] == "DISCOVERED" and job["attempt"] < 0):
             _fail("job_attempt")
         job_map[job_id] = dict(job, operation_id=operation, acceptance_bytes=acceptance_raw, queue_receipt_bytes=receipt_raw)
     if next_sequence < len(jobs):
@@ -252,7 +252,7 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         _blob(lease["token"], 24, "lease_token")
         _integer(lease["attempt"], "lease_attempt", 1)
         leased = _integer(lease["leased_ms"], "lease_time")
-        if _integer(lease["expires_ms"], "lease_expiry") <= leased or lease["attempt"] != job_map[jid]["attempt"]:
+        if _integer(lease["expires_ms"], "lease_expiry") <= leased or lease["attempt"] != job_map[jid]["attempt"] or lease["attempt"] > 3:
             _fail("lease_state")
         lease_map[jid] = dict(lease)
     results = value["results"]
@@ -319,6 +319,14 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
             if replay.get(jid) != "DISCOVERED" or status != "LEASED":
                 _fail("transition_claim")
             replay[jid] = "LEASED"
+        elif kind == "EXPIRED_REQUEUE":
+            if replay.get(jid) != "LEASED" or status != "DISCOVERED":
+                _fail("transition_requeue")
+            replay[jid] = "DISCOVERED"
+        elif kind == "EXPIRED_HELD":
+            if replay.get(jid) != "LEASED" or status != "HELD" or jid not in result_map:
+                _fail("transition_expired_held")
+            replay[jid] = "HELD"
         elif kind == "APPLIED":
             if replay.get(jid) != "LEASED" or status != "APPLIED":
                 _fail("transition_applied")
