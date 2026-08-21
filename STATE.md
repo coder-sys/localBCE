@@ -256,6 +256,37 @@ independent native verifier or circuit-reconstruction claim. The report's implem
 not DP24 `rate_R`; all six DP24 numeric mappings remain `UNKNOWN`, and no theorem,
 security-bit, backend-selection, production-usability, or activation claim follows.
 
+## Minimal-clearance qualification evidence
+
+The accepted test-owned qualification correction is carried by source commit
+f2db22d340aafc9b96b3a70eaebc0a3d84b092a5 and its controlled cherry-pick
+524efaa1055ae18c1fe53c6a2d65584cca6a9ce7. Its one fresh synthetic qualification submit used
+the unchanged retained artifact at 411,672 bytes with SHA-256
+69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E and the verifier executable
+identity E2BD096389E7D9CB3F8D83314747CA3D493DF6C30D86A57041F74B84F0023F3E. The artifact
+remained read-only and byte-identical. This later runner identity is evidence for that
+qualification record; the earlier verifier-custody record above remains historical evidence for
+its separately recorded executable identity.
+
+The accepted run measured 1,042,202,624 bytes of PeakJobMemoryUsed job commit under the hard
+5,000,000,000-byte cap, with cap enforcement, active-process limit 1, exit 0, and no timeout.
+It committed exactly one request, one audit row, and one DIRECT_CLEARANCE transition under schema
+2. Integrity, restart, exact retry, backup/recovery, payment-root equality, and settled-count
+equality passed. Zero prover invocations occurred. proofSuiteId=null, production_usable=false,
+and activation=false remain unchanged.
+
+The test-owned boundary requires exactly eight ordered ASCII stderr lines: four build phases;
+one positive complete line whose inputs, public_inputs, layers, and terms equal the single
+positive stdout acceptance line; proof.read=accept with remaining=0; commitment=received; and
+verify=accept. Missing, extra, reordered, malformed, non-ASCII, reject-stage, path-bearing, or
+dimension-mismatched output fails closed. The accepted trace digest is
+46A9D1FE953DBEC581D0445442BC5CFC3C807AAEFB2C5EA4DFC3B79396418754963BEDD3708D81795D67655E652D64799E3E1FF7E3E30A2C5FB668E83AA5F53D.
+
+This is complete current minimal engineering-route evidence for the accepted synthetic
+qualification seam, not production theorem qualification, backend selection, deployment,
+payment movement, PHI authority, or formal-kernel qualification. The controlled integration
+itself did not consume the retained proof or invoke a prover.
+
 ## Private-proof status
 
 No production proof backend is selected. DP24 remains an ideal-vector-oracle formula record only.
