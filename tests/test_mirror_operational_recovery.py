@@ -33,6 +33,8 @@ class OperationalRecoveryTests(unittest.TestCase):
             version=1,
             quarantine_policy_digest=self.upstream.source_policy.digest,
             runtime_profile_digest=self.upstream.profile.digest,
+            custody_id=self.custody.custody_id,
+            storage_id=self.storage.storage_id,
         )
         self.service = self._new_service(self.catalog)
         self.quarantine_export = self.upstream.quarantine_service.export_bytes()
@@ -51,7 +53,7 @@ class OperationalRecoveryTests(unittest.TestCase):
         )
 
     def _genesis(self) -> str:
-        return independent._genesis_root(self.profile.digest)
+        return independent._genesis_root(self.profile.digest, self.profile.custody_id, self.profile.storage_id)
 
     def _different_runtime_export(self) -> bytes:
         holder = object.__new__(runtime_tests.ControlledShadowRuntimeTests)
@@ -418,6 +420,8 @@ class OperationalRecoveryTests(unittest.TestCase):
             version=2,
             quarantine_policy_digest=self.profile.quarantine_policy_digest,
             runtime_profile_digest=self.profile.runtime_profile_digest,
+            custody_id=self.profile.custody_id,
+            storage_id=self.profile.storage_id,
         )
         with self.assertRaises(recovery.RecoveryIntegrityError):
             recovery.restore_export(
@@ -427,6 +431,75 @@ class OperationalRecoveryTests(unittest.TestCase):
                 key_custody=self.custody, storage=self.storage,
             )
         self.assertEqual(self.service.integrity()["point_count"], 1)
+
+    def test_custody_snapshot_object_and_storage_owner_bindings_fail_closed(self) -> None:
+        class WrongKeyCustody(recovery_fixtures.SyntheticKeyCustody):
+            def seal(self, plaintext: bytes, *, object_id: str) -> recovery.SealedRecoveryObjectV1:
+                value = super().seal(plaintext, object_id=object_id)
+                return recovery.SealedRecoveryObjectV1(object_id, "SYNTHETIC_OTHER_KEY", value.key_epoch, value.key_state, value.sealed_bytes)
+
+        class DriftStorage(recovery_fixtures.SyntheticRecoveryStorage):
+            def __init__(self) -> None:
+                super().__init__()
+                self._gets = 0
+
+            def get(self, object_id: str) -> bytes:
+                self._gets += 1
+                value = super().get(object_id)
+                return value + b"x" if self._gets == 2 else value
+
+        bad = self._new_service(self.root / "wrong-key.db")
+        bad.key_custody = WrongKeyCustody()
+        before = bad.export_bytes()
+        with self.assertRaises(recovery.RecoveryStorageError):
+            bad.create_recovery_point(
+                "WRONG_KEY", generation=1, expected_head=self._genesis(),
+                quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+            )
+        self.assertNotEqual(bad.export_bytes(), before)
+        self.assertEqual(bad.integrity()["state_counts"][recovery.STATE_PREPARED], 1)
+
+        drift = self._new_service(self.root / "drift-storage.db")
+        drift.storage = DriftStorage()
+        with self.assertRaises(recovery.RecoveryStorageError):
+            drift.create_recovery_point(
+                "DRIFT_STORAGE", generation=1, expected_head=self._genesis(),
+                quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+            )
+        self.assertEqual(drift.integrity()["point_count"], 1)
+
+        class WrongOwnerStorage(recovery_fixtures.SyntheticRecoveryStorage):
+            storage_id = "SYNTHETIC_OTHER_STORAGE_V1"
+
+        with self.assertRaises(recovery.OperationalRecoveryError):
+            recovery.OperationalRecoveryService(
+                self.root / "wrong-owner.db", profile=self.profile,
+                quarantine_policy=self.upstream.source_policy, runtime_profile=self.upstream.profile,
+                clock=self.clock, key_custody=self.custody,
+                storage=WrongOwnerStorage(),
+            )
+
+    def test_revoked_after_restore_never_returns_historical_success(self) -> None:
+        stored = self.service.create_recovery_point(
+            "REVOKE_AFTER_RESTORE", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        restored = self.service.restore_point(stored["point_id"], expected_head=stored["head_root"])
+        self.custody.revoke(1)
+        with self.assertRaises(recovery.RecoveryIntegrityError):
+            self.service.restore_point(stored["point_id"], expected_head=restored["head_root"])
+        self.assertIsNone(self.service.select_latest_restore_verified())
+        exported = self.service.export_bytes()
+        class WrongOwnerCustody(recovery_fixtures.SyntheticKeyCustody):
+            custody_id = "SYNTHETIC_OTHER_CUSTODY_V1"
+
+        with self.assertRaises(recovery.OperationalRecoveryError):
+            recovery.restore_export(
+                self.root / "wrong-custody-export.db", exported, profile=self.profile,
+                quarantine_policy=self.upstream.source_policy, runtime_profile=self.upstream.profile,
+                clock=self.clock, key_custody=WrongOwnerCustody(),
+                storage=self.storage,
+            )
 
     def test_precommit_faults_leave_catalog_at_the_prior_state(self) -> None:
         for fault_point in ("before_record_stored", "before_record_stored_commit"):

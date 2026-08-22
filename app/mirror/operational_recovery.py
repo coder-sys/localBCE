@@ -113,6 +113,8 @@ class OperationalRecoveryProfileV1:
     version: int
     quarantine_policy_digest: str
     runtime_profile_digest: str
+    custody_id: str
+    storage_id: str
     max_bundle_bytes: int = independent.MAX_BUNDLE_BYTES
     max_component_export_bytes: int = independent.MAX_COMPONENT_EXPORT_BYTES
     busy_timeout_ms: int = BUSY_TIMEOUT_MS
@@ -133,6 +135,8 @@ class OperationalRecoveryProfileV1:
             "version": self.version,
             "quarantine_policy_digest": self.quarantine_policy_digest,
             "runtime_profile_digest": self.runtime_profile_digest,
+            "custody_id": self.custody_id,
+            "storage_id": self.storage_id,
             "max_bundle_bytes": self.max_bundle_bytes,
             "max_component_export_bytes": self.max_component_export_bytes,
             "busy_timeout_ms": self.busy_timeout_ms,
@@ -209,13 +213,15 @@ def _key_view(value: Mapping[str, object]) -> dict[str, object]:
     return {"key_id": key_id, "key_epoch": epoch, "key_state": value["key_state"]}
 
 
-def _storage_view(value: Mapping[str, object], *, object_id: str, sealed_bytes: bytes) -> dict[str, object]:
+def _storage_view(value: Mapping[str, object], *, object_id: str, sealed_bytes: bytes, expected_storage_id: str | None = None) -> dict[str, object]:
     expected = {"object_id", "storage_id", "sealed_digest", "sealed_length"}
     if set(value) != expected or value["object_id"] != object_id:
         raise RecoveryStorageError("recovery:storage-receipt")
     storage_id = value["storage_id"]
     if not isinstance(storage_id, str) or independent.SAFE_TOKEN.fullmatch(storage_id) is None:
         raise RecoveryStorageError("recovery:storage-id")
+    if expected_storage_id is not None and storage_id != expected_storage_id:
+        raise RecoveryStorageError("recovery:storage-owner")
     if type(sealed_bytes) is not bytes or not sealed_bytes or len(sealed_bytes) > independent.MAX_SEALED_BYTES:
         raise RecoveryStorageError("recovery:sealed-bytes")
     digest = hashlib.sha3_512(sealed_bytes).hexdigest()
@@ -259,9 +265,16 @@ class OperationalRecoveryService:
         self.clock = clock
         self.key_custody = key_custody
         self.storage = storage
+        try:
+            custody_id = self.key_custody.custody_id
+            storage_id = self.storage.storage_id
+        except AttributeError as exc:
+            raise OperationalRecoveryError("recovery:port-identity") from exc
+        if custody_id != self.profile.custody_id or storage_id != self.profile.storage_id:
+            raise OperationalRecoveryError("recovery:port-identity")
         self.fault_injector = fault_injector
         self.profile_digest = profile.digest
-        self.chain_genesis = independent._genesis_root(self.profile_digest)
+        self.chain_genesis = independent._genesis_root(self.profile_digest, self.profile.custody_id, self.profile.storage_id)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -293,11 +306,13 @@ class OperationalRecoveryService:
                     "schema": SCHEMA,
                     "schema_version": str(SCHEMA_VERSION),
                     "profile_digest": self.profile_digest,
+                    "custody_id": self.profile.custody_id,
+                    "storage_id": self.profile.storage_id,
                     "sequence": "0",
                     "head_root": self.chain_genesis,
                     "head_point_id": "",
                     "generation": "0",
-                    "state_root": independent._state_root(0, self.chain_genesis, "", 0),
+                    "state_root": independent._state_root(0, self.chain_genesis, "", 0, self.profile.custody_id, self.profile.storage_id),
                 }
                 for key in sorted(values):
                     connection.execute("INSERT INTO recovery_meta(key,value) VALUES(?,?)", (key, values[key]))
@@ -358,6 +373,8 @@ class OperationalRecoveryService:
             "state_root": meta["state_root"],
             "receipt_raw": bytes(operation["receipt_raw"]),
             "receipt_digest": operation["receipt_digest"],
+            "custody_id": self.profile.custody_id,
+            "storage_id": self.profile.storage_id,
             "flags": dict(FIXED_FLAGS),
         }
 
@@ -387,6 +404,8 @@ class OperationalRecoveryService:
             "operation_id": operation_id,
             "observed_at": observed_at,
             "profile_digest": self.profile_digest,
+            "custody_id": self.profile.custody_id,
+            "storage_id": self.profile.storage_id,
             "flags": dict(FIXED_FLAGS),
         }
         transition_id = independent._transition_id(body)
@@ -408,6 +427,8 @@ class OperationalRecoveryService:
             "prior_root": transition["prior_root"],
             "next_root": transition["next_root"],
             "profile_digest": self.profile_digest,
+            "custody_id": self.profile.custody_id,
+            "storage_id": self.profile.storage_id,
             "flags": dict(FIXED_FLAGS),
         }
         body["receipt_id"] = independent._receipt_id(body)
@@ -420,7 +441,7 @@ class OperationalRecoveryService:
             "head_root": head_root,
             "head_point_id": head_point_id,
             "generation": str(generation),
-            "state_root": independent._state_root(sequence, head_root, head_point_id, generation),
+            "state_root": independent._state_root(sequence, head_root, head_point_id, generation, self.profile.custody_id, self.profile.storage_id),
         }
         for key, value in values.items():
             connection.execute("UPDATE recovery_meta SET value=? WHERE key=?", (value, key))
@@ -481,7 +502,7 @@ class OperationalRecoveryService:
             "sequence": sequence,
             "transition_id": transition["transition_id"],
             "head_root": transition["next_root"],
-            "state_root": independent._state_root(sequence, str(transition["next_root"]), head_point, generation),
+            "state_root": independent._state_root(sequence, str(transition["next_root"]), head_point, generation, self.profile.custody_id, self.profile.storage_id),
             "receipt_raw": receipt_raw,
             "receipt_digest": receipt_digest,
             "flags": dict(FIXED_FLAGS),
@@ -620,20 +641,20 @@ class OperationalRecoveryService:
         finally:
             connection.close()
 
-    def _validate_sealed(self, sealed: SealedRecoveryObjectV1, *, object_id: str) -> dict[str, object]:
+    def _validate_sealed(self, sealed: SealedRecoveryObjectV1, *, object_id: str, bundle_digest: str, key_snapshot: Mapping[str, object]) -> dict[str, object]:
         if not isinstance(sealed, SealedRecoveryObjectV1) or sealed.object_id != object_id:
             raise RecoveryStorageError("recovery:sealed-result")
         key = _key_view({"key_id": sealed.key_id, "key_epoch": sealed.key_epoch, "key_state": sealed.key_state})
+        if any(key[field] != key_snapshot[field] for field in ("key_id", "key_epoch", "key_state")):
+            raise RecoveryStorageError("recovery:key-snapshot")
         if key["key_state"] != "ACTIVE":
             raise RecoveryConflictError("recovery:key-not-active")
         if type(sealed.sealed_bytes) is not bytes or not sealed.sealed_bytes or len(sealed.sealed_bytes) > independent.MAX_SEALED_BYTES:
             raise RecoveryStorageError("recovery:sealed-result")
-        expected = independent._object_id("", str(key["key_id"]), int(key["key_epoch"]))
-        # The caller binds the actual bundle digest separately; this check only
-        # protects the port result shape and key identity.
-        if not isinstance(expected, str):
-            raise RecoveryStorageError("recovery:sealed-result")
-        return {**key, "object_id": object_id, "sealed_bytes": bytes(sealed.sealed_bytes), "sealed_digest": hashlib.sha3_512(sealed.sealed_bytes).hexdigest(), "sealed_length": len(sealed.sealed_bytes)}
+        expected = independent._object_id(bundle_digest, str(key["key_id"]), int(key["key_epoch"]))
+        if expected != object_id:
+            raise RecoveryStorageError("recovery:object-identity")
+        return {**key, "custody_id": self.profile.custody_id, "object_id": object_id, "sealed_bytes": bytes(sealed.sealed_bytes), "sealed_digest": hashlib.sha3_512(sealed.sealed_bytes).hexdigest(), "sealed_length": len(sealed.sealed_bytes)}
 
     def _record_stored(self, point_id: str, *, bundle_digest: str, sealed: Mapping[str, object], storage_receipt: Mapping[str, object]) -> dict[str, object]:
         object_id = str(sealed["object_id"])
@@ -659,6 +680,8 @@ class OperationalRecoveryService:
                 raise RecoveryConflictError("recovery:store-lifecycle")
             if self.key_custody.key_state(str(sealed["key_id"]), int(sealed["key_epoch"])) != "ACTIVE":
                 raise RecoveryConflictError("recovery:key-revoked")
+            if storage_receipt["storage_id"] != self.profile.storage_id or sealed.get("custody_id") != self.profile.custody_id:
+                raise RecoveryConflictError("recovery:owner-drift")
             previous_epoch = connection.execute(
                 "SELECT MAX(key_epoch) FROM recovery_points WHERE sealed_length>0"
             ).fetchone()[0]
@@ -677,7 +700,8 @@ class OperationalRecoveryService:
                 "schema": independent.STORAGE_RECEIPT_SCHEMA, "schema_version": SCHEMA_VERSION, "receipt_id": "",
                 "object_id": object_id, "storage_id": storage_receipt["storage_id"], "sealed_digest": sealed_digest,
                 "sealed_length": sealed["sealed_length"], "key_id": sealed["key_id"], "key_epoch": sealed["key_epoch"],
-                "key_state": sealed["key_state"], "bundle_digest": bundle_digest, "flags": dict(FIXED_FLAGS),
+                "key_state": sealed["key_state"], "bundle_digest": bundle_digest,
+                "custody_id": self.profile.custody_id, "flags": dict(FIXED_FLAGS),
             }
             storage_body["receipt_id"] = _digest("storage-receipt-id", storage_body)
             storage_raw = _canonical(storage_body)
@@ -748,8 +772,13 @@ class OperationalRecoveryService:
             key = _key_view(self.key_custody.current_key())
             object_id = independent._object_id(bundle_digest, str(key["key_id"]), int(key["key_epoch"]))
             self._fault("before_seal")
-            sealed = self._validate_sealed(self.key_custody.seal(bundle_raw, object_id=object_id), object_id=object_id)
+            sealed = self._validate_sealed(
+                self.key_custody.seal(bundle_raw, object_id=object_id),
+                object_id=object_id, bundle_digest=bundle_digest, key_snapshot=key,
+            )
             stored_bytes = bytes(sealed["sealed_bytes"])
+            if self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
+                raise RecoveryConflictError("recovery:key-revoked")
             try:
                 storage_result = self.storage.put(object_id, stored_bytes)
             except Exception as exc:
@@ -761,7 +790,7 @@ class OperationalRecoveryService:
                 storage_bytes = self.storage.get(object_id)
             except Exception as exc:
                 raise RecoveryStorageError("recovery:storage-get") from exc
-            storage_view = _storage_view(storage_result, object_id=object_id, sealed_bytes=storage_bytes)
+            storage_view = _storage_view(storage_result, object_id=object_id, sealed_bytes=storage_bytes, expected_storage_id=self.profile.storage_id)
             if storage_bytes != stored_bytes or storage_view["sealed_digest"] != sealed["sealed_digest"]:
                 raise RecoveryStorageError("recovery:storage-object-conflict")
             self._fault("after_put_before_record")
@@ -781,8 +810,8 @@ class OperationalRecoveryService:
             raise RecoveryIntegrityError("recovery:key-revoked")
         object_id = str(point["object_id"])
         try:
-            stat = _storage_view(self.storage.stat(object_id), object_id=object_id, sealed_bytes=self.storage.get(object_id))
             sealed_bytes = self.storage.get(object_id)
+            stat = _storage_view(self.storage.stat(object_id), object_id=object_id, sealed_bytes=sealed_bytes, expected_storage_id=self.profile.storage_id)
         except Exception as exc:
             raise RecoveryIntegrityError("recovery:storage-missing") from exc
         if stat["sealed_digest"] != point["sealed_digest"] or stat["sealed_length"] != point["sealed_length"]:
@@ -829,7 +858,8 @@ class OperationalRecoveryService:
             drill_body: dict[str, object] = {
                 "schema": independent.DRILL_RECEIPT_SCHEMA, "schema_version": SCHEMA_VERSION, "receipt_id": "",
                 "point_id": point_id, "observed_at": observed_at, "duration_ms": duration_ms,
-                "quarantine_root": bundle["manifests"][0]["state_root"], "runtime_root": bundle["manifests"][1]["state_root"], "flags": dict(FIXED_FLAGS),
+                "quarantine_root": bundle["manifests"][0]["state_root"], "runtime_root": bundle["manifests"][1]["state_root"],
+                "custody_id": self.profile.custody_id, "storage_id": self.profile.storage_id, "flags": dict(FIXED_FLAGS),
             }
             drill_body["receipt_id"] = _digest("drill-receipt-id", drill_body)
             drill_raw = _canonical(drill_body)
@@ -886,6 +916,8 @@ class OperationalRecoveryService:
         if meta["head_root"] != expected_head:
             raise RecoveryConflictError("recovery:head-conflict")
         if point["state"] == STATE_RESTORE_VERIFIED:
+            if self.key_custody.key_state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
+                raise RecoveryIntegrityError("recovery:key-revoked")
             connection = self._connect()
             try:
                 operation = connection.execute("SELECT * FROM recovery_operations WHERE point_id=? AND action=? ORDER BY sequence DESC LIMIT 1", (point_id, independent.ACTION_RESTORE_VERIFIED)).fetchone()

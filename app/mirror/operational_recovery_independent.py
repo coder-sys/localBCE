@@ -19,15 +19,15 @@ from app.mirror import controlled_shadow_runtime_independent as runtime
 from app.mirror import external_source_quarantine_independent as quarantine
 
 
-SCHEMA = "mirror-operational-recovery-v1"
-SCHEMA_VERSION = 1
-EXPORT_SCHEMA = "mirror-operational-recovery-export-v1"
-EXPORT_VERSION = 1
-BUNDLE_SCHEMA = "mirror-operational-recovery-bundle-v1"
-BUNDLE_VERSION = 1
-RECEIPT_SCHEMA = "mirror-operational-recovery-receipt-v1"
-STORAGE_RECEIPT_SCHEMA = "mirror-operational-recovery-storage-receipt-v1"
-DRILL_RECEIPT_SCHEMA = "mirror-operational-recovery-drill-receipt-v1"
+SCHEMA = "mirror-operational-recovery-v2"
+SCHEMA_VERSION = 2
+EXPORT_SCHEMA = "mirror-operational-recovery-export-v2"
+EXPORT_VERSION = 2
+BUNDLE_SCHEMA = "mirror-operational-recovery-bundle-v2"
+BUNDLE_VERSION = 2
+RECEIPT_SCHEMA = "mirror-operational-recovery-receipt-v2"
+STORAGE_RECEIPT_SCHEMA = "mirror-operational-recovery-storage-receipt-v2"
+DRILL_RECEIPT_SCHEMA = "mirror-operational-recovery-drill-receipt-v2"
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -121,7 +121,7 @@ TABLE_BLOB_FIELDS = {
     "recovery_storage_receipts": {"receipt_raw"},
     "recovery_drills": {"receipt_raw"},
 }
-META_KEYS = {"schema", "schema_version", "profile_digest", "sequence", "head_root", "head_point_id", "generation", "state_root"}
+META_KEYS = {"schema", "schema_version", "profile_digest", "custody_id", "storage_id", "sequence", "head_root", "head_point_id", "generation", "state_root"}
 
 DDL = (
     "CREATE TABLE recovery_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -259,7 +259,7 @@ def _profile_material(profile: Mapping[str, object]) -> dict[str, object]:
         "profile_id", "version", "quarantine_policy_digest", "runtime_profile_digest", "max_bundle_bytes",
         "max_component_export_bytes", "busy_timeout_ms", "max_generation", "zero_phi", "state_owned",
         "synthetic_only", "production_usable", "activation", "payment_authority", "clearance_authority",
-        "settlement_authority", "proofSuiteId",
+        "settlement_authority", "proofSuiteId", "custody_id", "storage_id",
     }
     value = _expect_keys(profile, expected, "profile")
     configured = {
@@ -275,6 +275,8 @@ def _profile_material(profile: Mapping[str, object]) -> dict[str, object]:
         "production_usable": value["production_usable"], "activation": value["activation"],
         "payment_authority": value["payment_authority"], "clearance_authority": value["clearance_authority"],
         "settlement_authority": value["settlement_authority"], "proofSuiteId": value["proofSuiteId"],
+        "custody_id": _token(value["custody_id"], "custody-id"),
+        "storage_id": _token(value["storage_id"], "storage-id"),
     }
     if configured["zero_phi"] is not True or configured["state_owned"] is not True or configured["synthetic_only"] is not True:
         raise IndependentOperationalRecoveryError("recovery:profile-safety")
@@ -495,12 +497,12 @@ def _object_id(bundle_digest: str, key_id: str, key_epoch: int) -> str:
     return _digest("object-id", {"bundle_digest": bundle_digest, "key_id": key_id, "key_epoch": key_epoch})
 
 
-def _genesis_root(profile_digest_value: str) -> str:
-    return _digest("genesis", {"schema": SCHEMA, "profile_digest": profile_digest_value})
+def _genesis_root(profile_digest_value: str, custody_id: str = "", storage_id: str = "") -> str:
+    return _digest("genesis", {"schema": SCHEMA, "profile_digest": profile_digest_value, "custody_id": custody_id, "storage_id": storage_id})
 
 
-def _state_root(sequence: int, head_root: str, head_point_id: str, generation: int) -> str:
-    return _digest("state-root", {"sequence": sequence, "head_root": head_root, "head_point_id": head_point_id, "generation": generation})
+def _state_root(sequence: int, head_root: str, head_point_id: str, generation: int, custody_id: str = "", storage_id: str = "") -> str:
+    return _digest("state-root", {"sequence": sequence, "head_root": head_root, "head_point_id": head_point_id, "generation": generation, "custody_id": custody_id, "storage_id": storage_id})
 
 
 def _decode_blob(value: object, label: str, maximum: int = MAX_BUNDLE_BYTES) -> bytes:
@@ -553,15 +555,15 @@ def _verify_blob_row(row: Mapping[str, object], table: str) -> None:
             raise IndependentOperationalRecoveryError(f"recovery:{table}-blob")
 
 
-def _verify_transition(row: Mapping[str, object], *, profile_digest_value: str) -> dict[str, object]:
+def _verify_transition(row: Mapping[str, object], *, profile_digest_value: str, custody_id: str, storage_id: str) -> dict[str, object]:
     expected = set(TABLE_COLUMNS["recovery_transitions"])
     raw = row["transition_raw"]
     if type(raw) is not bytes:
         raise IndependentOperationalRecoveryError("recovery:transition-raw")
     value = _parse(raw, maximum=MAX_BUNDLE_BYTES)
-    keys = {"schema", "schema_version", "transition_id", "sequence", "action", "point_id", "prior_state", "next_state", "prior_root", "next_root", "operation_id", "observed_at", "profile_digest", "flags"}
+    keys = {"schema", "schema_version", "transition_id", "sequence", "action", "point_id", "prior_state", "next_state", "prior_root", "next_root", "operation_id", "observed_at", "profile_digest", "custody_id", "storage_id", "flags"}
     _expect_keys(value, keys, "transition")
-    if value["schema"] != SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["profile_digest"] != profile_digest_value or value["flags"] != FIXED_FLAGS:
+    if value["schema"] != SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["profile_digest"] != profile_digest_value or value["custody_id"] != custody_id or value["storage_id"] != storage_id or value["flags"] != FIXED_FLAGS:
         raise IndependentOperationalRecoveryError("recovery:transition-binding")
     sequence = _integer(value["sequence"], "transition-sequence", minimum=1, maximum=MAX_ROWS)
     action = value["action"]
@@ -581,11 +583,11 @@ def _verify_transition(row: Mapping[str, object], *, profile_digest_value: str) 
     return dict(value)
 
 
-def _verify_receipt(raw: bytes, *, profile_digest_value: str, expected_action: str, expected_point: str, expected_state: str, expected_sequence: int, expected_transition: str, expected_prior: str, expected_next: str) -> dict[str, object]:
+def _verify_receipt(raw: bytes, *, profile_digest_value: str, custody_id: str, storage_id: str, expected_action: str, expected_point: str, expected_state: str, expected_sequence: int, expected_transition: str, expected_prior: str, expected_next: str) -> dict[str, object]:
     value = _parse(raw, maximum=MAX_BUNDLE_BYTES)
-    keys = {"schema", "schema_version", "receipt_id", "operation_id", "action", "point_id", "state", "sequence", "transition_id", "prior_root", "next_root", "profile_digest", "flags"}
+    keys = {"schema", "schema_version", "receipt_id", "operation_id", "action", "point_id", "state", "sequence", "transition_id", "prior_root", "next_root", "profile_digest", "custody_id", "storage_id", "flags"}
     _expect_keys(value, keys, "receipt")
-    if value["schema"] != RECEIPT_SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["profile_digest"] != profile_digest_value or value["flags"] != FIXED_FLAGS:
+    if value["schema"] != RECEIPT_SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["profile_digest"] != profile_digest_value or value["custody_id"] != custody_id or value["storage_id"] != storage_id or value["flags"] != FIXED_FLAGS:
         raise IndependentOperationalRecoveryError("recovery:receipt-binding")
     if value["action"] != expected_action or value["point_id"] != expected_point or value["state"] != expected_state or value["sequence"] != expected_sequence or value["transition_id"] != expected_transition or value["prior_root"] != expected_prior or value["next_root"] != expected_next:
         raise IndependentOperationalRecoveryError("recovery:receipt-fields")
@@ -603,7 +605,7 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
     if len(meta_rows) != len(META_KEYS) or {row.get("key") for row in meta_rows} != META_KEYS:
         raise IndependentOperationalRecoveryError("recovery:meta")
     meta = {str(row["key"]): row["value"] for row in meta_rows}
-    if any(not isinstance(v, str) for v in meta.values()) or meta["schema"] != SCHEMA or meta["schema_version"] != str(SCHEMA_VERSION) or meta["profile_digest"] != profile_digest(configured):
+    if any(not isinstance(v, str) for v in meta.values()) or meta["schema"] != SCHEMA or meta["schema_version"] != str(SCHEMA_VERSION) or meta["profile_digest"] != profile_digest(configured) or meta["custody_id"] != configured["custody_id"] or meta["storage_id"] != configured["storage_id"]:
         raise IndependentOperationalRecoveryError("recovery:meta-binding")
     sequence = _integer(int(meta["sequence"]), "meta-sequence", maximum=MAX_ROWS)
     generation = _integer(int(meta["generation"]), "meta-generation", maximum=configured["max_generation"])
@@ -612,7 +614,7 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
     if head_point_id:
         _hex(head_point_id, "meta-head-point")
     state_root = _hex(meta["state_root"], "meta-state-root")
-    if sequence == 0 and (head_root != _genesis_root(profile_digest(configured)) or head_point_id or generation != 0):
+    if sequence == 0 and (head_root != _genesis_root(profile_digest(configured), configured["custody_id"], configured["storage_id"]) or head_point_id or generation != 0):
         raise IndependentOperationalRecoveryError("recovery:genesis")
     points = rows["recovery_points"]
     point_map: dict[str, Mapping[str, object]] = {}
@@ -642,10 +644,14 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
             _hex(point["sealed_digest"], "point-sealed")
             _integer(point["sealed_length"], "point-sealed-length", minimum=1, maximum=MAX_SEALED_BYTES)
             _token(point["storage_id"], "point-storage")
+            if point["storage_id"] != configured["storage_id"]:
+                raise IndependentOperationalRecoveryError("recovery:storage-owner")
             _token(point["key_id"], "point-key")
             _integer(point["key_epoch"], "point-key-epoch", minimum=1, maximum=MAX_GENERATION)
             if point["key_state"] not in KEY_STATES:
                 raise IndependentOperationalRecoveryError("recovery:point-key-state")
+            if point["object_id"] != _object_id(str(point["bundle_digest"]), str(point["key_id"]), int(point["key_epoch"])):
+                raise IndependentOperationalRecoveryError("recovery:object-identity")
         if point["state"] == STATE_INVALIDATED and point["invalid_reason"] not in INVALIDATION_REASONS:
             raise IndependentOperationalRecoveryError("recovery:invalid-reason")
         if point["state"] != STATE_INVALIDATED and point["invalid_reason"] != "":
@@ -682,11 +688,11 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
     if len(transitions) != sequence:
         raise IndependentOperationalRecoveryError("recovery:transition-count")
     transition_by_point: dict[str, list[Mapping[str, object]]] = {}
-    previous_root = _genesis_root(profile_digest(configured))
+    previous_root = _genesis_root(profile_digest(configured), configured["custody_id"], configured["storage_id"])
     for expected_sequence, row in enumerate(transitions, 1):
         if row["sequence"] != expected_sequence or row["prior_root"] != previous_root:
             raise IndependentOperationalRecoveryError("recovery:transition-order")
-        value = _verify_transition(row, profile_digest_value=profile_digest(configured))
+        value = _verify_transition(row, profile_digest_value=profile_digest(configured), custody_id=str(configured["custody_id"]), storage_id=str(configured["storage_id"]))
         pid = str(value["point_id"])
         if pid not in point_map:
             raise IndependentOperationalRecoveryError("recovery:transition-point")
@@ -708,7 +714,7 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
         raise IndependentOperationalRecoveryError("recovery:head-root")
     if sequence and previous_root != head_root:
         raise IndependentOperationalRecoveryError("recovery:head-root")
-    if state_root != _state_root(sequence, head_root, head_point_id, generation):
+    if state_root != _state_root(sequence, head_root, head_point_id, generation, configured["custody_id"], configured["storage_id"]):
         raise IndependentOperationalRecoveryError("recovery:state-root")
     operations = rows["recovery_operations"]
     operation_map: dict[str, Mapping[str, object]] = {}
@@ -739,7 +745,7 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
             or int(op["sequence"]) != int(t["sequence"])
         ):
             raise IndependentOperationalRecoveryError("recovery:operation-transition")
-        receipt = _verify_receipt(bytes(op["receipt_raw"]), profile_digest_value=profile_digest(configured), expected_action=str(op["action"]), expected_point=str(op["point_id"]), expected_state=str(t["next_state"]), expected_sequence=seq, expected_transition=transition_id, expected_prior=str(t["prior_root"]), expected_next=str(t["next_root"]))
+        receipt = _verify_receipt(bytes(op["receipt_raw"]), profile_digest_value=profile_digest(configured), custody_id=str(configured["custody_id"]), storage_id=str(configured["storage_id"]), expected_action=str(op["action"]), expected_point=str(op["point_id"]), expected_state=str(t["next_state"]), expected_sequence=seq, expected_transition=transition_id, expected_prior=str(t["prior_root"]), expected_next=str(t["next_root"]))
         if _raw_digest(bytes(op["receipt_raw"])) != op["receipt_digest"] or receipt["operation_id"] != oid:
             raise IndependentOperationalRecoveryError("recovery:operation-receipt")
     if len(operation_map) != len(transitions):
@@ -764,6 +770,8 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
         for field in ("object_id", "sealed_digest", "bundle_digest", "receipt_digest"):
             _hex(receipt[field], f"storage-{field}")
         _token(receipt["storage_id"], "storage-id")
+        if receipt["storage_id"] != configured["storage_id"]:
+            raise IndependentOperationalRecoveryError("recovery:storage-owner")
         _token(receipt["key_id"], "storage-key")
         if receipt["key_state"] not in KEY_STATES:
             raise IndependentOperationalRecoveryError("recovery:storage-key-state")
@@ -771,15 +779,15 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
         _integer(receipt["key_epoch"], "storage-key-epoch", minimum=1, maximum=MAX_GENERATION)
         raw = bytes(receipt["receipt_raw"])
         value = _parse(raw, maximum=MAX_BUNDLE_BYTES)
-        keys = {"schema", "schema_version", "receipt_id", "object_id", "storage_id", "sealed_digest", "sealed_length", "key_id", "key_epoch", "key_state", "bundle_digest", "flags"}
+        keys = {"schema", "schema_version", "receipt_id", "object_id", "storage_id", "sealed_digest", "sealed_length", "key_id", "key_epoch", "key_state", "bundle_digest", "custody_id", "flags"}
         _expect_keys(value, keys, "storage-receipt")
-        if value["schema"] != STORAGE_RECEIPT_SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["flags"] != FIXED_FLAGS:
+        if value["schema"] != STORAGE_RECEIPT_SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["custody_id"] != configured["custody_id"] or value["storage_id"] != configured["storage_id"] or value["flags"] != FIXED_FLAGS:
             raise IndependentOperationalRecoveryError("recovery:storage-receipt")
         receipt_material = dict(value)
         receipt_material["receipt_id"] = ""
         if _digest("storage-receipt-id", receipt_material) != value["receipt_id"]:
             raise IndependentOperationalRecoveryError("recovery:storage-receipt-identity")
-        if any(value[field] != receipt[field] for field in ("object_id", "storage_id", "sealed_digest", "sealed_length", "key_id", "key_epoch", "key_state", "bundle_digest")) or _raw_digest(raw) != receipt["receipt_digest"]:
+        if any(value[field] != receipt[field] for field in ("object_id", "storage_id", "sealed_digest", "sealed_length", "key_id", "key_epoch", "key_state", "bundle_digest")) or value["custody_id"] != configured["custody_id"] or _raw_digest(raw) != receipt["receipt_digest"]:
             raise IndependentOperationalRecoveryError("recovery:storage-receipt-binding")
         storage_map[pid] = receipt
         point = point_map[pid]
@@ -806,11 +814,11 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
         _hex(drill["receipt_digest"], "drill-receipt")
         raw = bytes(drill["receipt_raw"])
         value = _parse(raw, maximum=MAX_BUNDLE_BYTES)
-        keys = {"schema", "schema_version", "receipt_id", "point_id", "observed_at", "duration_ms", "quarantine_root", "runtime_root", "flags"}
+        keys = {"schema", "schema_version", "receipt_id", "point_id", "observed_at", "duration_ms", "quarantine_root", "runtime_root", "custody_id", "storage_id", "flags"}
         _expect_keys(value, keys, "drill-receipt")
-        if value["schema"] != DRILL_RECEIPT_SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["flags"] != FIXED_FLAGS or value["point_id"] != pid or _raw_digest(raw) != drill["receipt_digest"]:
+        if value["schema"] != DRILL_RECEIPT_SCHEMA or value["schema_version"] != SCHEMA_VERSION or value["custody_id"] != configured["custody_id"] or value["storage_id"] != configured["storage_id"] or value["flags"] != FIXED_FLAGS or value["point_id"] != pid or _raw_digest(raw) != drill["receipt_digest"]:
             raise IndependentOperationalRecoveryError("recovery:drill-receipt")
-        if any(value[field] != drill[field] for field in ("observed_at", "duration_ms", "quarantine_root", "runtime_root")):
+        if any(value[field] != drill[field] for field in ("observed_at", "duration_ms", "quarantine_root", "runtime_root")) or value["custody_id"] != configured["custody_id"] or value["storage_id"] != configured["storage_id"]:
             raise IndependentOperationalRecoveryError("recovery:drill-binding")
         receipt_material = dict(value)
         receipt_material["receipt_id"] = ""
