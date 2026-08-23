@@ -21,6 +21,9 @@ from app.mirror.nc_medicaid_fhir_profile import (
     CLAIM_FLAGS,
     NC_MEDICAID_PROFILE,
     NcMedicaidFhirSourceProfile,
+    SYNTHETIC_LOCATION_ID,
+    SYNTHETIC_PRACTITIONER_ID,
+    SYNTHETIC_ROLE_ID,
 )
 from app.mirror.source_admission import EvidenceMode, VerifiedSourceCoverage
 
@@ -56,10 +59,11 @@ RESOURCE_REQUIRED_KEYS = {
     "Location": {"resourceType", "id", "identifier", "name", "status", "address", "endpoint"},
 }
 RESOURCE_IDS = {
-    "Practitioner": "SYNTH_NC_PRACTITIONER_001",
-    "PractitionerRole": "SYNTH_NC_PRACTITIONER_ROLE_001",
-    "Location": "SYNTH_NC_LOCATION_001",
+    "Practitioner": SYNTHETIC_PRACTITIONER_ID,
+    "PractitionerRole": SYNTHETIC_ROLE_ID,
+    "Location": SYNTHETIC_LOCATION_ID,
 }
+TRANSPORT_ERROR_CODES = {"timeout", "transport"}
 FAILURE_CODES = {
     "wrong-host", "redirect", "rate-limit", "server-error", "timeout", "retry-exhausted", "retry-after",
     "http-status", "media-type", "schema", "noncanonical", "partial-page", "query-drift", "total-drift",
@@ -348,6 +352,9 @@ def _validate_resource(value: object, profile: NcMedicaidFhirSourceProfile) -> d
             raise IndependentNcMedicaidFhirError("location:status")
         _validate_address(resource["address"])
         _validate_reference_list(resource["endpoint"], "location:endpoint")
+    expected_digest = dict(profile.synthetic_resource_digests).get(str(resource_type))
+    if expected_digest is None or hashlib.sha3_512(_canonical(resource)).hexdigest() != expected_digest:
+        raise IndependentNcMedicaidFhirError("resource:synthetic-binding")
     return resource
 
 
@@ -427,8 +434,9 @@ def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence
         raise IndependentNcMedicaidFhirError("page:failure-code")
     if failure_code is not None and failure_code not in FAILURE_CODES:
         raise IndependentNcMedicaidFhirError("page:failure-code")
-    if page["transport_error"] is not None:
-        _text(page["transport_error"], "page:transport-error")
+    transport_error = page["transport_error"]
+    if transport_error is not None and transport_error not in TRANSPORT_ERROR_CODES:
+        raise IndependentNcMedicaidFhirError("page:transport-error")
     if page["response_url"] is not None:
         _text(page["response_url"], "page:response-url")
     if failure_code is None and page["response_url"] != request_url:
@@ -438,7 +446,7 @@ def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence
     bundle = page["bundle"]
     body_hex = page["body_hex"]
     if failure_code is None:
-        if page["status"] != 200 or page["media_type"] != ALLOWED_MEDIA_TYPE or not isinstance(bundle, dict) or body_hex is not None:
+        if page["status"] != 200 or page["media_type"] != ALLOWED_MEDIA_TYPE or not isinstance(bundle, dict) or body_hex is not None or transport_error is not None:
             raise IndependentNcMedicaidFhirError("page:success-shape")
         resources, next_url, total, last_updated = _validate_bundle(bundle, profile, sequence, request_url)
         body = _canonical(bundle)
@@ -451,14 +459,13 @@ def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence
         resources, next_url, total, last_updated = [], None, None, None
         if bundle is not None:
             raise IndependentNcMedicaidFhirError("page:failure-bundle")
-        if type(body_hex) is not str or len(body_hex) > profile.transport_caps["max_page_bytes"] * 2 or any(character not in _HEX for character in body_hex):
+        if (
+            body_hex != "" or page["byte_length"] != 0
+            or page["body_digest"] != _raw_digest("page-bytes", b"")
+            or page["response_url"] not in (None, request_url)
+            or page["media_type"] not in (None, ALLOWED_MEDIA_TYPE)
+        ):
             raise IndependentNcMedicaidFhirError("page:failure-body")
-        try:
-            body = bytes.fromhex(body_hex)
-        except ValueError as exc:
-            raise IndependentNcMedicaidFhirError("page:failure-body") from exc
-        if len(body) != page["byte_length"] or page["body_digest"] != _raw_digest("page-bytes", body):
-            raise IndependentNcMedicaidFhirError("page:failure-body-binding")
         if page["resource_digests"] != [] or page["next_url"] is not None:
             raise IndependentNcMedicaidFhirError("page:failure-fields")
     if page["next_url"] != next_url:

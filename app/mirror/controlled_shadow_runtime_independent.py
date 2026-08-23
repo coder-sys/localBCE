@@ -20,6 +20,7 @@ from typing import Any, Mapping
 from app.mirror import external_governance_approval_independent as governance_independent
 from app.mirror import external_privacy_support_approval_independent as privacy_independent
 from app.mirror import external_source_adapter_independent as source_independent
+from app.mirror import sqlite_snapshot
 
 
 SCHEMA = "mirror-controlled-shadow-runtime-v1"
@@ -581,7 +582,10 @@ def _table_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, obje
     return result
 
 
-def _check_schema(connection: sqlite3.Connection) -> None:
+def _check_schema(connection: sqlite3.Connection, *, immutable: bool) -> None:
+    journal = connection.execute("PRAGMA journal_mode").fetchone()
+    if journal is None or str(journal[0]).lower() != ("delete" if immutable else "wal"):
+        raise IndependentControlledShadowError("runtime:journal-mode")
     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if tables != set(TABLES):
         raise IndependentControlledShadowError("runtime:database-tables")
@@ -899,17 +903,21 @@ def _verify_rows(rows: Mapping[str, list[dict[str, object]]], *, profile: Mappin
 
 
 def snapshot_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
-    database = Path(path)
-    if not database.is_file() or database.stat().st_size > 64 * 1024 * 1024:
-        raise IndependentControlledShadowError("runtime:database")
+    try:
+        image = sqlite_snapshot.read_only_image(
+            path, max_database_bytes=64 * 1024 * 1024, max_sidecar_bytes=64 * 1024 * 1024,
+        )
+    except sqlite_snapshot.SQLiteSnapshotError as exc:
+        code = "journal-mode" if str(exc) == "journal-mode" else "database"
+        raise IndependentControlledShadowError(f"runtime:{code}") from exc
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(database, uri=False, timeout=BUSY_TIMEOUT_MS / 1000.0)
+        connection = sqlite3.connect(image.uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("BEGIN")
-        _check_schema(connection)
+        _check_schema(connection, immutable=image.immutable)
         rows = _table_rows(connection)
         result = _verify_rows(rows, profile=profile)
         connection.commit()

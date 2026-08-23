@@ -12,12 +12,13 @@ from typing import Mapping
 from app.mirror import external_source_adapter_independent as adapter
 from app.mirror import external_source_quarantine_independent as quarantine
 from app.mirror import nc_medicaid_fhir_independent as nc_fhir
+from app.mirror import sqlite_snapshot
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE
 
 SCHEMA = "mirror-authenticated-source-acquisition-v1"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EXPORT_SCHEMA = "mirror-authenticated-source-acquisition-export-v1"
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 DOMAIN = "BL/MIRROR/AUTHENTICATED-SOURCE-ACQUISITION/"
 GENESIS_TRANSITION = "0" * 128
 BUSY_TIMEOUT_MS = 500
@@ -51,7 +52,8 @@ CONFIG_KEYS = {
 META_KEYS = {
     "schema", "schema_version", "acquisition_id", "config_digest", "chain_id", "sequence", "state_root",
     "head_transition_id", "state_owned", "zero_phi", "production_usable", "activation",
-    "payment_authority", "clearance_authority", "settlement_authority", "proofSuiteId",
+    "read_only", "observation_only", "quarantine_only", "payment_authority",
+    "clearance_authority", "settlement_authority", "adjudication_authority", "proofSuiteId",
 }
 SLOT_COLUMNS = (
     "slot_id", "scheduled_at", "state", "lease_id", "lease_until", "attempt", "envelope_id", "envelope_digest",
@@ -68,7 +70,7 @@ TABLE_COLUMNS = {
     "acquisition_meta": ("key", "value"), "acquisition_slots": SLOT_COLUMNS, "acquisition_operations": OPERATION_COLUMNS,
     "acquisition_transitions": TRANSITION_COLUMNS, "acquisition_attestations": ATTESTATION_COLUMNS,
 }
-EXPORT_KEYS = {"schema", "schema_version", "config", "config_digest", "chain_id", "meta", "slots", "operations", "transitions", "attestations", "export_root", "state_owned", "zero_phi", "production_usable", "activation", "payment_authority", "clearance_authority", "settlement_authority", "proofSuiteId"}
+EXPORT_KEYS = {"schema", "schema_version", "config", "config_digest", "chain_id", "meta", "slots", "operations", "transitions", "attestations", "export_root", "state_owned", "zero_phi", "read_only", "observation_only", "quarantine_only", "production_usable", "activation", "payment_authority", "clearance_authority", "settlement_authority", "adjudication_authority", "proofSuiteId"}
 EXPORT_ROW_KEYS = {
     "acquisition_meta": set(TABLE_COLUMNS["acquisition_meta"]),
     "acquisition_slots": set(SLOT_COLUMNS) - {"quarantine_receipt_raw", "page_digests_raw", "selected_pages_raw"} | {"quarantine_receipt_hex", "page_digests_hex", "selected_pages_hex"},
@@ -76,7 +78,20 @@ EXPORT_ROW_KEYS = {
     "acquisition_transitions": set(TRANSITION_COLUMNS) - {"transition_raw"} | {"transition_hex"},
     "acquisition_attestations": set(ATTESTATION_COLUMNS),
 }
-FIXED_FLAGS = {"state_owned": True, "zero_phi": True, "production_usable": False, "activation": False, "payment_authority": False, "clearance_authority": False, "settlement_authority": False, "proofSuiteId": None}
+FIXED_FLAGS = {
+    "state_owned": True,
+    "zero_phi": True,
+    "read_only": True,
+    "observation_only": True,
+    "quarantine_only": True,
+    "production_usable": False,
+    "activation": False,
+    "payment_authority": False,
+    "clearance_authority": False,
+    "settlement_authority": False,
+    "adjudication_authority": False,
+    "proofSuiteId": None,
+}
 
 
 class IndependentAcquisitionError(ValueError):
@@ -605,7 +620,10 @@ def _sqlite_snapshot(connection: sqlite3.Connection) -> dict[str, list[dict[str,
     return {table: [{column: row[column] for column in columns} for row in connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()] for table, columns in TABLE_COLUMNS.items()}
 
 
-def _check_shape(connection: sqlite3.Connection) -> None:
+def _check_shape(connection: sqlite3.Connection, *, immutable: bool) -> None:
+    journal = connection.execute("PRAGMA journal_mode").fetchone()
+    if journal is None or str(journal[0]).lower() != ("delete" if immutable else "wal"):
+        raise IndependentAcquisitionError("acquisition:journal-mode")
     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if tables != set(TABLE_COLUMNS):
         raise IndependentAcquisitionError("acquisition:database-schema")
@@ -616,18 +634,22 @@ def _check_shape(connection: sqlite3.Connection) -> None:
 
 
 def snapshot_database(path: str | Path, *, config: Mapping[str, object] | object) -> dict[str, object]:
-    database = Path(path)
-    if not database.is_file() or database.stat().st_size > MAX_DATABASE_BYTES:
-        raise IndependentAcquisitionError("acquisition:database")
+    try:
+        image = sqlite_snapshot.read_only_image(
+            path, max_database_bytes=MAX_DATABASE_BYTES, max_sidecar_bytes=MAX_DATABASE_BYTES,
+        )
+    except sqlite_snapshot.SQLiteSnapshotError as exc:
+        code = "journal-mode" if str(exc) == "journal-mode" else "database"
+        raise IndependentAcquisitionError(f"acquisition:{code}") from exc
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(f"file:{database.resolve().as_posix()}?mode=ro", uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0, isolation_level=None)
+        connection = sqlite3.connect(image.uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         connection.execute("BEGIN")
-        _check_shape(connection)
+        _check_shape(connection, immutable=image.immutable)
         snapshot = _sqlite_snapshot(connection)
         evidence = _verify_rows(snapshot, config=config)
         connection.commit()
@@ -702,7 +724,7 @@ def support_snapshot(path: str | Path, *, config: Mapping[str, object] | object)
     result = snapshot_database(path, config=config)
     evidence = result["evidence"]
     snapshot = result["snapshot"]
-    return {"schema": "mirror-authenticated-source-acquisition-support-v2", "schema_version": 2, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **FIXED_FLAGS}
+    return {"schema": "mirror-authenticated-source-acquisition-support-v3", "schema_version": 3, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **FIXED_FLAGS}
 
 
 __all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "CONFIG_KEYS", "META_KEYS", "SLOT_COLUMNS", "OPERATION_COLUMNS", "TRANSITION_COLUMNS", "ATTESTATION_COLUMNS", "TABLE_COLUMNS", "EXPORT_KEYS", "EXPORT_ROW_KEYS", "FIXED_FLAGS", "IndependentAcquisitionError", "_canonical", "_digest", "_raw_digest", "_config_view", "_config_digest", "_chain_id", "_genesis_root", "_state_root", "_parse", "verify_attestation", "snapshot_database", "verify_database", "verify_export_bytes", "support_snapshot"]

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import redirect_stderr
+import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -19,6 +22,7 @@ from app.governance import provider_continuity_control_pack_withdrawal as withdr
 from app.mirror import continuity_export as export
 from app.mirror import continuity_store as store
 from app.mirror import continuity_store_independent as independent
+from app.mirror import restore_publication
 from app.mirror import provider_trust_graph as graph
 from app.mirror import support_boundary as support
 from tests.test_provider_continuity_control_pack import APPROVAL_FIXTURE_BYTES
@@ -509,7 +513,7 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         for point in export.RESTORE_FAULT_POINTS:
             with self.subTest(point=point):
                 target = self.directory / f"restore-{point}.db"
-                stage, marker = export._restore_stage_paths(target, str(value["export_root"]))
+                stage, marker = restore_publication.stage_paths(target, str(value["export_root"]), create_parent=False)
                 export._restore_fault_point = point
                 with self.assertRaises(export.InjectedRestoreFault):
                     export.import_export(raw, target)
@@ -548,8 +552,17 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         raw = export.export_database(self.database)
         value = _object(raw)
 
+        empty_target = self.directory / "empty-preplanted.db"
+        empty_stage, _empty_marker = restore_publication.stage_paths(
+            empty_target, str(value["export_root"]), create_parent=True,
+        )
+        with self.assertRaisesRegex(export.ContinuityExportError, "restore:staging-state"):
+            export.import_export(raw, empty_target)
+        self.assertTrue(empty_stage.parent.is_dir())
+        self.assertEqual([], list(empty_stage.parent.iterdir()))
+
         preplanted_target = self.directory / "preplanted.db"
-        stage, marker = export._restore_stage_paths(preplanted_target, str(value["export_root"]))
+        stage, marker = restore_publication.stage_paths(preplanted_target, str(value["export_root"]), create_parent=True)
         stage.write_bytes(b"not-a-database")
         with self.assertRaisesRegex(export.ContinuityExportError, "restore:staging-state"):
             export.import_export(raw, preplanted_target)
@@ -557,7 +570,7 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertEqual(b"not-a-database", stage.read_bytes())
 
         marker_target = self.directory / "preplanted-marker.db"
-        marker_stage, marker_path = export._restore_stage_paths(marker_target, str(value["export_root"]))
+        marker_stage, marker_path = restore_publication.stage_paths(marker_target, str(value["export_root"]), create_parent=True)
         marker_path.write_bytes(b"{}")
         with self.assertRaisesRegex(export.ContinuityExportError, "restore:staging-marker"):
             export.import_export(raw, marker_target)
@@ -565,8 +578,8 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertFalse(marker_stage.exists())
 
         lock_target = self.directory / "preplanted-lock.db"
-        _lock_stage, lock_marker = export._restore_stage_paths(lock_target, str(value["export_root"]))
-        lock_path = export._restore_lock_path(lock_marker)
+        _lock_stage, _lock_marker = restore_publication.stage_paths(lock_target, str(value["export_root"]), create_parent=True)
+        lock_path = restore_publication._lock_path(lock_target)
         lock_path.write_bytes(b"{}")
         with self.assertRaisesRegex(export.ContinuityExportError, "restore:lock-binding"):
             export.import_export(raw, lock_target)
@@ -574,7 +587,7 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertEqual(b"{}", lock_path.read_bytes())
 
         foreign_target = self.directory / "foreign-stage.db"
-        foreign_stage, _foreign_marker = export._restore_stage_paths(foreign_target, "0" * 128)
+        foreign_stage, _foreign_marker = restore_publication.stage_paths(foreign_target, "0" * 128, create_parent=True)
         foreign_stage.write_bytes(b"foreign-stage")
         with self.assertRaisesRegex(export.ContinuityExportError, "restore:staging-foreign"):
             export.import_export(raw, foreign_target)
@@ -582,7 +595,7 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertEqual(b"foreign-stage", foreign_stage.read_bytes())
 
         tampered_target = self.directory / "tampered-stage.db"
-        tampered_stage, _tampered_marker = export._restore_stage_paths(tampered_target, str(value["export_root"]))
+        tampered_stage, _tampered_marker = restore_publication.stage_paths(tampered_target, str(value["export_root"]), create_parent=False)
         export._restore_fault_point = "after_snapshot_transaction"
         with self.assertRaises(export.InjectedRestoreFault):
             export.import_export(raw, tampered_target)
@@ -606,25 +619,25 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         other_raw_artifact, _ = graph.build_demo_report("expired")
         other_instance.admit(store.ARTIFACT_GRAPH, other_raw_artifact)
         other_raw = export.export_database(other_database)
-        original_publish = export._restore_publish_no_clobber
+        original_publish = restore_publication._publish_link
 
         exact_target = self.directory / "exact-competing.db"
         exact_competitor = self.directory / "exact-competitor.db"
 
         def publish_with_exact_competitor(stage: Path, target: Path) -> bool:
-            export._restore_publish_no_clobber = original_publish
+            restore_publication._publish_link = original_publish
             try:
                 export.import_export(raw, exact_competitor)
                 shutil.copyfile(exact_competitor, target)
             finally:
-                export._restore_publish_no_clobber = publish_with_exact_competitor
+                restore_publication._publish_link = publish_with_exact_competitor
             return original_publish(stage, target)
 
-        export._restore_publish_no_clobber = publish_with_exact_competitor
+        restore_publication._publish_link = publish_with_exact_competitor
         try:
             exact_result = export.import_export(raw, exact_target)
         finally:
-            export._restore_publish_no_clobber = original_publish
+            restore_publication._publish_link = original_publish
         self.assertEqual(raw, export.export_database(exact_target))
         self.assertEqual(exact_result, export.import_export(raw, exact_target))
 
@@ -632,20 +645,20 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         conflict_competitor = self.directory / "conflicting-competitor.db"
 
         def publish_with_conflicting_competitor(stage: Path, target: Path) -> bool:
-            export._restore_publish_no_clobber = original_publish
+            restore_publication._publish_link = original_publish
             try:
                 export.import_export(other_raw, conflict_competitor)
                 shutil.copyfile(conflict_competitor, target)
             finally:
-                export._restore_publish_no_clobber = publish_with_conflicting_competitor
+                restore_publication._publish_link = publish_with_conflicting_competitor
             return original_publish(stage, target)
 
-        export._restore_publish_no_clobber = publish_with_conflicting_competitor
+        restore_publication._publish_link = publish_with_conflicting_competitor
         try:
             with self.assertRaisesRegex(export.ContinuityExportError, "restore:target-conflict"):
                 export.import_export(raw, conflict_target)
         finally:
-            export._restore_publish_no_clobber = original_publish
+            restore_publication._publish_link = original_publish
         self.assertEqual(other_raw, export.export_database(conflict_target))
 
     def test_restore_path_object_and_sidecar_rejections(self) -> None:
@@ -670,18 +683,115 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertFalse(sidecar_target.exists())
         self.assertEqual(b"", sidecar.read_bytes())
 
-    def test_restore_distinct_destination_lock_entries_are_reclaimed(self) -> None:
+        existing_target = self.directory / "existing-with-sidecar.db"
+        export.import_export(raw, existing_target)
+        existing_before = existing_target.read_bytes()
+        existing_sidecar = Path(str(existing_target) + "-wal")
+        existing_sidecar.write_bytes(b"")
+        with self.assertRaisesRegex(export.ContinuityExportError, "restore:target-conflict"):
+            export.import_export(raw, existing_target)
+        self.assertEqual(existing_before, existing_target.read_bytes())
+        self.assertEqual(b"", existing_sidecar.read_bytes())
+
+    def test_restore_publication_rejects_inode_aliases_stage_mutation_and_unbounded_scan(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        root = str(_object(raw)["export_root"])
+
+        missing = self.directory / "checkpoint-missing.db"
+        with self.assertRaises(restore_publication.RestorePublicationVerification):
+            restore_publication._checkpoint_closed_database(missing)
+        self.assertFalse(missing.exists())
+
+        for kind in ("marker", "stage", "lock"):
+            with self.subTest(kind=kind):
+                target = self.directory / f"hardlink-{kind}.db"
+                point = "before_staging_creation" if kind == "lock" else "after_snapshot_transaction"
+                export._restore_fault_point = point
+                with self.assertRaises(export.InjectedRestoreFault):
+                    export.import_export(raw, target)
+                self.assertIsNone(export._restore_fault_point)
+                stage, marker = restore_publication.stage_paths(target, root, create_parent=False)
+                owned = {"marker": marker, "stage": stage, "lock": restore_publication._lock_path(target)}[kind]
+                alias = self.directory / f"foreign-{kind}.link"
+                os.link(owned, alias)
+                try:
+                    with self.assertRaises(export.ContinuityExportError):
+                        export.import_export(raw, target)
+                    self.assertFalse(target.exists())
+                finally:
+                    alias.unlink()
+                export.import_export(raw, target)
+                self.assertEqual(raw, export.export_database(target))
+
+        other_database = self.directory / "toctou-source.db"
+        other_store = store.ContinuityStore(other_database)
+        other_graph, _ = graph.build_demo_report("expired")
+        other_store.admit(store.ARTIFACT_GRAPH, other_graph)
+        other_raw = export.export_database(other_database)
+        other_target = self.directory / "toctou-source-closed.db"
+        export.import_export(other_raw, other_target)
+        target = self.directory / "toctou-target.db"
+        original_publish = restore_publication._publish_link
+
+        def mutate_before_link(stage: Path, destination: Path) -> bool:
+            shutil.copyfile(other_target, stage)
+            return original_publish(stage, destination)
+
+        restore_publication._publish_link = mutate_before_link
+        try:
+            with self.assertRaisesRegex(export.ContinuityExportError, "target-conflict"):
+                export.import_export(raw, target)
+        finally:
+            restore_publication._publish_link = original_publish
+        self.assertFalse(target.exists())
+
+        bounded_parent = self.directory / "bounded-parent"
+        bounded_parent.mkdir()
+        for index in range(3):
+            (bounded_parent / f"unrelated-{index}.txt").write_text("x", encoding="ascii")
+        bounded_target = bounded_parent / "restored.db"
+        original_cap = restore_publication.MAX_PARENT_ENTRIES
+        restore_publication.MAX_PARENT_ENTRIES = 2
+        try:
+            with self.assertRaisesRegex(export.ContinuityExportError, "staging-scan-cap"):
+                export.import_export(raw, bounded_target)
+        finally:
+            restore_publication.MAX_PARENT_ENTRIES = original_cap
+        self.assertFalse(bounded_target.exists())
+        export.import_export(raw, bounded_target)
+        self.assertEqual(raw, export.export_database(bounded_target))
+
+    def test_closed_delete_journal_image_is_not_reinterpreted_as_wal(self) -> None:
+        candidate = self.directory / "delete-journal.db"
+        store.ContinuityStore(candidate)
+        unpaired_wal = Path(str(candidate) + "-wal")
+        unpaired_wal.write_bytes(b"")
+        with self.assertRaisesRegex(independent.IndependentStoreError, "database:image"):
+            independent.verify_database(candidate)
+        unpaired_wal.unlink()
+        connection = sqlite3.connect(candidate)
+        try:
+            self.assertEqual("delete", str(connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0]).lower())
+        finally:
+            connection.close()
+        self.assertEqual(b"\x01\x01", candidate.read_bytes()[18:20])
+        with self.assertRaisesRegex(independent.IndependentStoreError, "database:journal-mode"):
+            independent.verify_database(candidate)
+
+    def test_restore_distinct_destinations_do_not_share_state(self) -> None:
         instance = self._store()
         graph_raw, _ = graph.build_demo_report("confirmed")
         instance.admit(store.ARTIFACT_GRAPH, graph_raw)
         raw = export.export_database(self.database)
 
-        for index in range(export.MAX_RESTORE_LOCKS + 1):
+        for index in range(3):
             target = self.directory / f"sequential-{index}.db"
             result = export.import_export(raw, target)
             self.assertTrue(result["accepted"])
             self.assertEqual(raw, export.export_database(target))
-        self.assertEqual({}, export._restore_locks)
 
     def test_restore_same_export_converges_concurrently(self) -> None:
         instance = self._store()
@@ -711,7 +821,7 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertEqual(results[0], results[1])
         self.assertEqual(raw, export.export_database(target))
         value = _object(raw)
-        stage, marker = export._restore_stage_paths(target, str(value["export_root"]))
+        stage, marker = restore_publication.stage_paths(target, str(value["export_root"]), create_parent=False)
         self.assertFalse(stage.exists())
         self.assertFalse(marker.exists())
 
@@ -825,6 +935,14 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertNotIn(canary.encode("ascii"), bad)
         self.assertEqual(True, value["support_safe"])
         self.assertEqual(True, value["zero_phi_boundary"])
+
+    def test_export_cli_never_echoes_input_paths(self) -> None:
+        missing = self.directory / "PRIVATE-PATIENT-path.json"
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(1, export.main([str(missing)]))
+        self.assertEqual("REJECT input\n", stderr.getvalue())
+        self.assertNotIn(str(missing), stderr.getvalue())
 
     def test_support_rejects_corrupt_database_with_fixed_code(self) -> None:
         self.database.write_bytes(b"not sqlite")

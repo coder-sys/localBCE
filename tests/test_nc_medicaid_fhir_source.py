@@ -20,41 +20,15 @@ from app.mirror.source_admission import SourceAdmissionService
 
 
 def _practitioner() -> dict[str, object]:
-    return {
-        "resourceType": "Practitioner",
-        "id": profile.SYNTHETIC_PRACTITIONER_ID,
-        "identifier": [{"system": "urn:synthetic:ncmedicaid:provider", "value": "NCPROV-001"}],
-        "name": [{"use": "official", "family": "Synthetic", "given": ["Provider"]}],
-        "active": True,
-    }
+    return profile.synthetic_resource("Practitioner")
 
 
 def _role() -> dict[str, object]:
-    return {
-        "resourceType": "PractitionerRole",
-        "id": profile.SYNTHETIC_ROLE_ID,
-        "identifier": [{"system": "urn:synthetic:ncmedicaid:role", "value": "NCROLE-001"}],
-        "active": True,
-        "practitioner": {"reference": "Practitioner/" + profile.SYNTHETIC_PRACTITIONER_ID},
-        "location": [{"reference": "Location/" + profile.SYNTHETIC_LOCATION_ID}],
-        "code": [{"coding": [{"system": "urn:synthetic:ncmedicaid:role", "code": "primary-care", "display": "Primary Care"}], "text": "Synthetic primary care"}],
-        "specialty": [{"coding": [{"system": "urn:synthetic:ncmedicaid:specialty", "code": "family-medicine", "display": "Family Medicine"}], "text": "Synthetic family medicine"}],
-        "network": [],
-        "period": {"start": "2026-01-01", "end": "2026-12-31"},
-        "endpoint": [],
-    }
+    return profile.synthetic_resource("PractitionerRole")
 
 
 def _location() -> dict[str, object]:
-    return {
-        "resourceType": "Location",
-        "id": profile.SYNTHETIC_LOCATION_ID,
-        "identifier": [{"system": "urn:synthetic:ncmedicaid:location", "value": "NCLOC-001"}],
-        "name": "Synthetic NC Site",
-        "status": "active",
-        "address": {"use": "work", "line": ["1 Synthetic Way"], "city": "Raleigh", "state": "NC", "postalCode": "27601", "country": "US"},
-        "endpoint": [],
-    }
+    return profile.synthetic_resource("Location")
 
 
 def _bundle(page: int = 0, *, resources: list[dict[str, object]] | None = None, next_page: bool = False, total: int | None = 3, last_updated: str | None = profile.FIXTURE_LAST_UPDATED) -> dict[str, object]:
@@ -104,15 +78,16 @@ def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: s
 
 def _rebind(value: dict[str, object]) -> bytes:
     for page in value["pages"]:
-        if not isinstance(page, dict) or not isinstance(page.get("bundle"), dict):
+        if not isinstance(page, dict):
             continue
-        body = fhir.canonical_json(page["bundle"])
-        page["byte_length"] = len(body)
-        page["body_digest"] = fhir._raw_digest("page-bytes", body)
-        entries = page["bundle"].get("entry", [])
-        resources = [entry["resource"] for entry in entries if isinstance(entry, dict) and isinstance(entry.get("resource"), dict)]
-        page["resource_digests"] = [fhir._digest("resource", resource) for resource in resources]
-        page["body_hex"] = None
+        if isinstance(page.get("bundle"), dict):
+            body = fhir.canonical_json(page["bundle"])
+            page["byte_length"] = len(body)
+            page["body_digest"] = fhir._raw_digest("page-bytes", body)
+            entries = page["bundle"].get("entry", [])
+            resources = [entry["resource"] for entry in entries if isinstance(entry, dict) and isinstance(entry.get("resource"), dict)]
+            page["resource_digests"] = [fhir._digest("resource", resource) for resource in resources]
+            page["body_hex"] = None
         page["page_id"] = fhir._digest("page-id", {key: item for key, item in page.items() if key != "page_id"})
     snapshot_root = fhir._digest("snapshot-root", {"page_ids": [page["page_id"] for page in value["pages"]]})
     value["snapshot_root"] = snapshot_root
@@ -137,7 +112,7 @@ def _rebind(value: dict[str, object]) -> bytes:
 
 class NcMedicaidFhirSourceTests(unittest.TestCase):
     def test_fixed_profile_and_contract_digest_are_verifier_owned(self) -> None:
-        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v1", profile.SOURCE_PROFILE_ID)
+        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v2", profile.SOURCE_PROFILE_ID)
         self.assertEqual("https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir", profile.BASE_URL)
         self.assertEqual("provider-directory-observation-associated-with-NCTracks-and-health-plan-contract-data", profile.NC_MEDICAID_PROFILE.source_meaning)
         self.assertEqual("official-hostname-over-tls-unverified", profile.NC_MEDICAID_PROFILE.transport_provenance)
@@ -209,6 +184,55 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         value["pages"][0]["response_url"] = "https://wrong.example/fhir/Practitioner"
         with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "page:response-url"):
             independent.verify_bytes(_rebind(value))
+
+    def test_fixture_profile_rejects_phi_shaped_resources_and_never_retains_failure_content(self) -> None:
+        value = json.loads(_envelope().decode("ascii"))
+        practitioner = value["pages"][0]["bundle"]["entry"][0]["resource"]
+        practitioner["identifier"][0]["value"] = "REAL-PATIENT-123"
+        practitioner["name"][0]["family"] = "Jane Patient SSN 123"
+        practitioner["name"][0]["given"] = ["jane@example.com"]
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
+            independent.verify_bytes(_rebind(value))
+
+        secret_body = b"Bearer SECRET patient=123 C:\\Users\\private"
+        secret_url = "https://wrong.example/PRIVATE-PATIENT-123?token=SECRET"
+        secret_media = "text/PRIVATE-PATIENT-123"
+        request_url = profile.REQUEST_URL
+        failed = fhir.build_fixture_envelope(
+            fhir.SyntheticFhirTransport({
+                (request_url, 0): fhir.FhirTransportResponse(secret_url, 500, secret_media, secret_body),
+            })
+        )
+        self.assertNotIn(secret_body, failed)
+        self.assertNotIn(secret_url.encode("ascii"), failed)
+        self.assertNotIn(secret_media.encode("ascii"), failed)
+        failed_page = json.loads(failed.decode("ascii"))["pages"][0]
+        self.assertEqual(0, failed_page["byte_length"])
+        self.assertIsNone(failed_page["response_url"])
+        self.assertIsNone(failed_page["media_type"])
+        self.assertEqual(fhir._raw_digest("page-bytes", b""), failed_page["body_digest"])
+        self.assertNotEqual(fhir._raw_digest("page-bytes", secret_body), failed_page["body_digest"])
+        self.assertEqual("FAILED", independent.verify_bytes(failed)["source_status"])
+        failed_value = json.loads(failed.decode("ascii"))
+        failed_value["pages"][0]["body_digest"] = fhir._raw_digest("page-bytes", secret_body)
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "page:failure-body"):
+            independent.verify_bytes(_rebind(failed_value))
+
+        class SecretErrorTransport:
+            def fetch(self, request_url: str, *, timeout_seconds: int, attempt: int):
+                raise fhir.FhirTransportError("Bearer SECRET C:\\Users\\private")
+
+        transport_failed = fhir.build_fixture_envelope(SecretErrorTransport())
+        self.assertNotIn(b"Bearer SECRET", transport_failed)
+        self.assertNotIn(b"Users", transport_failed)
+        transport_page = json.loads(transport_failed.decode("ascii"))["pages"][0]
+        self.assertEqual("transport", transport_page["transport_error"])
+        independent.verify_bytes(transport_failed)
+
+        tampered = json.loads(failed.decode("ascii"))
+        tampered["pages"][0]["body_hex"] = "00"
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "page:failure-body"):
+            independent.verify_bytes(_rebind(tampered))
 
     def test_retry_after_and_exhaustion_are_distinguished(self) -> None:
         request_url = profile.REQUEST_URL

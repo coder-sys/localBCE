@@ -811,6 +811,15 @@ class OperationalRecoveryService:
             raise RecoveryStorageError("recovery:object-identity")
         return {**key, "custody_id": self.profile.custody_id, "object_id": object_id, "sealed_bytes": bytes(sealed.sealed_bytes), "sealed_digest": hashlib.sha3_512(sealed.sealed_bytes).hexdigest(), "sealed_length": len(sealed.sealed_bytes)}
 
+    def _custody_key_state(self, key_id: str, key_epoch: int) -> str:
+        try:
+            state = self.key_custody.key_state(key_id, key_epoch)
+        except Exception as exc:
+            raise RecoveryStorageError("recovery:custody-indeterminate") from exc
+        if state not in independent.KEY_STATES:
+            raise RecoveryStorageError("recovery:custody-indeterminate")
+        return str(state)
+
     def _record_store_pending(self, point: Mapping[str, object], *, key: Mapping[str, object]) -> dict[str, object]:
         if point["state"] != STATE_PREPARED:
             raise RecoveryConflictError("recovery:pending-lifecycle")
@@ -842,7 +851,7 @@ class OperationalRecoveryService:
             current = self._point(connection, str(point["point_id"]))
             if current is None or current["state"] != STATE_PREPARED or current["bundle_digest"] != point["bundle_digest"]:
                 raise RecoveryConflictError("recovery:pending-lifecycle")
-            if self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
+            if self._custody_key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
                 raise RecoveryConflictError("recovery:key-revoked")
             previous_epoch = connection.execute("SELECT MAX(key_epoch) FROM recovery_points WHERE key_epoch>0").fetchone()[0]
             if previous_epoch is not None and int(key["key_epoch"]) < int(previous_epoch):
@@ -909,7 +918,7 @@ class OperationalRecoveryService:
                 raise RecoveryConflictError("recovery:store-reservation")
             if point["sealed_digest"] != "" or int(point["sealed_length"]) != 0:
                 raise RecoveryConflictError("recovery:store-replay")
-            if self.key_custody.key_state(str(sealed["key_id"]), int(sealed["key_epoch"])) != "ACTIVE":
+            if self._custody_key_state(str(sealed["key_id"]), int(sealed["key_epoch"])) != "ACTIVE":
                 raise RecoveryConflictError("recovery:key-revoked")
             if storage_receipt["storage_id"] != self.profile.storage_id or sealed.get("custody_id") != self.profile.custody_id:
                 raise RecoveryConflictError("recovery:owner-drift")
@@ -1049,7 +1058,7 @@ class OperationalRecoveryService:
     def _store_pending(self, point_id: str, *, bundle_raw: bytes) -> dict[str, object]:
         point = self._pending_point(point_id)
         key = {"key_id": point["key_id"], "key_epoch": point["key_epoch"], "key_state": point["key_state"]}
-        if self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
+        if self._custody_key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
             self._invalidate_pending(point, reason="KEY_REVOKED")
             raise RecoveryConflictError("recovery:key-revoked")
         try:
@@ -1070,11 +1079,11 @@ class OperationalRecoveryService:
             except AttributeError as error:
                 raise RecoveryStorageError("recovery:key-reservation-port") from error
             except Exception as error:
-                if self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
+                if self._custody_key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
                     self._invalidate_pending(point, reason="KEY_REVOKED")
                     raise RecoveryConflictError("recovery:key-revoked") from error
                 raise
-            if self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
+            if self._custody_key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
                 self._invalidate_pending(point, reason="KEY_REVOKED")
                 raise RecoveryConflictError("recovery:key-revoked")
             try:
@@ -1136,7 +1145,7 @@ class OperationalRecoveryService:
                 key = _key_view(self.key_custody.current_key())
             except Exception as exc:
                 raise RecoveryStorageError("recovery:key-current") from exc
-            if key["key_state"] != "ACTIVE" or self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
+            if key["key_state"] != "ACTIVE" or self._custody_key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
                 raise RecoveryConflictError("recovery:key-revoked")
             self._record_store_pending(prepared, key=key)
         try:
@@ -1153,19 +1162,26 @@ class OperationalRecoveryService:
             raise RecoveryConflictError("recovery:point-not-restorable")
         if point["state"] != STATE_STORED:
             raise RecoveryConflictError("recovery:point-not-restorable")
-        key_state = self.key_custody.key_state(str(point["key_id"]), int(point["key_epoch"]))
+        key_state = self._custody_key_state(str(point["key_id"]), int(point["key_epoch"]))
         if key_state != "ACTIVE":
             raise RecoveryIntegrityError("recovery:key-revoked")
         object_id = str(point["object_id"])
         try:
             sealed_bytes = self.storage.get(object_id)
             stat = _storage_view(self.storage.stat(object_id), object_id=object_id, sealed_bytes=sealed_bytes, expected_storage_id=self.profile.storage_id)
-        except Exception as exc:
+        except StorageNotFound as exc:
             raise RecoveryIntegrityError("recovery:storage-missing") from exc
+        except RecoveryStorageError:
+            raise
+        except Exception as exc:
+            raise RecoveryStorageError("recovery:storage-indeterminate") from exc
         if stat["sealed_digest"] != point["sealed_digest"] or stat["sealed_length"] != point["sealed_length"]:
             raise RecoveryIntegrityError("recovery:storage-integrity")
         try:
             plaintext = self.key_custody.open(sealed_bytes, key_id=str(point["key_id"]), key_epoch=int(point["key_epoch"]))
+        except Exception as exc:
+            raise RecoveryStorageError("recovery:custody-indeterminate") from exc
+        try:
             bundle = independent.verify_bundle(
                 plaintext, profile=self.profile_material, quarantine_policy=self.quarantine_policy, runtime_profile=self.runtime_profile,
                 expected_generation=int(point["generation"]), expected_prior_root=str(point["prior_root"]),
@@ -1264,7 +1280,7 @@ class OperationalRecoveryService:
         if meta["head_root"] != expected_head:
             raise RecoveryConflictError("recovery:head-conflict")
         if point["state"] == STATE_RESTORE_VERIFIED:
-            if self.key_custody.key_state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
+            if self._custody_key_state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
                 raise RecoveryIntegrityError("recovery:key-revoked")
             connection = self._connect()
             try:
@@ -1308,12 +1324,26 @@ class OperationalRecoveryService:
                     runtime_service.export_bytes()
                 except Exception as exc:
                     raise RecoveryIntegrityError("recovery:restore-reverify") from exc
+
+                def verify_quarantine(path: Path) -> object:
+                    return quarantine_independent.verify_database(
+                        path,
+                        policy=self.quarantine_policy,
+                        database_id=database_id,
+                    )
+
+                def verify_runtime(path: Path) -> object:
+                    return runtime_independent.verify_database(
+                        path,
+                        profile=self.runtime_profile,
+                    )
+
                 restore_publication.cleanup_owned_workspace(
                     root,
                     point_id,
                     {
-                        "quarantine": (q_target, q_export_root),
-                        "runtime": (r_target, r_export_root),
+                        "quarantine": (q_target, q_export_root, q_evidence, verify_quarantine),
+                        "runtime": (r_target, r_export_root, r_evidence, verify_runtime),
                     },
                 )
                 duration_ms = max(0, int((self.clock.monotonic() - start) * 1000))
@@ -1360,7 +1390,7 @@ class OperationalRecoveryService:
             else:
                 if point["state"] not in {STATE_STORE_PENDING, STATE_STORED, STATE_RESTORE_VERIFIED}:
                     raise RecoveryConflictError("recovery:invalidate-lifecycle")
-                if reason == "KEY_REVOKED" and self.key_custody.key_state(str(point["key_id"]), int(point["key_epoch"])) != "REVOKED":
+                if reason == "KEY_REVOKED" and self._custody_key_state(str(point["key_id"]), int(point["key_epoch"])) != "REVOKED":
                     raise RecoveryConflictError("recovery:key-not-revoked")
                 prior_state = str(point["state"])
             result = self._append_locked(
@@ -1409,7 +1439,7 @@ class OperationalRecoveryService:
             point = dict(row)
         finally:
             connection.close()
-        if self.key_custody.key_state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
+        if self._custody_key_state(str(point["key_id"]), int(point["key_epoch"])) != "ACTIVE":
             return None
         return {"point_id": point["point_id"], "generation": point["generation"], "state": point["state"]}
 

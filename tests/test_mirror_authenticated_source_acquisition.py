@@ -177,6 +177,19 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         first = self.service.acquire(leases[0], _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
         retry = self.service.acquire(leases[0], _AuthenticatedFixtureTransport(self.policy))
         self.assertEqual(first["quarantine_receipt_digest"], retry["quarantine_receipt_digest"])
+        for key, value in independent.FIXED_FLAGS.items():
+            self.assertEqual(value, first[key])
+            self.assertEqual(value, retry[key])
+        row = self.service._slot_from_disk(str(first["slot_id"]))
+        found = self.service._lookup_quarantine(row)
+        self.assertIsNotNone(found)
+        tampered = dict(found)  # type: ignore[arg-type]
+        tampered["artifact_digest"] = "0" * 128
+        with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "quarantine-binding"):
+            self.service._record_quarantined(
+                str(first["slot_id"]), artifact_id=str(row["artifact_id"]),
+                artifact_digest=str(row["artifact_digest"]), quarantine_result=tampered,
+            )
         self.assertEqual(self.service.export_bytes(), self.service.export_bytes())
 
     def test_lease_expiry_requeues_then_exhausts_without_quarantine(self) -> None:
@@ -287,7 +300,7 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
 
         def after_publish(point: str) -> None:
             nonlocal fired
-            if point == "after_publish_before_response" and not fired:
+            if point == "after_atomic_publication_before_response" and not fired:
                 fired = True
                 raise acquisition.AcquisitionResponseLost("acquisition:restore-response-lost")
 

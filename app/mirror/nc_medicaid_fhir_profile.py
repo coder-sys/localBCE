@@ -22,8 +22,8 @@ class NcMedicaidFhirProfileError(ValueError):
     """Raised when the immutable fixture profile is not internally consistent."""
 
 
-SOURCE_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v1"
-SOURCE_PROFILE_VERSION = 1
+SOURCE_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v2"
+SOURCE_PROFILE_VERSION = 2
 OWNER_ID = "NCDHHS"
 SYSTEM_ID = "NC Medicaid Provider Directory API"
 BASE_URL = "https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir"
@@ -32,10 +32,10 @@ FHIR_VERSION = "4.0.1"
 SOURCE_MEANING = "provider-directory-observation-associated-with-NCTracks-and-health-plan-contract-data"
 TRANSPORT_PROVENANCE = "official-hostname-over-tls-unverified"
 RECORD_AUTHENTICATION = "undocumented"
-CAPABILITY_STATEMENT_IDENTITY = "NC_MEDICAID_FHIR_CAPABILITY_STATEMENT_UNBOUND_V1"
+CAPABILITY_STATEMENT_IDENTITY = "NC_MEDICAID_FHIR_CAPABILITY_STATEMENT_UNBOUND_V2"
 CAPABILITY_STATEMENT_DIGEST: str | None = None
-VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V1"
-VERIFIER_EPOCH = 1
+VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V2"
+VERIFIER_EPOCH = 2
 SCOPE = SOURCE_PROFILE_ID
 SYNTHETIC_SUBJECT = "SYNTH_NC_MEDICAID_PROVIDER_001"
 SYNTHETIC_PRACTITIONER_ID = "SYNTH_NC_PRACTITIONER_001"
@@ -134,6 +134,53 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
 
 
+_SYNTHETIC_RESOURCES = {
+    "Practitioner": {
+        "resourceType": "Practitioner",
+        "id": SYNTHETIC_PRACTITIONER_ID,
+        "identifier": [{"system": "urn:synthetic:ncmedicaid:provider", "value": "NCPROV-001"}],
+        "name": [{"use": "official", "family": "Synthetic", "given": ["Provider"]}],
+        "active": True,
+    },
+    "PractitionerRole": {
+        "resourceType": "PractitionerRole",
+        "id": SYNTHETIC_ROLE_ID,
+        "identifier": [{"system": "urn:synthetic:ncmedicaid:role", "value": "NCROLE-001"}],
+        "active": True,
+        "practitioner": {"reference": "Practitioner/" + SYNTHETIC_PRACTITIONER_ID},
+        "location": [{"reference": "Location/" + SYNTHETIC_LOCATION_ID}],
+        "code": [{"coding": [{"system": "urn:synthetic:ncmedicaid:role", "code": "primary-care", "display": "Primary Care"}], "text": "Synthetic primary care"}],
+        "specialty": [{"coding": [{"system": "urn:synthetic:ncmedicaid:specialty", "code": "family-medicine", "display": "Family Medicine"}], "text": "Synthetic family medicine"}],
+        "network": [],
+        "period": {"start": "2026-01-01", "end": "2026-12-31"},
+        "endpoint": [],
+    },
+    "Location": {
+        "resourceType": "Location",
+        "id": SYNTHETIC_LOCATION_ID,
+        "identifier": [{"system": "urn:synthetic:ncmedicaid:location", "value": "NCLOC-001"}],
+        "name": "Synthetic NC Site",
+        "status": "active",
+        "address": {"use": "work", "line": ["1 Synthetic Way"], "city": "Raleigh", "state": "NC", "postalCode": "27601", "country": "US"},
+        "endpoint": [],
+    },
+}
+_SYNTHETIC_RESOURCE_BYTES = {key: _canonical(value) for key, value in _SYNTHETIC_RESOURCES.items()}
+SYNTHETIC_RESOURCE_DIGESTS = tuple(
+    sorted((key, hashlib.sha3_512(raw).hexdigest()) for key, raw in _SYNTHETIC_RESOURCE_BYTES.items())
+)
+
+
+def synthetic_resource(resource_type: str) -> dict[str, object]:
+    """Return one fresh copy of the only zero-PHI resource allowed by this fixture profile."""
+
+    try:
+        raw = _SYNTHETIC_RESOURCE_BYTES[resource_type]
+    except KeyError as exc:
+        raise NcMedicaidFhirProfileError("profile:synthetic-resource") from exc
+    return json.loads(raw.decode("ascii"))
+
+
 def _digest(label: str, value: object) -> str:
     digest = hashlib.sha3_512()
     digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/PROFILE/" + label + "/v1\0").encode("ascii"))
@@ -160,6 +207,7 @@ class NcMedicaidFhirSourceProfile:
     allowed_resource_types: tuple[str, ...] = ALLOWED_RESOURCE_TYPES
     resource_cardinality: tuple[tuple[str, int], ...] = RESOURCE_CARDINALITY
     allowed_resource_fields: tuple[tuple[str, tuple[str, ...]], ...] = ALLOWED_RESOURCE_FIELDS
+    synthetic_resource_digests: tuple[tuple[str, str], ...] = SYNTHETIC_RESOURCE_DIGESTS
     query_parameters: tuple[tuple[str, str], ...] = QUERY_PARAMETERS
     page_parameter: str = PAGE_PARAMETER
     request_url: str = REQUEST_URL
@@ -193,6 +241,7 @@ class NcMedicaidFhirSourceProfile:
             or self.allowed_resource_types != ALLOWED_RESOURCE_TYPES
             or self.resource_cardinality != RESOURCE_CARDINALITY
             or self.allowed_resource_fields != ALLOWED_RESOURCE_FIELDS
+            or self.synthetic_resource_digests != SYNTHETIC_RESOURCE_DIGESTS
             or self.query_parameters != QUERY_PARAMETERS
             or self.page_parameter != PAGE_PARAMETER
             or self.request_url != REQUEST_URL
@@ -231,6 +280,7 @@ class NcMedicaidFhirSourceProfile:
             "allowed_resource_types": list(self.allowed_resource_types),
             "resource_cardinality": {key: value for key, value in self.resource_cardinality},
             "allowed_resource_fields": {key: list(value) for key, value in self.allowed_resource_fields},
+            "synthetic_resource_digests": {key: value for key, value in self.synthetic_resource_digests},
             "query_parameters": [list(value) for value in self.query_parameters],
             "page_parameter": self.page_parameter,
             "request_url": self.request_url,
@@ -324,5 +374,7 @@ __all__ = [
     "SOURCE_MEANING",
     "SOURCE_PROFILE_ID",
     "SOURCE_PROFILE_VERSION",
+    "SYNTHETIC_RESOURCE_DIGESTS",
     "TRANSPORT_PROVENANCE",
+    "synthetic_resource",
 ]

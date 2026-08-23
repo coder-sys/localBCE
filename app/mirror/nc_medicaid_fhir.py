@@ -214,20 +214,21 @@ def _failure_page(
     failure_code: str,
     transport_error: str | None = None,
 ) -> dict[str, object]:
-    body = response.body if response is not None and type(response.body) is bytes else b""
-    if len(body) > profile.transport_caps["max_page_bytes"]:
-        body = b""
+    body_length = len(response.body) if response is not None and type(response.body) is bytes else 0
+    if body_length > profile.transport_caps["max_page_bytes"]:
         failure_code = "schema"
     page: dict[str, object] = {
         "sequence": sequence,
         "request_url": request_url,
         "request_identity": _request_identity(profile, request_url),
-        "response_url": response.request_url if response is not None else None,
+        "response_url": response.request_url if response is not None and response.request_url == request_url else None,
         "status": response.status if response is not None else 0,
-        "media_type": response.media_type if response is not None else None,
-        "byte_length": len(response.body) if response is not None and type(response.body) is bytes else 0,
-        "body_digest": _raw_digest("page-bytes", response.body if response is not None and type(response.body) is bytes else b""),
-        "body_hex": body.hex() if body else "",
+        "media_type": response.media_type if response is not None and response.media_type == ALLOWED_MEDIA_TYPE else None,
+        "byte_length": 0,
+        "body_digest": _raw_digest("page-bytes", b""),
+        # Failure content can contain credentials, PHI, or host paths.  No
+        # content-derived bytes, length, or digest cross this boundary.
+        "body_hex": "",
         "attempt_statuses": attempts,
         "retry_after_seconds": retry_after,
         "bundle": None,
@@ -304,7 +305,7 @@ def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, 
             if failure_code not in ("rate-limit", "server-error") or attempt >= profile.transport_caps["max_retries"]:
                 break
         except FhirTransportError as exc:
-            transport_error = str(exc)
+            transport_error = "timeout" if str(exc) == "timeout" else "transport"
             attempts.append(0)
             retry_after_values.append(None)
             if attempt >= profile.transport_caps["max_retries"]:
@@ -387,9 +388,8 @@ def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirS
             break
         if sequence + 1 >= profile.transport_caps["max_pages"]:
             bundle = page.get("bundle")
-            body = canonical_json(bundle) if isinstance(bundle, dict) else b""
             page["bundle"] = None
-            page["body_hex"] = body.hex()
+            page["body_hex"] = ""
             page["resource_digests"] = []
             page["next_url"] = None
             page["failure_code"] = "partial-page"
@@ -400,9 +400,8 @@ def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirS
         expected_next = profile.page_url(sequence + 1)
         if next_url != expected_next:
             bundle = page.get("bundle")
-            body = canonical_json(bundle) if isinstance(bundle, dict) else b""
             page["bundle"] = None
-            page["body_hex"] = body.hex()
+            page["body_hex"] = ""
             page["resource_digests"] = []
             page["next_url"] = None
             page["failure_code"] = "query-drift"

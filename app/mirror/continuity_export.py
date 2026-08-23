@@ -68,8 +68,6 @@ RESTORE_FAULT_POINTS = (
     "after_atomic_publication_before_response",
 )
 _restore_fault_point: str | None = None
-MAX_RESTORE_LOCKS = 64
-_restore_locks: dict[str, object] = {}
 
 
 def _canonical(value: object) -> bytes:
@@ -227,25 +225,6 @@ def _restore_fault(point: str) -> None:
         raise InjectedRestoreFault(f"restore:injected:{point}")
 
 
-def _restore_stage_paths(target: Path, export_root: str) -> tuple[Path, Path]:
-    return restore_publication.stage_paths(target, export_root, create_parent=True)
-
-
-def _restore_lock_path(marker: Path) -> Path:
-    namespace = marker.parent
-    name = namespace.name
-    prefix = "."
-    suffix = ".restore-v2-"
-    if not name.startswith(prefix) or suffix not in name:
-        raise ContinuityExportError("restore:lock-binding")
-    target_name = name[1:].split(suffix, 1)[0]
-    return namespace.parent / f".{target_name}.restore-v2.lock"
-
-
-def _restore_publish_no_clobber(stage: Path, target: Path) -> bool:
-    return restore_publication._publish_link(stage, target)
-
-
 def _map_restore_error(exc: BaseException) -> ContinuityExportError:
     text = str(exc)
     if text.startswith("restore-publication:"):
@@ -340,7 +319,7 @@ def import_export(raw: bytes, destination: str | Path, graph_profile_registry: M
         result = restore_publication.publish_create_only(
             target, raw, expected_evidence=expected, build_stage=build_stage,
             verify_database=verify_database, result_factory=result_factory,
-            fault_injector=fault, publish=_restore_publish_no_clobber,
+            fault_injector=fault,
         )
         return result if isinstance(result, dict) else result_factory(target)
     except InjectedRestoreFault:
@@ -358,8 +337,8 @@ def main(argv: list[str] | None = None) -> int:
         raw = Path(args[0]).read_bytes()
         print(_canonical(verify_export_bytes(raw)).decode("ascii"))
         return 0
-    except Exception as exc:
-        print(f"REJECT {type(exc).__name__}:{exc}", file=sys.stderr)
+    except Exception:
+        print("REJECT input", file=sys.stderr)
         return 1
 
 

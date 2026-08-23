@@ -18,12 +18,13 @@ import sqlite3
 from typing import Mapping
 
 from app.mirror import external_source_adapter_independent as adapter
+from app.mirror import sqlite_snapshot
 
 
 SCHEMA = "mirror-external-source-quarantine-v1"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EXPORT_SCHEMA = "mirror-external-source-quarantine-export-v1"
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 DOMAIN = "BL/MIRROR/EXTERNAL_SOURCE_QUARANTINE/"
 QUARANTINE_STATUS = "QUARANTINED"
 HEAD_STATES = ("QUARANTINED", "WITHDRAWN")
@@ -105,11 +106,15 @@ EXPORT_ROW_KEYS = {
 FIXED_FLAGS = {
     "state_owned": True,
     "synthetic_only": True,
+    "read_only": True,
+    "observation_only": True,
+    "quarantine_only": True,
     "production_usable": False,
     "activation": False,
     "payment_authority": False,
     "clearance_authority": False,
     "settlement_authority": False,
+    "adjudication_authority": False,
     "downstream_bridge": False,
     "proofSuiteId": None,
 }
@@ -123,7 +128,7 @@ TRANSITION_KEYS = {
 RECEIPT_KEYS = {
     "schema", "schema_version", "receipt_id", "operation_id", "action", "policy_digest",
     "database_id",
-    "artifact_id", "capture_id", "prior_head", "head_artifact_id", "state", "sequence",
+    "artifact_id", "artifact_digest", "capture_id", "prior_head", "head_artifact_id", "state", "sequence",
     "transition_id", "before_root", "after_root", "chain_id", "flags",
 }
 FOREIGN_KEY_MANIFEST = {
@@ -412,6 +417,7 @@ def verify_receipt_bytes(
         "policy_digest": policy,
         "database_id": database,
         "artifact_id": artifact_id,
+        "artifact_digest": artifact_digest,
         "capture_id": capture_id,
         "prior_head": prior_head,
         "head_artifact_id": head_artifact_id,
@@ -537,9 +543,11 @@ def verify_admission_receipt(
         raise IndependentQuarantineError("quarantine:receipt-artifact-integrity")
     if artifact["status"] != QUARANTINE_STATUS or artifact["observed_at"] != capture.get("observed_at") or artifact["fetched_at"] != capture.get("fetched_at"):
         raise IndependentQuarantineError("quarantine:receipt-artifact-state")
-    if head["head_artifact_id"] != artifact_id or head["state"] != next_state or int(head["sequence"]) != sequence or head["head_root"] != after_root or head["head_transition_id"] != transition_id or head["capture_id"] != capture_id:
+    if head["head_artifact_id"] != artifact_id or head["state"] != next_state or int(head["sequence"]) != sequence or head["head_root"] != after_root or head["head_transition_id"] != transition_id or head["observed_at"] != artifact["observed_at"] or head["capture_id"] != capture_id:
         raise IndependentQuarantineError("quarantine:receipt-head")
     receipt_raw = operation["receipt_raw"]
+    if type(raw) is not bytes or raw != receipt_raw:
+        raise IndependentQuarantineError("quarantine:receipt-input")
     if type(receipt_raw) is not bytes or operation["receipt_digest"] != _raw_digest(receipt_raw):
         raise IndependentQuarantineError("quarantine:receipt-digest")
     return verify_receipt_bytes(
@@ -555,8 +563,10 @@ def _adapter_value(raw: bytes, policy: Mapping[str, object]) -> tuple[dict[str, 
     try:
         result = adapter.verify_artifact(raw, policy=policy)
         value = adapter._parse(raw)
+    except adapter.IndependentExternalSourceError as exc:
+        raise IndependentQuarantineError(str(exc)) from exc
     except Exception as exc:
-        raise IndependentQuarantineError(f"quarantine:adapter:{exc}") from exc
+        raise IndependentQuarantineError("quarantine:adapter-verification") from exc
     capture = value.get("capture")
     if not isinstance(capture, dict):
         raise IndependentQuarantineError("quarantine:adapter-capture")
@@ -619,6 +629,7 @@ def _verify_artifacts(
         captures.add(str(row["capture_id"]))
         artifacts[artifact_id] = {
             "artifact_id": artifact_id,
+            "artifact_digest": expected_digest,
             "capture_id": str(row["capture_id"]),
             "observed_at": int(row["observed_at"]),
             "fetched_at": int(row["fetched_at"]),
@@ -809,6 +820,7 @@ def _verify_rows(
             "policy_digest": policy_digest,
             "database_id": database,
             "artifact_id": artifact_id,
+            "artifact_digest": artifacts[artifact_id]["artifact_digest"],
             "capture_id": artifacts[artifact_id]["capture_id"],
             "prior_head": current_head,
             "head_artifact_id": artifact_id,
@@ -947,13 +959,14 @@ EXPLICIT_INDEXES = {
 }
 
 
-def _check_sqlite_shape(connection: sqlite3.Connection) -> None:
+def _check_sqlite_shape(connection: sqlite3.Connection, *, allow_immutable: bool = False) -> None:
     for pragma, expected in (("foreign_keys", 1), ("trusted_schema", 0), ("synchronous", 2), ("busy_timeout", BUSY_TIMEOUT_MS)):
         row = connection.execute(f"PRAGMA {pragma}").fetchone()
         if row is None or int(row[0]) != expected:
             raise IndependentQuarantineError(f"quarantine:pragma-{pragma}")
     journal = connection.execute("PRAGMA journal_mode").fetchone()
-    if journal is None or str(journal[0]).lower() != "wal":
+    expected_journal = "delete" if allow_immutable else "wal"
+    if journal is None or str(journal[0]).lower() != expected_journal:
         raise IndependentQuarantineError("quarantine:journal-mode")
     tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if tables != set(TABLE_COLUMNS):
@@ -1010,22 +1023,22 @@ def snapshot_database(
     policy: Mapping[str, object] | object,
     database_id: str,
 ) -> dict[str, object]:
-    database = Path(path)
-    if not database.is_file():
-        raise IndependentQuarantineError("quarantine:database-missing")
-    wal = Path(str(database) + "-wal")
-    if database.stat().st_size > MAX_DATABASE_BYTES or (wal.exists() and wal.stat().st_size > MAX_WAL_BYTES):
-        raise IndependentQuarantineError("quarantine:database-byte-cap")
+    try:
+        image = sqlite_snapshot.read_only_image(
+            path, max_database_bytes=MAX_DATABASE_BYTES, max_sidecar_bytes=MAX_WAL_BYTES,
+        )
+    except sqlite_snapshot.SQLiteSnapshotError as exc:
+        code = "journal-mode" if str(exc) == "journal-mode" else "database"
+        raise IndependentQuarantineError(f"quarantine:{code}") from exc
     connection: sqlite3.Connection | None = None
     try:
-        uri = f"file:{database.resolve().as_posix()}?mode=ro"
-        connection = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
+        connection = sqlite3.connect(image.uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         connection.execute("BEGIN")
-        _check_sqlite_shape(connection)
+        _check_sqlite_shape(connection, allow_immutable=image.immutable)
         snapshot = _snapshot_from_connection(connection)
         result = _verify_rows(snapshot, policy=policy, database_id=database_id)
         connection.commit()

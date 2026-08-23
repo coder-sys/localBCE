@@ -394,7 +394,7 @@ class AuthenticatedSourceAcquisitionService:
                     connection.execute(statement)
                 genesis = independent._genesis_root(independent._chain_id(self.config.digest))
                 state_root = independent._state_root(independent._chain_id(self.config.digest), 0, genesis, None)
-                values = {"schema": SCHEMA, "schema_version": str(SCHEMA_VERSION), "acquisition_id": self.config.acquisition_id, "config_digest": self.config.digest, "chain_id": independent._chain_id(self.config.digest), "sequence": "0", "state_root": state_root, "head_transition_id": GENESIS_TRANSITION, "state_owned": "1", "zero_phi": "1", "production_usable": "0", "activation": "0", "payment_authority": "0", "clearance_authority": "0", "settlement_authority": "0", "proofSuiteId": "null"}
+                values = {"schema": SCHEMA, "schema_version": str(SCHEMA_VERSION), "acquisition_id": self.config.acquisition_id, "config_digest": self.config.digest, "chain_id": independent._chain_id(self.config.digest), "sequence": "0", "state_root": state_root, "head_transition_id": GENESIS_TRANSITION, "state_owned": "1", "zero_phi": "1", "read_only": "1", "observation_only": "1", "quarantine_only": "1", "production_usable": "0", "activation": "0", "payment_authority": "0", "clearance_authority": "0", "settlement_authority": "0", "adjudication_authority": "0", "proofSuiteId": "null"}
                 for key in sorted(values):
                     connection.execute("INSERT INTO acquisition_meta(key,value) VALUES(?,?)", (key, values[key]))
                 connection.commit()
@@ -748,26 +748,59 @@ class AuthenticatedSourceAcquisitionService:
                 raise AcquisitionConflictError("acquisition:quarantine-receipt-type")
             receipt_raw = verified.receipt_raw
             receipt_digest = verified.receipt_digest
-            if verified.database_id != self.config.quarantine_database_id or verified.policy_digest != self.config.quarantine_policy_digest or verified.chain_id != self.config.quarantine_chain_id or verified.artifact_id != artifact_id or verified.artifact_digest != artifact_digest or verified.after_root != quarantine_result.get("head_root"):
+            if verified.database_id != self.config.quarantine_database_id or verified.policy_digest != self.config.quarantine_policy_digest or verified.chain_id != self.config.quarantine_chain_id or verified.artifact_id != artifact_id or verified.artifact_digest != artifact_digest:
                 raise AcquisitionConflictError("acquisition:quarantine-binding")
+            result_bindings = {
+                "operation_id": verified.operation_id,
+                "action": verified.action,
+                "policy_digest": verified.policy_digest,
+                "database_id": verified.database_id,
+                "chain_id": verified.chain_id,
+                "artifact_id": verified.artifact_id,
+                "artifact_digest": verified.artifact_digest,
+                "capture_id": verified.capture_id,
+                "prior_head": verified.prior_head,
+                "head_artifact_id": verified.head_artifact_id,
+                "head_root": verified.after_root,
+                "after_root": verified.after_root,
+                "state": verified.state,
+                "sequence": verified.sequence,
+                "transition_id": verified.transition_id,
+                "receipt_raw": verified.receipt_raw,
+                "receipt_digest": verified.receipt_digest,
+            }
             if (
                 verified.action not in {quarantine.ACTION_ADMIT, quarantine.ACTION_SUPERSEDE}
                 or verified.state != quarantine.QUARANTINE_STATUS
-                or verified.head_artifact_id != quarantine_result.get("head_artifact_id")
-                or verified.transition_id != quarantine_result.get("transition_id")
-                or verified.sequence != quarantine_result.get("sequence")
+                or quarantine_result.get("accepted") is not True
+                or quarantine_result.get("durable_status") != quarantine.QUARANTINE_STATUS
+                or quarantine_result.get("flags") != quarantine.FIXED_FLAGS
+                or any(quarantine_result.get(key) != value for key, value in result_bindings.items())
+                or row["artifact_id"] != verified.artifact_id
+                or row["artifact_digest"] != verified.artifact_digest
+                or row["quarantine_expected_head"] != verified.prior_head
+                or row["quarantine_database_id"] != verified.database_id
+                or row["quarantine_policy_digest"] != verified.policy_digest
+                or row["quarantine_chain_id"] != verified.chain_id
             ):
-                raise AcquisitionConflictError("acquisition:quarantine-after-root")
+                raise AcquisitionConflictError("acquisition:quarantine-binding")
             if row["state"] == "QUARANTINED":
-                if row["quarantine_receipt_digest"] != receipt_digest:
+                if any((
+                    row["capture_id"] != verified.capture_id,
+                    row["quarantine_head"] != verified.head_artifact_id,
+                    row["quarantine_head_root"] != verified.after_root,
+                    row["quarantine_transition_id"] != verified.transition_id,
+                    row["quarantine_receipt_digest"] != receipt_digest,
+                    row["quarantine_receipt_raw"] != receipt_raw,
+                )):
                     raise AcquisitionConflictError("acquisition:quarantine-conflict")
                 connection.commit()
-                return {"accepted": True, "state": "QUARANTINED", "slot_id": slot_id, "artifact_id": artifact_id, "quarantine_receipt_digest": receipt_digest}
-            updates = {"state": "QUARANTINED", "lease_id": None, "lease_until": None, "artifact_id": artifact_id, "artifact_digest": artifact_digest, "capture_id": quarantine_result["capture_id"], "quarantine_head": quarantine_result["head_artifact_id"], "quarantine_head_root": quarantine_result["head_root"], "quarantine_transition_id": quarantine_result["transition_id"], "quarantine_receipt_digest": receipt_digest, "quarantine_receipt_raw": receipt_raw, "failure_code": None}
+                return {"accepted": True, "state": "QUARANTINED", "slot_id": slot_id, "artifact_id": verified.artifact_id, "quarantine_receipt_digest": receipt_digest, **independent.FIXED_FLAGS}
+            updates = {"state": "QUARANTINED", "lease_id": None, "lease_until": None, "artifact_id": verified.artifact_id, "artifact_digest": verified.artifact_digest, "capture_id": verified.capture_id, "quarantine_head": verified.head_artifact_id, "quarantine_head_root": verified.after_root, "quarantine_transition_id": verified.transition_id, "quarantine_receipt_digest": receipt_digest, "quarantine_receipt_raw": receipt_raw, "failure_code": None}
             result = self._transition_locked(connection, slot_id=slot_id, action="CONFIRM_QUARANTINE", attempt=int(row["attempt"]), request_digest=self.config.request_digest, prior_state=row["state"], next_state="QUARANTINED", slot_updates=updates, observed_at=int(self.clock()))
             connection.execute("UPDATE acquisition_slots SET last_operation_id=? WHERE slot_id=?", (result["operation_id"], slot_id))
             connection.commit()
-            return {**result, "state": "QUARANTINED", "slot_id": slot_id, "artifact_id": artifact_id, "quarantine_receipt_digest": receipt_digest}
+            return {**result, "state": "QUARANTINED", "slot_id": slot_id, "artifact_id": verified.artifact_id, "quarantine_receipt_digest": receipt_digest, **independent.FIXED_FLAGS}
         except Exception:
             if connection.in_transaction:
                 connection.rollback()
@@ -792,7 +825,7 @@ class AuthenticatedSourceAcquisitionService:
         lease_obj = AcquisitionLease(str(loaded["slot_id"]), str(loaded["lease_id"]), int(loaded["attempt"]), int(loaded["lease_until"] or 0), int(loaded["scheduled_at"]))
         self.active_lease_attempt = lease_obj.attempt
         if loaded["state"] == "QUARANTINED":
-            return {"accepted": True, "state": "QUARANTINED", "slot_id": lease_obj.slot_id, "artifact_id": loaded["artifact_id"], "quarantine_receipt_digest": loaded["quarantine_receipt_digest"]}
+            return {"accepted": True, "state": "QUARANTINED", "slot_id": lease_obj.slot_id, "artifact_id": loaded["artifact_id"], "quarantine_receipt_digest": loaded["quarantine_receipt_digest"], **independent.FIXED_FLAGS}
         if loaded["state"] in {"QUARANTINE_PENDING", "QUARANTINE_UNCONFIRMED"}:
             found = self._lookup_quarantine(loaded)
             if found is not None:
@@ -817,7 +850,7 @@ class AuthenticatedSourceAcquisitionService:
             captured = self._record_captured(lease_obj, envelope_result=envelope_result, envelope_raw=envelope_raw, artifact=artifact, capture_result=capture_result, verifier=capture_verifier, attestations=wrapper.attestations, expected_head=expected_head)
             dispatch = self._begin_quarantine(lease_obj, artifact=artifact, expected_head=str(captured.get("quarantine_expected_head") or expected_head))
             if dispatch.get("state") == "QUARANTINED":
-                return {**dispatch, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, "production_usable": False, "activation": False, "proofSuiteId": None}
+                return {**dispatch, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, **independent.FIXED_FLAGS}
             request_key = self._request_key(lease_obj.slot_id)
             try:
                 q_result = self.quarantine_service.admit(request_key, artifact.raw, expected_head=str(dispatch.get("quarantine_expected_head") or "") or None)
@@ -831,7 +864,7 @@ class AuthenticatedSourceAcquisitionService:
                     raise AcquisitionBusyError("acquisition:busy") from exc
                 raise AcquisitionConflictError("acquisition:quarantine-head") from exc
             confirmed = self._record_quarantined(lease_obj.slot_id, artifact_id=artifact.artifact_id, artifact_digest=_raw_digest(artifact.raw), quarantine_result=q_result)
-            return {**confirmed, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, "production_usable": False, "activation": False, "proofSuiteId": None}
+            return {**confirmed, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, **independent.FIXED_FLAGS}
         except (AcquisitionResponseLost, AcquisitionBusyError, AcquisitionConflictError):
             raise
         except AcquisitionHold as exc:

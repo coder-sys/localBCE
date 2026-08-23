@@ -85,12 +85,63 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             self.service.admit("other-operation", second_raw)
         self.assertEqual(self.service.integrity()["artifact_count"], 1)
 
+    def test_receipt_binds_artifact_digest_and_verifies_the_supplied_bytes(self) -> None:
+        result = self.service.admit("receipt-binding", self._artifact("receipt-binding"))
+        receipt = json.loads(result["receipt_raw"].decode("ascii"))
+        self.assertEqual(result["artifact_digest"], receipt["artifact_digest"])
+        connection = sqlite3.connect(self.database)
+        connection.row_factory = sqlite3.Row
+        try:
+            operation = dict(connection.execute("SELECT * FROM quarantine_operations").fetchone())
+            transition = dict(connection.execute("SELECT * FROM quarantine_transitions").fetchone())
+            artifact = dict(connection.execute("SELECT * FROM quarantine_artifacts").fetchone())
+            head = dict(connection.execute("SELECT * FROM quarantine_heads").fetchone())
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(independent.IndependentQuarantineError, "receipt-input"):
+            independent.verify_admission_receipt(
+                b"{}", policy=self.policy.material(), database_id=self.database_id,
+                operation=operation, transition=transition, artifact=artifact, head=head,
+            )
+        tampered_head = dict(head)
+        tampered_head["observed_at"] = int(head["observed_at"]) + 1
+        with self.assertRaisesRegex(independent.IndependentQuarantineError, "receipt-head"):
+            independent.verify_admission_receipt(
+                result["receipt_raw"], policy=self.policy.material(), database_id=self.database_id,
+                operation=operation, transition=transition, artifact=artifact, head=tampered_head,
+            )
+
+    def test_adapter_failure_never_echoes_private_exception_content(self) -> None:
+        raw = self._artifact("adapter-private-error")
+
+        def fail_adapter(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("PRIVATE-PATIENT-PATH")
+
+        original = quarantine.adapter.verify_artifact
+        quarantine.adapter.verify_artifact = fail_adapter
+        try:
+            with self.assertRaisesRegex(quarantine.ExternalSourceQuarantineError, "adapter-verification") as caught:
+                self.service.admit("adapter-private-error", raw)
+        finally:
+            quarantine.adapter.verify_artifact = original
+        self.assertNotIn("PRIVATE-PATIENT-PATH", str(caught.exception))
+        self.assertEqual(0, self.service.integrity()["artifact_count"])
+
     def test_newer_artifact_supersedes_and_out_of_order_or_withdrawn_admission_rejects(self) -> None:
-        first = self.service.admit("first", self._artifact("capture-a"))
-        second = self.service.admit("second", self._artifact("capture-b", observed_at=1_300), expected_head=first["artifact_id"])
+        first_raw = self._artifact("capture-a")
+        second_raw = self._artifact("capture-b", observed_at=1_300)
+        first = self.service.admit("first", first_raw)
+        second = self.service.admit("second", second_raw, expected_head=first["artifact_id"])
         self.assertEqual(second["action"], quarantine.ACTION_SUPERSEDE)
         self.assertEqual(self.service.integrity()["sequence"], 2)
         before = self._export()
+        first_retry = self.service.admit("first", first_raw)
+        second_retry = self.service.admit("second", second_raw, expected_head=first["artifact_id"])
+        self.assertEqual(first_retry["receipt_raw"], first["receipt_raw"])
+        self.assertEqual(second_retry["receipt_raw"], second["receipt_raw"])
+        self.assertEqual(first_retry["head_root"], first["head_root"])
+        self.assertEqual(self.service.head()["head_root"], second["head_root"])  # type: ignore[index]
+        self.assertEqual(self._export(), before)
         with self.assertRaisesRegex(quarantine.QuarantineConflictError, "out-of-order"):
             self.service.admit("old", self._artifact("capture-old", observed_at=1_250), expected_head=second["artifact_id"])
         self.assertEqual(self._export(), before)
@@ -99,6 +150,12 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         retry = self.service.withdraw("withdraw", expected_head=second["artifact_id"], reason="SOURCE_WITHDRAWN")
         self.assertEqual(retry["receipt_raw"], withdrawn["receipt_raw"])
         before = self._export()
+        self.assertEqual(self.service.admit("first", first_raw)["receipt_raw"], first["receipt_raw"])
+        self.assertEqual(
+            self.service.admit("second", second_raw, expected_head=first["artifact_id"])["receipt_raw"],
+            second["receipt_raw"],
+        )
+        self.assertEqual(self._export(), before)
         with self.assertRaisesRegex(quarantine.QuarantineConflictError, "withdrawn"):
             self.service.admit("after-withdrawal", self._artifact("capture-c", observed_at=1_400), expected_head=second["artifact_id"])
         self.assertEqual(self._export(), before)
@@ -334,7 +391,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
 
         def after_publish(point: str) -> None:
             nonlocal fired
-            if point == "after_publish_before_response" and not fired:
+            if point == "after_atomic_publication_before_response" and not fired:
                 fired = True
                 raise quarantine.QuarantineResponseLost("quarantine:restore-response-lost")
 
@@ -343,6 +400,26 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             quarantine.ExternalSourceQuarantineService.restore_export(crash_target, exported, policy=self.policy, database_id=self.database_id, fault_injector=after_publish)
         recovered = quarantine.ExternalSourceQuarantineService.restore_export(crash_target, exported, policy=self.policy, database_id=self.database_id)
         self.assertEqual(recovered.export_bytes(), exported)
+
+        interrupted_target = Path(self._temporary.name) / "publication-interrupted.db"
+        original_restore = quarantine.ExternalSourceQuarantineService._restore_snapshot
+
+        def interrupt_restore(_service: object, _snapshot: object) -> None:
+            raise quarantine.QuarantineInjectedFault("quarantine:restore-interrupted")
+
+        quarantine.ExternalSourceQuarantineService._restore_snapshot = interrupt_restore
+        try:
+            with self.assertRaises(quarantine.QuarantineInjectedFault):
+                quarantine.ExternalSourceQuarantineService.restore_export(
+                    interrupted_target, exported, policy=self.policy, database_id=self.database_id,
+                )
+        finally:
+            quarantine.ExternalSourceQuarantineService._restore_snapshot = original_restore
+        self.assertFalse(interrupted_target.exists())
+        interrupted = quarantine.ExternalSourceQuarantineService.restore_export(
+            interrupted_target, exported, policy=self.policy, database_id=self.database_id,
+        )
+        self.assertEqual(interrupted.export_bytes(), exported)
 
     def test_corrupt_current_artifact_cannot_be_used_as_a_mutation_anchor(self) -> None:
         first = self.service.admit("anchor", self._artifact("anchor"))

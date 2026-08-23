@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from app.mirror import controlled_shadow_runtime_independent as runtime
 from app.mirror import external_source_quarantine_independent as quarantine
+from app.mirror import sqlite_snapshot
 
 
 SCHEMA = "mirror-operational-recovery-v2"
@@ -521,10 +522,13 @@ def _decode_blob(value: object, label: str, maximum: int = MAX_BUNDLE_BYTES) -> 
     return raw
 
 
-def _check_schema(connection: sqlite3.Connection) -> None:
+def _check_schema(connection: sqlite3.Connection, *, immutable: bool) -> None:
     try:
         if int(connection.execute("PRAGMA foreign_keys").fetchone()[0]) != 1 or int(connection.execute("PRAGMA trusted_schema").fetchone()[0]) != 0:
             raise IndependentOperationalRecoveryError("recovery:pragma")
+        journal = connection.execute("PRAGMA journal_mode").fetchone()
+        if journal is None or str(journal[0]).lower() != ("delete" if immutable else "wal"):
+            raise IndependentOperationalRecoveryError("recovery:journal-mode")
         tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
         if tables != set(TABLES):
             raise IndependentOperationalRecoveryError("recovery:tables")
@@ -935,17 +939,21 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
 
 
 def snapshot_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
-    database = Path(path)
-    if not database.is_file() or database.stat().st_size > 64 * 1024 * 1024:
-        raise IndependentOperationalRecoveryError("recovery:database")
+    try:
+        image = sqlite_snapshot.read_only_image(
+            path, max_database_bytes=64 * 1024 * 1024, max_sidecar_bytes=64 * 1024 * 1024,
+        )
+    except sqlite_snapshot.SQLiteSnapshotError as exc:
+        code = "journal-mode" if str(exc) == "journal-mode" else "database"
+        raise IndependentOperationalRecoveryError(f"recovery:{code}") from exc
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(f"file:{database.resolve().as_posix()}?mode=ro", uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
+        connection = sqlite3.connect(image.uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("BEGIN")
-        _check_schema(connection)
+        _check_schema(connection, immutable=image.immutable)
         rows = _snapshot(connection)
         result = _verify_rows(rows, profile=profile)
         connection.commit()

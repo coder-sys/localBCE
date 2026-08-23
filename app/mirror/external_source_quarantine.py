@@ -251,8 +251,10 @@ class ExternalSourceQuarantineService:
         try:
             result = adapter.verify_artifact(snapshot, policy=self.policy)
             value = adapter._parse(snapshot)
+        except adapter.IndependentExternalSourceError as exc:
+            raise ExternalSourceQuarantineError(str(exc)) from exc
         except Exception as exc:
-            raise ExternalSourceQuarantineError(f"quarantine:adapter:{exc}") from exc
+            raise ExternalSourceQuarantineError("quarantine:adapter-verification") from exc
         capture = value.get("capture")
         if not isinstance(capture, dict) or type(capture.get("observed_at")) is not int or type(capture.get("fetched_at")) is not int:
             raise ExternalSourceQuarantineError("quarantine:artifact-capture")
@@ -312,33 +314,56 @@ class ExternalSourceQuarantineService:
         operation_id = str(row["operation_id"])
         owned_connection = connection is None
         query_connection = connection or self._connect()
+        started_transaction = False
         try:
-            operation_row = query_connection.execute(
-                "SELECT * FROM quarantine_operations WHERE operation_id=?", (operation_id,)
-            ).fetchone()
-            if operation_row is None:
+            if not query_connection.in_transaction:
+                query_connection.execute("BEGIN")
+                started_transaction = True
+            snapshot = independent._snapshot_from_connection(query_connection)
+            independent.verify_snapshot(snapshot, policy=self.policy, database_id=self.database_id)
+            operations = [
+                item for item in snapshot["quarantine_operations"]
+                if item["operation_id"] == operation_id
+            ]
+            if len(operations) != 1:
                 raise QuarantineConflictError("quarantine:receipt-operation")
-            transition_row = query_connection.execute(
-                "SELECT * FROM quarantine_transitions WHERE transition_id=? AND operation_id=?",
-                (str(operation_row["transition_id"]), operation_id),
-            ).fetchone()
-            artifact_row = query_connection.execute(
-                "SELECT * FROM quarantine_artifacts WHERE policy_digest=? AND artifact_id=?",
-                (self.policy_digest, str(operation_row["artifact_id"])),
-            ).fetchone()
-            head_row = self._head(query_connection)
-            if transition_row is None or artifact_row is None or head_row is None:
+            operation_row = operations[0]
+            transitions = [
+                item for item in snapshot["quarantine_transitions"]
+                if item["transition_id"] == operation_row["transition_id"]
+                and item["operation_id"] == operation_id
+            ]
+            artifacts = [
+                item for item in snapshot["quarantine_artifacts"]
+                if item["policy_digest"] == self.policy_digest
+                and item["artifact_id"] == operation_row["artifact_id"]
+            ]
+            if len(transitions) != 1 or len(artifacts) != 1:
                 raise QuarantineConflictError("quarantine:receipt-chain")
+            transition_row = transitions[0]
+            artifact_row = artifacts[0]
+            historical_head = {
+                "policy_digest": self.policy_digest,
+                "head_artifact_id": artifact_row["artifact_id"],
+                "state": transition_row["next_state"],
+                "sequence": transition_row["sequence"],
+                "head_root": transition_row["after_root"],
+                "head_transition_id": transition_row["transition_id"],
+                "observed_at": artifact_row["observed_at"],
+                "capture_id": artifact_row["capture_id"],
+            }
             verified = independent.verify_admission_receipt(
-                bytes(operation_row["receipt_raw"]),
+                operation_row["receipt_raw"],
                 policy=self.policy,
                 database_id=self.database_id,
-                operation=dict(operation_row),
-                transition=dict(transition_row),
-                artifact=dict(artifact_row),
-                head=head_row,
+                operation=operation_row,
+                transition=transition_row,
+                artifact=artifact_row,
+                head=historical_head,
             )
         finally:
+            if started_transaction and query_connection.in_transaction:
+                query_connection.rollback()
             if owned_connection:
                 query_connection.close()
         return {
@@ -440,6 +465,7 @@ class ExternalSourceQuarantineService:
             "action": action,
             "policy_digest": self.policy_digest,
             "artifact_id": artifact["artifact_id"],
+            "artifact_digest": artifact["artifact_digest"],
             "capture_id": artifact["capture_id"],
             "prior_head": prior_head,
             "head_artifact_id": artifact["artifact_id"],

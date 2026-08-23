@@ -243,7 +243,7 @@ class ControlledShadowRuntimeTests(unittest.TestCase):
 
         def after_publish(point: str) -> None:
             nonlocal fired
-            if point == "after_publish_before_response" and not fired:
+            if point == "after_atomic_publication_before_response" and not fired:
                 fired = True
                 raise runtime.RuntimeResponseLost("runtime:restore-response-lost")
 
