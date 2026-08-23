@@ -16,15 +16,15 @@ import re
 from typing import Mapping
 
 
-ARTIFACT_KIND = "MIRROR_QUALIFICATION_V2"
-SCHEMA = "mirror-qualification-manifest-v2"
-SCHEMA_VERSION = 2
-DOMAIN = "BL/MIRROR/QUALIFICATION/"
-PROFILE_ID = "mirror.qualification.synthetic-rehearsal.v2"
-PROFILE_VERSION = 2
-SUBJECT = "SYNTH_MIRROR_QUALIFICATION_REHEARSAL_SCOPE_V2"
-SCOPE = "MIRROR_QUALIFICATION_REHEARSAL_V2"
-CUSTODY_PURPOSE = "MIRROR_SYNTHETIC_REHEARSAL_MANIFEST_V2"
+ARTIFACT_KIND = "MIRROR_QUALIFICATION_V3"
+SCHEMA = "mirror-qualification-manifest-v3"
+SCHEMA_VERSION = 3
+DOMAIN = "BL/MIRROR/QUALIFICATION-V3/"
+PROFILE_ID = "mirror.qualification.synthetic-rehearsal.v3"
+PROFILE_VERSION = 3
+SUBJECT = "SYNTH_MIRROR_QUALIFICATION_REHEARSAL_SCOPE_V3"
+SCOPE = "MIRROR_QUALIFICATION_REHEARSAL_V3"
+CUSTODY_PURPOSE = "MIRROR_SYNTHETIC_REHEARSAL_MANIFEST_V3"
 MAX_ARTIFACT_BYTES = 524_288
 MAX_STRING_BYTES = 8_192
 MAX_NODES = 16_384
@@ -120,15 +120,9 @@ COMPONENT_CONTRACTS = [
     {"component_id": "SOURCE_RECONCILIATION", "owner": "MIRROR_SOURCE_RECONCILIATION", "contract_version": 1, "verification_boundary": "INDEPENDENT_RECONCILIATION_VERIFIER"},
     {"component_id": "PROVIDER_TRUST_GRAPH", "owner": "MIRROR_PROVIDER_TRUST_GRAPH", "contract_version": 2, "verification_boundary": "INDEPENDENT_GRAPH_VERIFIER"},
     {"component_id": "DISCREPANCY_RESPONSIBILITY_REMEDIATION", "owner": "MIRROR_CASE_LIFECYCLE", "contract_version": 1, "verification_boundary": "INDEPENDENT_CASE_VERIFIER"},
-    {"component_id": "DENOMINATOR_LEDGER", "owner": "MIRROR_DENOMINATOR_LEDGER", "contract_version": 1, "verification_boundary": "INDEPENDENT_DENOMINATOR_VERIFIER"},
-    {"component_id": "CONTRACT_MIRROR", "owner": "MIRROR_CONTRACT", "contract_version": 1, "verification_boundary": "INDEPENDENT_CONTRACT_VERIFIER"},
-    {"component_id": "TRANSACTION_MIRROR", "owner": "MIRROR_TRANSACTION", "contract_version": 1, "verification_boundary": "INDEPENDENT_TRANSACTION_VERIFIER"},
-    {"component_id": "MONEY_MIRROR", "owner": "MIRROR_MONEY", "contract_version": 1, "verification_boundary": "INDEPENDENT_MONEY_VERIFIER"},
-    {"component_id": "TRANSITION_MIRROR", "owner": "MIRROR_TRANSITION", "contract_version": 1, "verification_boundary": "INDEPENDENT_TRANSITION_VERIFIER"},
-    {"component_id": "STATE_VALUE_LEDGER", "owner": "MIRROR_STATE_VALUE", "contract_version": 1, "verification_boundary": "INDEPENDENT_STATE_VALUE_VERIFIER"},
-    {"component_id": "CONTINUITY_STORE", "owner": "MIRROR_CONTINUITY_STORE", "contract_version": 2, "verification_boundary": "INDEPENDENT_DATABASE_VERIFIER"},
-    {"component_id": "EXPORT_RESTORE_SUPPORT", "owner": "MIRROR_OPERATIONS", "contract_version": 2, "verification_boundary": "INDEPENDENT_EXPORT_SUPPORT_VERIFIER"},
-    {"component_id": "MIRROR_QUALIFICATION", "owner": "MIRROR_QUALIFICATION_SERVICE", "contract_version": 2, "verification_boundary": "INDEPENDENT_QUALIFICATION_VERIFIER"},
+    {"component_id": "CONTINUITY_STORE", "owner": "MIRROR_CONTINUITY_STORE", "contract_version": 3, "verification_boundary": "INDEPENDENT_DATABASE_VERIFIER"},
+    {"component_id": "EXPORT_RESTORE_SUPPORT", "owner": "MIRROR_OPERATIONS", "contract_version": 3, "verification_boundary": "INDEPENDENT_EXPORT_SUPPORT_VERIFIER"},
+    {"component_id": "MIRROR_QUALIFICATION", "owner": "MIRROR_QUALIFICATION_SERVICE", "contract_version": 3, "verification_boundary": "INDEPENDENT_QUALIFICATION_VERIFIER"},
 ]
 OPERATION_IDS = (
     "ATOMIC_PERSISTENCE",
@@ -221,7 +215,7 @@ FIXED_FLAGS = {
 }
 
 GAP_LEDGER = {
-    "schema": "mirror-qualification-gap-ledger-v2",
+    "schema": "mirror-qualification-gap-ledger-v3",
     "implemented_software_seams": [
         {"gap_id": item["component_id"], "status": "REHEARSAL_SOFTWARE_ONLY", "claim": "bounded local contract and independent checks; no external authority"}
         for item in COMPONENT_CONTRACTS

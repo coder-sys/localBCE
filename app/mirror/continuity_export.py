@@ -18,20 +18,14 @@ from typing import Mapping
 from app.mirror import continuity_store as store
 from app.mirror import continuity_store_independent as independent
 from app.mirror import restore_publication
-from app.mirror import contract_mirror, contract_mirror_independent
 from app.mirror import discrepancy_case, discrepancy_case_independent
-from app.mirror import denominator_ledger, denominator_ledger_independent
 from app.mirror import source_evidence_custody, source_evidence_custody_independent
 from app.mirror import source_reconciliation, source_reconciliation_independent
-from app.mirror import transaction_mirror, transaction_mirror_independent
-from app.mirror import money_mirror, money_mirror_independent
-from app.mirror import transition_mirror, transition_mirror_independent
-from app.mirror import state_value_ledger, state_value_ledger_independent
 from app.mirror import qualification, qualification_independent
 
 
-EXPORT_SCHEMA = "mirror-continuity-state-export-v2"
-EXPORT_DOMAIN = "BL/MIRROR/CONTINUITY-EXPORT-V2/"
+EXPORT_SCHEMA = "mirror-continuity-state-export-v3"
+EXPORT_DOMAIN = "BL/MIRROR/CONTINUITY-EXPORT-V3/"
 MAX_EXPORT_BYTES = 20 * 1024 * 1024
 MAX_EXPORT_ARTIFACTS = 32
 MAX_EXPORT_EVENTS = 32
@@ -80,14 +74,14 @@ def _canonical(value: object) -> bytes:
 
 def _digest(label: str, value: object) -> str:
     digest = hashlib.sha3_512()
-    digest.update((EXPORT_DOMAIN + label + "/v2\0").encode("ascii"))
+    digest.update((EXPORT_DOMAIN + label + "/v3\0").encode("ascii"))
     digest.update(_canonical(value))
     return digest.hexdigest()
 
 
 def _module_identity(path: str | Path) -> str:
     digest = hashlib.sha3_512()
-    digest.update((EXPORT_DOMAIN + "MODULE-SOURCE/v2\0").encode("ascii"))
+    digest.update((EXPORT_DOMAIN + "MODULE-SOURCE/v3\0").encode("ascii"))
     digest.update(Path(path).read_bytes())
     return digest.hexdigest()
 
@@ -101,18 +95,6 @@ SOFTWARE_IDENTITIES = {
     "source_reconciliation_independent_identity": _module_identity(source_reconciliation_independent.__file__),
     "discrepancy_case_module_identity": _module_identity(discrepancy_case.__file__),
     "discrepancy_case_independent_identity": _module_identity(discrepancy_case_independent.__file__),
-    "denominator_ledger_module_identity": _module_identity(denominator_ledger.__file__),
-    "denominator_ledger_independent_identity": _module_identity(denominator_ledger_independent.__file__),
-    "contract_mirror_module_identity": _module_identity(contract_mirror.__file__),
-    "contract_mirror_independent_identity": _module_identity(contract_mirror_independent.__file__),
-    "transaction_mirror_module_identity": _module_identity(transaction_mirror.__file__),
-    "transaction_mirror_independent_identity": _module_identity(transaction_mirror_independent.__file__),
-    "money_mirror_module_identity": _module_identity(money_mirror.__file__),
-    "money_mirror_independent_identity": _module_identity(money_mirror_independent.__file__),
-    "transition_mirror_module_identity": _module_identity(transition_mirror.__file__),
-    "transition_mirror_independent_identity": _module_identity(transition_mirror_independent.__file__),
-    "state_value_ledger_module_identity": _module_identity(state_value_ledger.__file__),
-    "state_value_ledger_independent_identity": _module_identity(state_value_ledger_independent.__file__),
     "qualification_module_identity": _module_identity(qualification.__file__),
     "qualification_independent_module_identity": _module_identity(qualification_independent.__file__),
     "export_module_identity": _module_identity(__file__),

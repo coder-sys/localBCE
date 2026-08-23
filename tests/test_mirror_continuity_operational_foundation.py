@@ -302,26 +302,28 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertEqual(1, result["head_count"])
         self.assertTrue(original.raw)
 
-    def test_v2_rejects_v1_database_receipt_export_and_support_material(self) -> None:
+    def test_v3_rejects_older_database_receipt_export_and_support_material(self) -> None:
         self._admit_graph()
-        self._tamper("UPDATE store_meta SET value=? WHERE key='schema_version'", ("1",))
-        with self.assertRaises(independent.IndependentStoreError):
-            independent.verify_database(self.database)
-        with self.assertRaises(store.StoreSchemaError):
-            store.ContinuityStore(self.database)
+        for old_version in ("1", "2"):
+            self._tamper("UPDATE store_meta SET value=? WHERE key='schema_version'", (old_version,))
+            with self.assertRaises(independent.IndependentStoreError):
+                independent.verify_database(self.database)
+            with self.assertRaises(store.StoreSchemaError):
+                store.ContinuityStore(self.database)
+            self._tamper("UPDATE store_meta SET value=? WHERE key='schema_version'", (str(store.SCHEMA_VERSION),))
 
-        self.database = self.directory / "v2-receipt.db"
+        self.database = self.directory / "old-receipt.db"
         raw, receipt = self._admit_graph()
         receipt_value = receipt.value
-        receipt_value["schema"] = "mirror-continuity-receipt-v1"
+        receipt_value["schema"] = "mirror-continuity-receipt-v2"
         self._tamper("UPDATE receipts SET receipt=?", (_canonical(receipt_value),))
         with self.assertRaises(independent.IndependentStoreError):
             independent.verify_database(self.database)
 
-        self.database = self.directory / "v2-export.db"
+        self.database = self.directory / "old-export.db"
         self._admit_graph()
         export_value = _object(export.export_database(self.database))
-        export_value["schema"] = "mirror-continuity-state-export-v1"
+        export_value["schema"] = "mirror-continuity-state-export-v2"
         with self.assertRaises(export.ContinuityExportError):
             export.verify_export_bytes(_canonical(export_value))
 
@@ -329,6 +331,25 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         support_value["schema"] = "mirror-continuity-support-bundle-v1"
         with self.assertRaises(support.SupportBoundaryError):
             support.verify_support_bytes(_canonical(support_value))
+
+    def test_v3_rejects_removed_view_kinds_without_mutation(self) -> None:
+        instance = self._store()
+        before_counts = self._row_counts()
+        before_files = self._file_state()
+        for removed_kind in (
+            "MIRROR_DENOMINATOR_LEDGER_V1",
+            "MIRROR_CONTRACT_V1",
+            "MIRROR_TRANSACTION_OBSERVATION_V1",
+            "MIRROR_TRANSACTION_TRACE_V1",
+            "MIRROR_MONEY_OBSERVATION_V1",
+            "MIRROR_TRANSITION_V1",
+            "MIRROR_STATE_VALUE_LEDGER_V1",
+        ):
+            with self.assertRaises(store.ArtifactAdmissionError):
+                instance.admit(removed_kind, b"{}")
+        self.assertEqual(before_counts, self._row_counts())
+        self.assertEqual(before_files, self._file_state())
+        self.assertEqual(set(store.ARTIFACT_KINDS), set(independent.ARTIFACT_KINDS))
 
     def test_tampered_receipt_retry_and_corrupt_history_cannot_advance(self) -> None:
         instance = self._store()

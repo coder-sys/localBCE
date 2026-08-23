@@ -185,6 +185,21 @@ class MirrorQualificationTests(unittest.TestCase):
             self.instance.admit(store.ARTIFACT_QUALIFICATION, self._raw(value))
         self.assertEqual(before, self.instance._snapshot_rows())
 
+    def test_v3_qualification_binds_only_retained_components(self) -> None:
+        component_ids = {item["component_id"] for item in independent.COMPONENT_CONTRACTS}
+        self.assertEqual(
+            {
+                "SOURCE_ADMISSION", "SOURCE_CUSTODY", "SOURCE_RECONCILIATION",
+                "PROVIDER_TRUST_GRAPH", "DISCREPANCY_RESPONSIBILITY_REMEDIATION",
+                "CONTINUITY_STORE", "EXPORT_RESTORE_SUPPORT", "MIRROR_QUALIFICATION",
+            },
+            component_ids,
+        )
+        for removed in ("DENOMINATOR_LEDGER", "CONTRACT_MIRROR", "TRANSACTION_MIRROR", "MONEY_MIRROR", "TRANSITION_MIRROR", "STATE_VALUE_LEDGER"):
+            self.assertNotIn(removed, component_ids)
+        self.assertEqual(3, independent.SCHEMA_VERSION)
+        self.assertEqual("MIRROR_QUALIFICATION_V3", independent.ARTIFACT_KIND)
+
     def test_profile_expiry_and_operation_state_are_explicit_not_upgraded(self) -> None:
         evidence = self._evidence(valid_until=1_001)
         raw = fixtures.build_fixture_manifest(evidence=evidence, operations=self._operations(), as_of=2_000)
