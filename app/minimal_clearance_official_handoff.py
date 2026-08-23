@@ -54,7 +54,7 @@ class OfficialHandoffIndeterminateError(OfficialHandoffError):
 
 _SCHEMA_VERSION: Final[int] = 1
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-OFFICIAL-HANDOFF/v1"
-_STATUS: Final[frozenset[str]] = frozenset({"DISCOVERED", "LEASED", "ACKNOWLEDGED", "HELD"})
+_STATUS: Final[frozenset[str]] = frozenset({"DISCOVERED", "LEASED", "ACKNOWLEDGED", "HELD", "DELIVERY_UNCONFIRMED"})
 _MAX_ENVELOPE: Final[int] = 16 * 1024
 _MAX_ACK: Final[int] = 4096
 _MAX_EXPORT: Final[int] = 8 * 1024 * 1024
@@ -65,8 +65,9 @@ _HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/HEAD/v1\x00"
 _EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/EVENT/v1\x00"
 _ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v1\x00"
-_RESULT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-RESULT/v1\x00"
+_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v1\x00"
 _CAP_BYTES: Final[int] = 5_000_000_000
+_FIXED_ID_BYTES: Final[int] = 128
 
 
 def _sha(domain: bytes, *parts: bytes) -> bytes:
@@ -106,6 +107,27 @@ def _u64(value: int) -> bytes:
     if type(value) is not int or not 0 <= value < 2**64:
         raise OfficialHandoffIntegrityError("handoff_integer")
     return value.to_bytes(8, "big")
+
+
+def _fixed_ascii(value: str, label: str) -> bytes:
+    encoded = value.encode("ascii")
+    if not 0 <= len(encoded) <= _FIXED_ID_BYTES:
+        raise OfficialHandoffIntegrityError(f"{label}_width")
+    return len(encoded).to_bytes(2, "big") + encoded + b"\x00" * (_FIXED_ID_BYTES - len(encoded))
+
+
+def _operation_identity(config: OfficialHandoffConfigV1, job_id: str, envelope_digest_value: bytes) -> bytes:
+    return _sha(
+        _OPERATION, config.digest, _fixed_ascii(config.application_id, "application_id"),
+        _fixed_ascii(job_id, "job_id"), envelope_digest_value,
+    )
+
+
+def _idempotency_key(config: OfficialHandoffConfigV1, job_id: str, envelope_digest_value: bytes) -> bytes:
+    return _sha(
+        _IDEMPOTENCY, config.digest, _fixed_ascii(config.outbox_id, "outbox_id"),
+        _fixed_ascii(job_id, "job_id"), envelope_digest_value,
+    )
 
 
 class ApplicationClock(Protocol):
@@ -215,7 +237,6 @@ class OfficialHandoffResultV1:
     status: str
     acknowledgment_bytes: bytes | None
     acknowledgment_digest: bytes | None
-    delivery_count: int
     error_code: str | None
 
 
@@ -231,7 +252,10 @@ def build_directive_envelope(view: AppliedApplicationViewV1, config: OfficialHan
         raise OfficialHandoffIntegrityError("handoff_receipt_claim")
     value = {
         "schema": _SCHEMA,
+        "handoff_config_digest": _hex(config.digest),
         "application_id_digest": _hex(_sha(_ENVELOPE, view.application_id.encode("ascii"))),
+        "receiver_identity": _hex(config.receiver_identity),
+        "receiver_epoch": config.receiver_epoch,
         "application_config_digest": _hex(view.application_config_digest),
         "application_job_id_digest": _hex(_sha(_ENVELOPE, view.job_id.encode("ascii"))),
         "application_operation_id": _hex(view.operation_id),
@@ -302,7 +326,7 @@ class OfficialHandoffStoreV1:
                 );
                 CREATE TABLE IF NOT EXISTS outbox_acks (
                     job_id TEXT PRIMARY KEY, status TEXT NOT NULL, ack_bytes BLOB NOT NULL, ack_digest BLOB NOT NULL,
-                    operation_id BLOB NOT NULL UNIQUE, delivery_count INTEGER NOT NULL, completed_ms INTEGER NOT NULL,
+                    operation_id BLOB NOT NULL UNIQUE, completed_ms INTEGER NOT NULL,
                     FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id)
                 );
                 CREATE TABLE IF NOT EXISTS outbox_transitions (
@@ -377,8 +401,8 @@ class OfficialHandoffStoreV1:
                 connection.execute("UPDATE outbox_jobs SET status='DISCOVERED',next_eligible_ms=?,updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'", (now, now, "handoff_lease_expired", str(job_id)))
                 self._append_transition(connection, kind="EXPIRED_REQUEUE", job_id=str(job_id), event={"at_ms": now, "status": "DISCOVERED", "attempt": int(attempt), "error_code": "handoff_lease_expired", "expired_ms": int(expires_ms)})
             else:
-                connection.execute("UPDATE outbox_jobs SET status='HELD',updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'", (now, "handoff_lease_exhausted", str(job_id)))
-                self._append_transition(connection, kind="EXPIRED_HELD", job_id=str(job_id), event={"at_ms": now, "status": "HELD", "attempt": int(attempt), "error_code": "handoff_lease_exhausted", "expired_ms": int(expires_ms)})
+                connection.execute("UPDATE outbox_jobs SET status='DELIVERY_UNCONFIRMED',updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'", (now, "handoff_delivery_unconfirmed", str(job_id)))
+                self._append_transition(connection, kind="EXPIRED_DELIVERY_UNCONFIRMED", job_id=str(job_id), event={"at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": int(attempt), "error_code": "handoff_delivery_unconfirmed", "expired_ms": int(expires_ms)})
 
     def _validate_work(self, work: OfficialHandoffWorkV1) -> tuple[Any, ...]:
         if type(work) is not OfficialHandoffWorkV1 or work.outbox_id != self.config.outbox_id:
@@ -441,8 +465,8 @@ class OfficialHandoffStoreV1:
             raise OfficialHandoffIntegrityError("handoff_discovery_failed") from exc
         envelope = build_directive_envelope(view, self.config)
         env_digest = envelope_digest(envelope)
-        operation = _sha(_RESULT, self.config.application_id.encode("ascii"), job_id.encode("ascii"), env_digest, self.config.digest)
-        idempotency = _sha(_IDEMPOTENCY, self.config.outbox_id.encode("ascii"), job_id.encode("ascii"), env_digest)
+        operation = _operation_identity(self.config, job_id, env_digest)
+        idempotency = _idempotency_key(self.config, job_id, env_digest)
         now = int(self.clock.now_ms())
         with closing(self._connect()) as connection:
             began = False
@@ -511,7 +535,7 @@ class OfficialHandoffStoreV1:
             row = connection.execute("SELECT * FROM outbox_acks WHERE job_id=?", (job_id,)).fetchone()
         if row is None:
             return None
-        return OfficialHandoffResultV1(str(row[0]), bytes(row[4]), "ACKNOWLEDGED", bytes(row[2]), bytes(row[3]), int(row[5]), None)
+        return OfficialHandoffResultV1(str(row[0]), bytes(row[4]), "ACKNOWLEDGED", bytes(row[2]), bytes(row[3]), None)
 
     def _held(self, work: OfficialHandoffWorkV1, code: str) -> OfficialHandoffResultV1:
         now = int(self.clock.now_ms())
@@ -530,7 +554,7 @@ class OfficialHandoffStoreV1:
                 if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
                 raise
-        return OfficialHandoffResultV1(work.job_id, work.operation_id, "HELD", None, None, 0, code)
+        return OfficialHandoffResultV1(work.job_id, work.operation_id, "HELD", None, None, code)
 
     def dispatch(self, work: OfficialHandoffWorkV1, *, application_database: Path, state_database: Path, receiver: OfficialStateReceiverPort) -> OfficialHandoffResultV1:
         self._validate_work(work)
@@ -542,8 +566,11 @@ class OfficialHandoffStoreV1:
         try:
             identity = receiver.identity_sha256()
             epoch = receiver.epoch()
-            if identity != self.config.receiver_identity or epoch != self.config.receiver_epoch:
-                return self._held(work, "receiver_identity_drift")
+        except Exception:
+            raise OfficialHandoffIndeterminateError("handoff_pre_dispatch_indeterminate") from None
+        if identity != self.config.receiver_identity or epoch != self.config.receiver_epoch:
+            return self._held(work, "receiver_identity_drift")
+        try:
             view = read_applied_application(
                 application_database, state_database, expected_application_id=self.config.application_id,
                 expected_application_config_digest=self.config.application_config_digest,
@@ -553,9 +580,12 @@ class OfficialHandoffStoreV1:
             envelope = build_directive_envelope(view, self.config)
             if envelope != work.envelope_bytes:
                 return self._held(work, "handoff_envelope_drift")
+        except (IndependentOfficialHandoffError, OSError, ValueError):
+            return self._held(work, "handoff_reverification_failed")
+        try:
             ack_raw = receiver.dispatch(envelope, work.idempotency_key)
             if type(ack_raw) is not bytes:
-                return self._held(work, "receiver_ack_type")
+                raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
             ack = parse_acknowledgment_bytes(ack_raw)
             if (
                 bytes.fromhex(ack["receiver_identity"]) != self.config.receiver_identity
@@ -564,40 +594,44 @@ class OfficialHandoffStoreV1:
                 or bytes.fromhex(ack["envelope_digest"]) != envelope_digest(envelope)
                 or int(ack["effective_directive"]) != int(parse_envelope_bytes(envelope)["effective_directive"])
             ):
-                return self._held(work, "receiver_ack_binding")
-        except (IndependentOfficialHandoffError, OSError):
-            return self._held(work, "handoff_reverification_failed")
-        self._fault("after_dispatch_before_outbox_commit")
-        now = int(self.clock.now_ms())
-        ack_digest = acknowledgment_digest(ack_raw)
-        with closing(self._connect()) as connection:
-            began = False
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                began = True
-                try:
-                    self._live_lease(connection, work)
-                except OfficialHandoffLeaseError as exc:
-                    raise OfficialHandoffIndeterminateError("handoff_lease_lost_after_dispatch") from exc
-                connection.execute("DELETE FROM outbox_leases WHERE job_id=?", (work.job_id,))
-                changed = connection.execute("UPDATE outbox_jobs SET status='ACKNOWLEDGED',updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, work.job_id))
-                if changed.rowcount != 1:
-                    raise OfficialHandoffIndeterminateError("handoff_job_cas_after_dispatch")
-                connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?,?)", (work.job_id, "ACKNOWLEDGED", ack_raw, ack_digest, work.operation_id, 1, now))
-                self._append_transition(connection, kind="ACKNOWLEDGED", job_id=work.job_id, event={"at_ms": now, "status": "ACKNOWLEDGED", "attempt": work.attempt, "ack_digest": _hex(ack_digest), "effective_directive": int(ack["effective_directive"])})
-                self._fault("before_outbox_commit")
-                connection.execute("COMMIT")
+                raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
+            self._fault("after_dispatch_before_outbox_commit")
+            now = int(self.clock.now_ms())
+            ack_digest = acknowledgment_digest(ack_raw)
+            with closing(self._connect()) as connection:
                 began = False
-            except Exception:
-                if began and connection.in_transaction:
-                    connection.execute("ROLLBACK")
-                raise
-        if self._after_commit_fault is not None:
-            try:
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    began = True
+                    try:
+                        self._live_lease(connection, work)
+                    except OfficialHandoffLeaseError:
+                        raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate") from None
+                    connection.execute("DELETE FROM outbox_leases WHERE job_id=?", (work.job_id,))
+                    changed = connection.execute("UPDATE outbox_jobs SET status='ACKNOWLEDGED',updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, work.job_id))
+                    if changed.rowcount != 1:
+                        raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
+                    connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?)", (work.job_id, "ACKNOWLEDGED", ack_raw, ack_digest, work.operation_id, now))
+                    self._append_transition(connection, kind="ACKNOWLEDGED", job_id=work.job_id, event={
+                        "at_ms": now, "status": "ACKNOWLEDGED", "attempt": work.attempt,
+                        "receiver_identity": ack["receiver_identity"], "receiver_epoch": int(ack["receiver_epoch"]),
+                        "idempotency_key": ack["idempotency_key"], "envelope_digest": ack["envelope_digest"],
+                        "ack_digest": _hex(ack_digest), "effective_directive": int(ack["effective_directive"]),
+                    })
+                    self._fault("before_outbox_commit")
+                    connection.execute("COMMIT")
+                    began = False
+                except Exception:
+                    if began and connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                    raise
+            if self._after_commit_fault is not None:
                 self._after_commit_fault("after_outbox_commit")
-            except Exception as exc:
-                raise OfficialHandoffIndeterminateError("handoff_commit_indeterminate") from exc
-        return OfficialHandoffResultV1(work.job_id, work.operation_id, "ACKNOWLEDGED", ack_raw, ack_digest, 1, None)
+            return OfficialHandoffResultV1(work.job_id, work.operation_id, "ACKNOWLEDGED", ack_raw, ack_digest, None)
+        except OfficialHandoffIndeterminateError:
+            raise
+        except Exception:
+            raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate") from None
 
     def snapshot(self) -> dict[str, Any]:
         with closing(self._connect()) as connection:
@@ -609,9 +643,14 @@ class OfficialHandoffStoreV1:
     def support_summary(self) -> dict[str, Any]:
         snap = self.snapshot()
         with closing(self._connect()) as connection:
-            duplicate = int(connection.execute("SELECT COALESCE(SUM(delivery_count-1),0) FROM outbox_acks").fetchone()[0])
             directives = {str(int(row[0])): int(row[1]) for row in connection.execute("SELECT json_extract(json_extract(CAST(event_bytes AS TEXT),'$'), '$.effective_directive'), COUNT(*) FROM outbox_transitions WHERE transition_kind='DISCOVER' GROUP BY 1")}
-        return {**snap, "receiver_identity": _hex(self.config.receiver_identity), "duplicate_delivery_count": duplicate, "directive_counts": directives, "proof_suite_id": None, "production_usable": False, "activation": False}
+        return {
+            **snap, "receiver_identity": _hex(self.config.receiver_identity),
+            "acknowledged_count": snap["status_counts"]["ACKNOWLEDGED"],
+            "held_count": snap["status_counts"]["HELD"],
+            "delivery_unconfirmed_count": snap["status_counts"]["DELIVERY_UNCONFIRMED"],
+            "directive_counts": directives, "proof_suite_id": None, "production_usable": False, "activation": False,
+        }
 
     def export_bytes(self) -> bytes:
         self.verify_integrity()
@@ -623,7 +662,7 @@ class OfficialHandoffStoreV1:
                 "metadata": {"head_root": blob(meta[10]), "next_sequence": int(meta[11])},
                 "jobs": [{"job_id": str(row[0]), "operation_id": blob(row[1]), "envelope_digest": blob(row[2]), "envelope_bytes": blob(row[3]), "idempotency_key": blob(row[4]), "status": str(row[5]), "discovery_sequence": int(row[6]), "attempt": int(row[7]), "next_eligible_ms": int(row[8]), "created_ms": int(row[9]), "updated_ms": int(row[10]), "last_error_code": row[11]} for row in connection.execute("SELECT * FROM outbox_jobs ORDER BY discovery_sequence")],
                 "leases": [{"job_id": str(row[0]), "worker_id": str(row[1]), "token": blob(row[2]), "attempt": int(row[3]), "leased_ms": int(row[4]), "expires_ms": int(row[5])} for row in connection.execute("SELECT * FROM outbox_leases ORDER BY job_id")],
-                "acks": [{"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "delivery_count": int(row[5]), "completed_ms": int(row[6])} for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")],
+                "acks": [{"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "completed_ms": int(row[5])} for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")],
                 "transitions": [{"sequence": int(row[0]), "transition_kind": str(row[1]), "job_id": str(row[2]), "before_root": blob(row[3]), "after_root": blob(row[4]), "event_bytes": blob(row[5]), "event_digest": blob(row[6])} for row in connection.execute("SELECT * FROM outbox_transitions ORDER BY sequence")],
             }
         raw = _json_bytes(value)

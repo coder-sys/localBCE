@@ -35,7 +35,7 @@ class IndependentOfficialHandoffError(RuntimeError):
 
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-OFFICIAL-HANDOFF/v1"
 _SCHEMA_VERSION: Final[int] = 1
-_STATUS: Final[frozenset[str]] = frozenset({"DISCOVERED", "LEASED", "ACKNOWLEDGED", "HELD"})
+_STATUS: Final[frozenset[str]] = frozenset({"DISCOVERED", "LEASED", "ACKNOWLEDGED", "HELD", "DELIVERY_UNCONFIRMED"})
 _MAX_ENVELOPE: Final[int] = 16 * 1024
 _MAX_ACK: Final[int] = 4096
 _MAX_EXPORT: Final[int] = 8 * 1024 * 1024
@@ -46,13 +46,15 @@ _HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/HEAD/v1\x00"
 _EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/EVENT/v1\x00"
 _ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v1\x00"
+_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v1\x00"
 _ACK = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK/v1\x00"
 _RESULT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-RESULT/v1\x00"
 _STATE_IDENTITY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00"
 _CAP_BYTES: Final[int] = 5_000_000_000
+_FIXED_ID_BYTES: Final[int] = 128
 
 _ENVELOPE_KEYS: Final[frozenset[str]] = frozenset({
-    "schema", "application_id_digest", "application_config_digest", "application_job_id_digest",
+    "schema", "handoff_config_digest", "receiver_identity", "receiver_epoch", "application_id_digest", "application_config_digest", "application_job_id_digest",
     "application_operation_id", "application_result_digest", "state_store_identity", "state_receipt_digest",
     "request_id", "attempt_id", "decision_id", "receipt_id", "state_after_id", "state_binding_after",
     "audit_head_after", "policy_result", "effective_directive", "proof_session_accepted",
@@ -114,6 +116,30 @@ def _token(value: Any, label: str) -> str:
     return value
 
 
+def _fixed_ascii(value: str, label: str) -> bytes:
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise IndependentOfficialHandoffError(label + "_ascii") from exc
+    if len(encoded) > _FIXED_ID_BYTES:
+        _fail(label + "_width")
+    return len(encoded).to_bytes(2, "big") + encoded + b"\x00" * (_FIXED_ID_BYTES - len(encoded))
+
+
+def _operation_identity(config: Mapping[str, Any], job_id: str, envelope_digest_value: bytes, config_digest: bytes) -> bytes:
+    return _sha(
+        _OPERATION, config_digest, _fixed_ascii(config["application_id"], "application_id"),
+        _fixed_ascii(job_id, "job_id"), envelope_digest_value,
+    )
+
+
+def _idempotency_key(config: Mapping[str, Any], job_id: str, envelope_digest_value: bytes, config_digest: bytes) -> bytes:
+    return _sha(
+        _IDEMPOTENCY, config_digest, _fixed_ascii(config["outbox_id"], "outbox_id"),
+        _fixed_ascii(job_id, "job_id"), envelope_digest_value,
+    )
+
+
 def parse_envelope_bytes(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not 0 < len(raw) <= _MAX_ENVELOPE:
         _fail("envelope_bounds")
@@ -125,6 +151,9 @@ def parse_envelope_bytes(raw: bytes) -> dict[str, Any]:
         _fail("envelope_canonical")
     if value["schema"] != _SCHEMA:
         _fail("envelope_schema")
+    _blob(value["handoff_config_digest"], 64, "envelope_handoff_config")
+    _blob(value["receiver_identity"], 32, "envelope_receiver")
+    _integer(value["receiver_epoch"], "envelope_receiver_epoch", 1)
     for name in (
         "application_id_digest", "application_config_digest", "application_job_id_digest",
         "application_operation_id", "application_result_digest", "state_store_identity",
@@ -403,9 +432,19 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         env = parse_envelope_bytes(envelope)
         env_digest = _blob(job["envelope_digest"], 64, "envelope_digest")
         idem = _blob(job["idempotency_key"], 64, "idempotency")
-        if env_digest != _sha(_ENVELOPE, envelope) or idem != _sha(_IDEMPOTENCY, config["outbox_id"].encode("ascii"), jid.encode("ascii"), env_digest):
+        if (
+            env_digest != _sha(_ENVELOPE, envelope)
+            or env["handoff_config_digest"].upper() != _hex(config_digest)
+            or env["application_id_digest"].upper() != _hex(_sha(_ENVELOPE, config["application_id"].encode("ascii")))
+            or env["application_config_digest"].upper() != _hex(config["application_config_digest"])
+            or env["application_job_id_digest"].upper() != _hex(_sha(_ENVELOPE, jid.encode("ascii")))
+            or env["state_store_identity"].upper() != _hex(config["state_store_identity"])
+            or env["receiver_identity"].upper() != _hex(config["receiver_identity"])
+            or int(env["receiver_epoch"]) != int(config["receiver_epoch"])
+            or idem != _idempotency_key(config, jid, env_digest, config_digest)
+        ):
             _fail("job_digest")
-        expected_operation = _sha(_RESULT, config["application_id"].encode("ascii"), jid.encode("ascii"), env_digest, config_digest)
+        expected_operation = _operation_identity(config, jid, env_digest, config_digest)
         if operation != expected_operation or job["status"] not in _STATUS:
             _fail("job_binding")
         for name in ("attempt", "next_eligible_ms", "created_ms", "updated_ms"):
@@ -438,7 +477,7 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         _fail("acks_shape")
     ack_map: dict[str, dict[str, Any]] = {}
     for ack in acks:
-        keys = {"job_id", "ack_bytes", "ack_digest", "operation_id", "delivery_count", "completed_ms"}
+        keys = {"job_id", "ack_bytes", "ack_digest", "operation_id", "completed_ms"}
         if type(ack) is not dict or set(ack) != keys:
             _fail("ack_row_keys")
         jid = _token(ack["job_id"], "ack_job")
@@ -448,9 +487,16 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         parsed_ack = parse_acknowledgment_bytes(raw_ack)
         digest = _blob(ack["ack_digest"], 64, "ack_digest")
         operation = _blob(ack["operation_id"], 64, "ack_operation")
-        if digest != _sha(_ACK, raw_ack) or operation != job_map[jid]["operation_id"] or parsed_ack["envelope_digest"].upper() != job_map[jid]["envelope_digest"].upper():
+        if (
+            digest != _sha(_ACK, raw_ack)
+            or operation != job_map[jid]["operation_id"]
+            or parsed_ack["receiver_identity"].upper() != _hex(config["receiver_identity"])
+            or int(parsed_ack["receiver_epoch"]) != int(config["receiver_epoch"])
+            or parsed_ack["idempotency_key"].upper() != job_map[jid]["idempotency_key"].upper()
+            or parsed_ack["envelope_digest"].upper() != job_map[jid]["envelope_digest"].upper()
+            or int(parsed_ack["effective_directive"]) != int(job_map[jid]["envelope"]["effective_directive"])
+        ):
             _fail("ack_value_binding")
-        _integer(ack["delivery_count"], "delivery_count", 1)
         _integer(ack["completed_ms"], "ack_time")
         ack_map[jid] = dict(ack, ack_bytes=raw_ack, ack_value=parsed_ack)
     for jid, job in job_map.items():
@@ -522,24 +568,43 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
                 _fail("transition_requeue")
             if previous != "LEASED": _fail("transition_requeue")
             replay[jid] = "DISCOVERED"
-        elif kind == "EXPIRED_HELD":
+        elif kind == "EXPIRED_DELIVERY_UNCONFIRMED":
             if set(ev) != {"at_ms", "status", "attempt", "error_code", "expired_ms"}:
-                _fail("transition_expired_held_event")
-            _integer(ev["at_ms"], "expired_held_time")
-            _integer(ev["attempt"], "expired_held_attempt", 1)
-            _token(ev["error_code"], "expired_held_error")
-            if status != "HELD" or ev["attempt"] != replay_attempt.get(jid) or _integer(ev["expired_ms"], "expired_held_expiry") > ev["at_ms"]:
-                _fail("transition_expired_held")
-            if previous != "LEASED": _fail("transition_expired_held")
-            replay[jid] = "HELD"
+                _fail("transition_delivery_unconfirmed_event")
+            _integer(ev["at_ms"], "delivery_unconfirmed_time")
+            _integer(ev["attempt"], "delivery_unconfirmed_attempt", 1)
+            _token(ev["error_code"], "delivery_unconfirmed_error")
+            if status != "DELIVERY_UNCONFIRMED" or ev["attempt"] != replay_attempt.get(jid) or _integer(ev["expired_ms"], "delivery_unconfirmed_expiry") > ev["at_ms"]:
+                _fail("transition_delivery_unconfirmed")
+            if previous != "LEASED": _fail("transition_delivery_unconfirmed")
+            replay[jid] = "DELIVERY_UNCONFIRMED"
         elif kind == "ACKNOWLEDGED":
-            if set(ev) != {"at_ms", "status", "attempt", "ack_digest", "effective_directive"}:
+            if set(ev) != {"at_ms", "status", "attempt", "receiver_identity", "receiver_epoch", "idempotency_key", "envelope_digest", "ack_digest", "effective_directive"}:
                 _fail("transition_ack_event")
             _integer(ev["at_ms"], "ack_time")
             _integer(ev["attempt"], "ack_attempt", 1)
+            _blob(ev["receiver_identity"], 32, "ack_event_receiver")
+            _integer(ev["receiver_epoch"], "ack_event_epoch", 1)
+            _blob(ev["idempotency_key"], 64, "ack_event_idempotency")
+            _blob(ev["envelope_digest"], 64, "ack_event_envelope")
             _blob(ev["ack_digest"], 64, "ack_event_digest")
             _integer(ev["effective_directive"], "ack_event_directive", 1)
-            if ev["effective_directive"] > 5 or ev["effective_directive"] != job_map[jid]["envelope"]["effective_directive"]:
+            stored_ack = ack_map.get(jid, {}).get("ack_value")
+            if not isinstance(stored_ack, dict):
+                _fail("transition_ack")
+            if (
+                ev["effective_directive"] > 5
+                or ev["effective_directive"] != job_map[jid]["envelope"]["effective_directive"]
+                or ev["receiver_identity"].upper() != _hex(config["receiver_identity"])
+                or ev["receiver_epoch"] != int(config["receiver_epoch"])
+                or ev["idempotency_key"].upper() != job_map[jid]["idempotency_key"].upper()
+                or ev["envelope_digest"].upper() != job_map[jid]["envelope_digest"].upper()
+                or ev["receiver_identity"].upper() != stored_ack["receiver_identity"].upper()
+                or ev["receiver_epoch"] != stored_ack["receiver_epoch"]
+                or ev["idempotency_key"].upper() != stored_ack["idempotency_key"].upper()
+                or ev["envelope_digest"].upper() != stored_ack["envelope_digest"].upper()
+                or ev["effective_directive"] != stored_ack["effective_directive"]
+            ):
                 _fail("transition_ack_binding")
             if previous != "LEASED" or status != "ACKNOWLEDGED" or jid not in ack_map or ev["attempt"] != replay_attempt.get(jid) or ev["ack_digest"] != ack_map[jid]["ack_digest"]:
                 _fail("transition_ack")
@@ -567,7 +632,7 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         "schema": _SCHEMA, "outbox_id": config["outbox_id"], "head_root": _hex(head),
         "status_counts": counts, "transition_count": len(transitions), "config_digest": _hex(config_digest),
         "acknowledged_count": counts["ACKNOWLEDGED"],
-        "duplicate_delivery_count": sum(max(0, int(row["delivery_count"]) - 1) for row in acks),
+        "delivery_unconfirmed_count": counts["DELIVERY_UNCONFIRMED"],
     }
 
 
@@ -623,7 +688,7 @@ def _db_export(connection: sqlite3.Connection) -> bytes:
             for row in connection.execute("SELECT * FROM outbox_leases ORDER BY job_id")
         ],
         "acks": [
-            {"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "delivery_count": int(row[5]), "completed_ms": int(row[6])}
+            {"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "completed_ms": int(row[5])}
             for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")
         ],
         "transitions": [
@@ -664,7 +729,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE outbox_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token BLOB NOT NULL, attempt INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL,
           FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
         CREATE TABLE outbox_acks (job_id TEXT PRIMARY KEY, status TEXT NOT NULL, ack_bytes BLOB NOT NULL, ack_digest BLOB NOT NULL,
-          operation_id BLOB NOT NULL UNIQUE, delivery_count INTEGER NOT NULL, completed_ms INTEGER NOT NULL, FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
+          operation_id BLOB NOT NULL UNIQUE, completed_ms INTEGER NOT NULL, FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
         CREATE TABLE outbox_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, job_id TEXT NOT NULL,
           before_root BLOB NOT NULL, after_root BLOB NOT NULL, event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL UNIQUE,
           FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
@@ -692,7 +757,7 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
         for lease in value["leases"]:
             connection.execute("INSERT INTO outbox_leases VALUES (?,?,?,?,?,?)", (lease["job_id"], lease["worker_id"], _blob(lease["token"],24,"token"), lease["attempt"], lease["leased_ms"], lease["expires_ms"]))
         for ack in value["acks"]:
-            connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?,?)", (ack["job_id"], "ACKNOWLEDGED", _blob(ack["ack_bytes"],None,"ack"), _blob(ack["ack_digest"],64,"ack_digest"), _blob(ack["operation_id"],64,"ack_op"), ack["delivery_count"], ack["completed_ms"]))
+            connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?)", (ack["job_id"], "ACKNOWLEDGED", _blob(ack["ack_bytes"],None,"ack"), _blob(ack["ack_digest"],64,"ack_digest"), _blob(ack["operation_id"],64,"ack_op"), ack["completed_ms"]))
         for transition in value["transitions"]:
             connection.execute("INSERT INTO outbox_transitions VALUES (?,?,?,?,?,?,?)", (transition["sequence"], transition["transition_kind"], transition["job_id"], _blob(transition["before_root"],64,"before"), _blob(transition["after_root"],64,"after"), _blob(transition["event_bytes"],None,"event"), _blob(transition["event_digest"],64,"event_digest")))
         connection.commit()

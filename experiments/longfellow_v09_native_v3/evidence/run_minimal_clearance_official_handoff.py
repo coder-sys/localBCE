@@ -18,7 +18,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.minimal_clearance_official_handoff import OfficialHandoffStoreV1, build_directive_envelope
+from app.minimal_clearance_official_handoff import OfficialHandoffIndeterminateError, OfficialHandoffStoreV1, build_directive_envelope
 from app.minimal_clearance_official_handoff_independent import (
     parse_envelope_bytes,
     read_applied_application,
@@ -82,6 +82,8 @@ def run(evidence_output: Path) -> dict[str, object]:
             raise RuntimeError("dispatch_shape")
         if receiver.side_effects != 4:
             raise RuntimeError("receiver_effect_count")
+        if receiver.dispatch_calls != 4 or receiver.idempotent_replays != 0:
+            raise RuntimeError("ordinary_dispatch_accounting")
         for job_id in job_ids:
             repeated = outbox.discover(application_database, state_database, job_id)
             if repeated.status != "ACKNOWLEDGED":
@@ -95,6 +97,42 @@ def run(evidence_output: Path) -> dict[str, object]:
             raise RuntimeError("restore_parity")
         if state.snapshot() != before_state:
             raise RuntimeError("state_mutation")
+
+        recovery_path = helper.root / "official-handoff-response-loss.sqlite3"
+        recovery_restore_path = helper.root / "official-handoff-response-loss-restore.sqlite3"
+        recovery_config = replace(config, outbox_id="official-handoff-response-loss", lease_seconds=1)
+        recovery_clock = _StoreClock()
+        recovery_receiver = _Receiver(response_loss_once=True)
+        recovery = OfficialHandoffStoreV1(path=recovery_path, config=recovery_config, clock=recovery_clock)
+        recovery.discover(application_database, state_database, "job-0")
+        first_work = recovery.claim_next("recovery-worker-0")
+        if first_work is None:
+            raise RuntimeError("response_loss_claim")
+        try:
+            recovery.dispatch(first_work, application_database=application_database, state_database=state_database, receiver=recovery_receiver)
+        except OfficialHandoffIndeterminateError:
+            pass
+        else:
+            raise RuntimeError("response_loss_not_indeterminate")
+        if recovery_receiver.dispatch_calls != 1 or recovery_receiver.side_effects != 1:
+            raise RuntimeError("response_loss_first_dispatch_accounting")
+        recovery_clock.advance(1_001)
+        restarted = OfficialHandoffStoreV1(path=recovery_path, config=recovery_config, clock=recovery_clock)
+        second_work = restarted.claim_next("recovery-worker-1")
+        if second_work is None:
+            raise RuntimeError("response_loss_requeue")
+        recovered = restarted.dispatch(second_work, application_database=application_database, state_database=state_database, receiver=recovery_receiver)
+        if recovered.status != "ACKNOWLEDGED":
+            raise RuntimeError("response_loss_final_ack")
+        if recovery_receiver.dispatch_calls != 2 or recovery_receiver.idempotent_replays != 1 or recovery_receiver.side_effects != 1:
+            raise RuntimeError("response_loss_replay_accounting")
+        recovery.verify_integrity()
+        recovery_export = recovery.export_bytes()
+        recovery_restore_summary = restore_export_to_fresh_database(recovery_restore_path, recovery_export)
+        if recovery_restore_summary["status_counts"]["ACKNOWLEDGED"] != 1:
+            raise RuntimeError("response_loss_restore")
+        if state.snapshot() != before_state:
+            raise RuntimeError("response_loss_state_mutation")
         summary = outbox.support_summary()
         output: dict[str, object] = {
             "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-OFFICIAL-HANDOFF/INTEGRATION-EVIDENCE/v1",
@@ -102,12 +140,19 @@ def run(evidence_output: Path) -> dict[str, object]:
             "discovered_count": 4,
             "claimed_count": 4,
             "acknowledged_count": 4,
-            "receiver_side_effect_count": 4,
+            "ordinary_dispatch_calls": receiver.dispatch_calls,
+            "ordinary_idempotent_replays": receiver.idempotent_replays,
+            "ordinary_receiver_side_effects": receiver.side_effects,
             "duplicate_discovery_convergence_count": 4,
             "delivery_semantics": "recoverable_at_least_once",
+            "delivery_semantics_observed": True,
+            "response_loss_recovery_dispatch_calls": recovery_receiver.dispatch_calls,
+            "response_loss_recovery_idempotent_replays": recovery_receiver.idempotent_replays,
+            "response_loss_recovery_receiver_side_effects": recovery_receiver.side_effects,
+            "response_loss_recovery_final_acknowledged": True,
             "independent_export_restore_parity": True,
             "independent_database_parity": True,
-            "directive_values_checked": [1, 2, 3, 4, 5],
+            "envelope_parser_directives_checked": [1, 2, 3, 4, 5],
             "state_mutation_count": 0,
             "native_verifier_invocations": 0,
             "prover_invocations": 0,
@@ -125,14 +170,13 @@ def run(evidence_output: Path) -> dict[str, object]:
             "experimental_software_only": True,
             "status_counts": summary["status_counts"],
             "transition_count": summary["transition_count"],
-            "duplicate_delivery_count": summary["duplicate_delivery_count"],
         }
         encoded = _json_bytes(output)
         if len(encoded) > 8192 or any(token in encoded for token in (b"C:\\", b"stdout", b"stderr", b"proof_bytes", b"artifact")):
             raise RuntimeError("evidence_privacy")
         evidence_output.parent.mkdir(parents=True, exist_ok=True)
         with evidence_output.open("xb") as handle:
-            handle.write(encoded)
+            handle.write(encoded + b"\n")
             handle.flush()
         return output
     finally:

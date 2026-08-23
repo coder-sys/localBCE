@@ -42,13 +42,113 @@ from tests.test_minimal_clearance_queue_application import (
 
 
 _RECEIVER_ID = b"R" * 32
+_MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/MATERIAL/v1\x00"
+_GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/GENESIS/v1\x00"
+_HEAD = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/HEAD/v1\x00"
+_EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/EVENT/v1\x00"
+_ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00"
+_IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v1\x00"
+_OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v1\x00"
+_ACK = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK/v1\x00"
+
+
+def _digest(domain: bytes, *parts: bytes) -> bytes:
+    digest = hashlib.sha3_512()
+    digest.update(domain)
+    for part in parts:
+        digest.update(part)
+    return digest.digest()
+
+
+def _fixed_id(value: str) -> bytes:
+    encoded = value.encode("ascii")
+    return len(encoded).to_bytes(2, "big") + encoded + b"\x00" * (128 - len(encoded))
+
+
+def _json_bytes(value: dict[str, object]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
+def _rechain_export(value: dict[str, object]) -> None:
+    """Recompute ordinary export digests/roots after a semantic mutation."""
+    config = value["config"]
+    assert isinstance(config, dict)
+    config_raw = _json_bytes(config)
+    config_digest = _digest(_MATERIAL, config_raw)
+    jobs = value["jobs"]
+    assert isinstance(jobs, list)
+    for job in jobs:
+        assert isinstance(job, dict)
+        job_id = str(job["job_id"])
+        envelope = bytes.fromhex(str(job["envelope_bytes"]))
+        envelope_digest = _digest(_ENVELOPE, envelope)
+        job["envelope_digest"] = envelope_digest.hex().upper()
+        job["operation_id"] = _digest(
+            _OPERATION, config_digest, _fixed_id(str(config["application_id"])), _fixed_id(job_id), envelope_digest,
+        ).hex().upper()
+        job["idempotency_key"] = _digest(
+            _IDEMPOTENCY, config_digest, _fixed_id(str(config["outbox_id"])), _fixed_id(job_id), envelope_digest,
+        ).hex().upper()
+    job_map = {str(job["job_id"]): job for job in jobs}
+    acks = value["acks"]
+    assert isinstance(acks, list)
+    ack_map: dict[str, dict[str, object]] = {}
+    for ack in acks:
+        assert isinstance(ack, dict)
+        job_id = str(ack["job_id"])
+        raw = bytes.fromhex(str(ack["ack_bytes"]))
+        parsed = json.loads(raw.decode("ascii"))
+        ack["ack_digest"] = _digest(_ACK, raw).hex().upper()
+        ack["operation_id"] = str(job_map[job_id]["operation_id"])
+        ack_map[job_id] = parsed
+    head = _digest(_GENESIS, str(config["outbox_id"]).encode("ascii"), config_digest)
+    transitions = value["transitions"]
+    assert isinstance(transitions, list)
+    for sequence, transition in enumerate(transitions, 1):
+        assert isinstance(transition, dict)
+        kind = str(transition["transition_kind"])
+        job_id = str(transition["job_id"])
+        event = json.loads(bytes.fromhex(str(transition["event_bytes"])).decode("ascii"))
+        if kind == "ACKNOWLEDGED":
+            parsed_ack = ack_map[job_id]
+            event.update(
+                receiver_identity=parsed_ack["receiver_identity"], receiver_epoch=parsed_ack["receiver_epoch"],
+                idempotency_key=parsed_ack["idempotency_key"], envelope_digest=parsed_ack["envelope_digest"],
+                ack_digest=str(next(ack["ack_digest"] for ack in acks if str(ack["job_id"]) == job_id)),
+                effective_directive=parsed_ack["effective_directive"],
+            )
+        event_raw = _json_bytes(event)
+        event_digest = _digest(_EVENT, kind.encode("ascii"), job_id.encode("ascii"), event_raw)
+        after = _digest(_HEAD, head, sequence.to_bytes(8, "big"), event_digest)
+        transition["before_root"] = head.hex().upper()
+        transition["after_root"] = after.hex().upper()
+        transition["event_bytes"] = event_raw.hex().upper()
+        transition["event_digest"] = event_digest.hex().upper()
+        head = after
+    metadata = value["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["head_root"] = head.hex().upper()
+
+
+def _canonical(value: dict[str, object]) -> bytes:
+    return _json_bytes(value)
 
 
 class _Receiver:
-    def __init__(self, *, malformed: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        malformed: bool = False,
+        response_loss_once: bool = False,
+        response_mode: str | None = None,
+    ) -> None:
         self.malformed = malformed
+        self.response_loss_once = response_loss_once
+        self.response_mode = response_mode
         self._lock = Lock()
         self.seen: dict[bytes, bytes] = {}
+        self.dispatch_calls = 0
+        self.idempotent_replays = 0
         self.side_effects = 0
 
     def identity_sha256(self) -> bytes:
@@ -59,29 +159,47 @@ class _Receiver:
 
     def dispatch(self, envelope_bytes: bytes, idempotency_key: bytes) -> bytes:
         with self._lock:
+            self.dispatch_calls += 1
+            if idempotency_key in self.seen:
+                self.idempotent_replays += 1
+                return self.seen[idempotency_key]
             if self.malformed:
                 return b"{}"
-            if idempotency_key in self.seen:
-                return self.seen[idempotency_key]
             envelope = parse_envelope_bytes(envelope_bytes)
             self.side_effects += 1
             accepted_ms = 20_000 + self.side_effects
             ack_id = hashlib.sha3_512(b"fixture-ack\x00" + idempotency_key).digest().hex().upper()
+            ack = {
+                "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-OFFICIAL-HANDOFF/v1",
+                "receiver_identity": _RECEIVER_ID.hex().upper(),
+                "receiver_epoch": 1,
+                "idempotency_key": idempotency_key.hex().upper(),
+                "envelope_digest": hashlib.sha3_512(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00" + envelope_bytes).digest().hex().upper(),
+                "effective_directive": int(envelope["effective_directive"]),
+                "accepted_ms": accepted_ms,
+                "acknowledgment_id": ack_id,
+            }
+            if self.response_mode == "wrong_receiver":
+                ack["receiver_identity"] = (b"W" * 32).hex().upper()
+            elif self.response_mode == "wrong_epoch":
+                ack["receiver_epoch"] = 2
+            elif self.response_mode == "wrong_idempotency":
+                ack["idempotency_key"] = (b"I" * 64).hex().upper()
+            elif self.response_mode == "wrong_envelope":
+                ack["envelope_digest"] = (b"E" * 64).hex().upper()
+            elif self.response_mode == "wrong_directive":
+                ack["effective_directive"] = 1 if int(envelope["effective_directive"]) != 1 else 2
+            if self.response_mode == "nonbytes":
+                return object()  # type: ignore[return-value]
             raw = json.dumps(
-                {
-                    "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-OFFICIAL-HANDOFF/v1",
-                    "receiver_identity": _RECEIVER_ID.hex().upper(),
-                    "receiver_epoch": 1,
-                    "idempotency_key": idempotency_key.hex().upper(),
-                    "envelope_digest": hashlib.sha3_512(b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00" + envelope_bytes).digest().hex().upper(),
-                    "effective_directive": int(envelope["effective_directive"]),
-                    "accepted_ms": accepted_ms,
-                    "acknowledgment_id": ack_id,
-                },
+                ack,
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("ascii")
             self.seen[idempotency_key] = raw
+            if self.response_loss_once:
+                self.response_loss_once = False
+                raise OSError("fixture_response_loss")
             return raw
 
 
@@ -153,7 +271,7 @@ class OfficialHandoffTests(unittest.TestCase):
                 results = list(pool.map(lambda work: outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver), claimed))  # type: ignore[arg-type]
             self.assertEqual([result.status for result in results], ["ACKNOWLEDGED"] * 4)
             self.assertEqual(receiver.side_effects, 4)
-            self.assertEqual(outbox.snapshot()["status_counts"], {"ACKNOWLEDGED": 4, "DISCOVERED": 0, "HELD": 0, "LEASED": 0})
+            self.assertEqual(outbox.snapshot()["status_counts"], {"ACKNOWLEDGED": 4, "DELIVERY_UNCONFIRMED": 0, "DISCOVERED": 0, "HELD": 0, "LEASED": 0})
             outbox.verify_integrity()
         finally:
             state.close()
@@ -161,8 +279,9 @@ class OfficialHandoffTests(unittest.TestCase):
     def test_duplicate_discovery_and_send_before_record_deduplicate(self) -> None:
         helper, queue_path, state, verifier, app, works, receiver, config, outbox = self._prepared(count=1)
         failures = {"value": True}
+        clock = _StoreClock()
         outbox = OfficialHandoffStoreV1(
-            path=helper.root / "outbox.sqlite3", config=config, clock=_StoreClock(),
+            path=helper.root / "outbox.sqlite3", config=config, clock=clock,
             before_fault=lambda name: (_ for _ in ()).throw(RuntimeError("send_before_record")) if name == "after_dispatch_before_outbox_commit" and failures["value"] else None,
         )
         try:
@@ -171,23 +290,27 @@ class OfficialHandoffTests(unittest.TestCase):
             self.assertEqual(first.operation_id, retry.operation_id)
             work = outbox.claim_next("worker")
             self.assertIsNotNone(work)
-            with self.assertRaisesRegex(RuntimeError, "send_before_record"):
+            with self.assertRaises(OfficialHandoffIndeterminateError):
                 outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
             failures["value"] = False
-            result = outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
+            clock.advance(300_001)
+            restarted = OfficialHandoffStoreV1(path=helper.root / "outbox.sqlite3", config=config, clock=clock)
+            recovered_work = restarted.claim_next("worker-restarted")
+            self.assertIsNotNone(recovered_work)
+            result = restarted.dispatch(recovered_work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
             self.assertEqual(result.status, "ACKNOWLEDGED")
             self.assertEqual(receiver.side_effects, 1)
-            self.assertEqual(outbox.support_summary()["duplicate_delivery_count"], 0)
+            self.assertEqual(receiver.dispatch_calls, 2)
+            self.assertEqual(receiver.idempotent_replays, 1)
+            self.assertEqual(restarted.support_summary()["delivery_unconfirmed_count"], 0)
         finally:
             state.close()
 
     def test_response_loss_restart_export_restore_and_application_state_immutability(self) -> None:
         helper, queue_path, state, verifier, app, works, receiver, config, outbox = self._prepared(count=1)
-        fired = {"value": True}
-        outbox = OfficialHandoffStoreV1(
-            path=helper.root / "outbox.sqlite3", config=config, clock=_StoreClock(),
-            after_commit_fault=lambda name: (_ for _ in ()).throw(RuntimeError("handoff_response_loss")) if name == "after_outbox_commit" and fired["value"] else None,
-        )
+        clock = _StoreClock()
+        receiver = _Receiver(response_loss_once=True)
+        outbox = OfficialHandoffStoreV1(path=helper.root / "outbox.sqlite3", config=config, clock=clock)
         try:
             before_state = state.snapshot()
             outbox.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
@@ -195,15 +318,20 @@ class OfficialHandoffTests(unittest.TestCase):
             self.assertIsNotNone(work)
             with self.assertRaises(OfficialHandoffIndeterminateError):
                 outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
-            fired["value"] = False
-            recovered = outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
+            clock.advance(300_001)
+            restarted = OfficialHandoffStoreV1(path=helper.root / "outbox.sqlite3", config=config, clock=clock)
+            recovered_work = restarted.claim_next("worker-restarted")
+            self.assertIsNotNone(recovered_work)
+            recovered = restarted.dispatch(recovered_work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
             self.assertEqual(recovered.status, "ACKNOWLEDGED")
             self.assertEqual(receiver.side_effects, 1)
+            self.assertEqual(receiver.dispatch_calls, 2)
+            self.assertEqual(receiver.idempotent_replays, 1)
             self.assertEqual(state.snapshot(), before_state)
             exported = outbox.export_bytes()
             summary = verify_export_bytes(exported, expected_config=config.as_json())
             self.assertEqual(summary["status_counts"]["ACKNOWLEDGED"], 1)
-            restored = outbox.restore_from_export(helper.root / "outbox-restore.sqlite3", exported)
+            restored = restarted.restore_from_export(helper.root / "outbox-restore.sqlite3", exported)
             self.assertEqual(restored["status_counts"]["ACKNOWLEDGED"], 1)
             restarted = OfficialHandoffStoreV1(path=helper.root / "outbox.sqlite3", config=config, clock=_StoreClock())
             restarted.verify_integrity()
@@ -230,11 +358,38 @@ class OfficialHandoffTests(unittest.TestCase):
             self.assertIsNotNone(wrong_work)
             held = wrong_outbox.dispatch(wrong_work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
             self.assertEqual(held.status, "HELD")
+            self.assertEqual(receiver.dispatch_calls, 0)
+            epoch_config = replace(config, outbox_id="official-handoff-epoch", receiver_epoch=2)
+            epoch_outbox = OfficialHandoffStoreV1(path=helper.root / "epoch.sqlite3", config=epoch_config, clock=_StoreClock())
+            epoch_outbox.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
+            epoch_work = epoch_outbox.claim_next("worker")
+            self.assertIsNotNone(epoch_work)
+            epoch_held = epoch_outbox.dispatch(epoch_work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver)  # type: ignore[arg-type]
+            self.assertEqual(epoch_held.status, "HELD")
+            self.assertEqual(receiver.dispatch_calls, 0)
             bad_outbox = OfficialHandoffStoreV1(path=helper.root / "bad.sqlite3", config=config, clock=_StoreClock())
             bad_outbox.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
             bad_work = bad_outbox.claim_next("worker")
             self.assertIsNotNone(bad_work)
-            self.assertEqual(bad_outbox.dispatch(bad_work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=_Receiver(malformed=True)).status, "HELD")  # type: ignore[arg-type]
+            with self.assertRaises(OfficialHandoffIndeterminateError):
+                bad_outbox.dispatch(bad_work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=_Receiver(malformed=True))  # type: ignore[arg-type]
+            self.assertEqual(bad_outbox.snapshot()["status_counts"]["HELD"], 0)
+        finally:
+            state.close()
+
+    def test_receiver_epoch_and_config_change_idempotency_identity(self) -> None:
+        helper, queue_path, state, verifier, app, works, receiver, config, outbox = self._prepared(count=1)
+        try:
+            outbox.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
+            first = outbox.claim_next("worker-0")
+            self.assertIsNotNone(first)
+            changed_config = replace(config, outbox_id="official-handoff-epoch-change", receiver_epoch=2)
+            changed = OfficialHandoffStoreV1(path=helper.root / "epoch-change.sqlite3", config=changed_config, clock=_StoreClock())
+            changed.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
+            second = changed.claim_next("worker-1")
+            self.assertIsNotNone(second)
+            self.assertNotEqual(first.idempotency_key, second.idempotency_key)  # type: ignore[union-attr]
+            self.assertNotEqual(first.operation_id, second.operation_id)  # type: ignore[union-attr]
         finally:
             state.close()
 
@@ -275,7 +430,7 @@ class OfficialHandoffTests(unittest.TestCase):
                 self.assertEqual(claimed.attempt, expected_attempt)  # type: ignore[union-attr]
                 exhaustion_clock.advance(1001)
             self.assertIsNone(exhaustion.claim_next("worker"))
-            self.assertEqual(exhaustion.snapshot()["status_counts"], {"ACKNOWLEDGED": 0, "DISCOVERED": 0, "HELD": 1, "LEASED": 0})
+            self.assertEqual(exhaustion.snapshot()["status_counts"], {"ACKNOWLEDGED": 0, "DELIVERY_UNCONFIRMED": 1, "DISCOVERED": 0, "HELD": 0, "LEASED": 0})
             exhaustion.verify_integrity()
         finally:
             state.close()
@@ -310,6 +465,74 @@ class OfficialHandoffTests(unittest.TestCase):
                 connection.commit()
             with self.assertRaises(IndependentOfficialHandoffError):
                 verify_database(outbox.path, expected_config=config.as_json())
+        finally:
+            state.close()
+
+    def test_post_dispatch_ack_failures_are_indeterminate(self) -> None:
+        for mode in ("nonbytes", "malformed", "wrong_receiver", "wrong_epoch", "wrong_idempotency", "wrong_envelope", "wrong_directive"):
+            with self.subTest(mode=mode):
+                helper, queue_path, state, verifier, app, works, receiver, config, outbox = self._prepared(count=1)
+                try:
+                    mode_config = replace(config, outbox_id=f"handoff-{mode}")
+                    mode_outbox = OfficialHandoffStoreV1(path=helper.root / f"{mode}.sqlite3", config=mode_config, clock=_StoreClock())
+                    mode_outbox.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
+                    work = mode_outbox.claim_next("worker")
+                    self.assertIsNotNone(work)
+                    fixture = _Receiver(malformed=mode == "malformed", response_mode=None if mode == "malformed" else mode)
+                    with self.assertRaises(OfficialHandoffIndeterminateError):
+                        mode_outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=fixture)  # type: ignore[arg-type]
+                    self.assertEqual(fixture.dispatch_calls, 1)
+                    self.assertEqual(mode_outbox.snapshot()["status_counts"]["LEASED"], 1)
+                    self.assertEqual(mode_outbox.snapshot()["status_counts"]["HELD"], 0)
+                finally:
+                    state.close()
+
+    def test_fully_rebound_export_bindings_reject_semantic_substitution(self) -> None:
+        helper, queue_path, state, verifier, app, works, receiver, config, outbox = self._prepared(count=1)
+        try:
+            outbox.discover(helper.root / "application.sqlite3", helper.root / "clearance.sqlite3", "job-0")
+            work = outbox.claim_next("worker")
+            self.assertIsNotNone(work)
+            self.assertEqual(outbox.dispatch(work, application_database=helper.root / "application.sqlite3", state_database=helper.root / "clearance.sqlite3", receiver=receiver).status, "ACKNOWLEDGED")  # type: ignore[arg-type]
+            exported = outbox.export_bytes()
+
+            for field, replacement in (
+                ("receiver_epoch", 2),
+                ("application_config_digest", "A" * 128),
+                ("application_id_digest", "B" * 128),
+                ("application_job_id_digest", "C" * 128),
+                ("state_store_identity", "D" * 128),
+            ):
+                with self.subTest(field=field):
+                    mutated = json.loads(exported.decode("ascii"))
+                    job = mutated["jobs"][0]
+                    envelope = json.loads(bytes.fromhex(job["envelope_bytes"]).decode("ascii"))
+                    envelope[field] = replacement
+                    job["envelope_bytes"] = _json_bytes(envelope).hex().upper()
+                    _rechain_export(mutated)
+                    with self.assertRaises(IndependentOfficialHandoffError):
+                        verify_export_bytes(_canonical(mutated))
+
+            receiver_mutation = json.loads(exported.decode("ascii"))
+            ack = receiver_mutation["acks"][0]
+            ack_value = json.loads(bytes.fromhex(ack["ack_bytes"]).decode("ascii"))
+            ack_value["receiver_identity"] = (b"W" * 32).hex().upper()
+            ack["ack_bytes"] = _json_bytes(ack_value).hex().upper()
+            _rechain_export(receiver_mutation)
+            with self.assertRaises(IndependentOfficialHandoffError):
+                verify_export_bytes(_canonical(receiver_mutation))
+
+            config_mutation = json.loads(exported.decode("ascii"))
+            config_mutation["config"]["receiver_epoch"] = 2
+            config_env = json.loads(bytes.fromhex(config_mutation["jobs"][0]["envelope_bytes"]).decode("ascii"))
+            config_env["receiver_epoch"] = 2
+            config_mutation["jobs"][0]["envelope_bytes"] = _json_bytes(config_env).hex().upper()
+            config_ack = json.loads(bytes.fromhex(config_mutation["acks"][0]["ack_bytes"]).decode("ascii"))
+            config_ack["receiver_epoch"] = 2
+            config_mutation["acks"][0]["ack_bytes"] = _json_bytes(config_ack).hex().upper()
+            _rechain_export(config_mutation)
+            with self.assertRaises(IndependentOfficialHandoffError):
+                verify_export_bytes(_canonical(config_mutation), expected_config=config.as_json())
         finally:
             state.close()
 
