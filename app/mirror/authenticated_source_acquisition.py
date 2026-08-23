@@ -1204,8 +1204,8 @@ class AuthenticatedSourceAcquisitionService:
     def restore_export(cls, destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> "AuthenticatedSourceAcquisitionService":
         try:
             verified = independent.verify_export_bytes(raw, config=config.material())
-        except independent.IndependentAcquisitionError as exc:
-            raise_redacted(AuthenticatedSourceAcquisitionError, str(exc))
+        except independent.IndependentAcquisitionError:
+            raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:restore-export")
         except Exception:
             raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:restore")
         quarantine_snapshot = _authoritative_quarantine_snapshot(config, quarantine_service)
@@ -1265,10 +1265,10 @@ class AuthenticatedSourceAcquisitionService:
             )
         except (AcquisitionResponseLost, AcquisitionInjectedFault):
             raise
-        except restore_publication.RestorePublicationConflict as exc:
-            raise_redacted(AcquisitionConflictError, str(exc))
-        except (restore_publication.RestorePublicationError, AuthenticatedSourceAcquisitionError) as exc:
-            raise_redacted(AuthenticatedSourceAcquisitionError, str(exc))
+        except restore_publication.RestorePublicationConflict:
+            raise_redacted(AcquisitionConflictError, "acquisition:restore-conflict")
+        except (restore_publication.RestorePublicationError, AuthenticatedSourceAcquisitionError):
+            raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:restore")
         except Exception:
             raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:restore")
 

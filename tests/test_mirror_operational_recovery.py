@@ -634,6 +634,148 @@ class OperationalRecoveryTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__context__)
         self.assertNotIn("RESTORE-WRAPPER-CANARY", "".join(traceback.format_exception(caught.exception)))
 
+    def test_recovery_boundaries_redact_inner_error_messages(self) -> None:
+        canary = "PRIVATE-RECOVERY-BOUNDARY-CANARY"
+
+        def assert_redacted(error_type: type[BaseException], expected: str, operation: object) -> None:
+            with self.assertRaises(error_type) as caught:
+                operation()  # type: ignore[operator]
+            self.assertEqual(expected, str(caught.exception))
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            self.assertNotIn(canary, str(caught.exception))
+            self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+        stored = self.service.create_recovery_point(
+            "REDACTION_BUNDLE", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        connection = sqlite3.connect(self.catalog)
+        connection.row_factory = sqlite3.Row
+        try:
+            point = dict(connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (stored["point_id"],)).fetchone())
+        finally:
+            connection.close()
+
+        original_bundle = independent.verify_bundle
+
+        def fail_bundle(*_args: object, **_kwargs: object) -> object:
+            raise independent.IndependentOperationalRecoveryError(canary)
+
+        independent.verify_bundle = fail_bundle  # type: ignore[assignment]
+        try:
+            assert_redacted(
+                recovery.RecoveryIntegrityError,
+                "recovery:bundle-verification",
+                lambda: self.service._open_and_verify_bundle(point),
+            )
+        finally:
+            independent.verify_bundle = original_bundle  # type: ignore[assignment]
+
+        original_database = independent.verify_database
+
+        def fail_database(*_args: object, **_kwargs: object) -> object:
+            raise independent.IndependentOperationalRecoveryError(canary)
+
+        independent.verify_database = fail_database  # type: ignore[assignment]
+        try:
+            assert_redacted(recovery.RecoveryIntegrityError, "recovery:integrity", self.service.integrity)
+        finally:
+            independent.verify_database = original_database  # type: ignore[assignment]
+
+        original_snapshot = independent.snapshot_database
+
+        def fail_snapshot(*_args: object, **_kwargs: object) -> object:
+            raise independent.IndependentOperationalRecoveryError(canary)
+
+        independent.snapshot_database = fail_snapshot  # type: ignore[assignment]
+        try:
+            assert_redacted(recovery.RecoveryIntegrityError, "recovery:export", self.service.export_bytes)
+            assert_redacted(recovery.RecoveryIntegrityError, "recovery:support", self.service.support_snapshot)
+        finally:
+            independent.snapshot_database = original_snapshot  # type: ignore[assignment]
+
+        exported = self.service.export_bytes()
+        original_verify_export = independent.verify_export_bytes
+
+        def fail_verify_export(*_args: object, **_kwargs: object) -> object:
+            raise independent.IndependentOperationalRecoveryError(canary)
+
+        independent.verify_export_bytes = fail_verify_export  # type: ignore[assignment]
+        try:
+            assert_redacted(recovery.RecoveryIntegrityError, "recovery:export-verification", self.service.export_bytes)
+            assert_redacted(
+                recovery.RecoveryIntegrityError,
+                "recovery:restore-export",
+                lambda: recovery.restore_export(
+                    self.root / "bad-recovery-input.db",
+                    b"bad-export",
+                    profile=self.profile,
+                    quarantine_policy=self.upstream.source_policy,
+                    runtime_profile=self.upstream.profile,
+                    clock=self.clock,
+                    key_custody=self.custody,
+                    storage=self.storage,
+                ),
+            )
+        finally:
+            independent.verify_export_bytes = original_verify_export  # type: ignore[assignment]
+
+        captured: dict[str, object] = {}
+        original_publish = recovery.restore_publication.publish_create_only
+
+        def capture_publish(*_args: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return object()
+
+        recovery.restore_publication.publish_create_only = capture_publish  # type: ignore[assignment]
+        try:
+            recovery.restore_export(
+                self.root / "capture-recovery-callbacks.db",
+                exported,
+                profile=self.profile,
+                quarantine_policy=self.upstream.source_policy,
+                runtime_profile=self.upstream.profile,
+                clock=self.clock,
+                key_custody=self.custody,
+                storage=self.storage,
+            )
+        finally:
+            recovery.restore_publication.publish_create_only = original_publish  # type: ignore[assignment]
+        verify_database = captured["verify_database"]
+        assert callable(verify_database)
+        assert_redacted(
+            recovery.RecoveryIntegrityError,
+            "recovery:restore-database",
+            lambda: verify_database(self.root / "missing-recovery.db"),
+        )
+
+        for label, public_type, expected, inner_type in (
+            ("conflict", recovery.RecoveryConflictError, "recovery:restore-conflict", recovery.restore_publication.RestorePublicationConflict),
+            ("error", recovery.RecoveryIntegrityError, "recovery:restore", recovery.restore_publication.RestorePublicationError),
+        ):
+            def fail_publish(*_args: object, _inner_type=inner_type, **_kwargs: object) -> object:
+                raise _inner_type(canary)
+
+            recovery.restore_publication.publish_create_only = fail_publish  # type: ignore[assignment]
+            try:
+                assert_redacted(
+                    public_type,
+                    expected,
+                    lambda label=label: recovery.restore_export(
+                        self.root / f"restore-{label}-redaction.db",
+                        exported,
+                        profile=self.profile,
+                        quarantine_policy=self.upstream.source_policy,
+                        runtime_profile=self.upstream.profile,
+                        clock=self.clock,
+                        key_custody=self.custody,
+                        storage=self.storage,
+                    ),
+                )
+            finally:
+                recovery.restore_publication.publish_create_only = original_publish  # type: ignore[assignment]
+
     def test_storage_overwrite_revocation_and_existing_restore_target_fail_closed(self) -> None:
         stored = self.service.create_recovery_point(
             "PORT_FAILURES", generation=1, expected_head=self._genesis(),

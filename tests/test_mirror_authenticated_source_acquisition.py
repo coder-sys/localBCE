@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import traceback
 import unittest
 
 from app.mirror import authenticated_source_acquisition as acquisition
@@ -341,6 +342,67 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         self.assertNotIn(profile.BASE_URL, json.dumps(support))
         self.assertNotIn(profile.SYNTHETIC_PRACTITIONER_ID, json.dumps(support))
         self.assertNotRegex(json.dumps(support, sort_keys=True), r"[0-9a-f]{128}")
+
+    def test_restore_boundaries_redact_inner_error_messages(self) -> None:
+        canary = "PRIVATE-ACQUISITION-RESTORE-CANARY"
+
+        def assert_redacted(error_type: type[BaseException], expected: str, operation: object) -> None:
+            with self.assertRaises(error_type) as caught:
+                operation()  # type: ignore[operator]
+            self.assertEqual(expected, str(caught.exception))
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            self.assertNotIn(canary, str(caught.exception))
+            self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+        original_verify = independent.verify_export_bytes
+
+        def fail_export(*_args: object, **_kwargs: object) -> object:
+            raise independent.IndependentAcquisitionError(canary)
+
+        independent.verify_export_bytes = fail_export  # type: ignore[assignment]
+        try:
+            assert_redacted(
+                acquisition.AuthenticatedSourceAcquisitionError,
+                "acquisition:restore-export",
+                lambda: acquisition.restore_export(
+                    Path(self.temporary.name) / "bad-input.db",
+                    b"bad-export",
+                    config=self.config,
+                    external_policy=self.policy,
+                    quarantine_service=self.quarantine,
+                ),
+            )
+        finally:
+            independent.verify_export_bytes = original_verify  # type: ignore[assignment]
+
+        self.service.ensure_slot(7_000)
+        lease = self.service.claim_next(7_000)
+        self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+        exported = self.service.export_bytes()
+        original_publish = acquisition.restore_publication.publish_create_only
+        for label, public_type, expected, inner_type in (
+            ("conflict", acquisition.AcquisitionConflictError, "acquisition:restore-conflict", acquisition.restore_publication.RestorePublicationConflict),
+            ("error", acquisition.AuthenticatedSourceAcquisitionError, "acquisition:restore", acquisition.restore_publication.RestorePublicationError),
+        ):
+            def fail_publish(*_args: object, _inner_type=inner_type, **_kwargs: object) -> object:
+                raise _inner_type(canary)
+
+            acquisition.restore_publication.publish_create_only = fail_publish  # type: ignore[assignment]
+            try:
+                assert_redacted(
+                    public_type,
+                    expected,
+                    lambda label=label: acquisition.restore_export(
+                        Path(self.temporary.name) / f"restore-{label}.db",
+                        exported,
+                        config=self.config,
+                        external_policy=self.policy,
+                        quarantine_service=self.quarantine,
+                    ),
+                )
+            finally:
+                acquisition.restore_publication.publish_create_only = original_publish  # type: ignore[assignment]
 
     def test_quarantined_fast_retry_and_integrity_require_external_quarantine_database(self) -> None:
         self.service.ensure_slot(7_000)

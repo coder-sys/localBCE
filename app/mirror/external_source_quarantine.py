@@ -150,8 +150,8 @@ def _resolve_database(path: str | Path) -> Path:
 def _policy_material(policy: Mapping[str, object] | object) -> dict[str, object]:
     try:
         return independent._policy_view(policy)
-    except independent.IndependentQuarantineError as exc:
-        raise_redacted(ExternalSourceQuarantineError, str(exc))
+    except independent.IndependentQuarantineError:
+        raise_redacted(ExternalSourceQuarantineError, "quarantine:policy")
 
 
 class ExternalSourceQuarantineService:
@@ -170,8 +170,8 @@ class ExternalSourceQuarantineService:
         self.policy_digest = independent._policy_digest(self.policy)
         try:
             self.database_id = independent._database_id(database_id)
-        except independent.IndependentQuarantineError as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+        except independent.IndependentQuarantineError:
+            raise_redacted(ExternalSourceQuarantineError, "quarantine:database-id")
         self.chain_id = independent._chain_id(self.policy, self.database_id)
         self.fault_injector = fault_injector
         self._initialize()
@@ -239,7 +239,12 @@ class ExternalSourceQuarantineService:
         try:
             independent.verify_database(self.database, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+            verifier_code = exc.args[0] if len(exc.args) == 1 and isinstance(exc.args[0], str) else None
+            fixed_code = {
+                "quarantine:policy-drift": "quarantine:policy-drift",
+                "quarantine:database-id": "quarantine:database-id",
+            }.get(verifier_code, "quarantine:database-initialize")
+            raise_redacted(ExternalSourceQuarantineError, fixed_code)
 
     def _fault(self, point: str) -> None:
         if self.fault_injector is not None:
@@ -790,8 +795,8 @@ class ExternalSourceQuarantineService:
         try:
             independent._hex(artifact_id, "artifact-id")
             independent._hex(artifact_digest, "artifact-digest")
-        except independent.IndependentQuarantineError as exc:
-            raise_redacted(QuarantineConflictError, str(exc))
+        except independent.IndependentQuarantineError:
+            raise_redacted(QuarantineConflictError, "quarantine:query")
         connection = self._connect()
         try:
             row = self._operation_for_request(connection, self.policy_digest, request_digest)
@@ -814,8 +819,8 @@ class ExternalSourceQuarantineService:
     def integrity(self) -> dict[str, object]:
         try:
             return independent.verify_database(self.database, policy=self.policy, database_id=self.database_id)
-        except independent.IndependentQuarantineError as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+        except independent.IndependentQuarantineError:
+            raise_redacted(ExternalSourceQuarantineError, "quarantine:integrity")
 
     def support_snapshot(self) -> dict[str, object]:
         evidence = self.integrity()
@@ -835,8 +840,8 @@ class ExternalSourceQuarantineService:
         try:
             snapshot_result = independent.snapshot_database(self.database, policy=self.policy, database_id=self.database_id)
             snapshot = snapshot_result["snapshot"]
-        except independent.IndependentQuarantineError as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+        except independent.IndependentQuarantineError:
+            raise_redacted(ExternalSourceQuarantineError, "quarantine:export")
         body: dict[str, object] = {
             "schema": EXPORT_SCHEMA,
             "schema_version": EXPORT_VERSION,
@@ -870,8 +875,8 @@ class ExternalSourceQuarantineService:
             raise ExternalSourceQuarantineError("quarantine:export-byte-cap")
         try:
             independent.verify_export_bytes(raw, policy=self.policy, database_id=self.database_id)
-        except independent.IndependentQuarantineError as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+        except independent.IndependentQuarantineError:
+            raise_redacted(ExternalSourceQuarantineError, "quarantine:export")
         return raw
 
     def _restore_snapshot(self, snapshot: Mapping[str, list[Mapping[str, object]]]) -> None:
@@ -913,8 +918,8 @@ class ExternalSourceQuarantineService:
     ) -> "ExternalSourceQuarantineService":
         try:
             verified = independent.verify_export_bytes(raw, policy=policy, database_id=database_id)
-        except independent.IndependentQuarantineError as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+        except independent.IndependentQuarantineError:
+            raise_redacted(ExternalSourceQuarantineError, "quarantine:restore-export")
 
         def build_stage(stage: Path) -> None:
             service = cls(stage, policy=policy, database_id=database_id, fault_injector=fault_injector)
@@ -923,8 +928,8 @@ class ExternalSourceQuarantineService:
         def verify_database(path: Path) -> object:
             try:
                 return independent.verify_database(path, policy=policy, database_id=database_id)
-            except independent.IndependentQuarantineError as exc:
-                raise_redacted(ExternalSourceQuarantineError, str(exc))
+            except independent.IndependentQuarantineError:
+                raise_redacted(ExternalSourceQuarantineError, "quarantine:restore-database")
 
         def open_service(path: Path) -> ExternalSourceQuarantineService:
             return cls(path, policy=policy, database_id=database_id)
@@ -937,10 +942,10 @@ class ExternalSourceQuarantineService:
             )
         except (QuarantineResponseLost, QuarantineInjectedFault):
             raise
-        except restore_publication.RestorePublicationConflict as exc:
-            raise_redacted(QuarantineConflictError, str(exc))
-        except (restore_publication.RestorePublicationError, ExternalSourceQuarantineError) as exc:
-            raise_redacted(ExternalSourceQuarantineError, str(exc))
+        except restore_publication.RestorePublicationConflict:
+            raise_redacted(QuarantineConflictError, "quarantine:restore-conflict")
+        except (restore_publication.RestorePublicationError, ExternalSourceQuarantineError):
+            raise_redacted(ExternalSourceQuarantineError, "quarantine:restore")
         except Exception:
             raise_redacted(ExternalSourceQuarantineError, "quarantine:restore")
 

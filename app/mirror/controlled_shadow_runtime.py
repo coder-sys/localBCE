@@ -992,8 +992,8 @@ class ControlledShadowRuntimeService:
     ) -> "ControlledShadowRuntimeService":
         try:
             verified = independent.verify_export_bytes(raw, profile=profile.material())
-        except independent.IndependentControlledShadowError as exc:
-            raise_redacted(RuntimeIntegrityError, str(exc))
+        except independent.IndependentControlledShadowError:
+            raise_redacted(RuntimeIntegrityError, "runtime:restore-export")
         except Exception:
             raise_redacted(RuntimeIntegrityError, "runtime:restore")
 
@@ -1021,8 +1021,8 @@ class ControlledShadowRuntimeService:
         def verify_database(path: Path) -> object:
             try:
                 return independent.verify_database(path, profile=profile.material())
-            except independent.IndependentControlledShadowError as exc:
-                raise_redacted(RuntimeIntegrityError, str(exc))
+            except independent.IndependentControlledShadowError:
+                raise_redacted(RuntimeIntegrityError, "runtime:restore-database")
             except Exception:
                 raise_redacted(RuntimeIntegrityError, "runtime:restore")
 
@@ -1037,10 +1037,10 @@ class ControlledShadowRuntimeService:
             )
         except (RuntimeResponseLost, RuntimeInjectedFault):
             raise
-        except restore_publication.RestorePublicationConflict as exc:
-            raise_redacted(RuntimeConflictError, str(exc))
-        except (restore_publication.RestorePublicationError, RuntimeIntegrityError) as exc:
-            raise_redacted(RuntimeIntegrityError, str(exc))
+        except restore_publication.RestorePublicationConflict:
+            raise_redacted(RuntimeConflictError, "runtime:restore-conflict")
+        except (restore_publication.RestorePublicationError, RuntimeIntegrityError):
+            raise_redacted(RuntimeIntegrityError, "runtime:restore")
         except Exception:
             raise_redacted(RuntimeIntegrityError, "runtime:restore")
 

@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import traceback
 import unittest
 
 from app.mirror import controlled_shadow_runtime as runtime
@@ -252,6 +253,84 @@ class ControlledShadowRuntimeTests(unittest.TestCase):
             runtime.restore_export(crash_target, exported, profile=self.profile, clock=self.clock, fault_injector=after_publish)
         recovered = runtime.restore_export(crash_target, exported, profile=self.profile, clock=self.clock)
         self.assertEqual(recovered.export_bytes(), exported)
+
+    def test_restore_boundaries_redact_inner_error_messages(self) -> None:
+        canary = "PRIVATE-RUNTIME-RESTORE-CANARY"
+
+        def assert_redacted(error_type: type[BaseException], expected: str, operation: object) -> None:
+            with self.assertRaises(error_type) as caught:
+                operation()  # type: ignore[operator]
+            self.assertEqual(expected, str(caught.exception))
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            self.assertNotIn(canary, str(caught.exception))
+            self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+        original_verify = independent.verify_export_bytes
+
+        def fail_export(*_args: object, **_kwargs: object) -> object:
+            raise independent.IndependentControlledShadowError(canary)
+
+        independent.verify_export_bytes = fail_export  # type: ignore[assignment]
+        try:
+            assert_redacted(
+                runtime.RuntimeIntegrityError,
+                "runtime:restore-export",
+                lambda: runtime.restore_export(
+                    Path(self.temporary.name) / "bad-input.db",
+                    b"bad-export",
+                    profile=self.profile,
+                    clock=self.clock,
+                ),
+            )
+        finally:
+            independent.verify_export_bytes = original_verify  # type: ignore[assignment]
+
+        session_id, head = self._open("SYNTHETIC_SESSION_RESTORE_REDACTION")
+        self.service.run_observation("OBS_RESTORE_REDACTION", session_id, expected_head=head, evaluator=self.evaluator)
+        exported = self.service.export_bytes()
+
+        captured: dict[str, object] = {}
+        original_publish = runtime.restore_publication.publish_create_only
+
+        def capture_publish(*_args: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return object()
+
+        runtime.restore_publication.publish_create_only = capture_publish  # type: ignore[assignment]
+        try:
+            runtime.restore_export(Path(self.temporary.name) / "capture-callbacks.db", exported, profile=self.profile, clock=self.clock)
+        finally:
+            runtime.restore_publication.publish_create_only = original_publish  # type: ignore[assignment]
+        verify_database = captured["verify_database"]
+        assert callable(verify_database)
+        assert_redacted(
+            runtime.RuntimeIntegrityError,
+            "runtime:restore-database",
+            lambda: verify_database(Path(self.temporary.name) / "missing-runtime.db"),
+        )
+
+        for label, public_type, expected, inner_type in (
+            ("conflict", runtime.RuntimeConflictError, "runtime:restore-conflict", runtime.restore_publication.RestorePublicationConflict),
+            ("error", runtime.RuntimeIntegrityError, "runtime:restore", runtime.restore_publication.RestorePublicationError),
+        ):
+            def fail_publish(*_args: object, _inner_type=inner_type, **_kwargs: object) -> object:
+                raise _inner_type(canary)
+
+            runtime.restore_publication.publish_create_only = fail_publish  # type: ignore[assignment]
+            try:
+                assert_redacted(
+                    public_type,
+                    expected,
+                    lambda label=label: runtime.restore_export(
+                        Path(self.temporary.name) / f"restore-{label}.db",
+                        exported,
+                        profile=self.profile,
+                        clock=self.clock,
+                    ),
+                )
+            finally:
+                runtime.restore_publication.publish_create_only = original_publish  # type: ignore[assignment]
 
     def test_fault_before_commit_rolls_back_to_empty_state(self) -> None:
         faulted_path = Path(self.temporary.name) / "faulted.db"

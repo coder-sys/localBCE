@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import sqlite3
@@ -130,6 +131,34 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__context__)
         self.assertNotIn("PRIVATE-PATIENT-PATH", "".join(traceback.format_exception(caught.exception)))
         self.assertEqual(0, self.service.integrity()["artifact_count"])
+
+    def test_integrity_rejects_private_sqlite_object_without_leaking_its_name(self) -> None:
+        connection = sqlite3.connect(self.database)
+        try:
+            connection.execute("CREATE INDEX [PRIVATE-INDEX-CANARY] ON quarantine_artifacts(artifact_id)")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(quarantine.ExternalSourceQuarantineError) as caught:
+            self.service.integrity()
+        self.assertEqual("quarantine:integrity", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        delivered = "".join(traceback.format_exception(caught.exception))
+        self.assertNotIn("PRIVATE-INDEX-CANARY", str(caught.exception))
+        self.assertNotIn("PRIVATE-INDEX-CANARY", delivered)
+
+    def test_all_mirror_redaction_calls_have_fixed_non_stringified_messages(self) -> None:
+        mirror_root = Path(__file__).resolve().parents[1] / "app" / "mirror"
+        leaking: list[str] = []
+        for source_path in sorted(mirror_root.glob("*.py")):
+            tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "raise_redacted":
+                    continue
+                if len(node.args) >= 2 and isinstance(node.args[1], ast.Call) and isinstance(node.args[1].func, ast.Name) and node.args[1].func.id == "str":
+                    leaking.append(f"{source_path}:{node.lineno}")
+        self.assertEqual(0, len(leaking), leaking)
 
     def test_newer_artifact_supersedes_and_out_of_order_or_withdrawn_admission_rejects(self) -> None:
         first_raw = self._artifact("capture-a")
