@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import traceback
 import unittest
 
 from app.mirror import provider_trust_graph as graph
@@ -164,6 +165,77 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SourceAdmissionError, "graph:producer-reject"):
             _service(BadVerifier()).admit(_adapter())
+
+    def test_arbitrary_verifier_graph_and_parser_failures_have_no_public_context(self) -> None:
+        canary = "PRIVATE-SOURCE-BOUNDARY-CANARY"
+
+        class ExplodingVerifier(SyntheticTestSourceVerifier):
+            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
+                raise RuntimeError(canary)
+
+        with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject") as caught:
+            _service(ExplodingVerifier()).admit(_adapter())
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(canary, str(caught.exception))
+        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+        original_build = graph.build_report
+        graph.build_report = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(canary))  # type: ignore[assignment]
+        try:
+            with self.assertRaisesRegex(SourceAdmissionError, "graph:producer-reject") as caught:
+                _service().admit(_adapter())
+        finally:
+            graph.build_report = original_build  # type: ignore[assignment]
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+        original_independent = graph_independent.verify_bytes
+        graph_independent.verify_bytes = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(canary))  # type: ignore[assignment]
+        try:
+            with self.assertRaisesRegex(SourceAdmissionError, "graph:independent-reject") as caught:
+                _service().admit(_adapter())
+        finally:
+            graph_independent.verify_bytes = original_independent  # type: ignore[assignment]
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+        original_parse = graph.parse_canonical
+        original_build = graph.build_report
+        graph_input = SyntheticTestSourceVerifier().verify(_adapter()).graph_input
+        valid_artifact, valid_telemetry = original_build(graph_input)
+        graph.build_report = lambda *_args, **_kwargs: (valid_artifact, valid_telemetry)  # type: ignore[assignment]
+        graph.parse_canonical = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(canary))  # type: ignore[assignment]
+        try:
+            with self.assertRaisesRegex(SourceAdmissionError, "graph:artifact-shape") as caught:
+                _service().admit(_adapter())
+        finally:
+            graph.build_report = original_build  # type: ignore[assignment]
+            graph.parse_canonical = original_parse  # type: ignore[assignment]
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
+
+    def test_verifier_configuration_failure_has_no_public_context(self) -> None:
+        canary = "PRIVATE-SOURCE-VERIFIER-CANARY"
+
+        class ExplodingConfiguration:
+            @property
+            def identity(self) -> str:
+                raise RuntimeError(canary)
+
+            @property
+            def epoch(self) -> int:
+                return VERIFIER_EPOCH
+
+        with self.assertRaisesRegex(SourceAdmissionError, "composition:verifier") as caught:
+            _service(ExplodingConfiguration()).admit(_adapter())
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(canary, str(caught.exception))
+        self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
 
     def test_result_profile_coverage_roles_and_mode_are_service_owned(self) -> None:
         mutations = (

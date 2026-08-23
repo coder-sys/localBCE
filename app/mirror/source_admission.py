@@ -18,6 +18,7 @@ from typing import Protocol
 
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
+from app.mirror.error_boundary import raise_redacted
 
 
 class SourceAdmissionError(ValueError):
@@ -260,8 +261,8 @@ RECEIPT_SCHEMA_V2 = "mirror-source-admission-receipt-v2"
 def _canonical(value: object) -> bytes:
     try:
         raw = json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise SourceAdmissionError("receipt:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(SourceAdmissionError, "receipt:noncanonical")
     if len(raw) > MAX_RECEIPT_BYTES:
         raise SourceAdmissionError("receipt:byte-cap")
     return raw
@@ -294,8 +295,8 @@ class SourceAdmissionService:
         try:
             identity = verifier.identity
             epoch = verifier.epoch
-        except Exception as exc:
-            raise SourceAdmissionError("composition:verifier") from exc
+        except Exception:
+            raise_redacted(SourceAdmissionError, "composition:verifier")
         if identity != profile.verifier_id or epoch != profile.verifier_epoch:
             raise SourceAdmissionError("composition:verifier-mismatch")
         if profile.evidence_mode not in (EvidenceMode.SYNTHETIC_TEST_ONLY, EvidenceMode.OBSERVATION_ONLY):
@@ -307,13 +308,16 @@ class SourceAdmissionService:
 
     def _verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
         try:
-            if self._verifier.identity != self._identity or self._verifier.epoch != self._epoch:
-                raise SourceAdmissionError("verifier:configuration-changed")
+            identity = self._verifier.identity
+            epoch = self._verifier.epoch
+        except Exception:
+            raise_redacted(SourceAdmissionError, "verifier:configuration-changed")
+        if identity != self._identity or epoch != self._epoch:
+            raise SourceAdmissionError("verifier:configuration-changed")
+        try:
             result = self._verifier.verify(adapter_bytes)
-        except SourceAdmissionError:
-            raise
-        except Exception as exc:
-            raise SourceAdmissionError("verifier:reject") from exc
+        except Exception:
+            raise_redacted(SourceAdmissionError, "verifier:reject")
         if not isinstance(result, VerifiedSourceCoverage):
             raise SourceAdmissionError("verifier:malformed-result")
         return result
@@ -397,8 +401,8 @@ class SourceAdmissionService:
                 graph_artifact, graph_telemetry = graph.build_report(result.graph_input, profile=self.profile)
             else:
                 graph_artifact, graph_telemetry = graph.build_report(result.graph_input)
-        except Exception as exc:
-            raise SourceAdmissionError("graph:producer-reject") from exc
+        except Exception:
+            raise_redacted(SourceAdmissionError, "graph:producer-reject")
         try:
             if _v2_profile(self.profile):
                 independent = graph_independent.verify_bytes_v2(
@@ -407,14 +411,14 @@ class SourceAdmissionService:
                 )
             else:
                 independent = graph_independent.verify_bytes(graph_artifact)
-        except Exception as exc:
-            raise SourceAdmissionError("graph:independent-reject") from exc
+        except Exception:
+            raise_redacted(SourceAdmissionError, "graph:independent-reject")
         if independent.get("accepted") is not True:
             raise SourceAdmissionError("graph:independent-reject")
         try:
             artifact = graph.parse_canonical(graph_artifact, artifact=True)
-        except Exception as exc:
-            raise SourceAdmissionError("graph:artifact-shape") from exc
+        except Exception:
+            raise_redacted(SourceAdmissionError, "graph:artifact-shape")
         self._validate_graph_coverage(artifact)
         report_id = independent.get("report_id")
         if not isinstance(report_id, str):

@@ -2833,8 +2833,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         result = verify_database(args[0])
-    except Exception as exc:
-        print(f"REJECT {type(exc).__name__}:{exc}", file=sys.stderr)
+    except Exception:
+        print("REJECT verification", file=sys.stderr)
         return 1
     print(_canonical(result).decode("ascii"))
     return 0

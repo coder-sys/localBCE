@@ -37,6 +37,8 @@ WORKSPACE_SCHEMA = "mirror-restore-workspace-v1"
 WORKSPACE_VERSION = 1
 MAX_WORKSPACE_CHILDREN = 8
 MAX_WORKSPACE_RECEIPT_BYTES = 8192
+PUBLICATION_RECEIPT_NAME = "publication.json"
+MAX_PUBLICATION_RECEIPT_BYTES = 8192
 
 
 class RestorePublicationError(ValueError):
@@ -501,6 +503,10 @@ def _namespace_paths(target: Path, export_root: str) -> tuple[Path, Path, Path]:
     export_root = _hex(export_root, "stage-identity")
     namespace = target.parent / f".{target.name}.restore-v2-{export_root}"
     return namespace, namespace / "stage.db", namespace / "marker.json"
+
+
+def _publication_receipt_path(namespace: Path) -> Path:
+    return namespace / PUBLICATION_RECEIPT_NAME
 
 
 def stage_paths(target: str | Path, export_root: str, *, create_parent: bool = False) -> tuple[Path, Path]:
@@ -1215,15 +1221,20 @@ def _cleanup_namespace(namespace: Path, stage: Path, marker: Path) -> None:
         return
     namespace_identity = _directory_identity(namespace)
     entries = _namespace_entries(namespace)
-    allowed = {stage.name, stage.name + "-wal", stage.name + "-shm", marker.name}
+    publication_receipt = _publication_receipt_path(namespace)
+    allowed = {stage.name, stage.name + "-wal", stage.name + "-shm", marker.name, publication_receipt.name}
     if not entries <= allowed:
         raise RestorePublicationCleanupError("restore-publication:staging-foreign")
-    for path in (_sidecar(stage, "-wal"), _sidecar(stage, "-shm"), stage, marker):
+    for path in (_sidecar(stage, "-wal"), _sidecar(stage, "-shm"), stage, marker, publication_receipt):
         if not os.path.lexists(os.fspath(path)):
             continue
         if path.is_symlink() or path.is_dir():
             raise RestorePublicationCleanupError("restore-publication:staging-object")
-        expected_bytes = _read_owned_marker(path, label="staging-marker") if path == marker else None
+        expected_bytes = None
+        if path == marker:
+            expected_bytes = _read_owned_marker(path, label="staging-marker")
+        elif path == publication_receipt:
+            expected_bytes, _ = _read_owned_bytes(path, cap=MAX_PUBLICATION_RECEIPT_BYTES, label="publication-receipt")
         try:
             _delete_exact_file(
                 path,
@@ -1243,7 +1254,8 @@ def _reconcile_namespace(target: Path, namespace: Path, stage: Path, marker: Pat
     if not os.path.lexists(os.fspath(namespace)):
         return False
     entries = _namespace_entries(namespace)
-    allowed = {stage.name, stage.name + "-wal", stage.name + "-shm", marker.name}
+    publication_receipt = _publication_receipt_path(namespace)
+    allowed = {stage.name, stage.name + "-wal", stage.name + "-shm", marker.name, publication_receipt.name}
     if not entries <= allowed:
         raise RestorePublicationVerification("restore-publication:staging-foreign")
     if marker.name not in entries:
@@ -1252,7 +1264,20 @@ def _reconcile_namespace(target: Path, namespace: Path, stage: Path, marker: Pat
     if stage.name not in entries:
         if any(name in entries for name in (stage.name + "-wal", stage.name + "-shm")):
             raise RestorePublicationVerification("restore-publication:staging-state")
-        _cleanup_namespace(namespace, stage, marker)
+        if not os.path.lexists(os.fspath(target)):
+            raise RestorePublicationConflict("restore-publication:publication-receipt-target")
+        if publication_receipt.name not in entries:
+            raise RestorePublicationConflict("restore-publication:publication-receipt-missing")
+        receipt, _ = _read_publication_receipt(publication_receipt)
+        _validate_direct_publication_receipt(
+            receipt,
+            target=target,
+            namespace=namespace,
+            stage=stage,
+            export_root=export_root,
+            expected_semantic=None,
+            storage_identity=_existing_storage_identity(target),
+        )
         return False
     return True
 
@@ -1389,6 +1414,19 @@ def _finish_linked_publication(
             target, namespace, stage, export_root, image, created=created,
             storage_identity=stable_storage,
         )
+        local_receipt_path = _publication_receipt_path(namespace)
+        if os.path.lexists(os.fspath(local_receipt_path)):
+            existing_receipt, _ = _read_publication_receipt(local_receipt_path)
+            _validate_direct_publication_receipt(
+                existing_receipt,
+                target=target,
+                namespace=namespace,
+                stage=stage,
+                export_root=export_root,
+                expected_semantic=image.semantic_digest,
+                storage_identity=stable_storage,
+            )
+            receipt = existing_receipt
         if publication_receipt_sink is not None:
             try:
                 publication_receipt_sink(receipt)
@@ -1402,7 +1440,16 @@ def _finish_linked_publication(
                     except RestorePublicationError:
                         raise_redacted(RestorePublicationCleanupError, "restore-publication:published-cleanup")
                 raise_redacted(RestorePublicationError, "restore-publication:receipt")
-            receipt_persisted = True
+        try:
+            _persist_local_publication_receipt(namespace, target, stage, export_root, receipt)
+        except RestorePublicationError:
+            if created:
+                try:
+                    _remove_created_link(target, target_links[:2])
+                except RestorePublicationError:
+                    raise_redacted(RestorePublicationCleanupError, "restore-publication:published-cleanup")
+            raise
+        receipt_persisted = True
         _call_fault(fault_injector, "before_stage_delete")
         stage_delete_started = True
         _delete_exact_file(stage, expected_inode=stage_links[:2], allow_empty=False, label="stage-delete")
@@ -1500,6 +1547,148 @@ def _publication_receipt(
     body["publication_operation_id"] = _digest("publication-operation", body)
     body["receipt_digest"] = _digest("publication-receipt", body)
     return body
+
+
+def _read_publication_receipt(path: Path) -> tuple[dict[str, object], tuple[int, int, int, int, int]]:
+    try:
+        raw, identity = _read_owned_bytes(path, cap=MAX_PUBLICATION_RECEIPT_BYTES, label="publication-receipt")
+        value = json.loads(raw.decode("ascii"))
+        if not isinstance(value, dict) or _canonical(value) != raw:
+            raise RestorePublicationVerification("restore-publication:publication-receipt-canonical")
+        return value, identity
+    except RestorePublicationError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise_redacted(RestorePublicationVerification, "restore-publication:publication-receipt")
+
+
+def _validate_direct_publication_receipt(
+    receipt: Mapping[str, object],
+    *,
+    target: Path,
+    namespace: Path,
+    stage: Path,
+    export_root: str,
+    expected_semantic: str | None,
+    storage_identity: tuple[
+        tuple[tuple[int, int, int, int, int], str],
+        tuple[tuple[int, int, int, int, int], str] | None,
+        tuple[tuple[int, int, int, int, int], str] | None,
+    ] | None,
+) -> None:
+    required = {
+        "schema", "schema_version", "publication_kind", "target_identity", "export_root",
+        "semantic_digest", "byte_length", "file_digest", "storage_identity", "marker_identity",
+        "publication_operation_id", "receipt_digest",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != required:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-binding")
+    if receipt["schema"] != "mirror-restore-publication-receipt-v1" or receipt["schema_version"] != 1:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-binding")
+    if receipt["publication_kind"] not in {"CREATED", "ADOPTED_EXISTING"}:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-binding")
+    if receipt["target_identity"] != _target_identity(target) or receipt["export_root"] != _hex(export_root, "receipt-export-root"):
+        raise RestorePublicationVerification("restore-publication:publication-receipt-binding")
+    _validate_marker(namespace / "marker.json", target, namespace, stage, export_root)
+    marker_raw = _marker_bytes(target, namespace, stage, export_root)
+    expected_marker_identity = _digest(
+        "marker-identity",
+        {"byte_length": len(marker_raw), "byte_digest": hashlib.sha3_512(marker_raw).hexdigest()},
+    )
+    if receipt["marker_identity"] != expected_marker_identity:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-marker")
+    for key, label in (
+        ("target_identity", "receipt-target"),
+        ("export_root", "receipt-export-root"),
+        ("semantic_digest", "receipt-semantic"),
+        ("file_digest", "receipt-file"),
+        ("marker_identity", "receipt-marker"),
+        ("publication_operation_id", "receipt-operation"),
+        ("receipt_digest", "receipt-digest"),
+    ):
+        _hex(receipt[key], label)
+    if type(receipt["byte_length"]) is not int or receipt["byte_length"] <= 0 or receipt["byte_length"] > MAX_IMAGE_BYTES:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-binding")
+    storage = receipt["storage_identity"]
+    if (
+        not isinstance(storage, Mapping)
+        or set(storage) != {"dev", "ino", "nlink", "size", "mtime_ns"}
+        or any(type(storage[key]) is not int for key in storage)
+    ):
+        raise RestorePublicationVerification("restore-publication:publication-receipt-storage")
+    base = dict(receipt)
+    receipt_digest = base.pop("receipt_digest")
+    operation_id = base.pop("publication_operation_id")
+    if _digest("publication-operation", base) != operation_id or _digest("publication-receipt", {**base, "publication_operation_id": operation_id}) != receipt_digest:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-digest")
+    if expected_semantic is not None and receipt["semantic_digest"] != expected_semantic:
+        raise RestorePublicationConflict("restore-publication:publication-receipt-semantic")
+    if storage_identity is not None:
+        if storage_identity[1] is not None or storage_identity[2] is not None:
+            raise RestorePublicationVerification("restore-publication:publication-receipt-storage")
+        regular, file_digest = storage_identity[0]
+        expected_storage = {
+            "dev": regular[0], "ino": regular[1], "nlink": regular[2],
+            "size": regular[3], "mtime_ns": regular[4],
+        }
+        if storage != expected_storage or receipt["byte_length"] != regular[3] or receipt["file_digest"] != file_digest:
+            raise RestorePublicationConflict("restore-publication:publication-receipt-storage")
+
+
+def _persist_local_publication_receipt(
+    namespace: Path,
+    target: Path,
+    stage: Path,
+    export_root: str,
+    receipt: Mapping[str, object],
+) -> None:
+    """Durably recognize a publication before its stage link is removed."""
+
+    _validate_direct_publication_receipt(
+        receipt,
+        target=target,
+        namespace=namespace,
+        stage=stage,
+        export_root=export_root,
+        expected_semantic=None,
+        storage_identity=None,
+    )
+    raw = _canonical(dict(receipt))
+    if len(raw) > MAX_PUBLICATION_RECEIPT_BYTES:
+        raise RestorePublicationVerification("restore-publication:publication-receipt-cap")
+    path = _publication_receipt_path(namespace)
+    if os.path.lexists(os.fspath(path)):
+        existing, _ = _read_publication_receipt(path)
+        _validate_direct_publication_receipt(
+            existing,
+            target=target,
+            namespace=namespace,
+            stage=stage,
+            export_root=export_root,
+            expected_semantic=None,
+            storage_identity=None,
+        )
+        if _canonical(existing) != raw:
+            raise RestorePublicationConflict("restore-publication:publication-receipt-conflict")
+        return
+    descriptor = -1
+    try:
+        descriptor = os.open(os.fspath(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError:
+        raise RestorePublicationConflict("restore-publication:publication-receipt-race")
+    except OSError:
+        raise_redacted(RestorePublicationVerification, "restore-publication:publication-receipt")
+    finally:
+        if descriptor != -1:
+            try:
+                os.close(descriptor)
+            except OSError:
+                raise_redacted(RestorePublicationVerification, "restore-publication:publication-receipt")
 
 
 def publish_create_only(

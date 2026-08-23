@@ -522,6 +522,7 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
                     self.assertTrue(target.is_file())
                     self.assertFalse(stage.exists())
                     self.assertTrue(marker.is_file())
+                    self.assertTrue((marker.parent / restore_publication.PUBLICATION_RECEIPT_NAME).is_file())
                 elif point == "before_stage_delete":
                     self.assertTrue(target.is_file())
                     self.assertTrue(stage.is_file())
@@ -548,6 +549,57 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
                 for suffix in ("-wal", "-shm"):
                     sidecar = Path(str(target) + suffix)
                     self.assertFalse(sidecar.exists() and sidecar.stat().st_size != 0)
+
+    def test_no_sink_marker_only_requires_recognized_publication_receipt(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        value = _object(raw)
+
+        unrecognized_target = self.directory / "unrecognized-marker.db"
+        unrecognized_stage, unrecognized_marker = restore_publication.stage_paths(
+            unrecognized_target, str(value["export_root"]), create_parent=False,
+        )
+        export._restore_fault_point = "after_atomic_publication_before_response"
+        with self.assertRaises(export.InjectedRestoreFault):
+            export.import_export(raw, unrecognized_target)
+        unrecognized_receipt = unrecognized_marker.parent / restore_publication.PUBLICATION_RECEIPT_NAME
+        self.assertTrue(unrecognized_target.is_file())
+        self.assertFalse(unrecognized_stage.exists())
+        self.assertTrue(unrecognized_marker.is_file())
+        self.assertTrue(unrecognized_receipt.is_file())
+        unrecognized_receipt.unlink()
+        with self.assertRaisesRegex(export.ContinuityExportError, "restore:publication-receipt-missing"):
+            export.import_export(raw, unrecognized_target)
+        self.assertTrue(unrecognized_target.is_file())
+        self.assertTrue(unrecognized_marker.is_file())
+
+        recognized_target = self.directory / "recognized-marker.db"
+        recognized_stage, recognized_marker = restore_publication.stage_paths(
+            recognized_target, str(value["export_root"]), create_parent=False,
+        )
+        export._restore_fault_point = "after_atomic_publication_before_response"
+        with self.assertRaises(export.InjectedRestoreFault):
+            export.import_export(raw, recognized_target)
+        recognized_receipt = recognized_marker.parent / restore_publication.PUBLICATION_RECEIPT_NAME
+        self.assertTrue(recognized_receipt.is_file())
+        accepted = export.import_export(raw, recognized_target)
+        self.assertTrue(accepted["restored"])
+        self.assertFalse(recognized_stage.exists())
+        self.assertFalse(recognized_marker.exists())
+        self.assertFalse(recognized_receipt.exists())
+
+    def test_continuity_independent_cli_never_echoes_exception_context(self) -> None:
+        canary = "PRIVATE-CLI-DATABASE-CANARY"
+        path = self.directory / f"{canary}.db"
+        path.write_bytes(b"not sqlite")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(1, independent.main([str(path)]))
+        self.assertEqual("REJECT verification\n", stderr.getvalue())
+        self.assertNotIn(canary, stderr.getvalue())
+        self.assertNotIn("not sqlite", stderr.getvalue())
 
     def test_restore_preplanted_and_tampered_staging_fails_closed(self) -> None:
         instance = self._store()
