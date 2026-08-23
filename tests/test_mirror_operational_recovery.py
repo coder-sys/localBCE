@@ -10,6 +10,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 
 from app.mirror import controlled_shadow_runtime as runtime
@@ -588,6 +589,50 @@ class OperationalRecoveryTests(unittest.TestCase):
             restore_publication._delete_exact_file = original_delete  # type: ignore[assignment]
         self.assertTrue(q_child.is_dir())
         self.assertTrue(retained.is_dir())
+
+    def test_public_verifier_failure_has_no_delivered_context(self) -> None:
+        original = independent.verify_database
+
+        def fail_verifier(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("OPERATIONAL-VERIFIER-CANARY")
+
+        independent.verify_database = fail_verifier  # type: ignore[assignment]
+        try:
+            with self.assertRaises(recovery.RecoveryIntegrityError) as caught:
+                self.service.integrity()
+        finally:
+            independent.verify_database = original  # type: ignore[assignment]
+        self.assertEqual("recovery:integrity", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("OPERATIONAL-VERIFIER-CANARY", "".join(traceback.format_exception(caught.exception)))
+
+    def test_restore_wrapper_failure_has_no_delivered_context(self) -> None:
+        exported = self.service.export_bytes()
+        original = independent.verify_export_bytes
+
+        def fail_verifier(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("RESTORE-WRAPPER-CANARY")
+
+        independent.verify_export_bytes = fail_verifier  # type: ignore[assignment]
+        try:
+            with self.assertRaises(recovery.RecoveryIntegrityError) as caught:
+                recovery.restore_export(
+                    self.root / "restore-wrapper-failure.db",
+                    exported,
+                    profile=self.profile,
+                    quarantine_policy=self.upstream.source_policy,
+                    runtime_profile=self.upstream.profile,
+                    clock=self.clock,
+                    key_custody=self.custody,
+                    storage=self.storage,
+                )
+        finally:
+            independent.verify_export_bytes = original  # type: ignore[assignment]
+        self.assertEqual("recovery:integrity", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("RESTORE-WRAPPER-CANARY", "".join(traceback.format_exception(caught.exception)))
 
     def test_storage_overwrite_revocation_and_existing_restore_target_fail_closed(self) -> None:
         stored = self.service.create_recovery_point(

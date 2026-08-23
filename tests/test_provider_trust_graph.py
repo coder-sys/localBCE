@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import traceback
 import unittest
 
 from app.mirror import provider_trust_graph as graph
@@ -143,6 +144,113 @@ class ProviderTrustGraphV1Tests(unittest.TestCase):
             self.assertNotIn(token, encoded)
         self.assertNotIn("native_v3_plaintext_continuity", Path(graph.__file__).read_text(encoding="utf-8"))
         self.assertNotIn("from app.mirror.provider_trust_graph", Path(independent.__file__).read_text(encoding="utf-8"))
+
+    def test_profile_getter_failure_is_context_free_in_both_verifiers(self) -> None:
+        class MaliciousProfile:
+            @property
+            def profile_id(self) -> str:
+                raise RuntimeError("PTG-PROFILE-CANARY")
+
+        for verifier, error_type in (
+            (graph, graph.ProviderTrustGraphError),
+            (independent, independent.IndependentProviderTrustGraphError),
+        ):
+            with self.subTest(verifier=verifier.__name__):
+                with self.assertRaises(error_type) as caught:
+                    verifier._profile_view(MaliciousProfile())
+                self.assertEqual("profile:configuration", str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertNotIn("PTG-PROFILE-CANARY", "".join(traceback.format_exception(caught.exception)))
+
+    def test_descriptor_bound_file_reads_reject_same_size_swap_and_accept_exact_bytes(self) -> None:
+        raw, _ = self.build_case()
+        with tempfile.TemporaryDirectory(prefix="mirror-file-bound-") as directory:
+            path = Path(directory) / "artifact.json"
+            replacement = Path(directory) / "replacement.json"
+            path.write_bytes(raw)
+            self.assertEqual(raw, graph._read_bounded(path, graph.MAX_INPUT_BYTES))
+            self.assertTrue(independent.verify_file(path)["accepted"])
+
+            canary = b"X" * len(raw)
+            replacement.write_bytes(canary)
+            original_lstat = graph.os.lstat
+            calls = {"count": 0}
+
+            def swap_after_lstat(value: object):
+                result = original_lstat(value)
+                if calls["count"] == 0:
+                    calls["count"] += 1
+                    replacement.replace(path)
+                return result
+
+            graph.os.lstat = swap_after_lstat  # type: ignore[assignment]
+            try:
+                with self.assertRaises(graph.ProviderTrustGraphError) as caught:
+                    graph._read_bounded(path, graph.MAX_INPUT_BYTES)
+            finally:
+                graph.os.lstat = original_lstat  # type: ignore[assignment]
+            self.assertNotIn("X", str(caught.exception))
+            self.assertIsNone(caught.exception.__context__)
+            path.write_bytes(raw)
+
+            replacement.write_bytes(canary)
+            original_lstat = independent.os.lstat
+            calls = {"count": 0}
+
+            def swap_after_independent_lstat(value: object):
+                result = original_lstat(value)
+                if calls["count"] == 0:
+                    calls["count"] += 1
+                    replacement.replace(path)
+                return result
+
+            independent.os.lstat = swap_after_independent_lstat  # type: ignore[assignment]
+            try:
+                with self.assertRaises(independent.IndependentProviderTrustGraphError) as caught_independent:
+                    independent.verify_file(path)
+            finally:
+                independent.os.lstat = original_lstat  # type: ignore[assignment]
+            self.assertNotIn("X", str(caught_independent.exception))
+            self.assertIsNone(caught_independent.exception.__context__)
+
+    def test_descriptor_bound_file_reads_reject_missing_symlink_directory_and_oversize(self) -> None:
+        raw, _ = self.build_case()
+        with tempfile.TemporaryDirectory(prefix="mirror-file-shapes-") as directory:
+            root = Path(directory)
+            missing = root / "missing.json"
+            for reader in (
+                lambda path: graph._read_bounded(path, graph.MAX_INPUT_BYTES),
+                independent.verify_file,
+            ):
+                with self.subTest(shape="missing", reader=reader):
+                    with self.assertRaises(Exception) as caught:
+                        reader(missing)
+                    self.assertNotIn("mirror-file-shapes", str(caught.exception))
+                    self.assertIsNone(caught.exception.__context__)
+            directory_path = root / "directory"
+            directory_path.mkdir()
+            with self.assertRaises(Exception):
+                graph._read_bounded(directory_path, graph.MAX_INPUT_BYTES)
+            with self.assertRaises(Exception):
+                independent.verify_file(directory_path)
+            symlink = root / "symlink.json"
+            try:
+                symlink.symlink_to(root / "valid.json")
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink creation unavailable")
+            (root / "valid.json").write_bytes(raw)
+            with self.assertRaises(Exception):
+                graph._read_bounded(symlink, graph.MAX_INPUT_BYTES)
+            with self.assertRaises(Exception):
+                independent.verify_file(symlink)
+            oversized = root / "oversized.json"
+            oversized.write_bytes(b"x" * (graph.MAX_INPUT_BYTES + 1))
+            with self.assertRaisesRegex(graph.ProviderTrustGraphError, "file:byte-cap"):
+                graph._read_bounded(oversized, graph.MAX_INPUT_BYTES)
+            oversized.write_bytes(b"x" * (independent.MAX_ARTIFACT_BYTES + 1))
+            with self.assertRaisesRegex(independent.IndependentProviderTrustGraphError, "file:byte-cap"):
+                independent.verify_file(oversized)
 
     def test_source_provenance_snapshot_report_and_transition_bindings(self) -> None:
         raw, _ = self.build_case()

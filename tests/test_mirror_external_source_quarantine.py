@@ -127,6 +127,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             quarantine.adapter.verify_artifact = original
         self.assertNotIn("PRIVATE-PATIENT-PATH", str(caught.exception))
         self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
         self.assertNotIn("PRIVATE-PATIENT-PATH", "".join(traceback.format_exception(caught.exception)))
         self.assertEqual(0, self.service.integrity()["artifact_count"])
 

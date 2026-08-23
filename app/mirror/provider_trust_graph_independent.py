@@ -11,10 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import sys
+import stat
 from typing import Mapping, Sequence
+
+from app.mirror.error_boundary import raise_redacted
 
 
 class IndependentProviderTrustGraphError(ValueError):
@@ -215,7 +219,7 @@ class _GraphProfile:
         try:
             return self.source_roles.index(source_id)
         except ValueError as exc:
-            raise IndependentProviderTrustGraphError("profile:source-role") from exc
+            raise_redacted(IndependentProviderTrustGraphError, "profile:source-role")
 
 
 def _profile_material(profile: object) -> dict[str, object]:
@@ -304,8 +308,8 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         supplied_digest = getattr(profile, "profile_digest")
         require_complete = getattr(profile, "require_complete")
         allow_nonmembership = getattr(profile, "allow_nonmembership")
-    except Exception as exc:
-        raise IndependentProviderTrustGraphError("profile:configuration") from exc
+    except Exception:
+        raise_redacted(IndependentProviderTrustGraphError, "profile:configuration")
     role_ids = tuple(role[0] for role in roles)
     if (
         len(roles) != 2
@@ -352,8 +356,8 @@ def _profile_view(profile: object | None) -> _GraphProfile:
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    except (TypeError, ValueError) as exc:
-        raise IndependentProviderTrustGraphError("json:noncanonical-value") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(IndependentProviderTrustGraphError, "json:noncanonical-value")
 
 
 def _duplicate_reject(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -377,8 +381,8 @@ def _walk(value: object, depth: int = 0, count: list[int] | None = None) -> None
     if isinstance(value, str):
         try:
             size = len(value.encode("ascii"))
-        except UnicodeEncodeError as exc:
-            raise IndependentProviderTrustGraphError("json:non-ascii") from exc
+        except UnicodeEncodeError:
+            raise_redacted(IndependentProviderTrustGraphError, "json:non-ascii")
         if size > MAX_STRING_BYTES:
             raise IndependentProviderTrustGraphError("json:string-cap")
     elif isinstance(value, dict):
@@ -410,8 +414,8 @@ def _parse(raw: bytes) -> dict[str, object]:
         )
     except IndependentProviderTrustGraphError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentProviderTrustGraphError("json:parse") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise_redacted(IndependentProviderTrustGraphError, "json:parse")
     if not isinstance(value, dict):
         raise IndependentProviderTrustGraphError("json:top-level")
     _walk(value)
@@ -439,8 +443,8 @@ def _text(value: object, label: str) -> str:
         raise IndependentProviderTrustGraphError(f"{label}:text")
     try:
         size = len(value.encode("ascii"))
-    except UnicodeEncodeError as exc:
-        raise IndependentProviderTrustGraphError(f"{label}:ascii") from exc
+    except UnicodeEncodeError:
+        raise_redacted(IndependentProviderTrustGraphError, f"{label}:ascii")
     if size > MAX_STRING_BYTES:
         raise IndependentProviderTrustGraphError(f"{label}:length")
     return value
@@ -507,8 +511,8 @@ def _validate_record(
         raise IndependentProviderTrustGraphError("record:id:not-synthetic")
     try:
         role_index = view.source_kinds.index(source_kind)
-    except ValueError as exc:
-        raise IndependentProviderTrustGraphError("record:source-mismatch") from exc
+    except ValueError:
+        raise_redacted(IndependentProviderTrustGraphError, "record:source-mismatch")
     expected_kind = view.record_kinds[role_index]
     expected_prefix = "SYNTH_" + expected_kind
     if not record_id.startswith(expected_prefix):
@@ -1051,16 +1055,47 @@ def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[
 
 
 def verify_file(path: str | Path) -> dict[str, object]:
-    file_path = Path(path)
     try:
-        if file_path.stat().st_size > MAX_ARTIFACT_BYTES:
-            raise IndependentProviderTrustGraphError("file:byte-cap")
-        with file_path.open("rb") as handle:
-            raw = handle.read(MAX_ARTIFACT_BYTES + 1)
-    except OSError:
-        raise IndependentProviderTrustGraphError("file:read") from None
+        file_path = Path(path)
+    except Exception:
+        raise_redacted(IndependentProviderTrustGraphError, "file:read")
+    descriptor = -1
+    try:
+        before_stat = os.lstat(os.fspath(file_path))
+        if stat.S_ISLNK(before_stat.st_mode) or not stat.S_ISREG(before_stat.st_mode):
+            raise_redacted(IndependentProviderTrustGraphError, "file:read")
+        if before_stat.st_size > MAX_ARTIFACT_BYTES:
+            raise_redacted(IndependentProviderTrustGraphError, "file:byte-cap")
+        before = (int(before_stat.st_dev), int(before_stat.st_ino), int(before_stat.st_nlink), int(before_stat.st_size), int(before_stat.st_mtime_ns))
+        descriptor = os.open(os.fspath(file_path), os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        opened_stat = os.fstat(descriptor)
+        opened = (int(opened_stat.st_dev), int(opened_stat.st_ino), int(opened_stat.st_nlink), int(opened_stat.st_size), int(opened_stat.st_mtime_ns))
+        if stat.S_ISLNK(opened_stat.st_mode) or not stat.S_ISREG(opened_stat.st_mode) or opened != before:
+            raise_redacted(IndependentProviderTrustGraphError, "file:changed")
+        raw = os.read(descriptor, MAX_ARTIFACT_BYTES + 1)
+        closed_stat = os.fstat(descriptor)
+        closed = (int(closed_stat.st_dev), int(closed_stat.st_ino), int(closed_stat.st_nlink), int(closed_stat.st_size), int(closed_stat.st_mtime_ns))
+        if closed != opened:
+            raise_redacted(IndependentProviderTrustGraphError, "file:changed")
+    except IndependentProviderTrustGraphError:
+        raise
+    except Exception:
+        raise_redacted(IndependentProviderTrustGraphError, "file:read")
+    finally:
+        if descriptor != -1:
+            try:
+                os.close(descriptor)
+            except Exception:
+                raise_redacted(IndependentProviderTrustGraphError, "file:read")
+    try:
+        final_stat = os.lstat(os.fspath(file_path))
+    except Exception:
+        raise_redacted(IndependentProviderTrustGraphError, "file:read")
+    final = (int(final_stat.st_dev), int(final_stat.st_ino), int(final_stat.st_nlink), int(final_stat.st_size), int(final_stat.st_mtime_ns))
+    if stat.S_ISLNK(final_stat.st_mode) or not stat.S_ISREG(final_stat.st_mode) or final != before:
+        raise_redacted(IndependentProviderTrustGraphError, "file:changed")
     if len(raw) > MAX_ARTIFACT_BYTES:
-        raise IndependentProviderTrustGraphError("file:byte-cap")
+        raise_redacted(IndependentProviderTrustGraphError, "file:byte-cap")
     return verify_bytes(raw)
 
 

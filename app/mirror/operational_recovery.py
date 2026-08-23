@@ -21,6 +21,7 @@ from app.mirror import controlled_shadow_runtime as runtime
 from app.mirror import controlled_shadow_runtime_independent as runtime_independent
 from app.mirror import external_source_quarantine as quarantine
 from app.mirror import external_source_quarantine_independent as quarantine_independent
+from app.mirror.error_boundary import raise_redacted
 from app.mirror import operational_recovery_independent as independent
 from app.mirror import restore_publication
 
@@ -1167,11 +1168,11 @@ class OperationalRecoveryService:
         try:
             sealed_bytes = self.storage.get(object_id)
         except StorageNotFound as exc:
-            raise RecoveryIntegrityError("recovery:storage-missing") from None
+            raise_redacted(RecoveryIntegrityError, "recovery:storage-missing")
         except RecoveryStorageError:
-            raise
+            raise_redacted(RecoveryStorageError, "recovery:storage-indeterminate")
         except Exception as exc:
-            raise RecoveryStorageError("recovery:storage-indeterminate") from None
+            raise_redacted(RecoveryStorageError, "recovery:storage-indeterminate")
         try:
             stat = _storage_view(
                 self.storage.stat(object_id),
@@ -1183,20 +1184,20 @@ class OperationalRecoveryService:
             # A successful byte read proves the object was present at get();
             # a later stat miss or malformed/ambiguous response cannot prove
             # absence and must leave STORED retryable.
-            raise RecoveryStorageError("recovery:storage-indeterminate") from None
+            raise_redacted(RecoveryStorageError, "recovery:storage-indeterminate")
         if stat["sealed_digest"] != point["sealed_digest"] or stat["sealed_length"] != point["sealed_length"]:
             raise RecoveryIntegrityError("recovery:storage-integrity")
         try:
             plaintext = self.key_custody.open(sealed_bytes, key_id=str(point["key_id"]), key_epoch=int(point["key_epoch"]))
         except Exception as exc:
-            raise RecoveryStorageError("recovery:custody-indeterminate") from None
+            raise_redacted(RecoveryStorageError, "recovery:custody-indeterminate")
         try:
             bundle = independent.verify_bundle(
                 plaintext, profile=self.profile_material, quarantine_policy=self.quarantine_policy, runtime_profile=self.runtime_profile,
                 expected_generation=int(point["generation"]), expected_prior_root=str(point["prior_root"]),
             )
         except independent.IndependentOperationalRecoveryError as exc:
-            raise RecoveryIntegrityError(str(exc)) from None
+            raise_redacted(RecoveryIntegrityError, str(exc))
         if bundle["bundle_digest"] != point["bundle_digest"] or bundle["bundle_length"] != point["bundle_length"]:
             raise RecoveryIntegrityError("recovery:bundle-integrity")
         return {**bundle, "sealed_bytes": sealed_bytes, "storage": stat}
@@ -1307,7 +1308,7 @@ class OperationalRecoveryService:
             try:
                 self.invalidate(point_id, expected_head=expected_head, reason=reason)
             except Exception as invalidate_exc:
-                raise RecoveryIntegrityError("recovery:invalidation-indeterminate") from None
+                raise_redacted(RecoveryIntegrityError, "recovery:invalidation-indeterminate")
             raise
         try:
             q_export_root = bundle.get("quarantine_export_root")
@@ -1363,7 +1364,7 @@ class OperationalRecoveryService:
                     quarantine_service.export_bytes()
                     runtime_service.export_bytes()
                 except Exception as exc:
-                    raise RecoveryIntegrityError("recovery:restore-reverify") from None
+                    raise_redacted(RecoveryIntegrityError, "recovery:restore-reverify")
 
                 def verify_quarantine(path: Path) -> object:
                     return quarantine_independent.verify_database(
@@ -1390,11 +1391,11 @@ class OperationalRecoveryService:
                 duration_ms = max(0, int((self.clock.monotonic() - start) * 1000))
                 return self._record_restore(point_id, bundle=bundle, duration_ms=duration_ms, expected_head=expected_head)
         except quarantine.ExternalSourceQuarantineError:
-            raise RecoveryIntegrityError("recovery:quarantine-restore") from None
+            raise_redacted(RecoveryIntegrityError, "recovery:quarantine-restore")
         except runtime.ControlledShadowRuntimeError:
-            raise RecoveryIntegrityError("recovery:runtime-restore") from None
+            raise_redacted(RecoveryIntegrityError, "recovery:runtime-restore")
         except restore_publication.RestorePublicationError:
-            raise RecoveryIntegrityError("recovery:restore-publication") from None
+            raise_redacted(RecoveryIntegrityError, "recovery:restore-publication")
 
     def _mutate_lifecycle(self, *, action: str, point_id: str, expected_head: str, next_state: str, reason: str = "") -> dict[str, object]:
         if action not in {independent.ACTION_SUPERSEDE, independent.ACTION_INVALIDATE}:
@@ -1490,14 +1491,18 @@ class OperationalRecoveryService:
         try:
             return independent.verify_database(self.database, profile=self.profile_material)
         except independent.IndependentOperationalRecoveryError as exc:
-            raise RecoveryIntegrityError(str(exc)) from None
+            raise_redacted(RecoveryIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RecoveryIntegrityError, "recovery:integrity")
 
     def export_bytes(self) -> bytes:
         try:
             snapshot_result = independent.snapshot_database(self.database, profile=self.profile_material)
             tables = independent._export_rows(snapshot_result["snapshot"])
         except independent.IndependentOperationalRecoveryError as exc:
-            raise RecoveryIntegrityError(str(exc)) from exc
+            raise_redacted(RecoveryIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RecoveryIntegrityError, "recovery:integrity")
         body: dict[str, object] = {
             "schema": independent.EXPORT_SCHEMA,
             "schema_version": independent.EXPORT_VERSION,
@@ -1513,14 +1518,18 @@ class OperationalRecoveryService:
         try:
             independent.verify_export_bytes(raw, profile=self.profile_material)
         except independent.IndependentOperationalRecoveryError as exc:
-            raise RecoveryIntegrityError(str(exc)) from exc
+            raise_redacted(RecoveryIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RecoveryIntegrityError, "recovery:integrity")
         return raw
 
     def support_snapshot(self) -> dict[str, object]:
         try:
             snapshot_result = independent.snapshot_database(self.database, profile=self.profile_material)
         except independent.IndependentOperationalRecoveryError as exc:
-            raise RecoveryIntegrityError(str(exc)) from exc
+            raise_redacted(RecoveryIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RecoveryIntegrityError, "recovery:integrity")
         evidence = {key: value for key, value in snapshot_result.items() if key != "snapshot"}
         rows = snapshot_result["snapshot"]
         invalidated = sum(row["state"] == STATE_INVALIDATED for row in rows["recovery_points"])
@@ -1585,7 +1594,7 @@ class OperationalRecoveryService:
         except sqlite3.Error as exc:
             if connection.in_transaction:
                 connection.rollback()
-            raise RecoveryIntegrityError("recovery:restore-catalog") from exc
+            raise_redacted(RecoveryIntegrityError, "recovery:restore-catalog")
         finally:
             connection.close()
 
@@ -1606,7 +1615,9 @@ class OperationalRecoveryService:
         try:
             verified = independent.verify_export_bytes(raw, profile=profile.material())
         except independent.IndependentOperationalRecoveryError as exc:
-            raise RecoveryIntegrityError(str(exc)) from exc
+            raise_redacted(RecoveryIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RecoveryIntegrityError, "recovery:integrity")
 
         def build_stage(stage: Path) -> None:
             service = cls(stage, profile=profile, quarantine_policy=quarantine_policy, runtime_profile=runtime_profile, clock=clock, key_custody=key_custody, storage=storage, fault_injector=fault_injector)
@@ -1616,7 +1627,7 @@ class OperationalRecoveryService:
             try:
                 return independent.verify_database(path, profile=profile.material())
             except independent.IndependentOperationalRecoveryError as exc:
-                raise RecoveryIntegrityError(str(exc)) from None
+                raise_redacted(RecoveryIntegrityError, str(exc))
 
         def open_service(path: Path) -> OperationalRecoveryService:
             return cls(path, profile=profile, quarantine_policy=quarantine_policy, runtime_profile=runtime_profile, clock=clock, key_custody=key_custody, storage=storage)
@@ -1626,10 +1637,14 @@ class OperationalRecoveryService:
                 destination, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
             )
+        except (RecoveryResponseLost, RecoveryInjectedFault):
+            raise
         except restore_publication.RestorePublicationConflict as exc:
-            raise RecoveryConflictError(str(exc)) from None
+            raise_redacted(RecoveryConflictError, str(exc))
         except (restore_publication.RestorePublicationError, RecoveryIntegrityError) as exc:
-            raise RecoveryIntegrityError(str(exc)) from None
+            raise_redacted(RecoveryIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RecoveryIntegrityError, "recovery:restore")
 
 
 def restore_export(

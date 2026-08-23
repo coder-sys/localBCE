@@ -872,6 +872,150 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
             self.assertEqual("ADOPTED_EXISTING", receipts[0]["publication_kind"])
             self.assertTrue((root / "continuity.publication.json").exists())
 
+    def test_adopted_target_sink_failure_before_write_preserves_target_and_retries(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        value, snapshot, expected = export._decode_and_verify(raw)
+        identity = "4" * 128
+        children = ("continuity",)
+        with restore_publication.owned_restore_workspace(self.directory, identity, children=children) as root:
+            target = root / "continuity" / "continuity.db"
+            export._restore_fault_point = "before_publish"
+            try:
+                with self.assertRaises(export.InjectedRestoreFault):
+                    export.import_export(raw, target)
+            finally:
+                export._restore_fault_point = None
+            stage, _marker = restore_publication.stage_paths(target, str(value["export_root"]), create_parent=False)
+            os.link(stage, target)
+
+            def build_stage(path: Path) -> None:
+                service = store.ContinuityStore(path)
+                service._restore_snapshot(snapshot)
+
+            calls = {"count": 0}
+
+            def fail_once(_receipt: dict[str, object]) -> None:
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise RuntimeError("ADOPTED-SINK-BEFORE-WRITE")
+
+            with self.assertRaises(restore_publication.RestorePublicationError):
+                restore_publication.publish_create_only(
+                    target,
+                    export_root=str(value["export_root"]),
+                    expected_evidence={**expected, "export_root": value["export_root"]},
+                    build_stage=build_stage,
+                    verify_database=independent.verify_database,
+                    result_factory=lambda _path: {"accepted": True},
+                    publication_receipt_sink=fail_once,
+                )
+            self.assertTrue(target.is_file())
+            self.assertTrue(stage.is_file())
+            restore_publication.publish_create_only(
+                target,
+                export_root=str(value["export_root"]),
+                expected_evidence={**expected, "export_root": value["export_root"]},
+                build_stage=build_stage,
+                verify_database=independent.verify_database,
+                result_factory=lambda _path: {"accepted": True},
+                publication_receipt_sink=fail_once,
+            )
+            self.assertTrue(target.is_file())
+            self.assertFalse(stage.exists())
+
+    def test_adopted_target_sink_response_loss_preserves_target_and_retries(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        value, snapshot, expected = export._decode_and_verify(raw)
+        identity = "5" * 128
+        children = ("continuity",)
+        with restore_publication.owned_restore_workspace(self.directory, identity, children=children) as root:
+            target = root / "continuity" / "continuity.db"
+            export._restore_fault_point = "before_publish"
+            try:
+                with self.assertRaises(export.InjectedRestoreFault):
+                    export.import_export(raw, target)
+            finally:
+                export._restore_fault_point = None
+            stage, _marker = restore_publication.stage_paths(target, str(value["export_root"]), create_parent=False)
+            os.link(stage, target)
+
+            def build_stage(path: Path) -> None:
+                service = store.ContinuityStore(path)
+                service._restore_snapshot(snapshot)
+
+            calls = {"count": 0}
+
+            def persist_then_raise(receipt: dict[str, object]) -> None:
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    self.assertEqual("ADOPTED_EXISTING", receipt["publication_kind"])
+                    restore_publication.persist_workspace_receipt(
+                        root,
+                        identity,
+                        "continuity",
+                        receipt,
+                        children=children,
+                        target=target,
+                    )
+                    raise RuntimeError("ADOPTED-SINK-RESPONSE-LOSS")
+                restore_publication.persist_workspace_receipt(
+                    root,
+                    identity,
+                    "continuity",
+                    receipt,
+                    children=children,
+                    target=target,
+                )
+
+            with self.assertRaises(restore_publication.RestorePublicationError):
+                restore_publication.publish_create_only(
+                    target,
+                    export_root=str(value["export_root"]),
+                    expected_evidence={**expected, "export_root": value["export_root"]},
+                    build_stage=build_stage,
+                    verify_database=independent.verify_database,
+                    result_factory=lambda _path: {"accepted": True},
+                    publication_receipt_sink=persist_then_raise,
+                )
+            self.assertTrue(target.is_file())
+            self.assertTrue(stage.is_file())
+            restore_publication.publish_create_only(
+                target,
+                export_root=str(value["export_root"]),
+                expected_evidence={**expected, "export_root": value["export_root"]},
+                build_stage=build_stage,
+                verify_database=independent.verify_database,
+                result_factory=lambda _path: {"accepted": True},
+                publication_receipt_sink=persist_then_raise,
+            )
+            self.assertTrue(target.is_file())
+            self.assertFalse(stage.exists())
+
+    def test_bound_absence_fails_closed_for_file_and_directory(self) -> None:
+        owned = self.directory / "owned-rename-away.db"
+        retained = self.directory / "retained-rename-away.db"
+        owned.write_bytes(b"owned")
+        identity = restore_publication._regular_identity(owned)
+        owned.rename(retained)
+        with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+            restore_publication._delete_exact_file(owned, expected_identity=identity, allow_empty=False, label="rename-away")
+        self.assertEqual(b"owned", retained.read_bytes())
+
+        namespace = self.directory / "owned-rename-away-dir"
+        retained_namespace = self.directory / "retained-rename-away-dir"
+        namespace.mkdir()
+        directory_identity = restore_publication._directory_identity(namespace)
+        namespace.rename(retained_namespace)
+        with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+            restore_publication._delete_exact_directory(namespace, expected_identity=directory_identity, label="rename-away-directory")
+        self.assertTrue(retained_namespace.is_dir())
+
     def test_restore_path_object_and_sidecar_rejections(self) -> None:
         instance = self._store()
         graph_raw, _ = graph.build_demo_report("confirmed")

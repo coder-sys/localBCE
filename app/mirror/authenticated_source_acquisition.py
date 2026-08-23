@@ -22,6 +22,7 @@ from app.mirror import nc_medicaid_fhir_independent as nc_independent
 from app.mirror import nc_medicaid_fhir_profile as profile_module
 from app.mirror import authenticated_source_acquisition_independent as independent
 from app.mirror import external_source_quarantine_independent as quarantine_independent
+from app.mirror.error_boundary import raise_redacted
 from app.mirror import restore_publication
 
 SCHEMA = independent.SCHEMA
@@ -383,10 +384,8 @@ def _authoritative_quarantine_snapshot(
         if not isinstance(snapshot, Mapping):
             raise ValueError("quarantine authority snapshot")
         return result
-    except Exception as exc:
-        if isinstance(exc, AuthenticatedSourceAcquisitionError):
-            raise
-        raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority") from None
+    except Exception:
+        raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:quarantine-authority")
 
 
 def _historical_quarantine_result(
@@ -1206,7 +1205,9 @@ class AuthenticatedSourceAcquisitionService:
         try:
             verified = independent.verify_export_bytes(raw, config=config.material())
         except independent.IndependentAcquisitionError as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
+            raise_redacted(AuthenticatedSourceAcquisitionError, str(exc))
+        except Exception:
+            raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:restore")
         quarantine_snapshot = _authoritative_quarantine_snapshot(config, quarantine_service)
         _require_authoritative_quarantine_rows(
             verified["snapshot"],
@@ -1249,7 +1250,11 @@ class AuthenticatedSourceAcquisitionService:
                     quarantine_snapshot=service._authoritative_quarantine_snapshot(),
                 )
             except independent.IndependentAcquisitionError:
-                raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority") from None
+                raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:quarantine-authority")
+            except AuthenticatedSourceAcquisitionError:
+                raise
+            except Exception:
+                raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:quarantine-authority")
             return service
 
         try:
@@ -1261,9 +1266,11 @@ class AuthenticatedSourceAcquisitionService:
         except (AcquisitionResponseLost, AcquisitionInjectedFault):
             raise
         except restore_publication.RestorePublicationConflict as exc:
-            raise AcquisitionConflictError(str(exc)) from None
+            raise_redacted(AcquisitionConflictError, str(exc))
         except (restore_publication.RestorePublicationError, AuthenticatedSourceAcquisitionError) as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
+            raise_redacted(AuthenticatedSourceAcquisitionError, str(exc))
+        except Exception:
+            raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:restore")
 
 
 def restore_export(destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> AuthenticatedSourceAcquisitionService:

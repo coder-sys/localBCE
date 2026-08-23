@@ -19,6 +19,7 @@ import tempfile
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from app.mirror import controlled_shadow_runtime_independent as independent
+from app.mirror.error_boundary import raise_redacted
 from app.mirror import restore_publication
 
 
@@ -992,7 +993,9 @@ class ControlledShadowRuntimeService:
         try:
             verified = independent.verify_export_bytes(raw, profile=profile.material())
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from None
+            raise_redacted(RuntimeIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RuntimeIntegrityError, "runtime:restore")
 
         def build_stage(stage: Path) -> None:
             service = cls(stage, profile=profile, clock=clock)
@@ -1019,7 +1022,9 @@ class ControlledShadowRuntimeService:
             try:
                 return independent.verify_database(path, profile=profile.material())
             except independent.IndependentControlledShadowError as exc:
-                raise RuntimeIntegrityError(str(exc)) from None
+                raise_redacted(RuntimeIntegrityError, str(exc))
+            except Exception:
+                raise_redacted(RuntimeIntegrityError, "runtime:restore")
 
         def open_service(path: Path) -> ControlledShadowRuntimeService:
             return cls(path, profile=profile, clock=clock)
@@ -1030,10 +1035,14 @@ class ControlledShadowRuntimeService:
                 open_service=open_service, fault_injector=fault_injector,
                 publication_receipt_sink=publication_receipt_sink,
             )
+        except (RuntimeResponseLost, RuntimeInjectedFault):
+            raise
         except restore_publication.RestorePublicationConflict as exc:
-            raise RuntimeConflictError(str(exc)) from None
+            raise_redacted(RuntimeConflictError, str(exc))
         except (restore_publication.RestorePublicationError, RuntimeIntegrityError) as exc:
-            raise RuntimeIntegrityError(str(exc)) from None
+            raise_redacted(RuntimeIntegrityError, str(exc))
+        except Exception:
+            raise_redacted(RuntimeIntegrityError, "runtime:restore")
 
 
 def restore_export(destination: str | Path, raw: bytes, *, profile: ControlledShadowRuntimeProfileV1, clock: Clock, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> ControlledShadowRuntimeService:
