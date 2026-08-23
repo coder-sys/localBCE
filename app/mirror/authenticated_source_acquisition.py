@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Mapping, Protocol, Sequence
 
 from app.mirror import external_source_adapter as external_adapter
 from app.mirror import external_source_adapter_independent as external_independent
@@ -26,6 +26,7 @@ from app.mirror.error_boundary import raise_redacted
 from app.mirror import restore_publication
 
 SCHEMA = independent.SCHEMA
+VerifiedAcquisitionQualificationV1 = independent.VerifiedAcquisitionQualificationV1
 SCHEMA_VERSION = independent.SCHEMA_VERSION
 EXPORT_SCHEMA = independent.EXPORT_SCHEMA
 EXPORT_VERSION = independent.EXPORT_VERSION
@@ -69,6 +70,16 @@ class AcquisitionInjectedFault(AuthenticatedSourceAcquisitionError):
 
 class AcquisitionHold(AuthenticatedSourceAcquisitionError):
     pass
+
+
+class AcquisitionQualificationError(AuthenticatedSourceAcquisitionError):
+    _REASONS = {
+        "SOURCE_SUPERSEDED", "QUARANTINE_WITHDRAWN", "AUTHORITY_INDETERMINATE",
+    }
+
+    def __init__(self, reason: str = "AUTHORITY_INDETERMINATE") -> None:
+        self.reason = reason if reason in self._REASONS else "AUTHORITY_INDETERMINATE"
+        super().__init__("acquisition:qualification")
 
 
 def _canonical(value: object) -> bytes:
@@ -1042,6 +1053,38 @@ class AuthenticatedSourceAcquisitionService:
             quarantine_snapshot=quarantine_snapshot,
         )
 
+    def qualification_views(self, slot_ids: Sequence[str]) -> tuple[independent.VerifiedAcquisitionQualificationV1, ...]:
+        """Return current quarantine bindings from one snapshot per database."""
+
+        try:
+            requested = tuple(slot_ids)
+            snapshot_result = independent.snapshot_database(self.database, config=self.config.material())
+            quarantine_snapshot = self._authoritative_quarantine_snapshot()
+            self._verify_quarantine_rows(snapshot_result["snapshot"], quarantine_snapshot=quarantine_snapshot)
+            return independent.qualify_current_views(
+                snapshot_result,
+                quarantine_snapshot,
+                config=self.config.material(),
+                quarantine_policy=self.quarantine_service.policy,
+                slot_ids=requested,
+            )
+        except independent.IndependentAcquisitionError as exc:
+            reason = {
+                "acquisition:qualification-source-superseded": "SOURCE_SUPERSEDED",
+                "acquisition:qualification-quarantine-withdrawn": "QUARANTINE_WITHDRAWN",
+            }.get(exc.code, "AUTHORITY_INDETERMINATE")
+            raise AcquisitionQualificationError(reason) from None
+        except AuthenticatedSourceAcquisitionError:
+            raise
+        except Exception:
+            raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:qualification")
+
+    def qualification_view(self, slot_id: str) -> independent.VerifiedAcquisitionQualificationV1:
+        views = self.qualification_views((slot_id,))
+        if len(views) != 1:
+            raise_redacted(AuthenticatedSourceAcquisitionError, "acquisition:qualification")
+        return views[0]
+
     def _validate_port(self, transport: AuthenticatedFhirTransportPort) -> None:
         if getattr(transport, "transport_id", None) != self.config.transport_id or getattr(transport, "transport_epoch", None) != self.config.transport_epoch:
             raise AuthenticatedSourceAcquisitionError("acquisition:transport-mismatch")
@@ -1277,4 +1320,4 @@ def restore_export(destination: str | Path, raw: bytes, *, config: Authenticated
     return AuthenticatedSourceAcquisitionService.restore_export(destination, raw, config=config, external_policy=external_policy, quarantine_service=quarantine_service, fault_injector=fault_injector, publication_receipt_sink=publication_receipt_sink)
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "AuthenticatedSourceAcquisitionError", "AcquisitionConflictError", "AcquisitionBusyError", "AcquisitionResponseLost", "AcquisitionInjectedFault", "AcquisitionHold", "AuthenticatedSourceAcquisitionConfigV1", "request_digest_for_page", "request_digest_for_profile", "AuthenticatedFhirRequestV1", "FhirTransportAttestationV1", "AuthenticatedFhirResponseV1", "AuthenticatedFhirTransportPort", "LiveAuthenticatedFhirTransport", "AcquisitionLease", "AuthenticatedSourceAcquisitionService", "restore_export", "_digest"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "AuthenticatedSourceAcquisitionError", "AcquisitionConflictError", "AcquisitionBusyError", "AcquisitionResponseLost", "AcquisitionInjectedFault", "AcquisitionHold", "AcquisitionQualificationError", "AuthenticatedSourceAcquisitionConfigV1", "request_digest_for_page", "request_digest_for_profile", "AuthenticatedFhirRequestV1", "FhirTransportAttestationV1", "AuthenticatedFhirResponseV1", "AuthenticatedFhirTransportPort", "LiveAuthenticatedFhirTransport", "AcquisitionLease", "AuthenticatedSourceAcquisitionService", "VerifiedAcquisitionQualificationV1", "restore_export", "_digest"]

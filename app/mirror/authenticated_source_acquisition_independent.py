@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import sqlite3
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from app.mirror import external_source_adapter_independent as adapter
 from app.mirror import external_source_quarantine_independent as quarantine
@@ -101,7 +102,86 @@ FIXED_FLAG_STORAGE = {
 
 
 class IndependentAcquisitionError(ValueError):
-    pass
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class VerifiedAcquisitionQualificationV1:
+    """One current, independently reconstructed quarantine binding.
+
+    ``artifact_raw`` is an ephemeral state-owned input for composing the
+    runtime bundle.  It is intentionally absent from ``material`` and from
+    every support projection; the admission ledger stores only the bindings.
+    """
+
+    acquisition_id: str
+    config_digest: str
+    acquisition_database_id: str
+    source_policy_digest: str
+    slot_id: str
+    scheduled_at: int
+    envelope_id: str
+    envelope_digest: str
+    capture_id: str
+    artifact_id: str
+    artifact_digest: str
+    artifact_raw: bytes
+    quarantine_database_id: str
+    quarantine_policy_digest: str
+    quarantine_chain_id: str
+    quarantine_operation_id: str
+    quarantine_transition_id: str
+    quarantine_request_digest: str
+    quarantine_receipt_digest: str
+    quarantine_head_artifact_id: str
+    quarantine_head_root: str
+    quarantine_sequence: int
+    observed_at: int
+    fetched_at: int
+    qualification_digest: str
+    flags: Mapping[str, object]
+
+    def material(self) -> dict[str, object]:
+        return {
+            "acquisition_id": self.acquisition_id,
+            "config_digest": self.config_digest,
+            "acquisition_database_id": self.acquisition_database_id,
+            "source_policy_digest": self.source_policy_digest,
+            "slot_id": self.slot_id,
+            "scheduled_at": self.scheduled_at,
+            "envelope_id": self.envelope_id,
+            "envelope_digest": self.envelope_digest,
+            "capture_id": self.capture_id,
+            "artifact_id": self.artifact_id,
+            "artifact_digest": self.artifact_digest,
+            "quarantine_database_id": self.quarantine_database_id,
+            "quarantine_policy_digest": self.quarantine_policy_digest,
+            "quarantine_chain_id": self.quarantine_chain_id,
+            "quarantine_operation_id": self.quarantine_operation_id,
+            "quarantine_transition_id": self.quarantine_transition_id,
+            "quarantine_request_digest": self.quarantine_request_digest,
+            "quarantine_receipt_digest": self.quarantine_receipt_digest,
+            "quarantine_head_artifact_id": self.quarantine_head_artifact_id,
+            "quarantine_head_root": self.quarantine_head_root,
+            "quarantine_sequence": self.quarantine_sequence,
+            "observed_at": self.observed_at,
+            "fetched_at": self.fetched_at,
+            "flags": dict(self.flags),
+        }
+
+    def support_material(self) -> dict[str, object]:
+        return {
+            "state": "QUALIFIED_CURRENT_QUARANTINE",
+            "scheduled_at": self.scheduled_at,
+            "observed_at": self.observed_at,
+            "fetched_at": self.fetched_at,
+            "zero_phi": True,
+            "read_only": True,
+            "observation_only": True,
+            "quarantine_only": True,
+        }
 
 
 def _canonical(value: object) -> bytes:
@@ -732,4 +812,142 @@ def support_snapshot(path: str | Path, *, config: Mapping[str, object] | object)
     return {"schema": "mirror-authenticated-source-acquisition-support-v3", "schema_version": 3, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **FIXED_FLAGS}
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "CONFIG_KEYS", "META_KEYS", "SLOT_COLUMNS", "OPERATION_COLUMNS", "TRANSITION_COLUMNS", "ATTESTATION_COLUMNS", "TABLE_COLUMNS", "EXPORT_KEYS", "EXPORT_ROW_KEYS", "FIXED_FLAGS", "FIXED_FLAG_STORAGE", "IndependentAcquisitionError", "_canonical", "_digest", "_raw_digest", "_config_view", "_config_digest", "_chain_id", "_genesis_root", "_state_root", "_parse", "verify_attestation", "snapshot_database", "verify_database", "verify_export_bytes", "support_snapshot"]
+def qualify_current_views(
+    acquisition_snapshot: Mapping[str, object],
+    quarantine_snapshot: Mapping[str, object],
+    *,
+    config: Mapping[str, object] | object,
+    quarantine_policy: Mapping[str, object] | object,
+    slot_ids: Sequence[str],
+) -> tuple[VerifiedAcquisitionQualificationV1, ...]:
+    """Build current quarantine views from two already verified snapshots.
+
+    The caller is required to obtain each database snapshot once.  This
+    function performs no filesystem or database access and therefore cannot
+    accidentally turn a per-slot lookup into repeated full scans.
+    """
+
+    cfg = _config_view(config)
+    if not isinstance(acquisition_snapshot, Mapping) or not isinstance(quarantine_snapshot, Mapping):
+        raise IndependentAcquisitionError("acquisition:qualification-snapshot")
+    acq_evidence = acquisition_snapshot.get("evidence")
+    acq_rows = acquisition_snapshot.get("snapshot")
+    q_rows = quarantine_snapshot.get("snapshot")
+    if not isinstance(acq_evidence, Mapping) or not isinstance(acq_rows, Mapping) or not isinstance(q_rows, Mapping):
+        raise IndependentAcquisitionError("acquisition:qualification-snapshot")
+    if acq_evidence.get("config_digest") != _config_digest(cfg) or acq_evidence.get("chain_id") != _chain_id(_config_digest(cfg)):
+        raise IndependentAcquisitionError("acquisition:qualification-config")
+    q_evidence = quarantine_snapshot
+    if q_evidence.get("policy_digest") != cfg["quarantine_policy_digest"] or q_evidence.get("database_id") != cfg["quarantine_database_id"] or q_evidence.get("chain_id") != cfg["quarantine_chain_id"]:
+        raise IndependentAcquisitionError("acquisition:qualification-quarantine")
+    if q_evidence.get("head_state") == "WITHDRAWN":
+        raise IndependentAcquisitionError("acquisition:qualification-quarantine-withdrawn")
+    if q_evidence.get("head_state") != quarantine.QUARANTINE_STATUS or not isinstance(q_evidence.get("head_artifact_id"), str) or not isinstance(q_evidence.get("head_root"), str):
+        raise IndependentAcquisitionError("acquisition:qualification-head")
+    requested = tuple(slot_ids)
+    if not requested or len(requested) > cfg["max_slots"] or len(set(requested)) != len(requested):
+        raise IndependentAcquisitionError("acquisition:qualification-slots")
+    slots = acq_rows.get("acquisition_slots")
+    q_operations = q_rows.get("quarantine_operations")
+    q_transitions = q_rows.get("quarantine_transitions")
+    q_artifacts = q_rows.get("quarantine_artifacts")
+    q_heads = q_rows.get("quarantine_heads")
+    if not all(isinstance(value, list) for value in (slots, q_operations, q_transitions, q_artifacts, q_heads)):
+        raise IndependentAcquisitionError("acquisition:qualification-rows")
+    slot_map = {str(row["slot_id"]): row for row in slots if isinstance(row, Mapping)}
+    artifact_map = {str(row["artifact_id"]): row for row in q_artifacts if isinstance(row, Mapping)}
+    head_rows = [row for row in q_heads if isinstance(row, Mapping)]
+    if len(head_rows) != 1:
+        raise IndependentAcquisitionError("acquisition:qualification-head")
+    head = head_rows[0]
+    if (
+        head["policy_digest"] != cfg["quarantine_policy_digest"]
+        or head["head_artifact_id"] != q_evidence["head_artifact_id"]
+        or head["state"] != q_evidence["head_state"]
+        or head["sequence"] != q_evidence["sequence"]
+        or head["head_root"] != q_evidence["head_root"]
+    ):
+        raise IndependentAcquisitionError("acquisition:qualification-head")
+    results: list[VerifiedAcquisitionQualificationV1] = []
+    for slot_id in requested:
+        _hex(slot_id, "qualification-slot")
+        row = slot_map.get(slot_id)
+        if row is None or row["state"] != "QUARANTINED":
+            raise IndependentAcquisitionError("acquisition:qualification-slot-state")
+        if row["quarantine_database_id"] != cfg["quarantine_database_id"] or row["quarantine_policy_digest"] != cfg["quarantine_policy_digest"] or row["quarantine_chain_id"] != cfg["quarantine_chain_id"]:
+            raise IndependentAcquisitionError("acquisition:qualification-quarantine")
+        artifact_id = str(row["artifact_id"])
+        if artifact_id != q_evidence["head_artifact_id"] or artifact_id != head["head_artifact_id"]:
+            raise IndependentAcquisitionError("acquisition:qualification-source-superseded")
+        artifact = artifact_map.get(artifact_id)
+        if artifact is None or artifact["artifact_digest"] != row["artifact_digest"] or artifact["status"] != quarantine.QUARANTINE_STATUS or type(artifact["artifact_raw"]) is not bytes:
+            raise IndependentAcquisitionError("acquisition:qualification-artifact")
+        operations = [item for item in q_operations if isinstance(item, Mapping) and item["request_digest"] == row["quarantine_request_digest"] and item["artifact_id"] == artifact_id]
+        if len(operations) != 1:
+            raise IndependentAcquisitionError("acquisition:qualification-operation")
+        operation = operations[0]
+        if operation["request_digest"] != row["quarantine_request_digest"]:
+            raise IndependentAcquisitionError("acquisition:qualification-operation")
+        transitions = [item for item in q_transitions if isinstance(item, Mapping) and item["transition_id"] == operation["transition_id"] and item["operation_id"] == operation["operation_id"]]
+        if len(transitions) != 1:
+            raise IndependentAcquisitionError("acquisition:qualification-transition")
+        transition = transitions[0]
+        try:
+            receipt = quarantine.verify_admission_receipt(
+                operation["receipt_raw"],
+                policy=quarantine_policy,
+                database_id=cfg["quarantine_database_id"],
+                operation=operation,
+                transition=transition,
+                artifact=artifact,
+                head=head,
+            )
+        except quarantine.IndependentQuarantineError:
+            raise IndependentAcquisitionError("acquisition:qualification-receipt")
+        if receipt.receipt_digest != row["quarantine_receipt_digest"] or receipt.receipt_raw != row["quarantine_receipt_raw"]:
+            raise IndependentAcquisitionError("acquisition:qualification-receipt")
+        material = {
+            "acquisition_id": cfg["acquisition_id"],
+            "config_digest": _config_digest(cfg),
+            "acquisition_database_id": _chain_id(_config_digest(cfg)),
+            "source_policy_digest": cfg["external_policy_digest"],
+            "slot_id": slot_id,
+            "scheduled_at": row["scheduled_at"],
+            "envelope_id": row["envelope_id"],
+            "envelope_digest": row["envelope_digest"],
+            "capture_id": row["capture_id"],
+            "artifact_id": artifact_id,
+            "artifact_digest": row["artifact_digest"],
+            "quarantine_database_id": cfg["quarantine_database_id"],
+            "quarantine_policy_digest": cfg["quarantine_policy_digest"],
+            "quarantine_chain_id": cfg["quarantine_chain_id"],
+            "quarantine_operation_id": operation["operation_id"],
+            "quarantine_transition_id": transition["transition_id"],
+            "quarantine_request_digest": operation["request_digest"],
+            "quarantine_receipt_digest": operation["receipt_digest"],
+            "quarantine_head_artifact_id": head["head_artifact_id"],
+            "quarantine_head_root": head["head_root"],
+            "quarantine_sequence": head["sequence"],
+            "observed_at": row["observed_at"],
+            "fetched_at": row["fetched_at"],
+            "flags": FIXED_FLAGS,
+        }
+        qualification_digest = _digest("qualification", material)
+        results.append(VerifiedAcquisitionQualificationV1(
+            acquisition_id=cfg["acquisition_id"], config_digest=_config_digest(cfg),
+            acquisition_database_id=_chain_id(_config_digest(cfg)), source_policy_digest=cfg["external_policy_digest"],
+            slot_id=slot_id, scheduled_at=int(row["scheduled_at"]), envelope_id=str(row["envelope_id"]),
+            envelope_digest=str(row["envelope_digest"]), capture_id=str(row["capture_id"]), artifact_id=artifact_id,
+            artifact_digest=str(row["artifact_digest"]), artifact_raw=bytes(artifact["artifact_raw"]),
+            quarantine_database_id=cfg["quarantine_database_id"], quarantine_policy_digest=cfg["quarantine_policy_digest"],
+            quarantine_chain_id=cfg["quarantine_chain_id"], quarantine_operation_id=str(operation["operation_id"]),
+            quarantine_transition_id=str(transition["transition_id"]), quarantine_request_digest=str(operation["request_digest"]),
+            quarantine_receipt_digest=str(operation["receipt_digest"]),
+            quarantine_head_artifact_id=str(head["head_artifact_id"]), quarantine_head_root=str(head["head_root"]),
+            quarantine_sequence=int(head["sequence"]), observed_at=int(row["observed_at"]), fetched_at=int(row["fetched_at"]),
+            qualification_digest=qualification_digest, flags=dict(FIXED_FLAGS),
+        ))
+    return tuple(results)
+
+
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "CONFIG_KEYS", "META_KEYS", "SLOT_COLUMNS", "OPERATION_COLUMNS", "TRANSITION_COLUMNS", "ATTESTATION_COLUMNS", "TABLE_COLUMNS", "EXPORT_KEYS", "EXPORT_ROW_KEYS", "FIXED_FLAGS", "FIXED_FLAG_STORAGE", "IndependentAcquisitionError", "VerifiedAcquisitionQualificationV1", "_canonical", "_digest", "_raw_digest", "_config_view", "_config_digest", "_chain_id", "_genesis_root", "_state_root", "_parse", "verify_attestation", "snapshot_database", "verify_database", "verify_export_bytes", "support_snapshot", "qualify_current_views"]
