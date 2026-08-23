@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-import tempfile
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from app.mirror import controlled_shadow_runtime as runtime
@@ -67,6 +66,13 @@ class RecoveryStorageError(OperationalRecoveryError):
     """The immutable storage port could not prove the requested object."""
 
 
+class StorageNotFound(RecoveryStorageError):
+    """The storage owner proved that the exact object is absent."""
+
+
+STORAGE_PUT_OUTCOMES = frozenset({"CREATED", "EXISTING_SAME", "EXISTING_DIFFERENT"})
+
+
 @runtime_checkable
 class StateClock(Protocol):
     def now(self) -> int: ...
@@ -104,7 +110,14 @@ class KeyCustodyPort(Protocol):
 class RecoveryStoragePort(Protocol):
     storage_id: str
 
-    def put(self, object_id: str, sealed_bytes: bytes) -> Mapping[str, object]: ...
+    def put_if_absent(
+        self,
+        object_id: str,
+        sealed_bytes: bytes,
+        *,
+        key_id: str,
+        key_epoch: int,
+    ) -> Mapping[str, object]: ...
 
     def get(self, object_id: str) -> bytes: ...
 
@@ -234,6 +247,44 @@ def _storage_view(value: Mapping[str, object], *, object_id: str, sealed_bytes: 
     return {"object_id": object_id, "storage_id": storage_id, "sealed_digest": digest, "sealed_length": len(sealed_bytes)}
 
 
+def _storage_put_view(
+    value: Mapping[str, object],
+    *,
+    object_id: str,
+    sealed_bytes: bytes,
+    key_id: str,
+    key_epoch: int,
+    expected_storage_id: str,
+) -> dict[str, object]:
+    expected = {"outcome", "object_id", "storage_id", "sealed_digest", "sealed_length", "key_id", "key_epoch"}
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise RecoveryStorageError("recovery:storage-put-receipt")
+    outcome = value["outcome"]
+    if outcome not in STORAGE_PUT_OUTCOMES:
+        raise RecoveryStorageError("recovery:storage-put-outcome")
+    if value["object_id"] != object_id or value["key_id"] != key_id or value["key_epoch"] != key_epoch:
+        raise RecoveryStorageError("recovery:storage-put-binding")
+    storage_id = value["storage_id"]
+    if not isinstance(storage_id, str) or independent.SAFE_TOKEN.fullmatch(storage_id) is None or storage_id != expected_storage_id:
+        raise RecoveryStorageError("recovery:storage-put-owner")
+    if type(sealed_bytes) is not bytes or not sealed_bytes or len(sealed_bytes) > independent.MAX_SEALED_BYTES:
+        raise RecoveryStorageError("recovery:storage-put-bytes")
+    digest = hashlib.sha3_512(sealed_bytes).hexdigest()
+    reported_digest = value["sealed_digest"]
+    reported_length = value["sealed_length"]
+    if not isinstance(reported_digest, str) or independent.SAFE_TOKEN.fullmatch(reported_digest) is None or len(reported_digest) != 128:
+        raise RecoveryStorageError("recovery:storage-put-integrity")
+    if type(reported_length) is not int or reported_length < 1 or reported_length > independent.MAX_SEALED_BYTES:
+        raise RecoveryStorageError("recovery:storage-put-integrity")
+    if outcome != "EXISTING_DIFFERENT" and (reported_digest != digest or reported_length != len(sealed_bytes)):
+        raise RecoveryStorageError("recovery:storage-put-integrity")
+    return {
+        "outcome": outcome, "object_id": object_id, "storage_id": storage_id,
+        "sealed_digest": reported_digest, "sealed_length": reported_length,
+        "key_id": key_id, "key_epoch": key_epoch,
+    }
+
+
 class OperationalRecoveryService:
     """One profile-owned SQLite recovery catalog and lifecycle owner."""
 
@@ -361,14 +412,98 @@ class OperationalRecoveryService:
 
     def _result_from_operation(self, connection: sqlite3.Connection, operation: Mapping[str, object]) -> dict[str, object]:
         meta = self._metadata(connection)
-        point = self._point(connection, str(operation["point_id"]))
+        try:
+            if (
+                set(meta) != independent.META_KEYS
+                or meta["schema"] != SCHEMA
+                or meta["schema_version"] != str(SCHEMA_VERSION)
+                or meta["profile_digest"] != self.profile_digest
+                or meta["custody_id"] != self.profile.custody_id
+                or meta["storage_id"] != self.profile.storage_id
+            ):
+                raise RecoveryIntegrityError("recovery:current-metadata")
+            current_sequence = int(meta["sequence"])
+            current_generation = int(meta["generation"])
+            current_head = str(meta["head_root"])
+            current_point = str(meta["head_point_id"])
+            current_state_root = str(meta["state_root"])
+            if (
+                independent._state_root(
+                    current_sequence,
+                    current_head,
+                    current_point,
+                    current_generation,
+                    self.profile.custody_id,
+                    self.profile.storage_id,
+                )
+                != current_state_root
+            ):
+                raise RecoveryIntegrityError("recovery:current-metadata")
+        except RecoveryIntegrityError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RecoveryIntegrityError("recovery:current-metadata") from exc
+        operation_id = str(operation["operation_id"])
+        stored_operation = self._operation(connection, operation_id)
+        if stored_operation is None:
+            raise RecoveryIntegrityError("recovery:operation-missing")
+        point = self._point(connection, str(stored_operation["point_id"]))
         if point is None:
             raise RecoveryIntegrityError("recovery:operation-point")
-        receipt = json.loads(bytes(operation["receipt_raw"]).decode("ascii"))
-        historical_head = str(receipt["next_root"])
+        transition_row = connection.execute(
+            "SELECT * FROM recovery_transitions WHERE transition_id=? AND operation_id=?",
+            (str(stored_operation["transition_id"]), operation_id),
+        ).fetchone()
+        if transition_row is None:
+            raise RecoveryIntegrityError("recovery:operation-transition")
+        transition = dict(transition_row)
+        if (
+            transition["point_id"] != stored_operation["point_id"]
+            or transition["action"] != stored_operation["action"]
+            or int(transition["sequence"]) != int(stored_operation["sequence"])
+        ):
+            raise RecoveryIntegrityError("recovery:operation-transition")
+        try:
+            transition_value = independent._verify_transition(
+                transition,
+                profile_digest_value=self.profile_digest,
+                custody_id=self.profile.custody_id,
+                storage_id=self.profile.storage_id,
+            )
+            if any(
+                transition_value[key] != transition[key]
+                for key in independent.TABLE_COLUMNS["recovery_transitions"]
+                if key != "transition_raw"
+            ):
+                raise RecoveryIntegrityError("recovery:operation-transition")
+            receipt_raw = bytes(stored_operation["receipt_raw"])
+            if stored_operation["receipt_digest"] != hashlib.sha3_512(receipt_raw).hexdigest():
+                raise RecoveryIntegrityError("recovery:operation-receipt")
+            receipt_value = independent._verify_receipt(
+                receipt_raw,
+                profile_digest_value=self.profile_digest,
+                custody_id=self.profile.custody_id,
+                storage_id=self.profile.storage_id,
+                expected_action=str(transition_value["action"]),
+                expected_point=str(transition_value["point_id"]),
+                expected_state=str(transition_value["next_state"]),
+                expected_sequence=int(transition_value["sequence"]),
+                expected_transition=str(transition_value["transition_id"]),
+                expected_prior=str(transition_value["prior_root"]),
+                expected_next=str(transition_value["next_root"]),
+            )
+            if receipt_value["operation_id"] != operation_id:
+                raise RecoveryIntegrityError("recovery:operation-receipt")
+        except RecoveryIntegrityError:
+            raise
+        except Exception as exc:
+            raise RecoveryIntegrityError("recovery:operation-receipt") from exc
+        # The historical root is owned by the matching transition, never by
+        # an independently parsed receipt field.
+        historical_head = str(transition_value["next_root"])
         historical_head_point = connection.execute(
             "SELECT point_id FROM recovery_transitions WHERE action=? AND sequence<=? ORDER BY sequence DESC LIMIT 1",
-            (independent.ACTION_PREPARE, int(operation["sequence"])),
+            (independent.ACTION_PREPARE, int(stored_operation["sequence"])),
         ).fetchone()
         if historical_head_point is None:
             raise RecoveryIntegrityError("recovery:operation-head")
@@ -379,19 +514,20 @@ class OperationalRecoveryService:
             raise RecoveryIntegrityError("recovery:operation-generation")
         return {
             "accepted": True,
-            "operation_id": operation["operation_id"],
-            "action": operation["action"],
+            "operation_id": stored_operation["operation_id"],
+            "action": stored_operation["action"],
             "point_id": point["point_id"],
             "generation": point["generation"],
             "state": point["state"],
-            "sequence": operation["sequence"],
-            "transition_id": operation["transition_id"],
+            "sequence": stored_operation["sequence"],
+            "transition_id": stored_operation["transition_id"],
             "head_root": historical_head,
             "current_head_root": meta["head_root"],
-            "state_root": independent._state_root(int(operation["sequence"]), historical_head, str(historical_head_point[0]), int(historical_generation[0]), self.profile.custody_id, self.profile.storage_id),
+            "state_root": independent._state_root(int(stored_operation["sequence"]), historical_head, str(historical_head_point[0]), int(historical_generation[0]), self.profile.custody_id, self.profile.storage_id),
             "current_state_root": meta["state_root"],
-            "receipt_raw": bytes(operation["receipt_raw"]),
-            "receipt_digest": operation["receipt_digest"],
+            "receipt_raw": receipt_raw,
+            "receipt_digest": stored_operation["receipt_digest"],
+            "verified_transition": transition_value,
             "custody_id": self.profile.custody_id,
             "storage_id": self.profile.storage_id,
             "flags": dict(FIXED_FLAGS),
@@ -880,9 +1016,23 @@ class OperationalRecoveryService:
         object_id = str(point["object_id"])
         try:
             sealed_bytes = self.storage.get(object_id)
-            storage_view = _storage_view(self.storage.stat(object_id), object_id=object_id, sealed_bytes=sealed_bytes, expected_storage_id=self.profile.storage_id)
+        except StorageNotFound:
+            raise
         except Exception as exc:
-            raise RecoveryStorageError("recovery:storage-missing") from exc
+            raise RecoveryStorageError("recovery:storage-indeterminate") from exc
+        try:
+            storage_view = _storage_view(
+                self.storage.stat(object_id), object_id=object_id, sealed_bytes=sealed_bytes,
+                expected_storage_id=self.profile.storage_id,
+            )
+        except StorageNotFound as exc:
+            # Bytes were returned but their authoritative metadata was not;
+            # this is not proof of absence and must never authorize a put.
+            raise RecoveryStorageError("recovery:storage-indeterminate") from exc
+        except RecoveryStorageError:
+            raise
+        except Exception as exc:
+            raise RecoveryStorageError("recovery:storage-indeterminate") from exc
         return self._verify_reserved_object(point, sealed_bytes=sealed_bytes, storage_view=storage_view, bundle_raw=bundle_raw)
 
     def _invalidate_pending(self, point: Mapping[str, object], *, reason: str) -> None:
@@ -904,9 +1054,7 @@ class OperationalRecoveryService:
             raise RecoveryConflictError("recovery:key-revoked")
         try:
             existing = self._read_reserved_object(point, bundle_raw=bundle_raw)
-        except RecoveryStorageError as exc:
-            if "storage-missing" not in str(exc):
-                raise
+        except StorageNotFound:
             self._fault("before_seal")
             try:
                 sealed = self._validate_sealed(
@@ -929,23 +1077,28 @@ class OperationalRecoveryService:
             if self.key_custody.key_state(str(key["key_id"]), int(key["key_epoch"])) != "ACTIVE":
                 self._invalidate_pending(point, reason="KEY_REVOKED")
                 raise RecoveryConflictError("recovery:key-revoked")
-            put_result: Mapping[str, object] | None = None
             try:
-                put_result = self.storage.put(str(point["object_id"]), bytes(sealed["sealed_bytes"]))
+                raw_put_result = self.storage.put_if_absent(
+                    str(point["object_id"]), bytes(sealed["sealed_bytes"]),
+                    key_id=str(key["key_id"]), key_epoch=int(key["key_epoch"]),
+                )
             except Exception as exc:
-                try:
-                    reconciled = self._read_reserved_object(point, bundle_raw=bundle_raw)
-                except RecoveryStorageError as reconcile_exc:
-                    raise RecoveryStorageError("recovery:storage-put-unknown") from reconcile_exc
-                if reconciled["sealed_digest"] != sealed["sealed_digest"]:
-                    raise RecoveryStorageError("recovery:storage-object-conflict") from exc
-                existing = reconciled
-            else:
+                # The side effect may have happened, but the response is not
+                # authoritative.  Leave STORE_PENDING; the next retry starts
+                # with the exact object lookup and can reconcile it.
+                raise RecoveryStorageError("recovery:storage-put-unknown") from exc
+            put_result = _storage_put_view(
+                raw_put_result, object_id=str(point["object_id"]), sealed_bytes=bytes(sealed["sealed_bytes"]),
+                key_id=str(key["key_id"]), key_epoch=int(key["key_epoch"]), expected_storage_id=self.profile.storage_id,
+            )
+            if put_result["outcome"] == "EXISTING_DIFFERENT":
+                raise RecoveryStorageError("recovery:storage-object-conflict")
+            try:
                 existing = self._read_reserved_object(point, bundle_raw=bundle_raw)
-                if existing["sealed_digest"] != sealed["sealed_digest"] or existing["sealed_length"] != sealed["sealed_length"]:
-                    raise RecoveryStorageError("recovery:storage-object-conflict")
-                if put_result is None or put_result.get("storage_id") != self.profile.storage_id or put_result.get("sealed_digest") != existing["sealed_digest"] or put_result.get("sealed_length") != existing["sealed_length"]:
-                    raise RecoveryStorageError("recovery:storage-receipt-drift")
+            except StorageNotFound as exc:
+                raise RecoveryStorageError("recovery:storage-put-receipt-drift") from exc
+            if existing["sealed_digest"] != sealed["sealed_digest"] or existing["sealed_length"] != sealed["sealed_length"]:
+                raise RecoveryStorageError("recovery:storage-object-conflict")
             self._fault("after_put_before_record")
         self._fault("before_record_stored")
         return self._record_stored(point_id, bundle_digest=str(point["bundle_digest"]), sealed=existing, storage_receipt={
@@ -1131,38 +1284,44 @@ class OperationalRecoveryService:
             except Exception as invalidate_exc:
                 raise RecoveryIntegrityError("recovery:invalidation-indeterminate") from invalidate_exc
             raise
-        root = Path(tempfile.mkdtemp(prefix="mirror-recovery-drill-"))
         try:
-            q_target = root / "quarantine.db"
-            r_target = root / "runtime.db"
             q_export = quarantine_independent._parse(bundle["quarantine_raw"], maximum=quarantine_independent.MAX_EXPORT_BYTES, max_string_bytes=quarantine_independent.MAX_EXPORT_BYTES)
-            database_id = quarantine_independent._database_id(q_export.get("database_id"))
-            quarantine_service = quarantine.restore_export(q_target, bundle["quarantine_raw"], policy=self.quarantine_policy_value, database_id=database_id)
-            runtime_service = runtime.restore_export(r_target, bundle["runtime_raw"], profile=self.runtime_profile_value, clock=self.clock)
-            q_evidence = quarantine_service.integrity()
-            r_evidence = runtime_service.integrity()
-            if q_evidence["state_root"] != bundle["manifests"][0]["state_root"] or r_evidence["global_head_root"] != bundle["manifests"][1]["state_root"]:
-                raise RecoveryIntegrityError("recovery:restore-root")
-            try:
-                quarantine_service.export_bytes()
-                runtime_service.export_bytes()
-            except Exception as exc:
-                raise RecoveryIntegrityError("recovery:restore-reverify") from exc
-            duration_ms = max(0, int((self.clock.monotonic() - start) * 1000))
-            return self._record_restore(point_id, bundle=bundle, duration_ms=duration_ms, expected_head=expected_head)
+            r_export = runtime_independent._parse(bundle["runtime_raw"], maximum=runtime_independent.MAX_EXPORT_BYTES)
+            q_export_root = q_export.get("export_root")
+            r_export_root = r_export.get("export_root")
+            if not isinstance(q_export_root, str) or not isinstance(r_export_root, str):
+                raise RecoveryIntegrityError("recovery:restore-export-root")
+            with restore_publication.owned_restore_workspace(self.database.parent, point_id) as root:
+                q_directory = root / "quarantine"
+                r_directory = root / "runtime"
+                q_target = q_directory / "quarantine.db"
+                r_target = r_directory / "runtime.db"
+                database_id = quarantine_independent._database_id(q_export.get("database_id"))
+                quarantine_service = quarantine.restore_export(q_target, bundle["quarantine_raw"], policy=self.quarantine_policy_value, database_id=database_id)
+                runtime_service = runtime.restore_export(r_target, bundle["runtime_raw"], profile=self.runtime_profile_value, clock=self.clock)
+                q_evidence = quarantine_service.integrity()
+                r_evidence = runtime_service.integrity()
+                if q_evidence["state_root"] != bundle["manifests"][0]["state_root"] or r_evidence["global_head_root"] != bundle["manifests"][1]["state_root"]:
+                    raise RecoveryIntegrityError("recovery:restore-root")
+                try:
+                    quarantine_service.export_bytes()
+                    runtime_service.export_bytes()
+                except Exception as exc:
+                    raise RecoveryIntegrityError("recovery:restore-reverify") from exc
+                restore_publication.cleanup_owned_workspace(
+                    root,
+                    point_id,
+                    {
+                        "quarantine": (q_target, q_export_root),
+                        "runtime": (r_target, r_export_root),
+                    },
+                )
+                duration_ms = max(0, int((self.clock.monotonic() - start) * 1000))
+                return self._record_restore(point_id, bundle=bundle, duration_ms=duration_ms, expected_head=expected_head)
         except quarantine.ExternalSourceQuarantineError as exc:
             raise RecoveryIntegrityError(f"recovery:quarantine-restore:{exc}") from exc
         except runtime.ControlledShadowRuntimeError as exc:
             raise RecoveryIntegrityError(f"recovery:runtime-restore:{exc}") from exc
-        finally:
-            for suffix in ("", "-wal", "-shm"):
-                target = Path(str(root) + suffix)
-                if target.is_file():
-                    target.unlink(missing_ok=True)
-            for child in root.glob("**/*") if root.exists() else ():
-                if child.is_file():
-                    child.unlink(missing_ok=True)
-            root.rmdir() if root.exists() else None
 
     def _mutate_lifecycle(self, *, action: str, point_id: str, expected_head: str, next_state: str, reason: str = "") -> dict[str, object]:
         if action not in {independent.ACTION_SUPERSEDE, independent.ACTION_INVALIDATE}:
@@ -1391,7 +1550,7 @@ class OperationalRecoveryService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
             )
         except restore_publication.RestorePublicationConflict as exc:
@@ -1418,6 +1577,6 @@ def restore_export(
 __all__ = [
     "SCHEMA", "SCHEMA_VERSION", "STATE_PREPARED", "STATE_STORE_PENDING", "STATE_STORED", "STATE_RESTORE_VERIFIED", "STATE_SUPERSEDED", "STATE_INVALIDATED",
     "OperationalRecoveryError", "RecoveryConflictError", "RecoveryBusyError", "RecoveryInjectedFault", "RecoveryResponseLost",
-    "RecoveryIntegrityError", "RecoveryStorageError", "StateClock", "SealedRecoveryObjectV1", "KeyCustodyPort", "RecoveryStoragePort",
+    "RecoveryIntegrityError", "RecoveryStorageError", "StorageNotFound", "STORAGE_PUT_OUTCOMES", "StateClock", "SealedRecoveryObjectV1", "KeyCustodyPort", "RecoveryStoragePort",
     "OperationalRecoveryProfileV1", "OperationalRecoveryService", "restore_export",
 ]

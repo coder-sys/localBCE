@@ -15,6 +15,7 @@ from app.mirror import controlled_shadow_runtime as runtime
 from app.mirror import operational_recovery as recovery
 from app.mirror import operational_recovery_fixtures as recovery_fixtures
 from app.mirror import operational_recovery_independent as independent
+from app.mirror import restore_publication
 from tests import test_mirror_controlled_shadow_runtime as runtime_tests
 
 
@@ -363,6 +364,22 @@ class OperationalRecoveryTests(unittest.TestCase):
         self.assertEqual(reopened.export_bytes(), before)
         independent.verify_database(self.catalog, profile=self.profile.material())
 
+    def test_restore_drill_reuses_owned_workspace_and_cleans_completed_targets(self) -> None:
+        first = self.service.create_recovery_point(
+            "OWNED_WORKSPACE", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        workspace = self.root / f".mirror-restore-workspace-v1-{first['point_id']}"
+        with restore_publication.owned_restore_workspace(self.root, str(first["point_id"])) as owned:
+            self.assertEqual(owned, workspace)
+            self.assertTrue((owned / "workspace.json").is_file())
+            self.assertTrue((owned / "quarantine").is_dir())
+            self.assertTrue((owned / "runtime").is_dir())
+        self.assertTrue(workspace.is_dir())
+        restored = self.service.restore_point(first["point_id"], expected_head=first["head_root"])
+        self.assertEqual(restored["state"], recovery.STATE_RESTORE_VERIFIED)
+        self.assertFalse(workspace.exists())
+
     def test_storage_overwrite_revocation_and_existing_restore_target_fail_closed(self) -> None:
         stored = self.service.create_recovery_point(
             "PORT_FAILURES", generation=1, expected_head=self._genesis(),
@@ -394,6 +411,51 @@ class OperationalRecoveryTests(unittest.TestCase):
                 runtime_profile=self.upstream.profile, clock=self.clock,
                 key_custody=self.custody, storage=self.storage,
             )
+
+    def test_storage_read_ambiguity_never_authorizes_put_and_stays_pending(self) -> None:
+        class AmbiguousStorage(recovery_fixtures.SyntheticRecoveryStorage):
+            def __init__(inner_self, mode: str) -> None:
+                super().__init__()
+                inner_self.mode = mode
+                inner_self.put_calls = 0
+
+            def get(inner_self, object_id: str) -> bytes:
+                if inner_self.mode == "timeout":
+                    raise TimeoutError("synthetic timeout")
+                if inner_self.mode == "permission":
+                    raise PermissionError("synthetic permission")
+                return b"not-a-valid-sealed-object"
+
+            def stat(inner_self, object_id: str):
+                if inner_self.mode == "malformed-stat":
+                    raise ValueError("synthetic malformed stat")
+                return super(AmbiguousStorage, inner_self).stat(object_id)
+
+            def put_if_absent(inner_self, *args, **kwargs):
+                inner_self.put_calls += 1
+                return super(AmbiguousStorage, inner_self).put_if_absent(*args, **kwargs)
+
+        for mode in ("timeout", "permission", "malformed-stat"):
+            with self.subTest(mode=mode):
+                path = self.root / f"storage-ambiguity-{mode}.db"
+                storage = AmbiguousStorage(mode)
+                service = recovery.OperationalRecoveryService(
+                    path,
+                    profile=self.profile,
+                    quarantine_policy=self.upstream.source_policy,
+                    runtime_profile=self.upstream.profile,
+                    clock=self.clock,
+                    key_custody=self.custody,
+                    storage=storage,
+                )
+                with self.assertRaisesRegex(recovery.RecoveryStorageError, "storage-indeterminate"):
+                    service.create_recovery_point(
+                        f"AMBIGUOUS_{mode}", generation=1, expected_head=self._genesis(),
+                        quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+                    )
+                self.assertEqual(storage.put_calls, 0)
+                self.assertEqual(storage._objects, {})
+                self.assertEqual(service.integrity()["state_counts"][recovery.STATE_STORE_PENDING], 1)
 
     def test_restore_export_truncation_reorder_and_profile_drift_fail_closed(self) -> None:
         stored = self.service.create_recovery_point(

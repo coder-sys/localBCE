@@ -142,9 +142,22 @@ class SyntheticRecoveryStorage:
         self._objects.setdefault(object_id, bytes(sealed_bytes))
         return self.stat(object_id)
 
+    def put_if_absent(self, object_id: str, sealed_bytes: bytes, *, key_id: str, key_epoch: int) -> Mapping[str, object]:
+        existed = object_id in self._objects
+        receipt = self.put(object_id, sealed_bytes)
+        return {
+            "outcome": "EXISTING_SAME" if existed else "CREATED",
+            "object_id": receipt["object_id"],
+            "storage_id": receipt["storage_id"],
+            "sealed_digest": receipt["sealed_digest"],
+            "sealed_length": receipt["sealed_length"],
+            "key_id": key_id,
+            "key_epoch": key_epoch,
+        }
+
     def get(self, object_id: str) -> bytes:
         if object_id not in self._objects:
-            raise KeyError("synthetic-storage:missing")
+            raise recovery.StorageNotFound("synthetic-storage:missing")
         return bytes(self._objects[object_id])
 
     def stat(self, object_id: str) -> Mapping[str, object]:

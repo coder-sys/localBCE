@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import sqlite3
@@ -144,6 +145,41 @@ FOREIGN_KEY_MANIFEST = {
 
 class IndependentQuarantineError(ValueError):
     """A bounded independent quarantine rejection."""
+
+
+@dataclass(frozen=True)
+class VerifiedAdmissionReceiptV1:
+    """Opaque, independently reconstructed admission result.
+
+    The value is deliberately produced by this independent module.  It binds
+    the receipt bytes to the operation, transition, artifact, and post-action
+    head; callers cannot manufacture a receipt by rebinding a JSON fragment.
+    """
+
+    schema: str
+    schema_version: int
+    receipt_id: str
+    receipt_digest: str
+    receipt_raw: bytes
+    operation_id: str
+    action: str
+    policy_digest: str
+    database_id: str
+    chain_id: str
+    artifact_id: str
+    artifact_digest: str
+    capture_id: str
+    prior_head: str
+    head_artifact_id: str
+    state: str
+    sequence: int
+    transition_id: str
+    before_root: str
+    after_root: str
+
+    @property
+    def result(self) -> str:
+        return self.state
 
 
 def _canonical(value: object) -> bytes:
@@ -321,6 +357,198 @@ def _transition_id(body: Mapping[str, object]) -> str:
 def _receipt_id(body: Mapping[str, object]) -> str:
     without_id = {key: value for key, value in body.items() if key != "receipt_id"}
     return _digest("receipt-id", without_id)
+
+
+def verify_receipt_bytes(
+    raw: bytes,
+    *,
+    policy_digest: str,
+    database_id: str,
+    chain_id: str,
+    artifact_id: str,
+    artifact_digest: str,
+    capture_id: str,
+    action: str,
+    operation_id: str,
+    prior_head: str,
+    head_artifact_id: str,
+    state: str,
+    sequence: int | None,
+    transition_id: str,
+    before_root: str | None,
+    after_root: str | None,
+) -> VerifiedAdmissionReceiptV1:
+    """Verify one receipt against caller-supplied, already-bound row facts.
+
+    This is the public pure boundary used by acquisition's independent
+    verifier.  It never accepts a caller status or root as authority: every
+    supplied fact is compared with the canonical receipt and its identity.
+    The stronger database form below additionally reconstructs the operation,
+    transition, artifact, and head rows.
+    """
+
+    if type(raw) is not bytes or not raw or len(raw) > MAX_EXPORT_BYTES:
+        raise IndependentQuarantineError("quarantine:receipt-bytes")
+    try:
+        value = _parse(raw, maximum=MAX_EXPORT_BYTES)
+    except Exception as exc:
+        raise IndependentQuarantineError("quarantine:receipt-parse") from exc
+    if set(value) != RECEIPT_KEYS:
+        raise IndependentQuarantineError("quarantine:receipt-keys")
+    database = _database_id(database_id)
+    policy = _hex(policy_digest, "receipt-policy")
+    chain = _hex(chain_id, "receipt-chain")
+    if sequence is None:
+        sequence = value.get("sequence")
+    if before_root is None:
+        before_root = value.get("before_root")
+    if after_root is None:
+        after_root = value.get("after_root")
+    expected = {
+        "schema": f"{SCHEMA}-receipt",
+        "schema_version": SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "action": action,
+        "policy_digest": policy,
+        "database_id": database,
+        "artifact_id": artifact_id,
+        "capture_id": capture_id,
+        "prior_head": prior_head,
+        "head_artifact_id": head_artifact_id,
+        "state": state,
+        "sequence": sequence,
+        "transition_id": transition_id,
+        "before_root": before_root,
+        "after_root": after_root,
+        "chain_id": chain,
+        "flags": FIXED_FLAGS,
+    }
+    if value != {**expected, "receipt_id": value.get("receipt_id")}:
+        raise IndependentQuarantineError("quarantine:receipt-binding")
+    receipt_id = value.get("receipt_id")
+    if not isinstance(receipt_id, str) or _receipt_id(value) != receipt_id:
+        raise IndependentQuarantineError("quarantine:receipt-identity")
+    for label, item in (
+        ("receipt-operation", operation_id), ("receipt-artifact", artifact_id),
+        ("receipt-transition", transition_id), ("receipt-before", before_root),
+        ("receipt-after", after_root), ("receipt-artifact-digest", artifact_digest),
+    ):
+        _hex(item, label)
+    if not isinstance(capture_id, str) or not capture_id or not isinstance(action, str) or action not in ACTIONS:
+        raise IndependentQuarantineError("quarantine:receipt-fields")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1 or sequence > MAX_TRANSITIONS:
+        raise IndependentQuarantineError("quarantine:receipt-sequence")
+    return VerifiedAdmissionReceiptV1(
+        schema=str(value["schema"]), schema_version=int(value["schema_version"]),
+        receipt_id=receipt_id, receipt_digest=_raw_digest(raw), receipt_raw=bytes(raw),
+        operation_id=operation_id, action=action, policy_digest=policy, database_id=database,
+        chain_id=chain, artifact_id=artifact_id, artifact_digest=artifact_digest,
+        capture_id=capture_id, prior_head=prior_head, head_artifact_id=head_artifact_id,
+        state=state, sequence=sequence, transition_id=transition_id,
+        before_root=before_root, after_root=after_root,
+    )
+
+
+def verify_admission_receipt(
+    raw: bytes,
+    *,
+    policy: Mapping[str, object] | object,
+    database_id: str,
+    operation: Mapping[str, object],
+    transition: Mapping[str, object],
+    artifact: Mapping[str, object],
+    head: Mapping[str, object],
+) -> VerifiedAdmissionReceiptV1:
+    """Reconstruct one receipt from all authoritative quarantine rows."""
+
+    configured = _policy_view(policy)
+    database = _database_id(database_id)
+    policy_digest = _policy_digest(configured)
+    chain_id = _chain_id(configured, database)
+    if set(operation) != set(TABLE_COLUMNS["quarantine_operations"]):
+        raise IndependentQuarantineError("quarantine:receipt-operation-row")
+    if set(transition) != set(TABLE_COLUMNS["quarantine_transitions"]):
+        raise IndependentQuarantineError("quarantine:receipt-transition-row")
+    if set(artifact) != set(TABLE_COLUMNS["quarantine_artifacts"]):
+        raise IndependentQuarantineError("quarantine:receipt-artifact-row")
+    if set(head) != set(TABLE_COLUMNS["quarantine_heads"]):
+        raise IndependentQuarantineError("quarantine:receipt-head-row")
+    action = operation["action"]
+    if action not in ACTIONS or transition["action"] != action:
+        raise IndependentQuarantineError("quarantine:receipt-action")
+    operation_id = _hex(operation["operation_id"], "receipt-operation")
+    request_digest = _hex(operation["request_digest"], "receipt-request")
+    if operation_id != _operation_id(str(action), request_digest, database):
+        raise IndependentQuarantineError("quarantine:receipt-operation-id")
+    artifact_id = _hex(operation["artifact_id"], "receipt-artifact")
+    if transition["artifact_id"] != artifact_id or artifact["artifact_id"] != artifact_id:
+        raise IndependentQuarantineError("quarantine:receipt-artifact-binding")
+    if operation["policy_digest"] != policy_digest or transition["policy_digest"] != policy_digest or artifact["policy_digest"] != policy_digest or head["policy_digest"] != policy_digest:
+        raise IndependentQuarantineError("quarantine:receipt-policy")
+    if transition["database_id"] != database:
+        raise IndependentQuarantineError("quarantine:receipt-database")
+    expected_head = operation["expected_head"]
+    if not isinstance(expected_head, str) or expected_head != transition["prior_head"]:
+        raise IndependentQuarantineError("quarantine:receipt-prior-head")
+    reason = operation["reason"]
+    if action == ACTION_WITHDRAW:
+        if reason not in WITHDRAW_REASONS:
+            raise IndependentQuarantineError("quarantine:receipt-reason")
+    elif reason != "":
+        raise IndependentQuarantineError("quarantine:receipt-reason")
+    if operation["request_material_digest"] != _request_material_digest(
+        operation_id=operation_id, policy_digest=policy_digest, artifact_id=artifact_id,
+        expected_head=expected_head, reason=reason,
+    ):
+        raise IndependentQuarantineError("quarantine:receipt-request-material")
+    if operation["transition_id"] != transition["transition_id"]:
+        raise IndependentQuarantineError("quarantine:receipt-transition")
+    transition_id = _hex(transition["transition_id"], "receipt-transition")
+    transition_raw = transition["transition_raw"]
+    if type(transition_raw) is not bytes:
+        raise IndependentQuarantineError("quarantine:receipt-transition-bytes")
+    transition_value = _parse(transition_raw, maximum=MAX_EXPORT_BYTES)
+    if set(transition_value) != TRANSITION_KEYS:
+        raise IndependentQuarantineError("quarantine:receipt-transition-keys")
+    if transition_value["schema"] != SCHEMA or transition_value["schema_version"] != SCHEMA_VERSION or any(
+        transition_value[key] != transition[key]
+        for key in (set(transition) & TRANSITION_KEYS) - {"flags"}
+    ) or transition_value["flags"] != FIXED_FLAGS:
+        raise IndependentQuarantineError("quarantine:receipt-transition-binding")
+    if _transition_id(transition_value) != transition_id:
+        raise IndependentQuarantineError("quarantine:receipt-transition-id")
+    sequence = int(transition["sequence"])
+    if sequence < 1 or operation["sequence"] != sequence:
+        raise IndependentQuarantineError("quarantine:receipt-sequence")
+    next_state = "WITHDRAWN" if action == ACTION_WITHDRAW else QUARANTINE_STATUS
+    if transition["next_state"] != next_state:
+        raise IndependentQuarantineError("quarantine:receipt-state")
+    before_root = _hex(transition["before_root"], "receipt-before")
+    after_root = _after_root(chain_id, sequence, transition_id, artifact_id, next_state, before_root)
+    if transition["after_root"] != after_root:
+        raise IndependentQuarantineError("quarantine:receipt-after")
+    artifact_raw = artifact["artifact_raw"]
+    if type(artifact_raw) is not bytes:
+        raise IndependentQuarantineError("quarantine:receipt-artifact-bytes")
+    artifact_result, capture = _adapter_value(artifact_raw, configured)
+    artifact_digest = _raw_digest(artifact_raw)
+    capture_id = str(artifact_result["capture_id"])
+    if artifact_result["artifact_id"] != artifact_id or artifact["artifact_digest"] != artifact_digest or artifact["capture_id"] != capture_id:
+        raise IndependentQuarantineError("quarantine:receipt-artifact-integrity")
+    if artifact["status"] != QUARANTINE_STATUS or artifact["observed_at"] != capture.get("observed_at") or artifact["fetched_at"] != capture.get("fetched_at"):
+        raise IndependentQuarantineError("quarantine:receipt-artifact-state")
+    if head["head_artifact_id"] != artifact_id or head["state"] != next_state or int(head["sequence"]) != sequence or head["head_root"] != after_root or head["head_transition_id"] != transition_id or head["capture_id"] != capture_id:
+        raise IndependentQuarantineError("quarantine:receipt-head")
+    receipt_raw = operation["receipt_raw"]
+    if type(receipt_raw) is not bytes or operation["receipt_digest"] != _raw_digest(receipt_raw):
+        raise IndependentQuarantineError("quarantine:receipt-digest")
+    return verify_receipt_bytes(
+        receipt_raw, policy_digest=policy_digest, database_id=database, chain_id=chain_id,
+        artifact_id=artifact_id, artifact_digest=artifact_digest, capture_id=capture_id,
+        action=str(action), operation_id=operation_id, prior_head=expected_head,
+        head_artifact_id=artifact_id, state=next_state, sequence=sequence,
+        transition_id=transition_id, before_root=before_root, after_root=after_root,
+    )
 
 
 def _adapter_value(raw: bytes, policy: Mapping[str, object]) -> tuple[dict[str, object], dict[str, object]]:
@@ -899,7 +1127,7 @@ __all__ = [
     "WITHDRAW_REASONS", "GENESIS_TRANSITION", "MAX_ARTIFACTS", "MAX_TRANSITIONS", "MAX_OPERATIONS",
     "MAX_EXPORT_BYTES", "MAX_DATABASE_BYTES", "MAX_WAL_BYTES", "BUSY_TIMEOUT_MS", "TABLE_COLUMNS",
     "SNAPSHOT_TABLES", "TABLE_INFO", "EXPLICIT_INDEXES", "FOREIGN_KEY_MANIFEST", "FIXED_FLAGS", "IndependentQuarantineError",
-    "snapshot_database", "verify_database", "verify_export_bytes", "verify_snapshot", "_canonical", "_digest", "_raw_digest",
+    "VerifiedAdmissionReceiptV1", "verify_receipt_bytes", "verify_admission_receipt", "snapshot_database", "verify_database", "verify_export_bytes", "verify_snapshot", "_canonical", "_digest", "_raw_digest",
     "_policy_view", "_policy_digest", "_chain_id", "_genesis_root", "_state_root", "_after_root",
     "_operation_id", "_request_material_digest", "_transition_id", "_receipt_id", "_parse", "_database_id",
 ]

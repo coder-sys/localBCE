@@ -2682,13 +2682,13 @@ def _snapshot_from_connection(connection: sqlite3.Connection) -> dict[str, list[
     }
 
 
-def _check_sqlite_shape(connection: sqlite3.Connection) -> None:
+def _check_sqlite_shape(connection: sqlite3.Connection, *, allow_immutable: bool = False) -> None:
     for pragma, expected in (("foreign_keys", 1), ("trusted_schema", 0), ("synchronous", 2), ("busy_timeout", BUSY_TIMEOUT_MS)):
         row = connection.execute(f"PRAGMA {pragma}").fetchone()
         if row is None or int(row[0]) != expected:
             raise IndependentStoreError(f"database:pragma-{pragma}")
     journal = connection.execute("PRAGMA journal_mode").fetchone()
-    if journal is None or str(journal[0]).lower() != "wal":
+    if journal is None or (str(journal[0]).lower() != "wal" and not allow_immutable):
         raise IndependentStoreError("database:journal-mode")
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if tables != set(TABLES):
@@ -2763,38 +2763,59 @@ def _check_sqlite_shape(connection: sqlite3.Connection) -> None:
         raise IndependentStoreError("database:foreign-key")
 
 
+def snapshot_database(
+    path: str | Path,
+    graph_profile_registry: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Verify schema and rows from one explicit SQLite read snapshot."""
+
+    database = Path(path)
+    if not database.is_file():
+        raise IndependentStoreError("database:missing")
+    wal = Path(str(database) + "-wal")
+    shm = Path(str(database) + "-shm")
+    if database.stat().st_size > MAX_DB_BYTES or (wal.exists() and wal.stat().st_size > MAX_WAL_BYTES) or (shm.exists() and shm.stat().st_size > MAX_WAL_BYTES):
+        raise IndependentStoreError("database:byte-cap")
+    connection: sqlite3.Connection | None = None
+    try:
+        # A closed image with no WAL/SHM sidecars can be opened immutable so
+        # SQLite cannot create a new shared-memory sidecar during read-only
+        # verification.  When a live WAL exists, ordinary read-only mode is
+        # required to include that snapshot; its owner must checkpoint before
+        # publication.
+        immutable = not wal.exists() and not shm.exists()
+        query = "mode=ro" if not immutable else "mode=ro&immutable=1"
+        uri = f"file:{database.resolve().as_posix()}?{query}"
+        connection = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        connection.execute("BEGIN")
+        _check_sqlite_shape(connection, allow_immutable=immutable)
+        snapshot = _snapshot_from_connection(connection)
+        result = _verify_rows(snapshot, graph_profile_registry=graph_profile_registry)
+        return {"evidence": result, "snapshot": snapshot}
+    except IndependentStoreError:
+        raise
+    except (sqlite3.DatabaseError, OSError, ValueError) as exc:
+        raise IndependentStoreError("database:corrupt-or-unreadable") from exc
+    finally:
+        if connection is not None:
+            try:
+                if connection.in_transaction:
+                    connection.rollback()
+            finally:
+                connection.close()
+
+
 def verify_database(
     path: str | Path,
     graph_profile_registry: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Open a database read-only and return only compact conformance evidence."""
 
-    database = Path(path)
-    if not database.is_file():
-        raise IndependentStoreError("database:missing")
-    wal = Path(str(database) + "-wal")
-    if database.stat().st_size > MAX_DB_BYTES or (wal.exists() and wal.stat().st_size > MAX_WAL_BYTES):
-        raise IndependentStoreError("database:byte-cap")
-    try:
-        uri = f"file:{database.resolve().as_posix()}?mode=ro"
-        connection = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA trusted_schema=OFF")
-        connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-        _check_sqlite_shape(connection)
-        snapshot = _snapshot_from_connection(connection)
-        result = _verify_rows(snapshot, graph_profile_registry=graph_profile_registry)
-        return result
-    except IndependentStoreError:
-        raise
-    except (sqlite3.DatabaseError, OSError, ValueError) as exc:
-        raise IndependentStoreError("database:corrupt-or-unreadable") from exc
-    finally:
-        try:
-            connection.close()
-        except UnboundLocalError:
-            pass
+    return dict(snapshot_database(path, graph_profile_registry=graph_profile_registry)["evidence"])
 
 
 def verify_snapshot(

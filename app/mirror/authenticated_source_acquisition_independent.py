@@ -309,28 +309,30 @@ def _verify_q_receipt(row: Mapping[str, object], cfg: Mapping[str, object]) -> N
     raw = row["quarantine_receipt_raw"]
     if type(raw) is not bytes or row["quarantine_receipt_digest"] != _raw_digest(raw):
         raise IndependentAcquisitionError("acquisition:quarantine-receipt")
-    try:
-        receipt = quarantine._parse(raw, maximum=128 * 1024)
-    except Exception as exc:
-        raise IndependentAcquisitionError("acquisition:quarantine-receipt-parse") from exc
-    if set(receipt) != quarantine.RECEIPT_KEYS or receipt["receipt_id"] != quarantine._receipt_id(receipt):
-        raise IndependentAcquisitionError("acquisition:quarantine-receipt-identity")
-    if receipt["flags"] != quarantine.FIXED_FLAGS or receipt["database_id"] != cfg["quarantine_database_id"]:
-        raise IndependentAcquisitionError("acquisition:quarantine-receipt-flags")
-    if receipt["policy_digest"] != cfg["quarantine_policy_digest"] or receipt["chain_id"] != cfg["quarantine_chain_id"]:
-        raise IndependentAcquisitionError("acquisition:quarantine-receipt-policy")
     action = quarantine.ACTION_ADMIT if row["quarantine_expected_head"] in (None, "") else quarantine.ACTION_SUPERSEDE
     expected_operation_id = quarantine._operation_id(action, row["quarantine_request_digest"], cfg["quarantine_database_id"])
-    if receipt["action"] != action or receipt["operation_id"] != expected_operation_id:
-        raise IndependentAcquisitionError("acquisition:quarantine-receipt-action")
-    if not isinstance(receipt["sequence"], int) or isinstance(receipt["sequence"], bool) or receipt["sequence"] < 1:
-        raise IndependentAcquisitionError("acquisition:quarantine-receipt-sequence")
-    for key in ("before_root", "after_root"):
-        _hex(receipt[key], "quarantine-receipt-" + key)
-    for key, expected in (("artifact_id", row["artifact_id"]), ("capture_id", row["capture_id"]), ("head_artifact_id", row["quarantine_head"]), ("prior_head", row["quarantine_expected_head"] or ""), ("transition_id", row["quarantine_transition_id"]), ("state", "QUARANTINED")):
-        if receipt[key] != expected:
-            raise IndependentAcquisitionError("acquisition:quarantine-receipt-binding")
-    if receipt["after_root"] != row["quarantine_head_root"]:
+    try:
+        verified = quarantine.verify_receipt_bytes(
+            raw,
+            policy_digest=str(cfg["quarantine_policy_digest"]),
+            database_id=str(cfg["quarantine_database_id"]),
+            chain_id=str(cfg["quarantine_chain_id"]),
+            artifact_id=str(row["artifact_id"]),
+            artifact_digest=str(row["artifact_digest"]),
+            capture_id=str(row["capture_id"]),
+            action=action,
+            operation_id=expected_operation_id,
+            prior_head=str(row["quarantine_expected_head"] or ""),
+            head_artifact_id=str(row["quarantine_head"]),
+            state="QUARANTINED",
+            sequence=None,
+            transition_id=str(row["quarantine_transition_id"]),
+            before_root=None,
+            after_root=str(row["quarantine_head_root"]),
+        )
+    except Exception as exc:
+        raise IndependentAcquisitionError("acquisition:quarantine-receipt-binding") from exc
+    if verified.receipt_digest != row["quarantine_receipt_digest"] or verified.after_root != row["quarantine_head_root"]:
         raise IndependentAcquisitionError("acquisition:quarantine-after-root")
 
 

@@ -743,12 +743,20 @@ class AuthenticatedSourceAcquisitionService:
             row = self._slot(connection, slot_id)
             if row is None or row["state"] not in {"QUARANTINE_PENDING", "QUARANTINE_UNCONFIRMED", "QUARANTINED"}:
                 raise AcquisitionConflictError("acquisition:quarantine-state")
-            receipt_raw = bytes(quarantine_result["receipt_raw"])
-            receipt_digest = _raw_digest(receipt_raw)
-            if quarantine_result.get("database_id") != self.config.quarantine_database_id or quarantine_result.get("policy_digest") != self.config.quarantine_policy_digest or quarantine_result.get("chain_id") != self.config.quarantine_chain_id or quarantine_result.get("artifact_id") != artifact_id or quarantine_result.get("artifact_digest") != artifact_digest or quarantine_result.get("after_root") != quarantine_result.get("head_root"):
+            verified = quarantine_result.get("verified_receipt")
+            if not isinstance(verified, quarantine.independent.VerifiedAdmissionReceiptV1):
+                raise AcquisitionConflictError("acquisition:quarantine-receipt-type")
+            receipt_raw = verified.receipt_raw
+            receipt_digest = verified.receipt_digest
+            if verified.database_id != self.config.quarantine_database_id or verified.policy_digest != self.config.quarantine_policy_digest or verified.chain_id != self.config.quarantine_chain_id or verified.artifact_id != artifact_id or verified.artifact_digest != artifact_digest or verified.after_root != quarantine_result.get("head_root"):
                 raise AcquisitionConflictError("acquisition:quarantine-binding")
-            receipt = quarantine.independent._parse(receipt_raw, maximum=128 * 1024)
-            if receipt["after_root"] != quarantine_result["head_root"]:
+            if (
+                verified.action not in {quarantine.ACTION_ADMIT, quarantine.ACTION_SUPERSEDE}
+                or verified.state != quarantine.QUARANTINE_STATUS
+                or verified.head_artifact_id != quarantine_result.get("head_artifact_id")
+                or verified.transition_id != quarantine_result.get("transition_id")
+                or verified.sequence != quarantine_result.get("sequence")
+            ):
                 raise AcquisitionConflictError("acquisition:quarantine-after-root")
             if row["state"] == "QUARANTINED":
                 if row["quarantine_receipt_digest"] != receipt_digest:
@@ -911,7 +919,7 @@ class AuthenticatedSourceAcquisitionService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
             )
         except (AcquisitionResponseLost, AcquisitionInjectedFault):

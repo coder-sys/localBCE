@@ -1025,7 +1025,7 @@ class ControlledShadowRuntimeService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
             )
         except restore_publication.RestorePublicationConflict as exc:

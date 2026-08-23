@@ -73,6 +73,9 @@ DDL = (
 
 
 FIXED_FLAGS = dict(independent.FIXED_FLAGS)
+VerifiedAdmissionReceiptV1 = independent.VerifiedAdmissionReceiptV1
+verify_admission_receipt = independent.verify_admission_receipt
+verify_receipt_bytes = independent.verify_receipt_bytes
 
 
 class ExternalSourceQuarantineError(ValueError):
@@ -306,39 +309,59 @@ class ExternalSourceQuarantineService:
         *,
         connection: sqlite3.Connection | None = None,
     ) -> dict[str, object]:
-        receipt = independent._parse(bytes(row["receipt_raw"]), maximum=MAX_EXPORT_BYTES)
+        operation_id = str(row["operation_id"])
         owned_connection = connection is None
         query_connection = connection or self._connect()
         try:
-            artifact_row = query_connection.execute(
-                "SELECT artifact_digest,capture_id FROM quarantine_artifacts WHERE policy_digest=? AND artifact_id=?",
-                (self.policy_digest, row["artifact_id"]),
+            operation_row = query_connection.execute(
+                "SELECT * FROM quarantine_operations WHERE operation_id=?", (operation_id,)
             ).fetchone()
+            if operation_row is None:
+                raise QuarantineConflictError("quarantine:receipt-operation")
+            transition_row = query_connection.execute(
+                "SELECT * FROM quarantine_transitions WHERE transition_id=? AND operation_id=?",
+                (str(operation_row["transition_id"]), operation_id),
+            ).fetchone()
+            artifact_row = query_connection.execute(
+                "SELECT * FROM quarantine_artifacts WHERE policy_digest=? AND artifact_id=?",
+                (self.policy_digest, str(operation_row["artifact_id"])),
+            ).fetchone()
+            head_row = self._head(query_connection)
+            if transition_row is None or artifact_row is None or head_row is None:
+                raise QuarantineConflictError("quarantine:receipt-chain")
+            verified = independent.verify_admission_receipt(
+                bytes(operation_row["receipt_raw"]),
+                policy=self.policy,
+                database_id=self.database_id,
+                operation=dict(operation_row),
+                transition=dict(transition_row),
+                artifact=dict(artifact_row),
+                head=head_row,
+            )
         finally:
             if owned_connection:
                 query_connection.close()
-        if artifact_row is None:
-            raise QuarantineConflictError("quarantine:receipt-artifact")
         return {
             "accepted": True,
-            "operation_id": row["operation_id"],
-            "action": row["action"],
+            "operation_id": verified.operation_id,
+            "action": verified.action,
             "policy_digest": self.policy_digest,
             "database_id": self.database_id,
             "chain_id": self.chain_id,
-            "artifact_id": row["artifact_id"],
-            "artifact_digest": artifact_row["artifact_digest"],
-            "capture_id": artifact_row["capture_id"],
-            "head_artifact_id": receipt["head_artifact_id"],
-            "head_root": receipt["after_root"],
-            "after_root": receipt["after_root"],
-            "prior_head": receipt["prior_head"],
-            "state": "WITHDRAWN" if row["action"] == ACTION_WITHDRAW else QUARANTINE_STATUS,
+            "artifact_id": verified.artifact_id,
+            "artifact_digest": verified.artifact_digest,
+            "capture_id": verified.capture_id,
+            "head_artifact_id": verified.head_artifact_id,
+            "head_root": verified.after_root,
+            "after_root": verified.after_root,
+            "prior_head": verified.prior_head,
+            "state": verified.state,
             "durable_status": QUARANTINE_STATUS,
-            "sequence": row["sequence"],
-            "transition_id": row["transition_id"],
-            "receipt_raw": bytes(row["receipt_raw"]),
-            "receipt_digest": row["receipt_digest"],
+            "sequence": verified.sequence,
+            "transition_id": verified.transition_id,
+            "receipt_raw": verified.receipt_raw,
+            "receipt_digest": verified.receipt_digest,
+            "verified_receipt": verified,
             "flags": dict(FIXED_FLAGS),
         }
 
@@ -888,7 +911,7 @@ class ExternalSourceQuarantineService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
             )
         except (QuarantineResponseLost, QuarantineInjectedFault):
@@ -914,5 +937,6 @@ __all__ = [
     "SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "QUARANTINE_STATUS",
     "ACTION_ADMIT", "ACTION_SUPERSEDE", "ACTION_WITHDRAW", "WITHDRAW_REASONS", "FIXED_FLAGS",
     "ExternalSourceQuarantineError", "QuarantineConflictError", "QuarantineBusyError",
-    "QuarantineInjectedFault", "QuarantineResponseLost", "ExternalSourceQuarantineService", "restore_export",
+    "QuarantineInjectedFault", "QuarantineResponseLost", "VerifiedAdmissionReceiptV1", "verify_admission_receipt",
+    "verify_receipt_bytes", "ExternalSourceQuarantineService", "restore_export",
 ]
