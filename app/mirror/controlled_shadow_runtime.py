@@ -199,7 +199,7 @@ class ControlledShadowRuntimeProfileV1:
         try:
             return independent.profile_digest(self.material())
         except independent.IndependentControlledShadowError as exc:
-            raise ControlledShadowRuntimeError(str(exc)) from exc
+            raise ControlledShadowRuntimeError(str(exc)) from None
 
 
 @dataclass(frozen=True)
@@ -342,14 +342,14 @@ def _token(value: str, label: str) -> str:
     try:
         return independent._text(value, label, token=True)
     except independent.IndependentControlledShadowError as exc:
-        raise ControlledShadowRuntimeError(str(exc)) from exc
+        raise ControlledShadowRuntimeError(str(exc)) from None
 
 
 def _hex(value: str, label: str) -> str:
     try:
         return independent._hex(value, label)
     except independent.IndependentControlledShadowError as exc:
-        raise ControlledShadowRuntimeError(str(exc)) from exc
+        raise ControlledShadowRuntimeError(str(exc)) from None
 
 
 class ControlledShadowRuntimeService:
@@ -393,11 +393,11 @@ class ControlledShadowRuntimeService:
             connection.execute("PRAGMA synchronous=FULL")
             return connection
         except sqlite3.OperationalError as exc:
-            raise RuntimeBusyError("runtime:busy") from exc
+            raise RuntimeBusyError("runtime:busy") from None
         except ControlledShadowRuntimeError:
             raise
         except (sqlite3.Error, OSError) as exc:
-            raise ControlledShadowRuntimeError("runtime:database-open") from exc
+            raise ControlledShadowRuntimeError("runtime:database-open") from None
 
     def _initialize(self) -> None:
         connection = self._connect()
@@ -440,7 +440,7 @@ class ControlledShadowRuntimeService:
         try:
             independent.verify_database(self.database, profile=self.profile_material)
         except independent.IndependentControlledShadowError as exc:
-            raise ControlledShadowRuntimeError(str(exc)) from exc
+            raise ControlledShadowRuntimeError(str(exc)) from None
 
     @staticmethod
     def _meta(connection: sqlite3.Connection) -> dict[str, str]:
@@ -467,7 +467,7 @@ class ControlledShadowRuntimeService:
             receipt = _parse(receipt_raw)
             return {"receipt_raw": receipt_raw, "receipt": receipt, "state": receipt["state"], "head_root": receipt["after_session_root"]}
         except Exception as exc:
-            raise RuntimeIntegrityError("runtime:receipt-corrupt") from exc
+            raise RuntimeIntegrityError("runtime:receipt-corrupt") from None
 
     def _run_mutation(self, operation_id: str, callback: Callable[[sqlite3.Connection], dict[str, object]]) -> dict[str, object]:
         self._fault("before_transaction")
@@ -477,7 +477,7 @@ class ControlledShadowRuntimeService:
             try:
                 connection.execute("BEGIN IMMEDIATE")
             except sqlite3.OperationalError as exc:
-                raise RuntimeBusyError("runtime:busy") from exc
+                raise RuntimeBusyError("runtime:busy") from None
             self._fault("after_begin")
             result = callback(connection)
             self._fault("before_commit")
@@ -486,7 +486,7 @@ class ControlledShadowRuntimeService:
             try:
                 self._fault("after_commit_before_response")
             except RuntimeInjectedFault as exc:
-                raise RuntimeResponseLost(operation_id) from exc
+                raise RuntimeResponseLost(operation_id) from None
             return result
         except RuntimeResponseLost:
             raise
@@ -497,13 +497,13 @@ class ControlledShadowRuntimeService:
         except sqlite3.IntegrityError as exc:
             if not committed and connection.in_transaction:
                 connection.rollback()
-            raise RuntimeConflictError("runtime:integrity") from exc
+            raise RuntimeConflictError("runtime:integrity") from None
         except sqlite3.OperationalError as exc:
             if not committed and connection.in_transaction:
                 connection.rollback()
             if "busy" in str(exc).lower() or "locked" in str(exc).lower():
-                raise RuntimeBusyError("runtime:busy") from exc
-            raise ControlledShadowRuntimeError("runtime:operational") from exc
+                raise RuntimeBusyError("runtime:busy") from None
+            raise ControlledShadowRuntimeError("runtime:operational") from None
         finally:
             connection.close()
 
@@ -584,7 +584,7 @@ class ControlledShadowRuntimeService:
             raw = bytes(row[0])
             return {"receipt_raw": raw, "receipt": _parse(raw)}
         except sqlite3.Error as exc:
-            raise RuntimeBusyError("runtime:read-busy") from exc
+            raise RuntimeBusyError("runtime:read-busy") from None
         finally:
             connection.close()
 
@@ -593,21 +593,21 @@ class ControlledShadowRuntimeService:
         try:
             upstream = independent.verify_upstream_bundle(snapshot, self.profile_material)
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeAuthorizationError(str(exc)) from exc
+            raise RuntimeAuthorizationError(str(exc)) from None
         try:
             mode = verifier.mode
             verifier_id = verifier.verifier_id
             verifier_epoch = verifier.verifier_epoch
             fixture_only = verifier.fixture_only
         except AttributeError as exc:
-            raise RuntimeAuthorizationError("runtime:authorization-verifier-config") from exc
+            raise RuntimeAuthorizationError("runtime:authorization-verifier-config") from None
         if mode not in independent.MODES:
             raise RuntimeAuthorizationError("runtime:authorization-mode")
         input_raw = independent.authorization_input(self.profile_material, upstream["manifest"])
         try:
             result = verifier.verify(bytes(input_raw))
         except Exception as exc:
-            raise RuntimeAuthorizationError("runtime:authorization-verifier-failure") from exc
+            raise RuntimeAuthorizationError("runtime:authorization-verifier-failure") from None
         if type(result) is not VerifiedShadowAuthorizationV1:
             raise RuntimeAuthorizationError("runtime:authorization-result-type")
         result_material = result.material()
@@ -622,7 +622,7 @@ class ControlledShadowRuntimeService:
                 fixture_only=bool(fixture_only),
             )
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeAuthorizationError(str(exc)) from exc
+            raise RuntimeAuthorizationError(str(exc)) from None
         return snapshot, upstream, checked
 
     def create_session(
@@ -717,7 +717,7 @@ class ControlledShadowRuntimeService:
             auth = _parse(bytes(session["authorization_material"]))
             return int(self.clock.now()) <= int(auth["valid_until"])
         except Exception as exc:
-            raise RuntimeIntegrityError("runtime:authorization-material") from exc
+            raise RuntimeIntegrityError("runtime:authorization-material") from None
 
     def claim_observation(self, operation_id: str, session_id: str, *, expected_head: str, worker_id: str = "SYNTHETIC_WORKER") -> ObservationClaim:
         _token(operation_id, "operation-id")
@@ -810,7 +810,7 @@ class ControlledShadowRuntimeService:
         try:
             checked = independent.verify_evaluation_result(result.material(), expected=expected, evaluator_id=self.profile.evaluator_id, evaluator_epoch=self.profile.evaluator_epoch)
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
         if int(checked["completed_at"]) > int(self.clock.now()):
             raise RuntimeIntegrityError("runtime:evaluation-future")
         request_raw = self._request(operation_id, "COMPLETE_OBSERVATION", claim.session_id, {"expected_head": claim.head_root, "slot_number": claim.slot_number, "attempt": claim.attempt, "result_digest": checked["result_digest"]})
@@ -879,7 +879,7 @@ class ControlledShadowRuntimeService:
                     evaluator_epoch=self.profile.evaluator_epoch,
                 )
             except independent.IndependentControlledShadowError as exc:
-                raise RuntimeIntegrityError(str(exc)) from exc
+                raise RuntimeIntegrityError(str(exc)) from None
             if int(result.completed_at) > int(self.clock.now()):
                 raise RuntimeIntegrityError("runtime:evaluation-future")
         except RuntimeEvaluatorRetryable as exc:
@@ -926,14 +926,14 @@ class ControlledShadowRuntimeService:
         try:
             return independent.verify_database(self.database, profile=self.profile_material)
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
 
     def export_bytes(self) -> bytes:
         try:
             snapshot_result = independent.snapshot_database(self.database, profile=self.profile_material)
             tables = independent._export_rows(snapshot_result["snapshot"])
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
         body: dict[str, object] = {
             "schema": independent.EXPORT_SCHEMA,
             "schema_version": independent.EXPORT_VERSION,
@@ -949,14 +949,14 @@ class ControlledShadowRuntimeService:
         try:
             independent.verify_export_bytes(raw, profile=self.profile_material)
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
         return raw
 
     def support_snapshot(self) -> dict[str, object]:
         try:
             snapshot_result = independent.snapshot_database(self.database, profile=self.profile_material)
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
         evidence = {key: value for key, value in snapshot_result.items() if key != "snapshot"}
         rows = snapshot_result["snapshot"]
         failures = sorted({str(row["last_failure_code"]) for row in rows["runtime_slots"] if row["last_failure_code"] is not None})[:independent.MAX_SUPPORT_CODES]
@@ -992,7 +992,7 @@ class ControlledShadowRuntimeService:
         try:
             verified = independent.verify_export_bytes(raw, profile=profile.material())
         except independent.IndependentControlledShadowError as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
 
         def build_stage(stage: Path) -> None:
             service = cls(stage, profile=profile, clock=clock)
@@ -1019,21 +1019,21 @@ class ControlledShadowRuntimeService:
             try:
                 return independent.verify_database(path, profile=profile.material())
             except independent.IndependentControlledShadowError as exc:
-                raise RuntimeIntegrityError(str(exc)) from exc
+                raise RuntimeIntegrityError(str(exc)) from None
 
         def open_service(path: Path) -> ControlledShadowRuntimeService:
             return cls(path, profile=profile, clock=clock)
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
                 publication_receipt_sink=publication_receipt_sink,
             )
         except restore_publication.RestorePublicationConflict as exc:
-            raise RuntimeConflictError(str(exc)) from exc
+            raise RuntimeConflictError(str(exc)) from None
         except (restore_publication.RestorePublicationError, RuntimeIntegrityError) as exc:
-            raise RuntimeIntegrityError(str(exc)) from exc
+            raise RuntimeIntegrityError(str(exc)) from None
 
 
 def restore_export(destination: str | Path, raw: bytes, *, profile: ControlledShadowRuntimeProfileV1, clock: Clock, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> ControlledShadowRuntimeService:

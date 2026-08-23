@@ -195,7 +195,7 @@ def _decode_and_verify(raw: bytes, *, graph_profile_registry: Mapping[str, objec
     try:
         value = independent._parse_canonical(raw, maximum=MAX_EXPORT_BYTES, max_string_bytes=MAX_HEX_BYTES * 2)
     except independent.IndependentStoreError as exc:
-        raise ContinuityExportError(str(exc)) from exc
+        raise ContinuityExportError(str(exc)) from None
     if set(value) != EXPORT_KEYS or value["schema"] != EXPORT_SCHEMA or type(value["schema_version"]) is not int or value["schema_version"] != store.SCHEMA_VERSION:
         raise ContinuityExportError("export:schema")
     if value["software"] != SOFTWARE_IDENTITIES:
@@ -209,7 +209,7 @@ def _decode_and_verify(raw: bytes, *, graph_profile_registry: Mapping[str, objec
     try:
         result = independent.verify_snapshot(snapshot, graph_profile_registry=graph_profile_registry)
     except independent.IndependentStoreError as exc:
-        raise ContinuityExportError(f"export:state:{exc}") from exc
+        raise ContinuityExportError("export:state") from None
     if result["state_root"] != state_root:
         raise ContinuityExportError("export:state-root-binding")
     body = dict(value)
@@ -284,7 +284,7 @@ def _restore_destination(destination: str | Path) -> Path:
     try:
         value = os.fspath(destination)
     except TypeError as exc:
-        raise ContinuityExportError("restore:destination") from exc
+        raise ContinuityExportError("restore:destination") from None
     if isinstance(value, bytes):
         raise ContinuityExportError("restore:destination")
     target = Path(os.path.abspath(value))
@@ -318,7 +318,7 @@ def import_export(raw: bytes, destination: str | Path, graph_profile_registry: M
 
     try:
         result = restore_publication.publish_create_only(
-            target, raw, export_root=str(value["export_root"]), expected_evidence={**expected, "export_root": value["export_root"]}, build_stage=build_stage,
+            target, export_root=str(value["export_root"]), expected_evidence={**expected, "export_root": value["export_root"]}, build_stage=build_stage,
             verify_database=verify_database, result_factory=result_factory,
             fault_injector=fault,
         )
@@ -326,7 +326,7 @@ def import_export(raw: bytes, destination: str | Path, graph_profile_registry: M
     except InjectedRestoreFault:
         raise
     except (restore_publication.RestorePublicationError, OSError, ValueError) as exc:
-        raise _map_restore_error(exc) from exc
+        raise _map_restore_error(exc) from None
 
 
 def main(argv: list[str] | None = None) -> int:

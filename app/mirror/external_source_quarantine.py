@@ -102,7 +102,7 @@ def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise ExternalSourceQuarantineError("quarantine:noncanonical") from exc
+        raise ExternalSourceQuarantineError("quarantine:noncanonical") from None
 
 
 def _digest(label: str, value: object) -> str:
@@ -135,7 +135,7 @@ def _resolve_database(path: str | Path) -> Path:
     try:
         value = os.fspath(path)
     except TypeError as exc:
-        raise ExternalSourceQuarantineError("quarantine:database-path") from exc
+        raise ExternalSourceQuarantineError("quarantine:database-path") from None
     if isinstance(value, bytes) or not value:
         raise ExternalSourceQuarantineError("quarantine:database-path")
     target = Path(os.path.abspath(value))
@@ -150,7 +150,7 @@ def _policy_material(policy: Mapping[str, object] | object) -> dict[str, object]
     try:
         return independent._policy_view(policy)
     except independent.IndependentQuarantineError as exc:
-        raise ExternalSourceQuarantineError(str(exc)) from exc
+        raise ExternalSourceQuarantineError(str(exc)) from None
 
 
 class ExternalSourceQuarantineService:
@@ -170,7 +170,7 @@ class ExternalSourceQuarantineService:
         try:
             self.database_id = independent._database_id(database_id)
         except independent.IndependentQuarantineError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
         self.chain_id = independent._chain_id(self.policy, self.database_id)
         self.fault_injector = fault_injector
         self._initialize()
@@ -179,7 +179,7 @@ class ExternalSourceQuarantineService:
         try:
             connection = sqlite3.connect(self.database, timeout=BUSY_TIMEOUT_MS / 1000.0, isolation_level=None)
         except (sqlite3.Error, OSError) as exc:
-            raise ExternalSourceQuarantineError("quarantine:database-open") from exc
+            raise ExternalSourceQuarantineError("quarantine:database-open") from None
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA foreign_keys=ON")
@@ -190,11 +190,11 @@ class ExternalSourceQuarantineService:
         except sqlite3.OperationalError as exc:
             connection.close()
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                raise QuarantineBusyError("quarantine:busy") from exc
-            raise ExternalSourceQuarantineError("quarantine:database-pragmas") from exc
+                raise QuarantineBusyError("quarantine:busy") from None
+            raise ExternalSourceQuarantineError("quarantine:database-pragmas") from None
         except sqlite3.Error as exc:
             connection.close()
-            raise ExternalSourceQuarantineError("quarantine:database-pragmas") from exc
+            raise ExternalSourceQuarantineError("quarantine:database-pragmas") from None
         return connection
 
     def _initialize(self) -> None:
@@ -230,7 +230,7 @@ class ExternalSourceQuarantineService:
         except sqlite3.Error as exc:
             if connection.in_transaction:
                 connection.rollback()
-            raise ExternalSourceQuarantineError("quarantine:database-initialize") from exc
+            raise ExternalSourceQuarantineError("quarantine:database-initialize") from None
         finally:
             connection.close()
         # Opening an existing database is a read-only integrity gate.  It
@@ -238,7 +238,7 @@ class ExternalSourceQuarantineService:
         try:
             independent.verify_database(self.database, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
 
     def _fault(self, point: str) -> None:
         if self.fault_injector is not None:
@@ -252,9 +252,11 @@ class ExternalSourceQuarantineService:
             result = adapter.verify_artifact(snapshot, policy=self.policy)
             value = adapter._parse(snapshot)
         except adapter.IndependentExternalSourceError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
-        except Exception as exc:
-            raise ExternalSourceQuarantineError("quarantine:adapter-verification") from exc
+            if str(exc) == "external:authority-flags":
+                raise ExternalSourceQuarantineError("quarantine:authority-flags") from None
+            raise ExternalSourceQuarantineError("quarantine:adapter-verification") from None
+        except Exception:
+            raise ExternalSourceQuarantineError("quarantine:adapter-verification") from None
         capture = value.get("capture")
         if not isinstance(capture, dict) or type(capture.get("observed_at")) is not int or type(capture.get("fetched_at")) is not int:
             raise ExternalSourceQuarantineError("quarantine:artifact-capture")
@@ -630,7 +632,7 @@ class ExternalSourceQuarantineService:
             try:
                 connection.execute("BEGIN IMMEDIATE")
             except sqlite3.OperationalError as exc:
-                raise QuarantineBusyError("quarantine:busy") from exc
+                raise QuarantineBusyError("quarantine:busy") from None
             self._fault("after_begin")
             result = self._admit_locked(connection, candidate=candidate, request_digest=request_digest, expected_head=expected)
             # The only postcommit hook is intentionally a response-loss fault.
@@ -650,17 +652,17 @@ class ExternalSourceQuarantineService:
         except sqlite3.IntegrityError as exc:
             if connection.in_transaction:
                 connection.rollback()
-            raise QuarantineConflictError("quarantine:integrity") from exc
+            raise QuarantineConflictError("quarantine:integrity") from None
         except sqlite3.OperationalError as exc:
             if connection.in_transaction:
                 connection.rollback()
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                raise QuarantineBusyError("quarantine:busy") from exc
-            raise ExternalSourceQuarantineError("quarantine:operational") from exc
+                raise QuarantineBusyError("quarantine:busy") from None
+            raise ExternalSourceQuarantineError("quarantine:operational") from None
         except sqlite3.DatabaseError as exc:
             if connection.in_transaction:
                 connection.rollback()
-            raise QuarantineConflictError("quarantine:database") from exc
+            raise QuarantineConflictError("quarantine:database") from None
         finally:
             connection.close()
 
@@ -733,7 +735,7 @@ class ExternalSourceQuarantineService:
             try:
                 connection.execute("BEGIN IMMEDIATE")
             except sqlite3.OperationalError as exc:
-                raise QuarantineBusyError("quarantine:busy") from exc
+                raise QuarantineBusyError("quarantine:busy") from None
             self._fault("after_begin")
             result = self._withdraw_locked(connection, request_digest=request_digest, expected_head=expected, reason=reason)
             committed = True if not connection.in_transaction else False
@@ -753,13 +755,13 @@ class ExternalSourceQuarantineService:
         except sqlite3.IntegrityError as exc:
             if connection.in_transaction:
                 connection.rollback()
-            raise QuarantineConflictError("quarantine:integrity") from exc
+            raise QuarantineConflictError("quarantine:integrity") from None
         except sqlite3.OperationalError as exc:
             if connection.in_transaction:
                 connection.rollback()
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
-                raise QuarantineBusyError("quarantine:busy") from exc
-            raise ExternalSourceQuarantineError("quarantine:operational") from exc
+                raise QuarantineBusyError("quarantine:busy") from None
+            raise ExternalSourceQuarantineError("quarantine:operational") from None
         finally:
             connection.close()
 
@@ -788,7 +790,7 @@ class ExternalSourceQuarantineService:
             independent._hex(artifact_id, "artifact-id")
             independent._hex(artifact_digest, "artifact-digest")
         except independent.IndependentQuarantineError as exc:
-            raise QuarantineConflictError(str(exc)) from exc
+            raise QuarantineConflictError(str(exc)) from None
         connection = self._connect()
         try:
             row = self._operation_for_request(connection, self.policy_digest, request_digest)
@@ -812,7 +814,7 @@ class ExternalSourceQuarantineService:
         try:
             return independent.verify_database(self.database, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
 
     def support_snapshot(self) -> dict[str, object]:
         evidence = self.integrity()
@@ -833,7 +835,7 @@ class ExternalSourceQuarantineService:
             snapshot_result = independent.snapshot_database(self.database, policy=self.policy, database_id=self.database_id)
             snapshot = snapshot_result["snapshot"]
         except independent.IndependentQuarantineError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
         body: dict[str, object] = {
             "schema": EXPORT_SCHEMA,
             "schema_version": EXPORT_VERSION,
@@ -868,7 +870,7 @@ class ExternalSourceQuarantineService:
         try:
             independent.verify_export_bytes(raw, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
         return raw
 
     def _restore_snapshot(self, snapshot: Mapping[str, list[Mapping[str, object]]]) -> None:
@@ -911,7 +913,7 @@ class ExternalSourceQuarantineService:
         try:
             verified = independent.verify_export_bytes(raw, policy=policy, database_id=database_id)
         except independent.IndependentQuarantineError as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
 
         def build_stage(stage: Path) -> None:
             service = cls(stage, policy=policy, database_id=database_id, fault_injector=fault_injector)
@@ -921,23 +923,23 @@ class ExternalSourceQuarantineService:
             try:
                 return independent.verify_database(path, policy=policy, database_id=database_id)
             except independent.IndependentQuarantineError as exc:
-                raise ExternalSourceQuarantineError(str(exc)) from exc
+                raise ExternalSourceQuarantineError(str(exc)) from None
 
         def open_service(path: Path) -> ExternalSourceQuarantineService:
             return cls(path, policy=policy, database_id=database_id)
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
                 publication_receipt_sink=publication_receipt_sink,
             )
         except (QuarantineResponseLost, QuarantineInjectedFault):
             raise
         except restore_publication.RestorePublicationConflict as exc:
-            raise QuarantineConflictError(str(exc)) from exc
+            raise QuarantineConflictError(str(exc)) from None
         except (restore_publication.RestorePublicationError, ExternalSourceQuarantineError) as exc:
-            raise ExternalSourceQuarantineError(str(exc)) from exc
+            raise ExternalSourceQuarantineError(str(exc)) from None
 
 
 def restore_export(

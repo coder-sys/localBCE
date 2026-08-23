@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 
 from app.mirror import external_source_adapter as adapter
@@ -125,6 +126,8 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         finally:
             quarantine.adapter.verify_artifact = original
         self.assertNotIn("PRIVATE-PATIENT-PATH", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn("PRIVATE-PATIENT-PATH", "".join(traceback.format_exception(caught.exception)))
         self.assertEqual(0, self.service.integrity()["artifact_count"])
 
     def test_newer_artifact_supersedes_and_out_of_order_or_withdrawn_admission_rejects(self) -> None:

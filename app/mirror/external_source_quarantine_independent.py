@@ -199,7 +199,7 @@ def _canonical(value: object) -> bytes:
             separators=(",", ":"),
         ).encode("ascii")
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise IndependentQuarantineError("quarantine:noncanonical") from exc
+        raise IndependentQuarantineError("quarantine:noncanonical") from None
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -224,7 +224,7 @@ def _walk(value: object, *, depth: int = 0, nodes: list[int] | None = None, max_
         try:
             value.encode("ascii")
         except UnicodeEncodeError as exc:
-            raise IndependentQuarantineError("quarantine:ascii") from exc
+            raise IndependentQuarantineError("quarantine:ascii") from None
         if len(value.encode("ascii")) > max_string_bytes:
             raise IndependentQuarantineError("quarantine:string-cap")
     elif isinstance(value, dict):
@@ -249,7 +249,7 @@ def _parse(raw: bytes, *, maximum: int, max_string_bytes: int = 4_096) -> dict[s
     except IndependentQuarantineError:
         raise
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise IndependentQuarantineError("quarantine:parse") from exc
+        raise IndependentQuarantineError("quarantine:parse") from None
     if not isinstance(value, dict):
         raise IndependentQuarantineError("quarantine:top-level")
     _walk(value, max_string_bytes=max_string_bytes)
@@ -295,7 +295,7 @@ def _policy_view(policy: Mapping[str, object] | object) -> dict[str, object]:
         material = policy.material() if hasattr(policy, "material") else dict(policy)  # type: ignore[arg-type]
         normalized = adapter._policy_material(material)
     except Exception as exc:
-        raise IndependentQuarantineError("quarantine:policy") from exc
+        raise IndependentQuarantineError("quarantine:policy") from None
     return dict(normalized)
 
 
@@ -399,7 +399,7 @@ def verify_receipt_bytes(
     try:
         value = _parse(raw, maximum=MAX_EXPORT_BYTES)
     except Exception as exc:
-        raise IndependentQuarantineError("quarantine:receipt-parse") from exc
+        raise IndependentQuarantineError("quarantine:receipt-parse") from None
     if set(value) != RECEIPT_KEYS:
         raise IndependentQuarantineError("quarantine:receipt-keys")
     database = _database_id(database_id)
@@ -566,9 +566,11 @@ def _adapter_value(raw: bytes, policy: Mapping[str, object]) -> tuple[dict[str, 
         result = adapter.verify_artifact(raw, policy=policy)
         value = adapter._parse(raw)
     except adapter.IndependentExternalSourceError as exc:
-        raise IndependentQuarantineError(str(exc)) from exc
-    except Exception as exc:
-        raise IndependentQuarantineError("quarantine:adapter-verification") from exc
+        if str(exc) == "external:authority-flags":
+            raise IndependentQuarantineError("quarantine:authority-flags") from None
+        raise IndependentQuarantineError("quarantine:adapter-verification") from None
+    except Exception:
+        raise IndependentQuarantineError("quarantine:adapter-verification") from None
     capture = value.get("capture")
     if not isinstance(capture, dict):
         raise IndependentQuarantineError("quarantine:adapter-capture")
@@ -588,7 +590,7 @@ def _hex_bytes(value: object, label: str, *, maximum: int) -> bytes:
     try:
         raw = bytes.fromhex(value)
     except ValueError as exc:
-        raise IndependentQuarantineError(f"quarantine:{label}-hex") from exc
+        raise IndependentQuarantineError(f"quarantine:{label}-hex") from None
     if raw.hex() != value:
         raise IndependentQuarantineError(f"quarantine:{label}-canonical")
     return raw
@@ -1031,7 +1033,7 @@ def snapshot_database(
         )
     except sqlite_snapshot.SQLiteSnapshotError as exc:
         code = "journal-mode" if str(exc) == "journal-mode" else "database"
-        raise IndependentQuarantineError(f"quarantine:{code}") from exc
+        raise IndependentQuarantineError(f"quarantine:{code}") from None
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(image.uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000.0)
@@ -1048,7 +1050,7 @@ def snapshot_database(
     except IndependentQuarantineError:
         raise
     except (sqlite3.DatabaseError, OSError, ValueError) as exc:
-        raise IndependentQuarantineError("quarantine:database-corrupt") from exc
+        raise IndependentQuarantineError("quarantine:database-corrupt") from None
     finally:
         if connection is not None:
             connection.close()

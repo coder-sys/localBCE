@@ -1546,7 +1546,7 @@ def _read_bounded(path: str | Path, maximum: int) -> bytes:
         with file_path.open("rb") as handle:
             raw = handle.read(maximum + 1)
     except OSError:
-        raise
+        raise ProviderTrustGraphError("file:read") from None
     if len(raw) > maximum:
         raise ProviderTrustGraphError("file:byte-cap")
     return raw

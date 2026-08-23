@@ -522,6 +522,10 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
                     self.assertTrue(target.is_file())
                     self.assertFalse(stage.exists())
                     self.assertTrue(marker.is_file())
+                elif point == "before_stage_delete":
+                    self.assertTrue(target.is_file())
+                    self.assertTrue(stage.is_file())
+                    self.assertTrue(marker.is_file())
                 elif point == "before_staging_creation":
                     self.assertFalse(target.exists())
                     self.assertFalse(stage.exists())
@@ -711,7 +715,10 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
                 export.import_export(raw, target)
         finally:
             export._restore_fault_point = None
-        self.assertFalse(target.exists())
+        self.assertTrue(target.exists())
+        stage, marker = restore_publication.stage_paths(target, str(_object(raw)["export_root"]), create_parent=False)
+        self.assertTrue(stage.exists())
+        self.assertTrue(marker.exists())
         export.import_export(raw, target)
         self.assertEqual(raw, export.export_database(target))
 
@@ -734,6 +741,62 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
                 label="replacement",
             )
         self.assertEqual(b"foreign", owned.read_bytes())
+
+    def test_namespace_replacement_during_cleanup_is_not_deleted_by_path(self) -> None:
+        target = self.directory / "namespace-swap.db"
+        stage, marker = restore_publication.stage_paths(target, "a" * 128, create_parent=True)
+        namespace = stage.parent
+        stage.write_bytes(b"owned-stage")
+        marker.write_bytes(b"{}")
+        original_entries = restore_publication._namespace_entries
+        swapped = {"value": False}
+        retained = self.directory / "retained-owned-namespace"
+
+        def enumerate_and_swap(path: Path) -> set[str]:
+            entries = original_entries(path)
+            if path == namespace and not swapped["value"]:
+                swapped["value"] = True
+                path.rename(retained)
+                path.mkdir()
+            return entries
+
+        restore_publication._namespace_entries = enumerate_and_swap  # type: ignore[assignment]
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+                restore_publication._cleanup_namespace(namespace, stage, marker)
+        finally:
+            restore_publication._namespace_entries = original_entries  # type: ignore[assignment]
+        self.assertTrue(namespace.is_dir())
+        self.assertTrue(retained.is_dir())
+        self.assertEqual([], list(namespace.iterdir()))
+        self.assertEqual({"stage.db", "marker.json"}, {item.name for item in retained.iterdir()})
+
+    def test_workspace_receipt_read_rejects_descriptor_swap_and_oversize(self) -> None:
+        receipt = self.directory / "workspace-receipt.json"
+        receipt.write_bytes(b"{}")
+        original_identity = restore_publication._regular_identity
+        calls = {"count": 0}
+        host = self.directory / "workspace-receipt-host.json"
+        host.write_bytes(b"HOST-PATH-CANARY")
+
+        def swap_after_identity(path: Path, **kwargs: object) -> tuple[int, int, int, int, int]:
+            identity = original_identity(path, **kwargs)
+            if path == receipt and calls["count"] == 0:
+                calls["count"] += 1
+                os.replace(host, receipt)
+            return identity
+
+        restore_publication._regular_identity = swap_after_identity  # type: ignore[assignment]
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+                restore_publication._read_workspace_receipt(receipt)
+        finally:
+            restore_publication._regular_identity = original_identity  # type: ignore[assignment]
+        self.assertEqual(b"HOST-PATH-CANARY", receipt.read_bytes())
+
+        receipt.write_bytes(b"x" * (restore_publication.MAX_WORKSPACE_RECEIPT_BYTES + 1))
+        with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+            restore_publication._read_workspace_receipt(receipt)
 
     def test_publication_rollback_preserves_a_foreign_target_replacement(self) -> None:
         instance = self._store()
@@ -799,7 +862,6 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
 
             restore_publication.publish_create_only(
                 target,
-                raw,
                 export_root=str(value["export_root"]),
                 expected_evidence={**expected, "export_root": value["export_root"]},
                 build_stage=build_stage,

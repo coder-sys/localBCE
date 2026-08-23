@@ -74,7 +74,7 @@ def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise AuthenticatedSourceAcquisitionError("acquisition:noncanonical") from exc
+        raise AuthenticatedSourceAcquisitionError("acquisition:noncanonical") from None
 
 
 def _digest(label: str, value: object) -> str:
@@ -92,14 +92,14 @@ def _hex(value: object, label: str) -> str:
     try:
         return independent._hex(value, label)
     except independent.IndependentAcquisitionError as exc:
-        raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+        raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
 
 def _int(value: object, label: str, *, minimum: int = 0, maximum: int = 2_147_483_647) -> int:
     try:
         return independent._int(value, label, minimum=minimum, maximum=maximum)
     except independent.IndependentAcquisitionError as exc:
-        raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+        raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
 
 @dataclass(frozen=True)
@@ -140,7 +140,7 @@ class AuthenticatedSourceAcquisitionConfigV1:
         try:
             independent._config_view(self)
         except independent.IndependentAcquisitionError as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
         if self.nc_profile_digest != profile_module.NC_MEDICAID_PROFILE.profile_digest:
             raise AuthenticatedSourceAcquisitionError("acquisition:profile-drift")
         if self.max_body_bytes > profile_module.NC_MEDICAID_PROFILE.transport_caps["max_page_bytes"] or self.max_page_count > profile_module.NC_MEDICAID_PROFILE.transport_caps["max_pages"]:
@@ -278,7 +278,7 @@ class _AuthenticatedTransportAdapter:
         except nc_fhir.FhirTransportError:
             raise
         except Exception as exc:
-            raise nc_fhir.FhirTransportError("transport") from exc
+            raise nc_fhir.FhirTransportError("transport") from None
         if not isinstance(response, AuthenticatedFhirResponseV1) or type(response.body) is not bytes:
             raise nc_fhir.FhirTransportError("transport")
         if len(response.body) > self.service.config.max_body_bytes:
@@ -317,8 +317,8 @@ class _NcCaptureVerifier:
     def verify(self, capture_raw: bytes) -> external_adapter.VerifiedExternalCaptureV1:
         try:
             result = nc_independent.verify_bytes(capture_raw, profile=self.service.profile)
-        except Exception as exc:
-            raise AuthenticatedSourceAcquisitionError("acquisition:nc-verifier") from exc
+        except Exception:
+            raise AuthenticatedSourceAcquisitionError("acquisition:nc-verifier") from None
         page_count = int(result["page_count"])
         envelope_value = nc_independent._parse(capture_raw, self.service.profile)
         pages = envelope_value.get("pages")
@@ -347,8 +347,8 @@ class _NcCaptureVerifier:
 def _resolve_database(path: str | Path) -> Path:
     try:
         target = Path(os.path.abspath(os.fspath(path)))
-    except (TypeError, ValueError) as exc:
-        raise AuthenticatedSourceAcquisitionError("acquisition:database-path") from exc
+    except (TypeError, ValueError):
+        raise AuthenticatedSourceAcquisitionError("acquisition:database-path") from None
     if not target.name or not target.parent.is_dir() or target.is_symlink() or target.parent.is_symlink():
         raise AuthenticatedSourceAcquisitionError("acquisition:database-path")
     return target
@@ -386,7 +386,7 @@ def _authoritative_quarantine_snapshot(
     except Exception as exc:
         if isinstance(exc, AuthenticatedSourceAcquisitionError):
             raise
-        raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority") from exc
+        raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority") from None
 
 
 def _historical_quarantine_result(
@@ -550,8 +550,8 @@ class AuthenticatedSourceAcquisitionService:
             return connection
         except sqlite3.OperationalError as exc:
             if "busy" in str(exc).lower() or "locked" in str(exc).lower():
-                raise AcquisitionBusyError("acquisition:busy") from exc
-            raise AuthenticatedSourceAcquisitionError("acquisition:database-open") from exc
+                raise AcquisitionBusyError("acquisition:busy") from None
+            raise AuthenticatedSourceAcquisitionError("acquisition:database-open") from None
 
     def _initialize(self) -> None:
         connection = self._connect()
@@ -660,8 +660,8 @@ class AuthenticatedSourceAcquisitionService:
             if connection.in_transaction:
                 connection.rollback()
             if "busy" in str(exc).lower() or "locked" in str(exc).lower():
-                raise AcquisitionBusyError("acquisition:busy") from exc
-            raise AuthenticatedSourceAcquisitionError("acquisition:database") from exc
+                raise AcquisitionBusyError("acquisition:busy") from None
+            raise AuthenticatedSourceAcquisitionError("acquisition:database") from None
         finally:
             connection.close()
 
@@ -1121,10 +1121,10 @@ class AuthenticatedSourceAcquisitionService:
                         source_status=envelope_result["source_status"],
                     )
                 if isinstance(exc, quarantine.QuarantineResponseLost):
-                    raise AcquisitionResponseLost("acquisition:response-loss") from exc
+                    raise AcquisitionResponseLost("acquisition:response-loss") from None
                 if isinstance(exc, quarantine.QuarantineBusyError):
-                    raise AcquisitionBusyError("acquisition:busy") from exc
-                raise AcquisitionConflictError("acquisition:quarantine-head") from exc
+                    raise AcquisitionBusyError("acquisition:busy") from None
+                raise AcquisitionConflictError("acquisition:quarantine-head") from None
             # The producer result is only a dispatch response.  Reconstruct the
             # exact operation/transition/head/receipt from the independently
             # verified authoritative database before persisting QUARANTINED.
@@ -1149,12 +1149,12 @@ class AuthenticatedSourceAcquisitionService:
             code = str(exc).split(":")[-1]
             mapped = code if code in SAFE_FAILURES else "verifier"
             self._record_failure(lease_obj.slot_id, lease_obj.lease_id, lease_obj.attempt, mapped)
-            raise AuthenticatedSourceAcquisitionError(f"acquisition:{mapped}") from exc
+            raise AuthenticatedSourceAcquisitionError(f"acquisition:{mapped}") from None
         except (nc_fhir.NcMedicaidFhirError, nc_independent.IndependentNcMedicaidFhirError, external_adapter.ExternalSourceAdapterError, external_independent.IndependentExternalSourceError) as exc:
             code = str(exc).split(":")[-1]
             mapped = code if code in SAFE_FAILURES else "verifier"
             self._record_failure(lease_obj.slot_id, lease_obj.lease_id, lease_obj.attempt, mapped)
-            raise AuthenticatedSourceAcquisitionError(f"acquisition:{mapped}") from exc
+            raise AuthenticatedSourceAcquisitionError(f"acquisition:{mapped}") from None
 
     def _slot_from_disk(self, slot_id: str) -> dict[str, object]:
         connection = self._connect()
@@ -1172,7 +1172,7 @@ class AuthenticatedSourceAcquisitionService:
             self._verify_quarantine_rows(snapshot_result["snapshot"], quarantine_snapshot=self._authoritative_quarantine_snapshot())
             return dict(snapshot_result["evidence"])
         except independent.IndependentAcquisitionError as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
     def export_bytes(self) -> bytes:
         try:
@@ -1190,7 +1190,7 @@ class AuthenticatedSourceAcquisitionService:
             independent.verify_export_bytes(raw, config=self.config.material())
             return raw
         except independent.IndependentAcquisitionError as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
     def support_snapshot(self) -> dict[str, object]:
         try:
@@ -1199,14 +1199,14 @@ class AuthenticatedSourceAcquisitionService:
             evidence = snapshot_result["evidence"]
             return {"schema": "mirror-authenticated-source-acquisition-support-v3", "schema_version": 3, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot_result["snapshot"]["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **independent.FIXED_FLAGS}
         except independent.IndependentAcquisitionError as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
     @classmethod
     def restore_export(cls, destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> "AuthenticatedSourceAcquisitionService":
         try:
             verified = independent.verify_export_bytes(raw, config=config.material())
         except independent.IndependentAcquisitionError as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
         quarantine_snapshot = _authoritative_quarantine_snapshot(config, quarantine_service)
         _require_authoritative_quarantine_rows(
             verified["snapshot"],
@@ -1238,23 +1238,32 @@ class AuthenticatedSourceAcquisitionService:
             try:
                 return independent.verify_database(path, config=config.material())
             except independent.IndependentAcquisitionError as exc:
-                raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+                raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
         def open_service(path: Path) -> AuthenticatedSourceAcquisitionService:
-            return cls(path, config=config, external_policy=external_policy, quarantine_service=quarantine_service)
+            service = cls(path, config=config, external_policy=external_policy, quarantine_service=quarantine_service)
+            try:
+                final_snapshot = independent.snapshot_database(path, config=config.material())
+                service._verify_quarantine_rows(
+                    final_snapshot["snapshot"],
+                    quarantine_snapshot=service._authoritative_quarantine_snapshot(),
+                )
+            except independent.IndependentAcquisitionError:
+                raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority") from None
+            return service
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
                 publication_receipt_sink=publication_receipt_sink,
             )
         except (AcquisitionResponseLost, AcquisitionInjectedFault):
             raise
         except restore_publication.RestorePublicationConflict as exc:
-            raise AcquisitionConflictError(str(exc)) from exc
+            raise AcquisitionConflictError(str(exc)) from None
         except (restore_publication.RestorePublicationError, AuthenticatedSourceAcquisitionError) as exc:
-            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from None
 
 
 def restore_export(destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> AuthenticatedSourceAcquisitionService:

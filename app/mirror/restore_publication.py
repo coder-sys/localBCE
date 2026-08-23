@@ -69,7 +69,7 @@ def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
     except (TypeError, ValueError) as exc:
-        raise RestorePublicationVerification("restore-publication:noncanonical") from exc
+        raise RestorePublicationVerification("restore-publication:noncanonical") from None
 
 
 def _digest(label: str, value: object) -> str:
@@ -83,7 +83,7 @@ def _regular_identity(path: Path, *, allow_empty: bool = False, expected_links: 
     try:
         value = os.lstat(os.fspath(path))
     except OSError as exc:
-        raise RestorePublicationVerification("restore-publication:file-stat") from exc
+        raise RestorePublicationVerification("restore-publication:file-stat") from None
     if not stat.S_ISREG(value.st_mode) or value.st_nlink != expected_links:
         raise RestorePublicationVerification("restore-publication:file-ownership")
     size = int(value.st_size)
@@ -92,35 +92,37 @@ def _regular_identity(path: Path, *, allow_empty: bool = False, expected_links: 
     return int(value.st_dev), int(value.st_ino), int(value.st_nlink), size, int(value.st_mtime_ns)
 
 
-def _delete_exact_file(
+def _delete_exact_object(
     path: Path,
     *,
-    expected_identity: tuple[int, int, int, int, int] | None = None,
+    expected_identity: tuple[int, ...] | None,
+    kind: str,
     expected_inode: tuple[int, int] | None = None,
     expected_bytes: bytes | None = None,
     allow_empty: bool = True,
     label: str = "cleanup",
 ) -> None:
-    """Delete only the object bound to an opened handle.
+    """Delete one previously-bound file or directory through its handle.
 
-    Windows is the supported candidate platform for this boundary.  Its
-    ``SetFileInformationByHandle(FILE_DISPOSITION_INFO)`` operation binds the
-    disposition to the opened file object, so a pathname replacement after
-    the handle is acquired cannot redirect deletion to the replacement.  A
-    platform without an equivalent primitive fails closed instead of falling
-    back to pathname unlink.
+    The pathname is used only to acquire the object.  The identity is checked
+    on the opened descriptor and the disposition is then applied to that same
+    native handle.  There is deliberately no pathname-unlink/rmdir fallback.
     """
 
     if not os.path.lexists(os.fspath(path)):
         return
+    if kind not in {"file", "directory"}:
+        raise RestorePublicationCleanupError(f"restore-publication:{label}")
     try:
         preliminary = os.lstat(os.fspath(path))
-    except OSError as exc:
-        raise RestorePublicationCleanupError(f"restore-publication:{label}") from exc
-    if not stat.S_ISREG(preliminary.st_mode):
+    except OSError:
+        raise RestorePublicationCleanupError(f"restore-publication:{label}") from None
+    is_directory = stat.S_ISDIR(preliminary.st_mode) and not stat.S_ISLNK(preliminary.st_mode)
+    if (kind == "directory") != is_directory or (kind == "file" and not stat.S_ISREG(preliminary.st_mode)):
         raise RestorePublicationCleanupError(f"restore-publication:{label}")
     if os.name != "nt":
         raise RestorePublicationCleanupError("restore-publication:exact-delete-unsupported")
+
     import ctypes
     from ctypes import wintypes
     import msvcrt
@@ -134,6 +136,7 @@ def _delete_exact_file(
     OPEN_EXISTING = 3
     FILE_ATTRIBUTE_NORMAL = 0x00000080
     FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
     FILE_DISPOSITION_INFO = 4
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     create_file = kernel32.CreateFileW
@@ -145,13 +148,16 @@ def _delete_exact_file(
     set_information = kernel32.SetFileInformationByHandle
     set_information.argtypes = [wintypes.HANDLE, wintypes.INT, wintypes.LPVOID, wintypes.DWORD]
     set_information.restype = wintypes.BOOL
+    flags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+    if kind == "directory":
+        flags |= FILE_FLAG_BACKUP_SEMANTICS
     handle = create_file(
         os.fspath(path),
-        GENERIC_READ | DELETE | FILE_READ_ATTRIBUTES,
+        DELETE | FILE_READ_ATTRIBUTES | (GENERIC_READ if kind == "file" else 0),
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         None,
         OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+        flags,
         None,
     )
     invalid = ctypes.cast(handle, ctypes.c_void_p).value in (None, ctypes.c_void_p(-1).value)
@@ -166,17 +172,23 @@ def _delete_exact_file(
             int(actual_stat.st_dev), int(actual_stat.st_ino), int(actual_stat.st_nlink),
             int(actual_stat.st_size), int(actual_stat.st_mtime_ns),
         )
-        if not stat.S_ISREG(actual_stat.st_mode) or actual[3] < 0 or (actual[3] == 0 and not allow_empty) or actual[3] > MAX_IMAGE_BYTES:
-            raise RestorePublicationCleanupError(f"restore-publication:{label}")
-        if expected_identity is not None and actual != expected_identity:
-            raise RestorePublicationCleanupError(f"restore-publication:{label}")
-        if expected_inode is not None and actual[:2] != expected_inode:
-            raise RestorePublicationCleanupError(f"restore-publication:{label}")
-        if expected_bytes is not None:
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            observed = os.read(descriptor, len(expected_bytes) + 1)
-            if observed != expected_bytes:
+        if kind == "directory":
+            if not stat.S_ISDIR(actual_stat.st_mode) or stat.S_ISLNK(actual_stat.st_mode):
                 raise RestorePublicationCleanupError(f"restore-publication:{label}")
+            if expected_identity is not None and actual[:2] != expected_identity[:2]:
+                raise RestorePublicationCleanupError(f"restore-publication:{label}")
+        else:
+            if not stat.S_ISREG(actual_stat.st_mode) or actual[3] < 0 or (actual[3] == 0 and not allow_empty) or actual[3] > MAX_IMAGE_BYTES:
+                raise RestorePublicationCleanupError(f"restore-publication:{label}")
+            if expected_identity is not None and actual != expected_identity:
+                raise RestorePublicationCleanupError(f"restore-publication:{label}")
+            if expected_inode is not None and actual[:2] != expected_inode:
+                raise RestorePublicationCleanupError(f"restore-publication:{label}")
+            if expected_bytes is not None:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                observed = os.read(descriptor, len(expected_bytes) + 1)
+                if observed != expected_bytes:
+                    raise RestorePublicationCleanupError(f"restore-publication:{label}")
 
         class _Disposition(ctypes.Structure):
             _fields_ = [("DeleteFile", wintypes.BOOL)]
@@ -187,13 +199,47 @@ def _delete_exact_file(
             raise RestorePublicationCleanupError(f"restore-publication:{label}")
     except RestorePublicationError:
         raise
-    except (OSError, ValueError, TypeError) as exc:
-        raise RestorePublicationCleanupError(f"restore-publication:{label}") from exc
+    except (OSError, ValueError, TypeError):
+        raise RestorePublicationCleanupError(f"restore-publication:{label}") from None
     finally:
         if descriptor != -1:
             os.close(descriptor)
         elif handle not in (None, 0):
             kernel32.CloseHandle(handle)
+
+
+def _delete_exact_file(
+    path: Path,
+    *,
+    expected_identity: tuple[int, int, int, int, int] | None = None,
+    expected_inode: tuple[int, int] | None = None,
+    expected_bytes: bytes | None = None,
+    allow_empty: bool = True,
+    label: str = "cleanup",
+) -> None:
+    _delete_exact_object(
+        path,
+        expected_identity=expected_identity,
+        expected_inode=expected_inode,
+        expected_bytes=expected_bytes,
+        allow_empty=allow_empty,
+        kind="file",
+        label=label,
+    )
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    try:
+        value = os.lstat(os.fspath(path))
+    except OSError:
+        raise RestorePublicationCleanupError("restore-publication:directory-stat") from None
+    if not stat.S_ISDIR(value.st_mode) or stat.S_ISLNK(value.st_mode):
+        raise RestorePublicationCleanupError("restore-publication:directory-ownership")
+    return int(value.st_dev), int(value.st_ino)
+
+
+def _delete_exact_directory(path: Path, *, expected_identity: tuple[int, int], label: str) -> None:
+    _delete_exact_object(path, expected_identity=expected_identity, kind="directory", label=label)
 
 
 def _file_identity(path: Path, *, allow_empty: bool = False, expected_links: int = 1) -> tuple[int, str]:
@@ -222,7 +268,7 @@ def _file_identity(path: Path, *, allow_empty: bool = False, expected_links: int
     except RestorePublicationError:
         raise
     except OSError as exc:
-        raise RestorePublicationVerification("restore-publication:file-read") from exc
+        raise RestorePublicationVerification("restore-publication:file-read") from None
     finally:
         if descriptor != -1:
             os.close(descriptor)
@@ -231,31 +277,36 @@ def _file_identity(path: Path, *, allow_empty: bool = False, expected_links: int
     return before[3], digest.hexdigest()
 
 
-def _read_owned_marker(path: Path, *, label: str) -> bytes:
-    before = _regular_identity(path)
-    if before[3] > MAX_MARKER_BYTES:
-        raise RestorePublicationVerification(f"restore-publication:{label}")
+def _read_owned_bytes(path: Path, *, cap: int, label: str) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    """Read a small owned regular file without trusting its pathname."""
+
     descriptor = -1
     try:
+        before = _regular_identity(path)
+        if before[3] > cap:
+            raise RestorePublicationVerification(f"restore-publication:{label}")
         descriptor = os.open(os.fspath(path), os.O_RDONLY | getattr(os, "O_BINARY", 0))
         opened = os.fstat(descriptor)
         if (int(opened.st_dev), int(opened.st_ino), int(opened.st_nlink), int(opened.st_size), int(opened.st_mtime_ns)) != before:
             raise RestorePublicationVerification(f"restore-publication:{label}")
-        with os.fdopen(descriptor, "rb") as stream:
-            descriptor = -1
-            raw = stream.read(MAX_MARKER_BYTES + 1)
-            closed = os.fstat(stream.fileno())
-            if (int(closed.st_dev), int(closed.st_ino), int(closed.st_nlink), int(closed.st_size), int(closed.st_mtime_ns)) != before:
-                raise RestorePublicationVerification(f"restore-publication:{label}")
+        raw = os.read(descriptor, cap + 1)
+        closed = os.fstat(descriptor)
+        if (int(closed.st_dev), int(closed.st_ino), int(closed.st_nlink), int(closed.st_size), int(closed.st_mtime_ns)) != before:
+            raise RestorePublicationVerification(f"restore-publication:{label}")
     except RestorePublicationError:
         raise
-    except OSError as exc:
-        raise RestorePublicationVerification(f"restore-publication:{label}") from exc
+    except OSError:
+        raise RestorePublicationVerification(f"restore-publication:{label}") from None
     finally:
         if descriptor != -1:
             os.close(descriptor)
-    if len(raw) != before[3] or _regular_identity(path) != before:
+    if len(raw) != before[3] or len(raw) > cap or _regular_identity(path) != before:
         raise RestorePublicationVerification(f"restore-publication:{label}")
+    return raw, before
+
+
+def _read_owned_marker(path: Path, *, label: str) -> bytes:
+    raw, _identity = _read_owned_bytes(path, cap=MAX_MARKER_BYTES, label=label)
     return raw
 
 
@@ -263,7 +314,7 @@ def _target(path: str | Path) -> Path:
     try:
         value = os.fspath(path)
     except TypeError as exc:
-        raise RestorePublicationError("restore-publication:target") from exc
+        raise RestorePublicationError("restore-publication:target") from None
     if isinstance(value, bytes) or not value:
         raise RestorePublicationError("restore-publication:target")
     target = Path(os.path.abspath(value))
@@ -311,7 +362,7 @@ def _verified_image(
     except RestorePublicationError:
         raise
     except Exception as exc:
-        raise RestorePublicationVerification("restore-publication:database") from exc
+        raise RestorePublicationVerification("restore-publication:database") from None
     if not isinstance(evidence, Mapping):
         raise RestorePublicationVerification("restore-publication:evidence")
     size, file_digest = _file_identity(path, expected_links=expected_links)
@@ -386,7 +437,7 @@ def _require_no_sidecars(path: Path, *, label: str, remove_empty: bool) -> None:
         try:
             size = _regular_identity(sidecar, allow_empty=True)[3]
         except OSError as exc:
-            raise RestorePublicationVerification(f"restore-publication:{label}-sidecar") from exc
+            raise RestorePublicationVerification(f"restore-publication:{label}-sidecar") from None
         if size != 0:
             raise RestorePublicationVerification(f"restore-publication:{label}-sidecar-nonempty")
         if remove_empty:
@@ -396,7 +447,7 @@ def _require_no_sidecars(path: Path, *, label: str, remove_empty: bool) -> None:
             except RestorePublicationError:
                 raise
             except OSError as exc:
-                raise RestorePublicationVerification(f"restore-publication:{label}-sidecar") from exc
+                raise RestorePublicationVerification(f"restore-publication:{label}-sidecar") from None
     if any(os.path.lexists(os.fspath(_sidecar(path, suffix))) for suffix in ("-wal", "-shm")):
         raise RestorePublicationVerification(f"restore-publication:{label}-sidecar")
 
@@ -416,7 +467,7 @@ def _checkpoint_closed_database(path: Path) -> None:
     except RestorePublicationError:
         raise
     except (sqlite3.Error, OSError, ValueError) as exc:
-        raise RestorePublicationVerification("restore-publication:checkpoint") from exc
+        raise RestorePublicationVerification("restore-publication:checkpoint") from None
     finally:
         if connection is not None:
             connection.close()
@@ -522,11 +573,11 @@ def _validate_lock(stream, target: Path) -> None:
         opened = os.fstat(stream.fileno())
         size = opened.st_size
     except OSError as exc:
-        raise RestorePublicationVerification("restore-publication:lock-read") from exc
+        raise RestorePublicationVerification("restore-publication:lock-read") from None
     try:
         path_identity = _regular_identity(_lock_path(target))
     except RestorePublicationError as exc:
-        raise RestorePublicationVerification("restore-publication:lock-binding") from exc
+        raise RestorePublicationVerification("restore-publication:lock-binding") from None
     if raw != expected or size != len(expected) + 1 or (int(opened.st_dev), int(opened.st_ino), int(opened.st_nlink)) != path_identity[:3]:
         raise RestorePublicationVerification("restore-publication:lock-binding")
 
@@ -613,7 +664,7 @@ def _workspace_paths(base: str | Path, identity: str) -> tuple[Path, Path, Path]
     try:
         value = os.fspath(base)
     except TypeError as exc:
-        raise RestorePublicationError("restore-publication:workspace-base") from exc
+        raise RestorePublicationError("restore-publication:workspace-base") from None
     if isinstance(value, bytes) or not value:
         raise RestorePublicationError("restore-publication:workspace-base")
     parent = Path(os.path.abspath(value))
@@ -635,7 +686,7 @@ def _workspace_children(children: Sequence[str]) -> tuple[str, ...]:
             if len(value.encode("ascii", "strict")) > 64:
                 raise RestorePublicationVerification("restore-publication:workspace-children")
         except UnicodeEncodeError as exc:
-            raise RestorePublicationVerification("restore-publication:workspace-children") from exc
+            raise RestorePublicationVerification("restore-publication:workspace-children") from None
         if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in value):
             raise RestorePublicationVerification("restore-publication:workspace-children")
     return values
@@ -705,7 +756,7 @@ def _ensure_workspace_marker(namespace: Path, marker: Path, temporary: Path, ide
     except FileExistsError:
         _validate_workspace_marker(marker, namespace, identity, children)
     except OSError as exc:
-        raise RestorePublicationVerification("restore-publication:workspace-marker-link") from exc
+        raise RestorePublicationVerification("restore-publication:workspace-marker-link") from None
     finally:
         if os.path.lexists(os.fspath(temporary)):
             if temporary.is_symlink() or temporary.is_dir():
@@ -745,7 +796,7 @@ def owned_restore_workspace(base: str | Path, identity: str, *, children: Sequen
             try:
                 namespace.mkdir(mode=0o700, exist_ok=False)
             except FileExistsError as exc:
-                raise RestorePublicationVerification("restore-publication:workspace-object") from exc
+                raise RestorePublicationVerification("restore-publication:workspace-object") from None
         entries = _namespace_entries(namespace)
         allowed = {marker.name, temporary.name, *children, *(_workspace_receipt_name(child) for child in children)}
         if not entries <= allowed:
@@ -763,20 +814,17 @@ def owned_restore_workspace(base: str | Path, identity: str, *, children: Sequen
 
 def _read_workspace_receipt(path: Path) -> tuple[dict[str, object], tuple[int, int, int, int, int]]:
     try:
-        identity = _regular_identity(path, allow_empty=False)
-        if identity[3] > MAX_WORKSPACE_RECEIPT_BYTES:
-            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-cap")
-        raw = path.read_bytes()
-        if len(raw) != identity[3] or _regular_identity(path) != identity:
-            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-changed")
+        raw, identity = _read_owned_bytes(path, cap=MAX_WORKSPACE_RECEIPT_BYTES, label="workspace-receipt")
         value = json.loads(raw.decode("ascii"))
         if not isinstance(value, dict) or _canonical(value) != raw:
             raise RestorePublicationCleanupError("restore-publication:workspace-receipt-canonical")
         return value, identity
-    except RestorePublicationError:
+    except RestorePublicationCleanupError:
         raise
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise RestorePublicationCleanupError("restore-publication:workspace-receipt") from exc
+    except RestorePublicationVerification:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt") from None
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt") from None
 
 
 def _validate_publication_receipt(
@@ -825,7 +873,7 @@ def _validate_publication_receipt(
         try:
             _validate_marker(publication_marker, target, publication_namespace, publication_stage, export_root)
         except RestorePublicationError as exc:
-            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-marker") from exc
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-marker") from None
     if expected_semantic is not None and receipt["semantic_digest"] != expected_semantic:
         raise RestorePublicationCleanupError("restore-publication:workspace-receipt-semantic")
     if not isinstance(receipt["semantic_digest"], str) or not isinstance(receipt["file_digest"], str):
@@ -937,8 +985,21 @@ def persist_workspace_receipt(
     owned_publication = False
     if target is not None:
         target_path = _target(target)
+        if target_identity != _target_identity(target_path):
+            raise RestorePublicationVerification("restore-publication:workspace-receipt-target")
         publication_namespace, publication_stage, publication_marker = _namespace_paths(target_path, export_root)
         _validate_marker(publication_marker, target_path, publication_namespace, publication_stage, export_root)
+        # A new receipt is durable proof only while the marker and the two
+        # hard links still bind the publication.  A marker-only target is not
+        # an owned publication; an already persisted receipt is handled by
+        # the existing-receipt branch above.
+        try:
+            target_links = _regular_identity(target_path, expected_links=2)
+            stage_links = _regular_identity(publication_stage, expected_links=2)
+        except RestorePublicationError:
+            raise RestorePublicationVerification("restore-publication:workspace-receipt-required") from None
+        if target_links[:2] != stage_links[:2] or target_links[2] != 2 or stage_links[2] != 2:
+            raise RestorePublicationVerification("restore-publication:workspace-receipt-required")
         owned_publication = True
         publication_raw = _read_owned_marker(publication_marker, label="publication-marker")
         expected_marker_identity = _digest(
@@ -947,7 +1008,7 @@ def persist_workspace_receipt(
         )
     if receipt["marker_identity"] != expected_marker_identity:
         raise RestorePublicationVerification("restore-publication:workspace-receipt-marker")
-    if receipt.get("publication_kind") != "CREATED" and not owned_publication:
+    if not owned_publication:
         raise RestorePublicationVerification("restore-publication:workspace-receipt-required")
     try:
         descriptor = os.open(os.fspath(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
@@ -983,6 +1044,7 @@ def cleanup_owned_workspace(
         raise RestorePublicationCleanupError("restore-publication:workspace-binding")
     if namespace.is_symlink() or not namespace.is_dir():
         raise RestorePublicationCleanupError("restore-publication:workspace-object")
+    namespace_identity = _directory_identity(namespace)
     _validate_workspace_marker(marker, namespace, identity, children)
     if set(bindings) != set(children):
         raise RestorePublicationCleanupError("restore-publication:workspace-bindings")
@@ -998,6 +1060,7 @@ def cleanup_owned_workspace(
         )
     for child_name in children:
         child = namespace / child_name
+        child_identity = _directory_identity(child)
         target_value, export_root, expected_evidence, verify_database = bindings[child_name]
         target = _target(target_value)
         if target.parent != child:
@@ -1076,10 +1139,7 @@ def cleanup_owned_workspace(
             allow_empty=False,
             label="workspace-receipt",
         )
-        try:
-            child.rmdir()
-        except OSError as exc:
-            raise RestorePublicationCleanupError("restore-publication:workspace-child") from exc
+        _delete_exact_directory(child, expected_identity=child_identity, label="workspace-child")
     _validate_workspace_marker(marker, namespace, identity, children)
     _delete_exact_file(
         marker,
@@ -1088,7 +1148,7 @@ def cleanup_owned_workspace(
         allow_empty=True,
         label="workspace-marker",
     )
-    namespace.rmdir()
+    _delete_exact_directory(namespace, expected_identity=namespace_identity, label="workspace")
 
 
 def _namespace_entries(namespace: Path) -> set[str]:
@@ -1104,7 +1164,7 @@ def _namespace_entries(namespace: Path) -> set[str]:
     except RestorePublicationError:
         raise
     except OSError as exc:
-        raise RestorePublicationVerification("restore-publication:staging-scan") from exc
+        raise RestorePublicationVerification("restore-publication:staging-scan") from None
 
 
 def _scan_target_namespaces(target: Path, current: Path) -> None:
@@ -1112,7 +1172,7 @@ def _scan_target_namespaces(target: Path, current: Path) -> None:
     try:
         candidates = target.parent.iterdir()
     except OSError as exc:
-        raise RestorePublicationVerification("restore-publication:staging-scan") from exc
+        raise RestorePublicationVerification("restore-publication:staging-scan") from None
     for index, item in enumerate(candidates, start=1):
         if index > MAX_PARENT_ENTRIES:
             raise RestorePublicationVerification("restore-publication:staging-scan-cap")
@@ -1127,6 +1187,7 @@ def _scan_target_namespaces(target: Path, current: Path) -> None:
 def _cleanup_namespace(namespace: Path, stage: Path, marker: Path) -> None:
     if not os.path.lexists(os.fspath(namespace)):
         return
+    namespace_identity = _directory_identity(namespace)
     entries = _namespace_entries(namespace)
     allowed = {stage.name, stage.name + "-wal", stage.name + "-shm", marker.name}
     if not entries <= allowed:
@@ -1148,11 +1209,8 @@ def _cleanup_namespace(namespace: Path, stage: Path, marker: Path) -> None:
         except RestorePublicationError:
             raise
         except OSError as exc:
-            raise RestorePublicationCleanupError("restore-publication:cleanup") from exc
-    try:
-        namespace.rmdir()
-    except OSError as exc:
-        raise RestorePublicationCleanupError("restore-publication:cleanup") from exc
+            raise RestorePublicationCleanupError("restore-publication:cleanup") from None
+    _delete_exact_directory(namespace, expected_identity=namespace_identity, label="cleanup")
 
 
 def _reconcile_namespace(target: Path, namespace: Path, stage: Path, marker: Path, export_root: str) -> bool:
@@ -1215,7 +1273,7 @@ def _verify_existing(
         if before_shape != after_shape or (after_identity[0][0][3], after_identity[0][1]) != (image.byte_length, image.file_digest):
             raise RestorePublicationVerification("restore-publication:existing-changed")
     except RestorePublicationError as exc:
-        raise RestorePublicationConflict("restore-publication:existing-invalid") from exc
+        raise RestorePublicationConflict("restore-publication:existing-invalid") from None
     _same_semantic(image, expected_semantic)
     return image, evidence, after_identity
 
@@ -1229,7 +1287,7 @@ def _publish_link(stage: Path, target: Path) -> bool:
     except OSError as exc:
         if os.path.lexists(os.fspath(target)):
             return False
-        raise RestorePublicationError("restore-publication:atomic-create") from exc
+        raise RestorePublicationError("restore-publication:atomic-create") from None
 
 
 def _remove_created_link(target: Path, owned_inode: tuple[int, int]) -> None:
@@ -1248,7 +1306,7 @@ def _remove_created_link(target: Path, owned_inode: tuple[int, int]) -> None:
     except RestorePublicationError:
         raise
     except OSError as exc:
-        raise RestorePublicationCleanupError("restore-publication:published-cleanup") from exc
+        raise RestorePublicationCleanupError("restore-publication:published-cleanup") from None
 
 
 def _call_fault(fault_injector: Callable[[str], None] | None, point: str) -> None:
@@ -1256,13 +1314,106 @@ def _call_fault(fault_injector: Callable[[str], None] | None, point: str) -> Non
         fault_injector(point)
 
 
-def _recognized_owned_publication(
+def _finish_linked_publication(
     target: Path,
+    namespace: Path,
     stage: Path,
+    export_root: str,
     expected_semantic: str | None,
     *,
     verify_database: Callable[[Path], object],
     fault_injector: Callable[[str], None] | None,
+    publication_receipt_sink: Callable[[Mapping[str, object]], object] | None,
+    created: bool,
+) -> tuple[
+    VerifiedRestoreImageV1,
+    tuple[
+        tuple[tuple[int, int, int, int, int], str],
+        tuple[tuple[int, int, int, int, int], str] | None,
+        tuple[tuple[int, int, int, int, int], str] | None,
+    ],
+]:
+    """Finish one publication while its target and stage still share an inode."""
+
+    try:
+        target_links = _regular_identity(target, expected_links=target.stat().st_nlink)
+        stage_links = _regular_identity(stage, expected_links=stage.stat().st_nlink)
+    except (OSError, RestorePublicationError) as exc:
+        raise RestorePublicationConflict("restore-publication:published-recovery") from None
+    if target_links[:2] != stage_links[:2] or target_links[2] != 2 or stage_links[2] != 2:
+        if created and target_links[:2] == stage_links[:2]:
+            try:
+                _remove_created_link(target, target_links[:2])
+            except RestorePublicationError:
+                raise RestorePublicationCleanupError("restore-publication:published-cleanup") from None
+        raise RestorePublicationConflict("restore-publication:published-recovery")
+    receipt_persisted = False
+    stage_delete_started = False
+    stage_delete_completed = False
+    try:
+        image, _ = _verified_image(target, verify_database, expected_links=2)
+        stage_image, _ = _verified_image(stage, verify_database, expected_links=2)
+        _same_semantic(image, expected_semantic)
+        if (image.byte_length, image.file_digest) != (stage_image.byte_length, stage_image.file_digest):
+            raise RestorePublicationConflict("restore-publication:published-recovery")
+        _require_no_sidecars(target, label="published", remove_empty=False)
+        predicted = (target_links[0], target_links[1], 1, target_links[3], target_links[4])
+        stable_storage = ((predicted, image.file_digest), None, None)
+        receipt = _publication_receipt(
+            target, namespace, stage, export_root, image, created=created,
+            storage_identity=stable_storage,
+        )
+        if publication_receipt_sink is not None:
+            try:
+                publication_receipt_sink(receipt)
+            except Exception:
+                # A callback may have durably written before losing its
+                # response.  Remove only this exact target link; stage,
+                # marker, and any receipt remain available for deterministic
+                # retry.
+                try:
+                    _remove_created_link(target, target_links[:2])
+                except RestorePublicationError:
+                    raise RestorePublicationCleanupError("restore-publication:published-cleanup") from None
+                raise RestorePublicationError("restore-publication:receipt") from None
+            receipt_persisted = True
+        _call_fault(fault_injector, "before_stage_delete")
+        stage_delete_started = True
+        _delete_exact_file(stage, expected_inode=stage_links[:2], allow_empty=False, label="stage-delete")
+        stage_delete_completed = True
+        final = _regular_identity(target)
+        if final[:2] != target_links[:2] or final[2] != 1:
+            raise RestorePublicationConflict("restore-publication:published-recovery")
+        stable_storage = ((final, image.file_digest), None, None)
+        if created:
+            _call_fault(fault_injector, "after_atomic_publication_before_response")
+    except RestorePublicationConflict:
+        if created and not receipt_persisted and (not stage_delete_started or stage_delete_completed):
+            try:
+                _remove_created_link(target, target_links[:2])
+            except RestorePublicationError:
+                raise RestorePublicationCleanupError("restore-publication:published-cleanup") from None
+        raise
+    except RestorePublicationError:
+        if created and not receipt_persisted and (not stage_delete_started or stage_delete_completed):
+            try:
+                _remove_created_link(target, target_links[:2])
+            except RestorePublicationError:
+                raise RestorePublicationCleanupError("restore-publication:published-cleanup") from None
+        raise
+    return image, stable_storage
+
+
+def _recognized_owned_publication(
+    target: Path,
+    namespace: Path,
+    stage: Path,
+    export_root: str,
+    expected_semantic: str | None,
+    *,
+    verify_database: Callable[[Path], object],
+    fault_injector: Callable[[str], None] | None,
+    publication_receipt_sink: Callable[[Mapping[str, object]], object] | None,
 ) -> tuple[
     VerifiedRestoreImageV1,
     tuple[
@@ -1273,30 +1424,11 @@ def _recognized_owned_publication(
 ]:
     """Adopt a target whose still-present stage proves the same hard link."""
 
-    try:
-        target_links = _regular_identity(target, expected_links=target.stat().st_nlink)
-        stage_links = _regular_identity(stage, expected_links=stage.stat().st_nlink)
-    except (OSError, RestorePublicationError) as exc:
-        raise RestorePublicationConflict("restore-publication:published-recovery") from exc
-    if target_links[:2] != stage_links[:2] or target_links[2] != 2 or stage_links[2] != 2:
-        raise RestorePublicationConflict("restore-publication:published-recovery")
-    try:
-        image, _ = _verified_image(target, verify_database, expected_links=2)
-        stage_image, _ = _verified_image(stage, verify_database, expected_links=2)
-        _same_semantic(image, expected_semantic)
-        if (image.byte_length, image.file_digest) != (stage_image.byte_length, stage_image.file_digest):
-            raise RestorePublicationConflict("restore-publication:published-recovery")
-        _require_no_sidecars(target, label="published", remove_empty=False)
-        _call_fault(fault_injector, "before_stage_delete")
-        _delete_exact_file(stage, expected_inode=stage_links[:2], allow_empty=False, label="stage-delete")
-        final = _regular_identity(target)
-        if final[:2] != target_links[:2] or final[2] != 1:
-            raise RestorePublicationConflict("restore-publication:published-recovery")
-    except RestorePublicationConflict:
-        raise
-    except RestorePublicationError as exc:
-        raise RestorePublicationCleanupError("restore-publication:stage-delete") from exc
-    return image, ((final, image.file_digest), None, None)
+    return _finish_linked_publication(
+        target, namespace, stage, export_root, expected_semantic,
+        verify_database=verify_database, fault_injector=fault_injector,
+        publication_receipt_sink=publication_receipt_sink, created=False,
+    )
 
 
 def _publication_receipt(
@@ -1346,7 +1478,6 @@ def _publication_receipt(
 
 def publish_create_only(
     destination: str | Path,
-    expected_export: bytes,
     *,
     export_root: str,
     expected_evidence: Mapping[str, object] | None = None,
@@ -1358,8 +1489,6 @@ def publish_create_only(
     publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None,
 ) -> T:
     """Build and atomically publish one independently verified image."""
-    if type(expected_export) is not bytes or not expected_export:
-        raise RestorePublicationError("restore-publication:export")
     if (open_service is None) == (result_factory is None):
         raise RestorePublicationError("restore-publication:result-owner")
     target = _target(destination)
@@ -1368,6 +1497,24 @@ def publish_create_only(
         raise RestorePublicationVerification("restore-publication:export-root-binding")
     expected_semantic = _expected_semantic(expected_evidence)
     namespace, stage, marker = _namespace_paths(target, export_root)
+
+    def build_owned_stage(path: Path) -> None:
+        try:
+            build_stage(path)
+        except RestorePublicationError:
+            raise
+        except (OSError, sqlite3.Error):
+            raise RestorePublicationVerification("restore-publication:stage-build") from None
+
+    def open_owned_service(path: Path) -> T:
+        try:
+            result = open_service(path) if open_service is not None else (result_factory(path) if result_factory is not None else None)
+        except (OSError, sqlite3.Error):
+            raise RestorePublicationError("restore-publication:result") from None
+        if result is None:
+            raise RestorePublicationError("restore-publication:result")
+        return result
+
     with _target_lock(target):
         _scan_target_namespaces(target, namespace)
         has_stage = _reconcile_namespace(target, namespace, stage, marker, export_root)
@@ -1376,21 +1523,21 @@ def publish_create_only(
             if has_stage:
                 image, stable_storage = _recognized_owned_publication(
                     target,
+                    namespace,
                     stage,
+                    export_root,
                     expected_semantic,
                     verify_database=verify_database,
                     fault_injector=fault_injector,
+                    publication_receipt_sink=publication_receipt_sink,
                 )
             else:
                 image, _evidence, stable_storage = _verify_existing(target, expected_semantic, verify_database=verify_database)
-            if publication_receipt_sink is not None:
+            if publication_receipt_sink is not None and not has_stage:
                 publication_receipt_sink(_publication_receipt(target, namespace, stage, export_root, image, created=False, storage_identity=stable_storage))
             if os.path.lexists(os.fspath(namespace)):
                 _cleanup_namespace(namespace, stage, marker)
-            result = open_service(target) if open_service is not None else (result_factory(target) if result_factory is not None else None)
-            if result is None:
-                raise RestorePublicationError("restore-publication:result")
-            return result
+            return open_owned_service(target)
 
         # A sidecar beside an absent target is never ours to clean.  Reject it
         # before creating a database or publishing a hard link.
@@ -1402,9 +1549,9 @@ def publish_create_only(
             try:
                 namespace.mkdir(mode=0o700, exist_ok=False)
             except FileExistsError as exc:
-                raise RestorePublicationVerification("restore-publication:staging-state") from exc
+                raise RestorePublicationVerification("restore-publication:staging-state") from None
             _ensure_marker(marker, target, namespace, stage, export_root)
-            build_stage(stage)
+            build_owned_stage(stage)
             _call_fault(fault_injector, "after_empty_staging_db_creation")
 
         if not stage.is_file() or stage.is_symlink():
@@ -1417,7 +1564,7 @@ def publish_create_only(
         if expected_semantic is not None and stage_image.semantic_digest != expected_semantic:
             if not _is_empty_evidence(stage_evidence):
                 _same_semantic(stage_image, expected_semantic)
-            build_stage(stage)
+            build_owned_stage(stage)
             stage_image, stage_evidence = _verified_image(stage, verify_database)
         _same_semantic(stage_image, expected_semantic)
         _checkpoint_closed_database(stage)
@@ -1427,56 +1574,27 @@ def publish_create_only(
         stage_image, _ = _verified_image(stage, verify_database)
         _same_semantic(stage_image, expected_semantic)
         _require_no_sidecars(stage, label="staging", remove_empty=False)
-        stage_inode = _regular_identity(stage)
 
         _call_fault(fault_injector, "before_publish")
         created = _publish_link(stage, target)
         if created:
-            owned_inode = stage_inode[:2]
-            stage_deleted = False
-            try:
-                linked_stage = _regular_identity(stage, expected_links=stage.stat().st_nlink)
-                linked_target = _regular_identity(target, expected_links=target.stat().st_nlink)
-                if linked_stage[:2] != owned_inode or linked_target[:2] != owned_inode or linked_stage[2] != 2 or linked_target[2] != 2:
-                    raise RestorePublicationVerification("restore-publication:published-ownership")
-                image, _ = _verified_image(target, verify_database, expected_links=2)
-                _same_semantic(image, expected_semantic)
-                if (image.byte_length, image.file_digest) != (stage_image.byte_length, stage_image.file_digest):
-                    raise RestorePublicationVerification("restore-publication:published-image")
-                _require_no_sidecars(target, label="published", remove_empty=False)
-                _call_fault(fault_injector, "before_stage_delete")
-                _delete_exact_file(stage, expected_inode=owned_inode, allow_empty=False, label="stage-delete")
-                stage_deleted = True
-                final_inode = _regular_identity(target)
-                if final_inode[:2] != owned_inode or final_inode[2] != 1:
-                    raise RestorePublicationVerification("restore-publication:published-image")
-                stable_storage = ((final_inode, image.file_digest), None, None)
-            except Exception:
-                if not stage_deleted:
-                    _remove_created_link(target, owned_inode)
-                raise
-            if publication_receipt_sink is not None:
-                publication_receipt_sink(
-                    _publication_receipt(
-                        target,
-                        namespace,
-                        stage,
-                        export_root,
-                        image,
-                        created=True,
-                        storage_identity=stable_storage,
-                    )
-                )
-            _call_fault(fault_injector, "after_atomic_publication_before_response")
+            image, stable_storage = _finish_linked_publication(
+                target,
+                namespace,
+                stage,
+                export_root,
+                expected_semantic,
+                verify_database=verify_database,
+                fault_injector=fault_injector,
+                publication_receipt_sink=publication_receipt_sink,
+                created=True,
+            )
         else:
             image, _evidence, _stable_storage = _verify_existing(target, expected_semantic, verify_database=verify_database)
             if publication_receipt_sink is not None:
                 publication_receipt_sink(_publication_receipt(target, namespace, stage, export_root, image, created=False, storage_identity=_stable_storage))
         _cleanup_namespace(namespace, stage, marker)
-        result = open_service(target) if open_service is not None else (result_factory(target) if result_factory is not None else None)
-        if result is None:
-            raise RestorePublicationError("restore-publication:result")
-        return result
+        return open_owned_service(target)
 
 __all__ = [
     "VerifiedRestoreImageV1", "RestorePublicationError",

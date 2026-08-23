@@ -1058,7 +1058,7 @@ def verify_file(path: str | Path) -> dict[str, object]:
         with file_path.open("rb") as handle:
             raw = handle.read(MAX_ARTIFACT_BYTES + 1)
     except OSError:
-        raise
+        raise IndependentProviderTrustGraphError("file:read") from None
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise IndependentProviderTrustGraphError("file:byte-cap")
     return verify_bytes(raw)

@@ -361,6 +361,9 @@ def verify_component_exports(
         "runtime": _component_manifest("CONTROLLED_SHADOW_RUNTIME", runtime_raw, r, profile=configured),
         "quarantine_result": q,
         "runtime_result": r,
+        "quarantine_export_root": q["export_root"],
+        "runtime_export_root": r["export_root"],
+        "quarantine_database_id": database_id,
     }
 
 
@@ -423,7 +426,13 @@ def build_bundle(
     raw = _canonical(body)
     if len(raw) > configured["max_bundle_bytes"]:
         raise IndependentOperationalRecoveryError("recovery:bundle-cap")
-    return raw, {"bundle_digest": _raw_digest(raw), "manifests": manifests, "generation": generation, "prior_root": prior_root, "created_at": created_at}
+    return raw, {
+        "bundle_digest": _raw_digest(raw), "manifests": manifests,
+        "generation": generation, "prior_root": prior_root, "created_at": created_at,
+        "quarantine_export_root": checked["quarantine_export_root"],
+        "runtime_export_root": checked["runtime_export_root"],
+        "quarantine_database_id": checked["quarantine_database_id"],
+    }
 
 
 def verify_bundle(
@@ -470,6 +479,9 @@ def verify_bundle(
         "manifests": details["manifests"],
         "quarantine_raw": exports["EXTERNAL_SOURCE_QUARANTINE"],
         "runtime_raw": exports["CONTROLLED_SHADOW_RUNTIME"],
+        "quarantine_export_root": details["quarantine_export_root"],
+        "runtime_export_root": details["runtime_export_root"],
+        "quarantine_database_id": details["quarantine_database_id"],
     }
 
 

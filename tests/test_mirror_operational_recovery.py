@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -449,6 +450,144 @@ class OperationalRecoveryTests(unittest.TestCase):
         self.assertTrue(workspace.is_dir())
         self.assertEqual(planted, q_target.read_bytes())
         self.assertEqual(marker_raw, marker.read_bytes())
+
+    def test_receipt_sink_failure_before_write_retains_stage_and_retries_both_children(self) -> None:
+        first = self.service.create_recovery_point(
+            "RECEIPT_SINK_BEFORE_WRITE", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        q_root = str(json.loads(self.quarantine_export.decode("ascii"))["export_root"])
+        q_target = self.root / f".mirror-restore-workspace-v1-{first['point_id']}" / "quarantine" / "quarantine.db"
+        original = restore_publication.persist_workspace_receipt
+        calls = {"count": 0}
+
+        def fail_before(*args: object, **kwargs: object) -> object:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise restore_publication.RestorePublicationError("test-receipt-before-write")
+            return original(*args, **kwargs)
+
+        restore_publication.persist_workspace_receipt = fail_before  # type: ignore[assignment]
+        try:
+            with self.assertRaises(recovery.RecoveryIntegrityError):
+                self.service.restore_point(first["point_id"], expected_head=first["head_root"])
+        finally:
+            restore_publication.persist_workspace_receipt = original  # type: ignore[assignment]
+        stage, marker = restore_publication.stage_paths(q_target, q_root, create_parent=False)
+        self.assertFalse(q_target.exists())
+        self.assertTrue(stage.exists())
+        self.assertTrue(marker.exists())
+        self.assertTrue((stage.parent.parent.parent / "workspace.json").exists())
+
+        restored = self.service.restore_point(first["point_id"], expected_head=first["head_root"])
+        self.assertEqual(recovery.STATE_RESTORE_VERIFIED, restored["state"])
+        self.assertFalse(stage.parent.parent.exists())
+
+    def test_receipt_sink_response_loss_retains_stage_and_persisted_receipt_for_retry(self) -> None:
+        first = self.service.create_recovery_point(
+            "RECEIPT_SINK_RESPONSE_LOSS", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        q_root = str(json.loads(self.quarantine_export.decode("ascii"))["export_root"])
+        workspace = self.root / f".mirror-restore-workspace-v1-{first['point_id']}"
+        q_target = workspace / "quarantine" / "quarantine.db"
+        original = restore_publication.persist_workspace_receipt
+        calls = {"count": 0}
+
+        def persist_then_raise(*args: object, **kwargs: object) -> object:
+            result = original(*args, **kwargs)
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise restore_publication.RestorePublicationError("test-receipt-response-loss")
+            return result
+
+        restore_publication.persist_workspace_receipt = persist_then_raise  # type: ignore[assignment]
+        try:
+            with self.assertRaises(recovery.RecoveryIntegrityError):
+                self.service.restore_point(first["point_id"], expected_head=first["head_root"])
+        finally:
+            restore_publication.persist_workspace_receipt = original  # type: ignore[assignment]
+        stage, marker = restore_publication.stage_paths(q_target, q_root, create_parent=False)
+        self.assertFalse(q_target.exists())
+        self.assertTrue(stage.exists())
+        self.assertTrue(marker.exists())
+        self.assertTrue((workspace / "quarantine.publication.json").exists())
+
+        restored = self.service.restore_point(first["point_id"], expected_head=first["head_root"])
+        self.assertEqual(recovery.STATE_RESTORE_VERIFIED, restored["state"])
+        self.assertFalse(workspace.exists())
+
+    def test_child_directory_replacement_during_cleanup_is_preserved(self) -> None:
+        identity = "3" * 128
+        workspace_children = ("quarantine", "runtime")
+        q_export = json.loads(self.quarantine_export.decode("ascii"))
+        r_export = json.loads(self.runtime_export.decode("ascii"))
+        with restore_publication.owned_restore_workspace(self.root, identity, children=workspace_children) as workspace:
+            q_target = workspace / "quarantine" / "quarantine.db"
+            r_target = workspace / "runtime" / "runtime.db"
+
+            def persist_quarantine(receipt: dict[str, object]) -> object:
+                return restore_publication.persist_workspace_receipt(
+                    workspace, identity, "quarantine", receipt,
+                    children=workspace_children, target=q_target,
+                )
+
+            def persist_runtime(receipt: dict[str, object]) -> object:
+                return restore_publication.persist_workspace_receipt(
+                    workspace, identity, "runtime", receipt,
+                    children=workspace_children, target=r_target,
+                )
+
+            q_service = quarantine.restore_export(
+                q_target, self.quarantine_export, policy=self.upstream.source_policy,
+                database_id=self.upstream.quarantine_service.database_id,
+                publication_receipt_sink=persist_quarantine,
+            )
+            r_service = runtime.restore_export(
+                r_target, self.runtime_export, profile=self.upstream.profile,
+                clock=self.clock, publication_receipt_sink=persist_runtime,
+            )
+            q_evidence = q_service.integrity()
+            r_evidence = r_service.integrity()
+        q_child = self.root / f".mirror-restore-workspace-v1-{identity}" / "quarantine"
+        retained = self.root / "retained-child-directory"
+        original_delete = restore_publication._delete_exact_file
+        swapped = {"value": False}
+
+        def delete_and_swap(path: Path, *args: object, **kwargs: object) -> object:
+            result = original_delete(path, *args, **kwargs)
+            if path == q_target and kwargs.get("label") == "workspace-target" and not swapped["value"]:
+                swapped["value"] = True
+                q_child.rename(retained)
+                q_child.mkdir()
+            return result
+
+        def verify_quarantine(path: Path) -> object:
+            return quarantine_independent.verify_database(
+                path, policy=self.upstream.source_policy.material(), database_id=str(q_export["database_id"]),
+            )
+
+        def verify_runtime(path: Path) -> object:
+            return runtime_independent.verify_database(path, profile=self.upstream.profile.material())
+
+        original_lock = restore_publication._target_lock
+        restore_publication._target_lock = lambda _target: nullcontext()  # type: ignore[assignment]
+        restore_publication._delete_exact_file = delete_and_swap  # type: ignore[assignment]
+        try:
+            with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+                restore_publication.cleanup_owned_workspace(
+                    workspace, identity,
+                    {
+                        "quarantine": (q_target, str(q_export["export_root"]), q_evidence, verify_quarantine),
+                        "runtime": (r_target, str(r_export["export_root"]), r_evidence, verify_runtime),
+                    },
+                    children=workspace_children,
+                )
+        finally:
+            restore_publication._target_lock = original_lock  # type: ignore[assignment]
+            restore_publication._delete_exact_file = original_delete  # type: ignore[assignment]
+        self.assertTrue(q_child.is_dir())
+        self.assertTrue(retained.is_dir())
 
     def test_storage_overwrite_revocation_and_existing_restore_target_fail_closed(self) -> None:
         stored = self.service.create_recovery_point(
