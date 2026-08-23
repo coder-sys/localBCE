@@ -1072,8 +1072,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         print(json.dumps(verify_file(args[0]), sort_keys=True, separators=(",", ":")))
         return 0
-    except (OSError, IndependentProviderTrustGraphError) as exc:
-        print(f"REJECT {exc}", file=sys.stderr)
+    except (OSError, IndependentProviderTrustGraphError):
+        print("REJECT input", file=sys.stderr)
         return 1
 
 

@@ -1561,8 +1561,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw, telemetry = build_report(_read_bounded(args[0], MAX_INPUT_BYTES))
         print(json.dumps({"accepted": True, "artifact_bytes": len(raw), "process_tree_peak_bytes": telemetry["process_tree_peak_bytes"]}, sort_keys=True))
         return 0
-    except (OSError, ProviderTrustGraphError) as exc:
-        print(f"REJECT {exc}", file=sys.stderr)
+    except (OSError, ProviderTrustGraphError):
+        print("REJECT input", file=sys.stderr)
         return 1
 
 

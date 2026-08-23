@@ -153,6 +153,28 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         for key in ("chain_id", "state_root", "head_transition_id"):
             self.assertNotIn(key, support)
 
+    def test_initial_quarantine_persist_rejects_a_cross_database_producer_receipt(self) -> None:
+        root = Path(self.temporary.name)
+        foreign = quarantine.ExternalSourceQuarantineService(
+            root / "foreign-quarantine.db",
+            policy=self.policy,
+            database_id=self.quarantine_database_id,
+        )
+        created = self.service.ensure_slot(7_000)
+        lease = self.service.claim_next(7_000)
+        self.assertIsNotNone(lease)
+        original_admit = self.quarantine.admit
+        self.quarantine.admit = foreign.admit  # type: ignore[method-assign]
+        try:
+            with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "quarantine-authority"):
+                self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+        finally:
+            self.quarantine.admit = original_admit  # type: ignore[method-assign]
+        row = self.service._slot_from_disk(str(created["slot_id"]))
+        self.assertEqual("QUARANTINE_PENDING", row["state"])
+        self.assertIsNone(row["quarantine_receipt_digest"])
+        self.assertEqual(1, foreign.integrity()["artifact_count"])
+
     def test_same_slot_claim_is_single_writer_and_exact_retry_is_stable(self) -> None:
         created = self.service.ensure_slot(7_000)
         services = [self.service, acquisition.AuthenticatedSourceAcquisitionService(Path(self.temporary.name) / "acquisition.db", config=self.config, external_policy=self.policy, quarantine_service=self.quarantine, clock=lambda: 7_000)]
@@ -319,6 +341,42 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         self.assertNotIn(profile.BASE_URL, json.dumps(support))
         self.assertNotIn(profile.SYNTHETIC_PRACTITIONER_ID, json.dumps(support))
         self.assertNotRegex(json.dumps(support, sort_keys=True), r"[0-9a-f]{128}")
+
+    def test_quarantined_fast_retry_and_integrity_require_external_quarantine_database(self) -> None:
+        self.service.ensure_slot(7_000)
+        lease = self.service.claim_next(7_000)
+        first = self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+        self.assertEqual("QUARANTINED", first["state"])
+        self.quarantine.database.unlink()
+        for operation in (self.service.integrity, self.service.export_bytes):
+            with self.assertRaises(acquisition.AuthenticatedSourceAcquisitionError):
+                operation()
+        with self.assertRaises(acquisition.AuthenticatedSourceAcquisitionError):
+            self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+
+    def test_every_fixed_flag_is_bound_in_acquisition_metadata_and_export(self) -> None:
+        original = json.loads(self.service.export_bytes().decode("ascii"))
+        connection = sqlite3.connect(self.service.database)
+        try:
+            for field, expected in independent.FIXED_FLAGS.items():
+                with self.subTest(metadata=field):
+                    encoded = "MUTATED" if expected is None else "0" if expected else "1"
+                    connection.execute("UPDATE acquisition_meta SET value=? WHERE key=?", (encoded, field))
+                    connection.commit()
+                    with self.assertRaises(acquisition.AuthenticatedSourceAcquisitionError):
+                        self.service.integrity()
+                    connection.execute("UPDATE acquisition_meta SET value=? WHERE key=?", (independent.FIXED_FLAG_STORAGE[field], field))
+                    connection.commit()
+        finally:
+            connection.close()
+        for field, expected in independent.FIXED_FLAGS.items():
+            with self.subTest(export=field):
+                mutated = dict(original)
+                mutated[field] = "MUTATED" if expected is None else not expected
+                body = {key: value for key, value in mutated.items() if key != "export_root"}
+                mutated["export_root"] = acquisition._digest("export-root", body)
+                with self.assertRaises(independent.IndependentAcquisitionError):
+                    independent.verify_export_bytes(acquisition._canonical(mutated), config=self.config.material())
 
     def test_precommit_fault_rolls_back_without_a_slot_or_quarantine_artifact(self) -> None:
         armed = {"value": True}

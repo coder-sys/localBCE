@@ -456,6 +456,22 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             self.service.admit("mutated", mutated)
         self.assertEqual(self._export(), before)
 
+    def test_every_fixed_export_flag_mutation_rejects_after_root_rebind(self) -> None:
+        self.service.admit("flags", self._artifact("flags"))
+        original = json.loads(self._export().decode("ascii"))
+        for field, expected in independent.FIXED_FLAGS.items():
+            with self.subTest(field=field):
+                mutated = dict(original)
+                mutated[field] = "MUTATED" if expected is None else not expected
+                body = {key: value for key, value in mutated.items() if key != "export_root"}
+                mutated["export_root"] = independent._digest("export-root", body)
+                with self.assertRaises(independent.IndependentQuarantineError):
+                    independent.verify_export_bytes(
+                        _canonical(mutated),
+                        policy=self.policy.material(),
+                        database_id=self.database_id,
+                    )
+
     def test_support_is_aggregate_only_and_no_downstream_bridge_exists(self) -> None:
         raw = self._artifact("support-capture")
         self.service.admit("support", raw)

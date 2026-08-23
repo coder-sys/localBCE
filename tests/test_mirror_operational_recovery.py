@@ -13,6 +13,7 @@ import unittest
 
 from app.mirror import controlled_shadow_runtime as runtime
 from app.mirror import controlled_shadow_runtime_independent as runtime_independent
+from app.mirror import external_source_quarantine as quarantine
 from app.mirror import external_source_quarantine_independent as quarantine_independent
 from app.mirror import operational_recovery as recovery
 from app.mirror import operational_recovery_fixtures as recovery_fixtures
@@ -372,7 +373,7 @@ class OperationalRecoveryTests(unittest.TestCase):
             quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
         )
         workspace = self.root / f".mirror-restore-workspace-v1-{first['point_id']}"
-        with restore_publication.owned_restore_workspace(self.root, str(first["point_id"])) as owned:
+        with restore_publication.owned_restore_workspace(self.root, str(first["point_id"]), children=("quarantine", "runtime")) as owned:
             self.assertEqual(owned, workspace)
             self.assertTrue((owned / "workspace.json").is_file())
             self.assertTrue((owned / "quarantine").is_dir())
@@ -390,14 +391,14 @@ class OperationalRecoveryTests(unittest.TestCase):
             restore_publication.RestorePublicationVerification,
             "workspace-marker",
         ):
-            with restore_publication.owned_restore_workspace(self.root, identity):
+            with restore_publication.owned_restore_workspace(self.root, identity, children=("quarantine", "runtime")):
                 self.fail("unmarked workspace was adopted")
         self.assertTrue(workspace.is_dir())
         self.assertEqual([], list(workspace.iterdir()))
 
     def test_workspace_cleanup_never_deletes_unverified_regular_files(self) -> None:
         identity = "1" * 128
-        with restore_publication.owned_restore_workspace(self.root, identity) as workspace:
+        with restore_publication.owned_restore_workspace(self.root, identity, children=("quarantine", "runtime")) as workspace:
             q_target = workspace / "quarantine" / "quarantine.db"
             r_target = workspace / "runtime" / "runtime.db"
             q_target.write_bytes(b"foreign-quarantine")
@@ -421,9 +422,33 @@ class OperationalRecoveryTests(unittest.TestCase):
                     "quarantine": (q_target, str(q_export["export_root"]), {}, verify_quarantine),
                     "runtime": (r_target, str(r_export["export_root"]), {}, verify_runtime),
                 },
+                children=("quarantine", "runtime"),
             )
         self.assertEqual(b"foreign-quarantine", q_target.read_bytes())
         self.assertEqual(b"foreign-runtime", r_target.read_bytes())
+
+    def test_restore_rejects_a_preplanted_valid_same_semantic_child_target(self) -> None:
+        first = self.service.create_recovery_point(
+            "PREPLANTED_VALID_TARGET", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        workspace = self.root / f".mirror-restore-workspace-v1-{first['point_id']}"
+        with restore_publication.owned_restore_workspace(self.root, str(first["point_id"]), children=("quarantine", "runtime")) as owned:
+            q_target = owned / "quarantine" / "quarantine.db"
+            quarantine.restore_export(
+                q_target,
+                self.quarantine_export,
+                policy=self.upstream.source_policy,
+                database_id=self.upstream.quarantine_service.database_id,
+            )
+            planted = q_target.read_bytes()
+        marker = workspace / "workspace.json"
+        marker_raw = marker.read_bytes()
+        with self.assertRaises(recovery.RecoveryIntegrityError):
+            self.service.restore_point(first["point_id"], expected_head=first["head_root"])
+        self.assertTrue(workspace.is_dir())
+        self.assertEqual(planted, q_target.read_bytes())
+        self.assertEqual(marker_raw, marker.read_bytes())
 
     def test_storage_overwrite_revocation_and_existing_restore_target_fail_closed(self) -> None:
         stored = self.service.create_recovery_point(
@@ -516,9 +541,11 @@ class OperationalRecoveryTests(unittest.TestCase):
             def stat(inner_self, object_id: str):
                 if inner_self.mode == "stat":
                     raise ValueError("secret malformed stat")
+                if inner_self.mode == "stat-missing":
+                    raise recovery.StorageNotFound("synthetic stat miss after get")
                 return super(AmbiguousReadStorage, inner_self).stat(object_id)
 
-        for mode in ("timeout", "permission", "stat"):
+        for mode in ("timeout", "permission", "stat", "stat-missing"):
             with self.subTest(mode=mode):
                 storage = AmbiguousReadStorage()
                 profile = recovery.OperationalRecoveryProfileV1(

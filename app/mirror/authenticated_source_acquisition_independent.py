@@ -53,7 +53,8 @@ META_KEYS = {
     "schema", "schema_version", "acquisition_id", "config_digest", "chain_id", "sequence", "state_root",
     "head_transition_id", "state_owned", "zero_phi", "production_usable", "activation",
     "read_only", "observation_only", "quarantine_only", "payment_authority",
-    "clearance_authority", "settlement_authority", "adjudication_authority", "proofSuiteId",
+    "clearance_authority", "settlement_authority", "adjudication_authority",
+    "production_source_authentication", "proofSuiteId",
 }
 SLOT_COLUMNS = (
     "slot_id", "scheduled_at", "state", "lease_id", "lease_until", "attempt", "envelope_id", "envelope_digest",
@@ -70,7 +71,7 @@ TABLE_COLUMNS = {
     "acquisition_meta": ("key", "value"), "acquisition_slots": SLOT_COLUMNS, "acquisition_operations": OPERATION_COLUMNS,
     "acquisition_transitions": TRANSITION_COLUMNS, "acquisition_attestations": ATTESTATION_COLUMNS,
 }
-EXPORT_KEYS = {"schema", "schema_version", "config", "config_digest", "chain_id", "meta", "slots", "operations", "transitions", "attestations", "export_root", "state_owned", "zero_phi", "read_only", "observation_only", "quarantine_only", "production_usable", "activation", "payment_authority", "clearance_authority", "settlement_authority", "adjudication_authority", "proofSuiteId"}
+EXPORT_KEYS = {"schema", "schema_version", "config", "config_digest", "chain_id", "meta", "slots", "operations", "transitions", "attestations", "export_root", "state_owned", "zero_phi", "read_only", "observation_only", "quarantine_only", "production_source_authentication", "production_usable", "activation", "payment_authority", "clearance_authority", "settlement_authority", "adjudication_authority", "proofSuiteId"}
 EXPORT_ROW_KEYS = {
     "acquisition_meta": set(TABLE_COLUMNS["acquisition_meta"]),
     "acquisition_slots": set(SLOT_COLUMNS) - {"quarantine_receipt_raw", "page_digests_raw", "selected_pages_raw"} | {"quarantine_receipt_hex", "page_digests_hex", "selected_pages_hex"},
@@ -84,6 +85,7 @@ FIXED_FLAGS = {
     "read_only": True,
     "observation_only": True,
     "quarantine_only": True,
+    "production_source_authentication": False,
     "production_usable": False,
     "activation": False,
     "payment_authority": False,
@@ -91,6 +93,10 @@ FIXED_FLAGS = {
     "settlement_authority": False,
     "adjudication_authority": False,
     "proofSuiteId": None,
+}
+FIXED_FLAG_STORAGE = {
+    key: "1" if value is True else "0" if value is False else "null"
+    for key, value in FIXED_FLAGS.items()
 }
 
 
@@ -377,8 +383,7 @@ def _verify_rows(snapshot: Mapping[str, list[dict[str, object]]], *, config: Map
         raise IndependentAcquisitionError("acquisition:meta")
     if meta["schema"] != SCHEMA or meta["schema_version"] != str(SCHEMA_VERSION) or meta["acquisition_id"] != cfg["acquisition_id"] or meta["config_digest"] != config_digest or meta["chain_id"] != chain_id:
         raise IndependentAcquisitionError("acquisition:meta-binding")
-    expected_flags = {"state_owned": "1", "zero_phi": "1", "production_usable": "0", "activation": "0", "payment_authority": "0", "clearance_authority": "0", "settlement_authority": "0", "proofSuiteId": "null"}
-    if any(meta[key] != value for key, value in expected_flags.items()):
+    if any(meta[key] != value for key, value in FIXED_FLAG_STORAGE.items()):
         raise IndependentAcquisitionError("acquisition:meta-flags")
     sequence = _int(int(meta["sequence"]), "sequence", maximum=MAX_TRANSITIONS)
     state_root = _hex(meta["state_root"], "state-root")
@@ -727,4 +732,4 @@ def support_snapshot(path: str | Path, *, config: Mapping[str, object] | object)
     return {"schema": "mirror-authenticated-source-acquisition-support-v3", "schema_version": 3, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **FIXED_FLAGS}
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "CONFIG_KEYS", "META_KEYS", "SLOT_COLUMNS", "OPERATION_COLUMNS", "TRANSITION_COLUMNS", "ATTESTATION_COLUMNS", "TABLE_COLUMNS", "EXPORT_KEYS", "EXPORT_ROW_KEYS", "FIXED_FLAGS", "IndependentAcquisitionError", "_canonical", "_digest", "_raw_digest", "_config_view", "_config_digest", "_chain_id", "_genesis_root", "_state_root", "_parse", "verify_attestation", "snapshot_database", "verify_database", "verify_export_bytes", "support_snapshot"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "CONFIG_KEYS", "META_KEYS", "SLOT_COLUMNS", "OPERATION_COLUMNS", "TRANSITION_COLUMNS", "ATTESTATION_COLUMNS", "TABLE_COLUMNS", "EXPORT_KEYS", "EXPORT_ROW_KEYS", "FIXED_FLAGS", "FIXED_FLAG_STORAGE", "IndependentAcquisitionError", "_canonical", "_digest", "_raw_digest", "_config_view", "_config_digest", "_chain_id", "_genesis_root", "_state_root", "_parse", "verify_attestation", "snapshot_database", "verify_database", "verify_export_bytes", "support_snapshot"]

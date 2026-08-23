@@ -20,7 +20,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import time
-from typing import Callable, Mapping, TypeVar
+from typing import Callable, Mapping, Sequence, TypeVar
 
 
 MAX_IMAGE_BYTES = 128 * 1024 * 1024
@@ -33,7 +33,8 @@ STAGING_SCHEMA = "mirror-restore-publication-stage-v2"
 STAGING_VERSION = 2
 WORKSPACE_SCHEMA = "mirror-restore-workspace-v1"
 WORKSPACE_VERSION = 1
-WORKSPACE_CHILDREN = ("quarantine", "runtime")
+MAX_WORKSPACE_CHILDREN = 8
+MAX_WORKSPACE_RECEIPT_BYTES = 8192
 
 
 class RestorePublicationError(ValueError):
@@ -50,10 +51,6 @@ class RestorePublicationVerification(RestorePublicationError):
 
 class RestorePublicationCleanupError(RestorePublicationError):
     """An owned staging artifact could not be removed safely."""
-
-
-class RestorePublicationInjectedFault(RestorePublicationError):
-    """Test-only interruption; owned staging remains for recovery."""
 
 
 T = TypeVar("T")
@@ -93,6 +90,110 @@ def _regular_identity(path: Path, *, allow_empty: bool = False, expected_links: 
     if size < 0 or (size == 0 and not allow_empty) or size > MAX_IMAGE_BYTES:
         raise RestorePublicationVerification("restore-publication:file-cap")
     return int(value.st_dev), int(value.st_ino), int(value.st_nlink), size, int(value.st_mtime_ns)
+
+
+def _delete_exact_file(
+    path: Path,
+    *,
+    expected_identity: tuple[int, int, int, int, int] | None = None,
+    expected_inode: tuple[int, int] | None = None,
+    expected_bytes: bytes | None = None,
+    allow_empty: bool = True,
+    label: str = "cleanup",
+) -> None:
+    """Delete only the object bound to an opened handle.
+
+    Windows is the supported candidate platform for this boundary.  Its
+    ``SetFileInformationByHandle(FILE_DISPOSITION_INFO)`` operation binds the
+    disposition to the opened file object, so a pathname replacement after
+    the handle is acquired cannot redirect deletion to the replacement.  A
+    platform without an equivalent primitive fails closed instead of falling
+    back to pathname unlink.
+    """
+
+    if not os.path.lexists(os.fspath(path)):
+        return
+    try:
+        preliminary = os.lstat(os.fspath(path))
+    except OSError as exc:
+        raise RestorePublicationCleanupError(f"restore-publication:{label}") from exc
+    if not stat.S_ISREG(preliminary.st_mode):
+        raise RestorePublicationCleanupError(f"restore-publication:{label}")
+    if os.name != "nt":
+        raise RestorePublicationCleanupError("restore-publication:exact-delete-unsupported")
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    GENERIC_READ = 0x80000000
+    DELETE = 0x00010000
+    FILE_READ_ATTRIBUTES = 0x00000080
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    OPEN_EXISTING = 3
+    FILE_ATTRIBUTE_NORMAL = 0x00000080
+    FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    FILE_DISPOSITION_INFO = 4
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [wintypes.HANDLE, wintypes.INT, wintypes.LPVOID, wintypes.DWORD]
+    set_information.restype = wintypes.BOOL
+    handle = create_file(
+        os.fspath(path),
+        GENERIC_READ | DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        None,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    invalid = ctypes.cast(handle, ctypes.c_void_p).value in (None, ctypes.c_void_p(-1).value)
+    if invalid:
+        raise RestorePublicationCleanupError(f"restore-publication:{label}")
+    descriptor = -1
+    try:
+        descriptor = msvcrt.open_osfhandle(int(ctypes.cast(handle, ctypes.c_void_p).value), os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        handle = None
+        actual_stat = os.fstat(descriptor)
+        actual = (
+            int(actual_stat.st_dev), int(actual_stat.st_ino), int(actual_stat.st_nlink),
+            int(actual_stat.st_size), int(actual_stat.st_mtime_ns),
+        )
+        if not stat.S_ISREG(actual_stat.st_mode) or actual[3] < 0 or (actual[3] == 0 and not allow_empty) or actual[3] > MAX_IMAGE_BYTES:
+            raise RestorePublicationCleanupError(f"restore-publication:{label}")
+        if expected_identity is not None and actual != expected_identity:
+            raise RestorePublicationCleanupError(f"restore-publication:{label}")
+        if expected_inode is not None and actual[:2] != expected_inode:
+            raise RestorePublicationCleanupError(f"restore-publication:{label}")
+        if expected_bytes is not None:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            observed = os.read(descriptor, len(expected_bytes) + 1)
+            if observed != expected_bytes:
+                raise RestorePublicationCleanupError(f"restore-publication:{label}")
+
+        class _Disposition(ctypes.Structure):
+            _fields_ = [("DeleteFile", wintypes.BOOL)]
+
+        disposition = _Disposition(1)
+        native_handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+        if not set_information(native_handle, FILE_DISPOSITION_INFO, ctypes.byref(disposition), ctypes.sizeof(disposition)):
+            raise RestorePublicationCleanupError(f"restore-publication:{label}")
+    except RestorePublicationError:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise RestorePublicationCleanupError(f"restore-publication:{label}") from exc
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+        elif handle not in (None, 0):
+            kernel32.CloseHandle(handle)
 
 
 def _file_identity(path: Path, *, allow_empty: bool = False, expected_links: int = 1) -> tuple[int, str]:
@@ -235,6 +336,27 @@ def _storage_file_identity(path: Path, *, allow_empty: bool = False) -> tuple[tu
     return regular, digest
 
 
+def _existing_storage_shape(
+    path: Path,
+) -> tuple[tuple[int, int, int, int, int], tuple[int, int, int, int, int] | None, tuple[int, int, int, int, int] | None]:
+    """Capture only race-detection identities before semantic verification."""
+
+    sidecar_shapes: list[tuple[int, int, int, int, int] | None] = []
+    for suffix in ("-wal", "-shm"):
+        sidecar = _sidecar(path, suffix)
+        if not os.path.lexists(os.fspath(sidecar)):
+            sidecar_shapes.append(None)
+            continue
+        if sidecar.is_symlink() or sidecar.is_dir() or not sidecar.is_file():
+            raise RestorePublicationVerification("restore-publication:existing-sidecar")
+        sidecar_shapes.append(_regular_identity(sidecar, allow_empty=True))
+    if (sidecar_shapes[0] is None) != (sidecar_shapes[1] is None):
+        raise RestorePublicationVerification("restore-publication:existing-sidecar")
+    if all(identity is not None and identity[3] == 0 for identity in sidecar_shapes):
+        raise RestorePublicationVerification("restore-publication:existing-sidecar")
+    return _regular_identity(path), sidecar_shapes[0], sidecar_shapes[1]
+
+
 def _existing_storage_identity(path: Path) -> tuple[tuple[tuple[int, int, int, int, int], str], tuple[tuple[int, int, int, int, int], str] | None, tuple[tuple[int, int, int, int, int], str] | None]:
     """Read one immutable identity without checkpointing caller-owned state."""
 
@@ -269,7 +391,10 @@ def _require_no_sidecars(path: Path, *, label: str, remove_empty: bool) -> None:
             raise RestorePublicationVerification(f"restore-publication:{label}-sidecar-nonempty")
         if remove_empty:
             try:
-                sidecar.unlink()
+                identity = _regular_identity(sidecar, allow_empty=True)
+                _delete_exact_file(sidecar, expected_identity=identity, allow_empty=True, label=f"{label}-sidecar")
+            except RestorePublicationError:
+                raise
             except OSError as exc:
                 raise RestorePublicationVerification(f"restore-publication:{label}-sidecar") from exc
     if any(os.path.lexists(os.fspath(_sidecar(path, suffix))) for suffix in ("-wal", "-shm")):
@@ -499,12 +624,36 @@ def _workspace_paths(base: str | Path, identity: str) -> tuple[Path, Path, Path]
     return namespace, namespace / "workspace.json", namespace / "workspace.json.tmp"
 
 
-def _workspace_marker_bytes(namespace: Path, identity: str) -> bytes:
+def _workspace_children(children: Sequence[str]) -> tuple[str, ...]:
+    values = tuple(children)
+    if not values or len(values) > MAX_WORKSPACE_CHILDREN or len(set(values)) != len(values):
+        raise RestorePublicationVerification("restore-publication:workspace-children")
+    for value in values:
+        if not isinstance(value, str) or not value:
+            raise RestorePublicationVerification("restore-publication:workspace-children")
+        try:
+            if len(value.encode("ascii", "strict")) > 64:
+                raise RestorePublicationVerification("restore-publication:workspace-children")
+        except UnicodeEncodeError as exc:
+            raise RestorePublicationVerification("restore-publication:workspace-children") from exc
+        if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in value):
+            raise RestorePublicationVerification("restore-publication:workspace-children")
+    return values
+
+
+def _workspace_receipt_name(child_name: str) -> str:
+    return f"{child_name}.publication.json"
+
+
+def _workspace_marker_bytes(namespace: Path, identity: str, children: Sequence[str]) -> bytes:
+    children = _workspace_children(children)
     value = {
         "schema": WORKSPACE_SCHEMA,
         "schema_version": WORKSPACE_VERSION,
         "workspace_identity": _hex(identity, "workspace-identity"),
         "target_identity": _target_identity(namespace),
+        "children": list(children),
+        "receipt_names": [_workspace_receipt_name(child) for child in children],
     }
     raw = _canonical(value)
     if len(raw) > MAX_MARKER_BYTES:
@@ -512,20 +661,26 @@ def _workspace_marker_bytes(namespace: Path, identity: str) -> bytes:
     return raw
 
 
-def _validate_workspace_marker(marker: Path, namespace: Path, identity: str) -> None:
+def _validate_workspace_marker(marker: Path, namespace: Path, identity: str, children: Sequence[str]) -> None:
     raw = _read_owned_marker(marker, label="workspace-marker")
-    if raw != _workspace_marker_bytes(namespace, identity):
+    if raw != _workspace_marker_bytes(namespace, identity, children):
         raise RestorePublicationVerification("restore-publication:workspace-marker-binding")
 
 
-def _ensure_workspace_marker(namespace: Path, marker: Path, temporary: Path, identity: str) -> None:
-    expected = _workspace_marker_bytes(namespace, identity)
+def _ensure_workspace_marker(namespace: Path, marker: Path, temporary: Path, identity: str, children: Sequence[str]) -> None:
+    expected = _workspace_marker_bytes(namespace, identity, children)
     if os.path.lexists(os.fspath(marker)):
-        _validate_workspace_marker(marker, namespace, identity)
+        _validate_workspace_marker(marker, namespace, identity, children)
         if os.path.lexists(os.fspath(temporary)):
             if _read_owned_marker(temporary, label="workspace-marker-temp") != expected:
                 raise RestorePublicationVerification("restore-publication:workspace-marker-temp")
-            temporary.unlink()
+            _delete_exact_file(
+                temporary,
+                expected_identity=_regular_identity(temporary, allow_empty=True),
+                expected_bytes=expected,
+                allow_empty=True,
+                label="workspace-marker-temp",
+            )
         return
     if os.path.lexists(os.fspath(temporary)):
         if _read_owned_marker(temporary, label="workspace-marker-temp") != expected:
@@ -548,7 +703,7 @@ def _ensure_workspace_marker(namespace: Path, marker: Path, temporary: Path, ide
     try:
         os.link(temporary, marker)
     except FileExistsError:
-        _validate_workspace_marker(marker, namespace, identity)
+        _validate_workspace_marker(marker, namespace, identity, children)
     except OSError as exc:
         raise RestorePublicationVerification("restore-publication:workspace-marker-link") from exc
     finally:
@@ -559,12 +714,18 @@ def _ensure_workspace_marker(namespace: Path, marker: Path, temporary: Path, ide
             marker_identity = _regular_identity(marker, expected_links=2)
             if temporary_identity[:2] != marker_identity[:2]:
                 raise RestorePublicationVerification("restore-publication:workspace-marker-link")
-            temporary.unlink()
-    _validate_workspace_marker(marker, namespace, identity)
+            _delete_exact_file(
+                temporary,
+                expected_inode=temporary_identity[:2],
+                expected_bytes=expected,
+                allow_empty=True,
+                label="workspace-marker-temp",
+            )
+    _validate_workspace_marker(marker, namespace, identity, children)
 
 
 @contextmanager
-def owned_restore_workspace(base: str | Path, identity: str):
+def owned_restore_workspace(base: str | Path, identity: str, *, children: Sequence[str]):
     """Open one deterministic, marker-owned fresh-target workspace.
 
     The workspace is deliberately retained when the caller fails.  A later
@@ -573,6 +734,7 @@ def owned_restore_workspace(base: str | Path, identity: str):
     workspace is removed.
     """
 
+    children = _workspace_children(children)
     namespace, marker, temporary = _workspace_paths(base, identity)
     with _target_lock(namespace):
         existed = os.path.lexists(os.fspath(namespace))
@@ -585,18 +747,221 @@ def owned_restore_workspace(base: str | Path, identity: str):
             except FileExistsError as exc:
                 raise RestorePublicationVerification("restore-publication:workspace-object") from exc
         entries = _namespace_entries(namespace)
-        allowed = {marker.name, temporary.name, *WORKSPACE_CHILDREN}
+        allowed = {marker.name, temporary.name, *children, *(_workspace_receipt_name(child) for child in children)}
         if not entries <= allowed:
             raise RestorePublicationVerification("restore-publication:workspace-foreign")
         if existed and marker.name not in entries:
             raise RestorePublicationVerification("restore-publication:workspace-marker")
-        _ensure_workspace_marker(namespace, marker, temporary, identity)
-        for child_name in WORKSPACE_CHILDREN:
+        _ensure_workspace_marker(namespace, marker, temporary, identity, children)
+        for child_name in children:
             child = namespace / child_name
             if os.path.lexists(os.fspath(child)) and (child.is_symlink() or not child.is_dir()):
                 raise RestorePublicationVerification("restore-publication:workspace-child")
             child.mkdir(mode=0o700, exist_ok=True)
         yield namespace
+
+
+def _read_workspace_receipt(path: Path) -> tuple[dict[str, object], tuple[int, int, int, int, int]]:
+    try:
+        identity = _regular_identity(path, allow_empty=False)
+        if identity[3] > MAX_WORKSPACE_RECEIPT_BYTES:
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-cap")
+        raw = path.read_bytes()
+        if len(raw) != identity[3] or _regular_identity(path) != identity:
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-changed")
+        value = json.loads(raw.decode("ascii"))
+        if not isinstance(value, dict) or _canonical(value) != raw:
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-canonical")
+        return value, identity
+    except RestorePublicationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt") from exc
+
+
+def _validate_publication_receipt(
+    receipt: Mapping[str, object],
+    *,
+    identity: str,
+    child_name: str,
+    target: Path,
+    export_root: str,
+    expected_semantic: str | None,
+    storage_identity: tuple[
+        tuple[tuple[int, int, int, int, int], str],
+        tuple[tuple[int, int, int, int, int], str] | None,
+        tuple[tuple[int, int, int, int, int], str] | None,
+    ] | None,
+) -> None:
+    required = {
+        "schema", "schema_version", "publication_kind", "target_identity", "export_root",
+        "semantic_digest", "byte_length", "file_digest", "storage_identity", "marker_identity",
+        "publication_operation_id", "receipt_digest", "workspace_identity", "child_name",
+        "child_identity", "canonical_target", "workspace_receipt_digest",
+    }
+    if set(receipt) != required or receipt["schema"] != "mirror-restore-publication-receipt-v1" or receipt["schema_version"] != 1:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-binding")
+    if receipt["publication_kind"] not in {"CREATED", "ADOPTED_EXISTING"}:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-binding")
+    expected_target = _target_identity(target)
+    if (
+        receipt["workspace_identity"] != _hex(identity, "workspace-identity")
+        or receipt["child_name"] != child_name
+        or receipt["child_identity"] != _digest("workspace-child", {"workspace_identity": identity, "child_name": child_name})
+        or receipt["canonical_target"] != expected_target
+        or receipt["target_identity"] != expected_target
+        or receipt["export_root"] != _hex(export_root, "receipt-export-root")
+    ):
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-binding")
+    publication_namespace, publication_stage, publication_marker = _namespace_paths(target, export_root)
+    expected_marker_raw = _marker_bytes(target, publication_namespace, publication_stage, export_root)
+    expected_marker_identity = _digest(
+        "marker-identity",
+        {"byte_length": len(expected_marker_raw), "byte_digest": hashlib.sha3_512(expected_marker_raw).hexdigest()},
+    )
+    if receipt["marker_identity"] != expected_marker_identity:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-marker")
+    if os.path.lexists(os.fspath(publication_marker)):
+        try:
+            _validate_marker(publication_marker, target, publication_namespace, publication_stage, export_root)
+        except RestorePublicationError as exc:
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-marker") from exc
+    if expected_semantic is not None and receipt["semantic_digest"] != expected_semantic:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-semantic")
+    if not isinstance(receipt["semantic_digest"], str) or not isinstance(receipt["file_digest"], str):
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-binding")
+    _hex(receipt["semantic_digest"], "receipt-semantic")
+    _hex(receipt["file_digest"], "receipt-file")
+    _hex(receipt["marker_identity"], "receipt-marker")
+    _hex(receipt["publication_operation_id"], "receipt-operation")
+    _hex(receipt["receipt_digest"], "receipt-digest")
+    _hex(receipt["workspace_receipt_digest"], "workspace-receipt-digest")
+    if type(receipt["byte_length"]) is not int or receipt["byte_length"] <= 0 or receipt["byte_length"] > MAX_IMAGE_BYTES:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-binding")
+    storage = receipt["storage_identity"]
+    if not isinstance(storage, Mapping) or set(storage) != {"dev", "ino", "nlink", "size", "mtime_ns"} or any(type(storage[key]) is not int for key in storage):
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-storage")
+    base = {key: receipt[key] for key in required if key not in {"workspace_identity", "child_name", "child_identity", "canonical_target", "workspace_receipt_digest"}}
+    receipt_digest = base.pop("receipt_digest")
+    operation_id = base.pop("publication_operation_id")
+    if _digest("publication-receipt", {**base, "publication_operation_id": operation_id}) != receipt_digest:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-digest")
+    operation_material = dict(base)
+    operation_material.pop("receipt_digest", None)
+    if _digest("publication-operation", operation_material) != operation_id:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-operation")
+    workspace_digest_material = {key: receipt[key] for key in required if key != "workspace_receipt_digest"}
+    if _digest("workspace-receipt", workspace_digest_material) != receipt["workspace_receipt_digest"]:
+        raise RestorePublicationCleanupError("restore-publication:workspace-receipt-digest")
+    if storage_identity is not None:
+        regular = storage_identity[0][0]
+        if storage != {"dev": regular[0], "ino": regular[1], "nlink": regular[2], "size": regular[3], "mtime_ns": regular[4]}:
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-storage")
+        if receipt["byte_length"] != storage_identity[0][0][3] or receipt["file_digest"] != storage_identity[0][1]:
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-storage")
+
+
+def persist_workspace_receipt(
+    namespace: str | Path,
+    identity: str,
+    child_name: str,
+    receipt: Mapping[str, object],
+    *,
+    children: Sequence[str],
+    target: str | Path | None = None,
+) -> None:
+    """Persist one bounded, marker-bound receipt before workspace cleanup."""
+
+    children = _workspace_children(children)
+    namespace = Path(os.path.abspath(os.fspath(namespace)))
+    expected_namespace, marker, _temporary = _workspace_paths(namespace.parent, identity)
+    if namespace != expected_namespace or child_name not in children or namespace.is_symlink() or not namespace.is_dir():
+        raise RestorePublicationVerification("restore-publication:workspace-receipt-binding")
+    _validate_workspace_marker(marker, namespace, identity, children)
+    if not isinstance(receipt, Mapping):
+        raise RestorePublicationVerification("restore-publication:workspace-receipt")
+    base_required = {
+        "schema", "schema_version", "publication_kind", "target_identity", "export_root",
+        "semantic_digest", "byte_length", "file_digest", "storage_identity", "marker_identity",
+        "publication_operation_id", "receipt_digest",
+    }
+    if set(receipt) != base_required or receipt["schema"] != "mirror-restore-publication-receipt-v1" or receipt["schema_version"] != 1 or receipt["publication_kind"] not in {"CREATED", "ADOPTED_EXISTING"}:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt")
+    target_identity = receipt.get("target_identity")
+    export_root = receipt.get("export_root")
+    semantic_digest = receipt.get("semantic_digest")
+    file_digest = receipt.get("file_digest")
+    storage = receipt.get("storage_identity")
+    if not all(isinstance(value, str) for value in (target_identity, export_root, semantic_digest, file_digest)) or not isinstance(storage, Mapping) or set(storage) != {"dev", "ino", "nlink", "size", "mtime_ns"} or any(type(storage[key]) is not int for key in storage):
+        raise RestorePublicationVerification("restore-publication:workspace-receipt")
+    _hex(target_identity, "receipt-target")
+    _hex(export_root, "receipt-export-root")
+    _hex(semantic_digest, "receipt-semantic")
+    _hex(file_digest, "receipt-file")
+    _hex(receipt["marker_identity"], "receipt-marker")
+    _hex(receipt["publication_operation_id"], "receipt-operation")
+    _hex(receipt["receipt_digest"], "receipt-digest")
+    if type(receipt["byte_length"]) is not int or receipt["byte_length"] <= 0 or receipt["byte_length"] > MAX_IMAGE_BYTES:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt")
+    receipt_base = dict(receipt)
+    receipt_digest = receipt_base.pop("receipt_digest")
+    operation_id = receipt_base.pop("publication_operation_id")
+    if _digest("publication-operation", receipt_base) != operation_id or _digest("publication-receipt", {**receipt_base, "publication_operation_id": operation_id}) != receipt_digest:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt-digest")
+    body = dict(receipt)
+    body.update({
+        "workspace_identity": _hex(identity, "workspace-identity"),
+        "child_name": child_name,
+        "child_identity": _digest("workspace-child", {"workspace_identity": identity, "child_name": child_name}),
+        "canonical_target": target_identity,
+    })
+    body["workspace_receipt_digest"] = _digest("workspace-receipt", body)
+    raw = _canonical(body)
+    if len(raw) > MAX_WORKSPACE_RECEIPT_BYTES:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt-cap")
+    path = namespace / _workspace_receipt_name(child_name)
+    if os.path.lexists(os.fspath(path)):
+        if path.is_symlink() or path.is_dir():
+            raise RestorePublicationVerification("restore-publication:workspace-receipt-object")
+        existing, _ = _read_workspace_receipt(path)
+        # An existing receipt is the durable proof of our earlier publication;
+        # an ADOPTED_EXISTING callback may therefore replay it byte-for-byte.
+        if existing.get("target_identity") != body["target_identity"] or existing.get("export_root") != body["export_root"] or existing.get("semantic_digest") != body["semantic_digest"] or existing.get("file_digest") != body["file_digest"] or existing.get("storage_identity") != body["storage_identity"]:
+            raise RestorePublicationVerification("restore-publication:workspace-receipt-conflict")
+        return
+    marker_raw = _read_owned_marker(marker, label="workspace-marker")
+    expected_marker_identity = _digest(
+        "marker-identity",
+        {"byte_length": len(marker_raw), "byte_digest": hashlib.sha3_512(marker_raw).hexdigest()},
+    )
+    owned_publication = False
+    if target is not None:
+        target_path = _target(target)
+        publication_namespace, publication_stage, publication_marker = _namespace_paths(target_path, export_root)
+        _validate_marker(publication_marker, target_path, publication_namespace, publication_stage, export_root)
+        owned_publication = True
+        publication_raw = _read_owned_marker(publication_marker, label="publication-marker")
+        expected_marker_identity = _digest(
+            "marker-identity",
+            {"byte_length": len(publication_raw), "byte_digest": hashlib.sha3_512(publication_raw).hexdigest()},
+        )
+    if receipt["marker_identity"] != expected_marker_identity:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt-marker")
+    if receipt.get("publication_kind") != "CREATED" and not owned_publication:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt-required")
+    try:
+        descriptor = os.open(os.fspath(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
+    except FileExistsError:
+        raise RestorePublicationVerification("restore-publication:workspace-receipt-race")
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
 
 
 def cleanup_owned_workspace(
@@ -606,28 +971,41 @@ def cleanup_owned_workspace(
         str,
         tuple[str | Path, str, Mapping[str, object], Callable[[Path], object]],
     ],
+    *,
+    children: Sequence[str],
 ) -> None:
     """Remove only a completed, marker-owned fresh-target workspace."""
 
+    children = _workspace_children(children)
     namespace = Path(os.path.abspath(os.fspath(namespace)))
     expected_namespace, marker, temporary = _workspace_paths(namespace.parent, identity)
     if namespace != expected_namespace:
         raise RestorePublicationCleanupError("restore-publication:workspace-binding")
     if namespace.is_symlink() or not namespace.is_dir():
         raise RestorePublicationCleanupError("restore-publication:workspace-object")
-    _validate_workspace_marker(marker, namespace, identity)
-    if set(bindings) != set(WORKSPACE_CHILDREN):
+    _validate_workspace_marker(marker, namespace, identity, children)
+    if set(bindings) != set(children):
         raise RestorePublicationCleanupError("restore-publication:workspace-bindings")
     if os.path.lexists(os.fspath(temporary)):
-        if _read_owned_marker(temporary, label="workspace-marker-temp") != _workspace_marker_bytes(namespace, identity):
+        if _read_owned_marker(temporary, label="workspace-marker-temp") != _workspace_marker_bytes(namespace, identity, children):
             raise RestorePublicationCleanupError("restore-publication:workspace-marker-temp")
-        temporary.unlink()
-    for child_name in WORKSPACE_CHILDREN:
+        _delete_exact_file(
+            temporary,
+            expected_identity=_regular_identity(temporary, allow_empty=True),
+            expected_bytes=_workspace_marker_bytes(namespace, identity, children),
+            allow_empty=True,
+            label="workspace-marker-temp",
+        )
+    for child_name in children:
         child = namespace / child_name
         target_value, export_root, expected_evidence, verify_database = bindings[child_name]
         target = _target(target_value)
         if target.parent != child:
             raise RestorePublicationCleanupError("restore-publication:workspace-target")
+        receipt_path = namespace / _workspace_receipt_name(child_name)
+        if not os.path.lexists(os.fspath(receipt_path)):
+            raise RestorePublicationCleanupError("restore-publication:workspace-receipt-missing")
+        receipt, receipt_file_identity = _read_workspace_receipt(receipt_path)
         target_namespace, stage, target_marker = _namespace_paths(target, export_root)
         target_lock = _lock_path(target)
         with _target_lock(target):
@@ -637,14 +1015,26 @@ def cleanup_owned_workspace(
             allowed = {target.name, target.name + "-wal", target.name + "-shm", target_namespace.name, target_lock.name}
             if not entries <= allowed:
                 raise RestorePublicationCleanupError("restore-publication:workspace-foreign")
-            if not target.exists() or target.is_symlink() or target.is_dir():
+            owned_storage = None
+            if target.exists() and not target.is_symlink() and not target.is_dir():
+                _owned_image, _owned_evidence, owned_storage = _verify_existing(
+                    target,
+                    _expected_semantic(expected_evidence),
+                    verify_database=verify_database,
+                )
+            elif any(os.path.lexists(os.fspath(_sidecar(target, suffix))) for suffix in ("-wal", "-shm")):
                 raise RestorePublicationCleanupError("restore-publication:workspace-target")
-            _verify_existing(
-                target,
-                _expected_semantic(expected_evidence),
-                verify_database=verify_database,
+            else:
+                raise RestorePublicationCleanupError("restore-publication:workspace-target")
+            _validate_publication_receipt(
+                receipt,
+                identity=identity,
+                child_name=child_name,
+                target=target,
+                export_root=export_root,
+                expected_semantic=_expected_semantic(expected_evidence),
+                storage_identity=owned_storage,
             )
-            owned_storage = _existing_storage_identity(target)
             if os.path.lexists(os.fspath(target_namespace)):
                 if target_namespace.is_symlink() or not target_namespace.is_dir():
                     raise RestorePublicationCleanupError("restore-publication:workspace-stage-object")
@@ -652,27 +1042,52 @@ def cleanup_owned_workspace(
                     raise RestorePublicationCleanupError("restore-publication:workspace-stage-pending")
                 _validate_marker(target_marker, target, target_namespace, stage, export_root)
                 _cleanup_namespace(target_namespace, stage, target_marker)
-            if _existing_storage_identity(target) != owned_storage:
-                raise RestorePublicationCleanupError("restore-publication:workspace-target-changed")
-            for path, expected in (
-                (_sidecar(target, "-wal"), owned_storage[1]),
-                (_sidecar(target, "-shm"), owned_storage[2]),
-                (target, owned_storage[0]),
-            ):
-                if expected is None:
-                    if os.path.lexists(os.fspath(path)):
+            if owned_storage is not None:
+                for path, expected in (
+                    (_sidecar(target, "-wal"), owned_storage[1]),
+                    (_sidecar(target, "-shm"), owned_storage[2]),
+                    (target, owned_storage[0]),
+                ):
+                    if expected is None:
+                        if os.path.lexists(os.fspath(path)):
+                            raise RestorePublicationCleanupError("restore-publication:workspace-target-changed")
+                        continue
+                    if _storage_file_identity(path, allow_empty=True) != expected:
                         raise RestorePublicationCleanupError("restore-publication:workspace-target-changed")
-                    continue
-                if _storage_file_identity(path, allow_empty=True) != expected:
-                    raise RestorePublicationCleanupError("restore-publication:workspace-target-changed")
-                path.unlink()
+                    _delete_exact_file(
+                        path,
+                        expected_identity=expected[0],
+                        allow_empty=True,
+                        label="workspace-target",
+                    )
         if os.path.lexists(os.fspath(target_lock)):
             if _read_owned_marker(target_lock, label="workspace-lock") != _lock_file_bytes(target):
                 raise RestorePublicationCleanupError("restore-publication:workspace-lock")
-            target_lock.unlink()
-        child.rmdir()
-    _validate_workspace_marker(marker, namespace, identity)
-    marker.unlink()
+            _delete_exact_file(
+                target_lock,
+                expected_identity=_regular_identity(target_lock, allow_empty=True),
+                expected_bytes=_lock_file_bytes(target),
+                allow_empty=True,
+                label="workspace-lock",
+            )
+        _delete_exact_file(
+            receipt_path,
+            expected_identity=receipt_file_identity,
+            allow_empty=False,
+            label="workspace-receipt",
+        )
+        try:
+            child.rmdir()
+        except OSError as exc:
+            raise RestorePublicationCleanupError("restore-publication:workspace-child") from exc
+    _validate_workspace_marker(marker, namespace, identity, children)
+    _delete_exact_file(
+        marker,
+        expected_identity=_regular_identity(marker, allow_empty=True),
+        expected_bytes=_workspace_marker_bytes(namespace, identity, children),
+        allow_empty=True,
+        label="workspace-marker",
+    )
     namespace.rmdir()
 
 
@@ -721,9 +1136,17 @@ def _cleanup_namespace(namespace: Path, stage: Path, marker: Path) -> None:
             continue
         if path.is_symlink() or path.is_dir():
             raise RestorePublicationCleanupError("restore-publication:staging-object")
+        expected_bytes = _read_owned_marker(path, label="staging-marker") if path == marker else None
         try:
-            _regular_identity(path, allow_empty=True)
-            path.unlink()
+            _delete_exact_file(
+                path,
+                expected_identity=_regular_identity(path, allow_empty=True),
+                expected_bytes=expected_bytes,
+                allow_empty=True,
+                label="staging-cleanup",
+            )
+        except RestorePublicationError:
+            raise
         except OSError as exc:
             raise RestorePublicationCleanupError("restore-publication:cleanup") from exc
     try:
@@ -765,19 +1188,36 @@ def _is_empty_evidence(evidence: Mapping[str, object]) -> bool:
     return bool(counters) and all(value == 0 for value in counters)
 
 
-def _verify_existing(target: Path, expected_semantic: str | None, *, verify_database: Callable[[Path], object]) -> tuple[VerifiedRestoreImageV1, Mapping[str, object]]:
+def _verify_existing(
+    target: Path,
+    expected_semantic: str | None,
+    *,
+    verify_database: Callable[[Path], object],
+) -> tuple[
+    VerifiedRestoreImageV1,
+    Mapping[str, object],
+    tuple[
+        tuple[tuple[int, int, int, int, int], str],
+        tuple[tuple[int, int, int, int, int], str] | None,
+        tuple[tuple[int, int, int, int, int], str] | None,
+    ],
+]:
     if target.is_symlink() or target.is_dir() or not target.is_file():
         raise RestorePublicationConflict("restore-publication:existing-object")
     try:
-        before_identity = _existing_storage_identity(target)
+        before_shape = _existing_storage_shape(target)
         image, evidence = _verified_image(target, verify_database)
         after_identity = _existing_storage_identity(target)
-        if before_identity != after_identity or (after_identity[0][0][3], after_identity[0][1]) != (image.byte_length, image.file_digest):
+        after_shape = tuple(
+            identity[0] if identity is not None else None
+            for identity in after_identity
+        )
+        if before_shape != after_shape or (after_identity[0][0][3], after_identity[0][1]) != (image.byte_length, image.file_digest):
             raise RestorePublicationVerification("restore-publication:existing-changed")
     except RestorePublicationError as exc:
         raise RestorePublicationConflict("restore-publication:existing-invalid") from exc
     _same_semantic(image, expected_semantic)
-    return image, evidence
+    return image, evidence, after_identity
 
 
 def _publish_link(stage: Path, target: Path) -> bool:
@@ -795,11 +1235,18 @@ def _publish_link(stage: Path, target: Path) -> bool:
 def _remove_created_link(target: Path, owned_inode: tuple[int, int]) -> None:
     """Remove only the link just created from the still-owned stage inode."""
 
-    current = _regular_identity(target, expected_links=2)
-    if current[:2] != owned_inode:
-        raise RestorePublicationCleanupError("restore-publication:published-ownership")
     try:
-        target.unlink()
+        current = _regular_identity(target, allow_empty=False, expected_links=target.stat().st_nlink)
+        if current[:2] != owned_inode:
+            raise RestorePublicationCleanupError("restore-publication:published-ownership")
+        _delete_exact_file(
+            target,
+            expected_inode=owned_inode,
+            allow_empty=False,
+            label="published-cleanup",
+        )
+    except RestorePublicationError:
+        raise
     except OSError as exc:
         raise RestorePublicationCleanupError("restore-publication:published-cleanup") from exc
 
@@ -809,16 +1256,106 @@ def _call_fault(fault_injector: Callable[[str], None] | None, point: str) -> Non
         fault_injector(point)
 
 
+def _recognized_owned_publication(
+    target: Path,
+    stage: Path,
+    expected_semantic: str | None,
+    *,
+    verify_database: Callable[[Path], object],
+    fault_injector: Callable[[str], None] | None,
+) -> tuple[
+    VerifiedRestoreImageV1,
+    tuple[
+        tuple[tuple[int, int, int, int, int], str],
+        tuple[tuple[int, int, int, int, int], str] | None,
+        tuple[tuple[int, int, int, int, int], str] | None,
+    ],
+]:
+    """Adopt a target whose still-present stage proves the same hard link."""
+
+    try:
+        target_links = _regular_identity(target, expected_links=target.stat().st_nlink)
+        stage_links = _regular_identity(stage, expected_links=stage.stat().st_nlink)
+    except (OSError, RestorePublicationError) as exc:
+        raise RestorePublicationConflict("restore-publication:published-recovery") from exc
+    if target_links[:2] != stage_links[:2] or target_links[2] != 2 or stage_links[2] != 2:
+        raise RestorePublicationConflict("restore-publication:published-recovery")
+    try:
+        image, _ = _verified_image(target, verify_database, expected_links=2)
+        stage_image, _ = _verified_image(stage, verify_database, expected_links=2)
+        _same_semantic(image, expected_semantic)
+        if (image.byte_length, image.file_digest) != (stage_image.byte_length, stage_image.file_digest):
+            raise RestorePublicationConflict("restore-publication:published-recovery")
+        _require_no_sidecars(target, label="published", remove_empty=False)
+        _call_fault(fault_injector, "before_stage_delete")
+        _delete_exact_file(stage, expected_inode=stage_links[:2], allow_empty=False, label="stage-delete")
+        final = _regular_identity(target)
+        if final[:2] != target_links[:2] or final[2] != 1:
+            raise RestorePublicationConflict("restore-publication:published-recovery")
+    except RestorePublicationConflict:
+        raise
+    except RestorePublicationError as exc:
+        raise RestorePublicationCleanupError("restore-publication:stage-delete") from exc
+    return image, ((final, image.file_digest), None, None)
+
+
+def _publication_receipt(
+    target: Path,
+    namespace: Path,
+    stage: Path,
+    export_root: str,
+    image: VerifiedRestoreImageV1,
+    *,
+    created: bool,
+    storage_identity: tuple[
+        tuple[tuple[int, int, int, int, int], str],
+        tuple[tuple[int, int, int, int, int], str] | None,
+        tuple[tuple[int, int, int, int, int], str] | None,
+    ] | None = None,
+) -> dict[str, object]:
+    if storage_identity is None:
+        storage_identity = _existing_storage_identity(target)
+    regular = storage_identity[0][0]
+    marker_raw = _marker_bytes(target, namespace, stage, export_root)
+    marker_identity = _digest(
+        "marker-identity",
+        {"byte_length": len(marker_raw), "byte_digest": hashlib.sha3_512(marker_raw).hexdigest()},
+    )
+    body: dict[str, object] = {
+        "schema": "mirror-restore-publication-receipt-v1",
+        "schema_version": 1,
+        "publication_kind": "CREATED" if created else "ADOPTED_EXISTING",
+        "target_identity": _target_identity(target),
+        "export_root": _hex(export_root, "receipt-export-root"),
+        "semantic_digest": image.semantic_digest,
+        "byte_length": image.byte_length,
+        "file_digest": image.file_digest,
+        "storage_identity": {
+            "dev": regular[0],
+            "ino": regular[1],
+            "nlink": regular[2],
+            "size": regular[3],
+            "mtime_ns": regular[4],
+        },
+        "marker_identity": marker_identity,
+    }
+    body["publication_operation_id"] = _digest("publication-operation", body)
+    body["receipt_digest"] = _digest("publication-receipt", body)
+    return body
+
+
 def publish_create_only(
     destination: str | Path,
     expected_export: bytes,
     *,
+    export_root: str,
     expected_evidence: Mapping[str, object] | None = None,
     build_stage: Callable[[Path], object],
     verify_database: Callable[[Path], object],
     open_service: Callable[[Path], T] | None = None,
     result_factory: Callable[[Path], T] | None = None,
     fault_injector: Callable[[str], None] | None = None,
+    publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None,
 ) -> T:
     """Build and atomically publish one independently verified image."""
     if type(expected_export) is not bytes or not expected_export:
@@ -826,7 +1363,9 @@ def publish_create_only(
     if (open_service is None) == (result_factory is None):
         raise RestorePublicationError("restore-publication:result-owner")
     target = _target(destination)
-    export_root = _extract_export_root(expected_export)
+    export_root = _hex(export_root, "export-root")
+    if expected_evidence is not None and "export_root" in expected_evidence and expected_evidence["export_root"] != export_root:
+        raise RestorePublicationVerification("restore-publication:export-root-binding")
     expected_semantic = _expected_semantic(expected_evidence)
     namespace, stage, marker = _namespace_paths(target, export_root)
     with _target_lock(target):
@@ -834,10 +1373,18 @@ def publish_create_only(
         has_stage = _reconcile_namespace(target, namespace, stage, marker, export_root)
 
         if os.path.lexists(os.fspath(target)):
-            image, _evidence = _verify_existing(target, expected_semantic, verify_database=verify_database)
             if has_stage:
-                stage_image, _ = _verified_image(stage, verify_database)
-                _same_semantic(stage_image, expected_semantic)
+                image, stable_storage = _recognized_owned_publication(
+                    target,
+                    stage,
+                    expected_semantic,
+                    verify_database=verify_database,
+                    fault_injector=fault_injector,
+                )
+            else:
+                image, _evidence, stable_storage = _verify_existing(target, expected_semantic, verify_database=verify_database)
+            if publication_receipt_sink is not None:
+                publication_receipt_sink(_publication_receipt(target, namespace, stage, export_root, image, created=False, storage_identity=stable_storage))
             if os.path.lexists(os.fspath(namespace)):
                 _cleanup_namespace(namespace, stage, marker)
             result = open_service(target) if open_service is not None else (result_factory(target) if result_factory is not None else None)
@@ -885,66 +1432,55 @@ def publish_create_only(
         _call_fault(fault_injector, "before_publish")
         created = _publish_link(stage, target)
         if created:
-            linked_stage = _regular_identity(stage, expected_links=2)
-            linked_target = _regular_identity(target, expected_links=2)
             owned_inode = stage_inode[:2]
-            if linked_stage[:2] != owned_inode or linked_target[:2] != owned_inode:
-                raise RestorePublicationVerification("restore-publication:published-ownership")
+            stage_deleted = False
             try:
+                linked_stage = _regular_identity(stage, expected_links=stage.stat().st_nlink)
+                linked_target = _regular_identity(target, expected_links=target.stat().st_nlink)
+                if linked_stage[:2] != owned_inode or linked_target[:2] != owned_inode or linked_stage[2] != 2 or linked_target[2] != 2:
+                    raise RestorePublicationVerification("restore-publication:published-ownership")
                 image, _ = _verified_image(target, verify_database, expected_links=2)
                 _same_semantic(image, expected_semantic)
                 if (image.byte_length, image.file_digest) != (stage_image.byte_length, stage_image.file_digest):
                     raise RestorePublicationVerification("restore-publication:published-image")
                 _require_no_sidecars(target, label="published", remove_empty=False)
+                _call_fault(fault_injector, "before_stage_delete")
+                _delete_exact_file(stage, expected_inode=owned_inode, allow_empty=False, label="stage-delete")
+                stage_deleted = True
+                final_inode = _regular_identity(target)
+                if final_inode[:2] != owned_inode or final_inode[2] != 1:
+                    raise RestorePublicationVerification("restore-publication:published-image")
+                stable_storage = ((final_inode, image.file_digest), None, None)
             except Exception:
-                _remove_created_link(target, owned_inode)
+                if not stage_deleted:
+                    _remove_created_link(target, owned_inode)
                 raise
-            stage.unlink()
-            final_inode = _regular_identity(target)
-            final_size, final_digest = _file_identity(target)
-            if final_inode[:2] != owned_inode or (final_size, final_digest) != (image.byte_length, image.file_digest):
-                raise RestorePublicationVerification("restore-publication:published-image")
+            if publication_receipt_sink is not None:
+                publication_receipt_sink(
+                    _publication_receipt(
+                        target,
+                        namespace,
+                        stage,
+                        export_root,
+                        image,
+                        created=True,
+                        storage_identity=stable_storage,
+                    )
+                )
             _call_fault(fault_injector, "after_atomic_publication_before_response")
         else:
-            image, _evidence = _verify_existing(target, expected_semantic, verify_database=verify_database)
+            image, _evidence, _stable_storage = _verify_existing(target, expected_semantic, verify_database=verify_database)
+            if publication_receipt_sink is not None:
+                publication_receipt_sink(_publication_receipt(target, namespace, stage, export_root, image, created=False, storage_identity=_stable_storage))
         _cleanup_namespace(namespace, stage, marker)
         result = open_service(target) if open_service is not None else (result_factory(target) if result_factory is not None else None)
         if result is None:
             raise RestorePublicationError("restore-publication:result")
         return result
 
-
-def _extract_export_root(expected_export: bytes) -> str:
-    try:
-        value = json.loads(
-            expected_export.decode("ascii"),
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=lambda _value: (_ for _ in ()).throw(
-                RestorePublicationVerification("restore-publication:export-constant")
-            ),
-        )
-        if not isinstance(value, dict) or _canonical(value) != expected_export:
-            raise RestorePublicationVerification("restore-publication:export-canonical")
-        root = value.get("export_root")
-    except RestorePublicationError:
-        raise
-    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
-        raise RestorePublicationVerification("restore-publication:export-root") from exc
-    return _hex(root, "export-root")
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    value: dict[str, object] = {}
-    for key, item in pairs:
-        if key in value:
-            raise RestorePublicationVerification("restore-publication:export-duplicate-key")
-        value[key] = item
-    return value
-
-
 __all__ = [
     "VerifiedRestoreImageV1", "RestorePublicationError",
     "RestorePublicationConflict", "RestorePublicationVerification", "RestorePublicationCleanupError",
-    "RestorePublicationInjectedFault", "publish_create_only",
-    "owned_restore_workspace", "cleanup_owned_workspace", "stage_paths", "_publish_link", "_canonical", "_digest",
+    "publish_create_only", "_delete_exact_file",
+    "owned_restore_workspace", "persist_workspace_receipt", "cleanup_owned_workspace", "stage_paths", "_publish_link", "_canonical", "_digest",
 ]

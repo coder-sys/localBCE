@@ -661,6 +661,155 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
             restore_publication._publish_link = original_publish
         self.assertEqual(other_raw, export.export_database(conflict_target))
 
+    def test_extra_hardlink_after_publication_rolls_back_only_created_target_link(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        value = _object(raw)
+        target = self.directory / "extra-link-target.db"
+        alias = self.directory / "foreign-extra-link.db"
+        original_publish = restore_publication._publish_link
+
+        def publish_with_extra_link(stage: Path, destination: Path) -> bool:
+            created = original_publish(stage, destination)
+            if created:
+                os.link(stage, alias)
+            return created
+
+        restore_publication._publish_link = publish_with_extra_link
+        try:
+            with self.assertRaises(export.ContinuityExportError):
+                export.import_export(raw, target)
+        finally:
+            restore_publication._publish_link = original_publish
+        stage, marker = restore_publication.stage_paths(target, str(value["export_root"]), create_parent=False)
+        self.assertFalse(target.exists())
+        self.assertTrue(stage.exists())
+        self.assertTrue(marker.exists())
+        self.assertTrue(alias.exists())
+        alias.unlink()
+        export.import_export(raw, target)
+        self.assertEqual(raw, export.export_database(target))
+
+    def test_stage_delete_interruption_is_recoverable_without_target_conflict(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        target = self.directory / "stage-delete-target.db"
+        fired = {"value": False}
+
+        def fault(point: str) -> None:
+            if point == "before_stage_delete" and not fired["value"]:
+                fired["value"] = True
+                raise export.InjectedRestoreFault("restore:test-stage-delete")
+
+        export._restore_fault_point = "before_stage_delete"
+        try:
+            with self.assertRaises(export.InjectedRestoreFault):
+                export.import_export(raw, target)
+        finally:
+            export._restore_fault_point = None
+        self.assertFalse(target.exists())
+        export.import_export(raw, target)
+        self.assertEqual(raw, export.export_database(target))
+
+    def test_generic_publisher_no_longer_parses_component_export_json(self) -> None:
+        source = Path(restore_publication.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("_extract_export_root", source)
+
+    def test_exact_cleanup_preserves_a_path_replacement(self) -> None:
+        owned = self.directory / "owned.db"
+        replacement = self.directory / "replacement.db"
+        owned.write_bytes(b"owned")
+        replacement.write_bytes(b"foreign")
+        identity = restore_publication._regular_identity(owned)
+        os.replace(replacement, owned)
+        with self.assertRaises(restore_publication.RestorePublicationCleanupError):
+            restore_publication._delete_exact_file(
+                owned,
+                expected_identity=identity,
+                allow_empty=False,
+                label="replacement",
+            )
+        self.assertEqual(b"foreign", owned.read_bytes())
+
+    def test_publication_rollback_preserves_a_foreign_target_replacement(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        target = self.directory / "replaced-publication-target.db"
+        replacement = self.directory / "foreign-publication-target.db"
+        original_publish = restore_publication._publish_link
+
+        def publish_and_replace(stage: Path, destination: Path) -> bool:
+            created = original_publish(stage, destination)
+            if created:
+                replacement.write_bytes(b"foreign replacement")
+                os.replace(replacement, destination)
+            return created
+
+        restore_publication._publish_link = publish_and_replace
+        try:
+            with self.assertRaises(export.ContinuityExportError):
+                export.import_export(raw, target)
+        finally:
+            restore_publication._publish_link = original_publish
+        self.assertEqual(b"foreign replacement", target.read_bytes())
+
+    def test_owned_stage_adoption_persists_an_adopted_workspace_receipt(self) -> None:
+        instance = self._store()
+        graph_raw, _ = graph.build_demo_report("confirmed")
+        instance.admit(store.ARTIFACT_GRAPH, graph_raw)
+        raw = export.export_database(self.database)
+        value, snapshot, expected = export._decode_and_verify(raw)
+        identity = "2" * 128
+        children = ("continuity",)
+        with restore_publication.owned_restore_workspace(self.directory, identity, children=children) as root:
+            target = root / "continuity" / "continuity.db"
+            export._restore_fault_point = "before_publish"
+            try:
+                with self.assertRaises(export.InjectedRestoreFault):
+                    export.import_export(raw, target)
+            finally:
+                export._restore_fault_point = None
+            stage, marker = restore_publication.stage_paths(target, str(value["export_root"]), create_parent=False)
+            self.assertTrue(stage.exists())
+            self.assertTrue(marker.exists())
+            os.link(stage, target)
+
+            def build_stage(path: Path) -> None:
+                service = store.ContinuityStore(path)
+                service._restore_snapshot(snapshot)
+
+            receipts: list[dict[str, object]] = []
+
+            def persist(receipt: dict[str, object]) -> None:
+                receipts.append(dict(receipt))
+                restore_publication.persist_workspace_receipt(
+                    root,
+                    identity,
+                    "continuity",
+                    receipt,
+                    children=children,
+                    target=target,
+                )
+
+            restore_publication.publish_create_only(
+                target,
+                raw,
+                export_root=str(value["export_root"]),
+                expected_evidence={**expected, "export_root": value["export_root"]},
+                build_stage=build_stage,
+                verify_database=independent.verify_database,
+                result_factory=lambda _path: {"accepted": True},
+                publication_receipt_sink=persist,
+            )
+            self.assertEqual("ADOPTED_EXISTING", receipts[0]["publication_kind"])
+            self.assertTrue((root / "continuity.publication.json").exists())
+
     def test_restore_path_object_and_sidecar_rejections(self) -> None:
         instance = self._store()
         graph_raw, _ = graph.build_demo_report("confirmed")

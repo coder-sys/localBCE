@@ -825,15 +825,7 @@ class ExternalSourceQuarantineService:
             "operation_count": evidence["operation_count"],
             "transition_count": evidence["transition_count"],
             "durable_status": QUARANTINE_STATUS if evidence["artifact_count"] else "EMPTY",
-            "state_owned": True,
-            "synthetic_only": True,
-            "production_usable": False,
-            "activation": False,
-            "payment_authority": False,
-            "clearance_authority": False,
-            "settlement_authority": False,
-            "downstream_bridge": False,
-            "proofSuiteId": None,
+            **FIXED_FLAGS,
         }
 
     def export_bytes(self) -> bytes:
@@ -853,10 +845,9 @@ class ExternalSourceQuarantineService:
             "operations": [],
             "transitions": [],
             "heads": snapshot["quarantine_heads"],
-            "state_owned": True,
             "synthetic_only": True,
             "support_safe": False,
-            "production_usable": False,
+            **independent.FIXED_FLAGS,
         }
         body["artifacts"] = [
             {**{key: value for key, value in row.items() if key != "artifact_raw"}, "artifact_hex": bytes(row["artifact_raw"]).hex()}
@@ -899,7 +890,6 @@ class ExternalSourceQuarantineService:
             for row in snapshot["quarantine_heads"]:
                 connection.execute("INSERT INTO quarantine_heads VALUES(?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["quarantine_heads"]))
             connection.commit()
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except (QuarantineConflictError, sqlite3.Error):
             if connection.in_transaction:
                 connection.rollback()
@@ -916,6 +906,7 @@ class ExternalSourceQuarantineService:
         policy: Mapping[str, object] | object,
         database_id: str,
         fault_injector: Callable[[str], None] | None = None,
+        publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None,
     ) -> "ExternalSourceQuarantineService":
         try:
             verified = independent.verify_export_bytes(raw, policy=policy, database_id=database_id)
@@ -937,8 +928,9 @@ class ExternalSourceQuarantineService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
+                publication_receipt_sink=publication_receipt_sink,
             )
         except (QuarantineResponseLost, QuarantineInjectedFault):
             raise
@@ -955,8 +947,9 @@ def restore_export(
     policy: Mapping[str, object] | object,
     database_id: str,
     fault_injector: Callable[[str], None] | None = None,
+    publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None,
 ) -> ExternalSourceQuarantineService:
-    return ExternalSourceQuarantineService.restore_export(destination, raw, policy=policy, database_id=database_id, fault_injector=fault_injector)
+    return ExternalSourceQuarantineService.restore_export(destination, raw, policy=policy, database_id=database_id, fault_injector=fault_injector, publication_receipt_sink=publication_receipt_sink)
 
 
 __all__ = [

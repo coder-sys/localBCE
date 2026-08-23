@@ -1038,8 +1038,6 @@ class OperationalRecoveryService:
             # Bytes were returned but their authoritative metadata was not;
             # this is not proof of absence and must never authorize a put.
             raise RecoveryStorageError("recovery:storage-indeterminate") from exc
-        except RecoveryStorageError:
-            raise
         except Exception as exc:
             raise RecoveryStorageError("recovery:storage-indeterminate") from exc
         return self._verify_reserved_object(point, sealed_bytes=sealed_bytes, storage_view=storage_view, bundle_raw=bundle_raw)
@@ -1168,12 +1166,23 @@ class OperationalRecoveryService:
         object_id = str(point["object_id"])
         try:
             sealed_bytes = self.storage.get(object_id)
-            stat = _storage_view(self.storage.stat(object_id), object_id=object_id, sealed_bytes=sealed_bytes, expected_storage_id=self.profile.storage_id)
         except StorageNotFound as exc:
             raise RecoveryIntegrityError("recovery:storage-missing") from exc
         except RecoveryStorageError:
             raise
         except Exception as exc:
+            raise RecoveryStorageError("recovery:storage-indeterminate") from exc
+        try:
+            stat = _storage_view(
+                self.storage.stat(object_id),
+                object_id=object_id,
+                sealed_bytes=sealed_bytes,
+                expected_storage_id=self.profile.storage_id,
+            )
+        except Exception as exc:
+            # A successful byte read proves the object was present at get();
+            # a later stat miss or malformed/ambiguous response cannot prove
+            # absence and must leave STORED retryable.
             raise RecoveryStorageError("recovery:storage-indeterminate") from exc
         if stat["sealed_digest"] != point["sealed_digest"] or stat["sealed_length"] != point["sealed_length"]:
             raise RecoveryIntegrityError("recovery:storage-integrity")
@@ -1307,14 +1316,48 @@ class OperationalRecoveryService:
             r_export_root = r_export.get("export_root")
             if not isinstance(q_export_root, str) or not isinstance(r_export_root, str):
                 raise RecoveryIntegrityError("recovery:restore-export-root")
-            with restore_publication.owned_restore_workspace(self.database.parent, point_id) as root:
+            workspace_children = ("quarantine", "runtime")
+            with restore_publication.owned_restore_workspace(self.database.parent, point_id, children=workspace_children) as root:
                 q_directory = root / "quarantine"
                 r_directory = root / "runtime"
                 q_target = q_directory / "quarantine.db"
                 r_target = r_directory / "runtime.db"
                 database_id = quarantine_independent._database_id(q_export.get("database_id"))
-                quarantine_service = quarantine.restore_export(q_target, bundle["quarantine_raw"], policy=self.quarantine_policy_value, database_id=database_id)
-                runtime_service = runtime.restore_export(r_target, bundle["runtime_raw"], profile=self.runtime_profile_value, clock=self.clock)
+
+                def persist_quarantine_receipt(receipt: Mapping[str, object]) -> object:
+                    return restore_publication.persist_workspace_receipt(
+                        root,
+                        point_id,
+                        "quarantine",
+                        receipt,
+                        children=workspace_children,
+                        target=q_target,
+                    )
+
+                def persist_runtime_receipt(receipt: Mapping[str, object]) -> object:
+                    return restore_publication.persist_workspace_receipt(
+                        root,
+                        point_id,
+                        "runtime",
+                        receipt,
+                        children=workspace_children,
+                        target=r_target,
+                    )
+
+                quarantine_service = quarantine.restore_export(
+                    q_target,
+                    bundle["quarantine_raw"],
+                    policy=self.quarantine_policy_value,
+                    database_id=database_id,
+                    publication_receipt_sink=persist_quarantine_receipt,
+                )
+                runtime_service = runtime.restore_export(
+                    r_target,
+                    bundle["runtime_raw"],
+                    profile=self.runtime_profile_value,
+                    clock=self.clock,
+                    publication_receipt_sink=persist_runtime_receipt,
+                )
                 q_evidence = quarantine_service.integrity()
                 r_evidence = runtime_service.integrity()
                 if q_evidence["state_root"] != bundle["manifests"][0]["state_root"] or r_evidence["global_head_root"] != bundle["manifests"][1]["state_root"]:
@@ -1345,6 +1388,7 @@ class OperationalRecoveryService:
                         "quarantine": (q_target, q_export_root, q_evidence, verify_quarantine),
                         "runtime": (r_target, r_export_root, r_evidence, verify_runtime),
                     },
+                    children=workspace_children,
                 )
                 duration_ms = max(0, int((self.clock.monotonic() - start) * 1000))
                 return self._record_restore(point_id, bundle=bundle, duration_ms=duration_ms, expected_head=expected_head)
@@ -1352,6 +1396,8 @@ class OperationalRecoveryService:
             raise RecoveryIntegrityError(f"recovery:quarantine-restore:{exc}") from exc
         except runtime.ControlledShadowRuntimeError as exc:
             raise RecoveryIntegrityError(f"recovery:runtime-restore:{exc}") from exc
+        except restore_publication.RestorePublicationError as exc:
+            raise RecoveryIntegrityError(f"recovery:restore-publication:{exc}") from exc
 
     def _mutate_lifecycle(self, *, action: str, point_id: str, expected_head: str, next_state: str, reason: str = "") -> dict[str, object]:
         if action not in {independent.ACTION_SUPERSEDE, independent.ACTION_INVALIDATE}:
@@ -1580,7 +1626,7 @@ class OperationalRecoveryService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
             )
         except restore_publication.RestorePublicationConflict as exc:

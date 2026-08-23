@@ -65,6 +65,7 @@ RESTORE_FAULT_POINTS = (
     "after_empty_staging_db_creation",
     "after_snapshot_transaction",
     "after_independent_verification_checkpoint",
+    "before_stage_delete",
     "after_atomic_publication_before_response",
 )
 _restore_fault_point: str | None = None
@@ -317,7 +318,7 @@ def import_export(raw: bytes, destination: str | Path, graph_profile_registry: M
 
     try:
         result = restore_publication.publish_create_only(
-            target, raw, expected_evidence=expected, build_stage=build_stage,
+            target, raw, export_root=str(value["export_root"]), expected_evidence={**expected, "export_root": value["export_root"]}, build_stage=build_stage,
             verify_database=verify_database, result_factory=result_factory,
             fault_injector=fault,
         )

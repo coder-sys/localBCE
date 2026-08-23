@@ -987,6 +987,7 @@ class ControlledShadowRuntimeService:
         profile: ControlledShadowRuntimeProfileV1,
         clock: Clock,
         fault_injector: Callable[[str], None] | None = None,
+        publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None,
     ) -> "ControlledShadowRuntimeService":
         try:
             verified = independent.verify_export_bytes(raw, profile=profile.material())
@@ -1025,8 +1026,9 @@ class ControlledShadowRuntimeService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
+                publication_receipt_sink=publication_receipt_sink,
             )
         except restore_publication.RestorePublicationConflict as exc:
             raise RuntimeConflictError(str(exc)) from exc
@@ -1034,8 +1036,8 @@ class ControlledShadowRuntimeService:
             raise RuntimeIntegrityError(str(exc)) from exc
 
 
-def restore_export(destination: str | Path, raw: bytes, *, profile: ControlledShadowRuntimeProfileV1, clock: Clock, fault_injector: Callable[[str], None] | None = None) -> ControlledShadowRuntimeService:
-    return ControlledShadowRuntimeService.restore_export(destination, raw, profile=profile, clock=clock, fault_injector=fault_injector)
+def restore_export(destination: str | Path, raw: bytes, *, profile: ControlledShadowRuntimeProfileV1, clock: Clock, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> ControlledShadowRuntimeService:
+    return ControlledShadowRuntimeService.restore_export(destination, raw, profile=profile, clock=clock, fault_injector=fault_injector, publication_receipt_sink=publication_receipt_sink)
 
 
 __all__ = [

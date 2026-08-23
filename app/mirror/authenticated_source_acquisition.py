@@ -21,6 +21,7 @@ from app.mirror import nc_medicaid_fhir as nc_fhir
 from app.mirror import nc_medicaid_fhir_independent as nc_independent
 from app.mirror import nc_medicaid_fhir_profile as profile_module
 from app.mirror import authenticated_source_acquisition_independent as independent
+from app.mirror import external_source_quarantine_independent as quarantine_independent
 from app.mirror import restore_publication
 
 SCHEMA = independent.SCHEMA
@@ -353,6 +354,174 @@ def _resolve_database(path: str | Path) -> Path:
     return target
 
 
+def _authoritative_quarantine_snapshot(
+    config: "AuthenticatedSourceAcquisitionConfigV1",
+    quarantine_service: quarantine.ExternalSourceQuarantineService,
+) -> dict[str, object]:
+    """Read one independently verified quarantine database snapshot.
+
+    Acquisition receipts are local observations only.  A persisted
+    ``QUARANTINED`` row is acceptable only when this independent snapshot can
+    reconstruct the historical quarantine operation that produced it.
+    """
+
+    try:
+        path = Path(os.path.abspath(os.fspath(quarantine_service.database)))
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("quarantine database absent")
+        if quarantine_service.database_id != config.quarantine_database_id or quarantine_service.policy_digest != config.quarantine_policy_digest or quarantine_service.chain_id != config.quarantine_chain_id:
+            raise ValueError("quarantine authority binding")
+        result = quarantine_independent.snapshot_database(
+            path,
+            policy=quarantine_service.policy,
+            database_id=config.quarantine_database_id,
+        )
+        evidence = result
+        if not isinstance(evidence, Mapping) or evidence.get("policy_digest") != config.quarantine_policy_digest or evidence.get("database_id") != config.quarantine_database_id or evidence.get("chain_id") != config.quarantine_chain_id:
+            raise ValueError("quarantine authority evidence")
+        snapshot = result.get("snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("quarantine authority snapshot")
+        return result
+    except Exception as exc:
+        if isinstance(exc, AuthenticatedSourceAcquisitionError):
+            raise
+        raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority") from exc
+
+
+def _historical_quarantine_result(
+    row: Mapping[str, object],
+    *,
+    config: "AuthenticatedSourceAcquisitionConfigV1",
+    quarantine_service: quarantine.ExternalSourceQuarantineService,
+    snapshot_result: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Reconstruct an acquisition's historical admission from q rows."""
+
+    required = (
+        "artifact_id", "artifact_digest", "quarantine_request_digest", "quarantine_expected_head",
+        "quarantine_database_id",
+        "quarantine_policy_digest", "quarantine_chain_id",
+    )
+    if any(row.get(key) is None for key in required):
+        return None
+    if row.get("quarantine_database_id") != config.quarantine_database_id or row.get("quarantine_policy_digest") != config.quarantine_policy_digest or row.get("quarantine_chain_id") != config.quarantine_chain_id:
+        return None
+    snapshot = snapshot_result.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        return None
+    operations = snapshot.get("quarantine_operations")
+    transitions = snapshot.get("quarantine_transitions")
+    artifacts = snapshot.get("quarantine_artifacts")
+    if not all(isinstance(items, list) for items in (operations, transitions, artifacts)):
+        return None
+    request_digest = str(row["quarantine_request_digest"])
+    matching_operations = [item for item in operations if isinstance(item, Mapping) and item.get("request_digest") == request_digest and item.get("action") in {quarantine_independent.ACTION_ADMIT, quarantine_independent.ACTION_SUPERSEDE}]
+    if len(matching_operations) != 1:
+        return None
+    operation = matching_operations[0]
+    artifact_id = str(row["artifact_id"])
+    artifact_digest = str(row["artifact_digest"])
+    if operation.get("artifact_id") != artifact_id or operation.get("expected_head") != str(row.get("quarantine_expected_head") or ""):
+        return None
+    matching_artifacts = [item for item in artifacts if isinstance(item, Mapping) and item.get("artifact_id") == artifact_id]
+    if len(matching_artifacts) != 1:
+        return None
+    artifact = matching_artifacts[0]
+    if artifact.get("artifact_digest") != artifact_digest or artifact.get("status") != quarantine_independent.QUARANTINE_STATUS:
+        return None
+    transition_id = operation.get("transition_id")
+    matching_transitions = [item for item in transitions if isinstance(item, Mapping) and item.get("transition_id") == transition_id and item.get("operation_id") == operation.get("operation_id")]
+    if len(matching_transitions) != 1:
+        return None
+    transition = matching_transitions[0]
+    if transition.get("next_state") != quarantine_independent.QUARANTINE_STATUS:
+        return None
+    historical_head = {
+        "policy_digest": config.quarantine_policy_digest,
+        "head_artifact_id": artifact_id,
+        "state": quarantine_independent.QUARANTINE_STATUS,
+        "sequence": transition.get("sequence"),
+        "head_root": transition.get("after_root"),
+        "head_transition_id": transition_id,
+        "observed_at": artifact.get("observed_at"),
+        "capture_id": artifact.get("capture_id"),
+    }
+    try:
+        verified = quarantine_independent.verify_admission_receipt(
+            operation["receipt_raw"],
+            policy=quarantine_service.policy,
+            database_id=config.quarantine_database_id,
+            operation=operation,
+            transition=transition,
+            artifact=artifact,
+            head=historical_head,
+        )
+    except quarantine_independent.IndependentQuarantineError:
+        return None
+    if (
+        verified.action not in {quarantine_independent.ACTION_ADMIT, quarantine_independent.ACTION_SUPERSEDE}
+        or verified.state != quarantine_independent.QUARANTINE_STATUS
+        or verified.artifact_id != artifact_id
+        or verified.artifact_digest != artifact_digest
+        or verified.prior_head != str(row.get("quarantine_expected_head") or "")
+        or (
+            row.get("state") == "QUARANTINED"
+            and (
+                row.get("quarantine_receipt_digest") is None
+                or row.get("quarantine_receipt_raw") is None
+                or verified.receipt_digest != row.get("quarantine_receipt_digest")
+                or verified.receipt_raw != row.get("quarantine_receipt_raw")
+            )
+        )
+    ):
+        return None
+    return {
+        "accepted": True,
+        "operation_id": verified.operation_id,
+        "action": verified.action,
+        "policy_digest": verified.policy_digest,
+        "database_id": verified.database_id,
+        "chain_id": verified.chain_id,
+        "artifact_id": verified.artifact_id,
+        "artifact_digest": verified.artifact_digest,
+        "capture_id": verified.capture_id,
+        "head_artifact_id": verified.head_artifact_id,
+        "head_root": verified.after_root,
+        "after_root": verified.after_root,
+        "prior_head": verified.prior_head,
+        "state": verified.state,
+        "durable_status": quarantine_independent.QUARANTINE_STATUS,
+        "sequence": verified.sequence,
+        "transition_id": verified.transition_id,
+        "receipt_raw": verified.receipt_raw,
+        "receipt_digest": verified.receipt_digest,
+        "verified_receipt": verified,
+        "flags": dict(quarantine_independent.FIXED_FLAGS),
+    }
+
+
+def _require_authoritative_quarantine_rows(
+    snapshot: Mapping[str, object],
+    *,
+    config: "AuthenticatedSourceAcquisitionConfigV1",
+    quarantine_service: quarantine.ExternalSourceQuarantineService,
+    quarantine_snapshot: Mapping[str, object],
+) -> None:
+    slots = snapshot.get("acquisition_slots")
+    if not isinstance(slots, list):
+        raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority")
+    for row in slots:
+        if isinstance(row, Mapping) and row.get("state") == "QUARANTINED":
+            if _historical_quarantine_result(
+                row,
+                config=config,
+                quarantine_service=quarantine_service,
+                snapshot_result=quarantine_snapshot,
+            ) is None:
+                raise AuthenticatedSourceAcquisitionError("acquisition:quarantine-authority")
+
+
 class AuthenticatedSourceAcquisitionService:
     def __init__(self, database: str | Path, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, clock: Callable[[], int] | None = None, fault_injector: Callable[[str], None] | None = None) -> None:
         self.database = _resolve_database(database)
@@ -394,7 +563,7 @@ class AuthenticatedSourceAcquisitionService:
                     connection.execute(statement)
                 genesis = independent._genesis_root(independent._chain_id(self.config.digest))
                 state_root = independent._state_root(independent._chain_id(self.config.digest), 0, genesis, None)
-                values = {"schema": SCHEMA, "schema_version": str(SCHEMA_VERSION), "acquisition_id": self.config.acquisition_id, "config_digest": self.config.digest, "chain_id": independent._chain_id(self.config.digest), "sequence": "0", "state_root": state_root, "head_transition_id": GENESIS_TRANSITION, "state_owned": "1", "zero_phi": "1", "read_only": "1", "observation_only": "1", "quarantine_only": "1", "production_usable": "0", "activation": "0", "payment_authority": "0", "clearance_authority": "0", "settlement_authority": "0", "adjudication_authority": "0", "proofSuiteId": "null"}
+                values = {"schema": SCHEMA, "schema_version": str(SCHEMA_VERSION), "acquisition_id": self.config.acquisition_id, "config_digest": self.config.digest, "chain_id": independent._chain_id(self.config.digest), "sequence": "0", "state_root": state_root, "head_transition_id": GENESIS_TRANSITION, **independent.FIXED_FLAG_STORAGE}
                 for key in sorted(values):
                     connection.execute("INSERT INTO acquisition_meta(key,value) VALUES(?,?)", (key, values[key]))
                 connection.commit()
@@ -794,8 +963,27 @@ class AuthenticatedSourceAcquisitionService:
                     row["quarantine_receipt_raw"] != receipt_raw,
                 )):
                     raise AcquisitionConflictError("acquisition:quarantine-conflict")
+                operation = connection.execute(
+                    "SELECT * FROM acquisition_operations WHERE operation_id=? AND slot_id=? AND action=?",
+                    (row["last_operation_id"], slot_id, "CONFIRM_QUARANTINE"),
+                ).fetchone()
+                if operation is None:
+                    raise AcquisitionConflictError("acquisition:quarantine-receipt")
                 connection.commit()
-                return {"accepted": True, "state": "QUARANTINED", "slot_id": slot_id, "artifact_id": verified.artifact_id, "quarantine_receipt_digest": receipt_digest, **independent.FIXED_FLAGS}
+                return {
+                    "accepted": True,
+                    "operation_id": operation["operation_id"],
+                    "slot_id": slot_id,
+                    "state": "QUARANTINED",
+                    "sequence": operation["sequence"],
+                    "transition_id": operation["transition_id"],
+                    "receipt_raw": bytes(operation["receipt_raw"]),
+                    "receipt_digest": operation["receipt_digest"],
+                    "action": operation["action"],
+                    "artifact_id": verified.artifact_id,
+                    "quarantine_receipt_digest": receipt_digest,
+                    **independent.FIXED_FLAGS,
+                }
             updates = {"state": "QUARANTINED", "lease_id": None, "lease_until": None, "artifact_id": verified.artifact_id, "artifact_digest": verified.artifact_digest, "capture_id": verified.capture_id, "quarantine_head": verified.head_artifact_id, "quarantine_head_root": verified.after_root, "quarantine_transition_id": verified.transition_id, "quarantine_receipt_digest": receipt_digest, "quarantine_receipt_raw": receipt_raw, "failure_code": None}
             result = self._transition_locked(connection, slot_id=slot_id, action="CONFIRM_QUARANTINE", attempt=int(row["attempt"]), request_digest=self.config.request_digest, prior_state=row["state"], next_state="QUARANTINED", slot_updates=updates, observed_at=int(self.clock()))
             connection.execute("UPDATE acquisition_slots SET last_operation_id=? WHERE slot_id=?", (result["operation_id"], slot_id))
@@ -808,10 +996,52 @@ class AuthenticatedSourceAcquisitionService:
         finally:
             connection.close()
 
-    def _lookup_quarantine(self, row: Mapping[str, object]) -> dict[str, object] | None:
-        if row["artifact_id"] in (None, "") or row["artifact_digest"] in (None, "") or row["quarantine_request_digest"] in (None, ""):
-            return None
-        return self.quarantine_service.lookup_request(self._request_key(str(row["slot_id"])), artifact_id=str(row["artifact_id"]), artifact_digest=str(row["artifact_digest"]), expected_head=str(row["quarantine_expected_head"] or "") or None)
+    @staticmethod
+    def _public_result(
+        result: Mapping[str, object],
+        *,
+        envelope_id: object = None,
+        source_status: object = None,
+    ) -> dict[str, object]:
+        """Project every accepted result through one fixed public contract."""
+
+        projected = dict(result)
+        projected.setdefault("envelope_id", envelope_id)
+        projected.setdefault("source_status", source_status)
+        projected["production_source_authentication"] = False
+        projected.update(independent.FIXED_FLAGS)
+        return projected
+
+    def _authoritative_quarantine_snapshot(self) -> dict[str, object]:
+        return _authoritative_quarantine_snapshot(self.config, self.quarantine_service)
+
+    def _lookup_quarantine(
+        self,
+        row: Mapping[str, object],
+        *,
+        snapshot_result: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        if snapshot_result is None:
+            snapshot_result = self._authoritative_quarantine_snapshot()
+        return _historical_quarantine_result(
+            row,
+            config=self.config,
+            quarantine_service=self.quarantine_service,
+            snapshot_result=snapshot_result,
+        )
+
+    def _verify_quarantine_rows(
+        self,
+        snapshot: Mapping[str, object],
+        *,
+        quarantine_snapshot: Mapping[str, object],
+    ) -> None:
+        _require_authoritative_quarantine_rows(
+            snapshot,
+            config=self.config,
+            quarantine_service=self.quarantine_service,
+            quarantine_snapshot=quarantine_snapshot,
+        )
 
     def _validate_port(self, transport: AuthenticatedFhirTransportPort) -> None:
         if getattr(transport, "transport_id", None) != self.config.transport_id or getattr(transport, "transport_epoch", None) != self.config.transport_epoch:
@@ -825,11 +1055,27 @@ class AuthenticatedSourceAcquisitionService:
         lease_obj = AcquisitionLease(str(loaded["slot_id"]), str(loaded["lease_id"]), int(loaded["attempt"]), int(loaded["lease_until"] or 0), int(loaded["scheduled_at"]))
         self.active_lease_attempt = lease_obj.attempt
         if loaded["state"] == "QUARANTINED":
-            return {"accepted": True, "state": "QUARANTINED", "slot_id": lease_obj.slot_id, "artifact_id": loaded["artifact_id"], "quarantine_receipt_digest": loaded["quarantine_receipt_digest"], **independent.FIXED_FLAGS}
+            found = self._lookup_quarantine(loaded)
+            if found is None:
+                raise AcquisitionConflictError("acquisition:quarantine-authority")
+            return self._public_result(
+                self._record_quarantined(
+                    lease_obj.slot_id,
+                    artifact_id=str(loaded["artifact_id"]),
+                    artifact_digest=str(loaded["artifact_digest"]),
+                    quarantine_result=found,
+                ),
+                envelope_id=loaded.get("envelope_id"),
+                source_status="COMPLETE",
+            )
         if loaded["state"] in {"QUARANTINE_PENDING", "QUARANTINE_UNCONFIRMED"}:
             found = self._lookup_quarantine(loaded)
             if found is not None:
-                return self._record_quarantined(str(loaded["slot_id"]), artifact_id=str(loaded["artifact_id"]), artifact_digest=str(loaded["artifact_digest"]), quarantine_result=found)
+                return self._public_result(
+                    self._record_quarantined(str(loaded["slot_id"]), artifact_id=str(loaded["artifact_id"]), artifact_digest=str(loaded["artifact_digest"]), quarantine_result=found),
+                    envelope_id=loaded.get("envelope_id"),
+                    source_status="COMPLETE",
+                )
             if loaded["state"] == "QUARANTINE_UNCONFIRMED":
                 raise AcquisitionConflictError("acquisition:quarantine-unconfirmed")
         wrapper = _AuthenticatedTransportAdapter(self, transport, lease_obj.scheduled_at)
@@ -850,27 +1096,61 @@ class AuthenticatedSourceAcquisitionService:
             captured = self._record_captured(lease_obj, envelope_result=envelope_result, envelope_raw=envelope_raw, artifact=artifact, capture_result=capture_result, verifier=capture_verifier, attestations=wrapper.attestations, expected_head=expected_head)
             dispatch = self._begin_quarantine(lease_obj, artifact=artifact, expected_head=str(captured.get("quarantine_expected_head") or expected_head))
             if dispatch.get("state") == "QUARANTINED":
-                return {**dispatch, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, **independent.FIXED_FLAGS}
+                found = self._lookup_quarantine(self._slot_from_disk(lease_obj.slot_id))
+                if found is None:
+                    raise AcquisitionConflictError("acquisition:quarantine-authority")
+                return self._public_result(
+                    self._record_quarantined(
+                        lease_obj.slot_id,
+                        artifact_id=str(artifact.artifact_id),
+                        artifact_digest=_raw_digest(artifact.raw),
+                        quarantine_result=found,
+                    ),
+                    envelope_id=envelope_result["envelope_id"],
+                    source_status=envelope_result["source_status"],
+                )
             request_key = self._request_key(lease_obj.slot_id)
             try:
-                q_result = self.quarantine_service.admit(request_key, artifact.raw, expected_head=str(dispatch.get("quarantine_expected_head") or "") or None)
+                self.quarantine_service.admit(request_key, artifact.raw, expected_head=str(dispatch.get("quarantine_expected_head") or "") or None)
             except (quarantine.QuarantineResponseLost, quarantine.QuarantineBusyError, quarantine.QuarantineConflictError) as exc:
                 found = self._lookup_quarantine(self._slot_from_disk(lease_obj.slot_id))
                 if found is not None:
-                    return self._record_quarantined(lease_obj.slot_id, artifact_id=artifact.artifact_id, artifact_digest=_raw_digest(artifact.raw), quarantine_result=found)
+                    return self._public_result(
+                        self._record_quarantined(lease_obj.slot_id, artifact_id=artifact.artifact_id, artifact_digest=_raw_digest(artifact.raw), quarantine_result=found),
+                        envelope_id=envelope_result["envelope_id"],
+                        source_status=envelope_result["source_status"],
+                    )
                 if isinstance(exc, quarantine.QuarantineResponseLost):
                     raise AcquisitionResponseLost("acquisition:response-loss") from exc
                 if isinstance(exc, quarantine.QuarantineBusyError):
                     raise AcquisitionBusyError("acquisition:busy") from exc
                 raise AcquisitionConflictError("acquisition:quarantine-head") from exc
-            confirmed = self._record_quarantined(lease_obj.slot_id, artifact_id=artifact.artifact_id, artifact_digest=_raw_digest(artifact.raw), quarantine_result=q_result)
-            return {**confirmed, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, **independent.FIXED_FLAGS}
+            # The producer result is only a dispatch response.  Reconstruct the
+            # exact operation/transition/head/receipt from the independently
+            # verified authoritative database before persisting QUARANTINED.
+            found = self._lookup_quarantine(self._slot_from_disk(lease_obj.slot_id))
+            if found is None:
+                raise AcquisitionConflictError("acquisition:quarantine-authority")
+            confirmed = self._record_quarantined(
+                lease_obj.slot_id,
+                artifact_id=artifact.artifact_id,
+                artifact_digest=_raw_digest(artifact.raw),
+                quarantine_result=found,
+            )
+            return self._public_result(confirmed, envelope_id=envelope_result["envelope_id"], source_status=envelope_result["source_status"])
         except (AcquisitionResponseLost, AcquisitionBusyError, AcquisitionConflictError):
             raise
         except AcquisitionHold as exc:
             self._record_failure(lease_obj.slot_id, lease_obj.lease_id, lease_obj.attempt, str(exc).split(":")[-1] if str(exc).split(":")[-1] in SAFE_FAILURES else "incomplete")
             raise
-        except (nc_fhir.NcMedicaidFhirError, nc_independent.IndependentNcMedicaidFhirError, external_adapter.ExternalSourceAdapterError, external_independent.IndependentExternalSourceError, AuthenticatedSourceAcquisitionError) as exc:
+        except AuthenticatedSourceAcquisitionError as exc:
+            if str(exc) == "acquisition:quarantine-authority":
+                raise
+            code = str(exc).split(":")[-1]
+            mapped = code if code in SAFE_FAILURES else "verifier"
+            self._record_failure(lease_obj.slot_id, lease_obj.lease_id, lease_obj.attempt, mapped)
+            raise AuthenticatedSourceAcquisitionError(f"acquisition:{mapped}") from exc
+        except (nc_fhir.NcMedicaidFhirError, nc_independent.IndependentNcMedicaidFhirError, external_adapter.ExternalSourceAdapterError, external_independent.IndependentExternalSourceError) as exc:
             code = str(exc).split(":")[-1]
             mapped = code if code in SAFE_FAILURES else "verifier"
             self._record_failure(lease_obj.slot_id, lease_obj.lease_id, lease_obj.attempt, mapped)
@@ -888,7 +1168,9 @@ class AuthenticatedSourceAcquisitionService:
 
     def integrity(self) -> dict[str, object]:
         try:
-            return independent.verify_database(self.database, config=self.config.material())
+            snapshot_result = independent.snapshot_database(self.database, config=self.config.material())
+            self._verify_quarantine_rows(snapshot_result["snapshot"], quarantine_snapshot=self._authoritative_quarantine_snapshot())
+            return dict(snapshot_result["evidence"])
         except independent.IndependentAcquisitionError as exc:
             raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
 
@@ -896,6 +1178,7 @@ class AuthenticatedSourceAcquisitionService:
         try:
             snapshot_result = independent.snapshot_database(self.database, config=self.config.material())
             snapshot = snapshot_result["snapshot"]
+            self._verify_quarantine_rows(snapshot, quarantine_snapshot=self._authoritative_quarantine_snapshot())
             body: dict[str, object] = {"schema": EXPORT_SCHEMA, "schema_version": EXPORT_VERSION, "config": self.config.material(), "config_digest": self.config.digest, "chain_id": independent._chain_id(self.config.digest), "meta": snapshot["acquisition_meta"], "slots": [], "operations": [], "transitions": [], "attestations": snapshot["acquisition_attestations"], **independent.FIXED_FLAGS}
             body["slots"] = [{**{key: row[key] for key in independent.SLOT_COLUMNS if key not in {"quarantine_receipt_raw", "page_digests_raw", "selected_pages_raw"}}, "quarantine_receipt_hex": None if row["quarantine_receipt_raw"] is None else bytes(row["quarantine_receipt_raw"]).hex(), "page_digests_hex": None if row["page_digests_raw"] is None else bytes(row["page_digests_raw"]).hex(), "selected_pages_hex": None if row["selected_pages_raw"] is None else bytes(row["selected_pages_raw"]).hex()} for row in snapshot["acquisition_slots"]]
             body["operations"] = [{**{key: row[key] for key in independent.OPERATION_COLUMNS if key not in {"material_raw", "receipt_raw"}}, "material_hex": bytes(row["material_raw"]).hex(), "receipt_hex": bytes(row["receipt_raw"]).hex()} for row in snapshot["acquisition_operations"]]
@@ -911,16 +1194,26 @@ class AuthenticatedSourceAcquisitionService:
 
     def support_snapshot(self) -> dict[str, object]:
         try:
-            return independent.support_snapshot(self.database, config=self.config.material())
+            snapshot_result = independent.snapshot_database(self.database, config=self.config.material())
+            self._verify_quarantine_rows(snapshot_result["snapshot"], quarantine_snapshot=self._authoritative_quarantine_snapshot())
+            evidence = snapshot_result["evidence"]
+            return {"schema": "mirror-authenticated-source-acquisition-support-v3", "schema_version": 3, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot_result["snapshot"]["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **independent.FIXED_FLAGS}
         except independent.IndependentAcquisitionError as exc:
             raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
 
     @classmethod
-    def restore_export(cls, destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None) -> "AuthenticatedSourceAcquisitionService":
+    def restore_export(cls, destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> "AuthenticatedSourceAcquisitionService":
         try:
             verified = independent.verify_export_bytes(raw, config=config.material())
         except independent.IndependentAcquisitionError as exc:
             raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+        quarantine_snapshot = _authoritative_quarantine_snapshot(config, quarantine_service)
+        _require_authoritative_quarantine_rows(
+            verified["snapshot"],
+            config=config,
+            quarantine_service=quarantine_service,
+            quarantine_snapshot=quarantine_snapshot,
+        )
 
         def build_stage(stage: Path) -> None:
             service = cls(stage, config=config, external_policy=external_policy, quarantine_service=quarantine_service, fault_injector=fault_injector)
@@ -952,8 +1245,9 @@ class AuthenticatedSourceAcquisitionService:
 
         try:
             return restore_publication.publish_create_only(
-                destination, raw, expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
+                destination, raw, export_root=str(verified["export_root"]), expected_evidence=verified, build_stage=build_stage, verify_database=verify_database,
                 open_service=open_service, fault_injector=fault_injector,
+                publication_receipt_sink=publication_receipt_sink,
             )
         except (AcquisitionResponseLost, AcquisitionInjectedFault):
             raise
@@ -963,8 +1257,8 @@ class AuthenticatedSourceAcquisitionService:
             raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
 
 
-def restore_export(destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None) -> AuthenticatedSourceAcquisitionService:
-    return AuthenticatedSourceAcquisitionService.restore_export(destination, raw, config=config, external_policy=external_policy, quarantine_service=quarantine_service, fault_injector=fault_injector)
+def restore_export(destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None, publication_receipt_sink: Callable[[Mapping[str, object]], object] | None = None) -> AuthenticatedSourceAcquisitionService:
+    return AuthenticatedSourceAcquisitionService.restore_export(destination, raw, config=config, external_policy=external_policy, quarantine_service=quarantine_service, fault_injector=fault_injector, publication_receipt_sink=publication_receipt_sink)
 
 
 __all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "AuthenticatedSourceAcquisitionError", "AcquisitionConflictError", "AcquisitionBusyError", "AcquisitionResponseLost", "AcquisitionInjectedFault", "AcquisitionHold", "AuthenticatedSourceAcquisitionConfigV1", "request_digest_for_page", "request_digest_for_profile", "AuthenticatedFhirRequestV1", "FhirTransportAttestationV1", "AuthenticatedFhirResponseV1", "AuthenticatedFhirTransportPort", "LiveAuthenticatedFhirTransport", "AcquisitionLease", "AuthenticatedSourceAcquisitionService", "restore_export", "_digest"]

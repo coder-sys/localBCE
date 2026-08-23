@@ -80,7 +80,9 @@ SNAPSHOT_TABLES = tuple(TABLE_COLUMNS)
 EXPORT_KEYS = {
     "schema", "schema_version", "policy_digest", "database_id", "chain_id", "meta", "artifacts",
     "operations", "transitions", "heads", "state_owned", "synthetic_only",
-    "support_safe", "production_usable", "export_root",
+    "support_safe", "read_only", "observation_only", "quarantine_only", "production_usable",
+    "activation", "payment_authority", "clearance_authority", "settlement_authority",
+    "adjudication_authority", "downstream_bridge", "proofSuiteId", "export_root",
 }
 EXPORT_ROW_KEYS = {
     "quarantine_meta": {"key", "value"},
@@ -1105,8 +1107,11 @@ def verify_export_bytes(
         raise IndependentQuarantineError("quarantine:export-keys")
     if value["schema"] != EXPORT_SCHEMA or value["schema_version"] != EXPORT_VERSION:
         raise IndependentQuarantineError("quarantine:export-schema")
-    if value["state_owned"] is not True or value["synthetic_only"] is not True or value["support_safe"] is not False or value["production_usable"] is not False:
+    if value["synthetic_only"] is not True or value["support_safe"] is not False:
         raise IndependentQuarantineError("quarantine:export-flags")
+    for key, expected in FIXED_FLAGS.items():
+        if value[key] != expected:
+            raise IndependentQuarantineError("quarantine:export-flags")
     configured = _policy_view(policy)
     database = _database_id(database_id)
     policy_digest = _policy_digest(configured)

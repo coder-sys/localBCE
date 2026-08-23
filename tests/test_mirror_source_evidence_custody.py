@@ -113,6 +113,23 @@ class MirrorSourceEvidenceCustodyTests(unittest.TestCase):
         self.assertEqual("STATE_SIDE_MIRROR_CUSTODY", custody_value["custody_policy"]["owner"])
         self.assertFalse(custody_value["custody_policy"]["encryption_at_rest_qualified"])
 
+    def test_source_custody_authority_omission_and_true_mutations_reject(self) -> None:
+        _instance, _registry, _graph_raw = _approved_store(self.root)
+        envelope = _envelope()
+        result = fhir_independent.verify_bytes(envelope)
+        built = custody.build_artifact(envelope, result)
+        for field, replacement in (("settlement_authority", None), ("adjudication_authority", True)):
+            with self.subTest(field=field):
+                mutated = json.loads(built.raw.decode("ascii"))
+                authority = dict(mutated["authority"])
+                if replacement is None:
+                    authority.pop(field, None)
+                else:
+                    authority[field] = replacement
+                mutated["authority"] = authority
+                with self.assertRaises(custody_independent.IndependentSourceCustodyError):
+                    custody_independent.verify_artifact(_canonical(mutated), allow_unresolved_graph=True)
+
     def test_fixed_envelope_binding_and_head_conflict_are_atomic(self) -> None:
         instance, registry, _graph_raw = _approved_store(self.root)
         service = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry)

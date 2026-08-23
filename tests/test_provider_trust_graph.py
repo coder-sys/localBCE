@@ -483,6 +483,23 @@ class ProviderTrustGraphV1Tests(unittest.TestCase):
             self.assertNotEqual(0, rejected.returncode)
             self.assertIn("REJECT", rejected.stderr)
 
+    def test_cli_input_failures_redact_host_path_and_exception_details(self) -> None:
+        canary = Path(tempfile.gettempdir()) / "PRIVATE-CREDENTIAL-CANARY-provider-trust.json"
+        missing = str(canary)
+        for module in ("app.mirror.provider_trust_graph", "app.mirror.provider_trust_graph_independent"):
+            with self.subTest(module=module):
+                result = subprocess.run(
+                    [sys.executable, "-m", module, missing],
+                    cwd=Path(__file__).parents[1],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("REJECT input\n", result.stderr)
+                self.assertNotIn(missing, result.stderr)
+                self.assertNotIn("CREDENTIAL", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

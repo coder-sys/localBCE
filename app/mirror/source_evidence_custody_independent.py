@@ -20,8 +20,8 @@ from app.mirror import provider_trust_graph_independent as graph
 
 
 ARTIFACT_KIND = "NC_MEDICAID_SOURCE_EVIDENCE_V1"
-SCHEMA = "mirror-ncmedicaid-source-evidence-custody-v1"
-SCHEMA_VERSION = 1
+SCHEMA = "mirror-ncmedicaid-source-evidence-custody-v2"
+SCHEMA_VERSION = 2
 STAGE_KIND = "SOURCE_EVIDENCE_CUSTODIED"
 DOMAIN = "BL/MIRROR/SOURCE-EVIDENCE-CUSTODY/"
 ADMISSION_DOMAIN = "BL/MIRROR/SOURCE-ADMISSION/"
@@ -37,6 +37,8 @@ AUTHORITY_FLAGS = {
     "automatic_enforcement_eligible": False,
     "clearance_authority": False,
     "payment_authority": False,
+    "settlement_authority": False,
+    "adjudication_authority": False,
     "economic_mutation": False,
     "production_usable": False,
     "synthetic_only": True,
