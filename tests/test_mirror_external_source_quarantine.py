@@ -284,8 +284,8 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         value["unknown"] = True
         with self.assertRaises(independent.IndependentQuarantineError):
             independent.verify_export_bytes(_canonical(value), policy=self.policy.material(), database_id=self.database_id)
-        with self.assertRaisesRegex(quarantine.QuarantineConflictError, "target-exists"):
-            quarantine.ExternalSourceQuarantineService.restore_export(restored, exported, policy=self.policy, database_id=self.database_id)
+        retry = quarantine.ExternalSourceQuarantineService.restore_export(restored, exported, policy=self.policy, database_id=self.database_id)
+        self.assertEqual(retry.export_bytes(), exported)
         connection = sqlite3.connect(self.database)
         try:
             connection.execute("UPDATE quarantine_meta SET value=? WHERE key='head_root'", ("0" * 128,))
@@ -294,6 +294,55 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             connection.close()
         with self.assertRaises(independent.IndependentQuarantineError):
             independent.verify_database(self.database, policy=self.policy.material(), database_id=self.database_id)
+
+    def test_restore_publication_is_create_only_and_converges_without_clobber(self) -> None:
+        self.service.admit("publication-a", self._artifact("publication-a"))
+        exported = self._export()
+        destination = Path(self._temporary.name) / "publication.db"
+        barrier = threading.Barrier(3)
+        results: list[object] = []
+
+        def restore() -> None:
+            barrier.wait()
+            try:
+                results.append(quarantine.ExternalSourceQuarantineService.restore_export(destination, exported, policy=self.policy, database_id=self.database_id))
+            except Exception as exc:  # pragma: no cover - assertion below records the race
+                results.append(exc)
+
+        threads = [threading.Thread(target=restore), threading.Thread(target=restore)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(5)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(isinstance(item, quarantine.ExternalSourceQuarantineService) for item in results), results)
+        self.assertEqual(results[0].export_bytes(), exported)
+        self.assertEqual(results[1].export_bytes(), exported)
+        self.assertEqual(list(Path(self._temporary.name).glob(".publication.db.restore-*.db")), [])
+
+        alternate_path = Path(self._temporary.name) / "alternate.db"
+        alternate = quarantine.ExternalSourceQuarantineService(alternate_path, policy=self.policy, database_id=self.database_id)
+        alternate.admit("publication-other", self._artifact("publication-other"))
+        alternate_export = alternate.export_bytes()
+        before = destination.read_bytes()
+        with self.assertRaises(quarantine.QuarantineConflictError):
+            quarantine.ExternalSourceQuarantineService.restore_export(destination, alternate_export, policy=self.policy, database_id=self.database_id)
+        self.assertEqual(destination.read_bytes(), before)
+
+        fired = False
+
+        def after_publish(point: str) -> None:
+            nonlocal fired
+            if point == "after_publish_before_response" and not fired:
+                fired = True
+                raise quarantine.QuarantineResponseLost("quarantine:restore-response-lost")
+
+        crash_target = Path(self._temporary.name) / "publication-crash.db"
+        with self.assertRaises(quarantine.QuarantineResponseLost):
+            quarantine.ExternalSourceQuarantineService.restore_export(crash_target, exported, policy=self.policy, database_id=self.database_id, fault_injector=after_publish)
+        recovered = quarantine.ExternalSourceQuarantineService.restore_export(crash_target, exported, policy=self.policy, database_id=self.database_id)
+        self.assertEqual(recovered.export_bytes(), exported)
 
     def test_corrupt_current_artifact_cannot_be_used_as_a_mutation_anchor(self) -> None:
         first = self.service.admit("anchor", self._artifact("anchor"))
@@ -341,6 +390,9 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         )
         for marker in forbidden:
             self.assertNotIn(marker, support)
+        self.assertNotRegex(support.decode("ascii"), r"[0-9a-f]{128}")
+        for key in (b"chain_id", b"database_id", b"head_root"):
+            self.assertNotIn(key, support)
         source = Path(quarantine.__file__).read_text(encoding="utf-8")
         self.assertNotIn("from app.mirror import continuity_store", source)
         self.assertNotIn("from app.mirror import provider_trust_graph", source)

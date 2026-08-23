@@ -21,6 +21,7 @@ from app.mirror import nc_medicaid_fhir as nc_fhir
 from app.mirror import nc_medicaid_fhir_independent as nc_independent
 from app.mirror import nc_medicaid_fhir_profile as profile_module
 from app.mirror import authenticated_source_acquisition_independent as independent
+from app.mirror import restore_publication
 
 SCHEMA = independent.SCHEMA
 SCHEMA_VERSION = independent.SCHEMA_VERSION
@@ -664,6 +665,13 @@ class AuthenticatedSourceAcquisitionService:
             connection.execute("BEGIN IMMEDIATE")
             row = self._slot(connection, lease.slot_id)
             if row is None or row["lease_id"] != lease.lease_id or int(row["attempt"]) != lease.attempt or row["state"] not in {"LEASED", "CAPTURED", "QUARANTINE_PENDING"}:
+                if row is not None and row["state"] == "QUARANTINED" and int(row["attempt"]) == lease.attempt:
+                    values = self._capture_values(lease, envelope_result, envelope_raw, artifact, capture_result, verifier, attestations, expected_head)
+                    for key in values:
+                        if key != "quarantine_expected_head" and row[key] != values[key]:
+                            raise AcquisitionConflictError("acquisition:capture-conflict")
+                    connection.commit()
+                    return {"accepted": True, "state": "QUARANTINED", "slot_id": lease.slot_id, "artifact_id": row["artifact_id"], "quarantine_receipt_digest": row["quarantine_receipt_digest"]}
                 raise AcquisitionConflictError("acquisition:lease")
             values = self._capture_values(lease, envelope_result, envelope_raw, artifact, capture_result, verifier, attestations, expected_head)
             if row["state"] in {"CAPTURED", "QUARANTINE_PENDING"}:
@@ -693,6 +701,12 @@ class AuthenticatedSourceAcquisitionService:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = self._slot(connection, lease.slot_id)
+            artifact_digest = _raw_digest(artifact.raw)
+            if row is not None and row["state"] == "QUARANTINED" and int(row["attempt"]) == lease.attempt:
+                if row["artifact_id"] != artifact.artifact_id or row["artifact_digest"] != artifact_digest:
+                    raise AcquisitionConflictError("acquisition:quarantine-conflict")
+                connection.commit()
+                return {"accepted": True, "state": "QUARANTINED", "slot_id": lease.slot_id, "artifact_id": row["artifact_id"], "quarantine_receipt_digest": row["quarantine_receipt_digest"]}
             if (
                 row is None
                 or int(row["attempt"]) != lease.attempt
@@ -794,6 +808,8 @@ class AuthenticatedSourceAcquisitionService:
             expected_head = str(loaded["quarantine_expected_head"] or "") if loaded["state"] in {"LEASED", "CAPTURED", "QUARANTINE_PENDING", "QUARANTINE_UNCONFIRMED"} and loaded["quarantine_expected_head"] is not None else str(current_head["head_artifact_id"]) if current_head else ""
             captured = self._record_captured(lease_obj, envelope_result=envelope_result, envelope_raw=envelope_raw, artifact=artifact, capture_result=capture_result, verifier=capture_verifier, attestations=wrapper.attestations, expected_head=expected_head)
             dispatch = self._begin_quarantine(lease_obj, artifact=artifact, expected_head=str(captured.get("quarantine_expected_head") or expected_head))
+            if dispatch.get("state") == "QUARANTINED":
+                return {**dispatch, "envelope_id": envelope_result["envelope_id"], "source_status": envelope_result["source_status"], "production_source_authentication": False, "production_usable": False, "activation": False, "proofSuiteId": None}
             request_key = self._request_key(lease_obj.slot_id)
             try:
                 q_result = self.quarantine_service.admit(request_key, artifact.raw, expected_head=str(dispatch.get("quarantine_expected_head") or "") or None)
@@ -859,46 +875,55 @@ class AuthenticatedSourceAcquisitionService:
             raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
 
     @classmethod
-    def restore_export(cls, destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService) -> "AuthenticatedSourceAcquisitionService":
-        target = _resolve_database(destination)
-        if target.exists() or target.is_symlink():
-            raise AcquisitionConflictError("acquisition:restore-target-exists")
+    def restore_export(cls, destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None) -> "AuthenticatedSourceAcquisitionService":
         try:
             verified = independent.verify_export_bytes(raw, config=config.material())
         except independent.IndependentAcquisitionError as exc:
             raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
-        stage = target.with_name("." + target.name + ".restore")
-        if stage.exists():
-            raise AcquisitionConflictError("acquisition:restore-stage-exists")
-        service: AuthenticatedSourceAcquisitionService | None = None
-        try:
-            service = cls(stage, config=config, external_policy=external_policy, quarantine_service=quarantine_service)
+
+        def build_stage(stage: Path) -> None:
+            service = cls(stage, config=config, external_policy=external_policy, quarantine_service=quarantine_service, fault_injector=fault_injector)
             connection = service._connect()
-            connection.execute("BEGIN IMMEDIATE")
-            for table in independent.TABLE_COLUMNS:
-                connection.execute(f"DELETE FROM {table}")
-            snapshot = verified["snapshot"]
-            for table in independent.TABLE_COLUMNS:
-                for row in snapshot[table]:
-                    connection.execute(f"INSERT INTO {table} VALUES(" + ",".join("?" for _ in independent.TABLE_COLUMNS[table]) + ")", tuple(row[column] for column in independent.TABLE_COLUMNS[table]))
-            connection.commit()
-            connection.close()
-            service.integrity()
-            os.replace(stage, target)
-            return cls(target, config=config, external_policy=external_policy, quarantine_service=quarantine_service)
-        except Exception:
-            if service is not None:
-                try:
-                    service._connect().close()
-                except Exception:
-                    pass
-            for suffix in ("", "-wal", "-shm"):
-                Path(str(stage) + suffix).unlink(missing_ok=True)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                for table in independent.TABLE_COLUMNS:
+                    connection.execute(f"DELETE FROM {table}")
+                snapshot = verified["snapshot"]
+                for table in independent.TABLE_COLUMNS:
+                    for row in snapshot[table]:
+                        connection.execute(f"INSERT INTO {table} VALUES(" + ",".join("?" for _ in independent.TABLE_COLUMNS[table]) + ")", tuple(row[column] for column in independent.TABLE_COLUMNS[table]))
+                connection.commit()
+            except Exception:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+        def verify_database(path: Path) -> object:
+            try:
+                return independent.verify_database(path, config=config.material())
+            except independent.IndependentAcquisitionError as exc:
+                raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
+
+        def open_service(path: Path) -> AuthenticatedSourceAcquisitionService:
+            return cls(path, config=config, external_policy=external_policy, quarantine_service=quarantine_service)
+
+        try:
+            return restore_publication.publish_create_only(
+                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                open_service=open_service, fault_injector=fault_injector,
+            )
+        except (AcquisitionResponseLost, AcquisitionInjectedFault):
             raise
+        except restore_publication.RestorePublicationConflict as exc:
+            raise AcquisitionConflictError(str(exc)) from exc
+        except (restore_publication.RestorePublicationError, AuthenticatedSourceAcquisitionError) as exc:
+            raise AuthenticatedSourceAcquisitionError(str(exc)) from exc
 
 
-def restore_export(destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService) -> AuthenticatedSourceAcquisitionService:
-    return AuthenticatedSourceAcquisitionService.restore_export(destination, raw, config=config, external_policy=external_policy, quarantine_service=quarantine_service)
+def restore_export(destination: str | Path, raw: bytes, *, config: AuthenticatedSourceAcquisitionConfigV1, external_policy: external_adapter.ExternalSourcePolicyV1, quarantine_service: quarantine.ExternalSourceQuarantineService, fault_injector: Callable[[str], None] | None = None) -> AuthenticatedSourceAcquisitionService:
+    return AuthenticatedSourceAcquisitionService.restore_export(destination, raw, config=config, external_policy=external_policy, quarantine_service=quarantine_service, fault_injector=fault_injector)
 
 
 __all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "AuthenticatedSourceAcquisitionError", "AcquisitionConflictError", "AcquisitionBusyError", "AcquisitionResponseLost", "AcquisitionInjectedFault", "AcquisitionHold", "AuthenticatedSourceAcquisitionConfigV1", "request_digest_for_page", "request_digest_for_profile", "AuthenticatedFhirRequestV1", "FhirTransportAttestationV1", "AuthenticatedFhirResponseV1", "AuthenticatedFhirTransportPort", "LiveAuthenticatedFhirTransport", "AcquisitionLease", "AuthenticatedSourceAcquisitionService", "restore_export", "_digest"]

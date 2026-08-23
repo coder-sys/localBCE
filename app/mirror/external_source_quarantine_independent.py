@@ -776,7 +776,7 @@ def _check_sqlite_shape(connection: sqlite3.Connection) -> None:
         raise IndependentQuarantineError("quarantine:foreign-key")
 
 
-def verify_database(
+def snapshot_database(
     path: str | Path,
     *,
     policy: Mapping[str, object] | object,
@@ -796,12 +796,12 @@ def verify_database(
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-        _check_sqlite_shape(connection)
         connection.execute("BEGIN")
+        _check_sqlite_shape(connection)
         snapshot = _snapshot_from_connection(connection)
         result = _verify_rows(snapshot, policy=policy, database_id=database_id)
         connection.commit()
-        return result
+        return {**result, "snapshot": snapshot}
     except IndependentQuarantineError:
         raise
     except (sqlite3.DatabaseError, OSError, ValueError) as exc:
@@ -809,6 +809,16 @@ def verify_database(
     finally:
         if connection is not None:
             connection.close()
+
+
+def verify_database(
+    path: str | Path,
+    *,
+    policy: Mapping[str, object] | object,
+    database_id: str,
+) -> dict[str, object]:
+    result = snapshot_database(path, policy=policy, database_id=database_id)
+    return {key: value for key, value in result.items() if key != "snapshot"}
 
 
 def _decode_export_rows(value: Mapping[str, object]) -> dict[str, list[dict[str, object]]]:
@@ -889,7 +899,7 @@ __all__ = [
     "WITHDRAW_REASONS", "GENESIS_TRANSITION", "MAX_ARTIFACTS", "MAX_TRANSITIONS", "MAX_OPERATIONS",
     "MAX_EXPORT_BYTES", "MAX_DATABASE_BYTES", "MAX_WAL_BYTES", "BUSY_TIMEOUT_MS", "TABLE_COLUMNS",
     "SNAPSHOT_TABLES", "TABLE_INFO", "EXPLICIT_INDEXES", "FOREIGN_KEY_MANIFEST", "FIXED_FLAGS", "IndependentQuarantineError",
-    "verify_database", "verify_export_bytes", "verify_snapshot", "_canonical", "_digest", "_raw_digest",
+    "snapshot_database", "verify_database", "verify_export_bytes", "verify_snapshot", "_canonical", "_digest", "_raw_digest",
     "_policy_view", "_policy_digest", "_chain_id", "_genesis_root", "_state_root", "_after_root",
     "_operation_id", "_request_material_digest", "_transition_id", "_receipt_id", "_parse", "_database_id",
 ]

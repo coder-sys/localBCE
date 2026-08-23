@@ -80,9 +80,14 @@ class SyntheticKeyCustody:
         return bytes(output[:size])
 
     def seal(self, plaintext: bytes, *, object_id: str) -> recovery.SealedRecoveryObjectV1:
+        return self.seal_for(plaintext, object_id=object_id, key_id=self._key_id, key_epoch=self._current_epoch)
+
+    def seal_for(self, plaintext: bytes, *, object_id: str, key_id: str, key_epoch: int) -> recovery.SealedRecoveryObjectV1:
         if type(plaintext) is not bytes or not plaintext or len(plaintext) > 4 * 1024 * 1024:
             raise ValueError("synthetic-key:plaintext-cap")
-        epoch = self._current_epoch
+        if key_id != self._key_id or key_epoch not in self._keys:
+            raise ValueError("synthetic-key:unknown-key")
+        epoch = key_epoch
         if self._states[epoch] != "ACTIVE":
             raise ValueError("synthetic-key:revoked")
         key = self._keys[epoch]

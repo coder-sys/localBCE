@@ -32,18 +32,20 @@ HEX128 = re.compile(r"^[0-9a-f]{128}$")
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 STATE_PREPARED = "PREPARED"
+STATE_STORE_PENDING = "STORE_PENDING"
 STATE_STORED = "STORED"
 STATE_RESTORE_VERIFIED = "RESTORE_VERIFIED"
 STATE_SUPERSEDED = "SUPERSEDED"
 STATE_INVALIDATED = "INVALIDATED"
-STATES = (STATE_PREPARED, STATE_STORED, STATE_RESTORE_VERIFIED, STATE_SUPERSEDED, STATE_INVALIDATED)
+STATES = (STATE_PREPARED, STATE_STORE_PENDING, STATE_STORED, STATE_RESTORE_VERIFIED, STATE_SUPERSEDED, STATE_INVALIDATED)
 
 ACTION_PREPARE = "PREPARE"
+ACTION_STORE_PENDING = "STORE_PENDING"
 ACTION_STORE = "STORE"
 ACTION_RESTORE_VERIFIED = "RESTORE_VERIFIED"
 ACTION_SUPERSEDE = "SUPERSEDE"
 ACTION_INVALIDATE = "INVALIDATE"
-ACTIONS = (ACTION_PREPARE, ACTION_STORE, ACTION_RESTORE_VERIFIED, ACTION_SUPERSEDE, ACTION_INVALIDATE)
+ACTIONS = (ACTION_PREPARE, ACTION_STORE_PENDING, ACTION_STORE, ACTION_RESTORE_VERIFIED, ACTION_SUPERSEDE, ACTION_INVALIDATE)
 
 INVALIDATION_REASONS = ("KEY_REVOKED", "OBJECT_CORRUPT", "CHAIN_INTEGRITY", "STATE_OWNED_INVALIDATION")
 KEY_STATES = ("ACTIVE", "REVOKED")
@@ -551,6 +553,20 @@ def _snapshot(connection: sqlite3.Connection) -> dict[str, list[dict[str, object
     return result
 
 
+def _store_pending_material(point: Mapping[str, object], custody_id: str) -> str:
+    return _digest("store-pending-material", {
+        "point_id": point["point_id"],
+        "generation": point["generation"],
+        "bundle_digest": point["bundle_digest"],
+        "object_id": point["object_id"],
+        "storage_id": point["storage_id"],
+        "key_id": point["key_id"],
+        "key_epoch": point["key_epoch"],
+        "key_state": point["key_state"],
+        "custody_id": custody_id,
+    })
+
+
 def _verify_blob_row(row: Mapping[str, object], table: str) -> None:
     for field in TABLE_BLOB_FIELDS.get(table, set()):
         if type(row[field]) is not bytes:
@@ -641,7 +657,23 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
             raise IndependentOperationalRecoveryError("recovery:point-state")
         if point["state"] == STATE_PREPARED and any(point[field] not in ("", 0) for field in ("object_id", "sealed_digest", "sealed_length", "storage_id", "key_id", "key_epoch", "key_state")):
             raise IndependentOperationalRecoveryError("recovery:prepared-storage")
-        if point["state"] != STATE_PREPARED:
+        pending_storage = point["state"] == STATE_STORE_PENDING or (
+            point["state"] == STATE_INVALIDATED and point["sealed_length"] == 0 and point["object_id"] != ""
+        )
+        if pending_storage:
+            _hex(point["object_id"], "point-object")
+            if point["sealed_digest"] != "" or point["sealed_length"] != 0:
+                raise IndependentOperationalRecoveryError("recovery:pending-sealed")
+            _token(point["storage_id"], "point-storage")
+            if point["storage_id"] != configured["storage_id"]:
+                raise IndependentOperationalRecoveryError("recovery:storage-owner")
+            _token(point["key_id"], "point-key")
+            _integer(point["key_epoch"], "point-key-epoch", minimum=1, maximum=MAX_GENERATION)
+            if point["key_state"] != "ACTIVE":
+                raise IndependentOperationalRecoveryError("recovery:pending-key-state")
+            if point["object_id"] != _object_id(str(point["bundle_digest"]), str(point["key_id"]), int(point["key_epoch"])):
+                raise IndependentOperationalRecoveryError("recovery:object-identity")
+        if point["state"] not in {STATE_PREPARED, STATE_STORE_PENDING} and not pending_storage:
             _hex(point["object_id"], "point-object")
             _hex(point["sealed_digest"], "point-sealed")
             _integer(point["sealed_length"], "point-sealed-length", minimum=1, maximum=MAX_SEALED_BYTES)
@@ -701,13 +733,14 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
         transition_by_point.setdefault(pid, []).append(value)
         legal = {
             ACTION_PREPARE: ("", STATE_PREPARED),
-            ACTION_STORE: (STATE_PREPARED, STATE_STORED),
+            ACTION_STORE_PENDING: (STATE_PREPARED, STATE_STORE_PENDING),
+            ACTION_STORE: (STATE_STORE_PENDING, STATE_STORED),
             ACTION_RESTORE_VERIFIED: (STATE_STORED, STATE_RESTORE_VERIFIED),
             ACTION_SUPERSEDE: (STATE_RESTORE_VERIFIED, STATE_SUPERSEDED),
             ACTION_INVALIDATE: (STATE_STORED, STATE_INVALIDATED),
         }
         if value["action"] == ACTION_INVALIDATE:
-            if value["prior_state"] not in {STATE_STORED, STATE_RESTORE_VERIFIED} or value["next_state"] != STATE_INVALIDATED:
+            if value["prior_state"] not in {STATE_STORE_PENDING, STATE_STORED, STATE_RESTORE_VERIFIED} or value["next_state"] != STATE_INVALIDATED:
                 raise IndependentOperationalRecoveryError("recovery:transition-lifecycle")
         elif tuple((value["prior_state"], value["next_state"])) != legal[value["action"]]:
             raise IndependentOperationalRecoveryError("recovery:transition-lifecycle")
@@ -747,6 +780,18 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
             or int(op["sequence"]) != int(t["sequence"])
         ):
             raise IndependentOperationalRecoveryError("recovery:operation-transition")
+        point = point_map[str(op["point_id"])]
+        if op["action"] == ACTION_STORE_PENDING:
+            if op["request_material_digest"] != _store_pending_material(point, str(configured["custody_id"])):
+                raise IndependentOperationalRecoveryError("recovery:pending-material")
+        elif op["action"] == ACTION_STORE:
+            expected_material = _digest("store-material", {
+                "point_id": point["point_id"], "object_id": point["object_id"],
+                "sealed_digest": point["sealed_digest"], "bundle_digest": point["bundle_digest"],
+                "key_id": point["key_id"], "key_epoch": point["key_epoch"],
+            })
+            if op["request_material_digest"] != expected_material:
+                raise IndependentOperationalRecoveryError("recovery:store-material")
         receipt = _verify_receipt(bytes(op["receipt_raw"]), profile_digest_value=profile_digest(configured), custody_id=str(configured["custody_id"]), storage_id=str(configured["storage_id"]), expected_action=str(op["action"]), expected_point=str(op["point_id"]), expected_state=str(t["next_state"]), expected_sequence=seq, expected_transition=transition_id, expected_prior=str(t["prior_root"]), expected_next=str(t["next_root"]))
         if _raw_digest(bytes(op["receipt_raw"])) != op["receipt_digest"] or receipt["operation_id"] != oid:
             raise IndependentOperationalRecoveryError("recovery:operation-receipt")
@@ -760,6 +805,10 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
             raise IndependentOperationalRecoveryError("recovery:point-prepare")
         if point["prior_root"] != ts[0]["prior_root"]:
             raise IndependentOperationalRecoveryError("recovery:point-prior")
+        if point["state"] == STATE_STORE_PENDING or (point["state"] == STATE_INVALIDATED and point["sealed_length"] == 0):
+            pending = [item for item in ts if item["action"] == ACTION_STORE_PENDING]
+            if len(pending) != 1:
+                raise IndependentOperationalRecoveryError("recovery:pending-transition")
     storage_rows = rows["recovery_storage_receipts"]
     storage_map: dict[str, Mapping[str, object]] = {}
     for receipt in storage_rows:
@@ -796,7 +845,7 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
         if any(point[field] != receipt[field] for field in ("object_id", "sealed_digest", "sealed_length", "storage_id", "key_id", "key_epoch", "key_state", "bundle_digest")):
             raise IndependentOperationalRecoveryError("recovery:point-storage-binding")
     for pid, point in point_map.items():
-        if point["state"] in {STATE_STORED, STATE_RESTORE_VERIFIED, STATE_SUPERSEDED, STATE_INVALIDATED} and pid not in storage_map:
+        if point["state"] in {STATE_STORED, STATE_RESTORE_VERIFIED, STATE_SUPERSEDED} and pid not in storage_map:
             raise IndependentOperationalRecoveryError("recovery:missing-storage")
     drills = rows["recovery_drills"]
     drill_points: set[str] = set()
@@ -885,7 +934,7 @@ def _verify_rows(rows: Mapping[str, list[Mapping[str, object]]], *, profile: Map
     }
 
 
-def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
+def snapshot_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
     database = Path(path)
     if not database.is_file() or database.stat().st_size > 64 * 1024 * 1024:
         raise IndependentOperationalRecoveryError("recovery:database")
@@ -895,8 +944,12 @@ def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("BEGIN")
         _check_schema(connection)
-        return _verify_rows(_snapshot(connection), profile=profile)
+        rows = _snapshot(connection)
+        result = _verify_rows(rows, profile=profile)
+        connection.commit()
+        return {**result, "snapshot": rows}
     except IndependentOperationalRecoveryError:
         raise
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError) as exc:
@@ -904,6 +957,11 @@ def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[
     finally:
         if connection is not None:
             connection.close()
+
+
+def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
+    result = snapshot_database(path, profile=profile)
+    return {key: value for key, value in result.items() if key != "snapshot"}
 
 
 def _export_rows(rows: Mapping[str, list[Mapping[str, object]]]) -> dict[str, list[dict[str, object]]]:
@@ -974,12 +1032,12 @@ def verify_export_bytes(raw: bytes, *, profile: Mapping[str, object]) -> dict[st
 
 __all__ = [
     "SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "BUNDLE_SCHEMA", "BUNDLE_VERSION",
-    "RECEIPT_SCHEMA", "STORAGE_RECEIPT_SCHEMA", "DRILL_RECEIPT_SCHEMA", "STATE_PREPARED", "STATE_STORED",
-    "STATE_RESTORE_VERIFIED", "STATE_SUPERSEDED", "STATE_INVALIDATED", "STATES", "ACTION_PREPARE", "ACTION_STORE",
+    "RECEIPT_SCHEMA", "STORAGE_RECEIPT_SCHEMA", "DRILL_RECEIPT_SCHEMA", "STATE_PREPARED", "STATE_STORE_PENDING", "STATE_STORED",
+    "STATE_RESTORE_VERIFIED", "STATE_SUPERSEDED", "STATE_INVALIDATED", "STATES", "ACTION_PREPARE", "ACTION_STORE_PENDING", "ACTION_STORE",
     "ACTION_RESTORE_VERIFIED", "ACTION_SUPERSEDE", "ACTION_INVALIDATE", "ACTIONS", "INVALIDATION_REASONS", "KEY_STATES",
     "MAX_BUNDLE_BYTES", "MAX_COMPONENT_EXPORT_BYTES", "MAX_SEALED_BYTES", "MAX_GENERATION", "BUSY_TIMEOUT_MS",
     "FIXED_FLAGS", "SUPPORT_FLAGS", "TABLE_COLUMNS", "TABLES", "DDL", "IndependentOperationalRecoveryError",
-    "verify_profile", "profile_digest", "verify_component_exports", "build_bundle", "verify_bundle", "verify_database",
+    "verify_profile", "profile_digest", "verify_component_exports", "build_bundle", "verify_bundle", "snapshot_database", "verify_database",
     "verify_export_bytes", "_canonical", "_digest", "_raw_digest", "_point_id", "_operation_id", "_transition_id",
-    "_transition_after", "_receipt_id", "_object_id", "_genesis_root", "_state_root", "_export_rows", "_import_rows",
+    "_transition_after", "_receipt_id", "_object_id", "_genesis_root", "_state_root", "_store_pending_material", "_export_rows", "_import_rows",
 ]

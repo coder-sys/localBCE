@@ -147,7 +147,11 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         self.assertEqual("QUARANTINED", evidence["states"]["QUARANTINED"] and "QUARANTINED")
         self.assertEqual(created["slot_id"], lease.slot_id)  # type: ignore[union-attr]
         self.assertEqual(1, self.quarantine.integrity()["artifact_count"])
+        support = json.dumps(self.service.support_snapshot(), sort_keys=True)
         self.assertTrue(self.service.support_snapshot()["zero_phi"])
+        self.assertNotRegex(support, r"[0-9a-f]{128}")
+        for key in ("chain_id", "state_root", "head_transition_id"):
+            self.assertNotIn(key, support)
 
     def test_same_slot_claim_is_single_writer_and_exact_retry_is_stable(self) -> None:
         created = self.service.ensure_slot(7_000)
@@ -279,6 +283,19 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         restored = Path(self.temporary.name) / "restored.db"
         restored_service = acquisition.restore_export(restored, exported, config=self.config, external_policy=self.policy, quarantine_service=self.quarantine)
         self.assertEqual(restored_service.export_bytes(), exported)
+        fired = False
+
+        def after_publish(point: str) -> None:
+            nonlocal fired
+            if point == "after_publish_before_response" and not fired:
+                fired = True
+                raise acquisition.AcquisitionResponseLost("acquisition:restore-response-lost")
+
+        crash_target = Path(self.temporary.name) / "crash-published.db"
+        with self.assertRaises(acquisition.AcquisitionResponseLost):
+            acquisition.restore_export(crash_target, exported, config=self.config, external_policy=self.policy, quarantine_service=self.quarantine, fault_injector=after_publish)
+        recovered = acquisition.restore_export(crash_target, exported, config=self.config, external_policy=self.policy, quarantine_service=self.quarantine)
+        self.assertEqual(recovered.export_bytes(), exported)
         reopened = acquisition.AuthenticatedSourceAcquisitionService(Path(self.temporary.name) / "acquisition.db", config=self.config, external_policy=self.policy, quarantine_service=self.quarantine, clock=lambda: 7_000)
         self.assertEqual(reopened.integrity()["state_root"], self.service.integrity()["state_root"])
         mutated = bytearray(exported)
@@ -288,6 +305,7 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         support = restored_service.support_snapshot()
         self.assertNotIn(profile.BASE_URL, json.dumps(support))
         self.assertNotIn(profile.SYNTHETIC_PRACTITIONER_ID, json.dumps(support))
+        self.assertNotRegex(json.dumps(support, sort_keys=True), r"[0-9a-f]{128}")
 
     def test_precommit_fault_rolls_back_without_a_slot_or_quarantine_artifact(self) -> None:
         armed = {"value": True}

@@ -19,6 +19,7 @@ import tempfile
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from app.mirror import controlled_shadow_runtime_independent as independent
+from app.mirror import restore_publication
 
 
 SCOPE = "MIRROR_CONTROLLED_SHADOW_READ_ONLY"
@@ -927,16 +928,12 @@ class ControlledShadowRuntimeService:
         except independent.IndependentControlledShadowError as exc:
             raise RuntimeIntegrityError(str(exc)) from exc
 
-    def _snapshot(self) -> dict[str, list[dict[str, object]]]:
-        connection = self._connect()
-        try:
-            return {table: [dict(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY rowid")] for table in independent.TABLES}
-        finally:
-            connection.close()
-
     def export_bytes(self) -> bytes:
-        self.integrity()
-        tables = independent._export_rows(self._snapshot())
+        try:
+            snapshot_result = independent.snapshot_database(self.database, profile=self.profile_material)
+            tables = independent._export_rows(snapshot_result["snapshot"])
+        except independent.IndependentControlledShadowError as exc:
+            raise RuntimeIntegrityError(str(exc)) from exc
         body: dict[str, object] = {
             "schema": independent.EXPORT_SCHEMA,
             "schema_version": independent.EXPORT_VERSION,
@@ -956,19 +953,19 @@ class ControlledShadowRuntimeService:
         return raw
 
     def support_snapshot(self) -> dict[str, object]:
-        evidence = self.integrity()
-        connection = self._connect()
         try:
-            failures = [str(row[0]) for row in connection.execute("SELECT last_failure_code FROM runtime_slots WHERE last_failure_code IS NOT NULL ORDER BY last_failure_code LIMIT ?", (independent.MAX_SUPPORT_CODES,))]
-            active_slots = int(connection.execute("SELECT COUNT(*) FROM runtime_slots WHERE state=?", (independent.SLOT_LEASED,)).fetchone()[0])
-        finally:
-            connection.close()
+            snapshot_result = independent.snapshot_database(self.database, profile=self.profile_material)
+        except independent.IndependentControlledShadowError as exc:
+            raise RuntimeIntegrityError(str(exc)) from exc
+        evidence = {key: value for key, value in snapshot_result.items() if key != "snapshot"}
+        rows = snapshot_result["snapshot"]
+        failures = sorted({str(row["last_failure_code"]) for row in rows["runtime_slots"] if row["last_failure_code"] is not None})[:independent.MAX_SUPPORT_CODES]
+        active_slots = sum(row["state"] == independent.SLOT_LEASED for row in rows["runtime_slots"])
         return {
             "schema": "mirror-controlled-shadow-runtime-support-v1",
             "schema_version": 1,
             "profile_version": self.profile.version,
             "global_sequence": evidence["global_sequence"],
-            "global_head_root": evidence["global_head_root"],
             "session_count": evidence["session_count"],
             "state_counts": evidence["state_counts"],
             "slot_count": evidence["slot_count"],
@@ -989,18 +986,14 @@ class ControlledShadowRuntimeService:
         *,
         profile: ControlledShadowRuntimeProfileV1,
         clock: Clock,
+        fault_injector: Callable[[str], None] | None = None,
     ) -> "ControlledShadowRuntimeService":
-        target = Path(destination)
-        if target.exists() or target.is_symlink():
-            raise RuntimeConflictError("runtime:restore-target-exists")
         try:
             verified = independent.verify_export_bytes(raw, profile=profile.material())
         except independent.IndependentControlledShadowError as exc:
             raise RuntimeIntegrityError(str(exc)) from exc
-        fd, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.restore-", suffix=".db", dir=target.parent)
-        os.close(fd)
-        stage = Path(temporary_name)
-        try:
+
+        def build_stage(stage: Path) -> None:
             service = cls(stage, profile=profile, clock=clock)
             rows = verified["snapshot"]
             connection = service._connect()
@@ -1020,20 +1013,29 @@ class ControlledShadowRuntimeService:
                 raise
             finally:
                 connection.close()
-            service.integrity()
-            os.replace(stage, target)
-            Path(str(stage) + "-wal").unlink(missing_ok=True)
-            Path(str(stage) + "-shm").unlink(missing_ok=True)
-            return cls(target, profile=profile, clock=clock)
-        except Exception:
-            stage.unlink(missing_ok=True)
-            Path(str(stage) + "-wal").unlink(missing_ok=True)
-            Path(str(stage) + "-shm").unlink(missing_ok=True)
-            raise
+
+        def verify_database(path: Path) -> object:
+            try:
+                return independent.verify_database(path, profile=profile.material())
+            except independent.IndependentControlledShadowError as exc:
+                raise RuntimeIntegrityError(str(exc)) from exc
+
+        def open_service(path: Path) -> ControlledShadowRuntimeService:
+            return cls(path, profile=profile, clock=clock)
+
+        try:
+            return restore_publication.publish_create_only(
+                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                open_service=open_service, fault_injector=fault_injector,
+            )
+        except restore_publication.RestorePublicationConflict as exc:
+            raise RuntimeConflictError(str(exc)) from exc
+        except (restore_publication.RestorePublicationError, RuntimeIntegrityError) as exc:
+            raise RuntimeIntegrityError(str(exc)) from exc
 
 
-def restore_export(destination: str | Path, raw: bytes, *, profile: ControlledShadowRuntimeProfileV1, clock: Clock) -> ControlledShadowRuntimeService:
-    return ControlledShadowRuntimeService.restore_export(destination, raw, profile=profile, clock=clock)
+def restore_export(destination: str | Path, raw: bytes, *, profile: ControlledShadowRuntimeProfileV1, clock: Clock, fault_injector: Callable[[str], None] | None = None) -> ControlledShadowRuntimeService:
+    return ControlledShadowRuntimeService.restore_export(destination, raw, profile=profile, clock=clock, fault_injector=fault_injector)
 
 
 __all__ = [

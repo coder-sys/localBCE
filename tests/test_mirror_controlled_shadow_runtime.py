@@ -239,6 +239,20 @@ class ControlledShadowRuntimeTests(unittest.TestCase):
             with self.assertRaises(runtime.RuntimeIntegrityError):
                 runtime.restore_export(Path(self.temporary.name) / ("bad-" + str(len(mutated)) + ".db"), mutated, profile=self.profile, clock=self.clock)
 
+        fired = False
+
+        def after_publish(point: str) -> None:
+            nonlocal fired
+            if point == "after_publish_before_response" and not fired:
+                fired = True
+                raise runtime.RuntimeResponseLost("runtime:restore-response-lost")
+
+        crash_target = Path(self.temporary.name) / "crash-published.db"
+        with self.assertRaises(runtime.RuntimeResponseLost):
+            runtime.restore_export(crash_target, exported, profile=self.profile, clock=self.clock, fault_injector=after_publish)
+        recovered = runtime.restore_export(crash_target, exported, profile=self.profile, clock=self.clock)
+        self.assertEqual(recovered.export_bytes(), exported)
+
     def test_fault_before_commit_rolls_back_to_empty_state(self) -> None:
         faulted_path = Path(self.temporary.name) / "faulted.db"
 
@@ -274,6 +288,9 @@ class ControlledShadowRuntimeTests(unittest.TestCase):
         support = json.dumps(self.service.support_snapshot(), sort_keys=True)
         for forbidden in ("synthetic-shadow-capture", "SYNTHETIC_SESSION_SUPPORT", "provider", "patient", "member", "claim", "http://", "https://"):
             self.assertNotIn(forbidden.lower(), support.lower())
+        self.assertNotRegex(support, r"[0-9a-f]{128}")
+        for key in ("global_head_root", "chain_id", "artifact_id", "transition_id"):
+            self.assertNotIn(key, support)
         self.assertNotIn("CLEAR", support)
         self.assertFalse(self.service.support_snapshot()["flags"]["payment_authority"])
 

@@ -97,6 +97,12 @@ class OperationalRecoveryTests(unittest.TestCase):
             clock=self.clock, key_custody=self.custody, storage=self.storage,
         )
         self.assertEqual(copy.export_bytes(), exported)
+        same_target = recovery.restore_export(
+            restored_catalog, exported, profile=self.profile,
+            quarantine_policy=self.upstream.source_policy, runtime_profile=self.upstream.profile,
+            clock=self.clock, key_custody=self.custody, storage=self.storage,
+        )
+        self.assertEqual(same_target.export_bytes(), exported)
         self.assertEqual(copy.integrity(), self.service.integrity())
         self.assertGreaterEqual(copy.integrity()["restore_count"], before_rotation["restore_count"])
         evidence = {
@@ -155,7 +161,8 @@ class OperationalRecoveryTests(unittest.TestCase):
                 "LOSSY", generation=1, expected_head=self._genesis(),
                 quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
             )
-        self.assertEqual(lossy.integrity()["state_counts"][recovery.STATE_PREPARED], 1)
+        self.assertEqual(lossy.integrity()["state_counts"][recovery.STATE_STORE_PENDING], 1)
+        self.custody.rotate(2)
         recovered = self._new_service(self.catalog).create_recovery_point(
             "LOSSY", generation=1, expected_head=self._genesis(),
             quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
@@ -194,8 +201,8 @@ class OperationalRecoveryTests(unittest.TestCase):
         self.assertEqual(results[0]["receipt_raw"], results[1]["receipt_raw"])
         evidence = first.integrity()
         self.assertEqual(evidence["point_count"], 1)
-        self.assertEqual(evidence["transition_count"], 2)
-        self.assertEqual(evidence["operation_count"], 2)
+        self.assertEqual(evidence["transition_count"], 3)
+        self.assertEqual(evidence["operation_count"], 3)
         independent.verify_database(path, profile=self.profile.material())
 
     def test_conflicting_concurrent_writers_have_one_winner_in_both_orders(self) -> None:
@@ -237,7 +244,7 @@ class OperationalRecoveryTests(unittest.TestCase):
             self.assertIn("head-conflict", str(conflicts[0]))
             evidence = left.integrity()
             self.assertEqual(evidence["point_count"], 1)
-            self.assertEqual(evidence["transition_count"], 2)
+            self.assertEqual(evidence["transition_count"], 3)
             catalog = left.export_bytes()
             catalog_value = json.loads(catalog.decode("ascii"))
             runtime_manifests = [
@@ -311,6 +318,9 @@ class OperationalRecoveryTests(unittest.TestCase):
         for forbidden in ("http://", "https://", "token", "password", "patient", "member", "claim"):
             self.assertNotIn(forbidden, support.lower())
         self.assertNotIn("point_id", support)
+        self.assertNotRegex(support, r"[0-9a-f]{128}")
+        for key in ("head_root", "state_root", "object_id", "storage_id"):
+            self.assertNotIn(key, support)
         support_value = self.service.support_snapshot()
         self.assertTrue(support_value["flags"]["production_usable"] is False)
         self.assertEqual(support_value["last_verified_age_bucket"], "NEVER")
@@ -434,8 +444,8 @@ class OperationalRecoveryTests(unittest.TestCase):
 
     def test_custody_snapshot_object_and_storage_owner_bindings_fail_closed(self) -> None:
         class WrongKeyCustody(recovery_fixtures.SyntheticKeyCustody):
-            def seal(self, plaintext: bytes, *, object_id: str) -> recovery.SealedRecoveryObjectV1:
-                value = super().seal(plaintext, object_id=object_id)
+            def seal_for(self, plaintext: bytes, *, object_id: str, key_id: str, key_epoch: int) -> recovery.SealedRecoveryObjectV1:
+                value = super().seal_for(plaintext, object_id=object_id, key_id=key_id, key_epoch=key_epoch)
                 return recovery.SealedRecoveryObjectV1(object_id, "SYNTHETIC_OTHER_KEY", value.key_epoch, value.key_state, value.sealed_bytes)
 
         class DriftStorage(recovery_fixtures.SyntheticRecoveryStorage):
@@ -457,7 +467,7 @@ class OperationalRecoveryTests(unittest.TestCase):
                 quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
             )
         self.assertNotEqual(bad.export_bytes(), before)
-        self.assertEqual(bad.integrity()["state_counts"][recovery.STATE_PREPARED], 1)
+        self.assertEqual(bad.integrity()["state_counts"][recovery.STATE_STORE_PENDING], 1)
 
         drift = self._new_service(self.root / "drift-storage.db")
         drift.storage = DriftStorage()
@@ -516,9 +526,9 @@ class OperationalRecoveryTests(unittest.TestCase):
                     quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
                 )
             evidence = faulted.integrity()
-            self.assertEqual(evidence["state_counts"][recovery.STATE_PREPARED], 1)
+            self.assertEqual(evidence["state_counts"][recovery.STATE_STORE_PENDING], 1)
             self.assertEqual(evidence["state_counts"][recovery.STATE_STORED], 0)
-            self.assertEqual(evidence["transition_count"], 1)
+            self.assertEqual(evidence["transition_count"], 2)
 
         path = self.root / "restore-before-commit.db"
         stored = self._new_service(path).create_recovery_point(
@@ -536,6 +546,100 @@ class OperationalRecoveryTests(unittest.TestCase):
         evidence = faulted_restore.integrity()
         self.assertEqual(evidence["state_counts"][recovery.STATE_STORED], 1)
         self.assertEqual(evidence["restore_count"], 0)
+
+    def test_store_pending_is_durable_before_put_and_reuses_reserved_key_after_rotation(self) -> None:
+        path = self.root / "pending-before-put.db"
+        observed_states: list[str] = []
+
+        class ObservingStorage(recovery_fixtures.SyntheticRecoveryStorage):
+            def put(inner_self, object_id: str, sealed_bytes: bytes):
+                connection = sqlite3.connect(path)
+                try:
+                    observed_states.append(str(connection.execute("SELECT state FROM recovery_points").fetchone()[0]))
+                finally:
+                    connection.close()
+                return super(ObservingStorage, inner_self).put(object_id, sealed_bytes)
+
+        storage = ObservingStorage()
+        rotated = False
+
+        def rotate_before_seal(point: str) -> None:
+            nonlocal rotated
+            if point == "before_seal" and not rotated:
+                rotated = True
+                self.custody.rotate(2)
+
+        service = recovery.OperationalRecoveryService(
+            path, profile=self.profile, quarantine_policy=self.upstream.source_policy,
+            runtime_profile=self.upstream.profile, clock=self.clock,
+            key_custody=self.custody, storage=storage, fault_injector=rotate_before_seal,
+        )
+        result = service.create_recovery_point(
+            "PENDING_RESERVE", generation=1, expected_head=self._genesis(),
+            quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+        )
+        self.assertEqual(observed_states, [recovery.STATE_STORE_PENDING])
+        self.assertEqual(result["state"], recovery.STATE_STORED)
+        connection = service._connect()
+        try:
+            point = service._point(connection, result["point_id"])
+        finally:
+            connection.close()
+        self.assertEqual(point["key_epoch"], 1)  # type: ignore[index]
+
+    def test_revoked_reserved_key_becomes_durable_invalidated_without_storage(self) -> None:
+        path = self.root / "pending-revoked.db"
+        revoked = False
+
+        def revoke_before_seal(point: str) -> None:
+            nonlocal revoked
+            if point == "before_seal" and not revoked:
+                revoked = True
+                self.custody.revoke(1)
+
+        service = recovery.OperationalRecoveryService(
+            path, profile=self.profile, quarantine_policy=self.upstream.source_policy,
+            runtime_profile=self.upstream.profile, clock=self.clock,
+            key_custody=self.custody, storage=self.storage, fault_injector=revoke_before_seal,
+        )
+        with self.assertRaises(recovery.RecoveryConflictError):
+            service.create_recovery_point(
+                "PENDING_REVOKED", generation=1, expected_head=self._genesis(),
+                quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+            )
+        evidence = service.integrity()
+        self.assertEqual(evidence["state_counts"][recovery.STATE_INVALIDATED], 1)
+        self.assertEqual(evidence["storage_count"], 0)
+
+    def test_nondeterministic_reserved_seal_fails_before_storage_side_effect(self) -> None:
+        path = self.root / "nondeterministic-seal.db"
+
+        class NondeterministicCustody(recovery_fixtures.SyntheticKeyCustody):
+            def __init__(inner_self) -> None:
+                super().__init__()
+                inner_self.calls = 0
+
+            def seal_for(inner_self, plaintext: bytes, *, object_id: str, key_id: str, key_epoch: int) -> recovery.SealedRecoveryObjectV1:
+                inner_self.calls += 1
+                sealed = super().seal_for(plaintext, object_id=object_id, key_id=key_id, key_epoch=key_epoch)
+                if inner_self.calls == 2:
+                    return recovery.SealedRecoveryObjectV1(sealed.object_id, sealed.key_id, sealed.key_epoch, sealed.key_state, sealed.sealed_bytes + b"x")
+                return sealed
+
+        custody = NondeterministicCustody()
+        storage = recovery_fixtures.SyntheticRecoveryStorage()
+        service = recovery.OperationalRecoveryService(
+            path, profile=self.profile, quarantine_policy=self.upstream.source_policy,
+            runtime_profile=self.upstream.profile, clock=self.clock,
+            key_custody=custody, storage=storage,
+        )
+        with self.assertRaises(recovery.RecoveryStorageError):
+            service.create_recovery_point(
+                "NONDETERMINISTIC_SEAL", generation=1, expected_head=self._genesis(),
+                quarantine_export=self.quarantine_export, runtime_export=self.runtime_export,
+            )
+        self.assertEqual(service.integrity()["state_counts"][recovery.STATE_STORE_PENDING], 1)
+        self.assertEqual(service.integrity()["storage_count"], 0)
 
 
 if __name__ == "__main__":

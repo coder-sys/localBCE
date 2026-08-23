@@ -20,6 +20,7 @@ from typing import Callable, Mapping
 
 from app.mirror import external_source_adapter_independent as adapter
 from app.mirror import external_source_quarantine_independent as independent
+from app.mirror import restore_publication
 
 
 SCHEMA = independent.SCHEMA
@@ -769,11 +770,8 @@ class ExternalSourceQuarantineService:
         return {
             "schema": f"{SCHEMA}-support",
             "schema_version": SCHEMA_VERSION,
-            "chain_id": evidence["chain_id"],
-            "database_id": self.database_id,
             "head_state": evidence["head_state"],
             "head_sequence": evidence["sequence"],
-            "head_root": evidence["head_root"],
             "artifact_count": evidence["artifact_count"],
             "operation_count": evidence["operation_count"],
             "transition_count": evidence["transition_count"],
@@ -789,22 +787,12 @@ class ExternalSourceQuarantineService:
             "proofSuiteId": None,
         }
 
-    def _snapshot(self) -> dict[str, list[dict[str, object]]]:
-        connection = self._connect()
-        try:
-            return {
-                "quarantine_meta": [dict(row) for row in connection.execute("SELECT * FROM quarantine_meta ORDER BY key")],
-                "quarantine_artifacts": [dict(row) for row in connection.execute("SELECT * FROM quarantine_artifacts ORDER BY policy_digest,artifact_id")],
-                "quarantine_operations": [dict(row) for row in connection.execute("SELECT * FROM quarantine_operations ORDER BY sequence")],
-                "quarantine_transitions": [dict(row) for row in connection.execute("SELECT * FROM quarantine_transitions ORDER BY sequence")],
-                "quarantine_heads": [dict(row) for row in connection.execute("SELECT * FROM quarantine_heads ORDER BY policy_digest")],
-            }
-        finally:
-            connection.close()
-
     def export_bytes(self) -> bytes:
-        self.integrity()
-        snapshot = self._snapshot()
+        try:
+            snapshot_result = independent.snapshot_database(self.database, policy=self.policy, database_id=self.database_id)
+            snapshot = snapshot_result["snapshot"]
+        except independent.IndependentQuarantineError as exc:
+            raise ExternalSourceQuarantineError(str(exc)) from exc
         body: dict[str, object] = {
             "schema": EXPORT_SCHEMA,
             "schema_version": EXPORT_VERSION,
@@ -880,29 +868,35 @@ class ExternalSourceQuarantineService:
         database_id: str,
         fault_injector: Callable[[str], None] | None = None,
     ) -> "ExternalSourceQuarantineService":
-        target = _resolve_database(destination)
-        if target.exists() or target.is_symlink():
-            raise QuarantineConflictError("quarantine:restore-target-exists")
         try:
             verified = independent.verify_export_bytes(raw, policy=policy, database_id=database_id)
         except independent.IndependentQuarantineError as exc:
             raise ExternalSourceQuarantineError(str(exc)) from exc
-        fd, descriptor = tempfile.mkstemp(prefix=f".{target.name}.restore-", suffix=".db", dir=target.parent)
-        os.close(fd)
-        stage = Path(descriptor)
-        try:
+
+        def build_stage(stage: Path) -> None:
             service = cls(stage, policy=policy, database_id=database_id, fault_injector=fault_injector)
             service._restore_snapshot(verified["snapshot"])  # type: ignore[arg-type]
-            service.integrity()
-            os.replace(stage, target)
-            for suffix in ("-wal", "-shm"):
-                Path(str(stage) + suffix).unlink(missing_ok=True)
-            return cls(target, policy=policy, database_id=database_id)
-        except Exception:
-            stage.unlink(missing_ok=True)
-            Path(str(stage) + "-wal").unlink(missing_ok=True)
-            Path(str(stage) + "-shm").unlink(missing_ok=True)
+
+        def verify_database(path: Path) -> object:
+            try:
+                return independent.verify_database(path, policy=policy, database_id=database_id)
+            except independent.IndependentQuarantineError as exc:
+                raise ExternalSourceQuarantineError(str(exc)) from exc
+
+        def open_service(path: Path) -> ExternalSourceQuarantineService:
+            return cls(path, policy=policy, database_id=database_id)
+
+        try:
+            return restore_publication.publish_create_only(
+                destination, raw, build_stage=build_stage, verify_database=verify_database,
+                open_service=open_service, fault_injector=fault_injector,
+            )
+        except (QuarantineResponseLost, QuarantineInjectedFault):
             raise
+        except restore_publication.RestorePublicationConflict as exc:
+            raise QuarantineConflictError(str(exc)) from exc
+        except (restore_publication.RestorePublicationError, ExternalSourceQuarantineError) as exc:
+            raise ExternalSourceQuarantineError(str(exc)) from exc
 
 
 def restore_export(
@@ -911,8 +905,9 @@ def restore_export(
     *,
     policy: Mapping[str, object] | object,
     database_id: str,
+    fault_injector: Callable[[str], None] | None = None,
 ) -> ExternalSourceQuarantineService:
-    return ExternalSourceQuarantineService.restore_export(destination, raw, policy=policy, database_id=database_id)
+    return ExternalSourceQuarantineService.restore_export(destination, raw, policy=policy, database_id=database_id, fault_injector=fault_injector)
 
 
 __all__ = [

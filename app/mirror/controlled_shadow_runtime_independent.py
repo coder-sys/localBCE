@@ -898,7 +898,7 @@ def _verify_rows(rows: Mapping[str, list[dict[str, object]]], *, profile: Mappin
     }
 
 
-def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
+def snapshot_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
     database = Path(path)
     if not database.is_file() or database.stat().st_size > 64 * 1024 * 1024:
         raise IndependentControlledShadowError("runtime:database")
@@ -908,8 +908,12 @@ def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("BEGIN")
         _check_schema(connection)
-        return _verify_rows(_table_rows(connection), profile=profile)
+        rows = _table_rows(connection)
+        result = _verify_rows(rows, profile=profile)
+        connection.commit()
+        return {**result, "snapshot": rows}
     except IndependentControlledShadowError:
         raise
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError) as exc:
@@ -917,6 +921,11 @@ def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[
     finally:
         if connection is not None:
             connection.close()
+
+
+def verify_database(path: str | Path, *, profile: Mapping[str, object]) -> dict[str, object]:
+    result = snapshot_database(path, profile=profile)
+    return {key: value for key, value in result.items() if key != "snapshot"}
 
 
 def _export_rows(rows: Mapping[str, list[Mapping[str, object]]]) -> dict[str, list[dict[str, object]]]:
@@ -1007,5 +1016,5 @@ __all__ = [
     "IndependentControlledShadowError", "_canonical", "_digest", "_raw_digest", "_parse", "_hex", "_profile_material",
     "verify_profile", "profile_digest", "verify_upstream_bundle", "authorization_input", "verify_authorization_result",
     "evaluator_input", "verify_evaluation_result", "_genesis_root", "_transition_id", "_session_after_root", "_global_after_root",
-    "verify_database", "verify_export_bytes", "_export_rows", "_import_rows", "_parse_blob", "_evaluation_body",
+    "snapshot_database", "verify_database", "verify_export_bytes", "_export_rows", "_import_rows", "_parse_blob", "_evaluation_body",
 ]

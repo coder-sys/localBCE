@@ -624,8 +624,8 @@ def snapshot_database(path: str | Path, *, config: Mapping[str, object] | object
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-        _check_shape(connection)
         connection.execute("BEGIN")
+        _check_shape(connection)
         snapshot = _sqlite_snapshot(connection)
         evidence = _verify_rows(snapshot, config=config)
         connection.commit()
@@ -700,7 +700,7 @@ def support_snapshot(path: str | Path, *, config: Mapping[str, object] | object)
     result = snapshot_database(path, config=config)
     evidence = result["evidence"]
     snapshot = result["snapshot"]
-    return {"schema": "mirror-authenticated-source-acquisition-support-v2", "schema_version": 2, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot["acquisition_slots"]), "attestation_count": evidence["attestation_count"], "head_transition_id": evidence["head_transition_id"], "state_root": evidence["state_root"], "chain_id": evidence["chain_id"], **FIXED_FLAGS}
+    return {"schema": "mirror-authenticated-source-acquisition-support-v2", "schema_version": 2, "state": "EMPTY" if evidence["slot_count"] == 0 else "NONEMPTY", "sequence": evidence["sequence"], "slot_counts": evidence["states"], "failure_counts": evidence["failure_counts"], "attempt_count": sum(int(row["attempt"]) for row in snapshot["acquisition_slots"]), "attestation_count": evidence["attestation_count"], **FIXED_FLAGS}
 
 
 __all__ = ["SCHEMA", "SCHEMA_VERSION", "EXPORT_SCHEMA", "EXPORT_VERSION", "STATES", "SAFE_FAILURES", "CONFIG_KEYS", "META_KEYS", "SLOT_COLUMNS", "OPERATION_COLUMNS", "TRANSITION_COLUMNS", "ATTESTATION_COLUMNS", "TABLE_COLUMNS", "EXPORT_KEYS", "EXPORT_ROW_KEYS", "FIXED_FLAGS", "IndependentAcquisitionError", "_canonical", "_digest", "_raw_digest", "_config_view", "_config_digest", "_chain_id", "_genesis_root", "_state_root", "_parse", "verify_attestation", "snapshot_database", "verify_database", "verify_export_bytes", "support_snapshot"]
