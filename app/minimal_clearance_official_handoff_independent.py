@@ -58,10 +58,15 @@ _ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v1\x00"
 _OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v1\x00"
 _ACK = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK/v1\x00"
+_ACK_PROFILE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-PROFILE/v1\x00"
+_ACK_RECEIPT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ACK-RECEIPT/v1\x00"
 _RESULT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-RESULT/v1\x00"
 _STATE_IDENTITY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00"
 _CAP_BYTES: Final[int] = 5_000_000_000
 _FIXED_ID_BYTES: Final[int] = 128
+_ACK_EVIDENCE_MODE: Final[str] = "SYNTHETIC_ONLY"
+_ACK_PROFILE_VERSION: Final[int] = 1
+_RECONCILIATION_STATUS: Final[frozenset[str]] = frozenset({"DISCOVERED", "LEASED", "EXHAUSTED", "ACKNOWLEDGED"})
 
 
 def _private_zk_profile_digest(statement: Any, verifier_sha256: bytes) -> bytes:
@@ -87,12 +92,24 @@ _ENVELOPE_KEYS: Final[frozenset[str]] = frozenset({
     "application_operation_id", "application_result_digest", "state_store_identity", "state_receipt_digest",
     "request_id", "attempt_id", "decision_id", "receipt_id", "state_after_id", "state_binding_after",
     "audit_head_after", "policy_result", "effective_directive", "proof_session_accepted",
-    "proof_acceptance_is_clear", "payment_root_unchanged", "settled_batch_count_unchanged",
+    "proof_acceptance_is_clear", "payment_root_unchanged", "settled_batch_count_unchanged", "verifier_epoch",
+    "ack_evidence_profile_digest",
     "economic_mutation", "proof_suite_id",
 })
 _ACK_KEYS: Final[frozenset[str]] = frozenset({
     "schema", "receiver_identity", "receiver_epoch", "idempotency_key", "envelope_digest",
     "effective_directive", "accepted_ms", "acknowledgment_id",
+})
+_ACK_KEYS_WITH_POLICY: Final[frozenset[str]] = frozenset(set(_ACK_KEYS) | {"policy_result"})
+_ACK_PROFILE_KEYS: Final[frozenset[str]] = frozenset({
+    "schema_version", "mode", "verifier_identity", "verifier_epoch", "receiver_identity",
+    "receiver_epoch", "proof_suite_id", "production_usable", "activation",
+})
+_ACK_RECEIPT_KEYS: Final[frozenset[str]] = frozenset({
+    "schema_version", "mode", "profile_digest", "verifier_identity", "verifier_epoch",
+    "receiver_identity", "receiver_epoch", "operation_id", "job_id_digest", "idempotency_key",
+    "envelope_digest", "ack_digest", "acknowledgment_id", "policy_result", "effective_directive",
+    "proof_suite_id", "production_usable", "activation",
 })
 
 
@@ -169,6 +186,119 @@ def _idempotency_key(config: Mapping[str, Any], job_id: str, envelope_digest_val
     )
 
 
+def acknowledgment_profile_digest(
+    *, verifier_identity: bytes, verifier_epoch: int, receiver_identity: bytes, receiver_epoch: int,
+) -> bytes:
+    """Return the verifier-owned, synthetic-only acknowledgment profile identity."""
+    if type(verifier_identity) is not bytes or len(verifier_identity) != 32:
+        _fail("profile_verifier_identity")
+    if type(verifier_epoch) is not int or verifier_epoch < 1:
+        _fail("profile_verifier_epoch")
+    if type(receiver_identity) is not bytes or len(receiver_identity) != 32:
+        _fail("profile_receiver_identity")
+    if type(receiver_epoch) is not int or receiver_epoch < 1:
+        _fail("profile_receiver_epoch")
+    value = {
+        "schema_version": _ACK_PROFILE_VERSION,
+        "mode": _ACK_EVIDENCE_MODE,
+        "verifier_identity": _hex(verifier_identity),
+        "verifier_epoch": verifier_epoch,
+        "receiver_identity": _hex(receiver_identity),
+        "receiver_epoch": receiver_epoch,
+        "proof_suite_id": None,
+        "production_usable": False,
+        "activation": False,
+    }
+    return _sha(_ACK_PROFILE, _json_bytes(value))
+
+
+def acknowledgment_profile_bytes(
+    *, verifier_identity: bytes, verifier_epoch: int, receiver_identity: bytes, receiver_epoch: int,
+) -> bytes:
+    """Return canonical profile bytes; callers cannot select another mode."""
+    if type(verifier_identity) is not bytes or len(verifier_identity) != 32:
+        _fail("profile_verifier_identity")
+    if type(verifier_epoch) is not int or verifier_epoch < 1:
+        _fail("profile_verifier_epoch")
+    if type(receiver_identity) is not bytes or len(receiver_identity) != 32:
+        _fail("profile_receiver_identity")
+    if type(receiver_epoch) is not int or receiver_epoch < 1:
+        _fail("profile_receiver_epoch")
+    value = {
+        "schema_version": _ACK_PROFILE_VERSION,
+        "mode": _ACK_EVIDENCE_MODE,
+        "verifier_identity": _hex(verifier_identity),
+        "verifier_epoch": verifier_epoch,
+        "receiver_identity": _hex(receiver_identity),
+        "receiver_epoch": receiver_epoch,
+        "proof_suite_id": None,
+        "production_usable": False,
+        "activation": False,
+    }
+    return _json_bytes(value)
+
+
+def build_ack_qualification_receipt(
+    *, profile_digest: bytes, verifier_identity: bytes, verifier_epoch: int,
+    receiver_identity: bytes, receiver_epoch: int, operation_id: bytes, job_id: str,
+    idempotency_key: bytes, envelope_digest_value: bytes, ack_digest: bytes,
+    acknowledgment_id: str, policy_result: int, effective_directive: int,
+) -> bytes:
+    """Build the bounded, support-safe receipt retained for a qualified ack."""
+    for raw, size, label in (
+        (profile_digest, 64, "receipt_profile"), (verifier_identity, 32, "receipt_verifier"),
+        (receiver_identity, 32, "receipt_receiver"), (operation_id, 64, "receipt_operation"),
+        (idempotency_key, 64, "receipt_idempotency"), (envelope_digest_value, 64, "receipt_envelope"),
+        (ack_digest, 64, "receipt_ack_digest"),
+    ):
+        _blob(_hex(raw), size, label)
+    _integer(verifier_epoch, "receipt_verifier_epoch", 1)
+    _integer(receiver_epoch, "receipt_receiver_epoch", 1)
+    _integer(policy_result, "receipt_policy_result", 1)
+    _integer(effective_directive, "receipt_directive", 1)
+    if policy_result > 5 or effective_directive > 5 or not _TOKEN.fullmatch(acknowledgment_id):
+        _fail("receipt_value")
+    value = {
+        "schema_version": _ACK_PROFILE_VERSION, "mode": _ACK_EVIDENCE_MODE,
+        "profile_digest": _hex(profile_digest), "verifier_identity": _hex(verifier_identity),
+        "verifier_epoch": verifier_epoch, "receiver_identity": _hex(receiver_identity),
+        "receiver_epoch": receiver_epoch, "operation_id": _hex(operation_id),
+        "job_id_digest": _hex(_sha(_ACK_RECEIPT, job_id.encode("ascii"))),
+        "idempotency_key": _hex(idempotency_key), "envelope_digest": _hex(envelope_digest_value),
+        "ack_digest": _hex(ack_digest), "acknowledgment_id": acknowledgment_id,
+        "policy_result": policy_result, "effective_directive": effective_directive,
+        "proof_suite_id": None, "production_usable": False, "activation": False,
+    }
+    return _json_bytes(value)
+
+
+def parse_ack_qualification_receipt(raw: bytes) -> dict[str, Any]:
+    if type(raw) is not bytes or not 0 < len(raw) <= 4096:
+        _fail("receipt_bounds")
+    try:
+        value = json.loads(raw.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise IndependentOfficialHandoffError("receipt_encoding") from exc
+    if type(value) is not dict or set(value) != _ACK_RECEIPT_KEYS or raw != _json_bytes(value):
+        _fail("receipt_canonical")
+    if value["schema_version"] != _ACK_PROFILE_VERSION or value["mode"] != _ACK_EVIDENCE_MODE:
+        _fail("receipt_profile")
+    for name, size in (("profile_digest", 64), ("verifier_identity", 32), ("receiver_identity", 32),
+                       ("operation_id", 64), ("job_id_digest", 64), ("idempotency_key", 64),
+                       ("envelope_digest", 64), ("ack_digest", 64)):
+        _blob(value[name], size, "receipt_" + name)
+    _integer(value["verifier_epoch"], "receipt_verifier_epoch", 1)
+    _integer(value["receiver_epoch"], "receipt_receiver_epoch", 1)
+    _token(value["acknowledgment_id"], "receipt_ack_id")
+    for name in ("policy_result", "effective_directive"):
+        _integer(value[name], "receipt_" + name, 1)
+        if value[name] > 5:
+            _fail("receipt_directive")
+    if value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
+        _fail("receipt_nonactivation")
+    return value
+
+
 def parse_envelope_bytes(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not 0 < len(raw) <= _MAX_ENVELOPE:
         _fail("envelope_bounds")
@@ -183,6 +313,8 @@ def parse_envelope_bytes(raw: bytes) -> dict[str, Any]:
     _blob(value["handoff_config_digest"], 64, "envelope_handoff_config")
     _blob(value["receiver_identity"], 32, "envelope_receiver")
     _integer(value["receiver_epoch"], "envelope_receiver_epoch", 1)
+    _integer(value["verifier_epoch"], "envelope_verifier_epoch", 1)
+    _blob(value["ack_evidence_profile_digest"], 64, "envelope_profile")
     for name in (
         "application_id_digest", "application_config_digest", "application_job_id_digest",
         "application_operation_id", "application_result_digest", "state_store_identity",
@@ -213,7 +345,7 @@ def parse_acknowledgment_bytes(raw: bytes) -> dict[str, Any]:
         value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise IndependentOfficialHandoffError("ack_encoding") from exc
-    if type(value) is not dict or set(value) != _ACK_KEYS or raw != _json_bytes(value):
+    if type(value) is not dict or set(value) not in {_ACK_KEYS, _ACK_KEYS_WITH_POLICY} or raw != _json_bytes(value):
         _fail("ack_canonical")
     if value["schema"] != _SCHEMA:
         _fail("ack_schema")
@@ -224,6 +356,10 @@ def parse_acknowledgment_bytes(raw: bytes) -> dict[str, Any]:
     _integer(value["effective_directive"], "ack_directive", 1)
     if value["effective_directive"] > 5:
         _fail("ack_directive")
+    if "policy_result" in value:
+        _integer(value["policy_result"], "ack_policy_result", 1)
+        if value["policy_result"] > 5:
+            _fail("ack_policy_result")
     _integer(value["accepted_ms"], "ack_time")
     _blob(value["acknowledgment_id"], 64, "ack_id")
     return value
@@ -237,6 +373,71 @@ def envelope_digest(raw: bytes) -> bytes:
 def acknowledgment_digest(raw: bytes) -> bytes:
     parse_acknowledgment_bytes(raw)
     return _sha(_ACK, raw)
+
+
+def validate_acknowledgment(
+    raw: bytes, *, envelope_bytes: bytes, operation_id: bytes, job_id: str,
+    config: Mapping[str, Any], expected_policy_result: int | None = None,
+) -> tuple[dict[str, Any], bytes, bytes, bytes]:
+    """Validate immediate and lookup acknowledgments through one path.
+
+    The identity and epoch fields are observation bindings only.  This routine
+    deliberately provides no cryptographic authentication or production claim.
+    """
+    try:
+        ack = parse_acknowledgment_bytes(raw)
+        envelope = parse_envelope_bytes(envelope_bytes)
+    except IndependentOfficialHandoffError:
+        raise
+    if type(operation_id) is not bytes or len(operation_id) != 64:
+        _fail("ack_operation")
+    _token(job_id, "ack_job")
+    env_digest = _sha(_ENVELOPE, envelope_bytes)
+    ack_digest = _sha(_ACK, raw)
+    profile_digest = _blob(config["ack_evidence_profile_digest"], 64, "config_profile")
+    verifier = _blob(config["verifier_sha256"], 32, "config_verifier")
+    receiver = _blob(config["receiver_identity"], 32, "config_receiver")
+    config_bytes = _json_bytes({k: v for k, v in config.items() if not k.startswith("_")})
+    config_digest = _sha(_MATERIAL, config_bytes)
+    expected_idempotency = _idempotency_key(config, job_id, env_digest, config_digest)
+    expected_operation = _operation_identity(config, job_id, env_digest, config_digest)
+    supplied_idempotency = config.get("_expected_idempotency_key")
+    if operation_id != expected_operation or (supplied_idempotency is not None and _blob(supplied_idempotency, 64, "expected_idempotency") != expected_idempotency):
+        _fail("expected_idempotency_binding")
+    if (
+        bytes.fromhex(ack["receiver_identity"]) != receiver
+        or int(ack["receiver_epoch"]) != int(config["receiver_epoch"])
+        or bytes.fromhex(ack["idempotency_key"]) != expected_idempotency
+        or bytes.fromhex(ack["envelope_digest"]) != env_digest
+        or int(ack["effective_directive"]) != int(envelope["effective_directive"])
+        or envelope["handoff_config_digest"].upper() != _hex(config_digest)
+        or envelope["application_id_digest"].upper() != _hex(_sha(_ENVELOPE, str(config["application_id"]).encode("ascii")))
+        or envelope["application_job_id_digest"].upper() != _hex(_sha(_ENVELOPE, job_id.encode("ascii")))
+        or envelope["application_config_digest"].upper() != str(config["application_config_digest"]).upper()
+        or envelope["state_store_identity"].upper() != str(config["state_store_identity"]).upper()
+        or envelope["receiver_identity"].upper() != _hex(receiver)
+        or int(envelope["receiver_epoch"]) != int(config["receiver_epoch"])
+        or int(envelope["verifier_epoch"]) != int(config["verifier_epoch"])
+        or envelope["ack_evidence_profile_digest"].upper() != _hex(profile_digest)
+    ):
+        _fail("ack_binding")
+    if expected_policy_result is not None and int(envelope["policy_result"]) != expected_policy_result:
+        _fail("ack_policy_binding")
+    if "policy_result" in ack and int(ack["policy_result"]) != int(envelope["policy_result"]):
+        _fail("ack_policy_binding")
+    if profile_digest != acknowledgment_profile_digest(
+        verifier_identity=verifier, verifier_epoch=int(config["verifier_epoch"]),
+        receiver_identity=receiver, receiver_epoch=int(config["receiver_epoch"]),
+    ):
+        _fail("ack_profile_binding")
+    receipt = build_ack_qualification_receipt(
+        profile_digest=profile_digest, verifier_identity=verifier, verifier_epoch=int(config["verifier_epoch"]),
+        receiver_identity=receiver, receiver_epoch=int(config["receiver_epoch"]), operation_id=operation_id,
+        job_id=job_id, idempotency_key=bytes.fromhex(ack["idempotency_key"]), envelope_digest_value=env_digest,
+        ack_digest=ack_digest, acknowledgment_id=str(ack["acknowledgment_id"]),
+        policy_result=int(envelope["policy_result"]), effective_directive=int(ack["effective_directive"]),
+    )
+    return ack, env_digest, ack_digest, receipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,7 +612,7 @@ def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
     keys = {
         "schema_version", "outbox_id", "application_id", "application_config_digest", "verifier_sha256", "state_store_identity",
         "receiver_identity", "receiver_epoch", "capacity", "lease_seconds", "max_attempts", "busy_timeout_ms",
-        "proof_suite_id", "production_usable", "activation",
+        "verifier_epoch", "ack_evidence_profile_digest", "proof_suite_id", "production_usable", "activation",
     }
     if type(value) is not dict or set(value) != keys or value["schema_version"] != _SCHEMA_VERSION:
         _fail("config_keys")
@@ -422,15 +623,23 @@ def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
     state_id = _blob(value["state_store_identity"], 64, "state_store_identity")
     receiver = _blob(value["receiver_identity"], 32, "receiver_identity")
     epoch = _integer(value["receiver_epoch"], "receiver_epoch", 1)
+    verifier_epoch = _integer(value["verifier_epoch"], "verifier_epoch", 1)
+    profile_digest = _blob(value["ack_evidence_profile_digest"], 64, "ack_evidence_profile_digest")
     capacity = _integer(value["capacity"], "capacity", 1)
     lease = _integer(value["lease_seconds"], "lease_seconds", 1)
     if not 1 <= capacity <= 10_000 or not 1 <= lease <= 3_600 or value["max_attempts"] != 3 or value["busy_timeout_ms"] != 5_000:
         _fail("config_bounds")
     if value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False:
         _fail("config_nonactivation")
+    expected_profile = acknowledgment_profile_digest(
+        verifier_identity=verifier, verifier_epoch=verifier_epoch,
+        receiver_identity=receiver, receiver_epoch=epoch,
+    )
+    if profile_digest != expected_profile:
+        _fail("config_profile")
     canonical = _json_bytes(value)
     digest = _sha(_MATERIAL, canonical)
-    parsed = dict(value, outbox_id=outbox_id, application_id=application_id, application_config_digest=app_digest, verifier_sha256=verifier, state_store_identity=state_id, receiver_identity=receiver)
+    parsed = dict(value, outbox_id=outbox_id, application_id=application_id, application_config_digest=app_digest, verifier_sha256=verifier, state_store_identity=state_id, receiver_identity=receiver, ack_evidence_profile_digest=profile_digest)
     return parsed, canonical, digest
 
 
@@ -441,10 +650,51 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
         value = json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise IndependentOfficialHandoffError("export_encoding") from exc
-    top = {"schema", "config", "metadata", "jobs", "leases", "acks", "transitions"}
+    top = {"schema", "config", "metadata", "jobs", "leases", "acks", "profiles", "receipts", "reconciliation", "transitions"}
     if type(value) is not dict or set(value) != top or value["schema"] != _SCHEMA or raw != _json_bytes(value):
         _fail("export_keys")
     config, _, config_digest = _parse_config(value["config"])
+    profiles = value["profiles"]
+    if type(profiles) is not list or len(profiles) != 1:
+        _fail("profiles_shape")
+    profile = profiles[0]
+    if type(profile) is not dict or set(profile) != {"profile_digest", "profile_bytes"}:
+        _fail("profile_keys")
+    profile_digest = _blob(profile["profile_digest"], 64, "profile_digest")
+    profile_bytes = _blob(profile["profile_bytes"], None, "profile_bytes")
+    try:
+        profile_value = json.loads(profile_bytes.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise IndependentOfficialHandoffError("profile_encoding") from exc
+    if (
+        profile_bytes != acknowledgment_profile_bytes(
+            verifier_identity=config["verifier_sha256"], verifier_epoch=int(config["verifier_epoch"]),
+            receiver_identity=config["receiver_identity"], receiver_epoch=int(config["receiver_epoch"]),
+        )
+        or profile_digest != acknowledgment_profile_digest(
+            verifier_identity=config["verifier_sha256"], verifier_epoch=int(config["verifier_epoch"]),
+            receiver_identity=config["receiver_identity"], receiver_epoch=int(config["receiver_epoch"]),
+        )
+        or type(profile_value) is not dict or set(profile_value) != _ACK_PROFILE_KEYS
+        or profile_value != json.loads(acknowledgment_profile_bytes(
+            verifier_identity=config["verifier_sha256"], verifier_epoch=int(config["verifier_epoch"]),
+            receiver_identity=config["receiver_identity"], receiver_epoch=int(config["receiver_epoch"]),
+        ).decode("ascii"))
+    ):
+        _fail("profile_binding")
+    receipts = value["receipts"]
+    if type(receipts) is not list:
+        _fail("receipts_shape")
+    receipt_map: dict[str, bytes] = {}
+    for receipt in receipts:
+        if type(receipt) is not dict or set(receipt) != {"job_id", "receipt_bytes"}:
+            _fail("receipt_row_keys")
+        jid = _token(receipt["job_id"], "receipt_job")
+        if jid in receipt_map:
+            _fail("receipt_duplicate")
+        receipt_raw = _blob(receipt["receipt_bytes"], None, "receipt_bytes")
+        parse_ack_qualification_receipt(receipt_raw)
+        receipt_map[jid] = receipt_raw
     metadata = value["metadata"]
     if type(metadata) is not dict or set(metadata) != {"head_root", "next_sequence"}:
         _fail("metadata_keys")
@@ -454,13 +704,16 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
     if type(jobs) is not list:
         _fail("jobs_shape")
     job_map: dict[str, dict[str, Any]] = {}
+    previous_discovery_sequence = 0
     for index, job in enumerate(jobs, 1):
         keys = {"job_id", "operation_id", "envelope_digest", "envelope_bytes", "idempotency_key", "status", "discovery_sequence", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"}
         if type(job) is not dict or set(job) != keys:
             _fail("job_keys")
         jid = _token(job["job_id"], "job_id")
-        if jid in job_map or _integer(job["discovery_sequence"], "discovery_sequence", 1) != index:
+        discovery_sequence = _integer(job["discovery_sequence"], "discovery_sequence", 1)
+        if jid in job_map or discovery_sequence <= previous_discovery_sequence:
             _fail("job_order")
+        previous_discovery_sequence = discovery_sequence
         operation = _blob(job["operation_id"], 64, "operation")
         envelope = _blob(job["envelope_bytes"], None, "envelope")
         env = parse_envelope_bytes(envelope)
@@ -475,6 +728,8 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
             or env["state_store_identity"].upper() != _hex(config["state_store_identity"])
             or env["receiver_identity"].upper() != _hex(config["receiver_identity"])
             or int(env["receiver_epoch"]) != int(config["receiver_epoch"])
+            or int(env["verifier_epoch"]) != int(config["verifier_epoch"])
+            or env["ack_evidence_profile_digest"].upper() != _hex(config["ack_evidence_profile_digest"])
             or idem != _idempotency_key(config, jid, env_digest, config_digest)
         ):
             _fail("job_digest")
@@ -487,7 +742,7 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
             _fail("job_attempt")
         if job["last_error_code"] is not None:
             _token(job["last_error_code"], "job_error_code")
-        job_map[jid] = dict(job, operation_id=operation, envelope_bytes=envelope, envelope=env)
+        job_map[jid] = dict(job, operation_id=operation, envelope_digest=env_digest, envelope_bytes=envelope, idempotency_key=idem, envelope=env)
     leases = value["leases"]
     if type(leases) is not list:
         _fail("leases_shape")
@@ -512,6 +767,7 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
     ack_map: dict[str, dict[str, Any]] = {}
     for ack in acks:
         keys = {"job_id", "ack_bytes", "ack_digest", "operation_id", "completed_ms"}
+        keys = keys | {"ack_receipt", "profile_digest"}
         if type(ack) is not dict or set(ack) != keys:
             _fail("ack_row_keys")
         jid = _token(ack["job_id"], "ack_job")
@@ -526,24 +782,100 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
             or operation != job_map[jid]["operation_id"]
             or parsed_ack["receiver_identity"].upper() != _hex(config["receiver_identity"])
             or int(parsed_ack["receiver_epoch"]) != int(config["receiver_epoch"])
-            or parsed_ack["idempotency_key"].upper() != job_map[jid]["idempotency_key"].upper()
-            or parsed_ack["envelope_digest"].upper() != job_map[jid]["envelope_digest"].upper()
+            or parsed_ack["idempotency_key"].upper() != _hex(job_map[jid]["idempotency_key"])
+            or parsed_ack["envelope_digest"].upper() != _hex(job_map[jid]["envelope_digest"])
             or int(parsed_ack["effective_directive"]) != int(job_map[jid]["envelope"]["effective_directive"])
+            or ("policy_result" in parsed_ack and int(parsed_ack["policy_result"]) != int(job_map[jid]["envelope"]["policy_result"]))
         ):
             _fail("ack_value_binding")
+        if jid not in receipt_map:
+            _fail("ack_receipt_missing")
+        ack_receipt = _blob(ack["ack_receipt"], None, "ack_receipt")
+        receipt_value = parse_ack_qualification_receipt(ack_receipt)
+        ack_profile = _blob(ack["profile_digest"], 64, "ack_profile_digest")
+        expected_profile = config["ack_evidence_profile_digest"]
+        if (
+            ack_receipt != receipt_map[jid] or ack_profile != expected_profile
+            or receipt_value["profile_digest"].upper() != _hex(ack_profile)
+            or receipt_value["operation_id"].upper() != _hex(operation)
+            or receipt_value["job_id_digest"].upper() != _hex(_sha(_ACK_RECEIPT, jid.encode("ascii")))
+            or receipt_value["idempotency_key"].upper() != _hex(job_map[jid]["idempotency_key"])
+            or receipt_value["envelope_digest"].upper() != _hex(job_map[jid]["envelope_digest"])
+            or receipt_value["ack_digest"].upper() != _hex(digest)
+            or receipt_value["acknowledgment_id"] != parsed_ack["acknowledgment_id"]
+            or int(receipt_value["policy_result"]) != int(job_map[jid]["envelope"]["policy_result"])
+            or int(receipt_value["effective_directive"]) != int(parsed_ack["effective_directive"])
+            or receipt_value["verifier_identity"].upper() != _hex(config["verifier_sha256"])
+            or int(receipt_value["verifier_epoch"]) != int(config["verifier_epoch"])
+            or receipt_value["receiver_identity"].upper() != _hex(config["receiver_identity"])
+            or int(receipt_value["receiver_epoch"]) != int(config["receiver_epoch"])
+        ):
+            _fail("ack_receipt_binding")
         _integer(ack["completed_ms"], "ack_time")
-        ack_map[jid] = dict(ack, ack_bytes=raw_ack, ack_value=parsed_ack)
+        ack_map[jid] = dict(ack, ack_bytes=raw_ack, ack_value=parsed_ack, ack_receipt=ack_receipt, profile_digest=ack_profile)
+    if any(jid not in ack_map for jid in receipt_map):
+        _fail("receipt_orphan")
     for jid, job in job_map.items():
         if (job["status"] == "LEASED") != (jid in lease_map):
             _fail("lease_final")
         if (job["status"] == "ACKNOWLEDGED") != (jid in ack_map):
             _fail("ack_final")
+    reconciliation = value["reconciliation"]
+    if type(reconciliation) is not list:
+        _fail("reconciliation_shape")
+    reconciliation_map: dict[str, dict[str, Any]] = {}
+    for row in reconciliation:
+        keys = {
+            "job_id", "operation_id", "envelope_digest", "idempotency_key", "status", "worker_id",
+            "token", "attempt", "leased_ms", "expires_ms", "next_eligible_ms", "discovered_ms",
+            "updated_ms", "last_error_code",
+        }
+        if type(row) is not dict or set(row) != keys:
+            _fail("reconciliation_keys")
+        jid = _token(row["job_id"], "reconciliation_job")
+        if jid in reconciliation_map or jid not in job_map:
+            _fail("reconciliation_job")
+        operation = _blob(row["operation_id"], 64, "reconciliation_operation")
+        env_digest = _blob(row["envelope_digest"], 64, "reconciliation_envelope")
+        idem = _blob(row["idempotency_key"], 64, "reconciliation_idempotency")
+        job = job_map[jid]
+        if operation != job["operation_id"] or env_digest != job["envelope_digest"] or idem != job["idempotency_key"]:
+            _fail("reconciliation_binding")
+        status = row["status"]
+        if status not in _RECONCILIATION_STATUS or job["status"] not in {"DELIVERY_UNCONFIRMED", "ACKNOWLEDGED"}:
+            _fail("reconciliation_status")
+        _integer(row["attempt"], "reconciliation_attempt")
+        if row["attempt"] > 3:
+            _fail("reconciliation_attempt")
+        for name in ("next_eligible_ms", "discovered_ms", "updated_ms"):
+            _integer(row[name], "reconciliation_" + name)
+        if row["status"] == "LEASED":
+            _token(row["worker_id"], "reconciliation_worker")
+            _blob(row["token"], 24, "reconciliation_token")
+            _integer(row["leased_ms"], "reconciliation_leased")
+            if _integer(row["expires_ms"], "reconciliation_expiry") <= row["leased_ms"]:
+                _fail("reconciliation_expiry")
+        else:
+            if row["worker_id"] is not None or row["token"] is not None or row["leased_ms"] is not None or row["expires_ms"] is not None:
+                _fail("reconciliation_unleased")
+        if row["last_error_code"] is not None:
+            _token(row["last_error_code"], "reconciliation_error")
+        if status == "ACKNOWLEDGED" and job["status"] != "ACKNOWLEDGED":
+            _fail("reconciliation_ack_status")
+        if status != "ACKNOWLEDGED" and job["status"] != "DELIVERY_UNCONFIRMED":
+            _fail("reconciliation_terminal_status")
+        reconciliation_map[jid] = dict(row)
+    for jid, job in job_map.items():
+        if job["status"] == "DELIVERY_UNCONFIRMED" and jid not in reconciliation_map:
+            _fail("reconciliation_missing")
     transitions = value["transitions"]
     if type(transitions) is not list or next_sequence != len(transitions):
         _fail("transition_count")
     expected_head = _sha(_GENESIS, config["outbox_id"].encode("ascii"), config_digest)
     replay: dict[str, str] = {}
     replay_attempt: dict[str, int] = {}
+    recon_replay: dict[str, str] = {}
+    recon_attempt: dict[str, int] = {}
     for index, transition in enumerate(transitions, 1):
         keys = {"sequence", "transition_kind", "job_id", "before_root", "after_root", "event_bytes", "event_digest"}
         if type(transition) is not dict or set(transition) != keys or _integer(transition["sequence"], "transition_sequence", 1) != index:
@@ -612,8 +944,123 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
                 _fail("transition_delivery_unconfirmed")
             if previous != "LEASED": _fail("transition_delivery_unconfirmed")
             replay[jid] = "DELIVERY_UNCONFIRMED"
+        elif kind == "DELIVERY_UNCONFIRMED":
+            required = {
+                "at_ms", "status", "attempt", "error_code", "operation_id", "envelope_digest",
+                "idempotency_key", "policy_result", "effective_directive",
+            }
+            if set(ev) != required:
+                _fail("transition_delivery_unconfirmed_event")
+            _integer(ev["at_ms"], "delivery_unconfirmed_time")
+            _integer(ev["attempt"], "delivery_unconfirmed_attempt", 1)
+            _token(ev["error_code"], "delivery_unconfirmed_error")
+            for name in ("operation_id", "envelope_digest", "idempotency_key"):
+                _blob(ev[name], 64, "delivery_unconfirmed_" + name)
+            for name in ("policy_result", "effective_directive"):
+                _integer(ev[name], "delivery_unconfirmed_" + name, 1)
+                if ev[name] > 5 or ev[name] != job_map[jid]["envelope"][name]:
+                    _fail("delivery_unconfirmed_binding")
+            if (
+                previous != "LEASED" or status != "DELIVERY_UNCONFIRMED"
+                or ev["attempt"] != replay_attempt.get(jid)
+                or ev["operation_id"].upper() != _hex(job_map[jid]["operation_id"])
+                or ev["envelope_digest"].upper() != _hex(job_map[jid]["envelope_digest"])
+                or ev["idempotency_key"].upper() != _hex(job_map[jid]["idempotency_key"])
+            ):
+                _fail("transition_delivery_unconfirmed")
+            replay[jid] = "DELIVERY_UNCONFIRMED"
+        elif kind == "RECONCILIATION_DISCOVERED":
+            required = {"at_ms", "status", "attempt", "operation_id", "envelope_digest", "idempotency_key"}
+            if set(ev) != required:
+                _fail("transition_reconciliation_discovered_event")
+            _integer(ev["at_ms"], "reconciliation_discovered_time")
+            _integer(ev["attempt"], "reconciliation_discovered_attempt")
+            for name in ("operation_id", "envelope_digest", "idempotency_key"):
+                _blob(ev[name], 64, "reconciliation_discovered_" + name)
+            if (
+                status != "DELIVERY_UNCONFIRMED" or replay.get(jid) != "DELIVERY_UNCONFIRMED"
+                or recon_replay.get(jid) not in {None, "DISCOVERED"}
+                or ev["operation_id"].upper() != _hex(job_map[jid]["operation_id"])
+                or ev["envelope_digest"].upper() != _hex(job_map[jid]["envelope_digest"])
+                or ev["idempotency_key"].upper() != _hex(job_map[jid]["idempotency_key"])
+            ):
+                _fail("transition_reconciliation_discovered")
+            recon_replay[jid] = "DISCOVERED"
+            recon_attempt.setdefault(jid, 0)
+        elif kind == "RECONCILIATION_CLAIM":
+            required = {"at_ms", "status", "attempt", "worker_id", "expires_ms"}
+            if set(ev) != required:
+                _fail("transition_reconciliation_claim_event")
+            at_ms = _integer(ev["at_ms"], "reconciliation_claim_time")
+            attempt = _integer(ev["attempt"], "reconciliation_claim_attempt", 1)
+            _token(ev["worker_id"], "reconciliation_claim_worker")
+            if status != "DELIVERY_UNCONFIRMED" or _integer(ev["expires_ms"], "reconciliation_claim_expiry") <= at_ms or recon_replay.get(jid) != "DISCOVERED":
+                _fail("transition_reconciliation_claim")
+            if attempt != recon_attempt.get(jid, 0) + 1:
+                _fail("transition_reconciliation_claim_attempt")
+            recon_attempt[jid] = attempt
+            recon_replay[jid] = "LEASED"
+        elif kind in {"RECONCILIATION_INDETERMINATE", "RECONCILIATION_EXPIRED_REQUEUE"}:
+            required = {"at_ms", "status", "attempt", "error_code"}
+            if set(ev) != required:
+                _fail("transition_reconciliation_release_event")
+            _integer(ev["at_ms"], "reconciliation_release_time")
+            _integer(ev["attempt"], "reconciliation_release_attempt")
+            _token(ev["error_code"], "reconciliation_release_error")
+            if status != "DELIVERY_UNCONFIRMED" or recon_replay.get(jid) != "LEASED" or ev["attempt"] != recon_attempt.get(jid):
+                _fail("transition_reconciliation_release")
+            recon_replay[jid] = "DISCOVERED"
+        elif kind == "RECONCILIATION_EXHAUSTED":
+            required = {"at_ms", "status", "attempt", "error_code"}
+            if set(ev) != required:
+                _fail("transition_reconciliation_exhausted_event")
+            _integer(ev["at_ms"], "reconciliation_exhausted_time")
+            _integer(ev["attempt"], "reconciliation_exhausted_attempt")
+            _token(ev["error_code"], "reconciliation_exhausted_error")
+            if status != "DELIVERY_UNCONFIRMED" or recon_replay.get(jid) not in {"LEASED", "DISCOVERED"} or ev["attempt"] != recon_attempt.get(jid):
+                _fail("transition_reconciliation_exhausted")
+            recon_replay[jid] = "EXHAUSTED"
+        elif kind == "ACKNOWLEDGED_BY_RECONCILIATION":
+            required = {
+                "at_ms", "status", "attempt", "receiver_identity", "receiver_epoch", "idempotency_key",
+                "envelope_digest", "ack_digest", "acknowledgment_id", "effective_directive", "policy_result",
+                "profile_digest", "verifier_identity", "verifier_epoch", "mode",
+            }
+            if set(ev) != required:
+                _fail("transition_reconciliation_ack_event")
+            _integer(ev["at_ms"], "reconciliation_ack_time")
+            _integer(ev["attempt"], "reconciliation_ack_attempt", 1)
+            for name, size in (("receiver_identity", 32), ("idempotency_key", 64), ("envelope_digest", 64), ("ack_digest", 64), ("profile_digest", 64), ("verifier_identity", 32)):
+                _blob(ev[name], size, "reconciliation_ack_" + name)
+            _integer(ev["receiver_epoch"], "reconciliation_ack_epoch", 1)
+            _integer(ev["verifier_epoch"], "reconciliation_ack_verifier_epoch", 1)
+            _token(ev["acknowledgment_id"], "reconciliation_ack_id")
+            for name in ("effective_directive", "policy_result"):
+                _integer(ev[name], "reconciliation_ack_" + name, 1)
+                if ev[name] > 5:
+                    _fail("reconciliation_ack_directive")
+            if (
+                status != "ACKNOWLEDGED" or replay.get(jid) != "DELIVERY_UNCONFIRMED" or jid not in ack_map
+                or recon_replay.get(jid) != "LEASED" or ev["attempt"] != recon_attempt.get(jid)
+                or ev["receiver_identity"].upper() != _hex(config["receiver_identity"])
+                or ev["receiver_epoch"] != int(config["receiver_epoch"])
+                or ev["verifier_identity"].upper() != _hex(config["verifier_sha256"])
+                or ev["verifier_epoch"] != int(config["verifier_epoch"])
+                or ev["profile_digest"].upper() != _hex(config["ack_evidence_profile_digest"])
+                or ev["mode"] != _ACK_EVIDENCE_MODE
+                or ev["idempotency_key"].upper() != _hex(job_map[jid]["idempotency_key"])
+                or ev["envelope_digest"].upper() != _hex(job_map[jid]["envelope_digest"])
+                or ev["ack_digest"].upper() != ack_map[jid]["ack_digest"].upper()
+                or ev["acknowledgment_id"] != ack_map[jid]["ack_value"]["acknowledgment_id"]
+                or ev["policy_result"] != job_map[jid]["envelope"]["policy_result"]
+                or ev["effective_directive"] != job_map[jid]["envelope"]["effective_directive"]
+            ):
+                _fail("transition_reconciliation_ack_binding")
+            replay[jid] = "ACKNOWLEDGED"
+            recon_replay[jid] = "ACKNOWLEDGED"
         elif kind == "ACKNOWLEDGED":
-            if set(ev) != {"at_ms", "status", "attempt", "receiver_identity", "receiver_epoch", "idempotency_key", "envelope_digest", "ack_digest", "effective_directive"}:
+            required = {"at_ms", "status", "attempt", "receiver_identity", "receiver_epoch", "idempotency_key", "envelope_digest", "ack_digest", "effective_directive", "acknowledgment_id", "policy_result", "profile_digest", "verifier_identity", "verifier_epoch", "mode"}
+            if set(ev) != required:
                 _fail("transition_ack_event")
             _integer(ev["at_ms"], "ack_time")
             _integer(ev["attempt"], "ack_attempt", 1)
@@ -631,8 +1078,8 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
                 or ev["effective_directive"] != job_map[jid]["envelope"]["effective_directive"]
                 or ev["receiver_identity"].upper() != _hex(config["receiver_identity"])
                 or ev["receiver_epoch"] != int(config["receiver_epoch"])
-                or ev["idempotency_key"].upper() != job_map[jid]["idempotency_key"].upper()
-                or ev["envelope_digest"].upper() != job_map[jid]["envelope_digest"].upper()
+                or ev["idempotency_key"].upper() != _hex(job_map[jid]["idempotency_key"])
+                or ev["envelope_digest"].upper() != _hex(job_map[jid]["envelope_digest"])
                 or ev["receiver_identity"].upper() != stored_ack["receiver_identity"].upper()
                 or ev["receiver_epoch"] != stored_ack["receiver_epoch"]
                 or ev["idempotency_key"].upper() != stored_ack["idempotency_key"].upper()
@@ -640,6 +1087,21 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
                 or ev["effective_directive"] != stored_ack["effective_directive"]
             ):
                 _fail("transition_ack_binding")
+            _token(ev["acknowledgment_id"], "ack_event_id")
+            _integer(ev["policy_result"], "ack_event_policy", 1)
+            if ev["policy_result"] > 5 or ev["policy_result"] != job_map[jid]["envelope"]["policy_result"]:
+                _fail("ack_event_policy_binding")
+            _blob(ev["profile_digest"], 64, "ack_event_profile")
+            _blob(ev["verifier_identity"], 32, "ack_event_verifier")
+            _integer(ev["verifier_epoch"], "ack_event_verifier_epoch", 1)
+            if (
+                ev["acknowledgment_id"] != stored_ack["acknowledgment_id"]
+                or ev["profile_digest"].upper() != _hex(config["ack_evidence_profile_digest"])
+                or ev["verifier_identity"].upper() != _hex(config["verifier_sha256"])
+                or ev["verifier_epoch"] != int(config["verifier_epoch"])
+                or ev["mode"] != _ACK_EVIDENCE_MODE
+            ):
+                _fail("ack_event_profile_binding")
             if previous != "LEASED" or status != "ACKNOWLEDGED" or jid not in ack_map or ev["attempt"] != replay_attempt.get(jid) or ev["ack_digest"] != ack_map[jid]["ack_digest"]:
                 _fail("transition_ack")
             replay[jid] = "ACKNOWLEDGED"
@@ -659,14 +1121,21 @@ def _parse_export(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
             _fail("transition_head")
     if expected_head != head or set(replay) != set(job_map) or any(replay[jid] != job["status"] for jid, job in job_map.items()):
         _fail("transition_final")
+    for jid, row in reconciliation_map.items():
+        if recon_replay.get(jid) != row["status"]:
+            _fail("reconciliation_transition_final")
     counts = {status: sum(1 for job in jobs if job["status"] == status) for status in sorted(_STATUS)}
     if counts["DISCOVERED"] + counts["LEASED"] > int(config["capacity"]):
         _fail("capacity")
+    if sum(1 for row in reconciliation if row["status"] in {"DISCOVERED", "LEASED"}) > int(config["capacity"]):
+        _fail("reconciliation_capacity")
     return value, {
         "schema": _SCHEMA, "outbox_id": config["outbox_id"], "head_root": _hex(head),
         "status_counts": counts, "transition_count": len(transitions), "config_digest": _hex(config_digest),
         "acknowledged_count": counts["ACKNOWLEDGED"],
         "delivery_unconfirmed_count": counts["DELIVERY_UNCONFIRMED"],
+        "reconciliation_counts": {status: sum(1 for row in reconciliation if row["status"] == status) for status in sorted(_RECONCILIATION_STATUS)},
+        "profile_digest": _hex(profile_digest), "qualification_receipt_count": len(receipts),
     }
 
 
@@ -678,7 +1147,7 @@ def verify_export_bytes(raw: bytes, *, expected_config: Mapping[str, Any] | None
 
 
 def _schema(connection: sqlite3.Connection) -> None:
-    expected = {"outbox_metadata", "outbox_jobs", "outbox_leases", "outbox_acks", "outbox_transitions"}
+    expected = {"outbox_metadata", "outbox_jobs", "outbox_leases", "outbox_acks", "outbox_reconciliation", "outbox_transitions"}
     actual = {str(row[1]) for row in connection.execute("SELECT type,name FROM sqlite_master WHERE type='table'")}
     if actual != expected:
         _fail("database_objects")
@@ -709,6 +1178,18 @@ def _db_export(connection: sqlite3.Connection) -> bytes:
         if row[0] != "ACKNOWLEDGED":
             _fail("ack_status")
     blob = lambda value: None if value is None else _hex(bytes(value))
+    profile_bytes = acknowledgment_profile_bytes(
+        verifier_identity=config["verifier_sha256"], verifier_epoch=int(config["verifier_epoch"]),
+        receiver_identity=config["receiver_identity"], receiver_epoch=int(config["receiver_epoch"]),
+    )
+    profile_digest = acknowledgment_profile_digest(
+        verifier_identity=config["verifier_sha256"], verifier_epoch=int(config["verifier_epoch"]),
+        receiver_identity=config["receiver_identity"], receiver_epoch=int(config["receiver_epoch"]),
+    )
+    receipts = [
+        {"job_id": str(row[0]), "receipt_bytes": blob(row[6])}
+        for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")
+    ]
     value = {
         "schema": _SCHEMA,
         "config": config_value,
@@ -722,8 +1203,14 @@ def _db_export(connection: sqlite3.Connection) -> bytes:
             for row in connection.execute("SELECT * FROM outbox_leases ORDER BY job_id")
         ],
         "acks": [
-            {"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "completed_ms": int(row[5])}
+            {"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "completed_ms": int(row[5]), "ack_receipt": blob(row[6]), "profile_digest": blob(row[7])}
             for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")
+        ],
+        "profiles": [{"profile_digest": _hex(profile_digest), "profile_bytes": _hex(profile_bytes)}],
+        "receipts": receipts,
+        "reconciliation": [
+            {"job_id": str(row[0]), "operation_id": blob(row[1]), "envelope_digest": blob(row[2]), "idempotency_key": blob(row[3]), "status": str(row[4]), "worker_id": row[5], "token": blob(row[6]), "attempt": int(row[7]), "leased_ms": None if row[8] is None else int(row[8]), "expires_ms": None if row[9] is None else int(row[9]), "next_eligible_ms": int(row[10]), "discovered_ms": int(row[11]), "updated_ms": int(row[12]), "last_error_code": row[13]}
+            for row in connection.execute("SELECT * FROM outbox_reconciliation ORDER BY job_id")
         ],
         "transitions": [
             {"sequence": int(row[0]), "transition_kind": str(row[1]), "job_id": str(row[2]), "before_root": blob(row[3]), "after_root": blob(row[4]), "event_bytes": blob(row[5]), "event_digest": blob(row[6])}
@@ -763,7 +1250,13 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE outbox_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token BLOB NOT NULL, attempt INTEGER NOT NULL, leased_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL,
           FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
         CREATE TABLE outbox_acks (job_id TEXT PRIMARY KEY, status TEXT NOT NULL, ack_bytes BLOB NOT NULL, ack_digest BLOB NOT NULL,
-          operation_id BLOB NOT NULL UNIQUE, completed_ms INTEGER NOT NULL, FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
+          operation_id BLOB NOT NULL UNIQUE, completed_ms INTEGER NOT NULL, ack_receipt BLOB NOT NULL,
+          profile_digest BLOB NOT NULL, FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
+        CREATE TABLE outbox_reconciliation (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE,
+          envelope_digest BLOB NOT NULL UNIQUE, idempotency_key BLOB NOT NULL UNIQUE, status TEXT NOT NULL,
+          worker_id TEXT, token BLOB, attempt INTEGER NOT NULL, leased_ms INTEGER, expires_ms INTEGER,
+          next_eligible_ms INTEGER NOT NULL, discovered_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
+          last_error_code TEXT, FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
         CREATE TABLE outbox_transitions (sequence INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL, job_id TEXT NOT NULL,
           before_root BLOB NOT NULL, after_root BLOB NOT NULL, event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL UNIQUE,
           FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id));
@@ -791,7 +1284,9 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
         for lease in value["leases"]:
             connection.execute("INSERT INTO outbox_leases VALUES (?,?,?,?,?,?)", (lease["job_id"], lease["worker_id"], _blob(lease["token"],24,"token"), lease["attempt"], lease["leased_ms"], lease["expires_ms"]))
         for ack in value["acks"]:
-            connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?)", (ack["job_id"], "ACKNOWLEDGED", _blob(ack["ack_bytes"],None,"ack"), _blob(ack["ack_digest"],64,"ack_digest"), _blob(ack["operation_id"],64,"ack_op"), ack["completed_ms"]))
+            connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?,?,?)", (ack["job_id"], "ACKNOWLEDGED", _blob(ack["ack_bytes"],None,"ack"), _blob(ack["ack_digest"],64,"ack_digest"), _blob(ack["operation_id"],64,"ack_op"), ack["completed_ms"], _blob(ack["ack_receipt"],None,"ack_receipt"), _blob(ack["profile_digest"],64,"profile_digest")))
+        for row in value["reconciliation"]:
+            connection.execute("INSERT INTO outbox_reconciliation VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (row["job_id"], _blob(row["operation_id"],64,"reconciliation_operation"), _blob(row["envelope_digest"],64,"reconciliation_envelope"), _blob(row["idempotency_key"],64,"reconciliation_idempotency"), row["status"], row["worker_id"], None if row["token"] is None else _blob(row["token"],24,"reconciliation_token"), row["attempt"], row["leased_ms"], row["expires_ms"], row["next_eligible_ms"], row["discovered_ms"], row["updated_ms"], row["last_error_code"]))
         for transition in value["transitions"]:
             connection.execute("INSERT INTO outbox_transitions VALUES (?,?,?,?,?,?,?)", (transition["sequence"], transition["transition_kind"], transition["job_id"], _blob(transition["before_root"],64,"before"), _blob(transition["after_root"],64,"after"), _blob(transition["event_bytes"],None,"event"), _blob(transition["event_digest"],64,"event_digest")))
         connection.commit()
@@ -803,6 +1298,8 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
 
 __all__ = (
     "AppliedApplicationViewV1", "IndependentOfficialHandoffError", "acknowledgment_digest",
-    "envelope_digest", "parse_acknowledgment_bytes", "parse_envelope_bytes", "read_applied_application",
+    "acknowledgment_profile_bytes", "acknowledgment_profile_digest", "build_ack_qualification_receipt",
+    "envelope_digest", "parse_ack_qualification_receipt", "parse_acknowledgment_bytes", "parse_envelope_bytes",
+    "read_applied_application", "validate_acknowledgment",
     "restore_export_to_fresh_database", "verify_database", "verify_export_bytes",
 )

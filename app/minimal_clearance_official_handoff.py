@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from contextlib import closing
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import re
@@ -22,6 +23,9 @@ from app.minimal_clearance_official_handoff_independent import (
     AppliedApplicationViewV1,
     IndependentOfficialHandoffError,
     acknowledgment_digest,
+    acknowledgment_profile_bytes,
+    acknowledgment_profile_digest,
+    build_ack_qualification_receipt,
     envelope_digest,
     parse_acknowledgment_bytes,
     parse_envelope_bytes,
@@ -29,6 +33,7 @@ from app.minimal_clearance_official_handoff_independent import (
     restore_export_to_fresh_database,
     verify_database as independent_verify_database,
     verify_export_bytes as independent_verify_export_bytes,
+    validate_acknowledgment,
 )
 
 
@@ -66,6 +71,9 @@ _EVENT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/EVENT/v1\x00"
 _ENVELOPE = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-ENVELOPE/v1\x00"
 _IDEMPOTENCY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-IDEMPOTENCY/v1\x00"
 _OPERATION = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-OPERATION/v1\x00"
+_ACK_EVIDENCE_MODE: Final[str] = "SYNTHETIC_ONLY"
+_RECONCILIATION_STATUS: Final[frozenset[str]] = frozenset({"DISCOVERED", "LEASED", "EXHAUSTED", "ACKNOWLEDGED"})
+_RECONCILIATION_ERROR: Final[str] = "reconciliation_indeterminate"
 _CAP_BYTES: Final[int] = 5_000_000_000
 _FIXED_ID_BYTES: Final[int] = 128
 
@@ -153,6 +161,78 @@ class OfficialStateReceiverPort(Protocol):
         """Consume one canonical directive and return a typed acknowledgment."""
 
 
+class OfficialStateReceiverLookupPort(Protocol):
+    """Read-only delivery lookup, separate from the dispatch port."""
+
+    def lookup_acknowledgment(
+        self, *, receiver_identity: bytes, receiver_epoch: int, job_id: str,
+        operation_id: bytes, idempotency_key: bytes, envelope_digest: bytes,
+    ) -> bytes | None:
+        """Return canonical acknowledgment bytes only for an exact positive match."""
+
+
+@dataclass(frozen=True, slots=True)
+class OfficialHandoffLookupQueryV1:
+    receiver_identity: bytes
+    receiver_epoch: int
+    job_id: str
+    operation_id: bytes
+    idempotency_key: bytes
+    envelope_digest: bytes
+
+
+class OfficialAckEvidenceProfilePort(Protocol):
+    """Verifier-owned profile provider; only the fixed synthetic profile is admissible."""
+
+    def acknowledgment_profile(self) -> OfficialAckEvidenceProfileV1:
+        """Return the pinned profile, never a caller-selected mode."""
+
+
+OfficialHandoffLookupPort = OfficialStateReceiverLookupPort
+
+
+@dataclass(frozen=True, slots=True)
+class OfficialAckEvidenceProfileV1:
+    """Verifier-owned profile for synthetic acknowledgment evidence."""
+
+    verifier_identity: bytes
+    verifier_epoch: int
+    receiver_identity: bytes
+    receiver_epoch: int
+    mode: str = _ACK_EVIDENCE_MODE
+    proof_suite_id: None = None
+    production_usable: bool = False
+    activation: bool = False
+
+    def __post_init__(self) -> None:
+        _fixed(self.verifier_identity, 32, "profile_verifier_identity")
+        _fixed(self.receiver_identity, 32, "profile_receiver_identity")
+        if type(self.verifier_epoch) is not int or self.verifier_epoch < 1:
+            raise OfficialHandoffIntegrityError("profile_verifier_epoch")
+        if type(self.receiver_epoch) is not int or self.receiver_epoch < 1:
+            raise OfficialHandoffIntegrityError("profile_receiver_epoch")
+        if self.mode != _ACK_EVIDENCE_MODE or self.proof_suite_id is not None or self.production_usable is not False or self.activation is not False:
+            raise OfficialHandoffIntegrityError("profile_nonactivation")
+
+    @property
+    def canonical_bytes(self) -> bytes:
+        return acknowledgment_profile_bytes(
+            verifier_identity=self.verifier_identity, verifier_epoch=self.verifier_epoch,
+            receiver_identity=self.receiver_identity, receiver_epoch=self.receiver_epoch,
+        )
+
+    @property
+    def digest(self) -> bytes:
+        return acknowledgment_profile_digest(
+            verifier_identity=self.verifier_identity, verifier_epoch=self.verifier_epoch,
+            receiver_identity=self.receiver_identity, receiver_epoch=self.receiver_epoch,
+        )
+
+
+OfficialAcknowledgmentEvidenceProfileV1 = OfficialAckEvidenceProfileV1
+OfficialAcknowledgmentEvidencePort = OfficialAckEvidenceProfilePort
+
+
 @dataclass(frozen=True, slots=True)
 class OfficialHandoffConfigV1:
     outbox_id: str
@@ -162,6 +242,8 @@ class OfficialHandoffConfigV1:
     state_store_identity: bytes
     receiver_identity: bytes
     receiver_epoch: int
+    verifier_epoch: int = 1
+    ack_evidence_profile_digest: bytes | None = None
     capacity: int = 16
     lease_seconds: int = 300
     max_attempts: int = 3
@@ -179,6 +261,14 @@ class OfficialHandoffConfigV1:
         _fixed(self.receiver_identity, 32, "receiver_identity")
         if type(self.receiver_epoch) is not int or self.receiver_epoch < 1:
             raise OfficialHandoffIntegrityError("receiver_epoch")
+        if type(self.verifier_epoch) is not int or self.verifier_epoch < 1:
+            raise OfficialHandoffIntegrityError("verifier_epoch")
+        expected_profile = acknowledgment_profile_digest(
+            verifier_identity=self.verifier_sha256, verifier_epoch=self.verifier_epoch,
+            receiver_identity=self.receiver_identity, receiver_epoch=self.receiver_epoch,
+        )
+        if self.ack_evidence_profile_digest is not None and self.ack_evidence_profile_digest != expected_profile:
+            raise OfficialHandoffIntegrityError("ack_evidence_profile_drift")
         if type(self.capacity) is not int or not 1 <= self.capacity <= 10_000:
             raise OfficialHandoffIntegrityError("handoff_capacity")
         if type(self.lease_seconds) is not int or not 1 <= self.lease_seconds <= 3_600:
@@ -194,7 +284,9 @@ class OfficialHandoffConfigV1:
             "application_config_digest": _hex(self.application_config_digest),
             "verifier_sha256": _hex(self.verifier_sha256),
             "state_store_identity": _hex(self.state_store_identity), "receiver_identity": _hex(self.receiver_identity),
-            "receiver_epoch": self.receiver_epoch, "capacity": self.capacity, "lease_seconds": self.lease_seconds,
+            "receiver_epoch": self.receiver_epoch, "verifier_epoch": self.verifier_epoch,
+            "ack_evidence_profile_digest": _hex(self.profile_digest),
+            "capacity": self.capacity, "lease_seconds": self.lease_seconds,
             "max_attempts": 3, "busy_timeout_ms": 5_000, "proof_suite_id": None,
             "production_usable": False, "activation": False,
         }
@@ -207,6 +299,23 @@ class OfficialHandoffConfigV1:
     def digest(self) -> bytes:
         return _sha(_MATERIAL, self.canonical_bytes)
 
+    @property
+    def profile_digest(self) -> bytes:
+        return acknowledgment_profile_digest(
+            verifier_identity=self.verifier_sha256, verifier_epoch=self.verifier_epoch,
+            receiver_identity=self.receiver_identity, receiver_epoch=self.receiver_epoch,
+        )
+
+    @property
+    def acknowledgment_profile(self) -> OfficialAckEvidenceProfileV1:
+        return OfficialAckEvidenceProfileV1(
+            verifier_identity=self.verifier_sha256, verifier_epoch=self.verifier_epoch,
+            receiver_identity=self.receiver_identity, receiver_epoch=self.receiver_epoch,
+        )
+
+    @property
+    def ack_evidence_profile(self) -> OfficialAckEvidenceProfileV1:
+        return self.acknowledgment_profile
 
 @dataclass(frozen=True, slots=True)
 class OfficialHandoffJobV1:
@@ -231,6 +340,19 @@ class OfficialHandoffWorkV1:
 
 
 @dataclass(frozen=True, slots=True)
+class OfficialHandoffReconciliationWorkV1:
+    outbox_id: str
+    job_id: str
+    operation_id: bytes
+    attempt: int
+    worker_id: str
+    lease_token: bytes
+    lease_expires_ms: int
+    envelope_digest: bytes
+    idempotency_key: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class OfficialHandoffResultV1:
     job_id: str
     operation_id: bytes
@@ -238,6 +360,9 @@ class OfficialHandoffResultV1:
     acknowledgment_bytes: bytes | None
     acknowledgment_digest: bytes | None
     error_code: str | None
+    qualification_receipt: bytes | None = None
+    profile_digest: bytes | None = None
+    acknowledgment_id: str | None = None
 
 
 def build_directive_envelope(view: AppliedApplicationViewV1, config: OfficialHandoffConfigV1) -> bytes:
@@ -247,6 +372,7 @@ def build_directive_envelope(view: AppliedApplicationViewV1, config: OfficialHan
         receipt["proof_session_accepted"] is not True or receipt["economic_mutation"] is not False
         or receipt["proof_suite_id"] is not None or receipt["payment_root_before"] != receipt["payment_root_after"]
         or receipt["settled_batch_count_before"] != receipt["settled_batch_count_after"]
+        or not 1 <= int(receipt["policy_result"]) <= 5
         or not 1 <= int(receipt["effective_directive"]) <= 5
     ):
         raise OfficialHandoffIntegrityError("handoff_receipt_claim")
@@ -256,6 +382,8 @@ def build_directive_envelope(view: AppliedApplicationViewV1, config: OfficialHan
         "application_id_digest": _hex(_sha(_ENVELOPE, view.application_id.encode("ascii"))),
         "receiver_identity": _hex(config.receiver_identity),
         "receiver_epoch": config.receiver_epoch,
+        "verifier_epoch": config.verifier_epoch,
+        "ack_evidence_profile_digest": _hex(config.profile_digest),
         "application_config_digest": _hex(view.application_config_digest),
         "application_job_id_digest": _hex(_sha(_ENVELOPE, view.job_id.encode("ascii"))),
         "application_operation_id": _hex(view.operation_id),
@@ -286,6 +414,7 @@ class OfficialHandoffStoreV1:
         clock: ApplicationClock | None = None,
         before_fault: Callable[[str], None] | None = None,
         after_commit_fault: Callable[[str], None] | None = None,
+        ack_evidence_profile: OfficialAckEvidenceProfileV1 | None = None,
     ) -> None:
         if not isinstance(path, Path) or path.exists() and path.is_symlink() or not path.parent.is_dir():
             raise OfficialHandoffError("handoff_database_path")
@@ -294,6 +423,14 @@ class OfficialHandoffStoreV1:
         self.clock = clock or _SystemClock()
         self._before_fault = before_fault
         self._after_commit_fault = after_commit_fault
+        if ack_evidence_profile is not None:
+            candidate = ack_evidence_profile
+            provider = getattr(candidate, "acknowledgment_profile", None)
+            if callable(provider):
+                candidate = provider()
+            if candidate != config.acknowledgment_profile:
+                raise OfficialHandoffIntegrityError("profile_port_mismatch")
+        self.ack_evidence_profile = config.acknowledgment_profile
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -326,7 +463,15 @@ class OfficialHandoffStoreV1:
                 );
                 CREATE TABLE IF NOT EXISTS outbox_acks (
                     job_id TEXT PRIMARY KEY, status TEXT NOT NULL, ack_bytes BLOB NOT NULL, ack_digest BLOB NOT NULL,
-                    operation_id BLOB NOT NULL UNIQUE, completed_ms INTEGER NOT NULL,
+                    operation_id BLOB NOT NULL UNIQUE, completed_ms INTEGER NOT NULL, ack_receipt BLOB NOT NULL,
+                    profile_digest BLOB NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id)
+                );
+                CREATE TABLE IF NOT EXISTS outbox_reconciliation (
+                    job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE, envelope_digest BLOB NOT NULL UNIQUE,
+                    idempotency_key BLOB NOT NULL UNIQUE, status TEXT NOT NULL, worker_id TEXT, token BLOB,
+                    attempt INTEGER NOT NULL, leased_ms INTEGER, expires_ms INTEGER, next_eligible_ms INTEGER NOT NULL,
+                    discovered_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL, last_error_code TEXT,
                     FOREIGN KEY(job_id) REFERENCES outbox_jobs(job_id)
                 );
                 CREATE TABLE IF NOT EXISTS outbox_transitions (
@@ -390,10 +535,10 @@ class OfficialHandoffStoreV1:
 
     def _recover_expired(self, connection, now: int) -> None:
         rows = connection.execute(
-            "SELECT l.job_id,l.attempt,l.expires_ms,j.operation_id,j.status FROM outbox_leases l JOIN outbox_jobs j ON j.job_id=l.job_id WHERE l.expires_ms<=? ORDER BY l.job_id",
+            "SELECT l.job_id,l.attempt,l.expires_ms,j.operation_id,j.status,j.envelope_digest,j.idempotency_key FROM outbox_leases l JOIN outbox_jobs j ON j.job_id=l.job_id WHERE l.expires_ms<=? ORDER BY l.job_id",
             (now,),
         ).fetchall()
-        for job_id, attempt, expires_ms, operation_id, status in rows:
+        for job_id, attempt, expires_ms, operation_id, status, envelope_digest_value, idempotency_key in rows:
             if str(status) != "LEASED":
                 raise OfficialHandoffIntegrityError("handoff_expired_status")
             connection.execute("DELETE FROM outbox_leases WHERE job_id=?", (str(job_id),))
@@ -403,6 +548,19 @@ class OfficialHandoffStoreV1:
             else:
                 connection.execute("UPDATE outbox_jobs SET status='DELIVERY_UNCONFIRMED',updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'", (now, "handoff_delivery_unconfirmed", str(job_id)))
                 self._append_transition(connection, kind="EXPIRED_DELIVERY_UNCONFIRMED", job_id=str(job_id), event={"at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": int(attempt), "error_code": "handoff_delivery_unconfirmed", "expired_ms": int(expires_ms)})
+                active = int(connection.execute("SELECT COUNT(*) FROM outbox_reconciliation WHERE status IN ('DISCOVERED','LEASED')").fetchone()[0])
+                recon_status = "DISCOVERED" if active < self.config.capacity else "EXHAUSTED"
+                connection.execute(
+                    "INSERT INTO outbox_reconciliation VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (str(job_id), bytes(operation_id), bytes(envelope_digest_value), bytes(idempotency_key), recon_status, None, None, 0, None, None, now, now, now, "handoff_delivery_unconfirmed" if recon_status == "DISCOVERED" else "reconciliation_capacity"),
+                )
+                self._append_transition(connection, kind="RECONCILIATION_DISCOVERED", job_id=str(job_id), event={
+                    "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": 0,
+                    "operation_id": _hex(bytes(operation_id)), "envelope_digest": _hex(bytes(envelope_digest_value)),
+                    "idempotency_key": _hex(bytes(idempotency_key)),
+                })
+                if recon_status == "EXHAUSTED":
+                    self._append_transition(connection, kind="RECONCILIATION_EXHAUSTED", job_id=str(job_id), event={"at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": 0, "error_code": "reconciliation_capacity"})
 
     def _validate_work(self, work: OfficialHandoffWorkV1) -> tuple[Any, ...]:
         if type(work) is not OfficialHandoffWorkV1 or work.outbox_id != self.config.outbox_id:
@@ -535,7 +693,8 @@ class OfficialHandoffStoreV1:
             row = connection.execute("SELECT * FROM outbox_acks WHERE job_id=?", (job_id,)).fetchone()
         if row is None:
             return None
-        return OfficialHandoffResultV1(str(row[0]), bytes(row[4]), "ACKNOWLEDGED", bytes(row[2]), bytes(row[3]), None)
+        ack = parse_acknowledgment_bytes(bytes(row[2]))
+        return OfficialHandoffResultV1(str(row[0]), bytes(row[4]), "ACKNOWLEDGED", bytes(row[2]), bytes(row[3]), None, bytes(row[6]), bytes(row[7]), str(ack["acknowledgment_id"]))
 
     def _held(self, work: OfficialHandoffWorkV1, code: str) -> OfficialHandoffResultV1:
         now = int(self.clock.now_ms())
@@ -556,6 +715,233 @@ class OfficialHandoffStoreV1:
                 raise
         return OfficialHandoffResultV1(work.job_id, work.operation_id, "HELD", None, None, code)
 
+    def _mark_delivery_unconfirmed(self, work: OfficialHandoffWorkV1, code: str) -> OfficialHandoffResultV1:
+        """Atomically terminalize an uncertain first dispatch and discover lookup work."""
+        now = int(self.clock.now_ms())
+        envelope = parse_envelope_bytes(work.envelope_bytes)
+        with closing(self._connect()) as connection:
+            began = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                began = True
+                self._live_lease(connection, work)
+                active = int(connection.execute("SELECT COUNT(*) FROM outbox_reconciliation WHERE status IN ('DISCOVERED','LEASED')").fetchone()[0])
+                next_status = "DISCOVERED" if active < self.config.capacity else "EXHAUSTED"
+                connection.execute("DELETE FROM outbox_leases WHERE job_id=?", (work.job_id,))
+                changed = connection.execute(
+                    "UPDATE outbox_jobs SET status='DELIVERY_UNCONFIRMED',updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'",
+                    (now, code, work.job_id),
+                )
+                if changed.rowcount != 1:
+                    raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
+                connection.execute(
+                    "INSERT INTO outbox_reconciliation VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (work.job_id, work.operation_id, envelope_digest(work.envelope_bytes), work.idempotency_key,
+                     next_status, None, None, 0, None, None, now, now, now, "reconciliation_capacity" if next_status == "EXHAUSTED" else code),
+                )
+                self._append_transition(connection, kind="DELIVERY_UNCONFIRMED", job_id=work.job_id, event={
+                    "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": work.attempt, "error_code": code,
+                    "operation_id": _hex(work.operation_id), "envelope_digest": _hex(envelope_digest(work.envelope_bytes)),
+                    "idempotency_key": _hex(work.idempotency_key), "policy_result": int(envelope["policy_result"]),
+                    "effective_directive": int(envelope["effective_directive"]),
+                })
+                self._append_transition(connection, kind="RECONCILIATION_DISCOVERED", job_id=work.job_id, event={
+                    "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": 0,
+                    "operation_id": _hex(work.operation_id), "envelope_digest": _hex(envelope_digest(work.envelope_bytes)),
+                    "idempotency_key": _hex(work.idempotency_key),
+                })
+                if next_status == "EXHAUSTED":
+                    self._append_transition(connection, kind="RECONCILIATION_EXHAUSTED", job_id=work.job_id, event={
+                        "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": 0, "error_code": "reconciliation_capacity",
+                    })
+                self._fault("before_delivery_unconfirmed_commit")
+                connection.execute("COMMIT")
+                began = False
+            except Exception:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return OfficialHandoffResultV1(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, code)
+
+    def _recover_reconciliation_expired(self, connection, now: int) -> None:
+        rows = connection.execute(
+            "SELECT job_id,attempt,expires_ms FROM outbox_reconciliation WHERE status='LEASED' AND expires_ms<=? ORDER BY job_id",
+            (now,),
+        ).fetchall()
+        for job_id, attempt, expires_ms in rows:
+            if int(attempt) < self.config.max_attempts:
+                connection.execute(
+                    "UPDATE outbox_reconciliation SET status='DISCOVERED',worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,next_eligible_ms=?,updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'",
+                    (now, now, "reconciliation_lease_expired", str(job_id)),
+                )
+                self._append_transition(connection, kind="RECONCILIATION_EXPIRED_REQUEUE", job_id=str(job_id), event={
+                    "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": int(attempt), "error_code": "reconciliation_lease_expired",
+                })
+            else:
+                connection.execute(
+                    "UPDATE outbox_reconciliation SET status='EXHAUSTED',worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'",
+                    (now, "reconciliation_attempts_exhausted", str(job_id)),
+                )
+                self._append_transition(connection, kind="RECONCILIATION_EXHAUSTED", job_id=str(job_id), event={
+                    "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": int(attempt), "error_code": "reconciliation_attempts_exhausted",
+                })
+
+    def claim_reconciliation_next(self, worker_id: str) -> OfficialHandoffReconciliationWorkV1 | None:
+        _token(worker_id, "worker_id")
+        now = int(self.clock.now_ms())
+        with closing(self._connect()) as connection:
+            began = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                began = True
+                self._meta(connection)
+                self._recover_reconciliation_expired(connection, now)
+                row = connection.execute(
+                    "SELECT r.* FROM outbox_reconciliation r JOIN outbox_jobs j ON j.job_id=r.job_id WHERE r.status='DISCOVERED' AND j.status='DELIVERY_UNCONFIRMED' AND r.next_eligible_ms<=? ORDER BY r.discovered_ms,r.job_id LIMIT 1",
+                    (now,),
+                ).fetchone()
+                if row is None:
+                    connection.execute("COMMIT")
+                    began = False
+                    return None
+                attempt = int(row[7]) + 1
+                if attempt > self.config.max_attempts:
+                    connection.execute("UPDATE outbox_reconciliation SET status='EXHAUSTED',updated_ms=?,last_error_code=? WHERE job_id=? AND status='DISCOVERED'", (now, "reconciliation_attempts_exhausted", str(row[0])))
+                    self._append_transition(connection, kind="RECONCILIATION_EXHAUSTED", job_id=str(row[0]), event={"at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": int(row[7]), "error_code": "reconciliation_attempts_exhausted"})
+                    connection.execute("COMMIT")
+                    began = False
+                    return None
+                token = secrets.token_bytes(24)
+                expires = now + self.config.lease_seconds * 1000
+                changed = connection.execute(
+                    "UPDATE outbox_reconciliation SET status='LEASED',worker_id=?,token=?,attempt=?,leased_ms=?,expires_ms=?,updated_ms=? WHERE job_id=? AND status='DISCOVERED' AND attempt=?",
+                    (worker_id, token, attempt, now, expires, now, str(row[0]), int(row[7])),
+                )
+                if changed.rowcount != 1:
+                    raise OfficialHandoffLeaseError("reconciliation_claim_cas")
+                self._append_transition(connection, kind="RECONCILIATION_CLAIM", job_id=str(row[0]), event={"at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": attempt, "worker_id": worker_id, "expires_ms": expires})
+                connection.execute("COMMIT")
+                began = False
+                return OfficialHandoffReconciliationWorkV1(
+                    self.config.outbox_id, str(row[0]), bytes(row[1]), attempt, worker_id, token, expires, bytes(row[2]), bytes(row[3]),
+                )
+            except Exception:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+
+    claim_next_reconciliation = claim_reconciliation_next
+
+    def _validate_reconciliation_work(self, work: OfficialHandoffReconciliationWorkV1) -> tuple[Any, ...]:
+        if type(work) is not OfficialHandoffReconciliationWorkV1 or work.outbox_id != self.config.outbox_id:
+            raise OfficialHandoffLeaseError("reconciliation_work_identity")
+        _token(work.job_id, "job_id")
+        _token(work.worker_id, "worker_id")
+        _fixed(work.operation_id, 64, "reconciliation_operation")
+        _fixed(work.lease_token, 24, "reconciliation_token")
+        _fixed(work.envelope_digest, 64, "reconciliation_envelope")
+        _fixed(work.idempotency_key, 64, "reconciliation_idempotency")
+        if type(work.attempt) is not int or not 1 <= work.attempt <= self.config.max_attempts:
+            raise OfficialHandoffLeaseError("reconciliation_attempt")
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT r.*,j.status FROM outbox_reconciliation r JOIN outbox_jobs j ON j.job_id=r.job_id WHERE r.job_id=?", (work.job_id,)).fetchone()
+        if row is None or len(row) != 15 or str(row[14]) not in {"DELIVERY_UNCONFIRMED", "ACKNOWLEDGED"} or bytes(row[1]) != work.operation_id or bytes(row[2]) != work.envelope_digest or bytes(row[3]) != work.idempotency_key or str(row[4]) not in _RECONCILIATION_STATUS:
+            raise OfficialHandoffLeaseError("reconciliation_work_binding")
+        return tuple(row)
+
+    def _live_reconciliation_lease(self, connection, work: OfficialHandoffReconciliationWorkV1) -> tuple[Any, ...]:
+        now = int(self.clock.now_ms())
+        row = connection.execute("SELECT * FROM outbox_reconciliation WHERE job_id=?", (work.job_id,)).fetchone()
+        if row is None:
+            raise OfficialHandoffLeaseError("reconciliation_lease_missing")
+        if (
+            str(row[4]) != "LEASED" or str(row[5]) != work.worker_id or bytes(row[6]) != work.lease_token
+            or int(row[7]) != work.attempt or int(row[9]) != work.lease_expires_ms
+            or bytes(row[1]) != work.operation_id or bytes(row[2]) != work.envelope_digest
+            or bytes(row[3]) != work.idempotency_key
+        ):
+            raise OfficialHandoffLeaseError("reconciliation_lease_binding")
+        if now >= int(row[9]):
+            raise OfficialHandoffLeaseError("reconciliation_lease_expired")
+        return tuple(row)
+
+    def _commit_acknowledgment(
+        self, *, job_id: str, operation_id: bytes, ack_raw: bytes, mode: str,
+        dispatch_work: OfficialHandoffWorkV1 | None = None,
+        reconciliation_work: OfficialHandoffReconciliationWorkV1 | None = None,
+    ) -> OfficialHandoffResultV1:
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT envelope_bytes,idempotency_key FROM outbox_jobs WHERE job_id=?", (job_id,)).fetchone()
+        if row is None:
+            raise OfficialHandoffIntegrityError("handoff_job_missing")
+        envelope_bytes = bytes(row[0])
+        expected_idempotency = bytes(row[1])
+        config = self.config.as_json()
+        config["_expected_idempotency_key"] = expected_idempotency.hex().upper()
+        ack, env_digest, ack_digest, receipt = validate_acknowledgment(
+            ack_raw, envelope_bytes=envelope_bytes, operation_id=operation_id, job_id=job_id, config=config,
+        )
+        now = int(self.clock.now_ms())
+        with closing(self._connect()) as connection:
+            began = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                began = True
+                if mode == "DISPATCH":
+                    if dispatch_work is None:
+                        raise OfficialHandoffLeaseError("handoff_dispatch_work_missing")
+                    self._live_lease(connection, dispatch_work)
+                elif mode == "RECONCILIATION":
+                    if reconciliation_work is None:
+                        raise OfficialHandoffLeaseError("reconciliation_work_missing")
+                    self._live_reconciliation_lease(connection, reconciliation_work)
+                else:
+                    raise OfficialHandoffIntegrityError("ack_mode")
+                current = connection.execute("SELECT status FROM outbox_jobs WHERE job_id=?", (job_id,)).fetchone()
+                required_status = "LEASED" if mode == "DISPATCH" else "DELIVERY_UNCONFIRMED"
+                if current is None or str(current[0]) != required_status:
+                    existing = connection.execute("SELECT * FROM outbox_acks WHERE job_id=?", (job_id,)).fetchone()
+                    if existing is not None:
+                        connection.execute("ROLLBACK")
+                        existing_ack = parse_acknowledgment_bytes(bytes(existing[2]))
+                        return OfficialHandoffResultV1(job_id, operation_id, "ACKNOWLEDGED", bytes(existing[2]), bytes(existing[3]), None, bytes(existing[6]), bytes(existing[7]), str(existing_ack["acknowledgment_id"]))
+                    raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
+                if dispatch_work is not None:
+                    connection.execute("DELETE FROM outbox_leases WHERE job_id=?", (job_id,))
+                changed = connection.execute("UPDATE outbox_jobs SET status='ACKNOWLEDGED',updated_ms=?,last_error_code=NULL WHERE job_id=? AND status=?", (now, job_id, required_status))
+                if changed.rowcount != 1:
+                    raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
+                connection.execute(
+                    "INSERT INTO outbox_acks VALUES (?,?,?,?,?,?,?,?)",
+                    (job_id, "ACKNOWLEDGED", ack_raw, ack_digest, operation_id, now, receipt, self.config.profile_digest),
+                )
+                if reconciliation_work is not None:
+                    connection.execute("UPDATE outbox_reconciliation SET status='ACKNOWLEDGED',worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, job_id))
+                envelope = parse_envelope_bytes(envelope_bytes)
+                event = {
+                    "at_ms": now, "status": "ACKNOWLEDGED", "attempt": dispatch_work.attempt if dispatch_work is not None else reconciliation_work.attempt,
+                    "receiver_identity": ack["receiver_identity"], "receiver_epoch": int(ack["receiver_epoch"]),
+                    "idempotency_key": ack["idempotency_key"], "envelope_digest": ack["envelope_digest"],
+                    "ack_digest": _hex(ack_digest), "acknowledgment_id": ack["acknowledgment_id"],
+                    "effective_directive": int(ack["effective_directive"]), "policy_result": int(envelope["policy_result"]),
+                    "profile_digest": _hex(self.config.profile_digest), "verifier_identity": _hex(self.config.verifier_sha256),
+                    "verifier_epoch": self.config.verifier_epoch, "mode": _ACK_EVIDENCE_MODE,
+                }
+                self._append_transition(connection, kind="ACKNOWLEDGED_BY_RECONCILIATION" if mode == "RECONCILIATION" else "ACKNOWLEDGED", job_id=job_id, event=event)
+                self._fault("before_outbox_commit")
+                connection.execute("COMMIT")
+                began = False
+            except Exception:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        if mode == "RECONCILIATION" and self._after_commit_fault is not None:
+            try:
+                self._after_commit_fault("after_reconciliation_commit")
+            except Exception as exc:
+                raise OfficialHandoffIndeterminateError("reconciliation_commit_indeterminate") from exc
+        return OfficialHandoffResultV1(job_id, operation_id, "ACKNOWLEDGED", ack_raw, ack_digest, None, receipt, self.config.profile_digest, str(ack["acknowledgment_id"]))
+
     def dispatch(self, work: OfficialHandoffWorkV1, *, application_database: Path, state_database: Path, receiver: OfficialStateReceiverPort) -> OfficialHandoffResultV1:
         self._validate_work(work)
         existing = self._existing_ack(work.job_id)
@@ -563,14 +949,12 @@ class OfficialHandoffStoreV1:
             return existing
         with closing(self._connect()) as connection:
             self._live_lease(connection, work)
+        dispatch_called = False
         try:
             identity = receiver.identity_sha256()
             epoch = receiver.epoch()
-        except Exception:
-            raise OfficialHandoffIndeterminateError("handoff_pre_dispatch_indeterminate") from None
-        if identity != self.config.receiver_identity or epoch != self.config.receiver_epoch:
-            return self._held(work, "receiver_identity_drift")
-        try:
+            if identity != self.config.receiver_identity or epoch != self.config.receiver_epoch:
+                return self._mark_delivery_unconfirmed(work, "receiver_identity_drift")
             view = read_applied_application(
                 application_database, state_database, expected_application_id=self.config.application_id,
                 expected_application_config_digest=self.config.application_config_digest,
@@ -579,73 +963,220 @@ class OfficialHandoffStoreV1:
             )
             envelope = build_directive_envelope(view, self.config)
             if envelope != work.envelope_bytes:
-                return self._held(work, "handoff_envelope_drift")
-        except (IndependentOfficialHandoffError, OSError, ValueError):
-            return self._held(work, "handoff_reverification_failed")
-        try:
+                return self._mark_delivery_unconfirmed(work, "handoff_envelope_drift")
+            dispatch_called = True
             ack_raw = receiver.dispatch(envelope, work.idempotency_key)
             if type(ack_raw) is not bytes:
-                raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
-            ack = parse_acknowledgment_bytes(ack_raw)
-            if (
-                bytes.fromhex(ack["receiver_identity"]) != self.config.receiver_identity
-                or int(ack["receiver_epoch"]) != self.config.receiver_epoch
-                or bytes.fromhex(ack["idempotency_key"]) != work.idempotency_key
-                or bytes.fromhex(ack["envelope_digest"]) != envelope_digest(envelope)
-                or int(ack["effective_directive"]) != int(parse_envelope_bytes(envelope)["effective_directive"])
-            ):
+                self._mark_delivery_unconfirmed(work, "handoff_delivery_indeterminate")
                 raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
             self._fault("after_dispatch_before_outbox_commit")
-            now = int(self.clock.now_ms())
-            ack_digest = acknowledgment_digest(ack_raw)
-            with closing(self._connect()) as connection:
-                began = False
-                try:
-                    connection.execute("BEGIN IMMEDIATE")
-                    began = True
-                    try:
-                        self._live_lease(connection, work)
-                    except OfficialHandoffLeaseError:
-                        raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate") from None
-                    connection.execute("DELETE FROM outbox_leases WHERE job_id=?", (work.job_id,))
-                    changed = connection.execute("UPDATE outbox_jobs SET status='ACKNOWLEDGED',updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, work.job_id))
-                    if changed.rowcount != 1:
-                        raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate")
-                    connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?)", (work.job_id, "ACKNOWLEDGED", ack_raw, ack_digest, work.operation_id, now))
-                    self._append_transition(connection, kind="ACKNOWLEDGED", job_id=work.job_id, event={
-                        "at_ms": now, "status": "ACKNOWLEDGED", "attempt": work.attempt,
-                        "receiver_identity": ack["receiver_identity"], "receiver_epoch": int(ack["receiver_epoch"]),
-                        "idempotency_key": ack["idempotency_key"], "envelope_digest": ack["envelope_digest"],
-                        "ack_digest": _hex(ack_digest), "effective_directive": int(ack["effective_directive"]),
-                    })
-                    self._fault("before_outbox_commit")
-                    connection.execute("COMMIT")
-                    began = False
-                except Exception:
-                    if began and connection.in_transaction:
-                        connection.execute("ROLLBACK")
-                    raise
-            if self._after_commit_fault is not None:
-                self._after_commit_fault("after_outbox_commit")
-            return OfficialHandoffResultV1(work.job_id, work.operation_id, "ACKNOWLEDGED", ack_raw, ack_digest, None)
+            result = self._commit_acknowledgment(
+                job_id=work.job_id, operation_id=work.operation_id, ack_raw=ack_raw, mode="DISPATCH", dispatch_work=work,
+            )
         except OfficialHandoffIndeterminateError:
+            if dispatch_called:
+                try:
+                    self._mark_delivery_unconfirmed(work, "handoff_delivery_indeterminate")
+                except OfficialHandoffLeaseError:
+                    existing = self._existing_ack(work.job_id)
+                    if existing is not None:
+                        return existing
+            raise
+        except OfficialHandoffLeaseError:
+            existing = self._existing_ack(work.job_id)
+            if existing is not None:
+                return existing
             raise
         except Exception:
-            raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate") from None
+            try:
+                result = self._mark_delivery_unconfirmed(work, "handoff_delivery_indeterminate")
+                if dispatch_called:
+                    raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate") from None
+                return result
+            except OfficialHandoffLeaseError:
+                existing = self._existing_ack(work.job_id)
+                if existing is not None:
+                    return existing
+                raise OfficialHandoffIndeterminateError("handoff_delivery_indeterminate") from None
+        if self._after_commit_fault is not None:
+            try:
+                self._after_commit_fault("after_outbox_commit")
+            except Exception as exc:
+                raise OfficialHandoffIndeterminateError("handoff_commit_indeterminate") from exc
+        return result
+
+    def _release_reconciliation(self, work: OfficialHandoffReconciliationWorkV1, code: str) -> OfficialHandoffResultV1:
+        now = int(self.clock.now_ms())
+        with closing(self._connect()) as connection:
+            began = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                began = True
+                self._live_reconciliation_lease(connection, work)
+                next_status = "DISCOVERED" if work.attempt < self.config.max_attempts else "EXHAUSTED"
+                changed = connection.execute(
+                    "UPDATE outbox_reconciliation SET status=?,worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,next_eligible_ms=?,updated_ms=?,last_error_code=? WHERE job_id=? AND status='LEASED'",
+                    (next_status, now, now, code, work.job_id),
+                )
+                if changed.rowcount != 1:
+                    raise OfficialHandoffIndeterminateError("reconciliation_release_cas")
+                self._append_transition(connection, kind="RECONCILIATION_INDETERMINATE", job_id=work.job_id, event={
+                    "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": work.attempt, "error_code": code,
+                })
+                if next_status == "EXHAUSTED":
+                    self._append_transition(connection, kind="RECONCILIATION_EXHAUSTED", job_id=work.job_id, event={
+                        "at_ms": now, "status": "DELIVERY_UNCONFIRMED", "attempt": work.attempt,
+                        "error_code": "reconciliation_attempts_exhausted",
+                    })
+                connection.execute("COMMIT")
+                began = False
+            except Exception:
+                if began and connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        return OfficialHandoffResultV1(work.job_id, work.operation_id, "DELIVERY_UNCONFIRMED", None, None, code)
+
+    @staticmethod
+    def _lookup_acknowledgment(lookup: OfficialStateReceiverLookupPort, *, receiver_identity: bytes, receiver_epoch: int, job_id: str, operation_id: bytes, idempotency_key: bytes, envelope_digest_value: bytes) -> bytes | None:
+        method = getattr(lookup, "lookup_acknowledgment", None)
+        if method is None:
+            method = getattr(lookup, "lookup", None)
+        if method is None:
+            method = getattr(lookup, "lookup_ack", None)
+        if method is None:
+            method = getattr(lookup, "find_acknowledgment", None)
+        if method is None:
+            raise OfficialHandoffIndeterminateError("reconciliation_lookup_unavailable")
+        query = OfficialHandoffLookupQueryV1(receiver_identity, receiver_epoch, job_id, operation_id, idempotency_key, envelope_digest_value)
+        try:
+            parameters = tuple(inspect.signature(method).parameters.values())
+        except (TypeError, ValueError):
+            # Unknown signatures receive the canonical keyword form once; a
+            # signature/runtime exception remains indeterminate to the caller.
+            return method(
+                receiver_identity=receiver_identity, receiver_epoch=receiver_epoch, job_id=job_id,
+                operation_id=operation_id, idempotency_key=idempotency_key, envelope_digest=envelope_digest_value,
+            )
+        parameter_names = {parameter.name for parameter in parameters}
+        expected_names = {"receiver_identity", "receiver_epoch", "job_id", "operation_id", "idempotency_key", "envelope_digest"}
+        if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters) or expected_names.issubset(parameter_names):
+            return method(
+                receiver_identity=receiver_identity, receiver_epoch=receiver_epoch, job_id=job_id,
+                operation_id=operation_id, idempotency_key=idempotency_key, envelope_digest=envelope_digest_value,
+            )
+        if len(parameters) == 1:
+            return method(query)
+        return method(receiver_identity, receiver_epoch, job_id, operation_id, idempotency_key, envelope_digest_value)
+
+    def reconcile(
+        self, work: OfficialHandoffReconciliationWorkV1, *, lookup: OfficialStateReceiverLookupPort | None = None,
+        lookup_port: OfficialStateReceiverLookupPort | None = None,
+        evidence_profile: OfficialAckEvidenceProfileV1 | None = None,
+    ) -> OfficialHandoffResultV1:
+        self._validate_reconciliation_work(work)
+        existing = self._existing_ack(work.job_id)
+        if existing is not None:
+            return existing
+        with closing(self._connect()) as connection:
+            self._live_reconciliation_lease(connection, work)
+        if lookup is None:
+            lookup = lookup_port
+        if lookup is None:
+            return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+        provider = getattr(lookup, "acknowledgment_profile", None)
+        if provider is None:
+            provider = getattr(lookup, "profile", None)
+        if provider is not None:
+            try:
+                candidate = provider() if callable(provider) else provider
+            except Exception:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+            if candidate != self.config.acknowledgment_profile:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+        if evidence_profile is not None:
+            supplied_profile = evidence_profile
+            provider = getattr(supplied_profile, "acknowledgment_profile", None)
+            if callable(provider):
+                try:
+                    supplied_profile = provider()
+                except Exception:
+                    return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+            if supplied_profile != self.config.acknowledgment_profile:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+        try:
+            ack_raw = self._lookup_acknowledgment(
+                lookup, receiver_identity=self.config.receiver_identity, receiver_epoch=self.config.receiver_epoch,
+                job_id=work.job_id, operation_id=work.operation_id, idempotency_key=work.idempotency_key,
+                envelope_digest_value=work.envelope_digest,
+            )
+            if ack_raw is None:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+            if type(ack_raw) is not bytes:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+            result = self._commit_acknowledgment(
+                job_id=work.job_id, operation_id=work.operation_id, ack_raw=ack_raw,
+                mode="RECONCILIATION", reconciliation_work=work,
+            )
+            return result
+        except OfficialHandoffIndeterminateError:
+            existing = self._existing_ack(work.job_id)
+            if existing is not None:
+                return existing
+            try:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+            except OfficialHandoffLeaseError:
+                existing = self._existing_ack(work.job_id)
+                if existing is not None:
+                    return existing
+                raise
+        except OfficialHandoffLeaseError:
+            existing = self._existing_ack(work.job_id)
+            if existing is not None:
+                return existing
+            raise
+        except Exception:
+            try:
+                return self._release_reconciliation(work, _RECONCILIATION_ERROR)
+            except OfficialHandoffLeaseError:
+                existing = self._existing_ack(work.job_id)
+                if existing is not None:
+                    return existing
+                raise OfficialHandoffIndeterminateError("reconciliation_release_indeterminate") from None
+
+    reconcile_delivery = reconcile
+    reconcile_unconfirmed = reconcile
+
+    def reconcile_next(
+        self, worker_id: str, *, lookup: OfficialStateReceiverLookupPort | None = None,
+        lookup_port: OfficialStateReceiverLookupPort | None = None,
+        evidence_profile: OfficialAckEvidenceProfileV1 | None = None,
+    ) -> OfficialHandoffResultV1 | None:
+        if lookup is None:
+            lookup = lookup_port
+        if lookup is None:
+            raise OfficialHandoffIndeterminateError("reconciliation_lookup_unavailable")
+        work = self.claim_reconciliation_next(worker_id)
+        if work is None:
+            return None
+        return self.reconcile(work, lookup=lookup, evidence_profile=evidence_profile)
+
+    reconcile_next_delivery = reconcile_next
+    claim_reconciliation = claim_reconciliation_next
 
     def snapshot(self) -> dict[str, Any]:
         with closing(self._connect()) as connection:
             meta = self._meta(connection)
             counts = {status: int(connection.execute("SELECT COUNT(*) FROM outbox_jobs WHERE status=?", (status,)).fetchone()[0]) for status in sorted(_STATUS)}
+            reconciliation_counts = {status: int(connection.execute("SELECT COUNT(*) FROM outbox_reconciliation WHERE status=?", (status,)).fetchone()[0]) for status in sorted(_RECONCILIATION_STATUS)}
             transitions = int(connection.execute("SELECT COUNT(*) FROM outbox_transitions").fetchone()[0])
-        return {"schema": _SCHEMA, "status_counts": counts, "head_root": _hex(bytes(meta[10])), "transition_count": transitions}
+        return {"schema": _SCHEMA, "status_counts": counts, "reconciliation_counts": reconciliation_counts, "head_root": _hex(bytes(meta[10])), "transition_count": transitions, "proof_suite_id": None, "production_usable": False, "activation": False}
 
     def support_summary(self) -> dict[str, Any]:
         snap = self.snapshot()
         with closing(self._connect()) as connection:
             directives = {str(int(row[0])): int(row[1]) for row in connection.execute("SELECT json_extract(json_extract(CAST(event_bytes AS TEXT),'$'), '$.effective_directive'), COUNT(*) FROM outbox_transitions WHERE transition_kind='DISCOVER' GROUP BY 1")}
         return {
-            **snap, "receiver_identity": _hex(self.config.receiver_identity),
+            **snap, "ack_evidence_mode": _ACK_EVIDENCE_MODE, "ack_evidence_profile_digest": _hex(self.config.profile_digest),
             "acknowledged_count": snap["status_counts"]["ACKNOWLEDGED"],
             "held_count": snap["status_counts"]["HELD"],
             "delivery_unconfirmed_count": snap["status_counts"]["DELIVERY_UNCONFIRMED"],
@@ -662,7 +1193,10 @@ class OfficialHandoffStoreV1:
                 "metadata": {"head_root": blob(meta[10]), "next_sequence": int(meta[11])},
                 "jobs": [{"job_id": str(row[0]), "operation_id": blob(row[1]), "envelope_digest": blob(row[2]), "envelope_bytes": blob(row[3]), "idempotency_key": blob(row[4]), "status": str(row[5]), "discovery_sequence": int(row[6]), "attempt": int(row[7]), "next_eligible_ms": int(row[8]), "created_ms": int(row[9]), "updated_ms": int(row[10]), "last_error_code": row[11]} for row in connection.execute("SELECT * FROM outbox_jobs ORDER BY discovery_sequence")],
                 "leases": [{"job_id": str(row[0]), "worker_id": str(row[1]), "token": blob(row[2]), "attempt": int(row[3]), "leased_ms": int(row[4]), "expires_ms": int(row[5])} for row in connection.execute("SELECT * FROM outbox_leases ORDER BY job_id")],
-                "acks": [{"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "completed_ms": int(row[5])} for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")],
+                "acks": [{"job_id": str(row[0]), "ack_bytes": blob(row[2]), "ack_digest": blob(row[3]), "operation_id": blob(row[4]), "completed_ms": int(row[5]), "ack_receipt": blob(row[6]), "profile_digest": blob(row[7])} for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")],
+                "profiles": [{"profile_digest": _hex(self.config.profile_digest), "profile_bytes": _hex(self.config.acknowledgment_profile.canonical_bytes)}],
+                "receipts": [{"job_id": str(row[0]), "receipt_bytes": blob(row[6])} for row in connection.execute("SELECT * FROM outbox_acks ORDER BY job_id")],
+                "reconciliation": [{"job_id": str(row[0]), "operation_id": blob(row[1]), "envelope_digest": blob(row[2]), "idempotency_key": blob(row[3]), "status": str(row[4]), "worker_id": row[5], "token": blob(row[6]), "attempt": int(row[7]), "leased_ms": None if row[8] is None else int(row[8]), "expires_ms": None if row[9] is None else int(row[9]), "next_eligible_ms": int(row[10]), "discovered_ms": int(row[11]), "updated_ms": int(row[12]), "last_error_code": row[13]} for row in connection.execute("SELECT * FROM outbox_reconciliation ORDER BY job_id")],
                 "transitions": [{"sequence": int(row[0]), "transition_kind": str(row[1]), "job_id": str(row[2]), "before_root": blob(row[3]), "after_root": blob(row[4]), "event_bytes": blob(row[5]), "event_digest": blob(row[6])} for row in connection.execute("SELECT * FROM outbox_transitions ORDER BY sequence")],
             }
         raw = _json_bytes(value)
@@ -684,9 +1218,9 @@ class OfficialHandoffStoreV1:
 
 
 __all__ = (
-    "OfficialHandoffConfigV1", "OfficialHandoffError",
+    "OfficialAckEvidenceProfileV1", "OfficialAcknowledgmentEvidenceProfileV1", "OfficialAckEvidenceProfilePort", "OfficialAcknowledgmentEvidencePort", "OfficialHandoffConfigV1", "OfficialHandoffError",
     "OfficialHandoffConflictError", "OfficialHandoffIndeterminateError", "OfficialHandoffIntegrityError",
-    "OfficialHandoffJobV1", "OfficialHandoffLeaseError", "OfficialHandoffResultV1",
-    "OfficialHandoffStoreV1", "OfficialHandoffWorkV1", "OfficialStateReceiverPort",
+    "OfficialHandoffJobV1", "OfficialHandoffLeaseError", "OfficialHandoffReconciliationWorkV1", "OfficialHandoffResultV1",
+    "OfficialHandoffStoreV1", "OfficialHandoffWorkV1", "OfficialHandoffLookupQueryV1", "OfficialStateReceiverLookupPort", "OfficialHandoffLookupPort", "OfficialStateReceiverPort",
     "build_directive_envelope", "independent_verify_database", "independent_verify_export_bytes",
 )
