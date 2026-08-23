@@ -940,7 +940,9 @@ class OperationalRecoveryService:
         try:
             q_target = root / "quarantine.db"
             r_target = root / "runtime.db"
-            quarantine_service = quarantine.restore_export(q_target, bundle["quarantine_raw"], policy=self.quarantine_policy_value)
+            q_export = quarantine_independent._parse(bundle["quarantine_raw"], maximum=quarantine_independent.MAX_EXPORT_BYTES, max_string_bytes=quarantine_independent.MAX_EXPORT_BYTES)
+            database_id = quarantine_independent._database_id(q_export.get("database_id"))
+            quarantine_service = quarantine.restore_export(q_target, bundle["quarantine_raw"], policy=self.quarantine_policy_value, database_id=database_id)
             runtime_service = runtime.restore_export(r_target, bundle["runtime_raw"], profile=self.runtime_profile_value, clock=self.clock)
             q_evidence = quarantine_service.integrity()
             r_evidence = runtime_service.integrity()

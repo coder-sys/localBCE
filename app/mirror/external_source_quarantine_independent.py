@@ -20,9 +20,9 @@ from app.mirror import external_source_adapter_independent as adapter
 
 
 SCHEMA = "mirror-external-source-quarantine-v1"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXPORT_SCHEMA = "mirror-external-source-quarantine-export-v1"
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 DOMAIN = "BL/MIRROR/EXTERNAL_SOURCE_QUARANTINE/"
 QUARANTINE_STATUS = "QUARANTINED"
 HEAD_STATES = ("QUARANTINED", "WITHDRAWN")
@@ -46,6 +46,7 @@ META_KEYS = (
     "schema",
     "schema_version",
     "policy_digest",
+    "database_id",
     "chain_id",
     "sequence",
     "head_root",
@@ -64,7 +65,7 @@ TABLE_COLUMNS = {
         "receipt_raw",
     ),
     "quarantine_transitions": (
-        "transition_id", "policy_digest", "sequence", "action", "artifact_id", "prior_head",
+        "transition_id", "policy_digest", "database_id", "sequence", "action", "artifact_id", "prior_head",
         "next_head", "prior_state", "next_state", "observed_at", "reason", "operation_id",
         "before_root", "after_root", "transition_raw",
     ),
@@ -75,7 +76,7 @@ TABLE_COLUMNS = {
 }
 SNAPSHOT_TABLES = tuple(TABLE_COLUMNS)
 EXPORT_KEYS = {
-    "schema", "schema_version", "policy_digest", "chain_id", "meta", "artifacts",
+    "schema", "schema_version", "policy_digest", "database_id", "chain_id", "meta", "artifacts",
     "operations", "transitions", "heads", "state_owned", "synthetic_only",
     "support_safe", "production_usable", "export_root",
 }
@@ -91,7 +92,7 @@ EXPORT_ROW_KEYS = {
         "receipt_hex",
     },
     "quarantine_transitions": {
-        "transition_id", "policy_digest", "sequence", "action", "artifact_id", "prior_head",
+        "transition_id", "policy_digest", "database_id", "sequence", "action", "artifact_id", "prior_head",
         "next_head", "prior_state", "next_state", "observed_at", "reason", "operation_id",
         "before_root", "after_root", "transition_hex",
     },
@@ -111,13 +112,16 @@ FIXED_FLAGS = {
     "downstream_bridge": False,
     "proofSuiteId": None,
 }
+SAFE_DATABASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 TRANSITION_KEYS = {
     "schema", "schema_version", "transition_id", "sequence", "action", "policy_digest",
+    "database_id",
     "artifact_id", "prior_head", "next_head", "prior_state", "next_state", "observed_at",
     "reason", "operation_id", "before_root", "after_root", "flags",
 }
 RECEIPT_KEYS = {
     "schema", "schema_version", "receipt_id", "operation_id", "action", "policy_digest",
+    "database_id",
     "artifact_id", "capture_id", "prior_head", "head_artifact_id", "state", "sequence",
     "transition_id", "before_root", "after_root", "chain_id", "flags",
 }
@@ -228,6 +232,15 @@ def _hex(value: object, label: str) -> str:
     return value
 
 
+def _database_id(value: object) -> str:
+    if not isinstance(value, str) or SAFE_DATABASE_ID.fullmatch(value) is None:
+        raise IndependentQuarantineError("quarantine:database-id")
+    lowered = value.lower()
+    if any(marker in lowered for marker in ("http://", "https://", "path", "token", "secret", "password", "credential", "patient", "member", "claim", "npi", "email", "phone", "address")):
+        raise IndependentQuarantineError("quarantine:database-id-forbidden")
+    return value
+
+
 def _integer(value: object, label: str, *, minimum: int = 0, maximum: int = 10**12) -> int:
     if type(value) is not int or value < minimum or value > maximum:
         raise IndependentQuarantineError(f"quarantine:{label}")
@@ -247,8 +260,9 @@ def _policy_digest(policy: Mapping[str, object] | object) -> str:
     return adapter._digest("policy", _policy_view(policy))
 
 
-def _chain_id(policy: Mapping[str, object]) -> str:
-    return _digest("chain-id", {"policy_digest": _policy_digest(policy)})
+def _chain_id(policy: Mapping[str, object], database_id: str) -> str:
+    database = _database_id(database_id)
+    return _digest("chain-id", {"policy_digest": _policy_digest(policy), "database_id": database})
 
 
 def _genesis_root(chain_id: str) -> str:
@@ -293,8 +307,8 @@ def _request_material_digest(
     )
 
 
-def _operation_id(action: str, request_digest: str) -> str:
-    return _digest("operation-id", {"action": action, "request_digest": request_digest})
+def _operation_id(action: str, request_digest: str, database_id: str) -> str:
+    return _digest("operation-id", {"action": action, "request_digest": request_digest, "database_id": _database_id(database_id)})
 
 
 def _transition_id(body: Mapping[str, object]) -> str:
@@ -386,7 +400,12 @@ def _verify_artifacts(
     return artifacts, raws
 
 
-def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object] | object) -> dict[str, object]:
+def _verify_rows(
+    snapshot: Mapping[str, object],
+    *,
+    policy: Mapping[str, object] | object,
+    database_id: str,
+) -> dict[str, object]:
     if set(snapshot) != set(SNAPSHOT_TABLES):
         raise IndependentQuarantineError("quarantine:snapshot-tables")
     rows: dict[str, list[Mapping[str, object]]] = {}
@@ -406,12 +425,15 @@ def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object]
     if any(type(value) is not str for value in metadata.values()):
         raise IndependentQuarantineError("quarantine:meta-values")
     configured = _policy_view(policy)
+    database = _database_id(database_id)
     policy_digest = _policy_digest(configured)
     if metadata["schema"] != SCHEMA or metadata["schema_version"] != str(SCHEMA_VERSION):
         raise IndependentQuarantineError("quarantine:schema")
     if metadata["policy_digest"] != policy_digest:
         raise IndependentQuarantineError("quarantine:policy-drift")
-    chain_id = _chain_id(configured)
+    if metadata["database_id"] != database:
+        raise IndependentQuarantineError("quarantine:database-id")
+    chain_id = _chain_id(configured, database)
     if metadata["chain_id"] != chain_id:
         raise IndependentQuarantineError("quarantine:chain-id")
     sequence = int(metadata["sequence"]) if metadata["sequence"].isdigit() else -1
@@ -466,7 +488,7 @@ def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object]
         if action not in ACTIONS or transition["action"] != action:
             raise IndependentQuarantineError("quarantine:action")
         request_digest = _hex(operation["request_digest"], "request-digest")
-        if operation_id != _operation_id(str(action), request_digest):
+        if operation_id != _operation_id(str(action), request_digest, database):
             raise IndependentQuarantineError("quarantine:operation-binding")
         artifact_id = _hex(operation["artifact_id"], "operation-artifact")
         if artifact_id not in artifacts:
@@ -506,7 +528,7 @@ def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object]
         for key in TRANSITION_KEYS - {"schema", "schema_version", "flags"}:
             if transition_value[key] != transition[key]:
                 raise IndependentQuarantineError("quarantine:transition-row-binding")
-        if transition_value["flags"] != FIXED_FLAGS:
+        if transition_value["flags"] != FIXED_FLAGS or transition_value["database_id"] != database:
             raise IndependentQuarantineError("quarantine:transition-flags")
         if _transition_id(transition_value) != transition_id:
             raise IndependentQuarantineError("quarantine:transition-id")
@@ -549,7 +571,7 @@ def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object]
             raise IndependentQuarantineError("quarantine:receipt-keys")
         if receipt["schema"] != f"{SCHEMA}-receipt" or receipt["schema_version"] != SCHEMA_VERSION:
             raise IndependentQuarantineError("quarantine:receipt-schema")
-        if receipt["flags"] != FIXED_FLAGS:
+        if receipt["flags"] != FIXED_FLAGS or receipt["database_id"] != database:
             raise IndependentQuarantineError("quarantine:receipt-flags")
         if receipt["receipt_id"] != _receipt_id(receipt):
             raise IndependentQuarantineError("quarantine:receipt-id")
@@ -557,6 +579,7 @@ def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object]
             "operation_id": operation_id,
             "action": action,
             "policy_digest": policy_digest,
+            "database_id": database,
             "artifact_id": artifact_id,
             "capture_id": artifacts[artifact_id]["capture_id"],
             "prior_head": current_head,
@@ -615,6 +638,7 @@ def _verify_rows(snapshot: Mapping[str, object], *, policy: Mapping[str, object]
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "policy_digest": policy_digest,
+        "database_id": database,
         "chain_id": chain_id,
         "sequence": sequence,
         "head_artifact_id": current_head or None,
@@ -672,7 +696,7 @@ TABLE_INFO = {
         ("sequence", "INTEGER", 1, None, 0), ("receipt_raw", "BLOB", 1, None, 0),
     ),
     "quarantine_transitions": (
-        ("transition_id", "TEXT", 0, None, 1), ("policy_digest", "TEXT", 1, None, 0),
+        ("transition_id", "TEXT", 0, None, 1), ("policy_digest", "TEXT", 1, None, 0), ("database_id", "TEXT", 1, None, 0),
         ("sequence", "INTEGER", 1, None, 0), ("action", "TEXT", 1, None, 0),
         ("artifact_id", "TEXT", 1, None, 0), ("prior_head", "TEXT", 1, "''", 0),
         ("next_head", "TEXT", 1, None, 0), ("prior_state", "TEXT", 1, None, 0),
@@ -752,7 +776,12 @@ def _check_sqlite_shape(connection: sqlite3.Connection) -> None:
         raise IndependentQuarantineError("quarantine:foreign-key")
 
 
-def verify_database(path: str | Path, *, policy: Mapping[str, object] | object) -> dict[str, object]:
+def verify_database(
+    path: str | Path,
+    *,
+    policy: Mapping[str, object] | object,
+    database_id: str,
+) -> dict[str, object]:
     database = Path(path)
     if not database.is_file():
         raise IndependentQuarantineError("quarantine:database-missing")
@@ -768,8 +797,11 @@ def verify_database(path: str | Path, *, policy: Mapping[str, object] | object) 
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         _check_sqlite_shape(connection)
+        connection.execute("BEGIN")
         snapshot = _snapshot_from_connection(connection)
-        return _verify_rows(snapshot, policy=policy)
+        result = _verify_rows(snapshot, policy=policy, database_id=database_id)
+        connection.commit()
+        return result
     except IndependentQuarantineError:
         raise
     except (sqlite3.DatabaseError, OSError, ValueError) as exc:
@@ -811,7 +843,12 @@ def _decode_export_rows(value: Mapping[str, object]) -> dict[str, list[dict[str,
     return result
 
 
-def verify_export_bytes(raw: bytes, *, policy: Mapping[str, object] | object) -> dict[str, object]:
+def verify_export_bytes(
+    raw: bytes,
+    *,
+    policy: Mapping[str, object] | object,
+    database_id: str,
+) -> dict[str, object]:
     value = _parse(raw, maximum=MAX_EXPORT_BYTES, max_string_bytes=MAX_EXPORT_BYTES)
     if set(value) != EXPORT_KEYS:
         raise IndependentQuarantineError("quarantine:export-keys")
@@ -820,14 +857,15 @@ def verify_export_bytes(raw: bytes, *, policy: Mapping[str, object] | object) ->
     if value["state_owned"] is not True or value["synthetic_only"] is not True or value["support_safe"] is not False or value["production_usable"] is not False:
         raise IndependentQuarantineError("quarantine:export-flags")
     configured = _policy_view(policy)
+    database = _database_id(database_id)
     policy_digest = _policy_digest(configured)
     if value["policy_digest"] != policy_digest:
         raise IndependentQuarantineError("quarantine:export-policy")
-    if value["chain_id"] != _chain_id(configured):
+    if value["database_id"] != database or value["chain_id"] != _chain_id(configured, database):
         raise IndependentQuarantineError("quarantine:export-chain")
     snapshot = _decode_export_rows(value)
-    result = _verify_rows(snapshot, policy=configured)
-    if result["policy_digest"] != value["policy_digest"] or result["chain_id"] != value["chain_id"]:
+    result = _verify_rows(snapshot, policy=configured, database_id=database)
+    if result["policy_digest"] != value["policy_digest"] or result["database_id"] != value["database_id"] or result["chain_id"] != value["chain_id"]:
         raise IndependentQuarantineError("quarantine:export-state-binding")
     body = dict(value)
     body.pop("export_root")
@@ -836,8 +874,13 @@ def verify_export_bytes(raw: bytes, *, policy: Mapping[str, object] | object) ->
     return {**result, "export_root": value["export_root"], "snapshot": snapshot}
 
 
-def verify_snapshot(snapshot: Mapping[str, object], *, policy: Mapping[str, object] | object) -> dict[str, object]:
-    return _verify_rows(snapshot, policy=policy)
+def verify_snapshot(
+    snapshot: Mapping[str, object],
+    *,
+    policy: Mapping[str, object] | object,
+    database_id: str,
+) -> dict[str, object]:
+    return _verify_rows(snapshot, policy=policy, database_id=database_id)
 
 
 __all__ = [
@@ -848,5 +891,5 @@ __all__ = [
     "SNAPSHOT_TABLES", "TABLE_INFO", "EXPLICIT_INDEXES", "FOREIGN_KEY_MANIFEST", "FIXED_FLAGS", "IndependentQuarantineError",
     "verify_database", "verify_export_bytes", "verify_snapshot", "_canonical", "_digest", "_raw_digest",
     "_policy_view", "_policy_digest", "_chain_id", "_genesis_root", "_state_root", "_after_root",
-    "_operation_id", "_request_material_digest", "_transition_id", "_receipt_id", "_parse",
+    "_operation_id", "_request_material_digest", "_transition_id", "_receipt_id", "_parse", "_database_id",
 ]

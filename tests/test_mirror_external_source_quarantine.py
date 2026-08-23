@@ -25,7 +25,8 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         self.policy = _policy()
         self._temporary = tempfile.TemporaryDirectory()
         self.database = Path(self._temporary.name) / "quarantine.db"
-        self.service = quarantine.ExternalSourceQuarantineService(self.database, policy=self.policy)
+        self.database_id = "SYNTH_Q_DB_V1"
+        self.service = quarantine.ExternalSourceQuarantineService(self.database, policy=self.policy, database_id=self.database_id)
 
     def tearDown(self) -> None:
         self._temporary.cleanup()
@@ -114,7 +115,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             connection.close()
         drifted = _policy(logical_endpoint_id="SYNTHETIC_OTHER_ENDPOINT_V1")
         with self.assertRaisesRegex(quarantine.ExternalSourceQuarantineError, "policy-drift"):
-            quarantine.ExternalSourceQuarantineService(self.database, policy=drifted)
+            quarantine.ExternalSourceQuarantineService(self.database, policy=drifted, database_id=self.database_id)
 
     def test_same_capture_identity_with_rebound_artifact_bytes_is_rejected(self) -> None:
         first_raw = self._artifact("capture-identity")
@@ -159,13 +160,13 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
                         state["value"] = False
                         raise quarantine.QuarantineInjectedFault(f"quarantine:injected:{target}")
 
-                service = quarantine.ExternalSourceQuarantineService(path, policy=self.policy, fault_injector=inject)
+                service = quarantine.ExternalSourceQuarantineService(path, policy=self.policy, database_id=self.database_id, fault_injector=inject)
                 with self.assertRaises(quarantine.QuarantineInjectedFault):
                     service.admit(f"fault-{point}", self._artifact(f"raw-{point}"))
-                evidence = independent.verify_database(path, policy=self.policy.material())
+                evidence = independent.verify_database(path, policy=self.policy.material(), database_id=self.database_id)
                 self.assertEqual(evidence["sequence"], 0)
                 self.assertEqual(evidence["artifact_count"], 0)
-                self.assertEqual(service.export_bytes(), quarantine.ExternalSourceQuarantineService(path, policy=self.policy).export_bytes())
+                self.assertEqual(service.export_bytes(), quarantine.ExternalSourceQuarantineService(path, policy=self.policy, database_id=self.database_id).export_bytes())
 
     def test_postcommit_response_loss_recovers_by_exact_retry(self) -> None:
         state = {"armed": True}
@@ -175,7 +176,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
                 state["armed"] = False
                 raise quarantine.QuarantineResponseLost("quarantine:response-lost")
 
-        service = quarantine.ExternalSourceQuarantineService(self.database, policy=self.policy, fault_injector=inject)
+        service = quarantine.ExternalSourceQuarantineService(self.database, policy=self.policy, database_id=self.database_id, fault_injector=inject)
         raw = self._artifact("response-loss")
         with self.assertRaises(quarantine.QuarantineResponseLost):
             service.admit("response-loss", raw)
@@ -192,7 +193,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
                 self.service.admit("busy", self._artifact("busy"))
             elapsed = time.monotonic() - started
             self.assertLess(elapsed, 2.0)
-            evidence = independent.verify_database(self.database, policy=self.policy.material())
+            evidence = independent.verify_database(self.database, policy=self.policy.material(), database_id=self.database_id)
             self.assertEqual(evidence["sequence"], 0)
             self.assertEqual(evidence["artifact_count"], 0)
         finally:
@@ -200,7 +201,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
             lock.close()
 
     def test_identical_concurrent_writers_converge_without_duplicate_rows(self) -> None:
-        services = [quarantine.ExternalSourceQuarantineService(self.database, policy=self.policy) for _ in range(2)]
+        services = [quarantine.ExternalSourceQuarantineService(self.database, policy=self.policy, database_id=self.database_id) for _ in range(2)]
         raw = self._artifact("identical-race")
         barrier = threading.Barrier(2)
         outcomes: list[object] = []
@@ -227,7 +228,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         for reverse in (False, True):
             with self.subTest(reverse=reverse):
                 path = Path(self._temporary.name) / ("conflict-reverse.db" if reverse else "conflict-forward.db")
-                services = [quarantine.ExternalSourceQuarantineService(path, policy=self.policy) for _ in range(2)]
+                services = [quarantine.ExternalSourceQuarantineService(path, policy=self.policy, database_id=self.database_id) for _ in range(2)]
                 artifacts = [self._artifact("conflict-a"), self._artifact("conflict-b")]
                 barrier = threading.Barrier(2)
                 outcomes: list[object] = []
@@ -248,7 +249,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
                 self.assertEqual(len(outcomes), 2)
                 self.assertEqual(sum(isinstance(item, dict) for item in outcomes), 1, outcomes)
                 self.assertEqual(sum(isinstance(item, quarantine.QuarantineConflictError) for item in outcomes), 1, outcomes)
-                evidence = independent.verify_database(path, policy=self.policy.material())
+                evidence = independent.verify_database(path, policy=self.policy.material(), database_id=self.database_id)
                 self.assertEqual((evidence["artifact_count"], evidence["operation_count"], evidence["transition_count"]), (1, 1, 1))
                 winner = next(item for item in outcomes if isinstance(item, dict))
                 self.assertEqual(evidence["head_artifact_id"], winner["artifact_id"])  # type: ignore[index]
@@ -272,19 +273,19 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         first = self.service.admit("a", self._artifact("a"))
         self.service.admit("b", self._artifact("b", observed_at=1_300), expected_head=first["artifact_id"])
         exported = self._export()
-        verified = independent.verify_export_bytes(exported, policy=self.policy.material())
+        verified = independent.verify_export_bytes(exported, policy=self.policy.material(), database_id=self.database_id)
         self.assertEqual(verified["sequence"], 2)
         restored = Path(self._temporary.name) / "restored.db"
-        copy = quarantine.ExternalSourceQuarantineService.restore_export(restored, exported, policy=self.policy)
+        copy = quarantine.ExternalSourceQuarantineService.restore_export(restored, exported, policy=self.policy, database_id=self.database_id)
         self.assertEqual(copy.export_bytes(), exported)
         with self.assertRaises(independent.IndependentQuarantineError):
-            independent.verify_export_bytes(exported[:-1], policy=self.policy.material())
+            independent.verify_export_bytes(exported[:-1], policy=self.policy.material(), database_id=self.database_id)
         value = json.loads(exported.decode("ascii"))
         value["unknown"] = True
         with self.assertRaises(independent.IndependentQuarantineError):
-            independent.verify_export_bytes(_canonical(value), policy=self.policy.material())
+            independent.verify_export_bytes(_canonical(value), policy=self.policy.material(), database_id=self.database_id)
         with self.assertRaisesRegex(quarantine.QuarantineConflictError, "target-exists"):
-            quarantine.ExternalSourceQuarantineService.restore_export(restored, exported, policy=self.policy)
+            quarantine.ExternalSourceQuarantineService.restore_export(restored, exported, policy=self.policy, database_id=self.database_id)
         connection = sqlite3.connect(self.database)
         try:
             connection.execute("UPDATE quarantine_meta SET value=? WHERE key='head_root'", ("0" * 128,))
@@ -292,7 +293,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         finally:
             connection.close()
         with self.assertRaises(independent.IndependentQuarantineError):
-            independent.verify_database(self.database, policy=self.policy.material())
+            independent.verify_database(self.database, policy=self.policy.material(), database_id=self.database_id)
 
     def test_corrupt_current_artifact_cannot_be_used_as_a_mutation_anchor(self) -> None:
         first = self.service.admit("anchor", self._artifact("anchor"))
@@ -315,7 +316,7 @@ class ExternalSourceQuarantineTests(unittest.TestCase):
         finally:
             connection.close()
         with self.assertRaises(independent.IndependentQuarantineError):
-            independent.verify_database(self.database, policy=self.policy.material())
+            independent.verify_database(self.database, policy=self.policy.material(), database_id=self.database_id)
 
     def test_adapter_mutation_and_authority_flags_cannot_enter_quarantine(self) -> None:
         raw = self._artifact("mutation")

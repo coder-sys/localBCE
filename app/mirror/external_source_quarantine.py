@@ -53,7 +53,7 @@ DDL = (
     "receipt_digest TEXT NOT NULL, sequence INTEGER NOT NULL, receipt_raw BLOB NOT NULL, "
     "FOREIGN KEY(policy_digest, artifact_id) REFERENCES quarantine_artifacts(policy_digest, artifact_id))",
     "CREATE TABLE quarantine_transitions ("
-    "transition_id TEXT PRIMARY KEY, policy_digest TEXT NOT NULL, sequence INTEGER NOT NULL, action TEXT NOT NULL, "
+    "transition_id TEXT PRIMARY KEY, policy_digest TEXT NOT NULL, database_id TEXT NOT NULL, sequence INTEGER NOT NULL, action TEXT NOT NULL, "
     "artifact_id TEXT NOT NULL, prior_head TEXT NOT NULL DEFAULT '', next_head TEXT NOT NULL, "
     "prior_state TEXT NOT NULL, next_state TEXT NOT NULL, observed_at INTEGER NOT NULL, "
     "reason TEXT NOT NULL DEFAULT '', operation_id TEXT NOT NULL, before_root TEXT NOT NULL, after_root TEXT NOT NULL, "
@@ -157,12 +157,17 @@ class ExternalSourceQuarantineService:
         database: str | Path,
         *,
         policy: Mapping[str, object] | object,
+        database_id: str,
         fault_injector: Callable[[str], None] | None = None,
     ) -> None:
         self.database = _resolve_database(database)
         self.policy = _policy_material(policy)
         self.policy_digest = independent._policy_digest(self.policy)
-        self.chain_id = independent._chain_id(self.policy)
+        try:
+            self.database_id = independent._database_id(database_id)
+        except independent.IndependentQuarantineError as exc:
+            raise ExternalSourceQuarantineError(str(exc)) from exc
+        self.chain_id = independent._chain_id(self.policy, self.database_id)
         self.fault_injector = fault_injector
         self._initialize()
 
@@ -202,6 +207,7 @@ class ExternalSourceQuarantineService:
                     "schema": SCHEMA,
                     "schema_version": str(SCHEMA_VERSION),
                     "policy_digest": self.policy_digest,
+                    "database_id": self.database_id,
                     "chain_id": self.chain_id,
                     "sequence": "0",
                     "head_root": genesis,
@@ -226,7 +232,7 @@ class ExternalSourceQuarantineService:
         # Opening an existing database is a read-only integrity gate.  It
         # prevents a restart from becoming an implicit repair operation.
         try:
-            independent.verify_database(self.database, policy=self.policy)
+            independent.verify_database(self.database, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
             raise ExternalSourceQuarantineError(str(exc)) from exc
 
@@ -293,14 +299,39 @@ class ExternalSourceQuarantineService:
         ).fetchone()
         return dict(row) if row is not None else None
 
-    def _result_from_operation(self, row: Mapping[str, object]) -> dict[str, object]:
+    def _result_from_operation(
+        self,
+        row: Mapping[str, object],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, object]:
+        receipt = independent._parse(bytes(row["receipt_raw"]), maximum=MAX_EXPORT_BYTES)
+        owned_connection = connection is None
+        query_connection = connection or self._connect()
+        try:
+            artifact_row = query_connection.execute(
+                "SELECT artifact_digest,capture_id FROM quarantine_artifacts WHERE policy_digest=? AND artifact_id=?",
+                (self.policy_digest, row["artifact_id"]),
+            ).fetchone()
+        finally:
+            if owned_connection:
+                query_connection.close()
+        if artifact_row is None:
+            raise QuarantineConflictError("quarantine:receipt-artifact")
         return {
             "accepted": True,
             "operation_id": row["operation_id"],
             "action": row["action"],
             "policy_digest": self.policy_digest,
+            "database_id": self.database_id,
             "chain_id": self.chain_id,
             "artifact_id": row["artifact_id"],
+            "artifact_digest": artifact_row["artifact_digest"],
+            "capture_id": artifact_row["capture_id"],
+            "head_artifact_id": receipt["head_artifact_id"],
+            "head_root": receipt["after_root"],
+            "after_root": receipt["after_root"],
+            "prior_head": receipt["prior_head"],
             "state": "WITHDRAWN" if row["action"] == ACTION_WITHDRAW else QUARANTINE_STATUS,
             "durable_status": QUARANTINE_STATUS,
             "sequence": row["sequence"],
@@ -332,6 +363,7 @@ class ExternalSourceQuarantineService:
             "sequence": sequence,
             "action": action,
             "policy_digest": self.policy_digest,
+            "database_id": self.database_id,
             "artifact_id": artifact["artifact_id"],
             "prior_head": prior_head,
             "next_head": artifact["artifact_id"],
@@ -393,6 +425,7 @@ class ExternalSourceQuarantineService:
             "before_root": transition["before_root"],
             "after_root": transition["after_root"],
             "chain_id": self.chain_id,
+            "database_id": self.database_id,
             "flags": dict(FIXED_FLAGS),
         }
         body["receipt_id"] = independent._receipt_id(body)
@@ -449,7 +482,7 @@ class ExternalSourceQuarantineService:
             ).fetchone()
             if stored_raw is None or bytes(stored_raw[0]) != candidate["raw"]:
                 raise QuarantineConflictError("quarantine:artifact-collision")
-            return self._result_from_operation(existing_operation)
+            return self._result_from_operation(existing_operation, connection=connection)
         head = self._head(connection)
         if head is None:
             action, prior_head, prior_state = ACTION_ADMIT, "", "EMPTY"
@@ -485,7 +518,7 @@ class ExternalSourceQuarantineService:
         if existing_capture is not None:
             raise QuarantineConflictError("quarantine:capture-collision")
         sequence = int(self._metadata(connection)["sequence"]) + 1
-        operation_id = independent._operation_id(action, request_digest)
+        operation_id = independent._operation_id(action, request_digest, self.database_id)
         request_material = independent._request_material_digest(
             operation_id=operation_id,
             policy_digest=self.policy_digest,
@@ -523,8 +556,8 @@ class ExternalSourceQuarantineService:
         )
         self._fault("after_operation_insert")
         connection.execute(
-            "INSERT INTO quarantine_transitions(transition_id,policy_digest,sequence,action,artifact_id,prior_head,next_head,prior_state,next_state,observed_at,reason,operation_id,before_root,after_root,transition_raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (transition["transition_id"], self.policy_digest, sequence, action, candidate["artifact_id"], prior_head, candidate["artifact_id"], prior_state, transition["next_state"], candidate["observed_at"], "", operation_id, transition["before_root"], transition["after_root"], transition["raw"]),
+            "INSERT INTO quarantine_transitions(transition_id,policy_digest,database_id,sequence,action,artifact_id,prior_head,next_head,prior_state,next_state,observed_at,reason,operation_id,before_root,after_root,transition_raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (transition["transition_id"], self.policy_digest, self.database_id, sequence, action, candidate["artifact_id"], prior_head, candidate["artifact_id"], prior_state, transition["next_state"], candidate["observed_at"], "", operation_id, transition["before_root"], transition["after_root"], transition["raw"]),
         )
         self._fault("after_transition_insert")
         self._write_meta_and_head(connection, artifact=candidate, transition=transition, sequence=sequence)
@@ -534,7 +567,7 @@ class ExternalSourceQuarantineService:
             "operation_id": operation_id, "action": action, "artifact_id": candidate["artifact_id"],
             "sequence": sequence, "transition_id": transition["transition_id"], "receipt_raw": receipt_raw,
             "receipt_digest": receipt_digest,
-        })
+        }, connection=connection)
 
     def admit(self, request_key: str, artifact_raw: bytes, *, expected_head: str | None = None) -> dict[str, object]:
         candidate = self._verify_artifact(artifact_raw)
@@ -590,7 +623,7 @@ class ExternalSourceQuarantineService:
             )
             if existing_operation["action"] != ACTION_WITHDRAW or stored_material != existing_operation["request_material_digest"]:
                 raise QuarantineConflictError("quarantine:operation-conflict")
-            return self._result_from_operation(existing_operation)
+            return self._result_from_operation(existing_operation, connection=connection)
         head = self._head(connection)
         if head is None:
             raise QuarantineConflictError("quarantine:head-missing")
@@ -605,7 +638,7 @@ class ExternalSourceQuarantineService:
         artifact = dict(artifact_row)
         self._verify_stored_artifact(artifact)
         sequence = int(self._metadata(connection)["sequence"]) + 1
-        operation_id = independent._operation_id(ACTION_WITHDRAW, request_digest)
+        operation_id = independent._operation_id(ACTION_WITHDRAW, request_digest, self.database_id)
         request_material = independent._request_material_digest(
             operation_id=operation_id, policy_digest=self.policy_digest,
             artifact_id=str(artifact["artifact_id"]), expected_head=expected_head, reason=reason,
@@ -625,8 +658,8 @@ class ExternalSourceQuarantineService:
         )
         self._fault("after_operation_insert")
         connection.execute(
-            "INSERT INTO quarantine_transitions(transition_id,policy_digest,sequence,action,artifact_id,prior_head,next_head,prior_state,next_state,observed_at,reason,operation_id,before_root,after_root,transition_raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (transition["transition_id"], self.policy_digest, sequence, ACTION_WITHDRAW, artifact["artifact_id"], head["head_artifact_id"], artifact["artifact_id"], QUARANTINE_STATUS, "WITHDRAWN", artifact["observed_at"], reason, operation_id, transition["before_root"], transition["after_root"], transition["raw"]),
+            "INSERT INTO quarantine_transitions(transition_id,policy_digest,database_id,sequence,action,artifact_id,prior_head,next_head,prior_state,next_state,observed_at,reason,operation_id,before_root,after_root,transition_raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (transition["transition_id"], self.policy_digest, self.database_id, sequence, ACTION_WITHDRAW, artifact["artifact_id"], head["head_artifact_id"], artifact["artifact_id"], QUARANTINE_STATUS, "WITHDRAWN", artifact["observed_at"], reason, operation_id, transition["before_root"], transition["after_root"], transition["raw"]),
         )
         self._fault("after_transition_insert")
         self._write_meta_and_head(connection, artifact=artifact, transition=transition, sequence=sequence)
@@ -636,7 +669,7 @@ class ExternalSourceQuarantineService:
             "operation_id": operation_id, "action": ACTION_WITHDRAW, "artifact_id": artifact["artifact_id"],
             "sequence": sequence, "transition_id": transition["transition_id"], "receipt_raw": receipt_raw,
             "receipt_digest": receipt_digest,
-        })
+        }, connection=connection)
 
     def withdraw(self, request_key: str, *, expected_head: str, reason: str) -> dict[str, object]:
         request_digest = _request_digest(request_key)
@@ -684,13 +717,50 @@ class ExternalSourceQuarantineService:
         connection = self._connect()
         try:
             row = self._head(connection)
-            return dict(row) if row is not None else None
+            if row is None:
+                return None
+            return {**dict(row), "database_id": self.database_id}
+        finally:
+            connection.close()
+
+    def lookup_request(
+        self,
+        request_key: str,
+        *,
+        artifact_id: str,
+        artifact_digest: str,
+        expected_head: str | None = None,
+    ) -> dict[str, object] | None:
+        """Read-only exact reconciliation for a previously dispatched request."""
+        request_digest = _request_digest(request_key)
+        expected = _head_selector(expected_head)
+        try:
+            independent._hex(artifact_id, "artifact-id")
+            independent._hex(artifact_digest, "artifact-digest")
+        except independent.IndependentQuarantineError as exc:
+            raise QuarantineConflictError(str(exc)) from exc
+        connection = self._connect()
+        try:
+            row = self._operation_for_request(connection, self.policy_digest, request_digest)
+            if row is None:
+                return None
+            if row["action"] not in {ACTION_ADMIT, ACTION_SUPERSEDE} or row["artifact_id"] != artifact_id or row["expected_head"] != expected:
+                raise QuarantineConflictError("quarantine:lookup-binding")
+            stored = connection.execute(
+                "SELECT * FROM quarantine_artifacts WHERE policy_digest=? AND artifact_id=?",
+                (self.policy_digest, artifact_id),
+            ).fetchone()
+            if stored is None or stored["artifact_digest"] != artifact_digest:
+                raise QuarantineConflictError("quarantine:lookup-artifact")
+            self._verify_stored_artifact(dict(stored))
+            result = self._result_from_operation(dict(row), connection=connection)
+            return result
         finally:
             connection.close()
 
     def integrity(self) -> dict[str, object]:
         try:
-            return independent.verify_database(self.database, policy=self.policy)
+            return independent.verify_database(self.database, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
             raise ExternalSourceQuarantineError(str(exc)) from exc
 
@@ -700,6 +770,7 @@ class ExternalSourceQuarantineService:
             "schema": f"{SCHEMA}-support",
             "schema_version": SCHEMA_VERSION,
             "chain_id": evidence["chain_id"],
+            "database_id": self.database_id,
             "head_state": evidence["head_state"],
             "head_sequence": evidence["sequence"],
             "head_root": evidence["head_root"],
@@ -738,6 +809,7 @@ class ExternalSourceQuarantineService:
             "schema": EXPORT_SCHEMA,
             "schema_version": EXPORT_VERSION,
             "policy_digest": self.policy_digest,
+            "database_id": self.database_id,
             "chain_id": self.chain_id,
             "meta": snapshot["quarantine_meta"],
             "artifacts": [],
@@ -766,7 +838,7 @@ class ExternalSourceQuarantineService:
         if len(raw) > MAX_EXPORT_BYTES:
             raise ExternalSourceQuarantineError("quarantine:export-byte-cap")
         try:
-            independent.verify_export_bytes(raw, policy=self.policy)
+            independent.verify_export_bytes(raw, policy=self.policy, database_id=self.database_id)
         except independent.IndependentQuarantineError as exc:
             raise ExternalSourceQuarantineError(str(exc)) from exc
         return raw
@@ -786,7 +858,7 @@ class ExternalSourceQuarantineService:
             for row in snapshot["quarantine_operations"]:
                 connection.execute("INSERT INTO quarantine_operations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["quarantine_operations"]))
             for row in snapshot["quarantine_transitions"]:
-                connection.execute("INSERT INTO quarantine_transitions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["quarantine_transitions"]))
+                connection.execute("INSERT INTO quarantine_transitions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["quarantine_transitions"]))
             for row in snapshot["quarantine_heads"]:
                 connection.execute("INSERT INTO quarantine_heads VALUES(?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["quarantine_heads"]))
             connection.commit()
@@ -805,26 +877,27 @@ class ExternalSourceQuarantineService:
         raw: bytes,
         *,
         policy: Mapping[str, object] | object,
+        database_id: str,
         fault_injector: Callable[[str], None] | None = None,
     ) -> "ExternalSourceQuarantineService":
         target = _resolve_database(destination)
         if target.exists() or target.is_symlink():
             raise QuarantineConflictError("quarantine:restore-target-exists")
         try:
-            verified = independent.verify_export_bytes(raw, policy=policy)
+            verified = independent.verify_export_bytes(raw, policy=policy, database_id=database_id)
         except independent.IndependentQuarantineError as exc:
             raise ExternalSourceQuarantineError(str(exc)) from exc
         fd, descriptor = tempfile.mkstemp(prefix=f".{target.name}.restore-", suffix=".db", dir=target.parent)
         os.close(fd)
         stage = Path(descriptor)
         try:
-            service = cls(stage, policy=policy, fault_injector=fault_injector)
+            service = cls(stage, policy=policy, database_id=database_id, fault_injector=fault_injector)
             service._restore_snapshot(verified["snapshot"])  # type: ignore[arg-type]
             service.integrity()
             os.replace(stage, target)
             for suffix in ("-wal", "-shm"):
                 Path(str(stage) + suffix).unlink(missing_ok=True)
-            return cls(target, policy=policy)
+            return cls(target, policy=policy, database_id=database_id)
         except Exception:
             stage.unlink(missing_ok=True)
             Path(str(stage) + "-wal").unlink(missing_ok=True)
@@ -837,8 +910,9 @@ def restore_export(
     raw: bytes,
     *,
     policy: Mapping[str, object] | object,
+    database_id: str,
 ) -> ExternalSourceQuarantineService:
-    return ExternalSourceQuarantineService.restore_export(destination, raw, policy=policy)
+    return ExternalSourceQuarantineService.restore_export(destination, raw, policy=policy, database_id=database_id)
 
 
 __all__ = [

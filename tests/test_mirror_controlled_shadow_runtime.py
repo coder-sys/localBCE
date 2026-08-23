@@ -42,7 +42,7 @@ class ControlledShadowRuntimeTests(unittest.TestCase):
         self.runtime_db = root / "runtime.db"
         self.source_policy = source_policy_factory()
         source_artifact = source_adapter.ExternalSourceAdapterService(self.source_policy, SourceVerifier(self.source_policy)).admit(b"synthetic-shadow-capture")
-        self.quarantine_service = quarantine.ExternalSourceQuarantineService(self.quarantine_db, policy=self.source_policy)
+        self.quarantine_service = quarantine.ExternalSourceQuarantineService(self.quarantine_db, policy=self.source_policy, database_id="SYNTH_SHADOW_Q_DB_V1")
         admitted = self.quarantine_service.admit("synthetic-quarantine-open", source_artifact.raw)
         head = self.quarantine_service.head()
         assert head is not None

@@ -347,7 +347,9 @@ def verify_component_exports(
     if runtime.profile_digest(runtime_profile) != configured["runtime_profile_digest"]:
         raise IndependentOperationalRecoveryError("recovery:runtime-profile")
     try:
-        q = quarantine.verify_export_bytes(quarantine_raw, policy=quarantine_policy)
+        q_export = quarantine._parse(quarantine_raw, maximum=quarantine.MAX_EXPORT_BYTES, max_string_bytes=quarantine.MAX_EXPORT_BYTES)
+        database_id = quarantine._database_id(q_export.get("database_id"))
+        q = quarantine.verify_export_bytes(quarantine_raw, policy=quarantine_policy, database_id=database_id)
         r = runtime.verify_export_bytes(runtime_raw, profile=runtime_profile)
     except Exception as exc:
         raise IndependentOperationalRecoveryError("recovery:component-verification") from exc

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -35,7 +36,7 @@ def _policy() -> adapter.ExternalSourcePolicyV1:
         verifier_epoch=profile.VERIFIER_EPOCH,
         authorization_artifact_digest=_hex("nc-authorization-fixture"),
         terms_artifact_digest=_hex("nc-terms-fixture"),
-        effective_start=6_000,
+        effective_start=7_000,
         effective_end=9_000,
         expected_cadence_seconds=600,
         freshness_grace_seconds=60,
@@ -99,7 +100,8 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         self.policy = _policy()
-        self.quarantine = quarantine.ExternalSourceQuarantineService(root / "quarantine.db", policy=self.policy)
+        self.quarantine_database_id = "SYNTH_NC_QUARANTINE_DATABASE_V1"
+        self.quarantine = quarantine.ExternalSourceQuarantineService(root / "quarantine.db", policy=self.policy, database_id=self.quarantine_database_id)
         self.config = acquisition.AuthenticatedSourceAcquisitionConfigV1(
             acquisition_id="SYNTH_NC_MEDICAID_ACQUISITION_V1",
             version=1,
@@ -107,13 +109,16 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
             external_policy_digest=self.policy.digest,
             quarantine_policy_digest=self.quarantine.policy_digest,
             quarantine_chain_id=self.quarantine.chain_id,
-            quarantine_database_id="SYNTH_NC_QUARANTINE_DATABASE_V1",
+            quarantine_database_id=self.quarantine_database_id,
             transport_id=_AuthenticatedFixtureTransport.transport_id,
             transport_epoch=1,
             authorization_artifact_digest=self.policy.authorization_artifact_digest,
             terms_artifact_digest=self.policy.terms_artifact_digest,
             endpoint_id=self.policy.logical_endpoint_id,
             request_digest=acquisition.request_digest_for_profile(),
+            effective_start=self.policy.effective_start,
+            effective_end=self.policy.effective_end,
+            expected_server_identity_digest=adapter_independent._digest("server-identity", self.policy.logical_endpoint_id),
             cadence_seconds=600,
             freshness_grace_seconds=60,
             max_body_bytes=profile.TRANSPORT_CAPS["max_page_bytes"],
@@ -138,7 +143,7 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         self.assertFalse(result["production_usable"])
         self.assertIsNone(result["proofSuiteId"])
         evidence = self.service.integrity()
-        self.assertEqual((1, 4, 4, 2), (evidence["slot_count"], evidence["operation_count"], evidence["transition_count"], evidence["attestation_count"]))
+        self.assertEqual((1, 5, 5, 2), (evidence["slot_count"], evidence["operation_count"], evidence["transition_count"], evidence["attestation_count"]))
         self.assertEqual("QUARANTINED", evidence["states"]["QUARANTINED"] and "QUARANTINED")
         self.assertEqual(created["slot_id"], lease.slot_id)  # type: ignore[union-attr]
         self.assertEqual(1, self.quarantine.integrity()["artifact_count"])
@@ -195,9 +200,9 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
                 raise quarantine.QuarantineResponseLost("quarantine:response-lost")
 
         self.quarantine.fault_injector = fault
-        with self.assertRaises(acquisition.AcquisitionResponseLost):
-            self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
-        self.assertEqual("CAPTURED", self.service.integrity()["states"]["CAPTURED"] and "CAPTURED")
+        first = self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+        self.assertEqual("QUARANTINED", first["state"])
+        self.assertEqual(0, self.service.integrity()["states"].get("QUARANTINE_PENDING", 0))
         self.quarantine.fault_injector = None
         retry = self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
         self.assertEqual("QUARANTINED", retry["state"])
@@ -208,7 +213,7 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 root = Path(self.temporary.name) / bad
                 root.mkdir()
-                q = quarantine.ExternalSourceQuarantineService(root / "q.db", policy=self.policy)
+                q = quarantine.ExternalSourceQuarantineService(root / "q.db", policy=self.policy, database_id=self.quarantine_database_id)
                 service = acquisition.AuthenticatedSourceAcquisitionService(root / "a.db", config=self.config, external_policy=self.policy, quarantine_service=q, clock=lambda: 7_000)
                 service.ensure_slot(7_000)
                 lease = service.claim_next(7_000)
@@ -230,7 +235,7 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
             with self.subTest(label=label):
                 root = Path(self.temporary.name) / ("transport-" + label)
                 root.mkdir()
-                q = quarantine.ExternalSourceQuarantineService(root / "q.db", policy=self.policy)
+                q = quarantine.ExternalSourceQuarantineService(root / "q.db", policy=self.policy, database_id=self.quarantine_database_id)
                 service = acquisition.AuthenticatedSourceAcquisitionService(root / "a.db", config=self.config, external_policy=self.policy, quarantine_service=q, clock=lambda: 7_000)
                 service.ensure_slot(7_000)
                 lease = service.claim_next(7_000)
@@ -310,6 +315,141 @@ class AuthenticatedSourceAcquisitionTests(unittest.TestCase):
         with self.assertRaises(acquisition.AuthenticatedSourceAcquisitionError):
             self.service.acquire(lease, _AuthenticatedFixtureTransport(self.policy, bad_digest=True))  # type: ignore[arg-type]
         self.assertEqual(0, self.quarantine.integrity()["artifact_count"])
+
+    def test_cadence_grid_future_and_capacity_are_store_owned(self) -> None:
+        future = self.service.ensure_slot(7_600)
+        self.assertIsNone(self.service.claim_next(7_000))
+        with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "future-slot"):
+            self.service.claim_slot(str(future["slot_id"]), 7_000)
+        with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "slot-grid"):
+            self.service.ensure_slot(7_100)
+        with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "slot-grid"):
+            self.service.ensure_slot(9_001)
+
+        root = Path(self.temporary.name) / "capacity"
+        root.mkdir()
+        q = quarantine.ExternalSourceQuarantineService(root / "q.db", policy=self.policy, database_id=self.quarantine_database_id)
+        config = acquisition.AuthenticatedSourceAcquisitionConfigV1(**{**self.config.material(), "max_slots": 1})
+        service = acquisition.AuthenticatedSourceAcquisitionService(root / "a.db", config=config, external_policy=self.policy, quarantine_service=q, clock=lambda: 7_000)
+        first = service.ensure_slot(7_000)
+        self.assertEqual(first["slot_id"], service.ensure_slot(7_000)["slot_id"])
+        before = service.export_bytes()
+        with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "slot-cap"):
+            service.ensure_slot(7_600)
+        self.assertEqual(before, service.export_bytes())
+
+    def test_declared_transport_identity_is_checked_before_first_fetch(self) -> None:
+        self.service.ensure_slot(7_000)
+        lease = self.service.claim_next(7_000)
+        transport = _AuthenticatedFixtureTransport(self.policy)
+        transport.transport_id = "SYNTH_WRONG_TRANSPORT_V1"
+        with self.assertRaisesRegex(acquisition.AuthenticatedSourceAcquisitionError, "transport-mismatch"):
+            self.service.acquire(lease, transport)  # type: ignore[arg-type]
+        self.assertEqual([], transport.calls)
+        self.assertEqual(1, self.service.integrity()["states"].get("LEASED"))
+        self.assertEqual(0, self.quarantine.integrity()["artifact_count"])
+
+    def test_quarantine_owner_identity_is_required_on_service_and_reopen(self) -> None:
+        wrong_root = Path(self.temporary.name) / "wrong-quarantine"
+        wrong_root.mkdir()
+        wrong = quarantine.ExternalSourceQuarantineService(wrong_root / "q.db", policy=self.policy, database_id="SYNTH_OTHER_QUARANTINE_DB_V1")
+        with self.assertRaisesRegex(acquisition.AuthenticatedSourceAcquisitionError, "quarantine-database"):
+            acquisition.AuthenticatedSourceAcquisitionService(wrong_root / "a.db", config=self.config, external_policy=self.policy, quarantine_service=wrong, clock=lambda: 7_000)
+        with self.assertRaisesRegex(quarantine.ExternalSourceQuarantineError, "database-id"):
+            quarantine.ExternalSourceQuarantineService(self.quarantine.database, policy=self.policy, database_id="SYNTH_OTHER_QUARANTINE_DB_V1")
+
+    def test_begin_quarantine_is_durable_before_external_invocation(self) -> None:
+        root = Path(self.temporary.name) / "pending-marker"
+        root.mkdir()
+        marker: dict[str, object] = {}
+        acquisition_database = root / "a.db"
+
+        class MarkerQuarantine(quarantine.ExternalSourceQuarantineService):
+            def admit(self, request_key: str, artifact_raw: bytes, *, expected_head: str | None = None) -> dict[str, object]:
+                connection = sqlite3.connect(acquisition_database)
+                try:
+                    row = connection.execute("SELECT state,quarantine_request_digest,quarantine_material_digest FROM acquisition_slots").fetchone()
+                finally:
+                    connection.close()
+                marker["row"] = row
+                marker["artifact_count"] = self.integrity()["artifact_count"]
+                return super().admit(request_key, artifact_raw, expected_head=expected_head)
+
+        q = MarkerQuarantine(root / "q.db", policy=self.policy, database_id=self.quarantine_database_id)
+        service = acquisition.AuthenticatedSourceAcquisitionService(acquisition_database, config=self.config, external_policy=self.policy, quarantine_service=q, clock=lambda: 7_000)
+        service.ensure_slot(7_000)
+        lease = service.claim_next(7_000)
+        service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+        self.assertEqual("QUARANTINE_PENDING", marker["row"][0])  # type: ignore[index]
+        self.assertTrue(marker["row"][1])  # type: ignore[index]
+        self.assertTrue(marker["row"][2])  # type: ignore[index]
+        self.assertEqual(0, marker["artifact_count"])
+
+    def test_response_loss_without_receipt_becomes_unconfirmed_not_held_at_last_attempt(self) -> None:
+        root = Path(self.temporary.name) / "unconfirmed"
+        root.mkdir()
+
+        class NoCommitQuarantine(quarantine.ExternalSourceQuarantineService):
+            def admit(self, request_key: str, artifact_raw: bytes, *, expected_head: str | None = None) -> dict[str, object]:
+                del request_key, artifact_raw, expected_head
+                raise quarantine.QuarantineResponseLost("quarantine:response-lost")
+
+        q = NoCommitQuarantine(root / "q.db", policy=self.policy, database_id=self.quarantine_database_id)
+        service = acquisition.AuthenticatedSourceAcquisitionService(root / "a.db", config=self.config, external_policy=self.policy, quarantine_service=q, clock=lambda: 7_000)
+        service.ensure_slot(7_000)
+        for _ in range(2):
+            lease = service.claim_next(7_000)
+            with self.assertRaises(acquisition.AuthenticatedSourceAcquisitionError):
+                service.acquire(lease, _AuthenticatedFixtureTransport(self.policy, bad_digest=True))  # type: ignore[arg-type]
+        lease = service.claim_next(7_000)
+        with self.assertRaisesRegex(acquisition.AcquisitionResponseLost, "response-loss"):
+            service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+        self.assertEqual(1, service.integrity()["states"].get("QUARANTINE_PENDING"))
+        self.assertEqual(1, service.requeue_expired(7_061))
+        evidence = service.integrity()
+        self.assertEqual(1, evidence["states"].get("QUARANTINE_UNCONFIRMED"))
+        self.assertEqual(0, evidence["states"].get("HELD", 0))
+        self.assertEqual(0, q.integrity()["artifact_count"])
+        with self.assertRaisesRegex(acquisition.AcquisitionConflictError, "quarantine-unconfirmed"):
+            service.recover_quarantine(str(lease.slot_id), 7_061)  # type: ignore[union-attr]
+
+    def test_selected_page_binding_rejects_missing_extra_reordered_and_cross_lease(self) -> None:
+        mutations = ("missing", "extra", "reordered", "cross-lease")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                root = Path(self.temporary.name) / ("pages-" + mutation)
+                root.mkdir()
+                q = quarantine.ExternalSourceQuarantineService(root / "q.db", policy=self.policy, database_id=self.quarantine_database_id)
+                service = acquisition.AuthenticatedSourceAcquisitionService(root / "a.db", config=self.config, external_policy=self.policy, quarantine_service=q, clock=lambda: 7_000)
+                service.ensure_slot(7_000)
+                lease = service.claim_next(7_000)
+                service.acquire(lease, _AuthenticatedFixtureTransport(self.policy))  # type: ignore[arg-type]
+                connection = sqlite3.connect(service.database)
+                try:
+                    raw = connection.execute("SELECT selected_pages_raw FROM acquisition_slots").fetchone()[0]
+                    selected = json.loads(bytes(raw).decode("ascii"))
+                    if mutation == "missing":
+                        selected.pop()
+                    elif mutation == "extra":
+                        selected.append(dict(selected[-1], page_index=2))
+                    elif mutation == "reordered":
+                        selected.reverse()
+                    else:
+                        selected[0]["lease_attempt"] = 2
+                    connection.execute("UPDATE acquisition_slots SET selected_pages_raw=?", (acquisition._canonical(selected),))
+                    connection.commit()
+                finally:
+                    connection.close()
+                with self.assertRaisesRegex(acquisition.AuthenticatedSourceAcquisitionError, "acquisition:"):
+                    service.integrity()
+
+    def test_live_transport_fails_before_network_or_quarantine_mutation(self) -> None:
+        self.service.ensure_slot(7_000)
+        lease = self.service.claim_next(7_000)
+        with self.assertRaisesRegex(acquisition.AuthenticatedSourceAcquisitionError, "transport-mismatch"):
+            self.service.acquire(lease, acquisition.LiveAuthenticatedFhirTransport())
+        self.assertEqual(0, self.quarantine.integrity()["artifact_count"])
+        self.assertEqual(1, self.service.integrity()["states"].get("LEASED"))
 
     def test_independent_module_has_no_producer_or_network_dependency(self) -> None:
         source = Path(independent.__file__).read_text(encoding="utf-8")
