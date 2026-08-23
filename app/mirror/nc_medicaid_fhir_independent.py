@@ -703,6 +703,7 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
         "resource_counts": counts,
         "resources": resources,
         "snapshot_id": value["snapshot_id"],
+        "page_digests": tuple(str(page["body_digest"]) for page in pages),
     }
 
 
