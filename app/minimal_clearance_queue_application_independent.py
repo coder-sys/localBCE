@@ -9,7 +9,7 @@ import re
 import sqlite3
 from typing import Any, Final, Mapping
 
-from app.minimal_clearance_proof_state import parse_acceptance_bytes
+from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_verification_queue_independent import (
     IndependentQueueError,
     IndependentVerifiedQueueJob,
@@ -428,6 +428,18 @@ def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = N
             connection.close()
 
 
+def verify_database_connection(
+    connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Verify an already-open read transaction without changing its snapshot."""
+    if not isinstance(connection, sqlite3.Connection):
+        _fail("database_connection")
+    try:
+        return verify_export_bytes(_db_export(connection), expected_config=expected_config)
+    except sqlite3.Error as exc:
+        raise IndependentQueueApplicationError("database_read") from exc
+
+
 def _create_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -485,5 +497,5 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
 
 __all__ = (
     "IndependentQueueApplicationError", "read_application_job", "restore_export_to_fresh_database",
-    "verify_database", "verify_export_bytes",
+    "verify_database", "verify_database_connection", "verify_export_bytes",
 )

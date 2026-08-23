@@ -23,12 +23,19 @@ from app.minimal_clearance_proof_state import (
     MinimalClearanceIndeterminateError,
     MinimalClearanceReceiptV1,
     MinimalClearanceStateStoreV1,
-    MinimalProofAcceptanceV1,
+)
+from app.minimal_clearance_acceptance_independent import (
+    IndependentAcceptanceV1,
     parse_acceptance_bytes,
 )
 from app.minimal_clearance_queue_application_independent import (
     IndependentQueueApplicationError,
     read_application_job,
+)
+from app.minimal_clearance_verification_queue import (
+    ArtifactMetadata,
+    CustodySnapshot,
+    ProofArtifactCustodyPort,
 )
 
 
@@ -225,6 +232,7 @@ class QueueApplicationStoreV1:
         *,
         path: Path,
         config: QueueApplicationConfigV1,
+        custody: ProofArtifactCustodyPort,
         clock: ApplicationClock | None = None,
         before_fault: Callable[[str], None] | None = None,
         after_commit_fault: Callable[[str], None] | None = None,
@@ -233,6 +241,9 @@ class QueueApplicationStoreV1:
             raise QueueApplicationError("application_database_path")
         self.path = path
         self.config = config
+        if not callable(getattr(custody, "snapshot", None)):
+            raise QueueApplicationError("application_custody_port")
+        self.custody = custody
         self.clock = clock or _SystemClock()
         self._before_fault = before_fault
         self._after_commit_fault = after_commit_fault
@@ -599,7 +610,7 @@ class QueueApplicationStoreV1:
 
     @staticmethod
     def _validate_state_receipt(
-        acceptance: MinimalProofAcceptanceV1,
+        acceptance: IndependentAcceptanceV1,
         receipt: MinimalClearanceReceiptV1,
         before: Any,
         after: Any,
@@ -663,11 +674,29 @@ class QueueApplicationStoreV1:
             return self._held(work, "acceptance_reparse_failed")
         with closing(self._connect()) as connection:
             self._live_lease(connection, work)
+        custody_snapshot: CustodySnapshot | None = None
         try:
             if bytes(state_store.expected_verifier_sha256) != self.config.verifier_sha256 or state_store.state_store_identity() != self.config.state_store_identity:
                 return self._held(work, "state_binding_drift")
+            metadata = ArtifactMetadata(
+                verified.artifact_ref, verified.artifact_bytes,
+                verified.artifact_sha256, verified.artifact_sha3_512,
+            )
+            custody_snapshot = self.custody.snapshot(verified.artifact_ref, metadata)
+            if type(custody_snapshot) is not CustodySnapshot or (
+                not custody_snapshot.path.is_file() or custody_snapshot.path.is_symlink()
+                or custody_snapshot.readonly is not True
+                or custody_snapshot.artifact_bytes != metadata.artifact_bytes
+                or custody_snapshot.artifact_sha256 != metadata.artifact_sha256
+                or custody_snapshot.artifact_sha3_512 != metadata.artifact_sha3_512
+                or not callable(custody_snapshot.cleanup)
+            ):
+                raise QueueApplicationIntegrityError("application_custody_identity")
             before = state_store.snapshot()
-            outcome = state_store.submit_verified_acceptance_outcome(acceptance)
+            outcome = state_store.submit_outcome(
+                custody_snapshot.path,
+                expected_acceptance_bytes=work.acceptance_bytes,
+            )
             if type(outcome) is not MinimalClearanceAdmissionOutcomeV1:
                 raise QueueApplicationIntegrityError("state_admission_outcome")
             receipt = outcome.receipt
@@ -678,6 +707,12 @@ class QueueApplicationStoreV1:
             raise
         except Exception:
             return self._held(work, "state_admission_failed")
+        finally:
+            if custody_snapshot is not None and custody_snapshot.cleanup is not None:
+                try:
+                    custody_snapshot.cleanup()
+                except Exception as exc:
+                    raise QueueApplicationIndeterminateError("application_custody_cleanup") from exc
         receipt_bytes = receipt.canonical_bytes()
         if len(receipt_bytes) > _MAX_RECEIPT:
             raise QueueApplicationIntegrityError("state_receipt_bounds")

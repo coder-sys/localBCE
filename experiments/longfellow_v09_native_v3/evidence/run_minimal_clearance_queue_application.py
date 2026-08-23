@@ -1,4 +1,4 @@
-"""One bounded queue-to-state application exercise; no native verifier call."""
+"""One bounded queue-to-state application exercise with native re-verification."""
 
 from __future__ import annotations
 
@@ -13,33 +13,16 @@ _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.minimal_clearance_proof_state import MinimalClearanceStateStoreV1, MinimalProofAcceptanceV1, parse_acceptance_bytes
+from app.minimal_clearance_proof_state import MinimalClearanceStateStoreV1, NativeMinimalClearanceVerifier
 from app.minimal_clearance_queue_application import QueueApplicationConfigV1, QueueApplicationStoreV1
 from app.minimal_clearance_queue_application_independent import restore_export_to_fresh_database, verify_database, verify_export_bytes, read_application_job
+from app.minimal_clearance_verification_queue import FilesystemArtifactCustody
 
 
 ARTIFACT_BYTES = 411_672
 ARTIFACT_SHA256 = "69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E"
 ARTIFACT_SHA3_512 = "A2D3DDBA8C6ECAABC70147793185318FA7910E8EBBA0675D614E95885DAC23331C3F2FE3689F30748B030C9A26D55D704DB244C5DC36136896F6B87F42045BE1"
 VERIFIER_SHA256 = "E2BD096389E7D9CB3F8D83314747CA3D493DF6C30D86A57041F74B84F0023F3E"
-
-
-class _AcceptedStateVerifier:
-    """Test-owned state adapter: expected statement only, never proof verify."""
-
-    def __init__(self, acceptance: MinimalProofAcceptanceV1) -> None:
-        self.acceptance = acceptance
-        self.verify_calls = 0
-
-    def identity_sha256(self) -> bytes:
-        return bytes.fromhex(VERIFIER_SHA256)
-
-    def expected_statement(self) -> bytes:
-        return self.acceptance.statement.statement_bytes
-
-    def verify(self, artifact_path: Path):
-        self.verify_calls += 1
-        raise RuntimeError("application_native_verifier_forbidden")
 
 
 def _identity(path: Path) -> tuple[bytes, str, bool]:
@@ -53,9 +36,9 @@ def _json_bytes(value: dict[str, object]) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
-def run(*, queue_database: Path, application_database: Path, state_database: Path, restore_database: Path, artifact: Path, verifier: Path, evidence_output: Path, job_ids: list[str]) -> dict[str, object]:
+def run(*, queue_database: Path, application_database: Path, state_database: Path, restore_database: Path, artifact: Path, verifier: Path, workspace: Path, evidence_output: Path, job_ids: list[str]) -> dict[str, object]:
     targets = (application_database, state_database, restore_database, evidence_output)
-    if any(path.exists() or path.is_symlink() for path in targets) or len(job_ids) != 4 or len(set(job_ids)) != 4:
+    if any(path.exists() or path.is_symlink() for path in targets) or len(job_ids) != 4 or len(set(job_ids)) != 4 or not workspace.is_dir():
         raise RuntimeError("fresh_target_or_job_set")
     artifact_raw, artifact_hash, artifact_readonly = _identity(artifact)
     _, verifier_hash, _ = _identity(verifier)
@@ -69,8 +52,9 @@ def run(*, queue_database: Path, application_database: Path, state_database: Pat
         for item in queue_jobs
     ):
         raise RuntimeError("queue_binding")
-    acceptance = parse_acceptance_bytes(first.acceptance_bytes)
-    state_verifier = _AcceptedStateVerifier(acceptance)
+    state_verifier = NativeMinimalClearanceVerifier(
+        verifier, executable_sha256=VERIFIER_SHA256, timeout_seconds=30.0 * 60.0,
+    )
     state = MinimalClearanceStateStoreV1(path=state_database, verifier=state_verifier)
     before_state = state.snapshot()
     fault_mode = {"name": "after_state_commit_before_coordinator"}
@@ -88,36 +72,54 @@ def run(*, queue_database: Path, application_database: Path, state_database: Pat
         state_store_identity=state.state_store_identity(),
         capacity=16,
     )
-    app = QueueApplicationStoreV1(path=application_database, config=config, before_fault=fault)
+    custody = FilesystemArtifactCustody(
+        resolver=lambda ref: artifact if ref == first.artifact_ref else Path("missing"),
+        workspace_parent=workspace,
+    )
+    app = QueueApplicationStoreV1(path=application_database, config=config, custody=custody, before_fault=fault)
     for job_id in job_ids:
         app.discover(queue_database, job_id)
     works = [app.claim_next(f"application-worker-{index}") for index in range(4)]
     if any(work is None for work in works):
         raise RuntimeError("application_claim_count")
     results = []
+    state_telemetry: list[dict[str, object]] = []
+
+    def capture_state_telemetry() -> dict[str, object]:
+        containment = state_verifier.last_containment_result
+        if containment is None or containment.exit_code != 0 or containment.timed_out or containment.cap_bytes != 5_000_000_000 or containment.cap_enforced is not True or containment.active_process_limit != 1 or containment.peak_job_commit_bytes > 5_000_000_000:
+            raise RuntimeError("state_containment_not_qualified")
+        return {
+            "exit_code": containment.exit_code,
+            "timed_out": containment.timed_out,
+            "cap_bytes": containment.cap_bytes,
+            "cap_enforced": containment.cap_enforced,
+            "active_process_limit": containment.active_process_limit,
+            "peak_job_commit_bytes": containment.peak_job_commit_bytes,
+        }
+
     recovery_count = 0
     for index, work in enumerate(works):
         try:
             result = app.apply(work, queue_database=queue_database, state_store=state)
         except RuntimeError as exc:
+            state_telemetry.append(capture_state_telemetry())
             if str(exc) != "synthetic_coordinator_fault":
                 raise
             recovery_count += 1
-            if index == 0:
-                fault_mode["name"] = "none"
-            elif index == 1:
-                fault_mode["name"] = "none"
             result = app.apply(work, queue_database=queue_database, state_store=state)
-            if index == 0:
-                fault_mode["name"] = "before_application_commit"
+            state_telemetry.append(capture_state_telemetry())
+        else:
+            state_telemetry.append(capture_state_telemetry())
         results.append(result)
-    if len(results) != 4 or any(result.status != "APPLIED" for result in results) or sum(not result.duplicate_convergence for result in results) != 1 or sum(result.duplicate_convergence for result in results) != 3:
+    duplicate_count = sum(result.duplicate_convergence for result in results)
+    if len(results) != 4 or any(result.status != "APPLIED" for result in results) or recovery_count != 1 or duplicate_count != 4:
         raise RuntimeError("application_result_shape")
     after_state = state.snapshot()
     if after_state.sequence != before_state.sequence + 1 or after_state.payment_root != before_state.payment_root or after_state.settled_batch_count != before_state.settled_batch_count:
         raise RuntimeError("state_mutation_shape")
-    if len({result.state_receipt_bytes for result in results}) != 1 or state_verifier.verify_calls != 0:
-        raise RuntimeError("state_receipt_or_native_call")
+    if len({result.state_receipt_bytes for result in results}) != 1 or len(state_telemetry) != 5:
+        raise RuntimeError("state_receipt_or_native_call_count")
     app.verify_integrity()
     exported = app.export_bytes()
     producer_summary = verify_database(application_database, expected_config=config.as_json())
@@ -126,7 +128,10 @@ def run(*, queue_database: Path, application_database: Path, state_database: Pat
     if producer_summary != export_summary or export_summary != restored_summary:
         raise RuntimeError("application_reconstruction_parity")
     state.close()
-    restarted = MinimalClearanceStateStoreV1(path=state_database, verifier=_AcceptedStateVerifier(acceptance))
+    restarted = MinimalClearanceStateStoreV1(
+        path=state_database,
+        verifier=NativeMinimalClearanceVerifier(verifier, executable_sha256=VERIFIER_SHA256, timeout_seconds=30.0 * 60.0),
+    )
     restarted.verify_integrity()
     restarted_after = restarted.snapshot()
     if restarted_after != after_state:
@@ -142,7 +147,9 @@ def run(*, queue_database: Path, application_database: Path, state_database: Pat
         "application_schema": 1,
         "queue_verified_job_count": 4,
         "application_applied_count": 4,
-        "application_duplicate_convergence_count": 3,
+        "application_duplicate_convergence_count": duplicate_count,
+        "application_transition_applied_count": 1,
+        "application_response_loss_recovery_observed": True,
         "application_recovery_count": recovery_count,
         "state_transition_count": 1,
         "state_schema": restarted_after.schema_version,
@@ -161,8 +168,13 @@ def run(*, queue_database: Path, application_database: Path, state_database: Pat
         "queue_reconstruction_parity": True,
         "application_reconstruction_parity": True,
         "state_restart_integrity": True,
-        "state_store_verifier_calls": 0,
-        "application_native_verifier_invocations": 0,
+        "queue_native_verification_invocations_in_runner": 0,
+        "state_boundary_native_verifier_invocations": len(state_telemetry),
+        "state_boundary_peak_job_commit_bytes": [item["peak_job_commit_bytes"] for item in state_telemetry],
+        "state_boundary_cap_bytes": 5_000_000_000,
+        "state_boundary_cap_enforced": True,
+        "state_boundary_active_process_limit": 1,
+        "state_boundary_timed_out": False,
         "prover_invocation_count": 0,
         "proof_suite_id": None,
         "production_usable": False,
@@ -189,6 +201,7 @@ def main() -> int:
     parser.add_argument("--restore-database", type=Path, required=True)
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--verifier", type=Path, required=True)
+    parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--evidence-output", type=Path, required=True)
     parser.add_argument("--job-id", action="append", required=True)
     args = parser.parse_args()

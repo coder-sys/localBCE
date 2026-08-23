@@ -2,7 +2,8 @@
 
 The fixture is the existing zero-PHI queue-application fixture.  It uses an
 in-process receiver and never invokes a native verifier, prover, payment
-interface, or state-store mutation during the handoff exercise.
+interface, or state-store mutation during the handoff exercise.  Its
+application setup uses only the test-owned concrete verifier fixture.
 """
 
 from __future__ import annotations
@@ -155,6 +156,7 @@ def run(evidence_output: Path) -> dict[str, object]:
             "envelope_parser_directives_checked": [1, 2, 3, 4, 5],
             "state_mutation_count": 0,
             "native_verifier_invocations": 0,
+            "synthetic_state_boundary_verifier_calls": int(_verifier.verify_calls),
             "prover_invocations": 0,
             "payment_calls": 0,
             "economic_mutation": False,

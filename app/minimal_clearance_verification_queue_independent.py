@@ -16,7 +16,7 @@ import re
 import sqlite3
 from typing import Any, Final, Mapping
 
-from app.minimal_clearance_proof_state import parse_acceptance_bytes
+from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 
 
 class IndependentQueueError(RuntimeError):
@@ -37,6 +37,7 @@ class IndependentVerifiedQueueJob:
     receipt_id: bytes
     acceptance_bytes: bytes
     proof_acceptance_digest: bytes
+    artifact_ref: str
     artifact_bytes: int
     artifact_sha256: bytes
     artifact_sha3_512: bytes
@@ -667,17 +668,19 @@ def read_verified_job(
     *,
     expected_config: Mapping[str, Any] | None = None,
 ) -> IndependentVerifiedQueueJob:
-    """Verify a queue database, then extract one terminal VERIFIED result."""
-    summary = verify_database(path, expected_config=expected_config)
+    """Verify and consume one terminal result from the same SQLite snapshot."""
     if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None:
         _fail("job_id")
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=5.0)
         connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        raw_database = _db_export(connection)
+        summary = verify_export_bytes(raw_database, expected_config=expected_config)
         metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()
         row = connection.execute(
-            "SELECT j.status,r.terminal_status,r.receipt_bytes FROM queue_jobs j "
+            "SELECT j.status,r.terminal_status,r.receipt_bytes,j.artifact_ref,j.artifact_bytes,j.artifact_sha256,j.artifact_sha3_512 FROM queue_jobs j "
             "LEFT JOIN queue_results r ON r.operation_id=j.operation_id WHERE j.job_id=?",
             (job_id,),
         ).fetchone()
@@ -695,7 +698,14 @@ def read_verified_job(
         evidence = receipt["evidence"]
         operation = receipt["operation_id"]
         acceptance_bytes = bytes(evidence["acceptance_bytes"])
-        return IndependentVerifiedQueueJob(
+        if (
+            type(row[3]) is not str or not _TOKEN.fullmatch(str(row[3]))
+            or int(row[4]) != int(evidence["artifact_bytes"])
+            or bytes(row[5]) != bytes(evidence["artifact_sha256"])
+            or bytes(row[6]) != bytes(evidence["artifact_sha3_512"])
+        ):
+            _fail("job_artifact_metadata_binding")
+        result = IndependentVerifiedQueueJob(
             queue_id=str(config["queue_id"]),
             config_digest=bytes.fromhex(str(summary["config_digest"])),
             verifier_sha256=bytes(evidence["verifier_sha256"]),
@@ -706,9 +716,10 @@ def read_verified_job(
             receipt_id=bytes(receipt["receipt_id"]),
             acceptance_bytes=acceptance_bytes,
             proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]),
-            artifact_bytes=int(evidence["artifact_bytes"]),
-            artifact_sha256=bytes(evidence["artifact_sha256"]),
-            artifact_sha3_512=bytes(evidence["artifact_sha3_512"]),
+            artifact_ref=str(row[3]),
+            artifact_bytes=int(row[4]),
+            artifact_sha256=bytes(row[5]),
+            artifact_sha3_512=bytes(row[6]),
             circuit_id=bytes(evidence["circuit_id"]),
             peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]),
             cap_bytes=int(evidence["cap_bytes"]),
@@ -719,6 +730,8 @@ def read_verified_job(
             stdout_sha3_512=bytes(evidence["stdout_sha3_512"]),
             stderr_sha3_512=bytes(evidence["stderr_sha3_512"]),
         )
+        connection.execute("ROLLBACK")
+        return result
     except sqlite3.Error as exc:
         raise IndependentQueueError("database_read") from exc
     finally:

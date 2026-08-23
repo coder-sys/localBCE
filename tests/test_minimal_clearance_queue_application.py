@@ -12,10 +12,9 @@ import tempfile
 import unittest
 
 from app.minimal_clearance_proof_state import (
-    MinimalClearanceProofStateError,
     MinimalClearanceStateStoreV1,
     MinimalProofAcceptanceV1,
-    parse_acceptance_bytes,
+    NativeMinimalClearanceVerifier,
 )
 from app.minimal_clearance_queue_application import (
     QueueApplicationConfigV1,
@@ -49,21 +48,29 @@ from tests.test_minimal_clearance_verification_queue import (
 )
 
 
-class _NoNativeVerifier:
-    def __init__(self, acceptance: MinimalProofAcceptanceV1) -> None:
-        self.acceptance = acceptance
-        self.identity = _VERIFIER
-        self.verify_calls = 0
+def _state_verifier(acceptance: MinimalProofAcceptanceV1) -> NativeMinimalClearanceVerifier:
+    """Concrete verifier test double; native execution is replaced at the test boundary."""
+    verifier = object.__new__(NativeMinimalClearanceVerifier)
+    verifier.acceptance = acceptance
+    verifier.identity = _VERIFIER
+    verifier.verify_calls = 0
 
-    def identity_sha256(self) -> bytes:
-        return self.identity
+    def identity_sha256() -> bytes:
+        return verifier.identity
 
-    def expected_statement(self) -> bytes:
-        return self.acceptance.statement.statement_bytes
+    def expected_statement() -> bytes:
+        return acceptance.statement.statement_bytes
 
-    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-        self.verify_calls += 1
-        raise AssertionError("application must not invoke a native verifier")
+    def verify(artifact_path: Path) -> MinimalProofAcceptanceV1:
+        verifier.verify_calls += 1
+        if not artifact_path.is_file() or artifact_path.is_symlink():
+            raise AssertionError("test custody snapshot missing")
+        return acceptance
+
+    verifier.identity_sha256 = identity_sha256
+    verifier.expected_statement = expected_statement
+    verifier.verify = verify
+    return verifier
 
 
 class _StoreClock:
@@ -114,8 +121,8 @@ class QueueApplicationTests(unittest.TestCase):
         store.verify_integrity()
         return path, config, _Acceptance()
 
-    def _state(self, acceptance: MinimalProofAcceptanceV1) -> tuple[MinimalClearanceStateStoreV1, _NoNativeVerifier]:
-        verifier = _NoNativeVerifier(acceptance)
+    def _state(self, acceptance: MinimalProofAcceptanceV1) -> tuple[MinimalClearanceStateStoreV1, NativeMinimalClearanceVerifier]:
+        verifier = _state_verifier(acceptance)
         store = MinimalClearanceStateStoreV1(path=self.root / "clearance.sqlite3", verifier=verifier)
         return store, verifier
 
@@ -128,7 +135,10 @@ class QueueApplicationTests(unittest.TestCase):
             state_store_identity=state.state_store_identity(),
             capacity=8,
         )
-        return QueueApplicationStoreV1(path=self.root / "application.sqlite3", config=app_config, clock=_StoreClock())
+        return QueueApplicationStoreV1(
+            path=self.root / "application.sqlite3", config=app_config,
+            custody=_Custody(self.root / "application-custody"), clock=_StoreClock(),
+        )
 
     def test_verified_discovery_apply_and_duplicate_convergence(self) -> None:
         queue_path, queue_config, acceptance = self._queue()
@@ -144,7 +154,7 @@ class QueueApplicationTests(unittest.TestCase):
             self.assertEqual(sum(result.duplicate_convergence for result in results), 3)
             self.assertEqual(len({result.state_receipt_bytes for result in results}), 1)
             self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
-            self.assertEqual(verifier.verify_calls, 0)
+            self.assertEqual(verifier.verify_calls, 4)
             self.assertEqual(app.snapshot()["status_counts"], {"APPLIED": 4, "DISCOVERED": 0, "HELD": 0, "LEASED": 0})
             app.verify_integrity()
         finally:
@@ -222,7 +232,7 @@ class QueueApplicationTests(unittest.TestCase):
             self.assertEqual(sum(result.duplicate_convergence for result in results), 1)
             self.assertEqual(len({result.state_receipt_bytes for result in results}), 1)
             self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
-            self.assertEqual(verifier.verify_calls, 0)
+            self.assertEqual(verifier.verify_calls, 2)
             app.verify_integrity()
         finally:
             state.close()
@@ -235,7 +245,10 @@ class QueueApplicationTests(unittest.TestCase):
             "queue-application-test", queue_config.queue_id, queue_config.digest, _VERIFIER,
             state.state_store_identity(), capacity=8, lease_seconds=1,
         )
-        app = QueueApplicationStoreV1(path=self.root / "application.sqlite3", config=app_config, clock=clock)
+        app = QueueApplicationStoreV1(
+            path=self.root / "application.sqlite3", config=app_config,
+            custody=_Custody(self.root / "application-custody-expiry"), clock=clock,
+        )
         try:
             app.discover(queue_path, "job-0")
             old = app.claim_next("worker-0")
@@ -262,7 +275,10 @@ class QueueApplicationTests(unittest.TestCase):
             "queue-application-test", queue_config.queue_id, queue_config.digest, _VERIFIER,
             state.state_store_identity(), capacity=8, lease_seconds=1,
         )
-        app = QueueApplicationStoreV1(path=self.root / "application.sqlite3", config=app_config, clock=clock)
+        app = QueueApplicationStoreV1(
+            path=self.root / "application.sqlite3", config=app_config,
+            custody=_Custody(self.root / "application-custody-held"), clock=clock,
+        )
         try:
             app.discover(queue_path, "job-0")
             for expected_attempt in (1, 2, 3):
@@ -293,7 +309,8 @@ class QueueApplicationTests(unittest.TestCase):
                 fired["value"] = True
                 clock.advance(1001)
         app = QueueApplicationStoreV1(
-            path=self.root / "application.sqlite3", config=app_config, clock=clock,
+            path=self.root / "application.sqlite3", config=app_config,
+            custody=_Custody(self.root / "application-custody-requeue"), clock=clock,
             before_fault=expire_after_state,
         )
         try:
@@ -309,7 +326,7 @@ class QueueApplicationTests(unittest.TestCase):
             self.assertEqual(result.status, "APPLIED")
             self.assertTrue(result.duplicate_convergence)
             self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
-            self.assertEqual(verifier.verify_calls, 0)
+            self.assertEqual(verifier.verify_calls, 2)
             app.verify_integrity()
         finally:
             state.close()
@@ -328,7 +345,10 @@ class QueueApplicationTests(unittest.TestCase):
             "queue-application-test", queue_config.queue_id, queue_config.digest, _VERIFIER,
             state.state_store_identity(), capacity=8,
         )
-        app = QueueApplicationStoreV1(path=self.root / "application.sqlite3", config=app_config, before_fault=fault)
+        app = QueueApplicationStoreV1(
+            path=self.root / "application.sqlite3", config=app_config,
+            custody=_Custody(self.root / "application-custody-loss"), before_fault=fault,
+        )
         try:
             app.discover(queue_path, "job-0")
             work = app.claim_next("worker")
@@ -340,7 +360,7 @@ class QueueApplicationTests(unittest.TestCase):
             self.assertEqual(recovered.status, "APPLIED")
             self.assertTrue(recovered.duplicate_convergence)
             self.assertEqual(state.snapshot().sequence, acceptance.statement.sequence_before + 1)
-            self.assertEqual(verifier.verify_calls, 0)
+            self.assertEqual(verifier.verify_calls, 2)
             app.verify_integrity()
         finally:
             state.close()
@@ -368,18 +388,22 @@ class QueueApplicationTests(unittest.TestCase):
         finally:
             state.close()
 
-    def test_typed_admission_never_calls_verifier_or_mutates_payment(self) -> None:
+    def test_artifact_admission_reverifies_and_never_accepts_caller_only_object(self) -> None:
         _, _, acceptance = self._queue(count=1)
         state, verifier = self._state(acceptance)
         try:
+            self.assertFalse(hasattr(state, "submit_verified_acceptance"))
+            self.assertFalse(hasattr(state, "submit_verified_acceptance_outcome"))
+            artifact = self.root / "state-artifact.blmc"
+            artifact.write_bytes(_RAW)
             before = state.snapshot()
-            first = state.submit_verified_acceptance_outcome(parse_acceptance_bytes(acceptance.canonical_bytes()))
-            second = state.submit_verified_acceptance_outcome(parse_acceptance_bytes(acceptance.canonical_bytes()))
+            first = state.submit_outcome(artifact, expected_acceptance_bytes=acceptance.canonical_bytes())
+            second = state.submit_outcome(artifact, expected_acceptance_bytes=acceptance.canonical_bytes())
             self.assertTrue(first.transition_applied)
             self.assertFalse(second.transition_applied)
             receipt = second.receipt
             after = state.snapshot()
-            self.assertEqual(verifier.verify_calls, 0)
+            self.assertEqual(verifier.verify_calls, 2)
             self.assertEqual(before.payment_root, after.payment_root)
             self.assertEqual(before.settled_batch_count, after.settled_batch_count)
             self.assertFalse(receipt.economic_mutation)

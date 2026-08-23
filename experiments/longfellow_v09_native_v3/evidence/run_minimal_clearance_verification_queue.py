@@ -44,36 +44,15 @@ CAP_BYTES = 5_000_000_000
 ARTIFACT_REF = "retained-minimal-proof-v1"
 
 
-class _TimedVerifier:
-    def __init__(self, native: NativeMinimalClearanceVerifier) -> None:
-        self.native = native
-        self.started = 0.0
-        self.ended = 0.0
-
-    def identity_sha256(self) -> bytes:
-        return self.native.identity_sha256()
-
-    @property
-    def last_containment_result(self):
-        return self.native.last_containment_result
-
-    def verify(self, artifact_path: Path):
-        self.started = time.perf_counter()
-        try:
-            return self.native.verify(artifact_path)
-        finally:
-            self.ended = time.perf_counter()
-
-
 class _Factory:
     def __init__(self, executable: Path) -> None:
         self.executable = executable
-        self.instances: list[_TimedVerifier] = []
+        self.instances: list[NativeMinimalClearanceVerifier] = []
 
-    def __call__(self) -> _TimedVerifier:
-        verifier = _TimedVerifier(NativeMinimalClearanceVerifier(
+    def __call__(self) -> NativeMinimalClearanceVerifier:
+        verifier = NativeMinimalClearanceVerifier(
             self.executable, executable_sha256=VERIFIER_SHA256, timeout_seconds=30.0 * 60.0,
-        ))
+        )
         self.instances.append(verifier)
         return verifier
 
@@ -121,9 +100,9 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
     wave_wall_ms = max(1, int(round((time.perf_counter() - wave_started) * 1000)))
     if len(results) != 4 or any(result is None or result.status != "VERIFIED" for result in results):
         raise RuntimeError("queue_verification_not_verified")
-    if len(factory.instances) != 4 or len({id(item.native) for item in factory.instances}) != 4:
+    if len(factory.instances) != 4 or len({id(item) for item in factory.instances}) != 4:
         raise RuntimeError("verifier_instance_sharing")
-    intervals = [(item.started, item.ended) for item in factory.instances]
+    intervals = [(worker.last_verification_started, worker.last_verification_ended) for worker in workers]
     if not all(start > 0 and end >= start for start, end in intervals) or max(start for start, _ in intervals) >= min(end for _, end in intervals):
         raise RuntimeError("verifier_no_overlap")
     direct_containment = []
@@ -171,7 +150,7 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
         "peak_job_commit_max_bytes": max(item["peak_job_commit_bytes"] for item in receipts),
         "timed_out": False, "exit_codes": [item.exit_code for item in direct_containment],
         "wave_wall_ms": wave_wall_ms, "per_job": receipts,
-        "per_verifier_wall_ms": [max(1, int(round((item.ended - item.started) * 1000))) for item in factory.instances],
+        "per_verifier_wall_ms": [worker.last_verification_wall_ms for worker in workers],
         "transition_claim_count": len(claims), "transition_complete_verified_count": len(completes),
         "queue_reconstruction_parity": True, "export_restore_parity": True,
         "final_queue_head_root": producer_summary["head_root"], "final_status_counts": producer_summary["status_counts"],

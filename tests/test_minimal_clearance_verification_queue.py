@@ -20,6 +20,7 @@ from unittest import TestCase
 
 from app.minimal_clearance_proof_state import (
     MinimalProofAcceptanceV1,
+    NativeMinimalClearanceVerifier,
     _CIRCUIT_ID,
     _artifact_public_bytes,
     _parse_statement,
@@ -183,8 +184,31 @@ class _Factory:
         self.containment = containment
         self.instances: list[_Verifier] = []
 
-    def __call__(self) -> _Verifier:
-        verifier = _Verifier(failure=self.failure, barrier=self.barrier, identity=self.identity, containment=self.containment)
+    def __call__(self) -> NativeMinimalClearanceVerifier:
+        # Test boundary only: the production worker accepts this concrete
+        # verifier type, while the contained native call is replaced here by
+        # a deterministic fixture.
+        verifier = object.__new__(NativeMinimalClearanceVerifier)
+        verifier.failure = self.failure
+        verifier.barrier = self.barrier
+        verifier.identity = self.identity
+        verifier.workspace_token = object()
+        verifier.last_containment_result = self.containment or _Containment()
+
+        def identity_sha256() -> bytes:
+            return verifier.identity
+
+        def verify(artifact_path: Path) -> MinimalProofAcceptanceV1:
+            if verifier.barrier is not None:
+                verifier.barrier.wait(timeout=10)
+            if verifier.failure is not None:
+                raise verifier.failure
+            if not artifact_path.is_file() or artifact_path.is_symlink():
+                raise QueueHeldError("snapshot_missing")
+            return _Acceptance()
+
+        verifier.identity_sha256 = identity_sha256
+        verifier.verify = verify
         self.instances.append(verifier)
         return verifier
 

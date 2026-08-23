@@ -12,7 +12,10 @@ from types import SimpleNamespace
 import unittest
 
 import app.minimal_clearance_proof_state as proof_state
-from app.direct_state_owned_clearance_v1 import DIRECT_INITIAL_PAYMENT_ROOT
+from app.minimal_clearance_acceptance_independent import (
+    IndependentAcceptanceError,
+    parse_acceptance_bytes as parse_acceptance_bytes_independent,
+)
 from app.minimal_clearance_proof_state import (
     MinimalClearanceIndeterminateError,
     MinimalClearanceProofStateError,
@@ -20,6 +23,7 @@ from app.minimal_clearance_proof_state import (
     MinimalClearanceStateStoreV1,
     MinimalProofAcceptanceV1,
     _CIRCUIT_ID,
+    PRIVATE_ZK_INITIAL_PAYMENT_ROOT,
     _PROOF_ROLE,
     _STATE_BYTES,
     _STATE_DIGEST_NAMES,
@@ -56,19 +60,29 @@ _DIRECTIVE_FLAGS = {
     5: (1, 1, 0, 0, 1, 1),
 }
 _QUALIFICATION_STDOUT = (
-    b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=10993 public_inputs=8145 "
-    b"layers=169 terms=21954328 public_bytes=3340 proof_bytes=317784\n"
+    b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=36969 public_inputs=26721 "
+    b"layers=217 terms=12158968 public_bytes=3340 proof_bytes=408264 rate=4 "
+    b"queries=189 transcript_version=6 circuit_id=1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0 "
+    b"state_mutations=0 clear_authorizations=0\n"
 )
 _QUALIFICATION_STDERR = (
     b"MINIMAL_CLEARANCE_BUILD phase=public\n"
     b"MINIMAL_CLEARANCE_BUILD phase=private\n"
     b"MINIMAL_CLEARANCE_BUILD phase=assertions\n"
     b"MINIMAL_CLEARANCE_BUILD phase=mkcircuit\n"
-    b"MINIMAL_CLEARANCE_BUILD phase=complete inputs=10993 public_inputs=8145 layers=169 terms=21954328\n"
+    b"MINIMAL_CLEARANCE_BUILD phase=complete inputs=36969 public_inputs=26721 layers=217 terms=12158968\n"
     b"MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0\n"
     b"MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received\n"
     b"MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept\n"
 )
+_PREFLIGHT_STDOUT = (
+    b"MINIMAL_CLEARANCE_PREFLIGHT_PASS proof_invocations=0 "
+    b"circuit_id=1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0 "
+    b"inputs=36969 public_inputs=26721 layers=217 terms=12158968 public_bytes=3340 "
+    b"epoch=7 sequence_before=11 endian_kat_epoch=72623859790382856 "
+    b"endian_kat_sequence=1230066625199609624 verifier_owned_reconstruction=1 canonical_serialize=1\n"
+)
+_PREFLIGHT_STDERR = b"\n".join(_QUALIFICATION_STDERR.splitlines()[:5]) + b"\n"
 
 
 def _base_acceptance() -> MinimalProofAcceptanceV1:
@@ -113,6 +127,37 @@ def _serialize_state(state: dict[str, object]) -> bytes:
     if len(output) != _STATE_BYTES:
         raise AssertionError(f"state serialization length {len(output)}")
     return bytes(output)
+
+
+def _encode_acceptance(
+    base: MinimalProofAcceptanceV1,
+    values: dict[str, object],
+    state: dict[str, object],
+) -> bytes:
+    values = dict(values)
+    state_bytes = _serialize_state(state)
+    values["state_commitment_bytes"] = state_bytes
+    values["state_after_id"] = _sha(
+        b"BL/NATIVE-V3/MINIMAL-STATE-ID/v1\x00", b"\x01", state_bytes,
+    )
+    statement = bytearray((int(values["protocol_version"]),))
+    statement.extend(_PROOF_ROLE)
+    for name in _STATEMENT_DIGEST_NAMES:
+        statement.extend(bytes(values[name]))
+    statement.extend(_u64(int(values["epoch"])))
+    statement.extend(_u64(int(values["sequence_before"])))
+    for name in ("active", "complete", "authoritative_membership", "authoritative_absence"):
+        statement.extend(bytes((int(values[name]),)))
+    statement.extend(state_bytes)
+    encoded = bytearray(b"BLPACV1\x00")
+    encoded.extend((1).to_bytes(4, "big"))
+    encoded.extend(base.artifact_bytes.to_bytes(8, "big"))
+    encoded.extend(base.artifact_sha256)
+    encoded.extend(base.artifact_digest)
+    encoded.extend(base.circuit_id)
+    encoded.extend(len(statement).to_bytes(4, "big"))
+    encoded.extend(statement)
+    return bytes(encoded)
 
 
 def _synthetic_acceptance(
@@ -183,22 +228,7 @@ def _synthetic_acceptance(
         bytes(state["before_continuity_root"]), bytes(values["source_root_id"]), decision_id,
     )
     state["write_after"] = state["after_audit_head"]
-    state_bytes = _serialize_state(state)
-    values["state_commitment_bytes"] = state_bytes
-    values["state_after_id"] = _sha(
-        b"BL/NATIVE-V3/MINIMAL-STATE-ID/v1\x00", b"\x01", state_bytes,
-    )
-    statement = bytearray()
-    statement.extend(bytes((int(values["protocol_version"]),)))
-    statement.extend(_PROOF_ROLE)
-    for name in _STATEMENT_DIGEST_NAMES:
-        statement.extend(bytes(values[name]))
-    statement.extend(_u64(int(values["epoch"])))
-    statement.extend(_u64(int(values["sequence_before"])))
-    for name in ("active", "complete", "authoritative_membership", "authoritative_absence"):
-        statement.extend(bytes((int(values[name]),)))
-    statement.extend(state_bytes)
-    parsed = _parse_statement(bytes(statement))
+    parsed = parse_acceptance_bytes(_encode_acceptance(base, values, state)).statement
     return MinimalProofAcceptanceV1(
         statement=parsed,
         artifact_sha256=base.artifact_sha256,
@@ -209,30 +239,22 @@ def _synthetic_acceptance(
 
 
 def _new_store(directory: str, acceptance: MinimalProofAcceptanceV1, **kwargs: object) -> MinimalClearanceStateStoreV1:
+    verifier = object.__new__(proof_state.NativeMinimalClearanceVerifier)
+    verifier.executable = _ARTIFACT
+    verifier.identity = b"T" * 32
+    verifier._executable_sha256 = b"T" * 32
+    verifier.timeout_seconds = 30.0
+    verifier.last_containment_result = None
+    verifier._preflight_checked = True
+    verifier.identity_sha256 = lambda: verifier.identity
+    verifier.acceptance = acceptance
+    verifier.expected_statement = lambda: verifier.acceptance.statement.statement_bytes
+    verifier.verify = lambda artifact_path: verifier.acceptance
     return MinimalClearanceStateStoreV1(
         path=Path(directory) / "clearance.sqlite3",
-        verifier=_TestVerifier(acceptance),
+        verifier=verifier,
         **kwargs,
     )
-
-
-class _TestVerifier:
-    """Test-only injected verifier; application code has no static bypass."""
-
-    def __init__(self, acceptance: MinimalProofAcceptanceV1, identity: bytes = b"T" * 32) -> None:
-        self.acceptance = acceptance
-        self.identity = identity
-
-    def identity_sha256(self) -> bytes:
-        return self.identity
-
-    def expected_statement(self) -> bytes:
-        return self.acceptance.statement.statement_bytes
-
-    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-        if artifact_path != _ARTIFACT:
-            raise MinimalClearanceProofStateError("test_artifact_path")
-        return self.acceptance
 
 
 def _corrupt_transition_kind(path: Path) -> None:
@@ -358,9 +380,9 @@ def _qualification_record_kwargs(raw: bytes) -> dict[str, object]:
             "minimal_proof_clearance_audit": 1,
             "minimal_proof_clearance_transitions": 1,
         },
-        "schema_version": 2,
+        "schema_version": 3,
         "state_verifier_sha256": bytes.fromhex("AA" * 32),
-        "transition_kind": "DIRECT_CLEARANCE",
+        "transition_kind": "PRIVATE_ZK_CLEARANCE",
         "integrity_pass": True,
         "restart_pass": True,
         "recovery_pass": True,
@@ -368,6 +390,14 @@ def _qualification_record_kwargs(raw: bytes) -> dict[str, object]:
 
 
 class MinimalClearanceProofStateTests(unittest.TestCase):
+    def test_preflight_binds_the_embedded_statement_sequence(self) -> None:
+        proof_state._parse_preflight_output(_PREFLIGHT_STDOUT, _PREFLIGHT_STDERR)
+        with self.assertRaisesRegex(MinimalClearanceProofStateError, "proof_preflight_statement"):
+            proof_state._parse_preflight_output(
+                _PREFLIGHT_STDOUT.replace(b"sequence_before=11", b"sequence_before=12"),
+                _PREFLIGHT_STDERR,
+            )
+
     def test_qualification_record_uses_raw_artifact_and_never_receipt_bytes(self) -> None:
         raw = _qualification_raw()
         record = build_qualification_record(**_qualification_record_kwargs(raw))
@@ -402,7 +432,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             valid.stdout, valid.stderr,
         )
         self.assertEqual(marker, "MINIMAL_CLEARANCE_VERIFIER_ACCEPT")
-        self.assertEqual(dimensions, {"inputs": 10993, "public_inputs": 8145, "layers": 169, "terms": 21954328})
+        self.assertEqual(dimensions, {"inputs": 36969, "public_inputs": 26721, "layers": 217, "terms": 12158968})
         self.assertEqual(trace_line_count, 8)
         self.assertEqual(trace_digest, hashlib.sha3_512(valid.stderr).hexdigest().upper())
         for stdout, stderr, label in (
@@ -412,7 +442,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
                 b"phase=private\nMINIMAL_CLEARANCE_BUILD phase=public",
             ), "verifier_trace_public"),
             (valid.stdout, _QUALIFICATION_STDERR + b"diagnostic=1\n", "verifier_trace_line_count"),
-            (valid.stdout, _QUALIFICATION_STDERR.replace(b"terms=21954328", b"terms=21954329"), "verifier_trace_dimensions"),
+            (valid.stdout, _QUALIFICATION_STDERR.replace(b"terms=12158968", b"terms=12158969"), "verifier_trace_dimensions"),
             (valid.stdout, _QUALIFICATION_STDERR + b"--diagnostics\n", "verifier_trace_line_count"),
             (valid.stdout, _QUALIFICATION_STDERR.replace(b"phase=private", b"warning: private"), "verifier_trace_private"),
             (valid.stdout, _QUALIFICATION_STDERR.replace(b"phase=private", b"phase=private C:\\temp"), "verifier_trace_private"),
@@ -422,7 +452,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             (valid.stdout, _QUALIFICATION_STDERR.replace(b"verify=accept", b"verify=reject"), "verifier_trace_verify_stage"),
             (valid.stdout, b"x" * (MAX_STDERR_BYTES + 1), "verifier_stderr_cap"),
             (valid.stdout + b"extra\n", valid.stderr, "verifier_stdout_unexpected"),
-            (valid.stdout.replace(b"inputs=10993", b"inputs=10994"), valid.stderr, "verifier_trace_dimensions"),
+            (valid.stdout.replace(b"inputs=36969", b"inputs=36970"), valid.stderr, "verifier_trace_dimensions"),
             (b"", valid.stderr, "verifier_stdout_unexpected"),
             (b"unexpected\n", valid.stderr, "verifier_acceptance_marker"),
             (b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT \xff\n", valid.stderr, "verifier_output_not_ascii"),
@@ -497,19 +527,19 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
     def test_rejected_verification_leaves_database_bytes_unchanged(self) -> None:
         base = _base_acceptance()
 
-        class RejectingVerifier:
-            def identity_sha256(self) -> bytes:
-                return b"R" * 32
-
-            def expected_statement(self) -> bytes:
-                return base.statement.statement_bytes
-
-            def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-                raise MinimalClearanceProofStateError("synthetic_verifier_rejected")
-
         with tempfile.TemporaryDirectory(prefix="blind-ledger-no-mutation-") as directory:
             path = Path(directory) / "clearance.sqlite3"
-            store = MinimalClearanceStateStoreV1(path=path, verifier=RejectingVerifier())
+            verifier = object.__new__(proof_state.NativeMinimalClearanceVerifier)
+            verifier.executable = _ARTIFACT
+            verifier.identity = b"R" * 32
+            verifier._executable_sha256 = b"R" * 32
+            verifier.timeout_seconds = 30.0
+            verifier.last_containment_result = None
+            verifier._preflight_checked = True
+            verifier.identity_sha256 = lambda: verifier.identity
+            verifier.expected_statement = lambda: base.statement.statement_bytes
+            verifier.verify = lambda artifact_path: (_ for _ in ()).throw(MinimalClearanceProofStateError("synthetic_verifier_rejected"))
+            store = MinimalClearanceStateStoreV1(path=path, verifier=verifier)
             try:
                 before = path.read_bytes()
                 with self.assertRaisesRegex(MinimalClearanceProofStateError, "synthetic_verifier_rejected"):
@@ -550,11 +580,47 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
                             "settled_batch_count_before, settled_batch_count_after "
                             "FROM minimal_proof_clearance_transitions"
                         ).fetchone()
-                    self.assertEqual(row[0], "DIRECT_CLEARANCE")
+                    self.assertEqual(row[0], "PRIVATE_ZK_CLEARANCE")
                     self.assertEqual(bytes(row[1]), bytes(row[2]))
                     self.assertEqual(row[3], row[4])
                 finally:
                     store.close()
+
+    def test_independent_acceptance_rejects_rechained_wrong_before_state(self) -> None:
+        base = _base_acceptance()
+        values = dict(base.statement.values)
+        state = dict(base.statement.state_values)
+        state["before_audit_head"] = _sha(
+            b"BL/TEST/INDEPENDENT-BEFORE-AUDIT/v1\x00",
+            bytes(state["before_audit_head"]),
+        )
+        state["write_before"] = state["before_audit_head"]
+        state["after_audit_head"] = _sha(
+            b"BL/NATIVE-V3/MINIMAL-AUDIT-HEAD/v1\x00",
+            bytes(state["before_audit_head"]),
+            bytes(values["decision_id"]),
+            bytes((int(state["effective_directive"]),)),
+        )
+        state["write_after"] = state["after_audit_head"]
+        encoded = _encode_acceptance(base, values, state)
+        with self.assertRaisesRegex(MinimalClearanceProofStateError, "proof_before_state_id"):
+            parse_acceptance_bytes(encoded)
+        with self.assertRaisesRegex(IndependentAcceptanceError, "acceptance_before_state"):
+            parse_acceptance_bytes_independent(encoded)
+
+    def test_acceptance_rejects_rechained_exception_scope_mismatch(self) -> None:
+        base = _synthetic_acceptance(_base_acceptance(), 5)
+        values = dict(base.statement.values)
+        state = dict(base.statement.state_values)
+        state["exception_scope_id"] = _sha(
+            b"BL/TEST/WRONG-EXCEPTION-SCOPE/v1\x00",
+            bytes(state["exception_scope_id"]),
+        )
+        encoded = _encode_acceptance(base, values, state)
+        with self.assertRaisesRegex(MinimalClearanceProofStateError, "proof_decision_context_binding"):
+            parse_acceptance_bytes(encoded)
+        with self.assertRaisesRegex(IndependentAcceptanceError, "acceptance_decision_context"):
+            parse_acceptance_bytes_independent(encoded)
 
     def test_exact_retry_conflict_and_rejected_verifier_do_not_mutate(self) -> None:
         base = _base_acceptance()
@@ -584,20 +650,20 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
                 exception_valid_until=int(base.statement.state("decision_time")) - 1,
             )
 
-        class RejectingVerifier:
-            def identity_sha256(self) -> bytes:
-                return b"R" * 32
-
-            def expected_statement(self) -> bytes:
-                return base.statement.statement_bytes
-
-            def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-                raise MinimalClearanceProofStateError("synthetic_verifier_rejected")
-
         with tempfile.TemporaryDirectory(prefix="blind-ledger-reject-") as directory:
+            verifier = object.__new__(proof_state.NativeMinimalClearanceVerifier)
+            verifier.executable = _ARTIFACT
+            verifier.identity = b"R" * 32
+            verifier._executable_sha256 = b"R" * 32
+            verifier.timeout_seconds = 30.0
+            verifier.last_containment_result = None
+            verifier._preflight_checked = True
+            verifier.identity_sha256 = lambda: verifier.identity
+            verifier.expected_statement = lambda: base.statement.statement_bytes
+            verifier.verify = lambda artifact_path: (_ for _ in ()).throw(MinimalClearanceProofStateError("synthetic_verifier_rejected"))
             store = MinimalClearanceStateStoreV1(
                 path=Path(directory) / "clearance.sqlite3",
-                verifier=RejectingVerifier(),
+                verifier=verifier,
             )
             try:
                 before = store.snapshot()
@@ -698,7 +764,7 @@ class MinimalClearanceProofStateTests(unittest.TestCase):
             with self.assertRaises(MinimalClearanceProofStateError):
                 MinimalClearanceStateStoreV1(
                     path=root / "clearance.sqlite3",
-                    verifier=_TestVerifier(base),
+                    verifier=verifier_store.verifier,
                 )
 
             bad_backup = root / "bad-backup.sqlite3"

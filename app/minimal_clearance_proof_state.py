@@ -18,19 +18,10 @@ import re
 import sqlite3
 import stat
 import tempfile
-from typing import Callable, Final, Protocol
+from typing import Callable, Final
 
-from app.direct_state_owned_clearance_v1 import (
-    DIRECT_DATABASE_CONTEXT_ID,
-    DIRECT_DATABASE_DOMAIN,
-    DIRECT_DATABASE_PROGRAM_ID,
-    DIRECT_DATABASE_SCHEMA_ID,
-    DIRECT_EPOCH,
-    DIRECT_GOVERNANCE_AUTHORITY,
-    DIRECT_INITIAL_CLEARANCE_ROOT,
-    DIRECT_INITIAL_NULLIFIER_ROOT,
-    DIRECT_INITIAL_PAYMENT_ROOT,
-)
+from app.batch.poseidon import FIELD_MODULUS
+from app.governance_authority_v2 import GovernanceAuthorityV2
 from app.production_boundary import ProductionBoundaryError
 from app.transactional_database_boundary import SQLiteSettlementStoreV2
 from app.minimal_clearance_verifier_process import (
@@ -59,11 +50,66 @@ _CIRCUIT_ID = bytes.fromhex(
 _ARTIFACT_MAGIC = b"BLMCV3P1"
 _ARTIFACT_HEADER_BYTES: Final[int] = 68
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024 + _ARTIFACT_HEADER_BYTES + _PUBLIC_BYTES
+_MAX_ACCEPTANCE: Final[int] = 65_536
 _STATE_MAGIC = b"BLST"
 _STATE_BYTES: Final[int] = 1622
 _STATE_HEADER_BYTES: Final[int] = 150
 _STATE_DIGEST_COUNT: Final[int] = 23
 _ZERO_SUITE = bytes(_DIGEST_BYTES)
+_PRIVATE_ZK_ID_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/IDENTITY/v1\x00"
+_PRIVATE_ZK_FIELD_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/FIELD/v1\x00"
+
+
+def _private_zk_wide(label: str) -> bytes:
+    digest = hashlib.sha3_512(_PRIVATE_ZK_ID_DOMAIN)
+    digest.update(label.encode("ascii"))
+    return digest.digest()
+
+
+def _private_zk_field(label: str) -> bytes:
+    digest = hashlib.sha3_512(_PRIVATE_ZK_FIELD_DOMAIN)
+    digest.update(label.encode("ascii"))
+    value = int.from_bytes(digest.digest(), "big")
+    return (value % (FIELD_MODULUS - 1) + 1).to_bytes(32, "big")
+
+
+PRIVATE_ZK_MODE_ID = _private_zk_wide("mode.PRIVATE_ZK.v1")
+PRIVATE_ZK_DATABASE_CONTEXT_ID = _private_zk_wide("database-context.v1")
+PRIVATE_ZK_DATABASE_SCHEMA_ID = _private_zk_wide("database-schema.v1")
+PRIVATE_ZK_DATABASE_PROGRAM_ID = _private_zk_wide("database-program.v1")
+PRIVATE_ZK_DATABASE_DOMAIN = _private_zk_field("database-domain.v1")
+PRIVATE_ZK_INITIAL_NULLIFIER_ROOT = _private_zk_wide("nullifier-genesis.v1")
+PRIVATE_ZK_INITIAL_PAYMENT_ROOT = _private_zk_wide("payment-genesis.v1")
+PRIVATE_ZK_INITIAL_CLEARANCE_ROOT = _private_zk_wide("clearance-genesis.v1")
+PRIVATE_ZK_EPOCH = 7
+PRIVATE_ZK_GOVERNANCE_AUTHORITY = GovernanceAuthorityV2(
+    profile_code=3,
+    epoch=PRIVATE_ZK_EPOCH,
+    claim_truth_roots_512=tuple(_private_zk_wide(f"truth-root-{index}.v1") for index in range(6)),
+    claim_truth_authority_digest_512=_private_zk_wide("truth-authority.v1"),
+    nullifier_authority_id_512=_private_zk_wide("nullifier-authority.v1"),
+    pepper_commitment_512=_private_zk_wide("pepper.v1"),
+)
+_PRIVATE_ZK_PROFILE_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00"
+
+
+def _private_zk_profile_digest(statement: MinimalProofStatementV1, verifier_sha256: bytes) -> bytes:
+    parts = [
+        PRIVATE_ZK_MODE_ID,
+        PRIVATE_ZK_DATABASE_CONTEXT_ID,
+        PRIVATE_ZK_DATABASE_SCHEMA_ID,
+        PRIVATE_ZK_DATABASE_PROGRAM_ID,
+        bytes(statement.get("execution_context")),
+        bytes(statement.get("evaluator_id")),
+        bytes(statement.get("schema_id")),
+        bytes(statement.get("program_id")),
+        bytes(statement.get("automatic_control_set")),
+        _CIRCUIT_ID,
+        verifier_sha256,
+        _ZERO_SUITE,
+        _u64(PRIVATE_ZK_EPOCH),
+    ]
+    return _sha(_PRIVATE_ZK_PROFILE_DOMAIN, *parts)
 _PROOF_OPERATION_DOMAIN = b"BL/MINIMAL-CLEARANCE/PROOF-OPERATION/v1\x00"
 _PROOF_REPLAY_DOMAIN = b"BL/MINIMAL-CLEARANCE/PROOF-REPLAY/v1\x00"
 _PROOF_CLEARANCE_ROOT_DOMAIN = b"BL/MINIMAL-CLEARANCE/CLEARANCE-ROOT/v1\x00"
@@ -74,8 +120,15 @@ _PROOF_AUDIT_HEAD_DOMAIN = b"BL/MINIMAL-CLEARANCE/AUDIT-HEAD/v1\x00"
 _PROOF_RECEIPT_DOMAIN = b"BL/MINIMAL-CLEARANCE/RECEIPT/v1\x00"
 _ACCEPTANCE_MAGIC = b"BLPACV1\x00"
 _ACCEPTANCE_VERSION: Final[int] = 1
-_SCHEMA_VERSION: Final[int] = 2
-_KIND = "DIRECT_CLEARANCE"
+_SCHEMA_VERSION: Final[int] = 3
+_KIND = "PRIVATE_ZK_CLEARANCE"
+_NATIVE_INPUTS: Final[int] = 36_969
+_NATIVE_PUBLIC_INPUTS: Final[int] = 26_721
+_NATIVE_LAYERS: Final[int] = 217
+_NATIVE_TERMS: Final[int] = 12_158_968
+_NATIVE_RATE: Final[int] = 4
+_NATIVE_QUERIES: Final[int] = 189
+_NATIVE_TRANSCRIPT_VERSION: Final[int] = 6
 
 _STATEMENT_DIGEST_NAMES = (
     "proof_suite",
@@ -425,6 +478,139 @@ def _parse_statement(statement_bytes: bytes) -> MinimalProofStatementV1:
     )
 
 
+def _positive_decimal(value: str, label: str) -> int:
+    if re.fullmatch(r"[1-9][0-9]*", value) is None:
+        raise MinimalClearanceProofStateError(f"{label}_integer")
+    return int(value)
+
+
+def _canonical_decimal(value: str, label: str) -> int:
+    if re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
+        raise MinimalClearanceProofStateError(f"{label}_integer")
+    return int(value)
+
+
+def _parse_build_trace(stderr: bytes, *, expected_lines: int) -> tuple[int, int, int, int]:
+    try:
+        text = stderr.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise MinimalClearanceProofStateError("proof_verifier_stderr_encoding") from exc
+    text = text.replace("\r\n", "\n")
+    if not text.endswith("\n") or "\r" in text:
+        raise MinimalClearanceProofStateError("proof_verifier_stderr_grammar")
+    lines = text.splitlines(keepends=True)
+    if len(lines) != expected_lines:
+        raise MinimalClearanceProofStateError("proof_verifier_stderr_line_count")
+    prefixes = (
+        "MINIMAL_CLEARANCE_BUILD phase=public\n",
+        "MINIMAL_CLEARANCE_BUILD phase=private\n",
+        "MINIMAL_CLEARANCE_BUILD phase=assertions\n",
+        "MINIMAL_CLEARANCE_BUILD phase=mkcircuit\n",
+    )
+    if tuple(lines[:4]) != prefixes:
+        raise MinimalClearanceProofStateError("proof_verifier_build_trace")
+    match = re.fullmatch(
+        r"MINIMAL_CLEARANCE_BUILD phase=complete inputs=([0-9]+) "
+        r"public_inputs=([0-9]+) layers=([0-9]+) terms=([0-9]+)\n",
+        lines[4],
+    )
+    if match is None:
+        raise MinimalClearanceProofStateError("proof_verifier_build_complete")
+    values = tuple(_positive_decimal(value, "proof_verifier_build") for value in match.groups())
+    if values != (_NATIVE_INPUTS, _NATIVE_PUBLIC_INPUTS, _NATIVE_LAYERS, _NATIVE_TERMS):
+        raise MinimalClearanceProofStateError("proof_verifier_build_profile")
+    if expected_lines == 8:
+        if tuple(lines[5:]) != (
+            "MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0\n",
+            "MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received\n",
+            "MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept\n",
+        ):
+            raise MinimalClearanceProofStateError("proof_verifier_stage_trace")
+    return values  # type: ignore[return-value]
+
+
+def _parse_acceptance_output(
+    stdout: bytes, stderr: bytes, *, public_bytes: int, proof_bytes: int
+) -> bytes:
+    try:
+        text = stdout.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise MinimalClearanceProofStateError("proof_verifier_output_encoding") from exc
+    text = text.replace("\r\n", "\n")
+    if "\r" in text or not text.endswith("\n") or text.count("\n") != 1:
+        raise MinimalClearanceProofStateError("proof_verifier_output_grammar")
+    match = re.fullmatch(
+        r"MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=([0-9]+) "
+        r"public_inputs=([0-9]+) layers=([0-9]+) terms=([0-9]+) "
+        r"public_bytes=([0-9]+) proof_bytes=([0-9]+) rate=([0-9]+) "
+        r"queries=([0-9]+) transcript_version=([0-9]+) circuit_id=([0-9a-f]{64}) "
+        r"state_mutations=0 clear_authorizations=0\n",
+        text,
+    )
+    if match is None:
+        raise MinimalClearanceProofStateError("proof_verifier_output_grammar")
+    numbers = tuple(_positive_decimal(value, "proof_verifier_output") for value in match.groups()[:-1])
+    expected = (
+        _NATIVE_INPUTS, _NATIVE_PUBLIC_INPUTS, _NATIVE_LAYERS, _NATIVE_TERMS,
+        public_bytes, proof_bytes, _NATIVE_RATE, _NATIVE_QUERIES, _NATIVE_TRANSCRIPT_VERSION,
+    )
+    if numbers != expected or bytes.fromhex(match.group(10)) != _CIRCUIT_ID:
+        raise MinimalClearanceProofStateError("proof_verifier_output_profile")
+    _parse_build_trace(stderr, expected_lines=8)
+    return stdout
+
+
+def _parse_preflight_output(stdout: bytes, stderr: bytes) -> None:
+    try:
+        text = stdout.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise MinimalClearanceProofStateError("proof_preflight_encoding") from exc
+    text = text.replace("\r\n", "\n")
+    if "\r" in text:
+        raise MinimalClearanceProofStateError("proof_preflight_grammar")
+    match = re.fullmatch(
+        r"MINIMAL_CLEARANCE_PREFLIGHT_PASS proof_invocations=0 "
+        r"circuit_id=([0-9a-f]{64}) inputs=([0-9]+) public_inputs=([0-9]+) "
+        r"layers=([0-9]+) terms=([0-9]+) public_bytes=([0-9]+) "
+        r"epoch=([0-9]+) sequence_before=([0-9]+) endian_kat_epoch=([0-9]+) "
+        r"endian_kat_sequence=([0-9]+) verifier_owned_reconstruction=1 canonical_serialize=1\n",
+        text,
+    )
+    if match is None:
+        raise MinimalClearanceProofStateError("proof_preflight_grammar")
+    values = tuple(_canonical_decimal(value, "proof_preflight") for value in match.groups()[1:])
+    expected = (_NATIVE_INPUTS, _NATIVE_PUBLIC_INPUTS, _NATIVE_LAYERS, _NATIVE_TERMS, _PUBLIC_BYTES)
+    if values[:5] != expected or bytes.fromhex(match.group(1)) != _CIRCUIT_ID:
+        raise MinimalClearanceProofStateError("proof_preflight_profile")
+    if values[5:7] != (7, 11):
+        raise MinimalClearanceProofStateError("proof_preflight_statement")
+    if values[7:] != (0x0102030405060708, 0x1112131415161718):
+        raise MinimalClearanceProofStateError("proof_preflight_endian")
+    _parse_build_trace(stderr, expected_lines=5)
+
+
+def _parse_public_statement_output(stdout: bytes, stderr: bytes, path: Path) -> None:
+    try:
+        text = stdout.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise MinimalClearanceProofStateError("proof_statement_output_encoding") from exc
+    text = text.replace("\r\n", "\n")
+    if "\r" in text:
+        raise MinimalClearanceProofStateError("proof_statement_output_grammar")
+    expected = (
+        f"MINIMAL_CLEARANCE_VERIFIER_PUBLIC_STATEMENT bytes={_PUBLIC_BYTES} "
+        f"path={path} verifier_owned_reconstruction=1\n"
+    )
+    if text != expected:
+        raise MinimalClearanceProofStateError("proof_statement_output_grammar")
+    try:
+        stderr.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise MinimalClearanceProofStateError("proof_statement_stderr_encoding") from exc
+    if stderr != b"":
+        raise MinimalClearanceProofStateError("proof_statement_stderr_grammar")
+
+
 def _validate_statement_and_state(values: dict[str, object], state: dict[str, object]) -> None:
     policy = int(state["policy_result"])
     directive = int(state["effective_directive"])
@@ -497,7 +683,11 @@ def _validate_statement_and_state(values: dict[str, object], state: dict[str, ob
         raise MinimalClearanceProofStateError("proof_attempt_binding")
     if bytes(state["request_id"]) != bytes(values["request_id"]):
         raise MinimalClearanceProofStateError("proof_request_binding")
-    if bytes(state["exception_id"]) != exception_id or bytes(state["rule_id"]) != bytes(values["rule_id"]):
+    if (
+        bytes(state["exception_id"]) != exception_id
+        or bytes(state["exception_scope_id"]) != bytes(values["exception_scope_id"])
+        or bytes(state["rule_id"]) != bytes(values["rule_id"])
+    ):
         raise MinimalClearanceProofStateError("proof_decision_context_binding")
     if bytes(state["decision_id"]) != bytes(values["decision_id"]):
         raise MinimalClearanceProofStateError("proof_decision_binding")
@@ -574,17 +764,6 @@ def parse_acceptance_bytes(encoded: bytes) -> MinimalProofAcceptanceV1:
         artifact_bytes=artifact_bytes,
         circuit_id=bytes(circuit_id),
     )
-
-
-class MinimalClearanceVerifierPort(Protocol):
-    def identity_sha256(self) -> bytes:
-        """Return the verifier executable identity bound to proof state."""
-
-    def expected_statement(self) -> bytes:
-        """Return immutable verifier-owned public statement bytes."""
-
-    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-        """Independently verify one artifact and return typed accepted fields."""
 
 
 def _regular_file(path: Path, label: str) -> None:
@@ -671,6 +850,7 @@ class NativeMinimalClearanceVerifier:
         self._executable_sha256 = bytes.fromhex(executable_sha256)
         self.timeout_seconds = timeout_seconds
         self.last_containment_result: ContainedVerifierResult | None = None
+        self._preflight_checked = False
         with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-identity-") as directory:
             _snapshot_verified_file(
                 executable, Path(directory), label="verifier-executable",
@@ -678,7 +858,14 @@ class NativeMinimalClearanceVerifier:
             )
 
     def identity_sha256(self) -> bytes:
-        return bytes(self._executable_sha256)
+        _regular_file(self.executable, "verifier_executable")
+        try:
+            current = hashlib.sha256(self.executable.read_bytes()).digest()
+        except OSError as exc:
+            raise MinimalClearanceProofStateError("verifier_executable_read") from exc
+        if current != self._executable_sha256:
+            raise MinimalClearanceProofStateError("verifier_executable_identity_changed")
+        return current
 
     def _run(self, workspace: Path, executable_snapshot: Path, *args: str):
         try:
@@ -697,7 +884,23 @@ class NativeMinimalClearanceVerifier:
             raise MinimalClearanceProofStateError("verifier_memory_cap")
         return result
 
+    def _ensure_preflight(self) -> None:
+        if self._preflight_checked:
+            return
+        with tempfile.TemporaryDirectory(prefix="blind-ledger-minimal-preflight-") as directory:
+            workspace = Path(directory)
+            executable_snapshot, _ = _snapshot_verified_file(
+                self.executable, workspace, label="verifier-executable",
+                expected_sha256=self._executable_sha256,
+            )
+            result = self._run(workspace, executable_snapshot, "--preflight")
+            if result.exit_code != 0:
+                raise MinimalClearanceProofStateError("verifier_preflight_rejected")
+            _parse_preflight_output(result.stdout, result.stderr)
+        self._preflight_checked = True
+
     def expected_statement(self) -> bytes:
+        self._ensure_preflight()
         with tempfile.TemporaryDirectory(prefix="blind-ledger-minimal-statement-") as directory:
             workspace = Path(directory)
             executable_snapshot, _ = _snapshot_verified_file(
@@ -706,7 +909,10 @@ class NativeMinimalClearanceVerifier:
             )
             path = workspace / "statement.bin"
             result = self._run(workspace, executable_snapshot, "--public-statement-file", str(path))
-            if result.exit_code != 0 or not path.is_file() or path.is_symlink():
+            if result.exit_code != 0:
+                raise MinimalClearanceProofStateError("verifier_statement_reconstruction")
+            _parse_public_statement_output(result.stdout, result.stderr, path)
+            if not path.is_file() or path.is_symlink():
                 raise MinimalClearanceProofStateError("verifier_statement_reconstruction")
             try:
                 statement = path.read_bytes()
@@ -717,6 +923,7 @@ class NativeMinimalClearanceVerifier:
             return statement
 
     def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
+        self._ensure_preflight()
         with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-acceptance-") as directory:
             workspace = Path(directory)
             executable_snapshot, _ = _snapshot_verified_file(
@@ -726,7 +933,7 @@ class NativeMinimalClearanceVerifier:
             artifact_snapshot, raw = _snapshot_verified_file(
                 artifact_path, workspace, label="proof-artifact",
             )
-            circuit_id, public_bytes, _ = _artifact_public_bytes(raw)
+            circuit_id, public_bytes, proof_bytes = _artifact_public_bytes(raw)
             if circuit_id != _CIRCUIT_ID:
                 raise MinimalClearanceProofStateError("proof_circuit_id")
             statement_output = workspace / "verified-statement.bin"
@@ -734,12 +941,12 @@ class NativeMinimalClearanceVerifier:
                 workspace, executable_snapshot, "--verified-statement-file",
                 str(statement_output), str(artifact_snapshot),
             )
-            try:
-                stdout = result.stdout.decode("ascii", "strict")
-            except UnicodeDecodeError as exc:
-                raise MinimalClearanceProofStateError("proof_verifier_output_encoding") from exc
-            if result.exit_code != 0 or "MINIMAL_CLEARANCE_VERIFIER_ACCEPT " not in stdout:
+            if result.exit_code != 0:
                 raise MinimalClearanceProofStateError("proof_verifier_rejected")
+            _parse_acceptance_output(
+                result.stdout, result.stderr,
+                public_bytes=len(public_bytes), proof_bytes=len(proof_bytes),
+            )
             if not statement_output.is_file() or statement_output.is_symlink():
                 raise MinimalClearanceProofStateError("proof_verified_statement_missing")
             try:
@@ -861,7 +1068,7 @@ class MinimalClearanceStateStoreV1:
         self,
         *,
         path: Path,
-        verifier: MinimalClearanceVerifierPort,
+        verifier: NativeMinimalClearanceVerifier,
         before_fault: Callable[[str], None] | None = None,
         after_commit_fault: Callable[[str], None] | None = None,
     ) -> None:
@@ -869,11 +1076,7 @@ class MinimalClearanceStateStoreV1:
             raise MinimalClearanceProofStateError("proof_database_path")
         if not path.parent.is_dir():
             raise MinimalClearanceProofStateError("proof_database_parent")
-        if (
-            not callable(getattr(verifier, "identity_sha256", None))
-            or not callable(getattr(verifier, "expected_statement", None))
-            or not callable(getattr(verifier, "verify", None))
-        ):
+        if type(verifier) is not NativeMinimalClearanceVerifier:
             raise MinimalClearanceProofStateError("proof_verifier_port")
         self.path = path
         self.verifier = verifier
@@ -882,16 +1085,16 @@ class MinimalClearanceStateStoreV1:
         self._after_commit_fault = after_commit_fault
         self._database = SQLiteSettlementStoreV2(
             path=path,
-            settlement_domain=DIRECT_DATABASE_DOMAIN,
-            governance_authority=DIRECT_GOVERNANCE_AUTHORITY,
-            initial_strong_nullifier_root=DIRECT_INITIAL_NULLIFIER_ROOT,
-            initial_strong_payment_state_root=DIRECT_INITIAL_PAYMENT_ROOT,
-            initial_direct_clearance_root=DIRECT_INITIAL_CLEARANCE_ROOT,
-            epoch=DIRECT_EPOCH,
-            profile_id=DIRECT_DATABASE_CONTEXT_ID,
-            suite_id=DIRECT_DATABASE_SCHEMA_ID,
-            schema_id=DIRECT_DATABASE_SCHEMA_ID,
-            verifier_artifact_identity=DIRECT_DATABASE_PROGRAM_ID,
+            settlement_domain=PRIVATE_ZK_DATABASE_DOMAIN,
+            governance_authority=PRIVATE_ZK_GOVERNANCE_AUTHORITY,
+            initial_strong_nullifier_root=PRIVATE_ZK_INITIAL_NULLIFIER_ROOT,
+            initial_strong_payment_state_root=PRIVATE_ZK_INITIAL_PAYMENT_ROOT,
+            initial_direct_clearance_root=PRIVATE_ZK_INITIAL_CLEARANCE_ROOT,
+            epoch=PRIVATE_ZK_EPOCH,
+            profile_id=PRIVATE_ZK_DATABASE_CONTEXT_ID,
+            suite_id=PRIVATE_ZK_DATABASE_SCHEMA_ID,
+            schema_id=PRIVATE_ZK_DATABASE_SCHEMA_ID,
+            verifier_artifact_identity=PRIVATE_ZK_DATABASE_PROGRAM_ID,
         )
         self._initialize_proof_tables()
 
@@ -928,7 +1131,7 @@ class MinimalClearanceStateStoreV1:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS minimal_proof_clearance_state (
-                    id INTEGER PRIMARY KEY CHECK (id=1), schema_version INTEGER NOT NULL CHECK(schema_version=2),
+                    id INTEGER PRIMARY KEY CHECK (id=1), schema_version INTEGER NOT NULL CHECK(schema_version=3),
                     expected_statement BLOB NOT NULL, circuit_id BLOB NOT NULL CHECK(length(circuit_id)=32),
                     state_id BLOB NOT NULL CHECK(length(state_id)=64), epoch INTEGER NOT NULL CHECK(epoch>0),
                     sequence INTEGER NOT NULL CHECK(sequence>=0), continuity_root BLOB NOT NULL CHECK(length(continuity_root)=64),
@@ -961,7 +1164,7 @@ class MinimalClearanceStateStoreV1:
                     event_commitment BLOB NOT NULL UNIQUE CHECK(length(event_commitment)=64), current_head BLOB NOT NULL CHECK(length(current_head)=64), payload BLOB NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS minimal_proof_clearance_transitions (
-                    sequence_after INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL CHECK(transition_kind='DIRECT_CLEARANCE'),
+                    sequence_after INTEGER PRIMARY KEY, transition_kind TEXT NOT NULL CHECK(transition_kind='PRIVATE_ZK_CLEARANCE'),
                     operation_digest BLOB NOT NULL UNIQUE CHECK(length(operation_digest)=64), state_binding_before BLOB NOT NULL CHECK(length(state_binding_before)=64),
                     state_binding_after BLOB NOT NULL CHECK(length(state_binding_after)=64), payment_root_before BLOB NOT NULL CHECK(length(payment_root_before)=64),
                     payment_root_after BLOB NOT NULL CHECK(length(payment_root_after)=64), settled_batch_count_before INTEGER NOT NULL, settled_batch_count_after INTEGER NOT NULL
@@ -976,21 +1179,22 @@ class MinimalClearanceStateStoreV1:
             )
             row = connection.execute("SELECT * FROM minimal_proof_clearance_state WHERE id=1").fetchone()
             if row is None:
-                clearance_root = _sha(_PROOF_GENESIS_DOMAIN, expected_statement.state_before_id, DIRECT_INITIAL_CLEARANCE_ROOT)
+                profile_digest = _private_zk_profile_digest(expected_statement, self.expected_verifier_sha256)
+                clearance_root = _sha(_PROOF_GENESIS_DOMAIN, expected_statement.state_before_id, PRIVATE_ZK_INITIAL_CLEARANCE_ROOT)
                 replay_root = _sha(_PROOF_GENESIS_DOMAIN, expected_statement.attempt_id, expected_statement.request_id)
                 binding = _sha(
                     _PROOF_STATE_BINDING_DOMAIN, expected, expected_statement.state_before_id,
                     _u64(expected_statement.epoch), _u64(expected_statement.sequence_before),
                     expected_statement.continuity_root if "continuity_root" in dict(expected_statement.state_values) else bytes(expected_statement.state("before_continuity_root")),
-                    clearance_root, replay_root, DIRECT_INITIAL_PAYMENT_ROOT, _u64(0),
-                    self.expected_verifier_sha256,
+                    clearance_root, replay_root, PRIVATE_ZK_INITIAL_PAYMENT_ROOT, _u64(0),
+                    self.expected_verifier_sha256, profile_digest,
                 )
                 connection.execute(
                     "INSERT INTO minimal_proof_clearance_state VALUES (" + ",".join("?" for _ in range(17)) + ")",
                     (1, _SCHEMA_VERSION, expected, _CIRCUIT_ID, expected_statement.state_before_id, expected_statement.epoch,
                      expected_statement.sequence_before, bytes(expected_statement.state("before_continuity_root")),
                      clearance_root, int(expected_statement.state("clearance_count_before")), replay_root,
-                     DIRECT_INITIAL_PAYMENT_ROOT, 0, binding, bytes(expected_statement.state("before_audit_head")), None,
+                     PRIVATE_ZK_INITIAL_PAYMENT_ROOT, 0, binding, bytes(expected_statement.state("before_audit_head")), None,
                      self.expected_verifier_sha256),
                 )
             else:
@@ -1027,8 +1231,9 @@ class MinimalClearanceStateStoreV1:
             raise MinimalClearanceProofStateError("proof_verifier_statement")
         return _sha(
             b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00",
-            DIRECT_DATABASE_CONTEXT_ID, DIRECT_DATABASE_SCHEMA_ID, DIRECT_DATABASE_PROGRAM_ID,
-            _CIRCUIT_ID, expected, self.expected_verifier_sha256,
+            PRIVATE_ZK_DATABASE_CONTEXT_ID, PRIVATE_ZK_DATABASE_SCHEMA_ID, PRIVATE_ZK_DATABASE_PROGRAM_ID,
+            PRIVATE_ZK_MODE_ID, _CIRCUIT_ID, expected, self.expected_verifier_sha256,
+            _private_zk_profile_digest(_parse_statement(expected), self.expected_verifier_sha256),
         )
 
     def _receipt_from_request(self, connection, operation_digest: bytes) -> MinimalClearanceReceiptV1:
@@ -1062,28 +1267,19 @@ class MinimalClearanceStateStoreV1:
     def submit(self, artifact_path: Path) -> MinimalClearanceReceiptV1:
         self._require_verifier_identity()
         acceptance = self.verifier.verify(artifact_path)
-        return self.submit_verified_acceptance(acceptance)
-
-    def submit_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
-        """Apply an already accepted typed proof without invoking the verifier."""
-        return self.submit_verified_acceptance_outcome(acceptance).receipt
-
-    def submit_verified_acceptance_outcome(
-        self, acceptance: MinimalProofAcceptanceV1
-    ) -> MinimalClearanceAdmissionOutcomeV1:
-        """Apply a typed acceptance and return the transaction-owned disposition."""
-        self._require_verifier_identity()
-        if type(acceptance) is not MinimalProofAcceptanceV1:
-            raise MinimalClearanceProofStateError("proof_verifier_result")
-        encoded = acceptance.canonical_bytes()
-        reparsed = parse_acceptance_bytes(encoded)
-        if reparsed != acceptance or reparsed.canonical_bytes() != encoded:
-            raise MinimalClearanceProofStateError("proof_acceptance_roundtrip")
-        return self._apply_verified_acceptance_outcome(reparsed)
-
-    def _apply_verified_acceptance(self, acceptance: MinimalProofAcceptanceV1) -> MinimalClearanceReceiptV1:
-        """Compatibility wrapper retaining the receipt-only internal shape."""
         return self._apply_verified_acceptance_outcome(acceptance).receipt
+
+    def submit_outcome(
+        self, artifact_path: Path, *, expected_acceptance_bytes: bytes | None = None
+    ) -> MinimalClearanceAdmissionOutcomeV1:
+        self._require_verifier_identity()
+        acceptance = self.verifier.verify(artifact_path)
+        if expected_acceptance_bytes is not None:
+            if type(expected_acceptance_bytes) is not bytes or len(expected_acceptance_bytes) > _MAX_ACCEPTANCE:
+                raise MinimalClearanceProofStateError("proof_expected_acceptance_bytes")
+            if acceptance.canonical_bytes() != expected_acceptance_bytes:
+                raise MinimalClearanceProofStateError("proof_expected_acceptance_mismatch")
+        return self._apply_verified_acceptance_outcome(acceptance)
 
     def _apply_verified_acceptance_outcome(
         self, acceptance: MinimalProofAcceptanceV1
@@ -1109,7 +1305,7 @@ class MinimalClearanceStateStoreV1:
                 expected_statement = bytes(state[2])
                 if acceptance.statement.statement_bytes != expected_statement:
                     raise MinimalClearanceProofStateError("proof_verifier_context_mismatch")
-                if bytes(state[11]) != DIRECT_INITIAL_PAYMENT_ROOT or int(state[12]) != 0:
+                if bytes(state[11]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT or int(state[12]) != 0:
                     raise MinimalClearanceProofStateError("proof_payment_state_changed")
                 operation_digest = _sha(
                     _PROOF_OPERATION_DOMAIN, encoded, bytes(state[13]), bytes(state[14]), bytes(state[11]),
@@ -1174,9 +1370,10 @@ class MinimalClearanceStateStoreV1:
                     _PROOF_STATE_BINDING_DOMAIN, bytes(state[13]), operation_digest, acceptance.statement.state_after_id,
                     replay_after, clearance_after, _u64(count_after), bytes(state[11]), _u64(int(state[12])),
                     _u64(int(state[5])), _u64(sequence_after), self.expected_verifier_sha256,
+                    _private_zk_profile_digest(acceptance.statement, self.expected_verifier_sha256),
                 )
                 event_payload = json.dumps({
-                    "event_kind": "MINIMAL_PROOF_DIRECT_CLEARANCE_V1", "version": 1,
+                    "event_kind": "MINIMAL_PROOF_PRIVATE_ZK_CLEARANCE_V1", "version": 1,
                     "sequence_before": int(state[6]), "sequence_after": sequence_after,
                     "operation_digest": operation_digest.hex(), "artifact_digest": acceptance.artifact_digest.hex(),
                     "receipt_id": acceptance.statement.receipt_id.hex(), "request_id": acceptance.statement.request_id.hex(),
@@ -1280,7 +1477,7 @@ class MinimalClearanceStateStoreV1:
                 raise MinimalClearanceProofStateError("proof_state_schema")
             if (
                 int(state[5]) != expected_statement.epoch
-                or bytes(state[11]) != DIRECT_INITIAL_PAYMENT_ROOT
+                or bytes(state[11]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT
                 or int(state[12]) != 0
             ):
                 raise MinimalClearanceProofStateError("proof_payment_or_epoch_integrity")
@@ -1289,13 +1486,14 @@ class MinimalClearanceStateStoreV1:
             transitions = connection.execute("SELECT * FROM minimal_proof_clearance_transitions ORDER BY sequence_after").fetchall()
             if len(rows) != len(audits) or len(rows) != len(transitions):
                 raise MinimalClearanceProofStateError("proof_ledger_count")
-            genesis_clearance = _sha(_PROOF_GENESIS_DOMAIN, expected_statement.state_before_id, DIRECT_INITIAL_CLEARANCE_ROOT)
+            genesis_clearance = _sha(_PROOF_GENESIS_DOMAIN, expected_statement.state_before_id, PRIVATE_ZK_INITIAL_CLEARANCE_ROOT)
             genesis_replay = _sha(_PROOF_GENESIS_DOMAIN, expected_statement.attempt_id, expected_statement.request_id)
             genesis_binding = _sha(
                 _PROOF_STATE_BINDING_DOMAIN, expected_bytes, expected_statement.state_before_id,
                 _u64(expected_statement.epoch), _u64(expected_statement.sequence_before),
                 bytes(expected_statement.state("before_continuity_root")), genesis_clearance,
-                genesis_replay, DIRECT_INITIAL_PAYMENT_ROOT, _u64(0), self.expected_verifier_sha256,
+                genesis_replay, PRIVATE_ZK_INITIAL_PAYMENT_ROOT, _u64(0), self.expected_verifier_sha256,
+                _private_zk_profile_digest(expected_statement, self.expected_verifier_sha256),
             )
             if not rows:
                 if (
@@ -1324,7 +1522,7 @@ class MinimalClearanceStateStoreV1:
                 if acceptance.canonical_bytes() != bytes(row[1]):
                     raise MinimalClearanceProofStateError("proof_acceptance_bytes_mismatch")
                 operation_digest = _sha(
-                    _PROOF_OPERATION_DOMAIN, bytes(row[1]), previous_binding, previous_head, DIRECT_INITIAL_PAYMENT_ROOT,
+                    _PROOF_OPERATION_DOMAIN, bytes(row[1]), previous_binding, previous_head, PRIVATE_ZK_INITIAL_PAYMENT_ROOT,
                     self.expected_verifier_sha256,
                 )
                 if (
@@ -1367,8 +1565,9 @@ class MinimalClearanceStateStoreV1:
                 state_binding_after = _sha(
                     _PROOF_STATE_BINDING_DOMAIN, previous_binding, operation_digest,
                     acceptance.statement.state_after_id, replay_after, clearance_after,
-                    _u64(count_after), DIRECT_INITIAL_PAYMENT_ROOT, _u64(0),
+                    _u64(count_after), PRIVATE_ZK_INITIAL_PAYMENT_ROOT, _u64(0),
                     _u64(expected_statement.epoch), _u64(expected_sequence), self.expected_verifier_sha256,
+                    _private_zk_profile_digest(expected_statement, self.expected_verifier_sha256),
                 )
                 if (
                     bytes(row[19]) != replay_after
@@ -1376,8 +1575,8 @@ class MinimalClearanceStateStoreV1:
                     or bytes(row[21]) != clearance_after
                     or int(row[22]) != previous_count
                     or int(row[23]) != count_after
-                    or bytes(row[24]) != DIRECT_INITIAL_PAYMENT_ROOT
-                    or bytes(row[25]) != DIRECT_INITIAL_PAYMENT_ROOT
+                    or bytes(row[24]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT
+                    or bytes(row[25]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT
                     or int(row[26]) != 0
                     or int(row[27]) != 0
                     or bytes(row[28]) != previous_binding
@@ -1401,8 +1600,8 @@ class MinimalClearanceStateStoreV1:
                     or bytes(transition[2]) != operation_digest
                     or bytes(transition[3]) != previous_binding
                     or bytes(transition[4]) != state_binding_after
-                    or bytes(transition[5]) != DIRECT_INITIAL_PAYMENT_ROOT
-                    or bytes(transition[6]) != DIRECT_INITIAL_PAYMENT_ROOT
+                    or bytes(transition[5]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT
+                    or bytes(transition[6]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT
                     or int(transition[7]) != 0
                     or int(transition[8]) != 0
                 ):
@@ -1418,7 +1617,7 @@ class MinimalClearanceStateStoreV1:
                     state_before_id=bytes(row[14]), state_after_id=bytes(row[15]),
                     clearance_root_before=previous_clearance, clearance_root_after=clearance_after,
                     clearance_count_before=previous_count, clearance_count_after=count_after,
-                    payment_root_before=DIRECT_INITIAL_PAYMENT_ROOT, payment_root_after=DIRECT_INITIAL_PAYMENT_ROOT,
+                    payment_root_before=PRIVATE_ZK_INITIAL_PAYMENT_ROOT, payment_root_after=PRIVATE_ZK_INITIAL_PAYMENT_ROOT,
                     settled_batch_count_before=0, settled_batch_count_after=0,
                     state_binding_after=state_binding_after, audit_head_after=bytes(row[31]),
                     policy_result=acceptance.policy_result, effective_directive=acceptance.statement.directive,
@@ -1469,7 +1668,6 @@ __all__ = (
     "MinimalClearanceReceiptV1",
     "MinimalClearanceStateSnapshotV1",
     "MinimalClearanceStateStoreV1",
-    "MinimalClearanceVerifierPort",
     "MinimalProofAcceptanceV1",
     "MinimalProofStatementV1",
     "NativeMinimalClearanceVerifier",

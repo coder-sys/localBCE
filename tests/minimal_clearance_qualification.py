@@ -234,9 +234,9 @@ def build_qualification_record(
     receipt_sha256, receipt_sha3_512, policy_result, directive, accepted, economic, suite = _receipt_values(receipt)
     _require(receipt_sha256.hex().upper() == artifact_sha256.upper(), "receipt_artifact_sha256_mismatch")
     _require(receipt_sha3_512.hex().upper() == artifact_sha3_512.upper(), "receipt_artifact_sha3_512_mismatch")
-    _require(type(schema_version) is int and schema_version == 2, "state_schema")
+    _require(type(schema_version) is int and schema_version == 3, "state_schema")
     _require(state_verifier_sha256 == bytes.fromhex(verifier_sha256), "state_verifier_identity")
-    _require(transition_kind == "DIRECT_CLEARANCE", "state_transition_kind")
+    _require(transition_kind == "PRIVATE_ZK_CLEARANCE", "state_transition_kind")
     _require(counts_before == {name: 0 for name in counts_before}, "state_counts_before")
     _require(counts_after == {name: 1 for name in counts_after}, "state_counts_after")
     _require(integrity_pass is True and restart_pass is True and recovery_pass is True, "state_recovery")
@@ -370,9 +370,9 @@ def run_qualification(
         restarted = None
         _require(recovered_state == state_after, "recovery_state_mismatch")
         _require(restart_state == state_after, "restart_state_mismatch")
-        _require(int(state_row[0]) == 2, "state_schema")
+        _require(int(state_row[0]) == 3, "state_schema")
         _require(bytes(state_row[1]) == bytes.fromhex(verifier_sha256), "state_verifier_identity")
-        _require(transition_row[0] == "DIRECT_CLEARANCE", "state_transition_kind")
+        _require(transition_row[0] == "PRIVATE_ZK_CLEARANCE", "state_transition_kind")
         return build_qualification_record(
             artifact_raw=raw, artifact_sha256=sha256, artifact_sha3_512=sha3_512,
             artifact_readonly_before=readonly_before, artifact_readonly_after=readonly_after,

@@ -23,7 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Final, Mapping, Protocol
 
-from app.minimal_clearance_proof_state import MinimalProofAcceptanceV1, parse_acceptance_bytes
+from app.minimal_clearance_proof_state import MinimalProofAcceptanceV1, NativeMinimalClearanceVerifier, parse_acceptance_bytes
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 
 
@@ -395,7 +395,7 @@ class ProofArtifactCustodyPort(Protocol):
 
 
 class VerificationFactory(Protocol):
-    def __call__(self) -> object:
+    def __call__(self) -> NativeMinimalClearanceVerifier:
         """Return a fresh verifier instance for one job."""
 
 
@@ -1355,6 +1355,9 @@ class QueueWorker:
         self.worker_id = worker_id
         self.custody = custody
         self.verifier_factory = verifier_factory
+        self.last_verification_wall_ms: int | None = None
+        self.last_verification_started: float | None = None
+        self.last_verification_ended: float | None = None
 
     @staticmethod
     def _error_code(error: BaseException) -> str:
@@ -1385,10 +1388,19 @@ class QueueWorker:
             ):
                 raise QueueHeldError("custody_snapshot_identity")
             verifier = self.verifier_factory()
-            identity = getattr(verifier, "identity_sha256", None)
-            if not callable(identity) or bytes(identity()) != self.store.config.verifier_sha256:
+            if type(verifier) is not NativeMinimalClearanceVerifier:
+                raise QueueHeldError("verifier_type")
+            identity = verifier.identity_sha256()
+            if identity != self.store.config.verifier_sha256:
                 raise QueueHeldError("verifier_identity")
-            acceptance = verifier.verify(snapshot.path)
+            started = time.perf_counter()
+            self.last_verification_started = started
+            try:
+                acceptance = verifier.verify(snapshot.path)
+            finally:
+                ended = time.perf_counter()
+                self.last_verification_ended = ended
+                self.last_verification_wall_ms = max(1, int(round((ended - started) * 1000)))
             containment = getattr(verifier, "last_containment_result", None)
             evidence = build_verification_evidence(
                 acceptance, containment, snapshot, self.store.config.verifier_sha256,

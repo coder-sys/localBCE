@@ -16,17 +16,27 @@ import re
 import sqlite3
 from typing import Any, Final, Mapping
 
-from app.direct_state_owned_clearance_v1 import (
-    DIRECT_DATABASE_CONTEXT_ID,
-    DIRECT_DATABASE_PROGRAM_ID,
-    DIRECT_DATABASE_SCHEMA_ID,
-    DIRECT_INITIAL_PAYMENT_ROOT,
-)
-from app.minimal_clearance_proof_state import parse_acceptance_bytes
+from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_queue_application_independent import (
     IndependentQueueApplicationError,
+    verify_database_connection,
     verify_database as verify_application_database,
 )
+
+
+def _private_zk_identity(label: str) -> bytes:
+    digest = hashlib.sha3_512(b"BL/NATIVE-V3/PRIVATE-ZK/IDENTITY/v1\x00")
+    digest.update(label.encode("ascii"))
+    return digest.digest()
+
+
+PRIVATE_ZK_DATABASE_CONTEXT_ID = _private_zk_identity("database-context.v1")
+PRIVATE_ZK_DATABASE_SCHEMA_ID = _private_zk_identity("database-schema.v1")
+PRIVATE_ZK_DATABASE_PROGRAM_ID = _private_zk_identity("database-program.v1")
+PRIVATE_ZK_MODE_ID = _private_zk_identity("mode.PRIVATE_ZK.v1")
+PRIVATE_ZK_INITIAL_PAYMENT_ROOT = _private_zk_identity("payment-genesis.v1")
+_ZERO_SUITE = bytes(64)
+_PROFILE = b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00"
 
 
 class IndependentOfficialHandoffError(RuntimeError):
@@ -52,6 +62,25 @@ _RESULT = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-DIRECTIVE-RESULT/v1\x00"
 _STATE_IDENTITY = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/STATE-STORE-IDENTITY/v1\x00"
 _CAP_BYTES: Final[int] = 5_000_000_000
 _FIXED_ID_BYTES: Final[int] = 128
+
+
+def _private_zk_profile_digest(statement: Any, verifier_sha256: bytes) -> bytes:
+    return _sha(
+        _PROFILE,
+        PRIVATE_ZK_MODE_ID,
+        PRIVATE_ZK_DATABASE_CONTEXT_ID,
+        PRIVATE_ZK_DATABASE_SCHEMA_ID,
+        PRIVATE_ZK_DATABASE_PROGRAM_ID,
+        bytes(statement.get("execution_context")),
+        bytes(statement.get("evaluator_id")),
+        bytes(statement.get("schema_id")),
+        bytes(statement.get("program_id")),
+        bytes(statement.get("automatic_control_set")),
+        bytes.fromhex("1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0"),
+        verifier_sha256,
+        _ZERO_SUITE,
+        (7).to_bytes(8, "big"),
+    )
 
 _ENVELOPE_KEYS: Final[frozenset[str]] = frozenset({
     "schema", "handoff_config_digest", "receiver_identity", "receiver_epoch", "application_id_digest", "application_config_digest", "application_job_id_digest",
@@ -279,7 +308,7 @@ def _read_state_binding(path: Path, view: AppliedApplicationViewV1, expected_ver
         raise IndependentOfficialHandoffError("state_database_open") from exc
     try:
         row = connection.execute("SELECT * FROM minimal_proof_clearance_state WHERE id=1").fetchone()
-        if row is None or len(row) != 17 or int(row[1]) != 2:
+        if row is None or len(row) != 17 or int(row[1]) != 3:
             _fail("state_schema")
         if (
             bytes(row[2]) != view.acceptance.statement.statement_bytes
@@ -290,13 +319,15 @@ def _read_state_binding(path: Path, view: AppliedApplicationViewV1, expected_ver
             or bytes(row[13]) != bytes.fromhex(view.receipt["state_binding_after"])
             or bytes(row[14]) != bytes.fromhex(view.receipt["audit_head_after"])
             or bytes(row[15]) != bytes.fromhex(view.receipt["operation_digest"])
-            or bytes(row[11]) != DIRECT_INITIAL_PAYMENT_ROOT
+            or bytes(row[11]) != PRIVATE_ZK_INITIAL_PAYMENT_ROOT
             or int(row[12]) != 0
         ):
             _fail("state_binding")
         expected_identity = _sha(
-            _STATE_IDENTITY, DIRECT_DATABASE_CONTEXT_ID, DIRECT_DATABASE_SCHEMA_ID,
-            DIRECT_DATABASE_PROGRAM_ID, view.acceptance.circuit_id, bytes(row[2]), expected_verifier_sha256,
+            _STATE_IDENTITY, PRIVATE_ZK_DATABASE_CONTEXT_ID, PRIVATE_ZK_DATABASE_SCHEMA_ID,
+            PRIVATE_ZK_DATABASE_PROGRAM_ID, PRIVATE_ZK_MODE_ID, view.acceptance.circuit_id,
+            bytes(row[2]), expected_verifier_sha256,
+            _private_zk_profile_digest(view.acceptance.statement, expected_verifier_sha256),
         )
         if expected_identity != view.state_store_identity:
             _fail("state_identity")
@@ -321,10 +352,6 @@ def read_applied_application(
     _token(job_id, "job_id")
     if len(expected_application_config_digest) != 64 or len(expected_state_store_identity) != 64 or len(expected_verifier_sha256) != 32:
         _fail("application_expected_identity")
-    try:
-        verify_application_database(application_database)
-    except (IndependentQueueApplicationError, OSError) as exc:
-        raise IndependentOfficialHandoffError("application_verification") from exc
     if not application_database.is_file() or application_database.is_symlink():
         _fail("application_database_path")
     try:
@@ -332,6 +359,12 @@ def read_applied_application(
     except sqlite3.Error as exc:
         raise IndependentOfficialHandoffError("application_database_open") from exc
     try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        try:
+            verify_database_connection(connection)
+        except (IndependentQueueApplicationError, OSError) as exc:
+            raise IndependentOfficialHandoffError("application_verification") from exc
         metadata = connection.execute("SELECT * FROM app_metadata WHERE id=1").fetchone()
         job = connection.execute("SELECT * FROM app_jobs WHERE job_id=?", (job_id,)).fetchone()
         result = connection.execute("SELECT * FROM app_results WHERE job_id=?", (job_id,)).fetchone()
@@ -365,6 +398,7 @@ def read_applied_application(
             receipt=receipt,
             acceptance=acceptance,
         )
+        connection.execute("ROLLBACK")
     except (sqlite3.Error, ValueError) as exc:
         raise IndependentOfficialHandoffError("application_database_read") from exc
     finally:
