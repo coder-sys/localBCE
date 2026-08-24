@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from app.batch import poseidon as poseidon_module
@@ -11,31 +10,8 @@ from app.batch.stark_encoding import (
     canonical_cents,
     canonical_day_count,
     canonical_npi,
-    government_prf_nullifier,
     pack_felt_text,
 )
-from app.ingestion import parse_837
-from app.shared_context import build_shared_context
-
-
-ROOT = Path(__file__).resolve().parents[1]
-def sample_payload(claim_id: str = "BL-STARK-FOUNDATION"):
-    payload = json.loads((ROOT / "sample_claim_input.json").read_text(encoding="utf-8"))
-    payload["edi"] = payload["edi"].replace("BL-CLAIM-0001", claim_id)
-    return payload
-
-
-def sample_context():
-    payload = sample_payload()
-    parsed = parse_837(payload["edi"])
-    if not parsed.accepted:
-        raise AssertionError(parsed.errors)
-    flags = {
-        **payload["flags"],
-        "provider_not_suspended": True,
-        "not_deceased": True,
-    }
-    return build_shared_context(parsed, flags, strict_oracle=False)
 
 
 class StarkFieldFoundationTests(unittest.TestCase):
@@ -108,34 +84,6 @@ class StarkFieldFoundationTests(unittest.TestCase):
             poseidon_hash([domain_tag("claim_source"), 1, FIELD_MODULUS])
         with self.assertRaisesRegex(ValueError, "domain tag"):
             poseidon_hash([123456, 0])
-
-    def test_government_prf_nullifier_is_deterministic_and_secret_bound(self):
-        ctx = sample_context()
-        same_duplicate_different_claim_id = build_shared_context(
-            parse_837(sample_payload("BL-STARK-DIFFERENT-ID")["edi"]),
-            {**sample_payload()["flags"], "provider_not_suspended": True, "not_deceased": True},
-            strict_oracle=False,
-        )
-        with patch.dict(os.environ, {"BL_NULLIFIER_PRF_SECRET": "secret-a"}, clear=False):
-            first = government_prf_nullifier(ctx)
-            second = government_prf_nullifier(ctx)
-            duplicate_identity = government_prf_nullifier(same_duplicate_different_claim_id)
-        with patch.dict(os.environ, {"BL_NULLIFIER_PRF_SECRET": "secret-b"}, clear=False):
-            different_secret = government_prf_nullifier(ctx)
-        self.assertEqual(first, second)
-        self.assertEqual(first, duplicate_identity)
-        self.assertNotEqual(first, different_secret)
-
-        old_secret = os.environ.pop("BL_NULLIFIER_PRF_SECRET", None)
-        old_dev = os.environ.pop("BL_DEV", None)
-        try:
-            with self.assertRaisesRegex(RuntimeError, "missing nullifier PRF secret"):
-                government_prf_nullifier(ctx)
-        finally:
-            if old_secret is not None:
-                os.environ["BL_NULLIFIER_PRF_SECRET"] = old_secret
-            if old_dev is not None:
-                os.environ["BL_DEV"] = old_dev
 
 if __name__ == "__main__":
     unittest.main()

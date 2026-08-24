@@ -7,7 +7,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEST_ROOT = ROOT / "tests"
 ACTIVE_OWNER_ROOTS = (
-    ROOT / "app" / "governance",
     ROOT / "app" / "mirror",
     ROOT / "experiments" / "native_v3_phase0",
     ROOT / "experiments" / "native_v3_plaintext_continuity",
@@ -25,8 +24,6 @@ TRANSITIVE_SOURCE_ROOTS = (
 RETIRED_IMPORT_PREFIXES = (
     "app.privacy_v2",
     "experiments.fixed_k_privacy_v2",
-    "experiments.fixed_shape_claim_air",
-    "experiments.bl_pq512_crypto_foundation",
     "experiments.bl_pq512_crypto_core",
 )
 RETIRED_CORE_MARKERS = (

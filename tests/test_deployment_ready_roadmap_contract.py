@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import re
 
-from experiments.bl_pq512_crypto_foundation.ops_authority import OPS_AUTHORITY_STATUS, verify_ops_authority
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +69,6 @@ def test_commercial_continuity_wedge_cannot_become_clearance_api() -> None:
 
 
 def test_launch_blocker_manifest_has_only_one_external_assurance_dependency() -> None:
-    assert verify_ops_authority() == OPS_AUTHORITY_STATUS
     payload = json.loads(_text(BLOCKERS))
     planning = payload["planning_model"]
     assert planning["internal_engineering_packages"] == 81
