@@ -342,11 +342,16 @@ class SourceAdmissionService:
         return result
 
     def _validate_result(self, result: VerifiedSourceCoverage) -> None:
-        if result.graph_profile is not None and result.graph_profile != self.profile:
-            raise SourceAdmissionError("result:profile-mismatch")
-        profile = result.graph_profile or self.profile
+        if _v2_profile(self.profile):
+            if not isinstance(result.graph_profile, SourceProfile) or result.graph_profile != self.profile:
+                raise_redacted(SourceAdmissionError, "result:profile-mismatch")
+            profile = result.graph_profile
+        else:
+            if result.graph_profile is not None and result.graph_profile != self.profile:
+                raise_redacted(SourceAdmissionError, "result:profile-mismatch")
+            profile = result.graph_profile or self.profile
         if not isinstance(profile, SourceProfile) or profile.source_contract_digest != self.profile.source_contract_digest:
-            raise SourceAdmissionError("result:profile-mismatch")
+            raise_redacted(SourceAdmissionError, "result:profile-mismatch")
         if type(result.profile_id) is not str or result.profile_id != profile.profile_id:
             raise SourceAdmissionError("result:profile-mismatch")
         if (

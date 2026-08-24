@@ -3671,6 +3671,170 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertFalse(first.exists())
         self.assertFalse(second.exists())
 
+    def test_ingress_transaction_finalizer_reconciles_commit_and_close_uncertainty(self) -> None:
+        path = self.root / "ingress-finalizer-commit.db"
+        service = ingress.IngressServiceV2(path, self.ingress_config, clock=self.clock)
+        original_open = ingress._connection
+        faults: list[_InitializationFaultConnection] = []
+
+        def commit_then_raise(target: Path, **kwargs: object):
+            connection = _InitializationFaultConnection(
+                original_open(target, **kwargs),
+                fail_commit=True,
+            )
+            faults.append(connection)
+            return connection
+
+        scheduled_at = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds
+        with mock.patch.object(ingress, "_connection", side_effect=commit_then_raise):
+            with self.assertRaisesRegex(ingress.IngressIndeterminateError, "^ingress:transaction-indeterminate$") as caught:
+                service.ensure_slot(scheduled_at)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY", "".join(traceback.format_exception(caught.exception)))
+        self.assertEqual(1, faults[0].commit_calls)
+        restarted = ingress.IngressServiceV2(path, self.ingress_config, clock=self.clock)
+        retry = restarted.ensure_slot(scheduled_at)
+        self.assertEqual("DUE", retry.next_state)
+        self.assertEqual(1, restarted.verify()["event_count"])
+
+        close_path = self.root / "ingress-finalizer-close.db"
+        close_service = ingress.IngressServiceV2(close_path, self.ingress_config, clock=self.clock)
+        close_faults: list[_InitializationFaultConnection] = []
+
+        def close_after_commit(target: Path, **kwargs: object):
+            connection = _InitializationFaultConnection(
+                original_open(target, **kwargs),
+                fail_close=True,
+            )
+            close_faults.append(connection)
+            return connection
+
+        close_time = profile.FIXTURE_OBSERVATION_TIME + 2 * self.ingress_config.cadence_seconds
+        with mock.patch.object(ingress, "_connection", side_effect=close_after_commit):
+            with self.assertRaisesRegex(ingress.IngressIndeterminateError, "^ingress:transaction-indeterminate$"):
+                close_service.ensure_slot(close_time)
+        close_retry = ingress.IngressServiceV2(close_path, self.ingress_config, clock=self.clock).ensure_slot(close_time)
+        self.assertEqual("DUE", close_retry.next_state)
+        self.assertEqual(1, ingress_independent.verify_database(close_path)["event_count"])
+
+    def test_ingress_transaction_finalizer_rejects_rollback_failure(self) -> None:
+        path = self.root / "ingress-finalizer-rollback.db"
+        service = ingress.IngressServiceV2(path, self.ingress_config, clock=self.clock)
+        original_open = ingress._connection
+        faults: list[_InitializationFaultConnection] = []
+
+        def rollback_failure(target: Path, **kwargs: object):
+            connection = _InitializationFaultConnection(
+                original_open(target, **kwargs),
+                fail_rollback=True,
+            )
+            faults.append(connection)
+            return connection
+
+        with mock.patch.object(service, "_append", side_effect=ingress.IngressError("ingress:precommit")):
+            with mock.patch.object(ingress, "_connection", side_effect=rollback_failure):
+                with self.assertRaisesRegex(ingress.IngressIndeterminateError, "^ingress:transaction-indeterminate$") as caught:
+                    service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY", "".join(traceback.format_exception(caught.exception)))
+        self.assertGreaterEqual(faults[0].rollback_calls, 1)
+
+    def test_core_transaction_finalizer_reconciles_commit_close_and_rollback(self) -> None:
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 62
+        original_open = core._connection
+
+        commit_faults: list[_InitializationFaultConnection] = []
+
+        def commit_then_raise(target: Path, **kwargs: object):
+            connection = _InitializationFaultConnection(original_open(target, **kwargs), fail_commit=True)
+            commit_faults.append(connection)
+            return connection
+
+        with mock.patch.object(core, "_connection", side_effect=commit_then_raise):
+            with self.assertRaisesRegex(core.CoreIndeterminateError, "^core:transaction-indeterminate$") as caught:
+                self.core.observe(self.session_id, 1, "DISCREPANCY", counts={"observed": 1, "changed": 1})
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY", "".join(traceback.format_exception(caught.exception)))
+        self.assertEqual(1, commit_faults[0].commit_calls)
+        restarted = core.CoreServiceV2(self.core_path, self.core_config, clock=self.core_clock)
+        retry = restarted.observe(self.session_id, 1, "DISCREPANCY", counts={"observed": 1, "changed": 1})
+        self.assertEqual("OBSERVATION", json.loads(retry.raw.decode("ascii"))["event_kind"])
+        self.assertEqual(self.core.verify()["event_count"], restarted.verify()["event_count"])
+
+        close_path = self.root / "core-finalizer-close.db"
+        shutil.copy2(self.core_path, close_path)
+        close_service = core.CoreServiceV2(close_path, self.core_config, clock=self.core_clock)
+        close_faults: list[_InitializationFaultConnection] = []
+
+        def close_after_commit(target: Path, **kwargs: object):
+            connection = _InitializationFaultConnection(original_open(target, **kwargs), fail_close=True)
+            close_faults.append(connection)
+            return connection
+
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 124
+        with mock.patch.object(core, "_connection", side_effect=close_after_commit):
+            with self.assertRaisesRegex(core.CoreIndeterminateError, "^core:transaction-indeterminate$"):
+                close_service.observe(self.session_id, 2, "PARITY", counts={"observed": 2, "changed": 0})
+        self.assertEqual(1, close_faults[0].close_calls)
+        close_retry = core.CoreServiceV2(close_path, self.core_config, clock=self.core_clock).observe(
+            self.session_id, 2, "PARITY", counts={"observed": 2, "changed": 0}
+        )
+        self.assertEqual("OBSERVATION", json.loads(close_retry.raw.decode("ascii"))["event_kind"])
+
+        rollback_path = self.root / "core-finalizer-rollback.db"
+        shutil.copy2(self.core_path, rollback_path)
+        rollback_service = core.CoreServiceV2(rollback_path, self.core_config, clock=self.core_clock)
+        rollback_faults: list[_InitializationFaultConnection] = []
+
+        def rollback_failure(target: Path, **kwargs: object):
+            connection = _InitializationFaultConnection(original_open(target, **kwargs), fail_rollback=True)
+            rollback_faults.append(connection)
+            return connection
+
+        with mock.patch.object(rollback_service, "_append", side_effect=core.CoreError("core:precommit")):
+            with mock.patch.object(core, "_connection", side_effect=rollback_failure):
+                with self.assertRaisesRegex(core.CoreIndeterminateError, "^core:transaction-indeterminate$") as caught:
+                    rollback_service.observe(self.session_id, 2, "DISCREPANCY", counts={"observed": 1, "changed": 1})
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY", "".join(traceback.format_exception(caught.exception)))
+        self.assertGreaterEqual(rollback_faults[0].rollback_calls, 1)
+
+    def test_independent_verifier_cleanup_failures_are_fixed_and_redacted(self) -> None:
+        canary = "CANARY-VERIFIER-CLEANUP-CREDENTIAL-C:/private"
+        for module, path, error_type, code in (
+            (ingress_independent, self.ingress_path, ingress_independent.IngressVerificationError, "ingress:database"),
+            (core_independent, self.core_path, core_independent.CoreVerificationError, "core:database"),
+        ):
+            with self.subTest(module=module.__name__):
+                real_connect = module.sqlite3.connect
+
+                class ReadFault:
+                    def __init__(self, inner: sqlite3.Connection) -> None:
+                        self.inner = inner
+
+                    def close(self) -> None:
+                        self.inner.close()
+                        raise RuntimeError(canary)
+
+                    def __getattr__(self, name: str) -> object:
+                        return getattr(self.inner, name)
+
+                def open_fault(*args: object, **kwargs: object):
+                    return ReadFault(real_connect(*args, **kwargs))
+
+                with mock.patch.object(module.sqlite3, "connect", side_effect=open_fault):
+                    with self.assertRaisesRegex(error_type, f"^{code}$") as caught:
+                        module.verify_database(path)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                rendered = "".join(traceback.format_exception(caught.exception))
+                self.assertNotIn(canary, str(caught.exception))
+                self.assertNotIn(canary, rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

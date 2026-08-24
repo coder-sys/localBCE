@@ -15,11 +15,13 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 from typing import Mapping
 
 from app.mirror import external_source_adapter_independent as external
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE, SOURCE_CONTRACT_SCHEMA, SOURCE_CONTRACT_VERSION, _digest as _contract_digest
+from app.mirror.error_boundary import raise_redacted
 
 
 SCHEMA = "mirror-ingress-v4"
@@ -69,6 +71,32 @@ FIXED_FLAGS = {
     "adjudication_authority": False,
     "proofSuiteId": None,
 }
+
+
+def _close_readonly(
+    connection: sqlite3.Connection | None,
+    *,
+    code: str = "ingress:database",
+) -> None:
+    """Close one verifier snapshot without exposing cleanup failures."""
+
+    active = sys.exc_info()[1]
+    cleanup_failed = False
+    if connection is not None:
+        try:
+            connection.execute("ROLLBACK")
+        except BaseException:
+            cleanup_failed = True
+        try:
+            connection.close()
+        except BaseException:
+            cleanup_failed = True
+    if cleanup_failed:
+        raise_redacted(IngressVerificationError, code)
+    if isinstance(active, IngressVerificationError):
+        active.__cause__ = None
+        active.__context__ = None
+        active.__suppress_context__ = True
 EVENT_KEYS = {
     "schema",
     "schema_version",
@@ -668,7 +696,7 @@ def _open(path: str | Path) -> sqlite3.Connection:
         )
         connection.row_factory = sqlite3.Row
         if _path_identity(database, allow_missing=False) != identity:
-            connection.close()
+            _close_readonly(connection)
             raise IngressVerificationError("ingress:database")
         if str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "delete":
             raise IngressVerificationError("ingress:database")
@@ -677,12 +705,10 @@ def _open(path: str | Path) -> sqlite3.Connection:
         connection.execute("BEGIN")
         return connection
     except IngressVerificationError:
-        if connection is not None:
-            connection.close()
+        _close_readonly(connection)
         raise
     except (OSError, sqlite3.Error, ValueError):
-        if connection is not None:
-            connection.close()
+        _close_readonly(connection)
         raise IngressVerificationError("ingress:database") from None
 
 
@@ -1696,11 +1722,7 @@ def verify_database(
             artifact_ids=artifact_ids,
         )
     finally:
-        try:
-            connection.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
-        connection.close()
+        _close_readonly(connection)
 
 
 def verify_bytes(
@@ -1738,14 +1760,7 @@ def verify_bytes(
     except (OSError, sqlite3.Error, TypeError, ValueError):
         raise IngressVerificationError("ingress:image") from None
     finally:
-        try:
-            connection.execute("ROLLBACK")
-        except (NameError, sqlite3.Error):
-            pass
-        try:
-            connection.close()
-        except (NameError, sqlite3.Error):
-            pass
+        _close_readonly(locals().get("connection"))
 
 
 def read_artifact(path: str | Path, artifact_id: str) -> dict[str, object]:

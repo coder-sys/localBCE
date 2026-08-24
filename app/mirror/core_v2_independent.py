@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 from typing import Mapping
 
 from app.mirror import ingress_v2_independent as ingress
@@ -19,6 +20,7 @@ from app.mirror import external_source_adapter_independent as external
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_GRAPH_PROFILE_REGISTRY, NC_MEDICAID_PROFILE
 from app.mirror import provider_trust_graph_independent as graph
+from app.mirror.error_boundary import raise_redacted
 
 
 SCHEMA = "mirror-core-v3"
@@ -101,6 +103,32 @@ _SIDECARS = ("-wal", "-shm", "-journal")
 
 class CoreVerificationError(ValueError):
     """Fixed independent Core failure."""
+
+
+def _close_readonly(
+    connection: sqlite3.Connection | None,
+    *,
+    code: str = "core:database",
+) -> None:
+    """Close one verifier snapshot without exposing cleanup failures."""
+
+    active = sys.exc_info()[1]
+    cleanup_failed = False
+    if connection is not None:
+        try:
+            connection.execute("ROLLBACK")
+        except BaseException:
+            cleanup_failed = True
+        try:
+            connection.close()
+        except BaseException:
+            cleanup_failed = True
+    if cleanup_failed:
+        raise_redacted(CoreVerificationError, code)
+    if isinstance(active, CoreVerificationError):
+        active.__cause__ = None
+        active.__context__ = None
+        active.__suppress_context__ = True
 
 
 def _canonical(value: object) -> bytes:
@@ -247,6 +275,7 @@ def _check_runtime_pragmas(connection: sqlite3.Connection, *, require_delete_jou
 
 def _open(path: str | Path) -> sqlite3.Connection:
     database = Path(path)
+    connection: sqlite3.Connection | None = None
     try:
         parent = os.lstat(database.parent)
         info = os.lstat(database)
@@ -264,8 +293,10 @@ def _open(path: str | Path) -> sqlite3.Connection:
         connection.execute("BEGIN")
         return connection
     except CoreVerificationError:
+        _close_readonly(connection)
         raise
     except (OSError, sqlite3.Error, TypeError, ValueError):
+        _close_readonly(connection)
         raise CoreVerificationError("core:database") from None
 
 
@@ -1191,11 +1222,7 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
     try:
         return _verify_connection(connection, expected_database_id=expected_database_id, expected_config_digest=expected_config_digest, ingress_path=ingress_path)
     finally:
-        try:
-            connection.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
-        connection.close()
+        _close_readonly(connection)
 
 
 def verify_bytes(raw: bytes, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_bytes: bytes | None = None) -> dict[str, object]:
@@ -1217,12 +1244,7 @@ def verify_bytes(raw: bytes, *, expected_database_id: str | None = None, expecte
     except (OSError, sqlite3.Error, TypeError, ValueError, KeyError):
         raise CoreVerificationError("core:image") from None
     finally:
-        if connection is not None:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
-            connection.close()
+        _close_readonly(connection)
 
 
 def logical_export(result: Mapping[str, object]) -> bytes:

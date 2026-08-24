@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 import time
 from typing import Callable, Mapping
 
@@ -63,6 +64,78 @@ class IngressConflictError(IngressError):
 
 class IngressBusyError(IngressError):
     """A bounded writer contention failure."""
+
+
+class IngressIndeterminateError(IngressError):
+    """The transaction outcome or its finalization cannot be established."""
+
+
+def _finalize_owner_connection(
+    connection: sqlite3.Connection | None,
+    *,
+    commit_attempted: bool = False,
+    commit_succeeded: bool = False,
+    identity_check: Callable[[], None] | None = None,
+    transactional: bool = True,
+    cleanup_code: str = "ingress:database",
+    close: bool = True,
+    continue_after_cleanup: bool = False,
+    ignore_active: bool = False,
+) -> None:
+    """Own rollback/close and never let cleanup replace a fixed public result."""
+
+    active = None if ignore_active else sys.exc_info()[1]
+    if connection is None:
+        if transactional and (commit_attempted or commit_succeeded):
+            raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
+        if active is not None and not isinstance(active, IngressError):
+            raise_redacted(IngressError, cleanup_code)
+        return
+    cleanup_failed = False
+    try:
+        in_transaction = bool(connection.in_transaction)
+    except BaseException:
+        in_transaction = False
+        cleanup_failed = True
+    if transactional and not commit_succeeded and in_transaction:
+        try:
+            connection.rollback()
+        except BaseException:
+            cleanup_failed = True
+    if close:
+        try:
+            connection.close()
+        except BaseException:
+            cleanup_failed = True
+    if identity_check is not None and (commit_succeeded or not transactional):
+        try:
+            identity_check()
+        except BaseException:
+            cleanup_failed = True
+    if continue_after_cleanup:
+        if cleanup_failed or (commit_attempted and not commit_succeeded):
+            raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
+        if isinstance(active, IngressError):
+            active.__cause__ = None
+            active.__context__ = None
+            active.__suppress_context__ = True
+        return
+    if isinstance(active, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+        return
+    if transactional and (
+        cleanup_failed
+        or (commit_attempted and not commit_succeeded)
+        or (commit_succeeded and active is not None)
+    ):
+        raise_redacted(IngressIndeterminateError, "ingress:transaction-indeterminate")
+    if not transactional and cleanup_failed:
+        raise_redacted(IngressError, cleanup_code)
+    if active is not None and not isinstance(active, IngressError):
+        raise_redacted(IngressError, cleanup_code)
+    if isinstance(active, IngressError):
+        active.__cause__ = None
+        active.__context__ = None
+        active.__suppress_context__ = True
 
 
 def _safe_identifier(value: object, label: str) -> str:
@@ -419,6 +492,7 @@ def _connection(
     ):
         raise IngressError("ingress:database-open")
     connection: sqlite3.Connection | None = None
+    returned = False
     try:
         if create:
             connection = sqlite3.connect(database, timeout=timeout, isolation_level=None)
@@ -457,21 +531,23 @@ def _connection(
             raise IngressError("ingress:database-open")
         if expected_identity is not None and (after[0], after[1]) != expected_identity:
             raise IngressError("ingress:database-open")
+        returned = True
         return connection
     except IngressError:
-        if connection is not None:
-            connection.close()
         raise
     except sqlite3.OperationalError as exc:
-        if connection is not None:
-            connection.close()
         if _is_capacity_error(exc):
             raise_redacted(IngressError, "ingress:capacity")
         raise_redacted(IngressError, "ingress:database-open")
     except (OSError, sqlite3.Error):
-        if connection is not None:
-            connection.close()
         raise_redacted(IngressError, "ingress:database-open")
+    finally:
+        if not returned:
+            _finalize_owner_connection(
+                connection,
+                transactional=False,
+                cleanup_code="ingress:database-open",
+            )
 
 
 def _is_capacity_error(exc: BaseException) -> bool:
@@ -522,12 +598,11 @@ def _is_uninitialized_database(path: Path) -> bool:
     except (independent.IngressVerificationError, OSError, sqlite3.Error, TypeError, ValueError):
         return False
     finally:
-        if connection is not None:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
-            connection.close()
+        _finalize_owner_connection(
+            connection,
+            transactional=False,
+            cleanup_code="ingress:database-open",
+        )
 
 
 _SCHEMA_DDL = (
@@ -642,6 +717,17 @@ def _init(path: Path, config: IngressConfigV2) -> None:
         expected_identity=None if existing is None else (existing[0], existing[1]),
         create=existing is None,
     )
+    commit_attempted = False
+    commit_succeeded = False
+
+    def _postcommit_identity() -> None:
+        current = _path_identity(path, allow_missing=False)
+        if current is None or (
+            existing is not None
+            and (current[0], current[1]) != (existing[0], existing[1])
+        ):
+            raise IngressError("ingress:database-open")
+
     try:
         current = _table_names(connection)
         if current and current != tuple(sorted(TABLES)):
@@ -661,7 +747,9 @@ def _init(path: Path, config: IngressConfigV2) -> None:
                     config.digest, config_raw, 0, independent.GENESIS_ROOT, 0, 0,
                 ),
             )
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
         else:
             if not _schema_matches(connection):
                 raise IngressError("ingress:legacy-schema")
@@ -671,21 +759,21 @@ def _init(path: Path, config: IngressConfigV2) -> None:
                 raise IngressError("ingress:identity")
             _configure_page_limit(connection)
     except IngressError:
-        if connection.in_transaction:
-            connection.rollback()
         raise
     except sqlite3.OperationalError as exc:
-        if connection.in_transaction:
-            connection.rollback()
         if _is_capacity_error(exc):
             raise_redacted(IngressError, "ingress:capacity")
         raise_redacted(IngressError, "ingress:database-initialize")
     except sqlite3.Error:
-        if connection.in_transaction:
-            connection.rollback()
         raise_redacted(IngressError, "ingress:database-initialize")
     finally:
-        connection.close()
+        _finalize_owner_connection(
+            connection,
+            commit_attempted=commit_attempted,
+            commit_succeeded=commit_succeeded,
+            identity_check=_postcommit_identity,
+            cleanup_code="ingress:database-initialize",
+        )
 
 
 class IngressServiceV2:
@@ -1021,7 +1109,6 @@ class IngressServiceV2:
             "UPDATE ingress_slots SET state='HELD',lease_token=NULL,lease_until=NULL WHERE slot_id=?",
             (str(slot["slot_id"]),),
         )
-        connection.commit()
         return self._receipt(raw, artifact_id=artifact_id, next_state="HELD")
 
     def _capacity_hold_after_full(
@@ -1036,6 +1123,8 @@ class IngressServiceV2:
         attempt: int,
         lease_token_digest: str,
     ) -> IngressReceipt:
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             slot = connection.execute(
@@ -1056,7 +1145,7 @@ class IngressServiceV2:
                 raise IngressConflictError("ingress:clock-rewind")
             if owner_now >= int(slot["lease_until"]):
                 raise IngressConflictError("ingress:lease-expired")
-            return self._capacity_hold_receipt(
+            receipt = self._capacity_hold_receipt(
                 connection,
                 slot=slot,
                 artifact_id=artifact_id,
@@ -1066,20 +1155,48 @@ class IngressServiceV2:
                 lease_token=lease_token_digest,
                 owner_now=owner_now,
             )
+            commit_attempted = True
+            connection.commit()
+            commit_succeeded = True
+            return receipt
         except (IngressConflictError, IngressError):
-            if connection.in_transaction:
-                connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.OperationalError as exc:
-            if connection.in_transaction:
-                connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
                 raise_redacted(IngressConflictError, "ingress:capacity")
             raise_redacted(IngressError, "ingress:database")
         except sqlite3.Error:
-            if connection.in_transaction:
-                connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise_redacted(IngressError, "ingress:database")
+        finally:
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="ingress:database",
+                ignore_active=True,
+            )
 
     def ensure_slot(self, scheduled_at: int) -> IngressReceipt:
         if type(scheduled_at) is not int or not (
@@ -1093,6 +1210,8 @@ class IngressServiceV2:
         operation_id = _digest("slot-operation", {"slot_id": slot_id})
         request_digest = _digest("request", {"operation_id": operation_id, "scheduled_at": scheduled_at})
         connection = self._writer_connection()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -1105,7 +1224,9 @@ class IngressServiceV2:
                 ).fetchone()
                 if event is None:
                     raise IngressError("ingress:slot-receipt")
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(bytes(event[0]), artifact_id=row["artifact_id"], next_state=str(row["state"]))
             meta = connection.execute("SELECT slot_count FROM ingress_meta WHERE meta_id=1").fetchone()
             if meta is None or int(meta[0]) >= self.config.max_slots:
@@ -1143,25 +1264,51 @@ class IngressServiceV2:
                 payload_length=0,
             )
             connection.execute("UPDATE ingress_meta SET slot_count=slot_count+1 WHERE meta_id=1")
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(raw, artifact_id=None, next_state="DUE")
         except (IngressConflictError, IngressError):
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.OperationalError as exc:
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
                 raise_redacted(IngressConflictError, "ingress:capacity")
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
                 raise_redacted(IngressBusyError, "ingress:busy")
             raise_redacted(IngressError, "ingress:database")
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
                 raise_redacted(IngressConflictError, "ingress:capacity")
             raise_redacted(IngressError, "ingress:database")
         finally:
-            connection.close()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="ingress:database",
+            )
 
     def claim_slot(self, slot_id: str, *, lease_token: str) -> IngressReceipt:
         slot_id = _bounded_digest_string(slot_id, "ingress:lease")
@@ -1172,6 +1319,8 @@ class IngressServiceV2:
             ascii_only=True,
         )
         connection = self._writer_connection()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -1203,7 +1352,9 @@ class IngressServiceV2:
                     ).fetchone()
                     if event is None:
                         raise IngressError("ingress:lease-receipt")
+                    commit_attempted = True
                     connection.commit()
+                    commit_succeeded = True
                     return self._receipt(bytes(event[0]), artifact_id=row["artifact_id"], next_state="LEASED")
             live_slots = self._live_slot_count(connection)
             expired = row["state"] == "LEASED" and row["lease_until"] is not None and int(row["lease_until"]) <= owner_now
@@ -1249,7 +1400,9 @@ class IngressServiceV2:
                     (next_state, slot_id),
                 )
                 if next_state == "HELD":
+                    commit_attempted = True
                     connection.commit()
+                    commit_succeeded = True
                     return self._receipt(raw, artifact_id=row["artifact_id"], next_state=next_state)
                 row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
             if row["state"] != "DUE" or row["scheduled_at"] > owner_now:
@@ -1273,25 +1426,51 @@ class IngressServiceV2:
                 "UPDATE ingress_slots SET state='LEASED',attempt=?,lease_token=?,lease_until=? WHERE slot_id=?",
                 (attempt, token_digest, lease_until, slot_id),
             )
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(raw, artifact_id=row["artifact_id"], next_state="LEASED")
         except (IngressConflictError, IngressError):
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.OperationalError as exc:
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
                 raise_redacted(IngressConflictError, "ingress:capacity")
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
                 raise_redacted(IngressBusyError, "ingress:busy")
             raise_redacted(IngressError, "ingress:database")
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
                 raise_redacted(IngressConflictError, "ingress:capacity")
             raise_redacted(IngressError, "ingress:database")
         finally:
-            connection.close()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="ingress:database",
+            )
 
     def admit_capture(
         self,
@@ -1393,6 +1572,9 @@ class IngressServiceV2:
         request_digest = _digest("request", {"operation_id": operation_id, "slot_id": slot_id, "artifact_id": artifact_id})
         submitted_token_digest = _lease_token_digest(self.config, slot_id, attempt, lease_token)
         connection = self._writer_connection()
+        commit_attempted = False
+        commit_succeeded = False
+        suppress_active = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             slot = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -1451,7 +1633,9 @@ class IngressServiceV2:
                         )
                     except independent.IngressVerificationError:
                         raise IngressConflictError("ingress:operation-conflict") from None
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(bytes(existing["event_raw"]), artifact_id=artifact_id, next_state=str(existing["next_state"]))
             owner_now = self._owner_now()
             last_observed_at = self._last_observed_at(connection)
@@ -1526,7 +1710,7 @@ class IngressServiceV2:
                 raw_artifact_bytes=MAX_COMPLETE_FRAME_BYTES,
                 terminal_live_slots=self._live_slot_count(connection),
             ):
-                return self._capacity_hold_receipt(
+                receipt = self._capacity_hold_receipt(
                     connection,
                     slot=slot,
                     artifact_id=artifact_id,
@@ -1536,6 +1720,10 @@ class IngressServiceV2:
                     lease_token=token_digest,
                     owner_now=owner_now,
                 )
+                commit_attempted = True
+                connection.commit()
+                commit_succeeded = True
+                return receipt
             row = connection.execute("SELECT * FROM ingress_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
             if row is not None and bytes(row["raw"]) != frame:
                 raise IngressConflictError("ingress:artifact-conflict")
@@ -1654,14 +1842,29 @@ class IngressServiceV2:
                 "UPDATE ingress_slots SET state=?,artifact_id=?,lease_token=NULL,lease_until=NULL WHERE slot_id=?",
                 (next_state, artifact_id, slot_id),
             )
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(final_raw, artifact_id=artifact_id, next_state=next_state)
         except (IngressConflictError, IngressError):
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.OperationalError as exc:
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
+                suppress_active = True
                 return self._capacity_hold_after_full(
                     connection,
                     slot_id=slot_id,
@@ -1676,8 +1879,15 @@ class IngressServiceV2:
                 raise_redacted(IngressBusyError, "ingress:busy")
             raise_redacted(IngressError, "ingress:database")
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_owner_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             if _is_capacity_error(exc):
+                suppress_active = True
                 return self._capacity_hold_after_full(
                     connection,
                     slot_id=slot_id,
@@ -1690,7 +1900,14 @@ class IngressServiceV2:
                 )
             raise_redacted(IngressError, "ingress:database")
         finally:
-            connection.close()
+            if not suppress_active:
+                _finalize_owner_connection(
+                    connection,
+                    commit_attempted=commit_attempted,
+                    commit_succeeded=commit_succeeded,
+                    identity_check=self._assert_database_identity,
+                    cleanup_code="ingress:database",
+                )
 
     def current(self, *, include_raw: bool = False) -> dict[str, object]:
         return self.verify(include_raw=include_raw)
@@ -1735,12 +1952,12 @@ class IngressServiceV2:
             raise_redacted(IngressError, "ingress:projection")
         finally:
             if connection is not None:
-                try:
-                    connection.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
-                connection.close()
-            self._assert_database_identity()
+                _finalize_owner_connection(
+                    connection,
+                    identity_check=self._assert_database_identity,
+                    transactional=False,
+                    cleanup_code="ingress:projection",
+                )
 
     def eligible_slots(self, limit: int) -> tuple[EligibleSlotV1, ...]:
         """Return due or expired slots from one identity-checked read snapshot."""
@@ -1791,12 +2008,12 @@ class IngressServiceV2:
             raise_redacted(IngressError, "ingress:eligible")
         finally:
             if connection is not None:
-                try:
-                    connection.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
-                connection.close()
-            self._assert_database_identity()
+                _finalize_owner_connection(
+                    connection,
+                    identity_check=self._assert_database_identity,
+                    transactional=False,
+                    cleanup_code="ingress:eligible",
+                )
 
     def logical_export(self) -> bytes:
         return independent.logical_export(self.verify())
@@ -1816,7 +2033,7 @@ class IngressServiceV2:
 
 __all__ = [
     "IngressConfigV2", "IngressReceipt", "EligibleSlotV1", "IngressError",
-    "IngressConflictError", "IngressBusyError", "IngressServiceV2",
+    "IngressConflictError", "IngressBusyError", "IngressIndeterminateError", "IngressServiceV2",
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
     "MAX_IDENTIFIER_BYTES",
 ]

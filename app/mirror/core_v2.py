@@ -14,8 +14,9 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 import time
-from typing import Mapping
+from typing import Callable, Mapping
 
 from app.mirror import core_v2_independent as independent
 from app.mirror import external_governance_approval_independent as governance
@@ -57,6 +58,79 @@ class CoreConflictError(CoreError):
 
 class CoreBusyError(CoreError):
     """A bounded Core writer contention failure."""
+
+
+class CoreIndeterminateError(CoreError):
+    """The transaction outcome or its finalization cannot be established."""
+
+
+def _finalize_core_connection(
+    connection: sqlite3.Connection | None,
+    *,
+    commit_attempted: bool = False,
+    commit_succeeded: bool = False,
+    identity_check: Callable[[], None] | None = None,
+    transactional: bool = True,
+    cleanup_code: str = "core:database",
+    close: bool = True,
+    continue_after_cleanup: bool = False,
+    ignore_active: bool = False,
+    rollback_before_close: bool = False,
+) -> None:
+    """Own Core rollback/close without exposing cleanup failures."""
+
+    active = None if ignore_active else sys.exc_info()[1]
+    if connection is None:
+        if transactional and (commit_attempted or commit_succeeded):
+            raise_redacted(CoreIndeterminateError, "core:transaction-indeterminate")
+        if active is not None and not isinstance(active, CoreError):
+            raise_redacted(CoreError, cleanup_code)
+        return
+    cleanup_failed = False
+    try:
+        in_transaction = bool(connection.in_transaction)
+    except BaseException:
+        in_transaction = False
+        cleanup_failed = True
+    if (transactional or rollback_before_close) and not commit_succeeded and in_transaction:
+        try:
+            connection.rollback()
+        except BaseException:
+            cleanup_failed = True
+    if close:
+        try:
+            connection.close()
+        except BaseException:
+            cleanup_failed = True
+    if identity_check is not None and (commit_succeeded or not transactional):
+        try:
+            identity_check()
+        except BaseException:
+            cleanup_failed = True
+    if continue_after_cleanup:
+        if cleanup_failed or (commit_attempted and not commit_succeeded):
+            raise_redacted(CoreIndeterminateError, "core:transaction-indeterminate")
+        if isinstance(active, CoreError):
+            active.__cause__ = None
+            active.__context__ = None
+            active.__suppress_context__ = True
+        return
+    if isinstance(active, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+        return
+    if transactional and (
+        cleanup_failed
+        or (commit_attempted and not commit_succeeded)
+        or (commit_succeeded and active is not None)
+    ):
+        raise_redacted(CoreIndeterminateError, "core:transaction-indeterminate")
+    if not transactional and cleanup_failed:
+        raise_redacted(CoreError, cleanup_code)
+    if active is not None and not isinstance(active, CoreError):
+        raise_redacted(CoreError, cleanup_code)
+    if isinstance(active, CoreError):
+        active.__cause__ = None
+        active.__context__ = None
+        active.__suppress_context__ = True
 
 
 def _safe_identifier(value: object, label: str) -> str:
@@ -237,16 +311,25 @@ def _connection(path: Path, *, expected_identity: tuple[int, int] | None = None,
         connection.row_factory = sqlite3.Row
         return connection
     except CoreError:
-        if connection is not None:
-            connection.close()
+        _finalize_core_connection(
+            connection,
+            transactional=False,
+            cleanup_code="core:database-open",
+        )
         raise
     except OSError:
-        if connection is not None:
-            connection.close()
+        _finalize_core_connection(
+            connection,
+            transactional=False,
+            cleanup_code="core:database-open",
+        )
         raise_redacted(CoreError, "core:database-open")
     except sqlite3.Error as exc:
-        if connection is not None:
-            connection.close()
+        _finalize_core_connection(
+            connection,
+            transactional=False,
+            cleanup_code="core:database-open",
+        )
         _sqlite_error(exc)
     raise CoreError("core:database-open")
 
@@ -274,10 +357,22 @@ def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
             if row is None or bytes(row["config_raw"]) != _canonical(config.material()) or row["database_id"] != config.database_id or row["chain_id"] != config.chain_id:
                 raise CoreError("core:identity")
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                identity_check=lambda: _path_identity(path, allow_missing=False),
+                transactional=False,
+                cleanup_code="core:database-open",
+            )
         return existing
 
     connection = _connection(path, create=True)
+    commit_attempted = False
+    commit_succeeded = False
+
+    def _postcommit_identity() -> None:
+        if _path_identity(path, allow_missing=False) is None:
+            raise CoreError("core:database-open")
+
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("CREATE TABLE core_meta(meta_id INTEGER PRIMARY KEY CHECK(meta_id=1),schema TEXT NOT NULL,schema_version INTEGER NOT NULL,database_id TEXT NOT NULL,chain_id TEXT NOT NULL,config_digest TEXT NOT NULL,config_raw BLOB NOT NULL,sequence INTEGER NOT NULL,head_root TEXT NOT NULL,ingress_database_id TEXT NOT NULL,ingress_watermark INTEGER NOT NULL)")
@@ -288,18 +383,44 @@ def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
         connection.execute("CREATE TABLE core_events(sequence INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,event_kind TEXT NOT NULL,operation_id TEXT NOT NULL UNIQUE,subject_id TEXT NOT NULL,event_raw BLOB NOT NULL,receipt_digest TEXT NOT NULL)")
         connection.execute("CREATE INDEX core_artifacts_kind_source_event_idx ON core_artifacts(kind,source_artifact_id,created_event_sequence)")
         connection.execute("INSERT INTO core_meta(meta_id,schema,schema_version,database_id,chain_id,config_digest,config_raw,sequence,head_root,ingress_database_id,ingress_watermark) VALUES(1,?,?,?,?,?,?,?,?,?,?)", (SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, _canonical(config.material()), 0, independent.GENESIS_ROOT, config.ingress_database_id, 0))
+        commit_attempted = True
         connection.commit()
+        commit_succeeded = True
     except CoreError:
-        connection.rollback()
+        _finalize_core_connection(
+            connection,
+            commit_attempted=commit_attempted,
+            commit_succeeded=commit_succeeded,
+            close=False,
+            continue_after_cleanup=True,
+        )
         raise
     except sqlite3.OperationalError as exc:
-        connection.rollback()
+        _finalize_core_connection(
+            connection,
+            commit_attempted=commit_attempted,
+            commit_succeeded=commit_succeeded,
+            close=False,
+            continue_after_cleanup=True,
+        )
         _sqlite_error(exc, busy=True)
     except sqlite3.Error as exc:
-        connection.rollback()
+        _finalize_core_connection(
+            connection,
+            commit_attempted=commit_attempted,
+            commit_succeeded=commit_succeeded,
+            close=False,
+            continue_after_cleanup=True,
+        )
         _sqlite_error(exc)
     finally:
-        connection.close()
+        _finalize_core_connection(
+            connection,
+            commit_attempted=commit_attempted,
+            commit_succeeded=commit_succeeded,
+            identity_check=_postcommit_identity,
+            cleanup_code="core:database-initialize",
+        )
     independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
     identity = _path_identity(path, allow_missing=False)
     if identity is None:
@@ -363,12 +484,12 @@ class CoreServiceV2:
             raise_redacted(CoreError, "core:projection")
         finally:
             if connection is not None:
-                try:
-                    connection.rollback()
-                except sqlite3.Error:
-                    pass
-                connection.close()
-            self._assert_database_identity()
+                _finalize_core_connection(
+                    connection,
+                    identity_check=self._assert_database_identity,
+                    transactional=False,
+                    cleanup_code="core:projection",
+                )
 
     def verify(self, *, ingress_path: str | Path | None = None) -> dict[str, object]:
         return independent.verify_database(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, ingress_path=ingress_path)
@@ -671,9 +792,13 @@ class CoreServiceV2:
                         raise CoreError("core:source-head")
                     prior_source = independent._parse(prior_row[0], "core:artifact")
                     predecessor_ingress_id = str(prior_source["ingress_artifact_id"])
-            connection.rollback()
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                transactional=False,
+                cleanup_code="core:database",
+                rollback_before_close=True,
+            )
         if not unresolved:
             return tuple(local[value] for value in artifact_ids)
         try:
@@ -735,6 +860,8 @@ class CoreServiceV2:
             raise_redacted(CoreError, "core:ingress-reject")
 
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             now = self._owner_now(connection)
@@ -799,19 +926,45 @@ class CoreServiceV2:
                     raise CoreConflictError("core:reconciliation-chain")
                 rec_id, rec_event = self._admit_artifact(connection, kind="RECONCILIATION", raw=_canonical(rec_body), profile_digest=self.config.runtime_profile_digest, predecessor_id=rec_predecessor, source_artifact_id=source_id, operation_id=_digest("reconciliation-operation", {"source_artifact_id": source_id}), request_digest=_digest("reconciliation-request", {"source_artifact_id": source_id}), state=status, observed_at=now, ingress_watermark=int(ing["event_sequence"]))
                 results[artifact_id] = {"source_artifact_id": source_id, "graph_artifact_id": graph_id, "reconciliation_artifact_id": rec_id, "observation_status": status, "receipt": self._receipt(rec_event)}
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return tuple(results[value] for value in artifact_ids)
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.OperationalError as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc, busy=True)
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     @staticmethod
@@ -827,26 +980,50 @@ class CoreServiceV2:
             raise CoreError("core:approval")
         operation_id = _digest("approval-operation", {"kind": kind, "raw": _raw_digest("approval", raw)})
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return str(independent._parse(existing, "core:event-raw")["material"]["artifact_id"])
             head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (kind,)).fetchone()
             predecessor = str(head[0]) if head else None
             now = self._owner_now(connection)
             artifact_id, _ = self._admit_artifact(connection, kind=kind, raw=raw, profile_digest=profile_digest, predecessor_id=predecessor, source_artifact_id=None, operation_id=operation_id, request_digest=_digest("approval-request", {"kind": kind, "raw": _raw_digest("approval", raw)}), state=decision, observed_at=now)
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return artifact_id
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     def admit_governance(self, raw: bytes, *, policy: object, evidence_raw: bytes) -> str:
@@ -881,6 +1058,8 @@ class CoreServiceV2:
         if type(reconciliation_artifact_id) is not str or len(reconciliation_artifact_id) != 128 or any(char not in "0123456789abcdef" for char in reconciliation_artifact_id):
             raise CoreConflictError("core:case-input")
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT raw,source_artifact_id FROM core_artifacts WHERE artifact_id=? AND kind='RECONCILIATION'", (reconciliation_artifact_id,)).fetchone()
@@ -894,22 +1073,44 @@ class CoreServiceV2:
             existing = self._event(connection, operation_id)
             if existing is not None:
                 material = independent._parse(existing, "core:event-raw")["material"]
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return str(material["artifact_id"])
             body = {"schema": "mirror-core-case-v3", "schema_version": 3, "kind": "CASE", "artifact_id": "", "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"], "state": "OPEN", "responsibility": "UNKNOWN", "remediation": "UNOBSERVED", "retest": "UNREQUESTED", "parity": parity, "reason": reason, "flags": dict(FIXED_FLAGS)}
             body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
             now = self._owner_now(connection)
             artifact_id, _ = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=None, source_artifact_id=body["source_artifact_id"], operation_id=operation_id, request_digest=_digest("case-request", {"reconciliation_artifact_id": reconciliation_artifact_id}), state="OPEN", observed_at=now)
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return artifact_id
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     def advance_case(self, case_artifact_id: str, *, next_state: str, responsibility: str | None = None, remediation: str | None = None, retest: str | None = None, parity: str | None = None) -> CoreReceipt:
@@ -922,11 +1123,15 @@ class CoreServiceV2:
             raise CoreConflictError("core:case-value")
         operation_id = _digest("case-transition-operation", {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied})
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(existing)
             prior_row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_artifact_id,)).fetchone()
             if prior_row is None:
@@ -957,16 +1162,36 @@ class CoreServiceV2:
             now = self._owner_now(connection)
             request_material = {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied}
             artifact_id, event_raw = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=case_artifact_id, source_artifact_id=str(prior["source_artifact_id"]), operation_id=operation_id, request_digest=_digest("case-transition-request", request_material), state=next_state, observed_at=now)
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(event_raw)
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     @staticmethod
@@ -985,11 +1210,15 @@ class CoreServiceV2:
         session_id = _digest("session-id", {"source": source_artifact_id, "governance": governance_artifact_id, "privacy": privacy_artifact_id, "config": self.config.digest})
         operation_id = _digest("session-operation", {"session_id": session_id, "action": "OPEN"})
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(existing)
             now = self._owner_now(connection)
             for kind, expected in (("SOURCE_OBSERVATION", source_artifact_id), ("GOVERNANCE", governance_artifact_id), ("PRIVACY", privacy_artifact_id)):
@@ -1020,16 +1249,36 @@ class CoreServiceV2:
             raw = self._append(connection, kind="SESSION_OPEN", operation_id=operation_id, subject_id=session_id, request_digest=_digest("session-request", {"session_id": session_id}), prior_state="NONE", next_state="OPEN", attempt=0, observed_at=now, material={"session": material}, payload_digest=source_artifact_id, payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
             stream_root = independent._parse(raw, "core:event-raw")["stream_after_root"]
             connection.execute("UPDATE core_sessions SET head_root=? WHERE session_id=?", (stream_root, session_id))
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     def start_session(self, session_id: str) -> CoreReceipt:
@@ -1037,6 +1286,8 @@ class CoreServiceV2:
         operation_id = _digest("session-operation", {"session_id": session_id, "action": "START"})
         request_digest = _digest("session-request", {"session_id": session_id, "action": "START"})
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
@@ -1046,12 +1297,16 @@ class CoreServiceV2:
                     raise CoreConflictError("core:operation-conflict")
                 if parsed.get("event_kind") == "SESSION_PAUSE" and parsed.get("material", {}).get("trigger") != "START":
                     raise CoreConflictError("core:operation-conflict")
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(existing)
             row = self._session(connection, session_id)
             if row["state"] == "PAUSED":
                 receipt = self._latest_pause_receipt(connection, session_id)
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return receipt
             if row["state"] != "OPEN":
                 raise CoreConflictError("core:session-state")
@@ -1066,21 +1321,43 @@ class CoreServiceV2:
                     trigger="START",
                     observed_at=now,
                 )
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return receipt
             raw = self._append(connection, kind="SESSION_START", operation_id=operation_id, subject_id=session_id, request_digest=_digest("session-request", {"session_id": session_id, "action": "START"}), prior_state="OPEN", next_state="RUNNING", attempt=0, observed_at=now, material={"delta": {"state": "RUNNING"}}, payload_digest=session_id, payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
             event = independent._parse(raw, "core:event-raw")
             connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("RUNNING", event["stream_after_root"], session_id))
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     def observe(self, session_id: str, slot_number: int, result: str, *, counts: Mapping[str, int] | None = None) -> CoreReceipt:
@@ -1095,6 +1372,8 @@ class CoreServiceV2:
         result_raw = _canonical(observation)
         operation_id = _digest("observation-operation", {"session_id": session_id, "slot_number": slot_number})
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
@@ -1111,12 +1390,16 @@ class CoreServiceV2:
                 )
                 if not exact_observation and not exact_pause:
                     raise CoreConflictError("core:observation-conflict")
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(existing)
             row = self._session(connection, session_id)
             if row["state"] == "PAUSED":
                 receipt = self._latest_pause_receipt(connection, session_id)
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return receipt
             if row["state"] not in {"OPEN", "RUNNING"}:
                 raise CoreConflictError("core:observation-order")
@@ -1133,7 +1416,9 @@ class CoreServiceV2:
                     slot_number=slot_number,
                     observation_digest=observation["result_digest"],
                 )
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return receipt
             if row["state"] != "RUNNING" or slot_number != int(row["last_slot"]) + 1:
                 raise CoreConflictError("core:observation-order")
@@ -1156,16 +1441,36 @@ class CoreServiceV2:
             raw = self._append(connection, kind="OBSERVATION", operation_id=operation_id, subject_id=session_id, request_digest=_digest("observation-request", {"session_id": session_id, "slot_number": slot_number}), prior_state="RUNNING", next_state="RUNNING", attempt=0, observed_at=now, material={"observation": observation}, payload_digest=observation["result_digest"], payload_length=len(result_raw), stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
             event = independent._parse(raw, "core:event-raw")
             connection.execute("UPDATE core_sessions SET last_slot=?,head_root=? WHERE session_id=?", (slot_number, event["stream_after_root"], session_id))
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
     def pause_if_stale(self, session_id: str) -> CoreReceipt:
@@ -1173,16 +1478,22 @@ class CoreServiceV2:
         operation_id = _digest("pause-operation", {"session_id": session_id, "trigger": "RECONCILE"})
         request_digest = _digest("pause-request", {"session_id": session_id, "trigger": "RECONCILE"})
         connection = self._open()
+        commit_attempted = False
+        commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return self._receipt(existing)
             row = self._session(connection, session_id)
             if row["state"] == "PAUSED":
                 receipt = self._latest_pause_receipt(connection, session_id)
+                commit_attempted = True
                 connection.commit()
+                commit_succeeded = True
                 return receipt
             if row["state"] not in {"OPEN", "RUNNING"}:
                 raise CoreConflictError("core:pause-state")
@@ -1195,17 +1506,37 @@ class CoreServiceV2:
                 trigger="RECONCILE",
                 observed_at=now,
             )
+            commit_attempted = True
             connection.commit()
+            commit_succeeded = True
             return receipt
         except (CoreError, CoreConflictError):
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             raise
         except sqlite3.Error as exc:
-            connection.rollback()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                close=False,
+                continue_after_cleanup=True,
+            )
             _sqlite_error(exc)
         finally:
-            connection.close()
+            _finalize_core_connection(
+                connection,
+                commit_attempted=commit_attempted,
+                commit_succeeded=commit_succeeded,
+                identity_check=self._assert_database_identity,
+                cleanup_code="core:database",
+            )
         raise CoreError("core:database")
 
 
-__all__ = ["CoreConfigV2", "CoreReceipt", "CoreError", "CoreConflictError", "CoreBusyError", "CoreServiceV2", "SCHEMA", "SCHEMA_VERSION", "TABLES", "ARTIFACT_KINDS", "FIXED_FLAGS", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES"]
+__all__ = ["CoreConfigV2", "CoreReceipt", "CoreError", "CoreConflictError", "CoreBusyError", "CoreIndeterminateError", "CoreServiceV2", "SCHEMA", "SCHEMA_VERSION", "TABLES", "ARTIFACT_KINDS", "FIXED_FLAGS", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES"]
