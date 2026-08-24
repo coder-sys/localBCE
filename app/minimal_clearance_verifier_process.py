@@ -13,7 +13,6 @@ import ctypes
 from ctypes import wintypes
 import os
 from pathlib import Path
-import threading
 import uuid
 
 
@@ -29,6 +28,7 @@ MAX_STDERR_BYTES = 262_144
 _CREATE_SUSPENDED = 0x00000004
 _CREATE_NO_WINDOW = 0x08000000
 _CREATE_UNICODE_ENVIRONMENT = 0x00000400
+_EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _STARTF_USESTDHANDLES = 0x00000100
 _WAIT_OBJECT_0 = 0x00000000
 _WAIT_TIMEOUT = 0x00000102
@@ -38,12 +38,7 @@ _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _HANDLE_FLAG_INHERIT = 0x00000001
-_ERROR_SUCCESS = 0
-
-# With bInheritHandles=True, Windows snapshots every inheritable handle in the
-# parent at CreateProcessW time.  This lock covers only that snapshot window;
-# it must never serialize verifier execution.
-_PROCESS_CREATION_LOCK = threading.Lock()
+_PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 
 
 class _JobObjectBasicLimitInformation(ctypes.Structure):
@@ -82,14 +77,6 @@ class _JobObjectExtendedLimitInformation(ctypes.Structure):
     ]
 
 
-class _SecurityAttributes(ctypes.Structure):
-    _fields_ = [
-        ("nLength", wintypes.DWORD),
-        ("lpSecurityDescriptor", wintypes.LPVOID),
-        ("bInheritHandle", wintypes.BOOL),
-    ]
-
-
 class _StartupInfo(ctypes.Structure):
     _fields_ = [
         ("cb", wintypes.DWORD),
@@ -110,6 +97,13 @@ class _StartupInfo(ctypes.Structure):
         ("hStdInput", wintypes.HANDLE),
         ("hStdOutput", wintypes.HANDLE),
         ("hStdError", wintypes.HANDLE),
+    ]
+
+
+class _StartupInfoEx(ctypes.Structure):
+    _fields_ = [
+        ("StartupInfo", _StartupInfo),
+        ("lpAttributeList", wintypes.LPVOID),
     ]
 
 
@@ -183,8 +177,8 @@ def _create_output_handle(path: Path) -> tuple[int, int]:
     flags = os.O_BINARY | os.O_CREAT | os.O_EXCL | os.O_WRONLY
     try:
         descriptor = os.open(path, flags, 0o600)
-    except OSError as exc:
-        raise VerifierProcessError("verifier_output_create") from exc
+    except OSError:
+        raise VerifierProcessError("verifier_output_create") from None
     try:
         import msvcrt
 
@@ -217,7 +211,7 @@ def _close_parent_descriptors_once(descriptors: list[int]) -> None:
             if first_error is None:
                 first_error = exc
     if first_error is not None:
-        raise VerifierProcessError("verifier_output_close") from first_error
+        raise VerifierProcessError("verifier_output_close") from None
 
 
 def _create_process_with_owned_output_handles(
@@ -225,46 +219,81 @@ def _create_process_with_owned_output_handles(
     kernel32: object,
     executable: Path,
     output_paths: tuple[Path, Path],
-    startup: _StartupInfo,
+    startup: _StartupInfoEx,
     environment: ctypes.Array,
     command_line: ctypes.Array,
     creation_flags: int,
     process_info: _ProcessInformation,
 ) -> None:
-    """Create the child while parent output handles are the only inheritable handles.
-
-    The parent descriptors are removed from ownership immediately after
-    CreateProcessW returns.  Assignment, resume, wait, telemetry, and cleanup
-    therefore occur outside the creation lock and cannot serialize workers.
-    """
+    """Create the child with an explicit inherited-handle allowlist."""
 
     descriptors: list[int] = []
-    with _PROCESS_CREATION_LOCK:
+    attribute_storage: ctypes.Array | None = None
+    attribute_list = wintypes.LPVOID()
+    attribute_list_initialized = False
+    process_created = False
+    primary_error: BaseException | None = None
+    try:
+        stdout_fd, stdout_handle = _create_output_handle(output_paths[0])
+        descriptors.append(stdout_fd)
+        stderr_fd, stderr_handle = _create_output_handle(output_paths[1])
+        descriptors.append(stderr_fd)
+        startup.StartupInfo.cb = ctypes.sizeof(startup)
+        startup.StartupInfo.hStdOutput = wintypes.HANDLE(stdout_handle)
+        startup.StartupInfo.hStdError = wintypes.HANDLE(stderr_handle)
+
+        attribute_size = ctypes.c_size_t(0)
+        first_call = kernel32.InitializeProcThreadAttributeList(
+            None, 1, 0, ctypes.byref(attribute_size)
+        )
+        if first_call or not attribute_size.value:
+            raise VerifierProcessError("verifier_attribute_list_size")
+        attribute_storage = ctypes.create_string_buffer(attribute_size.value)
+        attribute_list = ctypes.cast(attribute_storage, wintypes.LPVOID)
+        if not kernel32.InitializeProcThreadAttributeList(
+            attribute_list, 1, 0, ctypes.byref(attribute_size)
+        ):
+            raise _win_error("verifier_attribute_list_initialize")
+        attribute_list_initialized = True
+        inherited_handles = (wintypes.HANDLE * 2)(
+            wintypes.HANDLE(stdout_handle), wintypes.HANDLE(stderr_handle)
+        )
+        if not kernel32.UpdateProcThreadAttribute(
+            attribute_list, 0, _PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            ctypes.cast(inherited_handles, wintypes.LPVOID),
+            ctypes.sizeof(inherited_handles), None, None,
+        ):
+            raise _win_error("verifier_attribute_list_update")
+        startup.lpAttributeList = attribute_list
+        if not kernel32.CreateProcessW(
+            str(executable), command_line, None, None, True,
+            creation_flags | _EXTENDED_STARTUPINFO_PRESENT,
+            ctypes.cast(environment, wintypes.LPVOID), str(executable.parent),
+            ctypes.cast(ctypes.byref(startup), ctypes.POINTER(_StartupInfo)),
+            ctypes.byref(process_info)
+        ):
+            raise _win_error("verifier_process_create")
+        process_created = True
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        if attribute_list_initialized:
+            try:
+                kernel32.DeleteProcThreadAttributeList(attribute_list)
+            except BaseException:
+                cleanup_errors.append(VerifierProcessError("verifier_attribute_list_delete"))
         try:
-            stdout_fd, stdout_handle = _create_output_handle(output_paths[0])
-            descriptors.append(stdout_fd)
-            stderr_fd, stderr_handle = _create_output_handle(output_paths[1])
-            descriptors.append(stderr_fd)
-            startup.hStdOutput = wintypes.HANDLE(stdout_handle)
-            startup.hStdError = wintypes.HANDLE(stderr_handle)
-            if not kernel32.CreateProcessW(
-                str(executable), command_line, None, None, True, creation_flags,
-                ctypes.cast(environment, wintypes.LPVOID), str(executable.parent),
-                ctypes.byref(startup), ctypes.byref(process_info)
-            ):
-                raise _win_error("verifier_process_create")
-        except BaseException:
             _close_parent_descriptors_once(descriptors)
-            raise
-        try:
-            # The child now owns its inherited copies.  Do not leave these
-            # parent descriptors for the outer cleanup path or a sibling
-            # CreateProcessW call can inherit them.
-            _close_parent_descriptors_once(descriptors)
-        except VerifierProcessError as exc:
-            if process_info.hProcess and not kernel32.TerminateProcess(process_info.hProcess, 1):
-                raise VerifierProcessError("verifier_output_close_process") from exc
-            raise
+        except VerifierProcessError as close_error:
+            cleanup_errors.append(close_error)
+        if cleanup_errors:
+            if process_created and process_info.hProcess:
+                if not kernel32.TerminateProcess(process_info.hProcess, 1):
+                    cleanup_errors.append(_win_error("verifier_output_close_process"))
+            if primary_error is None:
+                raise VerifierProcessError("verifier_process_cleanup") from None
 
 
 def _read_capped(path: Path, limit: int, label: str) -> bytes:
@@ -275,14 +304,14 @@ def _read_capped(path: Path, limit: int, label: str) -> bytes:
         data = path.read_bytes()
     except VerifierProcessError:
         raise
-    except OSError as exc:
-        raise VerifierProcessError(f"{label}_read") from exc
+    except OSError:
+        raise VerifierProcessError(f"{label}_read") from None
     if len(data) != size or len(data) > limit:
         raise VerifierProcessError(f"{label}_read")
     try:
         data.decode("ascii")
-    except UnicodeDecodeError as exc:
-        raise VerifierProcessError(f"{label}_encoding") from exc
+    except UnicodeDecodeError:
+        raise VerifierProcessError(f"{label}_encoding") from None
     return data
 
 
@@ -307,6 +336,16 @@ def run_contained_verifier(
         raise VerifierProcessError("verifier_argument_type")
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    required_apis = (
+        "CreateJobObjectW", "SetInformationJobObject", "CreateProcessW",
+        "AssignProcessToJobObject", "ResumeThread", "WaitForSingleObject",
+        "TerminateJobObject", "GetExitCodeProcess", "QueryInformationJobObject",
+        "CloseHandle", "SetHandleInformation", "InitializeProcThreadAttributeList",
+        "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList",
+    )
+    for name in required_apis:
+        if not hasattr(kernel32, name):
+            raise VerifierProcessError(f"verifier_api_missing:{name}")
     kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
     kernel32.CreateJobObjectW.restype = wintypes.HANDLE
     kernel32.SetInformationJobObject.argtypes = [
@@ -338,15 +377,18 @@ def run_contained_verifier(
     kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
-    for name in (
-        "CreateJobObjectW", "SetInformationJobObject", "CreateProcessW",
-        "AssignProcessToJobObject", "ResumeThread", "WaitForSingleObject",
-        "TerminateJobObject", "GetExitCodeProcess", "QueryInformationJobObject",
-        "CloseHandle", "SetHandleInformation",
-    ):
-        if not hasattr(kernel32, name):
-            raise VerifierProcessError(f"verifier_api_missing:{name}")
-
+    kernel32.InitializeProcThreadAttributeList.argtypes = [
+        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
+    kernel32.UpdateProcThreadAttribute.argtypes = [
+        wintypes.LPVOID, wintypes.DWORD, ctypes.c_size_t, wintypes.LPVOID,
+        ctypes.c_size_t, wintypes.LPVOID, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.UpdateProcThreadAttribute.restype = wintypes.BOOL
+    kernel32.DeleteProcThreadAttributeList.argtypes = [wintypes.LPVOID]
+    kernel32.DeleteProcThreadAttributeList.restype = None
     output_paths = (
         workspace / f"stdout-{uuid.uuid4().hex}.bin",
         workspace / f"stderr-{uuid.uuid4().hex}.bin",
@@ -372,10 +414,10 @@ def run_contained_verifier(
         ):
             raise _win_error("verifier_job_limits")
 
-        startup = _StartupInfo()
-        startup.cb = ctypes.sizeof(startup)
-        startup.dwFlags = _STARTF_USESTDHANDLES
-        startup.hStdInput = wintypes.HANDLE(0)
+        startup = _StartupInfoEx()
+        startup.StartupInfo.cb = ctypes.sizeof(startup)
+        startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
+        startup.StartupInfo.hStdInput = wintypes.HANDLE(0)
         environment = _environment_block(workspace)
         command_line = ctypes.create_unicode_buffer(
             " ".join(
@@ -383,7 +425,10 @@ def run_contained_verifier(
                 + [_quote_argument(argument) for argument in arguments]
             )
         )
-        creation_flags = _CREATE_SUSPENDED | _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT
+        creation_flags = (
+            _CREATE_SUSPENDED | _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT
+            | _EXTENDED_STARTUPINFO_PRESENT
+        )
         _create_process_with_owned_output_handles(
             kernel32=kernel32,
             executable=executable,
@@ -447,7 +492,7 @@ def run_contained_verifier(
             except OSError as exc:
                 cleanup_errors.append(exc)
         if cleanup_errors:
-            raise VerifierProcessError("verifier_cleanup") from cleanup_errors[0]
+            raise VerifierProcessError("verifier_cleanup") from None
 
 
 __all__ = ("ACTIVE_PROCESS_LIMIT", "CAP_BYTES", "ContainedVerifierResult", "VerifierProcessError", "run_contained_verifier")

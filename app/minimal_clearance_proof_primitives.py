@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -39,6 +40,7 @@ _CIRCUIT_ID = bytes.fromhex(
 _ARTIFACT_MAGIC = b"BLMCV3P1"
 _ARTIFACT_HEADER_BYTES: Final[int] = 68
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024 + _ARTIFACT_HEADER_BYTES + _PUBLIC_BYTES
+_MAX_EXECUTABLE_BYTES: Final[int] = _MAX_ARTIFACT_BYTES
 _MAX_ACCEPTANCE: Final[int] = 65_536
 _STATE_MAGIC = b"BLST"
 _STATE_BYTES: Final[int] = 1622
@@ -464,8 +466,8 @@ def _canonical_decimal(value: str, label: str) -> int:
 def _parse_build_trace(stderr: bytes, *, expected_lines: int) -> tuple[int, int, int, int]:
     try:
         text = stderr.decode("ascii", "strict")
-    except UnicodeDecodeError as exc:
-        raise MinimalClearanceProofStateError("proof_verifier_stderr_encoding") from exc
+    except UnicodeDecodeError:
+        raise MinimalClearanceProofStateError("proof_verifier_stderr_encoding") from None
     text = text.replace("\r\n", "\n")
     if not text.endswith("\n") or "\r" in text:
         raise MinimalClearanceProofStateError("proof_verifier_stderr_grammar")
@@ -506,8 +508,8 @@ def _parse_acceptance_output(
 ) -> bytes:
     try:
         text = stdout.decode("ascii", "strict")
-    except UnicodeDecodeError as exc:
-        raise MinimalClearanceProofStateError("proof_verifier_output_encoding") from exc
+    except UnicodeDecodeError:
+        raise MinimalClearanceProofStateError("proof_verifier_output_encoding") from None
     text = text.replace("\r\n", "\n")
     if "\r" in text or not text.endswith("\n") or text.count("\n") != 1:
         raise MinimalClearanceProofStateError("proof_verifier_output_grammar")
@@ -535,8 +537,8 @@ def _parse_acceptance_output(
 def _parse_preflight_output(stdout: bytes, stderr: bytes) -> None:
     try:
         text = stdout.decode("ascii", "strict")
-    except UnicodeDecodeError as exc:
-        raise MinimalClearanceProofStateError("proof_preflight_encoding") from exc
+    except UnicodeDecodeError:
+        raise MinimalClearanceProofStateError("proof_preflight_encoding") from None
     text = text.replace("\r\n", "\n")
     if "\r" in text:
         raise MinimalClearanceProofStateError("proof_preflight_grammar")
@@ -564,8 +566,8 @@ def _parse_preflight_output(stdout: bytes, stderr: bytes) -> None:
 def _parse_public_statement_output(stdout: bytes, stderr: bytes, path: Path) -> None:
     try:
         text = stdout.decode("ascii", "strict")
-    except UnicodeDecodeError as exc:
-        raise MinimalClearanceProofStateError("proof_statement_output_encoding") from exc
+    except UnicodeDecodeError:
+        raise MinimalClearanceProofStateError("proof_statement_output_encoding") from None
     text = text.replace("\r\n", "\n")
     if "\r" in text:
         raise MinimalClearanceProofStateError("proof_statement_output_grammar")
@@ -577,8 +579,8 @@ def _parse_public_statement_output(stdout: bytes, stderr: bytes, path: Path) -> 
         raise MinimalClearanceProofStateError("proof_statement_output_grammar")
     try:
         stderr.decode("ascii", "strict")
-    except UnicodeDecodeError as exc:
-        raise MinimalClearanceProofStateError("proof_statement_stderr_encoding") from exc
+    except UnicodeDecodeError:
+        raise MinimalClearanceProofStateError("proof_statement_stderr_encoding") from None
     if stderr != b"":
         raise MinimalClearanceProofStateError("proof_statement_stderr_grammar")
 
@@ -738,27 +740,109 @@ def parse_acceptance_bytes(encoded: bytes) -> MinimalProofAcceptanceV1:
     )
 
 
-def _regular_file(path: Path, label: str) -> None:
-    if not isinstance(path, Path) or path.is_symlink() or not path.is_file():
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        int(metadata.st_dev), int(metadata.st_ino),
+        int(metadata.st_size), int(metadata.st_mtime_ns),
+    )
+
+
+def _require_regular_metadata(
+    metadata: os.stat_result, *, maximum: int, label: str
+) -> None:
+    if not stat.S_ISREG(metadata.st_mode) or int(metadata.st_ino) == 0:
         raise MinimalClearanceProofStateError(f"{label}_not_regular_file")
-    size = path.stat().st_size
-    if size <= 0 or size > _MAX_ARTIFACT_BYTES:
+    if metadata.st_size <= 0 or metadata.st_size > maximum:
         raise MinimalClearanceProofStateError(f"{label}_size")
+
+
+def _read_bounded_regular_file(
+    path: Path, *, maximum: int, label: str
+) -> bytes:
+    """Read one stable regular file through one owned descriptor."""
+
+    if not isinstance(path, Path) or type(maximum) is not int or maximum <= 0:
+        raise MinimalClearanceProofStateError(f"{label}_input")
+    path_error: MinimalClearanceProofStateError | None = None
+    try:
+        path_before = os.lstat(path)
+    except (OSError, ValueError):
+        path_error = MinimalClearanceProofStateError(f"{label}_not_regular_file")
+    if path_error is not None:
+        raise path_error
+    _require_regular_metadata(path_before, maximum=maximum, label=label)
+
+    descriptor: int | None = None
+    result: bytes | None = None
+    pending: BaseException | None = None
+    try:
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            opened = os.fstat(descriptor)
+            _require_regular_metadata(opened, maximum=maximum, label=label)
+            if _file_identity(opened) != _file_identity(path_before):
+                raise MinimalClearanceProofStateError(f"{label}_identity")
+            chunks: list[bytes] = []
+            total = 0
+            while total <= maximum:
+                piece = os.read(descriptor, min(1024 * 1024, maximum + 1 - total))
+                if not piece:
+                    break
+                chunks.append(piece)
+                total += len(piece)
+                if total > maximum:
+                    raise MinimalClearanceProofStateError(f"{label}_size")
+            descriptor_after = os.fstat(descriptor)
+            path_after = os.lstat(path)
+            _require_regular_metadata(path_after, maximum=maximum, label=label)
+            if (
+                _file_identity(descriptor_after) != _file_identity(opened)
+                or _file_identity(path_after) != _file_identity(descriptor_after)
+            ):
+                raise MinimalClearanceProofStateError(f"{label}_identity")
+            result = b"".join(chunks)
+            if len(result) != descriptor_after.st_size:
+                raise MinimalClearanceProofStateError(f"{label}_identity")
+        except MinimalClearanceProofStateError as exc:
+            pending = exc
+        except (OSError, ValueError):
+            pending = MinimalClearanceProofStateError(f"{label}_read")
+        except Exception:
+            pending = MinimalClearanceProofStateError(f"{label}_read")
+    except BaseException as exc:
+        pending = exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                if pending is None:
+                    pending = MinimalClearanceProofStateError(f"{label}_read")
+    if pending is not None:
+        pending.__cause__ = None
+        pending.__context__ = None
+        raise pending
+    if result is None:
+        raise MinimalClearanceProofStateError(f"{label}_read")
+    return result
 
 
 def _write_private_snapshot(directory: Path, name: str, raw: bytes, label: str) -> Path:
     target = directory / name
+    snapshot_error: MinimalClearanceProofStateError | None = None
     try:
         with target.open("xb") as output:
             output.write(raw)
             output.flush()
-            import os
-
             os.fsync(output.fileno())
         target.chmod(stat.S_IREAD)
-        reread = target.read_bytes()
-    except (OSError, ValueError) as exc:
-        raise MinimalClearanceProofStateError(f"{label}_snapshot") from exc
+        reread = _read_bounded_regular_file(
+            target, maximum=len(raw), label=f"{label}_snapshot"
+        )
+    except (OSError, ValueError):
+        snapshot_error = MinimalClearanceProofStateError(f"{label}_snapshot")
+    if snapshot_error is not None:
+        raise snapshot_error
     if reread != raw:
         raise MinimalClearanceProofStateError(f"{label}_snapshot_mismatch")
     return target
@@ -769,21 +853,17 @@ def _snapshot_verified_file(
     directory: Path,
     *,
     label: str,
+    maximum: int,
     expected_sha256: bytes | None = None,
 ) -> tuple[Path, bytes]:
-    _regular_file(source, label)
-    try:
-        raw = source.read_bytes()
-    except OSError as exc:
-        raise MinimalClearanceProofStateError(f"{label}_read") from exc
+    raw = _read_bounded_regular_file(source, maximum=maximum, label=label)
     digest = hashlib.sha256(raw).digest()
     if expected_sha256 is not None and digest != expected_sha256:
         raise MinimalClearanceProofStateError(f"{label}_identity")
     target = _write_private_snapshot(directory, f"{label}.bin", raw, label)
-    try:
-        reread = target.read_bytes()
-    except OSError as exc:
-        raise MinimalClearanceProofStateError(f"{label}_snapshot_read") from exc
+    reread = _read_bounded_regular_file(
+        target, maximum=len(raw), label=f"{label}_snapshot_read"
+    )
     if hashlib.sha256(reread).digest() != digest or reread != raw:
         raise MinimalClearanceProofStateError(f"{label}_snapshot_identity")
     return target, reread
@@ -813,7 +893,6 @@ class NativeMinimalClearanceVerifier:
         executable_sha256: str,
         timeout_seconds: float = 30.0 * 60.0,
     ) -> None:
-        _regular_file(executable, "verifier_executable")
         if type(executable_sha256) is not str or re.fullmatch(r"[0-9a-fA-F]{64}", executable_sha256) is None:
             raise MinimalClearanceProofStateError("verifier_executable_hash")
         if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
@@ -826,15 +905,17 @@ class NativeMinimalClearanceVerifier:
         with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-identity-") as directory:
             _snapshot_verified_file(
                 executable, Path(directory), label="verifier-executable",
+                maximum=_MAX_EXECUTABLE_BYTES,
                 expected_sha256=self._executable_sha256,
             )
 
     def identity_sha256(self) -> bytes:
-        _regular_file(self.executable, "verifier_executable")
-        try:
-            current = hashlib.sha256(self.executable.read_bytes()).digest()
-        except OSError as exc:
-            raise MinimalClearanceProofStateError("verifier_executable_read") from exc
+        current = hashlib.sha256(
+            _read_bounded_regular_file(
+                self.executable, maximum=_MAX_EXECUTABLE_BYTES,
+                label="verifier_executable",
+            )
+        ).digest()
         if current != self._executable_sha256:
             raise MinimalClearanceProofStateError("verifier_executable_identity_changed")
         return current
@@ -845,8 +926,8 @@ class NativeMinimalClearanceVerifier:
                 executable_snapshot, tuple(args), workspace=workspace,
                 timeout_seconds=self.timeout_seconds,
             )
-        except VerifierProcessError as exc:
-            raise MinimalClearanceProofStateError("verifier_process_unavailable") from exc
+        except VerifierProcessError:
+            raise MinimalClearanceProofStateError("verifier_process_unavailable") from None
         self.last_containment_result = result
         if result.timed_out:
             raise MinimalClearanceProofStateError("verifier_timeout")
@@ -863,6 +944,7 @@ class NativeMinimalClearanceVerifier:
             workspace = Path(directory)
             executable_snapshot, _ = _snapshot_verified_file(
                 self.executable, workspace, label="verifier-executable",
+                maximum=_MAX_EXECUTABLE_BYTES,
                 expected_sha256=self._executable_sha256,
             )
             result = self._run(workspace, executable_snapshot, "--preflight")
@@ -877,6 +959,7 @@ class NativeMinimalClearanceVerifier:
             workspace = Path(directory)
             executable_snapshot, _ = _snapshot_verified_file(
                 self.executable, workspace, label="verifier-executable",
+                maximum=_MAX_EXECUTABLE_BYTES,
                 expected_sha256=self._executable_sha256,
             )
             path = workspace / "statement.bin"
@@ -884,12 +967,9 @@ class NativeMinimalClearanceVerifier:
             if result.exit_code != 0:
                 raise MinimalClearanceProofStateError("verifier_statement_reconstruction")
             _parse_public_statement_output(result.stdout, result.stderr, path)
-            if not path.is_file() or path.is_symlink():
-                raise MinimalClearanceProofStateError("verifier_statement_reconstruction")
-            try:
-                statement = path.read_bytes()
-            except OSError as exc:
-                raise MinimalClearanceProofStateError("verifier_statement_read") from exc
+            statement = _read_bounded_regular_file(
+                path, maximum=_PUBLIC_BYTES, label="verifier_statement"
+            )
             if len(statement) != _PUBLIC_BYTES:
                 raise MinimalClearanceProofStateError("verifier_statement_length")
             return statement
@@ -900,10 +980,12 @@ class NativeMinimalClearanceVerifier:
             workspace = Path(directory)
             executable_snapshot, _ = _snapshot_verified_file(
                 self.executable, workspace, label="verifier-executable",
+                maximum=_MAX_EXECUTABLE_BYTES,
                 expected_sha256=self._executable_sha256,
             )
             artifact_snapshot, raw = _snapshot_verified_file(
                 artifact_path, workspace, label="proof-artifact",
+                maximum=_MAX_ARTIFACT_BYTES,
             )
             circuit_id, public_bytes, proof_bytes = _artifact_public_bytes(raw)
             if circuit_id != _CIRCUIT_ID:
@@ -919,12 +1001,10 @@ class NativeMinimalClearanceVerifier:
                 result.stdout, result.stderr,
                 public_bytes=len(public_bytes), proof_bytes=len(proof_bytes),
             )
-            if not statement_output.is_file() or statement_output.is_symlink():
-                raise MinimalClearanceProofStateError("proof_verified_statement_missing")
-            try:
-                verified_statement = statement_output.read_bytes()
-            except OSError as exc:
-                raise MinimalClearanceProofStateError("proof_verified_statement_read") from exc
+            verified_statement = _read_bounded_regular_file(
+                statement_output, maximum=_PUBLIC_BYTES,
+                label="proof_verified_statement",
+            )
             if len(verified_statement) != _PUBLIC_BYTES:
                 raise MinimalClearanceProofStateError("proof_verified_statement_length")
             if verified_statement != public_bytes:
