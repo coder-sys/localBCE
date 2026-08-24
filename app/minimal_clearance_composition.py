@@ -75,6 +75,11 @@ _CAP_BYTES = 5_000_000_000
 _ACTIVE_PROCESS_LIMIT = 1
 _ZERO_SUITE = bytes(64)
 _CIRCUIT_ID = bytes.fromhex("1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0")
+_COMPOSITION_TABLES: Final[frozenset[str]] = frozenset({
+    "composition_metadata", "composition_state", "composition_transitions", "proof_requests",
+    "proof_audit", "proof_transitions", "application_dispositions", "outbox_jobs", "outbox_leases",
+    "outbox_acks", "outbox_transitions", "reconciliation_records",
+})
 
 _MATERIAL = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/MATERIAL/v2\x00"
 _GENESIS = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/GENESIS/v2\x00"
@@ -630,6 +635,13 @@ class ClearanceCompositionStoreV2:
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
+            existing = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            if existing and not existing.issubset(_COMPOSITION_TABLES):
+                raise CompositionIntegrityError("composition_wrong_schema")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS composition_metadata (
@@ -1369,6 +1381,33 @@ class ClearanceCompositionStoreV2:
     def restore_from_export(self, path: Path, raw: bytes) -> dict[str, Any]:
         from app.minimal_clearance_composition_independent import restore_export_to_fresh_database
         return restore_export_to_fresh_database(path, raw, expected_config=self.config.as_json)
+
+    def create_backup(self, destination: Path) -> None:
+        if not isinstance(destination, Path) or destination.exists() or not destination.parent.is_dir() or destination == self.path:
+            raise CompositionError("backup_destination")
+        self.verify_integrity()
+        with closing(self._connect()) as source, closing(sqlite3.connect(destination)) as target:
+            source.backup(target)
+            target.commit()
+        from app.minimal_clearance_composition_independent import verify_database
+        verify_database(destination, expected_config=self.config.as_json)
+
+    def recover_from_backup(self, *, backup_path: Path, recovered_path: Path) -> "ClearanceCompositionStoreV2":
+        if (
+            not isinstance(backup_path, Path) or not backup_path.is_file() or
+            not isinstance(recovered_path, Path) or recovered_path.exists() or
+            not recovered_path.parent.is_dir() or backup_path == recovered_path
+        ):
+            raise CompositionError("backup_recovery_path")
+        from app.minimal_clearance_composition_independent import verify_database
+        verify_database(backup_path, expected_config=self.config.as_json)
+        with closing(sqlite3.connect(backup_path)) as source, closing(sqlite3.connect(recovered_path)) as target:
+            source.backup(target)
+            target.commit()
+        verify_database(recovered_path, expected_config=self.config.as_json)
+        return type(self)(path=recovered_path, config=self.config, clock=self.clock)
+
+    restore_from_backup = recover_from_backup
 
     def close(self) -> None:
         return None

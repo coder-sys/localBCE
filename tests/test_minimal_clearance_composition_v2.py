@@ -196,6 +196,22 @@ class CompositionV2Tests(unittest.TestCase):
         self.assertNotIn("transactional_database_boundary", source)
         self.assertNotIn("SQLiteSettlementStoreV2", source)
 
+    def test_direct_backup_restore_and_v1_database_rejection(self) -> None:
+        config = self._config()
+        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
+        backup = self.root / "backup.sqlite3"
+        recovered = self.root / "recovered.sqlite3"
+        store.create_backup(backup)
+        restored = store.recover_from_backup(backup_path=backup, recovered_path=recovered)
+        self.assertEqual(restored.snapshot()["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2")
+        legacy = self.root / "legacy.sqlite3"
+        with closing(sqlite3.connect(legacy)) as connection:
+            connection.execute("CREATE TABLE settlement_requests (id INTEGER)")
+            connection.commit()
+        with self.assertRaises(Exception) as caught:
+            ClearanceCompositionStoreV2(path=legacy, config=config)
+        self.assertIn("wrong_schema", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
