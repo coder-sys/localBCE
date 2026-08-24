@@ -40,12 +40,6 @@ from app.minimal_clearance_verifier_process import (
     MAX_STDOUT_BYTES,
     VerifierProcessError,
 )
-from tests.minimal_clearance_qualification import (
-    QualificationError,
-    _validate_acceptance_output,
-)
-
-
 SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFIER-THROUGHPUT/v1"
 ARTIFACT_BYTES = 411_672
 ARTIFACT_SHA256 = "69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E"
@@ -63,6 +57,14 @@ MAX_EVIDENCE_BYTES = 64 * 1024
 _HEX64 = re.compile(r"[0-9A-Fa-f]{64}\Z")
 _SAFE_ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
 _SAFE_EXCEPTION_CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+_DIMENSIONS = ("inputs", "public_inputs", "layers", "terms")
+_COMPLETE_TRACE = re.compile(
+    r"^MINIMAL_CLEARANCE_BUILD phase=complete "
+    r"inputs=(?P<inputs>[1-9][0-9]*) "
+    r"public_inputs=(?P<public_inputs>[1-9][0-9]*) "
+    r"layers=(?P<layers>[1-9][0-9]*) "
+    r"terms=(?P<terms>[1-9][0-9]*)$"
+)
 
 
 def _safe_error_code(value: object, fallback: str) -> str:
@@ -138,9 +140,9 @@ class ThroughputError(RuntimeError):
 
 
 _KNOWN_REPOSITORY_ERRORS = (
-    QualificationError,
     MinimalClearanceProofStateError,
     VerifierProcessError,
+    ThroughputError,
 )
 
 
@@ -218,6 +220,45 @@ class ArtifactSnapshot:
 def _require(condition: bool, label: str) -> None:
     if not condition:
         raise ThroughputError(label)
+
+
+def _validate_acceptance_output(stdout: bytes, stderr: bytes) -> tuple[str, dict[str, int], str, int]:
+    _require(type(stdout) is bytes and len(stdout) <= MAX_STDOUT_BYTES, "verifier_stdout_cap")
+    _require(type(stderr) is bytes and len(stderr) <= MAX_STDERR_BYTES, "verifier_stderr_cap")
+    try:
+        text = stdout.decode("ascii", "strict")
+        trace_text = stderr.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise ThroughputError("verifier_output_not_ascii") from exc
+    lines = text.splitlines()
+    _require(len(lines) == 1, "verifier_stdout_unexpected")
+    _require(lines[0].startswith("MINIMAL_CLEARANCE_VERIFIER_ACCEPT "), "verifier_acceptance_marker")
+    _require("/" not in lines[0] and "\\" not in lines[0], "verifier_stdout_path")
+    dimension_match = re.match(
+        r"^MINIMAL_CLEARANCE_VERIFIER_ACCEPT "
+        r"inputs=(?P<inputs>[1-9][0-9]*) "
+        r"public_inputs=(?P<public_inputs>[1-9][0-9]*) "
+        r"layers=(?P<layers>[1-9][0-9]*) "
+        r"terms=(?P<terms>[1-9][0-9]*)(?: .*)?$",
+        lines[0],
+    )
+    _require(dimension_match is not None, "verifier_acceptance_dimensions")
+    dimensions = {name: int(dimension_match.group(name)) for name in _DIMENSIONS}
+    normalized_trace = trace_text.replace("\r\n", "\n")
+    _require("\r" not in normalized_trace, "verifier_trace_line_endings")
+    trace_lines = normalized_trace.splitlines()
+    _require(len(trace_lines) == 8, "verifier_trace_line_count")
+    _require(trace_lines[0] == "MINIMAL_CLEARANCE_BUILD phase=public", "verifier_trace_public")
+    _require(trace_lines[1] == "MINIMAL_CLEARANCE_BUILD phase=private", "verifier_trace_private")
+    _require(trace_lines[2] == "MINIMAL_CLEARANCE_BUILD phase=assertions", "verifier_trace_assertions")
+    _require(trace_lines[3] == "MINIMAL_CLEARANCE_BUILD phase=mkcircuit", "verifier_trace_mkcircuit")
+    complete_match = _COMPLETE_TRACE.fullmatch(trace_lines[4])
+    _require(complete_match is not None, "verifier_trace_complete")
+    _require({name: int(complete_match.group(name)) for name in _DIMENSIONS} == dimensions, "verifier_trace_dimensions")
+    _require(trace_lines[5] == "MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0", "verifier_trace_proof_stage")
+    _require(trace_lines[6] == "MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received", "verifier_trace_commitment_stage")
+    _require(trace_lines[7] == "MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept", "verifier_trace_verify_stage")
+    return "MINIMAL_CLEARANCE_VERIFIER_ACCEPT", dimensions, hashlib.sha3_512(stderr).hexdigest().upper(), len(trace_lines)
 
 
 def _is_readonly(path: Path) -> bool:
