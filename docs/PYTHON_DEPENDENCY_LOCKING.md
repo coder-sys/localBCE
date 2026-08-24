@@ -9,21 +9,21 @@ installation are offline and consume only an already provisioned wheelhouse.
 
 ## Governed inputs
 
-- `requirements/inputs/*.in` declare the six direct production/development choices. They are not
+- `requirements/inputs/*.in` declare the four direct production/development choices. They are not
   installation inputs.
 - `requirements/locks/python-artifacts.lock.json` is canonical JSON. It binds every transitive
   package to one exact wheel filename, size, official PyPI acquisition URL, SHA-256, SHA3-512,
   embedded version, and declared wheel-metadata license for each supported platform.
 - The four `requirements/locks/*.lock` files are pip-compatible, fully transitive, exact-version,
   SHA-256-hashed production/development locks for CPython 3.14.4 on Windows x86-64 and Linux x86-64.
-- `docs/SBOM.python.spdx.json` reconciles all 26 logical packages and their declared licenses. The
+- `docs/SBOM.python.spdx.json` reconciles the 16 logical packages and their declared licenses. The
   artifact manifest remains the authority for per-platform wheel identities.
 - `requirements.txt` and `requirements-dev.txt` deliberately install nothing, preventing old
   automation from silently returning to online resolution.
 
 Linux requires glibc 2.28 or newer because the reviewed PQCrypto wheel advertises that floor. The
-lock also accepts older-floor compatible wheels for CFFI and Pydantic Core; those exact filenames
-and hashes are individually bound, not dynamically selected.
+lock also accepts older-floor compatible CFFI wheels; those exact filenames and hashes are
+individually bound, not dynamically selected.
 
 ## Install contract
 

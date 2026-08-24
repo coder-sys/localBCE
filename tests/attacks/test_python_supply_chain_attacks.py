@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import ast
+import json
 import unittest
 
 
@@ -16,6 +17,11 @@ class PythonSupplyChainAttackTests(unittest.TestCase):
             "requirements/locks/cp314-win_amd64-development.lock",
             "requirements/locks/cp314-win_amd64-production.lock",
         }
+        manifest = json.loads(
+            (ROOT / "requirements/locks/python-artifacts.lock.json").read_text(
+                encoding="utf-8"
+            )
+        )
         observed = {
             path.relative_to(ROOT).as_posix()
             for path in (ROOT / "requirements" / "locks").glob("*.lock")
@@ -26,15 +32,16 @@ class PythonSupplyChainAttackTests(unittest.TestCase):
             requirement_lines = [
                 line for line in text.splitlines() if line and not line.startswith("#")
             ]
-            self.assertGreaterEqual(len(requirement_lines), 18)
+            profile = Path(relative).stem.rsplit("-", 1)[-1]
+            self.assertEqual(len(manifest["profiles"][profile]), len(requirement_lines))
             self.assertTrue(all("==" in line and "--hash=sha256:" in line for line in requirement_lines))
 
-        manifest = (ROOT / "requirements/locks/python-artifacts.lock.json").read_text(
+        manifest_text = (ROOT / "requirements/locks/python-artifacts.lock.json").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"sha3_512":', manifest)
-        self.assertIn('"cp314-win_amd64"', manifest)
-        self.assertIn('"cp314-linux_x86_64"', manifest)
+        self.assertIn('"sha3_512":', manifest_text)
+        self.assertIn('"cp314-win_amd64"', manifest_text)
+        self.assertIn('"cp314-linux_x86_64"', manifest_text)
 
     def test_readme_cannot_resolve_dependencies_from_the_network(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

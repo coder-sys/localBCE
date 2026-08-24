@@ -226,8 +226,6 @@ def _validate_manifest() -> tuple[dict[str, Any], FileDigests]:
         if any(name != _normalize_name(name) for name in names):
             _fail(f"profile {profile} contains a non-canonical package name")
         profile_sets[profile] = set(names)
-    if len(profile_sets["production"]) != 18 or len(profile_sets["development"]) != 26:
-        _fail("reviewed profile package counts must remain production=18, development=26")
     if not profile_sets["production"] < profile_sets["development"]:
         _fail("production must remain a strict subset of development")
 

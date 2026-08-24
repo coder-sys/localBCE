@@ -27,7 +27,6 @@ from app.generator_835 import _x12_amount
 from app.ingestion import parse_837
 from app.models import ServiceLine
 from app.money import MAX_AMOUNT_CENTS, canonical_source_money_cents
-from app.operator_portal import _claim_charge_cents_from_edi
 from app.rules_engine_adapter import adjudicate as adapter_adjudicate
 from app.rules_engine_fallback import adjudicate as python_adjudicate
 from app.shared_context import build_shared_context
@@ -184,11 +183,8 @@ def test_inconsistent_large_direct_context_cannot_emit_out_of_range_payment() ->
         rust_adjudicate(ctx)
 
 
-def test_audit_and_835_money_views_never_prefix_parse_or_round() -> None:
-    assert _claim_charge_cents_from_edi("CLM*X*0.29~") == 29
-    assert _claim_charge_cents_from_edi("CLM*X*42949672.95~") == MAX_AMOUNT_CENTS
+def test_835_money_view_never_prefix_parse_or_round() -> None:
     for malformed in ("1.005", "1e2", "01", "42949672.96"):
-        assert _claim_charge_cents_from_edi(f"CLM*X*{malformed}~") == 0
         with pytest.raises(ValueError, match="malformed_835_amount"):
             _x12_amount(malformed, "synthetic")
     assert _x12_amount("0.29", "synthetic") == "0.29"

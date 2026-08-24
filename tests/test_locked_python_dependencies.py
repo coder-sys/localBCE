@@ -42,18 +42,33 @@ def _artifact(path: Path, *, name: str = "demo", version: str = "1.0") -> dict[s
 
 def test_current_manifest_locks_profiles_and_dual_hashes_reconcile() -> None:
     manifest, digests = locked._validate_manifest()
-    assert digests.size > 20_000
+    assert digests.size == len(locked._canonical_json(manifest))
     assert len(digests.sha256) == 64
     assert len(digests.sha3_512) == 128
-    assert len(manifest["profiles"]["production"]) == 18
-    assert len(manifest["profiles"]["development"]) == 26
+    production = {"cffi", "cryptography", "pqcrypto", "pycparser"}
+    development = production | {
+        "anyio",
+        "certifi",
+        "colorama",
+        "h11",
+        "httpcore",
+        "httpx",
+        "idna",
+        "iniconfig",
+        "packaging",
+        "pluggy",
+        "pygments",
+        "pytest",
+    }
+    assert set(manifest["profiles"]["production"]) == production
+    assert set(manifest["profiles"]["development"]) == development
     assert set(manifest["locks"]) == {
         "cp314-linux_x86_64-development",
         "cp314-linux_x86_64-production",
         "cp314-win_amd64-development",
         "cp314-win_amd64-production",
     }
-    assert all(len(items) == 26 for items in manifest["artifacts"].values())
+    assert all({item["name"] for item in items} == development for items in manifest["artifacts"].values())
 
 
 def test_python_sbom_reconciles_every_logical_package_and_declared_license() -> None:
@@ -67,7 +82,7 @@ def test_python_sbom_reconciles_every_logical_package_and_declared_license() -> 
     windows = {item["name"]: item for item in manifest["artifacts"]["cp314-win_amd64"]}
     linux = {item["name"]: item for item in manifest["artifacts"]["cp314-linux_x86_64"]}
     assert set(packages) == set(windows) == set(linux)
-    assert len(packages) == 26
+    assert set(packages) == set(manifest["profiles"]["development"])
     for name, package in packages.items():
         assert package["versionInfo"] == windows[name]["version"] == linux[name]["version"]
         assert package["licenseDeclared"] == windows[name]["license_declared"]
