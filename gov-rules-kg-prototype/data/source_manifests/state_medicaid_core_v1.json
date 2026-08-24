@@ -1,0 +1,315 @@
+{
+  "schema_version": "localbce-state-medicaid-source-registry-v1",
+  "registry_id": "medicaid-core-nc-ga-ca-v1",
+  "program": "medicaid",
+  "pilot_sequence": [
+    "NC",
+    "GA",
+    "CA"
+  ],
+  "rule_families": [
+    "eligibility",
+    "provider_enrollment",
+    "duplicate_claim",
+    "timely_filing"
+  ],
+  "official_sources_only": true,
+  "extraction_status": "discovery_only_not_captured",
+  "runtime_activation": false,
+  "proof_binding": false,
+  "sources": [
+    {
+      "source_id": "medicaid-us-nc-state-plan",
+      "state_code": "NC",
+      "jurisdiction": "US-NC",
+      "authority": "North Carolina Department of Health and Human Services, Division of Health Benefits",
+      "source_family": "state_plan",
+      "source_type": "state_plan",
+      "source_url": "https://medicaid.ncdhhs.gov/meetingsnotices/medicaid-state-plan-public-notices",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-nc-clinical-policies",
+      "state_code": "NC",
+      "jurisdiction": "US-NC",
+      "authority": "North Carolina Department of Health and Human Services, Division of Health Benefits",
+      "source_family": "clinical_policy",
+      "source_type": "agency_guidance",
+      "source_url": "https://medicaid.ncdhhs.gov/providers/program-specific-clinical-coverage-policies",
+      "rule_families": [
+        "eligibility",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-nc-provider-information",
+      "state_code": "NC",
+      "jurisdiction": "US-NC",
+      "authority": "North Carolina Department of Health and Human Services, Division of Health Benefits",
+      "source_family": "provider_enrollment",
+      "source_type": "agency_guidance",
+      "source_url": "https://medicaid.ncdhhs.gov/providers",
+      "rule_families": [
+        "provider_enrollment"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-nc-provider-bulletins",
+      "state_code": "NC",
+      "jurisdiction": "US-NC",
+      "authority": "North Carolina Department of Health and Human Services, Division of Health Benefits",
+      "source_family": "provider_bulletin",
+      "source_type": "agency_guidance",
+      "source_url": "https://medicaid.ncdhhs.gov/providers/medicaid-bulletin",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-nc-billing-guidance",
+      "state_code": "NC",
+      "jurisdiction": "US-NC",
+      "authority": "North Carolina Department of Health and Human Services, Division of Health Benefits",
+      "source_family": "claims_billing",
+      "source_type": "manual",
+      "source_url": "https://medicaid.ncdhhs.gov/providers/health-plan-billing-guidance",
+      "rule_families": [
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ga-state-plan",
+      "state_code": "GA",
+      "jurisdiction": "US-GA",
+      "authority": "Georgia Department of Community Health",
+      "source_family": "state_plan",
+      "source_type": "state_plan",
+      "source_url": "https://medicaid.georgia.gov/organization/about-georgia-medicaid/medicaid-state-plan",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ga-provider-manuals",
+      "state_code": "GA",
+      "jurisdiction": "US-GA",
+      "authority": "Georgia Department of Community Health",
+      "source_family": "provider_manual",
+      "source_type": "manual",
+      "source_url": "https://www.mmis.georgia.gov/portal/Default.aspx?BMLUsed=20160127&tabid=17",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ga-provider-notices",
+      "state_code": "GA",
+      "jurisdiction": "US-GA",
+      "authority": "Georgia Department of Community Health",
+      "source_family": "provider_bulletin",
+      "source_type": "agency_guidance",
+      "source_url": "https://www.mmis.georgia.gov/portal/Default.aspx?tabid=16",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ga-provider-information",
+      "state_code": "GA",
+      "jurisdiction": "US-GA",
+      "authority": "Georgia Department of Community Health",
+      "source_family": "provider_enrollment",
+      "source_type": "agency_guidance",
+      "source_url": "https://www.mmis.georgia.gov/portal/Default.aspx?BMLUsed=20160127&tabid=15",
+      "rule_families": [
+        "provider_enrollment",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ga-public-notices",
+      "state_code": "GA",
+      "jurisdiction": "US-GA",
+      "authority": "Georgia Department of Community Health",
+      "source_family": "public_notice",
+      "source_type": "agency_guidance",
+      "source_url": "https://dch.georgia.gov/meetings-notices/public-notices",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ca-state-plan",
+      "state_code": "CA",
+      "jurisdiction": "US-CA",
+      "authority": "California Department of Health Care Services",
+      "source_family": "state_plan",
+      "source_type": "state_plan",
+      "source_url": "https://www.dhcs.ca.gov/formsandpubs/laws/Pages/CaliforniStatePlan.aspx",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ca-eligibility-letters",
+      "state_code": "CA",
+      "jurisdiction": "US-CA",
+      "authority": "California Department of Health Care Services",
+      "source_family": "eligibility_guidance",
+      "source_type": "agency_guidance",
+      "source_url": "https://www.dhcs.ca.gov/services/medi-cal-resources/medi-cal-eligibility-division/all-county-welfare-directors-medi-cal-eligibility-division-information-letters/",
+      "rule_families": [
+        "eligibility"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ca-provider-manuals",
+      "state_code": "CA",
+      "jurisdiction": "US-CA",
+      "authority": "California Department of Health Care Services",
+      "source_family": "provider_manual",
+      "source_type": "manual",
+      "source_url": "https://mcweb.apps.prd.cammis.medi-cal.ca.gov/publications/manual",
+      "rule_families": [
+        "eligibility",
+        "provider_enrollment",
+        "duplicate_claim",
+        "timely_filing"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ca-provider-resources",
+      "state_code": "CA",
+      "jurisdiction": "US-CA",
+      "authority": "California Department of Health Care Services",
+      "source_family": "provider_enrollment",
+      "source_type": "agency_guidance",
+      "source_url": "https://www.dhcs.ca.gov/providers-partners/provider-resources/",
+      "rule_families": [
+        "provider_enrollment"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    },
+    {
+      "source_id": "medicaid-us-ca-waivers",
+      "state_code": "CA",
+      "jurisdiction": "US-CA",
+      "authority": "California Department of Health Care Services",
+      "source_family": "waiver",
+      "source_type": "agency_guidance",
+      "source_url": "https://www.dhcs.ca.gov/services/medi-cal-waivers/",
+      "rule_families": [
+        "eligibility"
+      ],
+      "official": true,
+      "snapshot_status": "not_captured",
+      "source_hash": null,
+      "review_status": "not_reviewed",
+      "legal_verification_status": "not_verified",
+      "runtime_eligibility_status": "ineligible_shadow_only"
+    }
+  ]
+}

@@ -62,7 +62,7 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
     ],
     "medicare": [
         "https://www.medicare.gov/",
-        "https://www.ecfr.gov/current/title-42/chapter-IV/subchapter-B",
+        "https://www.ecfr.gov/current/title-42/chapter-IV/subchapter-B/part-400",
         "https://www.ecfr.gov/current/title-42/chapter-IV/subchapter-B/part-422",
     ],
     "chip": [
@@ -86,7 +86,7 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
         "https://www.ssa.gov/disability/",
     ],
     "social_security": [
-        "https://www.ssa.gov/OP_Home/",
+        "https://www.ecfr.gov/current/title-20/chapter-III/part-404",
         "https://secure.ssa.gov/apps10/poms.nsf/home",
         "https://www.ssa.gov/benefits/",
     ],
@@ -95,8 +95,8 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
         "https://secure.ssa.gov/apps10/poms.nsf/home",
     ],
     "tanf": [
-        "https://www.acf.hhs.gov/ofa/programs/tanf",
-        "https://www.acf.hhs.gov/ofa/policy-guidance",
+        "https://www.ecfr.gov/current/title-45/subtitle-B/chapter-II/part-260",
+        "https://www.ecfr.gov/current/title-45/subtitle-B/chapter-II/part-261",
     ],
     "unemployment_insurance": [
         "https://oui.doleta.gov/unemploy/",
@@ -108,40 +108,40 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
     ],
     "snap": [
         "https://www.fns.usda.gov/snap/supplemental-nutrition-assistance-program",
-        "https://www.fns.usda.gov/snap/frules",
-        "https://www.fns.usda.gov/snap/state-guidance",
+        "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-C/part-271",
+        "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-C/part-273",
     ],
     "wic": [
         "https://www.fns.usda.gov/wic",
-        "https://www.fns.usda.gov/wic/regulations",
+        "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-A/part-246",
     ],
     "school_meals": [
         "https://www.fns.usda.gov/cn",
-        "https://www.fns.usda.gov/cn/regulations",
+        "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-A/part-210",
     ],
     "emergency_food_assistance": [
         "https://www.fns.usda.gov/tefap/emergency-food-assistance-program",
-        "https://www.fns.usda.gov/tefap/regulations",
+        "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-B/part-251",
     ],
     "section_8_housing_choice_voucher": [
-        "https://www.hud.gov/program_offices/public_indian_housing/programs/hcv",
-        "https://www.hud.gov/program_offices/public_indian_housing/programs/hcv/laws-regulations",
+        "https://www.hud.gov/helping-americans/housing-choice-vouchers-guidance",
+        "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-IX/part-982",
     ],
     "public_housing": [
         "https://www.hud.gov/program_offices/public_indian_housing/programs/ph",
         "https://www.hud.gov/program_offices/public_indian_housing",
     ],
     "liheap": [
-        "https://www.acf.hhs.gov/ocs/programs/liheap",
-        "https://www.acf.hhs.gov/ocs/policy-guidance/liheap",
+        "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-A/part-96/subpart-H",
+        "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-A/part-96",
     ],
     "homelessness_assistance": [
-        "https://www.hudexchange.info/homelessness-assistance/",
+        "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-V/part-578",
         "https://www.hud.gov/program_offices/comm_planning/coc",
     ],
     "rental_assistance": [
         "https://www.hud.gov/topics/rental_assistance",
-        "https://www.hud.gov/program_offices/public_indian_housing/programs/hcv",
+        "https://www.hud.gov/helping-americans/housing-choice-vouchers-guidance",
     ],
     "federal_income_tax": [
         "https://www.irs.gov/forms-instructions",
@@ -159,14 +159,14 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
         "https://www.usa.gov/state-taxes",
     ],
     "property_tax": [
-        "https://www.usa.gov/property-tax",
+        "https://www.usa.gov/state-taxes",
     ],
     "credits_refunds": [
         "https://www.irs.gov/credits-and-deductions",
         "https://www.irs.gov/refunds",
     ],
     "professional_licenses": [
-        "https://www.usa.gov/professional-licenses",
+        "https://www.dol.gov/sites/dolgov/files/VETS/files/CareerCredentials_PG_Interactive_Feb2026.pdf",
     ],
     "business_licenses": [
         "https://www.sba.gov/business-guide/launch-your-business/apply-licenses-permits",
@@ -203,7 +203,7 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
     ],
     "visas": [
         "https://www.uscis.gov/policy-manual",
-        "https://travel.state.gov/content/travel/en/us-visas.html",
+        "https://www.ecfr.gov/current/title-22/chapter-I/subchapter-E/part-41",
     ],
     "work_authorization": [
         "https://www.uscis.gov/working-in-the-united-states",
@@ -235,7 +235,7 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
     ],
     "veterans_education_benefits": [
         "https://www.va.gov/education/",
-        "https://www.va.gov/resources/gi-bill-and-other-va-education-benefits/",
+        "https://www.va.gov/education/about-gi-bill-benefits/",
     ],
     "state_aid": [
         "https://studentaid.gov/understand-aid/types/state-aid",
@@ -245,11 +245,11 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
         "https://www.oversight.gov/",
     ],
     "penalties": [
-        "https://www.ecfr.gov/",
+        "https://www.ecfr.gov/current/title-28/chapter-I/part-85",
         "https://www.govinfo.gov/app/collection/cfr",
     ],
     "appeals": [
-        "https://www.ecfr.gov/",
+        "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-A/part-16",
         "https://www.govinfo.gov/app/collection/cfr",
     ],
     "due_process": [
@@ -259,6 +259,91 @@ PROGRAM_OFFICIAL_ENTRYPOINTS = {
     "fraud_abuse": [
         "https://oig.hhs.gov/compliance/",
         "https://www.justice.gov/civil/false-claims-act",
+    ],
+}
+
+# Append-only primary sources preserve the stable names of the original 104
+# entrypoints while improving grounded coverage for programs with no accepted
+# current-contract candidate.
+PROGRAM_OFFICIAL_ENTRYPOINT_EXPANSIONS = {
+    "veterans_health_benefits": [
+        "https://www.ecfr.gov/current/title-38/chapter-I/part-17",
+    ],
+    "disability_ssi_health_eligibility": [
+        "https://www.ecfr.gov/current/title-20/chapter-III/part-416",
+    ],
+    "ssi": [
+        "https://www.ecfr.gov/current/title-20/chapter-III/part-416",
+    ],
+    "public_housing": [
+        "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-IX/part-960",
+    ],
+    "environmental_permits": [
+        "https://www.ecfr.gov/current/title-40/chapter-I/subchapter-D/part-122",
+    ],
+    "contract_awards": [
+        "https://www.ecfr.gov/current/title-48/chapter-1",
+    ],
+    "naturalization": [
+        "https://www.ecfr.gov/current/title-8/chapter-I/subchapter-C/part-316",
+    ],
+    "fafsa": [
+        "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-668",
+    ],
+    "pell_grants": [
+        "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-690",
+    ],
+    "student_loans": [
+        "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-685",
+    ],
+    "state_aid": [
+        "https://studentaid.gov/sites/default/files/2026-27-fafsa-form.pdf",
+    ],
+    "fraud_abuse": [
+        "https://www.ecfr.gov/current/title-42/chapter-V/subchapter-B/part-1001",
+    ],
+}
+
+PROGRAM_OFFICIAL_STATE_ENTRYPOINTS = {
+    # State and local programs cannot honestly reach balanced coverage from
+    # federal material alone. These official California code tables of
+    # contents are discovery seeds: linked code sections still require source
+    # review before capture or inference.
+    "building_permits": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=HSC",
+    ],
+    "driver_licenses": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=VEH",
+    ],
+    "professional_licenses": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=BPC",
+    ],
+    "business_licenses": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=BPC",
+    ],
+    "state_income_tax": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=RTC",
+    ],
+    "sales_tax": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=RTC",
+    ],
+    "property_tax": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=RTC",
+    ],
+    "unemployment_insurance": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=UIC",
+    ],
+    "state_grants": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=EDC",
+    ],
+    "rental_assistance": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=HSC",
+    ],
+    "appeals": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=GOV",
+    ],
+    "due_process": [
+        "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=GOV",
     ],
 }
 
@@ -656,6 +741,7 @@ def build_official_source_pack(max_sources_per_program: int = 0) -> dict:
     items: list[SourcePackItem] = []
     covered_programs: set[str] = set()
     programs_without_sources: list[str] = []
+    program_source_counts: dict[str, int] = {}
     source_index = 0
 
     for vertical, programs in GOVERNMENT_RULE_TAXONOMY["government_transaction_rules"].items():
@@ -667,6 +753,7 @@ def build_official_source_pack(max_sources_per_program: int = 0) -> dict:
                 programs_without_sources.append(program)
                 continue
             covered_programs.add(program)
+            program_source_counts[program] = len(urls)
             for url in urls:
                 source_index += 1
                 official, reason = source_allowed(url, official_only=True)
@@ -679,12 +766,80 @@ def build_official_source_pack(max_sources_per_program: int = 0) -> dict:
                         required=False,
                         discovery_seed=True,
                         jurisdiction_level=infer_pack_jurisdiction(url),
-                        state_code=None,
+                        state_code=infer_pack_state_code(url),
                         source_type=infer_pack_source_type(url),
                         official=official,
                         reason=reason,
                     )
                 )
+
+    for vertical, programs in GOVERNMENT_RULE_TAXONOMY["government_transaction_rules"].items():
+        for program in programs:
+            urls = PROGRAM_OFFICIAL_ENTRYPOINT_EXPANSIONS.get(program, [])
+            if max_sources_per_program > 0:
+                remaining = max(
+                    0,
+                    max_sources_per_program - program_source_counts.get(program, 0),
+                )
+                urls = urls[:remaining]
+            for url in urls:
+                source_index += 1
+                official, reason = source_allowed(url, official_only=True)
+                items.append(
+                    SourcePackItem(
+                        name=stable_source_name(program, source_index),
+                        url=url,
+                        vertical=vertical,
+                        program=program,
+                        required=False,
+                        discovery_seed=True,
+                        jurisdiction_level=infer_pack_jurisdiction(url),
+                        state_code=infer_pack_state_code(url),
+                        source_type=infer_pack_source_type(url),
+                        official=official,
+                        reason=reason,
+                    )
+                )
+                covered_programs.add(program)
+                program_source_counts[program] = (
+                    program_source_counts.get(program, 0) + 1
+                )
+
+    # Keep state expansion in a separate append-only pass so additions cannot
+    # renumber the existing federal source IDs.
+    for program, configured_urls in PROGRAM_OFFICIAL_STATE_ENTRYPOINTS.items():
+        vertical = vertical_for_program_key(program)
+        if vertical is None:
+            raise ValueError(f"state source expansion has unknown program: {program}")
+        urls = configured_urls
+        if max_sources_per_program > 0:
+            remaining = max(
+                0,
+                max_sources_per_program - program_source_counts.get(program, 0),
+            )
+            urls = urls[:remaining]
+        for url in urls:
+            source_index += 1
+            official, reason = source_allowed(url, official_only=True)
+            items.append(
+                SourcePackItem(
+                    name=stable_source_name(program, source_index),
+                    url=url,
+                    vertical=vertical,
+                    program=program,
+                    required=False,
+                    discovery_seed=True,
+                    jurisdiction_level=infer_pack_jurisdiction(url),
+                    state_code=infer_pack_state_code(url),
+                    source_type=infer_pack_source_type(url),
+                    official=official,
+                    reason=reason,
+                )
+            )
+            covered_programs.add(program)
+            program_source_counts[program] = (
+                program_source_counts.get(program, 0) + 1
+            )
 
     taxonomy_programs = [
         program
@@ -816,8 +971,20 @@ def write_official_source_pack_commands(manifest_path: Path) -> str:
     )
 
 
+_PACK_STATE_HOST_CODES = {
+    "leginfo.legislature.ca.gov": "CA",
+}
+
+
+def infer_pack_state_code(url: str) -> str | None:
+    host = normalize_host(urlparse(url).netloc)
+    return _PACK_STATE_HOST_CODES.get(host)
+
+
 def infer_pack_jurisdiction(url: str) -> str:
     host = normalize_host(urlparse(url).netloc)
+    if infer_pack_state_code(url) is not None:
+        return "state"
     if host.endswith(".gov") or host.endswith(".mil") or host in {"hudexchange.info"}:
         return "federal"
     return "unknown"
@@ -825,6 +992,8 @@ def infer_pack_jurisdiction(url: str) -> str:
 
 def infer_pack_source_type(url: str) -> str:
     lowered = url.lower()
+    if "leginfo.legislature.ca.gov" in lowered:
+        return "statute"
     if "ecfr.gov" in lowered or "cfr" in lowered or "regulation" in lowered or "laws-regulations" in lowered:
         return "regulation"
     if "policy" in lowered or "guidance" in lowered or "manual" in lowered or "poms" in lowered or "handbook" in lowered or "irm" in lowered:

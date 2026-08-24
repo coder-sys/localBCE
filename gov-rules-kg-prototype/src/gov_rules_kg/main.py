@@ -30,13 +30,27 @@ from .scale import write_ecfr_manifest, write_scale_playbook
 from .postgres_corpus import CorpusDatabaseError, PostgresCorpusStore
 from .scale_commands import (
     claude_infer,
+    corpus_progress,
     corpus_release,
+    inference_recover,
+    inference_failure_report,
+    inference_usage_report,
+    inference_launch_plan,
     migrate_corpus,
+    ocr_artifact_ingest,
     quality_evaluate,
+    quality_sample_plan,
+    rules_checkpoint,
     review_export,
     sections_extract,
     shadow_bundle_export,
+    source_registry_release,
+    sources_discover,
+    sources_preflight,
     sources_sync,
+    state_medicaid_sources_sync,
+    validate_corpus_release_artifact,
+    validate_source_preflight_artifact,
 )
 from .store import Store
 
@@ -118,18 +132,228 @@ def build_parser() -> argparse.ArgumentParser:
     sources_sync_parser.add_argument("--fetch", action="store_true")
     sources_sync_parser.add_argument("--limit", type=int, default=0, help="0 means all registered sources")
     sources_sync_parser.add_argument("--timeout-seconds", type=float, default=60.0)
+    sources_sync_parser.add_argument("--concurrency", type=int, default=4)
+    sources_sync_parser.add_argument(
+        "--capture-id",
+        help="Stable capture identifier; rerunning the same value resumes idempotently",
+    )
+    sources_sync_parser.add_argument("--retry-failed", action="store_true")
+    sources_sync_parser.add_argument(
+        "--retry-limit",
+        type=int,
+        default=0,
+        help="Maximum terminal source-fetch jobs to reopen",
+    )
+    sources_sync_parser.add_argument(
+        "--registry",
+        type=Path,
+        help="Explicit base descriptor or reviewed inactive registry release",
+    )
+    state_medicaid_sync_parser = subparsers.add_parser(
+        "state-medicaid-sources-sync",
+        help="Add the reviewed Medicaid Core V1 source roots without capture or candidate creation",
+    )
+    state_medicaid_sync_parser.add_argument(
+        "--registry",
+        type=Path,
+        default=Path("data/source_manifests/state_medicaid_core_v1.json"),
+    )
+    state_medicaid_sync_parser.add_argument(
+        "--preflight",
+        type=Path,
+        default=Path("reports/state_medicaid_core_preflight_v1.json"),
+    )
+    sources_discover_parser = subparsers.add_parser(
+        "sources-discover",
+        help="Build a review-only official-link expansion queue from captured snapshots",
+    )
+    sources_discover_parser.add_argument(
+        "--limit", type=int, default=0, help="0 means all undiscovered retrievals"
+    )
+    sources_preflight_parser = subparsers.add_parser(
+        "sources-preflight",
+        help="Deterministically score discovered links before explicit source review",
+    )
+    sources_preflight_parser.add_argument(
+        "--limit", type=int, default=0, help="0 means all unassessed candidates"
+    )
+    sources_preflight_parser.add_argument(
+        "--target",
+        type=int,
+        choices=(5_100, 51_000, 600_000),
+        default=5_100,
+        help="Corpus milestone used to calculate per-program source deficits",
+    )
+    source_preflight_validate_parser = subparsers.add_parser(
+        "sources-preflight-validate",
+        help="Validate a source-candidate preflight report without PostgreSQL",
+    )
+    source_preflight_validate_parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path("reports/rules_source_candidate_preflight_v1.json"),
+    )
+    source_release_parser = subparsers.add_parser(
+        "source-registry-release",
+        help="Export a hash-pinned inactive registry candidate from reviewed links",
+    )
+    source_release_parser.add_argument("--release-id", required=True)
     sections_parser = subparsers.add_parser(
         "sections-extract",
         help="Deterministically extract sections from uncatalogued PostgreSQL snapshots",
     )
     sections_parser.add_argument("--limit", type=int, default=0, help="0 means all unsectioned retrievals")
+    sections_parser.add_argument("--concurrency", type=int, default=4)
+    sections_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Explicitly reopen terminal section-extraction jobs",
+    )
+    sections_parser.add_argument(
+        "--retry-limit",
+        type=int,
+        default=0,
+        help="Maximum terminal section-extraction jobs to reopen",
+    )
+    ocr_parser = subparsers.add_parser(
+        "ocr-artifact-ingest",
+        help="Ingest reviewed OCR text as immutable evidence for a failed PDF extraction",
+    )
+    ocr_parser.add_argument("--retrieval-id", required=True)
+    ocr_parser.add_argument("--artifact", type=Path, required=True)
+    ocr_parser.add_argument(
+        "--evidence-root",
+        type=Path,
+        default=Path("data/evidence/ocr"),
+    )
+    ocr_parser.add_argument("--engine-name", required=True)
+    ocr_parser.add_argument("--engine-version", required=True)
+    ocr_parser.add_argument("--operator-id", required=True)
+    ocr_parser.add_argument(
+        "--generated-at",
+        required=True,
+        help="Timezone-aware ISO-8601 timestamp from the OCR execution",
+    )
     inference_parser = subparsers.add_parser(
         "claude-infer",
         help="Run pinned two-pass Claude extraction and critique with no local fallback",
     )
     inference_parser.add_argument("--limit", type=int, default=8)
     inference_parser.add_argument("--concurrency", type=int, default=8)
-    subparsers.add_parser("quality-evaluate", help="Evaluate release quality gates from reviewer samples")
+    inference_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=256,
+        help="Bounded section/job page size for large resumable runs",
+    )
+    inference_parser.add_argument(
+        "--result-detail-limit",
+        type=int,
+        default=1_000,
+        help="Maximum per-job details retained in the compact run report",
+    )
+    inference_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Explicitly resume failed jobs with a fresh bounded attempt allowance",
+    )
+    inference_parser.add_argument(
+        "--retry-limit",
+        type=int,
+        default=0,
+        help="Maximum failed jobs to resume; required with --retry-failed",
+    )
+    inference_parser.add_argument(
+        "--drain-existing",
+        action="store_true",
+        help="Drain the current pending inference queue without enqueueing new sections",
+    )
+    inference_parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=300.0,
+        help="Cumulative hard deadline for each Claude request (default: 300)",
+    )
+    recovery_parser = subparsers.add_parser(
+        "inference-recover",
+        help="Recover expired leases and materialize durable inference results",
+    )
+    recovery_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Explicitly return current-contract failed jobs to the pending queue",
+    )
+    recovery_parser.add_argument(
+        "--retry-limit",
+        type=int,
+        default=0,
+        help="Maximum failed jobs to resume; required with --retry-failed",
+    )
+    recovery_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=256,
+        help="Review-draft materialization page size",
+    )
+    subparsers.add_parser(
+        "inference-usage-report",
+        help="Export aggregate Claude token, request, and retry accounting",
+    )
+    failure_parser = subparsers.add_parser(
+        "inference-failure-report",
+        help="Export durable failed/rejected job details without source or prompt text",
+    )
+    failure_parser.add_argument("--limit", type=int, default=100)
+    progress_parser = subparsers.add_parser(
+        "corpus-progress",
+        help="Report exact active lineage and per-program milestone deficits",
+    )
+    progress_parser.add_argument(
+        "--target", type=int, choices=[5_100, 51_000, 600_000], required=True
+    )
+    checkpoint_parser = subparsers.add_parser(
+        "rules-checkpoint",
+        help="Write a deterministic non-production rules corpus checkpoint",
+    )
+    checkpoint_parser.add_argument(
+        "--medicaid-registry",
+        type=Path,
+        default=Path("data/source_manifests/state_medicaid_core_v1.json"),
+    )
+    checkpoint_parser.add_argument(
+        "--medicaid-preflight",
+        type=Path,
+        default=Path("reports/state_medicaid_core_preflight_v1.json"),
+    )
+    checkpoint_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("reports/rules_corpus_checkpoint_v1.json"),
+    )
+    launch_plan_parser = subparsers.add_parser(
+        "inference-launch-plan",
+        help="Build and validate a hash-pinned paid-inference launch plan",
+    )
+    launch_plan_parser.add_argument(
+        "--target", type=int, choices=[5_100, 51_000, 600_000], required=True
+    )
+    launch_plan_parser.add_argument("--concurrency", type=int, default=8)
+    quality_sample_parser = subparsers.add_parser(
+        "quality-sample-plan",
+        help="Create a deterministic 1,020+ record two-role quality sample plan",
+    )
+    quality_sample_parser.add_argument("--release-id", required=True)
+    quality_sample_parser.add_argument("--target", type=int, default=1_020)
+    quality_sample_parser.add_argument(
+        "--corpus-target",
+        type=int,
+        choices=[5_100, 51_000, 600_000],
+        default=5_100,
+    )
+    quality_parser = subparsers.add_parser(
+        "quality-evaluate", help="Evaluate quality gates globally or for one immutable release cohort"
+    )
+    quality_parser.add_argument("--release-id")
     subparsers.add_parser("review-export", help="Export compact review metrics without reviewer credentials")
     shadow_export_parser = subparsers.add_parser(
         "shadow-bundle-export",
@@ -142,6 +366,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     release_parser.add_argument("--release-id", required=True)
     release_parser.add_argument("--target", type=int, choices=[5_100, 51_000, 600_000], required=True)
+    release_parser.add_argument(
+        "--source-registry",
+        type=Path,
+        help="Registry artifact whose exact version must match cohort lineage",
+    )
+    release_validate_parser = subparsers.add_parser(
+        "corpus-release-validate",
+        help="Validate a corpus release artifact and its exact source registry",
+    )
+    release_validate_parser.add_argument(
+        "--release-manifest", type=Path, required=True
+    )
+    release_validate_parser.add_argument("--source-registry", type=Path)
     claude_scale_parser = subparsers.add_parser("claude-web-scale-plan", help="Plan structured Claude web expansion batches across programs, jurisdictions, and source types")
     claude_scale_parser.add_argument("--target-candidates-per-branch", type=int, default=10)
     claude_scale_parser.add_argument("--batch-size", type=int, default=5)
@@ -409,11 +646,54 @@ def main() -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
 
+    if args.command == "corpus-release-validate":
+        release_path = args.release_manifest
+        if not release_path.is_absolute():
+            release_path = workdir / release_path
+        registry_path = args.source_registry
+        if registry_path is not None and not registry_path.is_absolute():
+            registry_path = workdir / registry_path
+        try:
+            payload = validate_corpus_release_artifact(
+                workdir,
+                release_manifest=release_path,
+                source_registry=registry_path,
+            )
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if args.command == "sources-preflight-validate":
+        report_path = args.report
+        if not report_path.is_absolute():
+            report_path = workdir / report_path
+        try:
+            payload = validate_source_preflight_artifact(report_path=report_path)
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+            print(str(exc))
+            raise SystemExit(2) from exc
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
     if args.command in {
         "rules-db-migrate",
         "sources-sync",
+        "state-medicaid-sources-sync",
+        "sources-discover",
+        "sources-preflight",
+        "source-registry-release",
         "sections-extract",
+        "ocr-artifact-ingest",
         "claude-infer",
+        "inference-recover",
+        "inference-failure-report",
+        "inference-usage-report",
+        "inference-launch-plan",
+        "corpus-progress",
+        "rules-checkpoint",
+        "quality-sample-plan",
         "quality-evaluate",
         "review-export",
         "shadow-bundle-export",
@@ -424,19 +704,135 @@ def main() -> None:
             if args.command == "rules-db-migrate":
                 payload = migrate_corpus(workdir, store)
             elif args.command == "sources-sync":
+                registry_path = args.registry
+                if registry_path is not None and not registry_path.is_absolute():
+                    registry_path = workdir / registry_path
                 payload = sources_sync(
                     workdir,
                     store,
                     fetch=args.fetch,
                     limit=args.limit,
                     timeout_seconds=args.timeout_seconds,
+                    source_registry=registry_path,
+                    concurrency=args.concurrency,
+                    capture_id=args.capture_id,
+                    retry_failed=args.retry_failed,
+                    retry_limit=args.retry_limit,
+                )
+            elif args.command == "state-medicaid-sources-sync":
+                registry_path = args.registry
+                preflight_path = args.preflight
+                if not registry_path.is_absolute():
+                    registry_path = workdir / registry_path
+                if not preflight_path.is_absolute():
+                    preflight_path = workdir / preflight_path
+                payload = state_medicaid_sources_sync(
+                    workdir,
+                    store,
+                    registry_path=registry_path,
+                    preflight_path=preflight_path,
+                )
+            elif args.command == "sources-discover":
+                payload = sources_discover(workdir, store, limit=args.limit)
+            elif args.command == "sources-preflight":
+                payload = sources_preflight(
+                    workdir,
+                    store,
+                    limit=args.limit,
+                    target_count=args.target,
+                )
+            elif args.command == "source-registry-release":
+                payload = source_registry_release(
+                    workdir, store, release_id=args.release_id
                 )
             elif args.command == "sections-extract":
-                payload = sections_extract(workdir, store, limit=args.limit)
+                payload = sections_extract(
+                    workdir,
+                    store,
+                    limit=args.limit,
+                    concurrency=args.concurrency,
+                    retry_failed=args.retry_failed,
+                    retry_limit=args.retry_limit,
+                )
+            elif args.command == "ocr-artifact-ingest":
+                payload = ocr_artifact_ingest(
+                    workdir,
+                    store,
+                    retrieval_id=args.retrieval_id,
+                    artifact_path=args.artifact,
+                    evidence_root=args.evidence_root,
+                    engine_name=args.engine_name,
+                    engine_version=args.engine_version,
+                    operator_id=args.operator_id,
+                    generated_at=args.generated_at,
+                )
             elif args.command == "claude-infer":
-                payload = claude_infer(workdir, store, limit=args.limit, concurrency=args.concurrency)
+                payload = claude_infer(
+                    workdir,
+                    store,
+                    limit=args.limit,
+                    concurrency=args.concurrency,
+                    batch_size=args.batch_size,
+                    result_detail_limit=args.result_detail_limit,
+                    retry_failed=args.retry_failed,
+                    retry_limit=args.retry_limit,
+                    drain_existing=args.drain_existing,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            elif args.command == "inference-recover":
+                payload = inference_recover(
+                    workdir,
+                    store,
+                    retry_failed=args.retry_failed,
+                    retry_limit=args.retry_limit,
+                    batch_size=args.batch_size,
+                )
+            elif args.command == "inference-failure-report":
+                payload = inference_failure_report(
+                    workdir, store, limit=args.limit
+                )
+            elif args.command == "inference-usage-report":
+                payload = inference_usage_report(workdir, store)
+            elif args.command == "inference-launch-plan":
+                payload = inference_launch_plan(
+                    workdir,
+                    store,
+                    target_count=args.target,
+                    concurrency=args.concurrency,
+                )
+            elif args.command == "corpus-progress":
+                payload = corpus_progress(
+                    workdir, store, target_count=args.target
+                )
+            elif args.command == "rules-checkpoint":
+                registry_path = args.medicaid_registry
+                preflight_path = args.medicaid_preflight
+                output_path = args.output
+                if not registry_path.is_absolute():
+                    registry_path = workdir / registry_path
+                if not preflight_path.is_absolute():
+                    preflight_path = workdir / preflight_path
+                if not output_path.is_absolute():
+                    output_path = workdir / output_path
+                payload = rules_checkpoint(
+                    workdir,
+                    store,
+                    registry_path=registry_path,
+                    preflight_path=preflight_path,
+                    output_path=output_path,
+                )
             elif args.command == "quality-evaluate":
-                payload = quality_evaluate(workdir, store)
+                payload = quality_evaluate(
+                    workdir, store, release_id=args.release_id
+                )
+            elif args.command == "quality-sample-plan":
+                payload = quality_sample_plan(
+                    workdir,
+                    store,
+                    release_id=args.release_id,
+                    target_count=args.target,
+                    corpus_target_count=args.corpus_target,
+                )
             elif args.command == "review-export":
                 payload = review_export(workdir, store)
             elif args.command == "shadow-bundle-export":
@@ -445,11 +841,15 @@ def main() -> None:
                     release_path = workdir / release_path
                 payload = shadow_bundle_export(workdir, store, release_manifest=release_path)
             else:
+                registry_path = args.source_registry
+                if registry_path is not None and not registry_path.is_absolute():
+                    registry_path = workdir / registry_path
                 payload = corpus_release(
                     workdir,
                     store,
                     release_id=args.release_id,
                     target_count=args.target,
+                    source_registry=registry_path,
                 )
         except (CorpusDatabaseError, FileNotFoundError, ValueError) as exc:
             print(str(exc))

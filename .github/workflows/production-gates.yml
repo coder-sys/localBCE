@@ -11,16 +11,36 @@ permissions:
 jobs:
   rules-and-ops:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: localbce_rules_test
+          POSTGRES_USER: localbce_rules_test
+          POSTGRES_PASSWORD: localbce_rules_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U localbce_rules_test -d localbce_rules_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RULES_TEST_DATABASE_URL: postgresql://localbce_rules_test:localbce_rules_test@127.0.0.1:5432/localbce_rules_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python3 -m venv gov-rules-kg-prototype/.venv
+      - run: gov-rules-kg-prototype/.venv/bin/pip install -r gov-rules-kg-prototype/requirements.txt -r blind-ledger-app-layer/requirements.txt
       - run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - run: python3 scripts/validate_ops_scaffold.py
       - run: python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
       - run: python3 scripts/validate_openzeppelin_pin.py
       - run: bash scripts/validate_rules_pipeline.sh
+      - run: PYTHONPATH=blind-ledger-app-layer:gov-rules-kg-prototype/src gov-rules-kg-prototype/.venv/bin/python -m unittest blind-ledger-app-layer/tests/test_rules_review_auth.py
       - run: python3 scripts/scan_secrets.py
 
   rust:

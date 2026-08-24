@@ -11,5 +11,7 @@ data/*.sqlite-*
 reports/*.json
 reports/*.md
 !reports/.gitkeep
+!reports/state_medicaid_core_preflight_v1.json
+!reports/rules_corpus_checkpoint_v1.json
 !data/.gitkeep
 !data/cache/.gitkeep

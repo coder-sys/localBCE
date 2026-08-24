@@ -148,6 +148,134 @@ class LegalGradeFoundationTests(unittest.TestCase):
         self.assertIn("snap", programs)
         self.assertIn("due_process", programs)
 
+    def test_official_source_pack_appends_primary_gap_sources(self) -> None:
+        pack = build_official_source_pack()
+        self.assertEqual(pack["source_count"], 128)
+        self.assertEqual(pack["sources"][103]["name"], "agent_fraud_abuse_104")
+        self.assertEqual(
+            [source["name"] for source in pack["sources"][104:]],
+            [
+                "agent_veterans_health_benefits_105",
+                "agent_disability_ssi_health_eligibility_106",
+                "agent_ssi_107",
+                "agent_public_housing_108",
+                "agent_environmental_permits_109",
+                "agent_contract_awards_110",
+                "agent_naturalization_111",
+                "agent_fafsa_112",
+                "agent_pell_grants_113",
+                "agent_student_loans_114",
+                "agent_state_aid_115",
+                "agent_fraud_abuse_116",
+                "agent_building_permits_117",
+                "agent_driver_licenses_118",
+                "agent_professional_licenses_119",
+                "agent_business_licenses_120",
+                "agent_state_income_tax_121",
+                "agent_sales_tax_122",
+                "agent_property_tax_123",
+                "agent_unemployment_insurance_124",
+                "agent_state_grants_125",
+                "agent_rental_assistance_126",
+                "agent_appeals_127",
+                "agent_due_process_128",
+            ],
+        )
+        urls_by_program = {
+            program: {
+                source["url"]
+                for source in pack["sources"]
+                if source["program"] == program
+            }
+            for program in (
+                "veterans_health_benefits",
+                "public_housing",
+                "state_aid",
+                "disability_ssi_health_eligibility",
+                "ssi",
+                "naturalization",
+                "fafsa",
+                "pell_grants",
+                "student_loans",
+                "environmental_permits",
+                "contract_awards",
+                "fraud_abuse",
+            )
+        }
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-38/chapter-I/part-17",
+            urls_by_program["veterans_health_benefits"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-IX/part-960",
+            urls_by_program["public_housing"],
+        )
+        self.assertIn(
+            "https://studentaid.gov/sites/default/files/2026-27-fafsa-form.pdf",
+            urls_by_program["state_aid"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-20/chapter-III/part-416",
+            urls_by_program["disability_ssi_health_eligibility"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-20/chapter-III/part-416",
+            urls_by_program["ssi"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-8/chapter-I/subchapter-C/part-316",
+            urls_by_program["naturalization"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-668",
+            urls_by_program["fafsa"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-690",
+            urls_by_program["pell_grants"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-685",
+            urls_by_program["student_loans"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-40/chapter-I/subchapter-D/part-122",
+            urls_by_program["environmental_permits"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-48/chapter-1",
+            urls_by_program["contract_awards"],
+        )
+        self.assertIn(
+            "https://www.ecfr.gov/current/title-42/chapter-V/subchapter-B/part-1001",
+            urls_by_program["fraud_abuse"],
+        )
+        state_sources = [
+            source
+            for source in pack["sources"]
+            if "leginfo.legislature.ca.gov" in source["url"]
+        ]
+        self.assertEqual(len(state_sources), 12)
+        self.assertTrue(
+            all(source["jurisdiction_level"] == "state" for source in state_sources)
+        )
+        self.assertTrue(all(source["state_code"] == "CA" for source in state_sources))
+        self.assertTrue(all(source["source_type"] == "statute" for source in state_sources))
+        self.assertIn(
+            "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=VEH",
+            {
+                source["url"]
+                for source in state_sources
+                if source["program"] == "driver_licenses"
+            },
+        )
+        va_sources = [
+            source for source in pack["sources"] if source["url"].startswith("https://www.va.gov/")
+        ]
+        self.assertTrue(va_sources)
+        self.assertTrue(all(source["jurisdiction_level"] == "federal" for source in va_sources))
+        self.assertTrue(all(source["state_code"] is None for source in va_sources))
+
     def test_official_source_pack_writes_manifest_and_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workdir = Path(tmpdir)

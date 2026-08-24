@@ -2,6 +2,7 @@ import copy
 import csv
 import json
 import os
+import shutil
 import subprocess
 import unittest
 from dataclasses import asdict
@@ -13,9 +14,15 @@ from app.rules_engine_fallback import adjudicate as python_adjudicate
 
 ROOT = Path(__file__).resolve().parents[1]
 RUST_CRATE = ROOT / "rules-engine-rust"
-RUST_BIN = RUST_CRATE / "target" / "debug" / "rules-engine.exe"
-CARGO = Path(os.environ.get("BL_CARGO", r"C:\Users\neers\.cargo\bin\cargo.exe"))
-TOOLCHAIN = "1.96.0-x86_64-pc-windows-msvc"
+RUST_BIN = RUST_CRATE / "target" / "debug" / (
+    "rules-engine.exe" if os.name == "nt" else "rules-engine"
+)
+_cargo_path = os.environ.get("BL_CARGO") or shutil.which("cargo")
+CARGO = Path(_cargo_path) if _cargo_path else None
+TOOLCHAIN = os.environ.get(
+    "BL_RUST_TOOLCHAIN",
+    "1.96.0-x86_64-pc-windows-msvc" if os.name == "nt" else "",
+)
 VSDEV = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat")
 
 
@@ -59,13 +66,17 @@ def load_mapping() -> dict[str, tuple[str, str]]:
 def ensure_rust_binary() -> None:
     if RUST_BIN.exists():
         return
-    if not CARGO.exists():
+    if CARGO is None or not CARGO.exists():
         raise AssertionError(f"cargo not found at {CARGO}")
-    if VSDEV.exists():
+    if os.name == "nt" and VSDEV.exists():
         command = f'call "{VSDEV}" -arch=x64 -host_arch=x64 && "{CARGO}" +{TOOLCHAIN} build'
         proc = subprocess.run(["cmd.exe", "/c", command], cwd=RUST_CRATE, text=True, capture_output=True)
     else:
-        proc = subprocess.run([str(CARGO), f"+{TOOLCHAIN}", "build"], cwd=RUST_CRATE, text=True, capture_output=True)
+        command = [str(CARGO)]
+        if TOOLCHAIN:
+            command.append(f"+{TOOLCHAIN}")
+        command.append("build")
+        proc = subprocess.run(command, cwd=RUST_CRATE, text=True, capture_output=True)
     if proc.returncode != 0:
         raise AssertionError(f"rust build failed\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     if not RUST_BIN.exists():

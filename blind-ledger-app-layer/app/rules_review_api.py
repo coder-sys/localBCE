@@ -36,6 +36,22 @@ if APIRouter:
     class ConflictDecisionBody(DecisionBody):
         selected_draft_id: str = Field(min_length=1, max_length=128)
 
+    class QualityMeasurements(BaseModel):
+        evidence_span_precise: bool
+        typed_mapping_correct: bool
+        program_classification_correct: bool
+        deterministic_rerun_match: bool
+
+    class QualityReviewBody(BaseModel):
+        candidate_id: str = Field(min_length=1, max_length=128)
+        draft_hash: str = Field(min_length=64, max_length=64)
+        rationale: str = Field(min_length=1, max_length=4000)
+        measurements: QualityMeasurements
+
+    class SourceDecisionBody(BaseModel):
+        decision: str
+        rationale: str = Field(min_length=1, max_length=4000)
+
     def principal(
         request: Request,
         authorization: str | None = Header(default=None),
@@ -93,6 +109,38 @@ if APIRouter:
         except CorpusDatabaseError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @router.post("/tasks/{task_id}/renew")
+    def renew_task_claim(
+        task_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        role = _one_role(user)
+        try:
+            return corpus.renew_review_task_claim(
+                task_id,
+                reviewer_id=user.subject,
+                reviewer_role=role,
+            )
+        except (CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/tasks/{task_id}/release")
+    def release_task_claim(
+        task_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        role = _one_role(user)
+        try:
+            return corpus.release_review_task_claim(
+                task_id,
+                reviewer_id=user.subject,
+                reviewer_role=role,
+            )
+        except (CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     def _record(
         task_id: str,
         body: DecisionBody,
@@ -144,10 +192,216 @@ if APIRouter:
 
     @router.get("/quality")
     def quality(
+        release_id: str | None = None,
         user: RulesPrincipal = Depends(principal),
         corpus: PostgresCorpusStore = Depends(store),
     ) -> dict[str, Any]:
         _one_role(user)
-        return {"metrics": corpus.rules_metrics(), "quality_inputs": corpus.quality_measurements()}
+        quality_inputs = (
+            corpus.quality_measurements(release_id=release_id)
+            if release_id
+            else corpus.quality_measurements()
+        )
+        return {
+            "release_id": release_id,
+            "metrics": corpus.rules_metrics(),
+            "quality_inputs": quality_inputs,
+        }
+
+    @router.get("/sources/preflight")
+    def source_preflight_summary(
+        target_count: int = 5_100,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        try:
+            user.require("rules_admin")
+            return corpus.source_registry_preflight_summary(
+                target_count=target_count
+            )
+        except (RulesAuthError, CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(
+                status_code=_review_error_status(exc), detail=str(exc)
+            ) from exc
+
+    @router.post("/sources/tasks/claim")
+    def claim_source_task(
+        program: str | None = None,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        try:
+            user.require("rules_admin")
+            task = corpus.claim_source_registry_candidate(
+                reviewer_id=user.subject,
+                program=program,
+            )
+        except (RulesAuthError, CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(
+                status_code=_review_error_status(exc), detail=str(exc)
+            ) from exc
+        return {"task": task}
+
+    @router.get("/sources/candidates/{source_candidate_id}")
+    def source_candidate(
+        source_candidate_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        _one_role(user)
+        try:
+            return corpus.source_registry_candidate_detail(source_candidate_id)
+        except CorpusDatabaseError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/sources/tasks/{source_candidate_id}/renew")
+    def renew_source_task_claim(
+        source_candidate_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        try:
+            user.require("rules_admin")
+            return corpus.renew_source_registry_candidate_claim(
+                source_candidate_id,
+                reviewer_id=user.subject,
+            )
+        except (RulesAuthError, CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(
+                status_code=_review_error_status(exc), detail=str(exc)
+            ) from exc
+
+    @router.post("/sources/tasks/{source_candidate_id}/release")
+    def release_source_task_claim(
+        source_candidate_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        try:
+            user.require("rules_admin")
+            return corpus.release_source_registry_candidate_claim(
+                source_candidate_id,
+                reviewer_id=user.subject,
+            )
+        except (RulesAuthError, CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(
+                status_code=_review_error_status(exc), detail=str(exc)
+            ) from exc
+
+    @router.post("/sources/tasks/{source_candidate_id}/decision")
+    def submit_source_decision(
+        source_candidate_id: str,
+        body: SourceDecisionBody,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        try:
+            user.require("rules_admin")
+            return corpus.record_source_registry_candidate_decision(
+                source_candidate_id=source_candidate_id,
+                reviewer_id=user.subject,
+                decision=body.decision,
+                rationale=body.rationale,
+            )
+        except (RulesAuthError, CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(
+                status_code=_review_error_status(exc), detail=str(exc)
+            ) from exc
+
+    @router.post("/quality/tasks/claim")
+    def claim_quality_task(
+        release_id: str | None = None,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        role = _one_role(user)
+        if role not in {"policy_reviewer", "legal_verifier"}:
+            raise HTTPException(
+                status_code=403,
+                detail="quality review requires policy_reviewer or legal_verifier",
+            )
+        return {
+            "task": corpus.claim_quality_sample(
+                reviewer_id=user.subject,
+                reviewer_role=role,
+                release_id=release_id,
+            )
+        }
+
+    @router.post("/quality/tasks/{sample_id}/review")
+    def submit_quality_review(
+        sample_id: str,
+        body: QualityReviewBody,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        role = _one_role(user)
+        if role not in {"policy_reviewer", "legal_verifier"}:
+            raise HTTPException(
+                status_code=403,
+                detail="quality review requires policy_reviewer or legal_verifier",
+            )
+        submission = {
+            "schema_version": "localbce-rules-quality-review-v1",
+            "sample_id": sample_id,
+            "candidate_id": body.candidate_id,
+            "draft_hash": body.draft_hash,
+            "reviewer_id": user.subject,
+            "reviewer_role": role,
+            "measurements": (
+                body.measurements.model_dump()
+                if hasattr(body.measurements, "model_dump")
+                else body.measurements.dict()
+            ),
+            "rationale": body.rationale,
+            "runtime_activation": False,
+            "proof_binding": False,
+        }
+        try:
+            return corpus.record_quality_review(submission)
+        except (CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/quality/tasks/{sample_id}/renew")
+    def renew_quality_task_claim(
+        sample_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        role = _one_role(user)
+        if role not in {"policy_reviewer", "legal_verifier"}:
+            raise HTTPException(
+                status_code=403,
+                detail="quality review requires policy_reviewer or legal_verifier",
+            )
+        try:
+            return corpus.renew_quality_sample_claim(
+                sample_id,
+                reviewer_id=user.subject,
+                reviewer_role=role,
+            )
+        except (CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/quality/tasks/{sample_id}/release")
+    def release_quality_task_claim(
+        sample_id: str,
+        user: RulesPrincipal = Depends(principal),
+        corpus: PostgresCorpusStore = Depends(store),
+    ) -> dict[str, Any]:
+        role = _one_role(user)
+        if role not in {"policy_reviewer", "legal_verifier"}:
+            raise HTTPException(
+                status_code=403,
+                detail="quality review requires policy_reviewer or legal_verifier",
+            )
+        try:
+            return corpus.release_quality_sample_claim(
+                sample_id,
+                reviewer_id=user.subject,
+                reviewer_role=role,
+            )
+        except (CorpusDatabaseError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 else:
     router = None

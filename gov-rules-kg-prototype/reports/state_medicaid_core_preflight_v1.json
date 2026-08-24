@@ -1,0 +1,152 @@
+{
+  "schema_version": "localbce-state-medicaid-source-preflight-v1",
+  "registry_id": "medicaid-core-nc-ga-ca-v1",
+  "registry_canonical_sha256": "61122770c46fb16231d54625594ef3c10104292142d33734521cf51b6169ca91",
+  "checked_at": "2026-08-23",
+  "source_count": 15,
+  "http_200_count": 15,
+  "capture_ready_count": 10,
+  "special_adapter_required_count": 5,
+  "source_bytes_captured": false,
+  "legal_evidence_captured": false,
+  "database_jobs_created": false,
+  "runtime_activation": false,
+  "proof_binding": false,
+  "sources": [
+    {
+      "source_id": "medicaid-us-nc-state-plan",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 97331,
+      "redirect_count": 0,
+      "parser_profile": "static_html_link_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-nc-clinical-policies",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 127614,
+      "redirect_count": 0,
+      "parser_profile": "static_html_link_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-nc-provider-information",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 73665,
+      "redirect_count": 0,
+      "parser_profile": "static_html_link_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-nc-provider-bulletins",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 68825,
+      "redirect_count": 0,
+      "parser_profile": "static_html_paginated_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-nc-billing-guidance",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 68976,
+      "redirect_count": 0,
+      "parser_profile": "static_html_versioned_documents",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-ga-state-plan",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 157467,
+      "redirect_count": 0,
+      "parser_profile": "static_html_document_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-ga-provider-manuals",
+      "http_status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "response_bytes": 102196,
+      "redirect_count": 0,
+      "parser_profile": "aspnet_server_rendered_paginated_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-ga-provider-notices",
+      "http_status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "response_bytes": 102849,
+      "redirect_count": 0,
+      "parser_profile": "aspnet_server_rendered_paginated_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-ga-provider-information",
+      "http_status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "response_bytes": 55678,
+      "redirect_count": 0,
+      "parser_profile": "aspnet_server_rendered_link_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-ga-public-notices",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "response_bytes": 412088,
+      "redirect_count": 0,
+      "parser_profile": "static_html_paginated_index",
+      "preflight_status": "capture_ready"
+    },
+    {
+      "source_id": "medicaid-us-ca-state-plan",
+      "http_status": 200,
+      "content_type": "text/html",
+      "response_bytes": 962,
+      "redirect_count": 0,
+      "parser_profile": "incapsula_browser_or_linked_document_capture",
+      "preflight_status": "special_adapter_required"
+    },
+    {
+      "source_id": "medicaid-us-ca-eligibility-letters",
+      "http_status": 200,
+      "content_type": "text/html",
+      "response_bytes": 951,
+      "redirect_count": 0,
+      "parser_profile": "incapsula_browser_or_linked_document_capture",
+      "preflight_status": "special_adapter_required"
+    },
+    {
+      "source_id": "medicaid-us-ca-provider-manuals",
+      "http_status": 200,
+      "content_type": "text/html",
+      "response_bytes": 3489,
+      "redirect_count": 0,
+      "parser_profile": "javascript_spa_api_or_browser_capture",
+      "preflight_status": "special_adapter_required"
+    },
+    {
+      "source_id": "medicaid-us-ca-provider-resources",
+      "http_status": 200,
+      "content_type": "text/html",
+      "response_bytes": 960,
+      "redirect_count": 0,
+      "parser_profile": "incapsula_browser_or_linked_document_capture",
+      "preflight_status": "special_adapter_required"
+    },
+    {
+      "source_id": "medicaid-us-ca-waivers",
+      "http_status": 200,
+      "content_type": "text/html",
+      "response_bytes": 952,
+      "redirect_count": 0,
+      "parser_profile": "incapsula_browser_or_linked_document_capture",
+      "preflight_status": "special_adapter_required"
+    }
+  ]
+}

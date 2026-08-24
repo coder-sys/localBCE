@@ -158,10 +158,102 @@ official-source snapshots, deterministic sections, two-pass Claude inference,
 typed drafts, conflict clusters, separate policy/legal decisions, quality
 samples, and corpus release manifests.
 
+Official-source capture is a durable, idempotent PostgreSQL batch. Concurrent
+workers claim fetch jobs with expiring leases, retry transient failures after a
+delay, and atomically bind completed jobs to immutable snapshot and retrieval IDs.
+Starting a later capture requires a new explicit capture ID.
+
+Section extraction is also a durable, versioned queue. Concurrent workers use
+expiring leases and `SKIP LOCKED`; completion atomically activates exactly one
+pipeline version for inference while retaining superseded sections as inactive
+lineage. Section IDs include the snapshot, pipeline, parser identity, ordinal, and
+text hash. Parser changes therefore require an explicit pipeline-version bump, and
+terminal parser failures require an explicit bounded retry action.
+
+Inference completion is atomic with candidate or critique persistence. The
+transaction requires both a live worker-owned inference lease and an active section;
+parser-superseded sections cannot contribute to new drafts, quality cohorts, or
+release candidates. Historical immutable release cohorts retain their exact original
+candidate IDs and hashes.
+Large inference runs page section scheduling and draft materialization instead of
+loading an entire milestone into memory. Reports retain exact aggregate usage and
+queue state while bounding per-request details, so a 5.1k, 51k, or 600k run remains
+resumable without presenting partial drainage as completion.
+The `corpus-progress` command reports per-program quotas and deficits using only the
+currently active source-registry and parser lineage. Raw accepted counts are shown
+separately from conflict-free deterministic candidates and cannot satisfy a milestone
+unless every program reaches its assigned quota.
+Quality cohorts pin the exact candidate, draft hash, source snapshot, parser section,
+source-registry version, and extraction-pipeline version selected for review. A later
+source, parser, candidate, or draft change invalidates that quality work and blocks the
+release instead of reusing stale reviewer evidence.
+
+Before paid inference, a versioned deterministic relevance classifier records
+its decision and sections are scheduled round-robin across programs. Structured
+Claude repairs create new candidate IDs with immutable `repaired_from` lineage.
+Quality samples are planned deterministically with every mandatory risk record
+and at least 20 samples per program; measurements count only after independent,
+hash-bound policy and legal reviews reach conservative consensus.
+Each milestone freezes an immutable, quota-balanced release cohort. Quality,
+review evidence, blocker counts, manifests, and shadow exports are scoped to
+that cohort and use only each candidate's latest draft, preventing cross-release
+reviews or superseded drafts from satisfying a gate.
+Release manifests bind the exact source-registry version and hash, pinned Claude
+model and prompts, balanced quotas, quality verdict, and non-binding flags. The
+standalone release validator recomputes those invariants before shadow export.
+
+Structured source parser v2 preserves eCFR/GovInfo container headings, HTML
+heading levels, list items, table rows, PDF page context, and source node/page
+locators through PostgreSQL and into each Claude request.
+
+Official-link discovery is a separate review-only queue. Discovered `.gov` links
+retain parent snapshot lineage and cannot fetch themselves, edit the source
+registry, activate rules, or bind proofs without a later reviewed registry release.
+Rules-admin decisions are immutable and approval means only
+`approved_for_registry`, not active-source or runtime status. Source approval is
+bound to the exact parent snapshot. Newer different bytes or inactive/mismatched
+parent lineage supersede the candidate and exclude it from registry releases;
+the historical decision remains immutable for audit.
+
+All PostgreSQL reviewer queues use owner-bound, expiring claims with explicit renew
+and release operations. Stale claims are deterministically returned to their queue,
+claim and expiry events are append-only audit records, and an expired owner cannot
+submit a policy, legal, quality, conflict, or source decision.
+
 It targets 600,000 deduplicated discovery candidates across all 51 programs
 through 5,100, 51,000, and 600,000 milestones. A count is not a legal or
 runtime status. Source scarcity fails a quota instead of allowing unofficial
 material to fill it.
+
+The verified PostgreSQL bootstrap currently has 128 configured source entrypoints
+and active source/section coverage across all 51 programs. The source-v2 preflight,
+using contract v8, contains 7,577 official-link lineage rows: 1,029 are eligible for
+human source review, 6,548 are blocked, and 1,697 duplicate program/URL candidates cannot
+inflate corpus volume. The current v13 contract checkpoint contains 13,996 grounded
+candidates and 372 conflict-free deterministic candidates, while retaining zero
+blocking failures for the current active source and inference lineage. Balance,
+not raw volume, is the gate: grounded candidates fill 2,692 of 5,100 quota slots,
+deterministic candidates fill 288 slots, 18 of 51 programs meet the grounded quota,
+and only 1 of 51 programs meets its deterministic quota. Another 13,609 accepted
+candidates lack source-stated effective dates, 13 have conflicting duplicate blockers,
+2 have semantic-duplicate blockers, 129 reviewer tasks are pending, and no
+corpus release exists. The full Python and PostgreSQL integration suites pass, but
+the balanced 5,100 milestone has not passed, the 600,000 corpus has not been
+produced, and every quality, policy, legal, and runtime gate remains incomplete.
+
+`driver_licenses` and `building_permits` remain the immediate balanced-capacity
+blockers, with only three active program sections each. Their discovery queues contain
+51 and 5 blocker-free source links respectively, but all still require human source
+review because deterministic topical scope is not legal or program-authority
+verification. None is approved or eligible to expand the active registry automatically.
+The preflight API exposes these 56 immediate capacity candidates as a deterministic
+review packet pinned to SHA-256
+`661790cf462592e2cf44372cedccea0fe050b743917d7f927a74a903c185db69`.
+Every packet item remains an inactive registry candidate and explicitly records
+`legal_verification=false`, `runtime_activation=false`, and `proof_binding=false`.
+The credential-free `sources-preflight-validate` command independently checks the
+packet hash, ordering, official URLs, scope evidence, completeness, and these
+non-activation flags before reviewers rely on the artifact.
 
 PostgreSQL is not connected to `rust-engine`. Only deterministic, hash-pinned
 shadow exports may cross that boundary. Every scale release and export keeps:

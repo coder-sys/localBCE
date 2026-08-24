@@ -1,0 +1,754 @@
+{
+  "blockers": {
+    "draft_blocker_counts": {
+      "conflicting_duplicate": 13,
+      "missing_effective_date": 14493,
+      "semantic_duplicate": 2
+    },
+    "minimum_additional_physical_sections_lower_bound": 8900,
+    "minimum_additional_program_contexts_lower_bound": 18604,
+    "remaining_medicaid_capture_blockers": [
+      "medicaid-us-ca-eligibility-letters",
+      "medicaid-us-ca-provider-manuals",
+      "medicaid-us-ca-provider-resources",
+      "medicaid-us-ca-state-plan",
+      "medicaid-us-ca-waivers"
+    ]
+  },
+  "canonical_checkpoint_sha256": "bf2959a6ed10e356601983493a23ad5af5d9cb5542a76b9447b149e87b84f531",
+  "checkpoint_scope": "paused_federal_scale_with_medicaid_core_v1_sources",
+  "corpus": {
+    "active_accepted_candidate_count": 15392,
+    "active_accepted_missing_effective_date": 14924,
+    "active_accepted_with_effective_date": 468,
+    "blocked_draft_candidate_count": 14508,
+    "current_draft_candidate_count": 14927,
+    "deterministic_candidate_count": 419,
+    "grounding_status_counts": {
+      "accepted": 17284,
+      "pending": 1425,
+      "rejected": 2601,
+      "repair": 10485
+    },
+    "program_count": 51,
+    "programs": [
+      {
+        "accepted_deficit": 10556,
+        "accepted_grounded_candidates": 1209,
+        "active_program_section_count": 230,
+        "active_source_count": 19,
+        "deterministic_candidates": 41,
+        "deterministic_deficit": 11724,
+        "program": "medicaid",
+        "snapshot_retrieval_count": 4
+      },
+      {
+        "accepted_deficit": 10878,
+        "accepted_grounded_candidates": 887,
+        "active_program_section_count": 312,
+        "active_source_count": 3,
+        "deterministic_candidates": 64,
+        "deterministic_deficit": 11701,
+        "program": "medicare",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 10961,
+        "accepted_grounded_candidates": 804,
+        "active_program_section_count": 172,
+        "active_source_count": 3,
+        "deterministic_candidates": 38,
+        "deterministic_deficit": 11727,
+        "program": "chip",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11726,
+        "accepted_grounded_candidates": 39,
+        "active_program_section_count": 48,
+        "active_source_count": 3,
+        "deterministic_candidates": 24,
+        "deterministic_deficit": 11741,
+        "program": "aca_marketplace",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11033,
+        "accepted_grounded_candidates": 732,
+        "active_program_section_count": 359,
+        "active_source_count": 4,
+        "deterministic_candidates": 8,
+        "deterministic_deficit": 11757,
+        "program": "veterans_health_benefits",
+        "snapshot_retrieval_count": 4
+      },
+      {
+        "accepted_deficit": 11678,
+        "accepted_grounded_candidates": 87,
+        "active_program_section_count": 682,
+        "active_source_count": 4,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "disability_ssi_health_eligibility",
+        "snapshot_retrieval_count": 4
+      },
+      {
+        "accepted_deficit": 6144,
+        "accepted_grounded_candidates": 5621,
+        "active_program_section_count": 956,
+        "active_source_count": 3,
+        "deterministic_candidates": 184,
+        "deterministic_deficit": 11581,
+        "program": "social_security",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11765,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 681,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "ssi",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11446,
+        "accepted_grounded_candidates": 319,
+        "active_program_section_count": 67,
+        "active_source_count": 2,
+        "deterministic_candidates": 4,
+        "deterministic_deficit": 11761,
+        "program": "tanf",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11761,
+        "accepted_grounded_candidates": 4,
+        "active_program_section_count": 6,
+        "active_source_count": 3,
+        "deterministic_candidates": 2,
+        "deterministic_deficit": 11763,
+        "program": "unemployment_insurance",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11763,
+        "accepted_grounded_candidates": 2,
+        "active_program_section_count": 27,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "earned_income_tax_credit",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11694,
+        "accepted_grounded_candidates": 71,
+        "active_program_section_count": 105,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "snap",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11115,
+        "accepted_grounded_candidates": 650,
+        "active_program_section_count": 76,
+        "active_source_count": 2,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "wic",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11706,
+        "accepted_grounded_candidates": 59,
+        "active_program_section_count": 55,
+        "active_source_count": 2,
+        "deterministic_candidates": 5,
+        "deterministic_deficit": 11760,
+        "program": "school_meals",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11692,
+        "accepted_grounded_candidates": 73,
+        "active_program_section_count": 17,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "emergency_food_assistance",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11273,
+        "accepted_grounded_candidates": 492,
+        "active_program_section_count": 137,
+        "active_source_count": 2,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "section_8_housing_choice_voucher",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11505,
+        "accepted_grounded_candidates": 260,
+        "active_program_section_count": 35,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "public_housing",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11424,
+        "accepted_grounded_candidates": 341,
+        "active_program_section_count": 84,
+        "active_source_count": 2,
+        "deterministic_candidates": 5,
+        "deterministic_deficit": 11760,
+        "program": "liheap",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11700,
+        "accepted_grounded_candidates": 65,
+        "active_program_section_count": 60,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "homelessness_assistance",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11763,
+        "accepted_grounded_candidates": 2,
+        "active_program_section_count": 10,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "rental_assistance",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11760,
+        "accepted_grounded_candidates": 5,
+        "active_program_section_count": 29,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "federal_income_tax",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11764,
+        "accepted_grounded_candidates": 1,
+        "active_program_section_count": 25,
+        "active_source_count": 3,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "state_income_tax",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11744,
+        "accepted_grounded_candidates": 21,
+        "active_program_section_count": 33,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "payroll_tax",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11765,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 6,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "sales_tax",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11765,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 6,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "property_tax",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11757,
+        "accepted_grounded_candidates": 8,
+        "active_program_section_count": 43,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "credits_refunds",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11734,
+        "accepted_grounded_candidates": 31,
+        "active_program_section_count": 44,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "professional_licenses",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11706,
+        "accepted_grounded_candidates": 59,
+        "active_program_section_count": 62,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "business_licenses",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11765,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 3,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "driver_licenses",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11765,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 3,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "building_permits",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11651,
+        "accepted_grounded_candidates": 114,
+        "active_program_section_count": 108,
+        "active_source_count": 3,
+        "deterministic_candidates": 16,
+        "deterministic_deficit": 11749,
+        "program": "environmental_permits",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11471,
+        "accepted_grounded_candidates": 294,
+        "active_program_section_count": 214,
+        "active_source_count": 2,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "federal_grants",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11765,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 12,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "state_grants",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11709,
+        "accepted_grounded_candidates": 56,
+        "active_program_section_count": 10378,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11765,
+        "program": "contract_awards",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11291,
+        "accepted_grounded_candidates": 474,
+        "active_program_section_count": 106,
+        "active_source_count": 2,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "vendor_eligibility",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11616,
+        "accepted_grounded_candidates": 149,
+        "active_program_section_count": 214,
+        "active_source_count": 2,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11764,
+        "program": "reporting_compliance",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11374,
+        "accepted_grounded_candidates": 390,
+        "active_program_section_count": 55,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "visas",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11756,
+        "accepted_grounded_candidates": 8,
+        "active_program_section_count": 6,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "work_authorization",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11715,
+        "accepted_grounded_candidates": 49,
+        "active_program_section_count": 16,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "naturalization",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11726,
+        "accepted_grounded_candidates": 38,
+        "active_program_section_count": 10,
+        "active_source_count": 2,
+        "deterministic_candidates": 11,
+        "deterministic_deficit": 11753,
+        "program": "asylum",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11758,
+        "accepted_grounded_candidates": 6,
+        "active_program_section_count": 19,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "identity_verification",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11631,
+        "accepted_grounded_candidates": 133,
+        "active_program_section_count": 234,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "fafsa",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11675,
+        "accepted_grounded_candidates": 89,
+        "active_program_section_count": 37,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "pell_grants",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11640,
+        "accepted_grounded_candidates": 124,
+        "active_program_section_count": 79,
+        "active_source_count": 3,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11763,
+        "program": "student_loans",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11763,
+        "accepted_grounded_candidates": 1,
+        "active_program_section_count": 13,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "veterans_education_benefits",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11592,
+        "accepted_grounded_candidates": 172,
+        "active_program_section_count": 24,
+        "active_source_count": 2,
+        "deterministic_candidates": 8,
+        "deterministic_deficit": 11756,
+        "program": "state_aid",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 10534,
+        "accepted_grounded_candidates": 1230,
+        "active_program_section_count": 214,
+        "active_source_count": 2,
+        "deterministic_candidates": 1,
+        "deterministic_deficit": 11763,
+        "program": "audits",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11738,
+        "accepted_grounded_candidates": 26,
+        "active_program_section_count": 5,
+        "active_source_count": 2,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "penalties",
+        "snapshot_retrieval_count": 2
+      },
+      {
+        "accepted_deficit": 11651,
+        "accepted_grounded_candidates": 113,
+        "active_program_section_count": 26,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "appeals",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11764,
+        "accepted_grounded_candidates": 0,
+        "active_program_section_count": 6,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "due_process",
+        "snapshot_retrieval_count": 3
+      },
+      {
+        "accepted_deficit": 11680,
+        "accepted_grounded_candidates": 84,
+        "active_program_section_count": 81,
+        "active_source_count": 3,
+        "deterministic_candidates": 0,
+        "deterministic_deficit": 11764,
+        "program": "fraud_abuse",
+        "snapshot_retrieval_count": 3
+      }
+    ],
+    "programs_with_accepted_candidates": 44,
+    "programs_with_deterministic_candidates": 22,
+    "raw_grounded_candidate_count": 31795
+  },
+  "duplicates_and_conflicts": {
+    "active_open_conflicts": 8,
+    "silently_merged_conflicts": 0,
+    "stored_clusters": [
+      {
+        "count": 11,
+        "kind": "conflicting_outcome",
+        "status": "open"
+      },
+      {
+        "count": 2,
+        "kind": "semantic_duplicate",
+        "status": "open"
+      }
+    ]
+  },
+  "jobs": {
+    "durable_queue_states": {
+      "reviewer_tasks": {
+        "cancelled": 396,
+        "pending": 176
+      },
+      "section_extraction_jobs": {
+        "completed": 455
+      },
+      "source_fetch_jobs": {
+        "completed": 455
+      }
+    },
+    "inference_job_states": [
+      {
+        "count": 3081,
+        "expired_leases": 0,
+        "pass": 1,
+        "status": "completed"
+      },
+      {
+        "count": 196,
+        "expired_leases": 0,
+        "pass": 1,
+        "status": "failed"
+      },
+      {
+        "count": 4514,
+        "expired_leases": 0,
+        "pass": 1,
+        "status": "pending"
+      },
+      {
+        "count": 108,
+        "expired_leases": 0,
+        "pass": 1,
+        "status": "rejected"
+      },
+      {
+        "count": 2758,
+        "expired_leases": 0,
+        "pass": 2,
+        "status": "completed"
+      },
+      {
+        "count": 8,
+        "expired_leases": 0,
+        "pass": 2,
+        "status": "failed"
+      },
+      {
+        "count": 31,
+        "expired_leases": 0,
+        "pass": 2,
+        "status": "pending"
+      },
+      {
+        "count": 108,
+        "expired_leases": 0,
+        "pass": 2,
+        "status": "rejected"
+      }
+    ],
+    "inference_usage": {
+      "attempts": 6218,
+      "input_tokens": 41910895,
+      "job_count": 10804,
+      "lease_renewals": 7417,
+      "output_tokens": 21021896,
+      "retry_rounds": 31
+    },
+    "paid_inference_paused": true
+  },
+  "medicaid_core_v1": {
+    "active_source_count": 15,
+    "adapter_required_source_ids": [
+      "medicaid-us-ca-eligibility-letters",
+      "medicaid-us-ca-provider-manuals",
+      "medicaid-us-ca-provider-resources",
+      "medicaid-us-ca-state-plan",
+      "medicaid-us-ca-waivers"
+    ],
+    "california_shells_are_legal_evidence": false,
+    "candidates_created": 0,
+    "captured_legal_evidence_source_count": 0,
+    "fetch_job_count": 0,
+    "human_approved_source_count": 0,
+    "legally_verified_source_count": 0,
+    "preflight_status_counts": {
+      "capture_ready": 10,
+      "special_adapter_required": 5
+    },
+    "proof_binding": false,
+    "registry_id": "medicaid-core-nc-ga-ca-v1",
+    "registry_source_count": 15,
+    "rule_family_coverage": {
+      "CA": {
+        "duplicate_claim": 1,
+        "eligibility": 4,
+        "provider_enrollment": 3,
+        "timely_filing": 1
+      },
+      "GA": {
+        "duplicate_claim": 4,
+        "eligibility": 4,
+        "provider_enrollment": 5,
+        "timely_filing": 4
+      },
+      "NC": {
+        "duplicate_claim": 3,
+        "eligibility": 3,
+        "provider_enrollment": 3,
+        "timely_filing": 3
+      }
+    },
+    "runtime_activation": false,
+    "snapshot_count": 0,
+    "source_count": 15,
+    "source_records_only": true,
+    "state_counts": {
+      "CA": 5,
+      "GA": 5,
+      "NC": 5
+    }
+  },
+  "provenance_and_citations": {
+    "accepted_candidates": 15392,
+    "citation_covered": 15392,
+    "evidence_span_present": 15392,
+    "source_snapshot_covered": 15392
+  },
+  "review_legal_and_quality": {
+    "human_approved_medicaid_sources": 0,
+    "legally_verified_medicaid_sources": 0,
+    "passed_release_count": 0,
+    "quality_gate_passed": false,
+    "quality_gates": {
+      "all_mandatory_records_sampled": false,
+      "all_programs_sampled": false,
+      "citation_coverage": true,
+      "deterministic_rerun": false,
+      "evidence_span_precision": false,
+      "minimum_20_samples_per_program": false,
+      "minimum_program_accuracy": false,
+      "minimum_release_sample": false,
+      "no_open_conflicts": false,
+      "no_silently_merged_conflicts": true,
+      "program_classification_accuracy": false,
+      "source_snapshot_coverage": true,
+      "two_role_gold_set": false,
+      "typed_mapping_precision": false
+    },
+    "quality_measurements": {
+      "citation_coverage": 1.0,
+      "evidence_span_precision": 0.0,
+      "minimum_program_accuracy": 0.0,
+      "program_classification_accuracy": 0.0,
+      "source_snapshot_coverage": 1.0,
+      "typed_mapping_precision": 0.0
+    },
+    "quality_sample_count": 0,
+    "release_count": 0,
+    "reviewer_decision_count": 0,
+    "reviewer_decisions": [],
+    "two_role_sample_count": 0
+  },
+  "safety_boundaries": {
+    "candidate_rule_activation": false,
+    "hardcoded_g1_g10_default": true,
+    "human_or_legal_approval_implied": false,
+    "legacy_sqlite_graph_used": false,
+    "production_release_created": false,
+    "proof_binding": false,
+    "proof_bound_candidate_count": 0,
+    "proof_bound_release_count": 0,
+    "rules_active_v1_unchanged_required": true,
+    "runtime_activated_candidate_count": 0,
+    "runtime_activation": false,
+    "runtime_release_count": 0
+  },
+  "schema_version": "localbce-rules-corpus-checkpoint-v1",
+  "source_registries": {
+    "federal_registry_id": "official-51-programs-federal-first-state-seeds-v2",
+    "federal_registry_manifest_sha256": "3d4c537439aaea87384e2827c4052db043bf801cef5a88a217a59d2053a0d6af",
+    "medicaid_preflight_canonical_sha256": "86627d07297873a2314bca6d28ea5af06fea1260ef3a9067670c3d7211baeff5",
+    "medicaid_registry_canonical_sha256": "61122770c46fb16231d54625594ef3c10104292142d33734521cf51b6169ca91",
+    "medicaid_registry_id": "medicaid-core-nc-ga-ca-v1"
+  }
+}

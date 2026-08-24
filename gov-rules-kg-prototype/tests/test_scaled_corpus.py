@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -32,6 +33,7 @@ from gov_rules_kg.scaled_corpus import (
     segment_text,
     validate_typed_rule_draft,
     validate_inference_candidates,
+    validate_release_manifest,
 )
 
 
@@ -62,12 +64,87 @@ class ScaledCorpusTests(unittest.TestCase):
             "evidence": evidence,
         }
 
-    def test_registry_covers_104_sources_and_all_51_programs(self) -> None:
+    def test_registry_covers_128_sources_and_all_51_programs(self) -> None:
         registry = load_source_registry(WORKDIR)
-        self.assertEqual(len(registry["sources"]), 104)
+        self.assertEqual(registry["schema_version"], "localbce-official-source-registry-v2")
+        self.assertEqual(len(registry["sources"]), 128)
         self.assertEqual(len({item["program"] for item in registry["sources"]}), 51)
+        state_sources = [
+            source
+            for source in registry["sources"]
+            if source["jurisdiction"]["level"] == "state"
+        ]
+        self.assertEqual(len(state_sources), 12)
+        self.assertTrue(
+            all(source["jurisdiction"]["state"] == "CA" for source in state_sources)
+        )
         self.assertFalse(registry["runtime_activation"])
         self.assertFalse(registry["proof_binding"])
+
+    def test_registry_rejects_inconsistent_state_metadata(self) -> None:
+        manifest_dir = WORKDIR / "data" / "source_manifests"
+        descriptor = json.loads(
+            (manifest_dir / "official_source_registry_v2.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        pack = json.loads(
+            (manifest_dir / "official_source_pack.json").read_text(encoding="utf-8")
+        )
+        state_source = next(
+            source
+            for source in pack["sources"]
+            if source["jurisdiction_level"] == "state"
+        )
+        state_source["state_code"] = None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_manifest_dir = Path(tmpdir) / "data" / "source_manifests"
+            temp_manifest_dir.mkdir(parents=True)
+            pack_path = temp_manifest_dir / "official_source_pack.json"
+            pack_path.write_text(
+                json.dumps(pack, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            descriptor["source_pack_sha256"] = hashlib.sha256(
+                pack_path.read_bytes()
+            ).hexdigest()
+            descriptor_path = temp_manifest_dir / "official_source_registry_v2.json"
+            descriptor_path.write_text(
+                json.dumps(descriptor, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError, "state source requires a two-letter state_code"
+            ):
+                load_source_registry(Path(tmpdir), descriptor_path)
+
+        state_source["state_code"] = "CA"
+        federal_source = next(
+            source
+            for source in pack["sources"]
+            if source["jurisdiction_level"] == "federal"
+        )
+        federal_source["state_code"] = "CA"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_manifest_dir = Path(tmpdir) / "data" / "source_manifests"
+            temp_manifest_dir.mkdir(parents=True)
+            pack_path = temp_manifest_dir / "official_source_pack.json"
+            pack_path.write_text(
+                json.dumps(pack, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            descriptor["source_pack_sha256"] = hashlib.sha256(
+                pack_path.read_bytes()
+            ).hexdigest()
+            descriptor_path = temp_manifest_dir / "official_source_registry_v2.json"
+            descriptor_path.write_text(
+                json.dumps(descriptor, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError, "federal source must not set state_code"
+            ):
+                load_source_registry(Path(tmpdir), descriptor_path)
 
     def test_balanced_600k_quotas_are_exact(self) -> None:
         quotas = program_quotas()
@@ -177,6 +254,15 @@ class ScaledCorpusTests(unittest.TestCase):
         self.assertEqual(original, candidate_id(section, copy.deepcopy(candidate)))
         candidate["outcome"]["code"] = "ineligible"
         self.assertNotEqual(original, candidate_id(section, candidate))
+        candidate = self.candidate()
+        candidate["authority"]["citation"] = "42 CFR 435.2"
+        self.assertNotEqual(original, candidate_id(section, candidate))
+        candidate = self.candidate()
+        candidate["jurisdiction"] = {"country": "US", "level": "federal", "state": "NY"}
+        self.assertNotEqual(original, candidate_id(section, candidate))
+        candidate = self.candidate()
+        candidate["exceptions"] = ["Emergency eligibility exception applies."]
+        self.assertNotEqual(original, candidate_id(section, candidate))
 
     def test_grounded_candidate_becomes_nonbinding_typed_draft(self) -> None:
         section = self.section()
@@ -234,6 +320,14 @@ class ScaledCorpusTests(unittest.TestCase):
         right["effective_through"] = None
         self.assertFalse(effective_periods_overlap(left, right))
 
+        left["effective_from"] = None
+        right["effective_from"] = "2025-01-01"
+        right["effective_through"] = "2025-12-31"
+        self.assertTrue(effective_periods_overlap(left, right))
+
+        left["effective_through"] = "2024-12-31"
+        self.assertFalse(effective_periods_overlap(left, right))
+
     def test_claude_has_no_local_fallback_and_model_is_pinned(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(ClaudeInferenceError, "no local fallback"):
@@ -280,6 +374,7 @@ class ScaledCorpusTests(unittest.TestCase):
             typed_mapping_precision=0.98,
             program_classification_accuracy=0.95,
             silently_merged_conflicts=0,
+            open_conflicts=1,
             deterministic_rerun_match=True,
             mandatory_unsampled=1,
             two_role_sample_count=1_019,
@@ -290,40 +385,69 @@ class ScaledCorpusTests(unittest.TestCase):
         self.assertFalse(failing["gates"]["minimum_20_samples_per_program"])
         self.assertFalse(failing["gates"]["two_role_gold_set"])
         self.assertFalse(failing["gates"]["all_mandatory_records_sampled"])
+        self.assertFalse(failing["gates"]["no_open_conflicts"])
+        self.assertTrue(failing["gates"]["no_silently_merged_conflicts"])
 
     def test_release_manifest_rejects_duplicates_and_stays_nonbinding(self) -> None:
-        quality = {"passed": False}
-        candidate = {"candidate_id": "cand_" + "1" * 32, "primary_program": all_programs()[0]}
+        quality = quality_gate_report(
+            candidate_count=1,
+            sample_count=0,
+            program_metrics={},
+            source_snapshot_coverage=0.0,
+            citation_coverage=0.0,
+            evidence_span_precision=0.0,
+            typed_mapping_precision=0.0,
+            program_classification_accuracy=0.0,
+            silently_merged_conflicts=0,
+            deterministic_rerun_match=False,
+        )
+        reviewer_evidence = {
+            "schema_version": "localbce-rules-review-export-v1",
+            "runtime_activation": False,
+            "proof_binding": False,
+        }
+        candidate = {
+            "candidate_id": "cand_" + "1" * 32,
+            "primary_program": all_programs()[0],
+            "snapshot_hash": "b" * 64,
+            "section_id": "section-fixture",
+            "evidence_hash": "c" * 64,
+        }
         with self.assertRaisesRegex(ValueError, "duplicate"):
             build_release_manifest(
                 release_id="fixture",
                 target_count=5_100,
                 candidates=[candidate, candidate],
+                source_registry_id="federal-source-registry-v1",
                 source_manifest_hash="a" * 64,
                 quality_report=quality,
                 blocker_counts={},
-                reviewer_evidence={},
+                reviewer_evidence=reviewer_evidence,
             )
         release = build_release_manifest(
             release_id="fixture",
             target_count=5_100,
             candidates=[candidate],
+            source_registry_id="federal-source-registry-v1",
             source_manifest_hash="a" * 64,
             quality_report=quality,
             blocker_counts={},
-            reviewer_evidence={},
+            reviewer_evidence=reviewer_evidence,
         )
+        self.assertEqual(validate_release_manifest(release), [])
         self.assertFalse(release["gates_passed"])
         self.assertFalse(release["runtime_activation"])
         self.assertFalse(release["proof_binding"])
+        self.assertEqual(release["source_snapshot_hashes"], ["b" * 64])
+        self.assertEqual(release["source_snapshot_count"], 1)
+        tampered = copy.deepcopy(release)
+        tampered["source_snapshot_hashes"] = ["d" * 64]
+        self.assertIn(
+            "corpus release source snapshot set hash mismatch",
+            validate_release_manifest(tampered),
+        )
         with self.assertRaisesRegex(ValueError, "fully gated"):
             build_shadow_bundle(release, [candidate])
-        release["gates_passed"] = True
-        release["canonical_release_hash"] = canonical_sha256(
-            {key: value for key, value in release.items() if key != "canonical_release_hash"}
-        )
-        bundle = build_shadow_bundle(release, [candidate])
-        self.assertFalse(bundle["adjudication_effect"])
 
     def test_migration_contract_is_postgres_only_and_concurrent_safe(self) -> None:
         sql = (WORKDIR / "migrations" / "0001_grounded_rules_corpus.sql").read_text(encoding="utf-8")

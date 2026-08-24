@@ -1,7 +1,7 @@
 {
   "discovery_method": "curated_official_entrypoints_no_recursive_crawl_no_search",
   "mode": "official_source_pack",
-  "source_count": 104,
+  "source_count": 128,
   "sources": [
     {
       "discovery_seed": true,
@@ -78,7 +78,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.ecfr.gov/current/title-42/chapter-IV/subchapter-B",
+      "url": "https://www.ecfr.gov/current/title-42/chapter-IV/subchapter-B/part-400",
       "vertical": "healthcare_benefits"
     },
     {
@@ -258,9 +258,9 @@
       "program": "social_security",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.ssa.gov/OP_Home/",
+      "url": "https://www.ecfr.gov/current/title-20/chapter-III/part-404",
       "vertical": "cash_income_benefits"
     },
     {
@@ -321,11 +321,11 @@
       "name": "agent_tanf_25",
       "official": true,
       "program": "tanf",
-      "reason": "official_domain_suffix",
+      "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.acf.hhs.gov/ofa/programs/tanf",
+      "url": "https://www.ecfr.gov/current/title-45/subtitle-B/chapter-II/part-260",
       "vertical": "cash_income_benefits"
     },
     {
@@ -334,11 +334,11 @@
       "name": "agent_tanf_26",
       "official": true,
       "program": "tanf",
-      "reason": "official_domain_suffix",
+      "reason": "preferred_official_host",
       "required": false,
-      "source_type": "manual",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.acf.hhs.gov/ofa/policy-guidance",
+      "url": "https://www.ecfr.gov/current/title-45/subtitle-B/chapter-II/part-261",
       "vertical": "cash_income_benefits"
     },
     {
@@ -414,9 +414,9 @@
       "program": "snap",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.fns.usda.gov/snap/frules",
+      "url": "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-C/part-271",
       "vertical": "food_nutrition_benefits"
     },
     {
@@ -427,9 +427,9 @@
       "program": "snap",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "manual",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.fns.usda.gov/snap/state-guidance",
+      "url": "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-C/part-273",
       "vertical": "food_nutrition_benefits"
     },
     {
@@ -455,7 +455,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.fns.usda.gov/wic/regulations",
+      "url": "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-A/part-246",
       "vertical": "food_nutrition_benefits"
     },
     {
@@ -481,7 +481,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.fns.usda.gov/cn/regulations",
+      "url": "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-A/part-210",
       "vertical": "food_nutrition_benefits"
     },
     {
@@ -507,7 +507,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.fns.usda.gov/tefap/regulations",
+      "url": "https://www.ecfr.gov/current/title-7/subtitle-B/chapter-II/subchapter-B/part-251",
       "vertical": "food_nutrition_benefits"
     },
     {
@@ -518,9 +518,9 @@
       "program": "section_8_housing_choice_voucher",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "manual",
       "state_code": null,
-      "url": "https://www.hud.gov/program_offices/public_indian_housing/programs/hcv",
+      "url": "https://www.hud.gov/helping-americans/housing-choice-vouchers-guidance",
       "vertical": "housing_benefits"
     },
     {
@@ -533,7 +533,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.hud.gov/program_offices/public_indian_housing/programs/hcv/laws-regulations",
+      "url": "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-IX/part-982",
       "vertical": "housing_benefits"
     },
     {
@@ -568,11 +568,11 @@
       "name": "agent_liheap_44",
       "official": true,
       "program": "liheap",
-      "reason": "official_domain_suffix",
+      "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.acf.hhs.gov/ocs/programs/liheap",
+      "url": "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-A/part-96/subpart-H",
       "vertical": "housing_benefits"
     },
     {
@@ -581,11 +581,11 @@
       "name": "agent_liheap_45",
       "official": true,
       "program": "liheap",
-      "reason": "official_domain_suffix",
+      "reason": "preferred_official_host",
       "required": false,
-      "source_type": "manual",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.acf.hhs.gov/ocs/policy-guidance/liheap",
+      "url": "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-A/part-96",
       "vertical": "housing_benefits"
     },
     {
@@ -596,9 +596,9 @@
       "program": "homelessness_assistance",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.hudexchange.info/homelessness-assistance/",
+      "url": "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-V/part-578",
       "vertical": "housing_benefits"
     },
     {
@@ -635,9 +635,9 @@
       "program": "rental_assistance",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "manual",
       "state_code": null,
-      "url": "https://www.hud.gov/program_offices/public_indian_housing/programs/hcv",
+      "url": "https://www.hud.gov/helping-americans/housing-choice-vouchers-guidance",
       "vertical": "housing_benefits"
     },
     {
@@ -741,7 +741,7 @@
       "required": false,
       "source_type": "agency_guidance",
       "state_code": null,
-      "url": "https://www.usa.gov/property-tax",
+      "url": "https://www.usa.gov/state-taxes",
       "vertical": "tax_revenue_transactions"
     },
     {
@@ -780,7 +780,7 @@
       "required": false,
       "source_type": "agency_guidance",
       "state_code": null,
-      "url": "https://www.usa.gov/professional-licenses",
+      "url": "https://www.dol.gov/sites/dolgov/files/VETS/files/CareerCredentials_PG_Interactive_Feb2026.pdf",
       "vertical": "licensing_permits"
     },
     {
@@ -997,11 +997,11 @@
       "name": "agent_visas_77",
       "official": true,
       "program": "visas",
-      "reason": "official_domain_suffix",
+      "reason": "preferred_official_host",
       "required": false,
-      "source_type": "agency_guidance",
+      "source_type": "regulation",
       "state_code": null,
-      "url": "https://travel.state.gov/content/travel/en/us-visas.html",
+      "url": "https://www.ecfr.gov/current/title-22/chapter-I/subchapter-E/part-41",
       "vertical": "immigration_identity"
     },
     {
@@ -1207,9 +1207,9 @@
       "program": "veterans_education_benefits",
       "reason": "preferred_official_host",
       "required": false,
-      "source_type": "faq_public_guidance",
+      "source_type": "agency_guidance",
       "state_code": null,
-      "url": "https://www.va.gov/resources/gi-bill-and-other-va-education-benefits/",
+      "url": "https://www.va.gov/education/about-gi-bill-benefits/",
       "vertical": "education_benefits"
     },
     {
@@ -1261,7 +1261,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.ecfr.gov/",
+      "url": "https://www.ecfr.gov/current/title-28/chapter-I/part-85",
       "vertical": "compliance_enforcement"
     },
     {
@@ -1287,7 +1287,7 @@
       "required": false,
       "source_type": "regulation",
       "state_code": null,
-      "url": "https://www.ecfr.gov/",
+      "url": "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-A/part-16",
       "vertical": "compliance_enforcement"
     },
     {
@@ -1353,6 +1353,318 @@
       "source_type": "agency_guidance",
       "state_code": null,
       "url": "https://www.justice.gov/civil/false-claims-act",
+      "vertical": "compliance_enforcement"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_veterans_health_benefits_105",
+      "official": true,
+      "program": "veterans_health_benefits",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-38/chapter-I/part-17",
+      "vertical": "healthcare_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_disability_ssi_health_eligibility_106",
+      "official": true,
+      "program": "disability_ssi_health_eligibility",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-20/chapter-III/part-416",
+      "vertical": "healthcare_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_ssi_107",
+      "official": true,
+      "program": "ssi",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-20/chapter-III/part-416",
+      "vertical": "cash_income_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_public_housing_108",
+      "official": true,
+      "program": "public_housing",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-24/subtitle-B/chapter-IX/part-960",
+      "vertical": "housing_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_environmental_permits_109",
+      "official": true,
+      "program": "environmental_permits",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-40/chapter-I/subchapter-D/part-122",
+      "vertical": "licensing_permits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_contract_awards_110",
+      "official": true,
+      "program": "contract_awards",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-48/chapter-1",
+      "vertical": "procurement_grants"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_naturalization_111",
+      "official": true,
+      "program": "naturalization",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-8/chapter-I/subchapter-C/part-316",
+      "vertical": "immigration_identity"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_fafsa_112",
+      "official": true,
+      "program": "fafsa",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-668",
+      "vertical": "education_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_pell_grants_113",
+      "official": true,
+      "program": "pell_grants",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-690",
+      "vertical": "education_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_student_loans_114",
+      "official": true,
+      "program": "student_loans",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-34/subtitle-B/chapter-VI/part-685",
+      "vertical": "education_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_state_aid_115",
+      "official": true,
+      "program": "state_aid",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "form_instruction",
+      "state_code": null,
+      "url": "https://studentaid.gov/sites/default/files/2026-27-fafsa-form.pdf",
+      "vertical": "education_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "federal",
+      "name": "agent_fraud_abuse_116",
+      "official": true,
+      "program": "fraud_abuse",
+      "reason": "preferred_official_host",
+      "required": false,
+      "source_type": "regulation",
+      "state_code": null,
+      "url": "https://www.ecfr.gov/current/title-42/chapter-V/subchapter-B/part-1001",
+      "vertical": "compliance_enforcement"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_building_permits_117",
+      "official": true,
+      "program": "building_permits",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=HSC",
+      "vertical": "licensing_permits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_driver_licenses_118",
+      "official": true,
+      "program": "driver_licenses",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=VEH",
+      "vertical": "licensing_permits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_professional_licenses_119",
+      "official": true,
+      "program": "professional_licenses",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=BPC",
+      "vertical": "licensing_permits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_business_licenses_120",
+      "official": true,
+      "program": "business_licenses",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=BPC",
+      "vertical": "licensing_permits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_state_income_tax_121",
+      "official": true,
+      "program": "state_income_tax",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=RTC",
+      "vertical": "tax_revenue_transactions"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_sales_tax_122",
+      "official": true,
+      "program": "sales_tax",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=RTC",
+      "vertical": "tax_revenue_transactions"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_property_tax_123",
+      "official": true,
+      "program": "property_tax",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=RTC",
+      "vertical": "tax_revenue_transactions"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_unemployment_insurance_124",
+      "official": true,
+      "program": "unemployment_insurance",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=UIC",
+      "vertical": "cash_income_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_state_grants_125",
+      "official": true,
+      "program": "state_grants",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=EDC",
+      "vertical": "procurement_grants"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_rental_assistance_126",
+      "official": true,
+      "program": "rental_assistance",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=HSC",
+      "vertical": "housing_benefits"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_appeals_127",
+      "official": true,
+      "program": "appeals",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=GOV",
+      "vertical": "compliance_enforcement"
+    },
+    {
+      "discovery_seed": true,
+      "jurisdiction_level": "state",
+      "name": "agent_due_process_128",
+      "official": true,
+      "program": "due_process",
+      "reason": "official_domain_suffix",
+      "required": false,
+      "source_type": "statute",
+      "state_code": "CA",
+      "url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=GOV",
       "vertical": "compliance_enforcement"
     }
   ]
