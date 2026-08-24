@@ -415,7 +415,6 @@ def _graph_input(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureCo
                 record_id=_graph_record_id(graph_profile, 1, context, (resource_digests["PractitionerRole"], resource_digests["Location"])),
             ),
         ],
-        "prior_artifact": None, "remediation": None, "parity_cases": [],
     }
     return _canonical(value)
 

@@ -20,6 +20,7 @@ from app.mirror import external_source_adapter_independent as external
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_GRAPH_PROFILE_REGISTRY, NC_MEDICAID_PROFILE
 from app.mirror import provider_trust_graph_independent as graph
+from app.mirror import external_corrective_action_independent as corrective_action
 from app.mirror.error_boundary import raise_redacted
 
 
@@ -57,7 +58,7 @@ TABLE_COLUMNS = {
     ),
 }
 ARTIFACT_KINDS = (
-    "GRAPH", "SOURCE_OBSERVATION", "RECONCILIATION", "GOVERNANCE", "PRIVACY", "CASE",
+    "GRAPH", "SOURCE_OBSERVATION", "RECONCILIATION", "GOVERNANCE", "PRIVACY", "CASE", "CASE_ACTION",
 )
 SESSION_STATES = ("OPEN", "RUNNING", "PAUSED")
 OBSERVATION_RESULTS = ("PARITY", "DISCREPANCY", "INDETERMINATE")
@@ -69,11 +70,6 @@ FIXED_FLAGS = {
     "proofSuiteId": None,
 }
 EVENT_KINDS = ("ARTIFACT", "SESSION_OPEN", "SESSION_START", "OBSERVATION", "SESSION_PAUSE")
-CASE_EDGES = {
-    "OPEN": {"RESPONSIBILITY"}, "RESPONSIBILITY": {"REMEDIATION"},
-    "REMEDIATION": {"RETEST"}, "RETEST": {"PERSISTENCE"},
-    "PERSISTENCE": {"RESOLVED", "SUPERSEDED"},
-}
 SESSION_MATERIAL_FIELDS = (
     "session_id", "state", "source_artifact_id", "governance_artifact_id",
     "privacy_artifact_id", "last_slot",
@@ -627,6 +623,123 @@ def _authority_staleness(
     return None
 
 
+def _graph_profile_from_artifact(value: Mapping[str, object]) -> graph._GraphProfile:
+    """Reconstruct a bounded dynamic graph profile for structural replay.
+
+    The profile is intentionally derived only for the structural-only Core
+    lane.  When an Ingress image is supplied, source admission binds the same
+    artifact to the FHIR-derived profile before Core claims ingress_bound.
+    """
+
+    subject_value = value.get("subject")
+    profile_value = value.get("profile")
+    snapshot_value = value.get("observation_snapshot")
+    sources_value = value.get("source_coverage")
+    if (
+        not isinstance(subject_value, Mapping)
+        or set(subject_value) != {"provider_graph_subject", "scope"}
+        or not isinstance(profile_value, Mapping)
+        or set(profile_value) != {"profile_id", "version", "profile_digest"}
+        or not isinstance(snapshot_value, Mapping)
+        or not isinstance(sources_value, list)
+        or len(sources_value) != 2
+    ):
+        raise CoreVerificationError("core:graph")
+    subject = subject_value.get("provider_graph_subject")
+    scope = subject_value.get("scope")
+    profile_id = profile_value.get("profile_id")
+    version = profile_value.get("version")
+    profile_digest = profile_value.get("profile_digest")
+    observation_time = snapshot_value.get("observation_time")
+    if (
+        type(subject) is not str
+        or type(scope) is not str
+        or type(profile_id) is not str
+        or type(version) is not int
+        or type(profile_digest) is not str
+        or type(observation_time) is not int
+    ):
+        raise CoreVerificationError("core:graph")
+    _hex(profile_digest, "core:graph")
+    role_ids: list[str] = []
+    source_kinds: list[str] = []
+    record_kinds: list[str] = []
+    authority_ids: list[str] = []
+    provenance_ids: list[str] = []
+    credential_id: str | None = None
+    enrollment_id: str | None = None
+    effective_start: int | None = None
+    effective_end: int | None = None
+    for source in sources_value:
+        if not isinstance(source, Mapping):
+            raise CoreVerificationError("core:graph")
+        records = source.get("records")
+        provenance = source.get("provenance")
+        if not isinstance(records, list) or len(records) != 1 or not isinstance(provenance, Mapping):
+            raise CoreVerificationError("core:graph")
+        record = records[0]
+        role_id = source.get("source_id")
+        source_kind = source.get("source_kind")
+        record_kind = record.get("record_kind") if isinstance(record, Mapping) else None
+        authority = source.get("coverage_authority_id")
+        provenance_id = provenance.get("provenance_id")
+        if not all(type(item) is str and item for item in (role_id, source_kind, record_kind, authority, provenance_id)):
+            raise CoreVerificationError("core:graph")
+        role_ids.append(role_id)
+        source_kinds.append(source_kind)
+        record_kinds.append(record_kind)
+        authority_ids.append(authority)
+        provenance_ids.append(provenance_id)
+        if not isinstance(record, Mapping) or record.get("provider_id") != subject:
+            raise CoreVerificationError("core:graph")
+        credential = record.get("credential_id")
+        enrollment = record.get("enrollment_id")
+        if type(credential) is not str or type(enrollment) is not str:
+            raise CoreVerificationError("core:graph")
+        if record_kind == "CREDENTIAL":
+            credential_id = credential
+        elif record_kind == "ENROLLMENT":
+            enrollment_id = enrollment
+        else:
+            raise CoreVerificationError("core:graph")
+        start = source.get("coverage_effective_start")
+        end = source.get("coverage_effective_end")
+        if type(start) is not int or type(end) is not int:
+            raise CoreVerificationError("core:graph")
+        if effective_start is None:
+            effective_start, effective_end = start, end
+        elif (start, end) != (effective_start, effective_end):
+            raise CoreVerificationError("core:graph")
+    if credential_id is None or enrollment_id is None or effective_start is None or effective_end is None:
+        raise CoreVerificationError("core:graph")
+    try:
+        return graph._GraphProfile(
+            True,
+            graph.SCHEMA_V2,
+            profile_id,
+            version,
+            profile_digest,
+            subject,
+            scope,
+            credential_id,
+            enrollment_id,
+            subject + "|" + credential_id + "|" + enrollment_id,
+            tuple(role_ids),
+            tuple(source_kinds),
+            tuple(record_kinds),
+            tuple(authority_ids),
+            tuple(provenance_ids),
+            observation_time,
+            observation_time + 1,
+            effective_start,
+            effective_end,
+            False,
+            False,
+        )
+    except Exception:
+        raise CoreVerificationError("core:graph") from None
+
+
 def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, object]) -> dict[str, object]:
     if tuple(row.keys()) != TABLE_COLUMNS["core_artifacts"]:
         raise CoreVerificationError("core:artifact-columns")
@@ -635,7 +748,7 @@ def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, objec
         raise CoreVerificationError("core:artifact-raw")
     value = _parse(raw, "core:artifact")
     kind = row["kind"]
-    if kind not in ARTIFACT_KINDS or (kind != "GRAPH" and value.get("kind") != kind):
+    if kind not in ARTIFACT_KINDS or (kind not in {"GRAPH", "CASE_ACTION"} and value.get("kind") != kind) or (kind == "CASE_ACTION" and value.get("kind") != "CORRECTIVE_ACTION"):
         raise CoreVerificationError("core:artifact-kind")
     elif kind == "SOURCE_OBSERVATION":
         _verify_source_projection(value, config)
@@ -654,18 +767,38 @@ def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, objec
         if kind == "PRIVACY" and (value["privacy_decision"] not in {"GRANTED", "DENIED", "WITHDRAWN"} or value["support_decision"] not in {"GRANTED", "DENIED", "WITHDRAWN"}):
             raise CoreVerificationError("core:privacy")
     elif kind == "CASE":
-        expected = {"schema", "schema_version", "kind", "artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "state", "responsibility", "remediation", "retest", "parity", "reason", "flags"}
-        if set(value) != expected or value["schema"] != "mirror-core-case-v3" or value["schema_version"] != 3 or value["flags"] != FIXED_FLAGS or value["state"] not in {"OPEN", "RESPONSIBILITY", "REMEDIATION", "RETEST", "PERSISTENCE", "RESOLVED", "SUPERSEDED"}:
+        expected = {"schema", "schema_version", "kind", "artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "graph_artifact_id", "graph_report_id", "graph_profile_digest", "subject_digest", "target_finding_ids", "target_finding_kinds", "state", "responsibility", "reason", "action_artifact_id", "action_observed_at", "retest_source_artifact_id", "retest_graph_artifact_id", "retest_observation_time", "flags"}
+        if set(value) != expected or value["schema"] != "mirror-core-case-v4" or value["schema_version"] != 4 or value["flags"] != FIXED_FLAGS or value["state"] not in {"OPEN", "ACTION_RECORDED", "RETEST_FAILED_OR_INDETERMINATE", "RESOLVED", "SUPERSEDED"} or value["responsibility"] != "UNKNOWN":
             raise CoreVerificationError("core:case")
-        for key in ("artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id"):
+        for key in ("artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "graph_artifact_id", "graph_report_id", "graph_profile_digest", "subject_digest"):
             _hex(value[key], "core:case")
-        if value["responsibility"] not in {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"} or value["remediation"] not in {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"} or value["retest"] not in {"UNREQUESTED", "REQUESTED", "EXECUTED"} or value["parity"] not in {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"} or value["reason"] not in {"SOURCE_CHANGED", "SOURCE_INCOMPLETE", "SOURCE_CONFLICTED", "OBSERVATION_ONLY"}:
-            raise CoreVerificationError("core:case")
+        ids = value["target_finding_ids"]; kinds = value["target_finding_kinds"]
+        if not isinstance(ids, list) or not isinstance(kinds, list) or not ids or len(ids) != len(kinds) or ids != sorted(ids) or len(set(ids)) != len(ids):
+            raise CoreVerificationError("core:case-findings")
+        for item in ids: _hex(item, "core:case-finding")
+        for item in kinds:
+            if type(item) is not str or not item:
+                raise CoreVerificationError("core:case-finding")
+        if value["reason"] not in {"ACTIONABLE_FINDING", "ACTION_VERIFIED", "ALL_TARGET_FINDINGS_CLEARED", "TARGET_FINDINGS_REMAIN", "RETEST_INDETERMINATE"}:
+            raise CoreVerificationError("core:case-reason")
+        for key in ("action_artifact_id", "retest_source_artifact_id", "retest_graph_artifact_id"):
+            if value[key] is not None: _hex(value[key], "core:case-link")
+        for key in ("action_observed_at", "retest_observation_time"):
+            if value[key] is not None and (type(value[key]) is not int or value[key] < 0):
+                raise CoreVerificationError("core:case-time")
+        if value["state"] == "OPEN" and any(value[key] is not None for key in ("action_artifact_id", "action_observed_at", "retest_source_artifact_id", "retest_graph_artifact_id", "retest_observation_time")):
+            raise CoreVerificationError("core:case-state")
+    elif kind == "CASE_ACTION":
+        try:
+            corrective_action.verify_artifact(raw)
+        except Exception:
+            raise CoreVerificationError("core:case-action")
     expected_profile = {
         "GRAPH": row["profile_digest"],
         "SOURCE_OBSERVATION": config["runtime_profile_digest"],
         "RECONCILIATION": config["runtime_profile_digest"],
         "CASE": config["runtime_profile_digest"],
+        "CASE_ACTION": config["runtime_profile_digest"],
         "GOVERNANCE": config["governance_policy_digest"],
         "PRIVACY": config["privacy_policy_digest"],
     }[kind]
@@ -688,6 +821,8 @@ def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, objec
         expected_state = value["decision"]
     elif kind == "PRIVACY":
         expected_state = value["privacy_decision"]
+    elif kind == "CASE_ACTION":
+        expected_state = "ACTION_RECORDED"
     else:
         expected_state = value["state"]
     if row["current_state"] != expected_state:
@@ -741,13 +876,92 @@ def _check_common(value: Mapping[str, object]) -> None:
 def _expected_case_request(raw: bytes, predecessor_id: str | None) -> tuple[str, str]:
     case = _parse(raw, "core:case")
     if predecessor_id is None:
-        return _digest("case-operation", {"case_id": case["case_id"]}), _digest("case-request", {"reconciliation_artifact_id": case["reconciliation_artifact_id"]})
-    supplied = {"responsibility": None, "remediation": None, "retest": None, "parity": None}
-    field = {"RESPONSIBILITY": "responsibility", "REMEDIATION": "remediation", "RETEST": "retest", "PERSISTENCE": "parity"}.get(str(case["state"]))
-    if field is not None:
-        supplied[field] = case[field]
-    material = {"case_artifact_id": predecessor_id, "next_state": case["state"], **supplied}
+        return _digest("case-operation", {"case_id": case["case_id"]}), _digest("case-request", {"reconciliation_artifact_id": case["reconciliation_artifact_id"], "case_id": case["case_id"]})
+    material = {
+        "case_artifact_id": predecessor_id,
+        "action_artifact_id": case.get("action_artifact_id"),
+        "retest_source_artifact_id": case.get("retest_source_artifact_id"),
+        "retest_observation_time": case.get("retest_observation_time"),
+        "state": case["state"],
+        "reason": case["reason"],
+    }
+    if case["state"] == "ACTION_RECORDED":
+        return _digest("case-transition-operation", {"case_artifact_id": predecessor_id, "action_artifact_id": case["action_artifact_id"], "transition": "ACTION_RECORDED"}), _digest("case-transition-request", {"case_artifact_id": predecessor_id, "action_artifact_id": case["action_artifact_id"], "transition": "ACTION_RECORDED"})
+    if case["state"] in {"RESOLVED", "RETEST_FAILED_OR_INDETERMINATE"}:
+        return _digest("case-evaluate-operation", {"case_artifact_id": predecessor_id, "later_source_artifact_id": case["retest_source_artifact_id"]}), _digest("case-evaluate-request", {"case_artifact_id": predecessor_id, "later_source_artifact_id": case["retest_source_artifact_id"], "state": case["state"], "reason": case["reason"]})
     return _digest("case-transition-operation", material), _digest("case-transition-request", material)
+
+
+def _expected_open_case(
+    case: Mapping[str, object],
+    reconciliation: Mapping[str, object],
+    source: Mapping[str, object],
+    graph_value: Mapping[str, object],
+    config: Mapping[str, object],
+) -> dict[str, object]:
+    if (
+        reconciliation.get("kind") != "RECONCILIATION"
+        or reconciliation.get("current_source_artifact_id") != case.get("source_artifact_id")
+        or source.get("graph_artifact_id") != case.get("graph_artifact_id")
+        or not isinstance(graph_value.get("subject"), Mapping)
+        or not isinstance(graph_value.get("profile"), Mapping)
+        or not isinstance(graph_value.get("report"), Mapping)
+    ):
+        raise CoreVerificationError("core:case-semantic")
+    findings = graph_value.get("findings")
+    if not isinstance(findings, list):
+        raise CoreVerificationError("core:case-semantic")
+    actionable = [item for item in findings if isinstance(item, Mapping) and item.get("kind") != "CONTINUITY_CONFIRMED"]
+    if not actionable:
+        raise CoreVerificationError("core:case-semantic")
+    try:
+        ordered = sorted(actionable, key=lambda item: str(item["finding_id"]))
+        target_ids = [str(item["finding_id"]) for item in ordered]
+        target_kinds = [str(item["kind"]) for item in ordered]
+        report_id = str(graph_value["report"]["report_id"])
+        graph_profile_digest = str(graph_value["profile"]["profile_digest"])
+        subject_digest = _digest("case-subject", graph_value["subject"])
+        case_id = _digest(
+            "case-id",
+            {
+                "reconciliation_artifact_id": case["reconciliation_artifact_id"],
+                "source_artifact_id": case["source_artifact_id"],
+                "graph_artifact_id": source["graph_artifact_id"],
+                "graph_report_id": report_id,
+                "profile_digest": config["runtime_profile_digest"],
+                "subject_digest": subject_digest,
+                "target_finding_ids": target_ids,
+                "target_finding_kinds": target_kinds,
+            },
+        )
+    except (KeyError, TypeError, ValueError):
+        raise CoreVerificationError("core:case-semantic") from None
+    expected = {
+        "schema": "mirror-core-case-v4",
+        "schema_version": 4,
+        "kind": "CASE",
+        "artifact_id": "",
+        "case_id": case_id,
+        "reconciliation_artifact_id": case["reconciliation_artifact_id"],
+        "source_artifact_id": case["source_artifact_id"],
+        "graph_artifact_id": source["graph_artifact_id"],
+        "graph_report_id": report_id,
+        "graph_profile_digest": graph_profile_digest,
+        "subject_digest": subject_digest,
+        "target_finding_ids": target_ids,
+        "target_finding_kinds": target_kinds,
+        "state": "OPEN",
+        "responsibility": "UNKNOWN",
+        "reason": "ACTIONABLE_FINDING",
+        "action_artifact_id": None,
+        "action_observed_at": None,
+        "retest_source_artifact_id": None,
+        "retest_graph_artifact_id": None,
+        "retest_observation_time": None,
+        "flags": dict(FIXED_FLAGS),
+    }
+    expected["artifact_id"] = _digest("case-artifact", {key: expected[key] for key in expected if key != "artifact_id"})
+    return expected
 
 
 def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_path: str | Path | None = None, ingress_bytes: bytes | None = None) -> dict[str, object]:
@@ -840,7 +1054,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
             stream_sequences[stream_key] = int(value["sequence"])
             previous_root = str(value["after_root"])
             if kind == "ARTIFACT":
-                if value["prior_state"] != "NONE" or value["next_state"] not in ARTIFACT_KINDS or value["stream_kind"] != "ARTIFACT":
+                if value["prior_state"] != "NONE" or value["next_state"] not in ARTIFACT_KINDS or value["stream_kind"] not in {"ARTIFACT", "CASE_ACTION"}:
                     raise CoreVerificationError("core:event-artifact")
                 artifact_id = str(material["artifact_id"])
                 row_artifact = actual_artifacts.get(artifact_id)
@@ -852,7 +1066,12 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                 if type(raw_artifact) is not bytes or material["raw_length"] != len(raw_artifact) or material["raw_digest"] != _raw_digest("artifact-bytes", raw_artifact) or value["payload_digest"] != artifact_id or value["payload_length"] != len(raw_artifact):
                     raise CoreVerificationError("core:event-artifact")
                 parsed_artifact = _verify_artifact_value(row_artifact, config)
-                expected_stream_id = str(parsed_artifact["case_id"]) if material["kind"] == "CASE" else str(material["kind"])
+                if material["kind"] == "CASE":
+                    expected_stream_id = str(parsed_artifact["case_id"])
+                elif material["kind"] == "CASE_ACTION":
+                    expected_stream_id = str(parsed_artifact["policy"]["case_id"])
+                else:
+                    expected_stream_id = str(material["kind"])
                 if value["stream_id"] != expected_stream_id:
                     raise CoreVerificationError("core:case-stream")
                 predecessor_id = material["predecessor_id"]
@@ -862,9 +1081,13 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                     graph_digest = _raw_digest("graph-artifact", raw_artifact)
                     try:
                         graph_value = graph._parse(raw_artifact)
-                        profile_value = graph_value.get("profile")
-                        if not isinstance(profile_value, dict) or profile_value.get("profile_id") != NC_MEDICAID_PROFILE.source_profile_id or profile_value.get("version") != 3 or profile_value.get("profile_digest") != row_artifact["profile_digest"]:
+                        graph_profile = _graph_profile_from_artifact(graph_value)
+                        if graph_profile.profile_id != NC_MEDICAID_PROFILE.source_profile_id or graph_profile.version != 3 or graph_profile.profile_digest != row_artifact["profile_digest"]:
                             raise CoreVerificationError("core:graph")
+                        checked_graph = graph._new_graph_checked(
+                            raw_artifact,
+                            {graph_profile.profile_id: graph_profile},
+                        )
                     except CoreVerificationError:
                         raise
                     except Exception:
@@ -875,6 +1098,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                     graph_report_ids[artifact_id] = graph_report_id
                     graph_digests[artifact_id] = graph_digest
                     admission_graph_digests[artifact_id] = _admission_raw_digest("graph-artifact", raw_artifact)
+                    graph_checks[artifact_id] = checked_graph
                     expected_operation = _digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                     expected_request = _digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                 elif material["kind"] == "SOURCE_OBSERVATION":
@@ -887,6 +1111,9 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                     approval_digest = _raw_digest("approval", raw_artifact)
                     expected_operation = _digest("approval-operation", {"kind": material["kind"], "raw": approval_digest})
                     expected_request = _digest("approval-request", {"kind": material["kind"], "raw": approval_digest})
+                elif material["kind"] == "CASE_ACTION":
+                    expected_operation = _digest("case-action-operation", {"action_id": parsed_artifact["artifact_id"], "case_id": parsed_artifact["policy"]["case_id"]})
+                    expected_request = _digest("case-action-request", {"action_id": parsed_artifact["artifact_id"], "case_id": parsed_artifact["policy"]["case_id"], "evidence_digest": parsed_artifact["assertion"]["evidence_sha3_512"]})
                 else:
                     expected_operation, expected_request = _expected_case_request(raw_artifact, predecessor_id)
                 if value["operation_id"] != expected_operation or value["request_digest"] != expected_request:
@@ -950,16 +1177,140 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                     case = parsed_artifact
                     if row_artifact["source_artifact_id"] != case["source_artifact_id"]:
                         raise CoreVerificationError("core:case-source")
+                    reconciliation_row = expected_artifacts.get(str(case["reconciliation_artifact_id"]))
+                    source_row = expected_artifacts.get(str(case["source_artifact_id"]))
+                    if (
+                        reconciliation_row is None
+                        or reconciliation_row["kind"] != "RECONCILIATION"
+                        or source_row is None
+                        or source_row["kind"] != "SOURCE_OBSERVATION"
+                    ):
+                        raise CoreVerificationError("core:case-semantic")
+                    reconciliation_value = _parse(reconciliation_row["raw"], "core:case-reconciliation")
+                    source_value = _parse(source_row["raw"], "core:case-source")
+                    graph_row = expected_artifacts.get(str(source_value["graph_artifact_id"]))
+                    if graph_row is None or graph_row["kind"] != "GRAPH":
+                        raise CoreVerificationError("core:case-semantic")
+                    graph_value = _parse(graph_row["raw"], "core:case-graph")
                     if case["state"] == "OPEN":
-                        if predecessor_id is not None:
+                        if predecessor_id is not None or case != _expected_open_case(case, reconciliation_value, source_value, graph_value, config):
                             raise CoreVerificationError("core:case-chain")
                     else:
                         prior = expected_artifacts.get(str(predecessor_id))
                         if prior is None or prior["kind"] != "CASE":
                             raise CoreVerificationError("core:case-chain")
                         prior_case = _parse(prior["raw"], "core:artifact")
-                        if case["case_id"] != prior_case["case_id"] or case["reconciliation_artifact_id"] != prior_case["reconciliation_artifact_id"] or case["source_artifact_id"] != prior_case["source_artifact_id"] or case["state"] not in CASE_EDGES.get(prior_case["state"], set()):
+                        if case["case_id"] != prior_case["case_id"] or case["reconciliation_artifact_id"] != prior_case["reconciliation_artifact_id"] or case["source_artifact_id"] != prior_case["source_artifact_id"] or case["graph_artifact_id"] != prior_case["graph_artifact_id"] or case["target_finding_ids"] != prior_case["target_finding_ids"] or case["target_finding_kinds"] != prior_case["target_finding_kinds"]:
                             raise CoreVerificationError("core:case-chain")
+                        if prior_case["state"] == "OPEN" and case["state"] != "ACTION_RECORDED":
+                            raise CoreVerificationError("core:case-chain")
+                        if prior_case["state"] == "ACTION_RECORDED" and case["state"] not in {"RESOLVED", "RETEST_FAILED_OR_INDETERMINATE"}:
+                            raise CoreVerificationError("core:case-chain")
+                        if case["state"] == "ACTION_RECORDED" and (case["action_artifact_id"] is None or case["action_observed_at"] is None):
+                            raise CoreVerificationError("core:case-action")
+                        if case["state"] == "ACTION_RECORDED":
+                            action_value = None
+                            action_row_id = None
+                            for candidate_row in expected_artifacts.values():
+                                if candidate_row["kind"] != "CASE_ACTION":
+                                    continue
+                                candidate_value = _parse(candidate_row["raw"], "core:case-action")
+                                if candidate_row["artifact_id"] == case["action_artifact_id"]:
+                                    action_value = candidate_value
+                                    action_row_id = candidate_row["artifact_id"]
+                                    break
+                            if action_value is None or action_row_id is None:
+                                raise CoreVerificationError("core:case-action")
+                            policy = action_value.get("policy")
+                            assertion = action_value.get("assertion")
+                            if (
+                                not isinstance(policy, Mapping)
+                                or not isinstance(assertion, Mapping)
+                                or policy.get("case_id") != case["case_id"]
+                                or policy.get("current_case_artifact_id") != predecessor_id
+                                or policy.get("source_artifact_id") != case["source_artifact_id"]
+                                or policy.get("graph_artifact_id") != case["graph_artifact_id"]
+                                or policy.get("graph_report_id") != case["graph_report_id"]
+                                or policy.get("target_finding_ids") != case["target_finding_ids"]
+                                or policy.get("target_finding_kinds") != case["target_finding_kinds"]
+                                or case["action_observed_at"] != assertion.get("observed_at")
+                            ):
+                                raise CoreVerificationError("core:case-action")
+                            expected_case = dict(prior_case)
+                            expected_case.update({"artifact_id": "", "state": "ACTION_RECORDED", "reason": "ACTION_VERIFIED", "action_artifact_id": action_row_id, "action_observed_at": assertion["observed_at"]})
+                            expected_case["artifact_id"] = _digest("case-artifact", {key: expected_case[key] for key in expected_case if key != "artifact_id"})
+                            if case != expected_case:
+                                raise CoreVerificationError("core:case-action")
+                        if case["state"] in {"RESOLVED", "RETEST_FAILED_OR_INDETERMINATE"} and (case["retest_source_artifact_id"] is None or case["retest_graph_artifact_id"] is None or case["retest_observation_time"] is None):
+                            raise CoreVerificationError("core:case-retest")
+                        if case["state"] in {"RESOLVED", "RETEST_FAILED_OR_INDETERMINATE"}:
+                            later_row = expected_artifacts.get(str(case["retest_source_artifact_id"]))
+                            later_graph_row = expected_artifacts.get(str(case["retest_graph_artifact_id"]))
+                            initial_row = expected_artifacts.get(str(case["source_artifact_id"]))
+                            if (
+                                later_row is None
+                                or later_row["kind"] != "SOURCE_OBSERVATION"
+                                or later_graph_row is None
+                                or later_graph_row["kind"] != "GRAPH"
+                                or initial_row is None
+                            ):
+                                raise CoreVerificationError("core:case-retest")
+                            later_value = _parse(later_row["raw"], "core:case-retest")
+                            initial_value = _parse(initial_row["raw"], "core:case-source")
+                            later_graph_value = _parse(later_graph_row["raw"], "core:case-graph")
+                            initial_graph_row = expected_artifacts.get(str(initial_value["graph_artifact_id"]))
+                            if initial_graph_row is None:
+                                raise CoreVerificationError("core:case-graph")
+                            initial_graph_value = _parse(initial_graph_row["raw"], "core:case-graph")
+                            if (
+                                later_value["graph_artifact_id"] != case["retest_graph_artifact_id"]
+                                or later_value["observation_time"] != case["retest_observation_time"]
+                                or later_value["observation_time"] <= case["action_observed_at"]
+                                or later_graph_value.get("subject") != initial_graph_value.get("subject")
+                                or later_graph_value.get("scope") != initial_graph_value.get("scope")
+                                or not isinstance(later_graph_value.get("profile"), Mapping)
+                                or not isinstance(initial_graph_value.get("profile"), Mapping)
+                                or later_graph_value["profile"].get("profile_id") != initial_graph_value["profile"].get("profile_id")
+                                or later_graph_value["profile"].get("version") != initial_graph_value["profile"].get("version")
+                                or later_graph_value["profile"].get("source_contract_digest") != initial_graph_value["profile"].get("source_contract_digest")
+                            ):
+                                raise CoreVerificationError("core:case-retest")
+                            later_findings = {
+                                str(item["kind"])
+                                for item in later_graph_value.get("findings", [])
+                                if isinstance(item, Mapping)
+                            }
+                            target_kinds = set(str(item) for item in case["target_finding_kinds"])
+                            expected_state = "RESOLVED" if target_kinds.isdisjoint(later_findings) and "CONTINUITY_CONFIRMED" in later_findings else "RETEST_FAILED_OR_INDETERMINATE"
+                            expected_reason = "ALL_TARGET_FINDINGS_CLEARED" if expected_state == "RESOLVED" else "TARGET_FINDINGS_REMAIN"
+                            expected_case = dict(prior_case)
+                            expected_case.update({"artifact_id": "", "state": expected_state, "reason": expected_reason, "retest_source_artifact_id": case["retest_source_artifact_id"], "retest_graph_artifact_id": case["retest_graph_artifact_id"], "retest_observation_time": case["retest_observation_time"]})
+                            expected_case["artifact_id"] = _digest("case-artifact", {key: expected_case[key] for key in expected_case if key != "artifact_id"})
+                            if case != expected_case:
+                                raise CoreVerificationError("core:case-retest")
+                if material["kind"] == "CASE_ACTION":
+                    action = parsed_artifact
+                    if predecessor_id is None or value["stream_kind"] != "CASE_ACTION":
+                        raise CoreVerificationError("core:case-action")
+                    prior = expected_artifacts.get(str(predecessor_id))
+                    if prior is None or prior["kind"] != "CASE":
+                        raise CoreVerificationError("core:case-action")
+                    prior_case = _parse(prior["raw"], "core:case")
+                    policy = action.get("policy")
+                    assertion = action.get("assertion")
+                    if (
+                        not isinstance(policy, Mapping)
+                        or not isinstance(assertion, Mapping)
+                        or policy.get("case_id") != prior_case["case_id"]
+                        or policy.get("current_case_artifact_id") != predecessor_id
+                        or policy.get("source_artifact_id") != prior_case["source_artifact_id"]
+                        or policy.get("graph_artifact_id") != prior_case["graph_artifact_id"]
+                        or policy.get("graph_report_id") != prior_case["graph_report_id"]
+                        or policy.get("target_finding_ids") != prior_case["target_finding_ids"]
+                        or policy.get("target_finding_kinds") != prior_case["target_finding_kinds"]
+                        or assertion.get("current_case_artifact_id") != predecessor_id
+                    ):
+                        raise CoreVerificationError("core:case-action")
                 expected_artifacts[artifact_id] = row_artifact
                 stream_refs[stream_key] = artifact_id
             elif kind == "SESSION_OPEN":

@@ -24,6 +24,8 @@ from app.mirror import external_privacy_support_approval_independent as privacy
 from app.mirror import ingress_v2_independent as ingress
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror import nc_medicaid_fhir_profile as profile
+from app.mirror import external_corrective_action as corrective_action
+from app.mirror import external_corrective_action_independent as corrective_action_independent
 from app.mirror.error_boundary import raise_redacted
 from app.mirror.source_admission import SourceAdmissionService
 
@@ -33,11 +35,6 @@ SCHEMA_VERSION = independent.SCHEMA_VERSION
 TABLES = independent.TABLES
 ARTIFACT_KINDS = independent.ARTIFACT_KINDS
 FIXED_FLAGS = dict(independent.FIXED_FLAGS)
-CASE_EDGES = {
-    "OPEN": {"RESPONSIBILITY"}, "RESPONSIBILITY": {"REMEDIATION"},
-    "REMEDIATION": {"RETEST"}, "RETEST": {"PERSISTENCE"},
-    "PERSISTENCE": {"RESOLVED", "SUPERSEDED"},
-}
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_ARTIFACT_BYTES = independent.MAX_ARTIFACT_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
@@ -592,7 +589,7 @@ class CoreServiceV2:
         connection.execute("INSERT INTO core_heads(stream_kind,stream_id,head_ref,head_root,event_sequence) VALUES(?,?,?,?,?) ON CONFLICT(stream_kind,stream_id) DO UPDATE SET head_ref=excluded.head_ref,head_root=excluded.head_root,event_sequence=excluded.event_sequence", (stream_kind, stream_id, head_ref, body["stream_after_root"], sequence))
         return raw
 
-    def _admit_artifact(self, connection: sqlite3.Connection, *, kind: str, raw: bytes, profile_digest: str, predecessor_id: str | None, source_artifact_id: str | None, operation_id: str, request_digest: str, state: str, observed_at: int, ingress_watermark: int = 0) -> tuple[str, bytes]:
+    def _admit_artifact(self, connection: sqlite3.Connection, *, kind: str, raw: bytes, profile_digest: str, predecessor_id: str | None, source_artifact_id: str | None, operation_id: str, request_digest: str, state: str, observed_at: int, ingress_watermark: int = 0, event_stream_kind: str = "ARTIFACT", event_stream_id: str | None = None) -> tuple[str, bytes]:
         if type(raw) is not bytes or not raw or len(raw) > MAX_ARTIFACT_BYTES:
             raise CoreConflictError("core:capacity")
         if kind not in ARTIFACT_KINDS:
@@ -618,10 +615,16 @@ class CoreServiceV2:
                 raise CoreConflictError("core:artifact-conflict")
             raise CoreConflictError("core:artifact-receipt")
         parsed = independent._parse(raw, "core:artifact")
-        stream_id = str(parsed["case_id"]) if kind == "CASE" else kind
+        if kind == "CASE":
+            stream_id = str(parsed["case_id"])
+        elif kind == "CASE_ACTION":
+            stream_id = str(parsed["policy"]["case_id"])
+        else:
+            stream_id = kind
+        stream_id = event_stream_id or stream_id
         connection.execute("INSERT INTO core_artifacts(artifact_id,kind,raw,profile_digest,source_artifact_id,predecessor_id,current_state,created_event_sequence) VALUES(?,?,?,?,?,?,?,0)", (artifact_id, kind, raw, profile_digest, source_artifact_id, predecessor_id, state))
         material = {"artifact_id": artifact_id, "kind": kind, "raw_digest": _raw_digest("artifact-bytes", raw), "raw_length": len(raw), "profile_digest": profile_digest, "source_artifact_id": source_artifact_id, "predecessor_id": predecessor_id, "current_state": state, "ingress_watermark": ingress_watermark}
-        event_raw = self._append(connection, kind="ARTIFACT", operation_id=operation_id, subject_id=artifact_id, request_digest=request_digest, prior_state="NONE", next_state=kind, attempt=0, observed_at=observed_at, material=material, payload_digest=artifact_id, payload_length=len(raw), stream_kind="ARTIFACT", stream_id=stream_id, head_ref=artifact_id, ingress_watermark=ingress_watermark)
+        event_raw = self._append(connection, kind="ARTIFACT", operation_id=operation_id, subject_id=artifact_id, request_digest=request_digest, prior_state="NONE", next_state=kind, attempt=0, observed_at=observed_at, material=material, payload_digest=artifact_id, payload_length=len(raw), stream_kind=event_stream_kind, stream_id=stream_id, head_ref=artifact_id, ingress_watermark=ingress_watermark)
         sequence = independent._parse(event_raw, "core:event-raw")["sequence"]
         connection.execute("UPDATE core_artifacts SET created_event_sequence=? WHERE artifact_id=?", (sequence, artifact_id))
         return artifact_id, event_raw
@@ -1092,144 +1095,237 @@ class CoreServiceV2:
         except Exception:
             raise_redacted(CoreError, "core:privacy")
 
+    @staticmethod
+    def _case_graph(connection: sqlite3.Connection, source_artifact_id: str) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        source_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'", (source_artifact_id,)).fetchone()
+        if source_row is None:
+            raise CoreConflictError("core:case-source")
+        source = independent._parse(source_row[0], "core:case-source")
+        graph_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='GRAPH'", (source["graph_artifact_id"],)).fetchone()
+        if graph_row is None:
+            raise CoreConflictError("core:case-graph")
+        graph_value = independent._parse(graph_row[0], "core:case-graph")
+        report = graph_value.get("report")
+        if not isinstance(report, dict) or not isinstance(report.get("report_id"), str):
+            raise CoreConflictError("core:case-graph")
+        return source, graph_value, graph_row
+
     def admit_case(self, reconciliation_artifact_id: str) -> str:
-        if type(reconciliation_artifact_id) is not str or len(reconciliation_artifact_id) != 128 or any(char not in "0123456789abcdef" for char in reconciliation_artifact_id):
-            raise CoreConflictError("core:case-input")
+        _require_digest(reconciliation_artifact_id, "core:case-input")
         connection = self._open()
         commit_attempted = False
         commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT raw,source_artifact_id FROM core_artifacts WHERE artifact_id=? AND kind='RECONCILIATION'", (reconciliation_artifact_id,)).fetchone()
-            if row is None:
+            rec_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='RECONCILIATION'", (reconciliation_artifact_id,)).fetchone()
+            if rec_row is None:
                 raise CoreConflictError("core:case-reconciliation")
-            reconciliation = independent._parse(row[0], "core:artifact")
-            reason = "SOURCE_CHANGED" if reconciliation["observation_status"] == "OBSERVED_CHANGED" else ("SOURCE_INCOMPLETE" if reconciliation["observation_status"] == "INCOMPLETE" else "OBSERVATION_ONLY")
-            parity = "DIVERGENT" if reason == "SOURCE_CHANGED" else ("PARTIAL" if reason == "SOURCE_INCOMPLETE" else "UNKNOWN")
-            case_id = _digest("case-id", {"reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"]})
+            reconciliation = independent._parse(rec_row[0], "core:case-reconciliation")
+            source_id = str(reconciliation["current_source_artifact_id"])
+            reconciliation_head = connection.execute(
+                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='RECONCILIATION'"
+            ).fetchone()
+            source_head = connection.execute(
+                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'"
+            ).fetchone()
+            if reconciliation_head is None or reconciliation_head[0] != reconciliation_artifact_id or source_head is None or source_head[0] != source_id:
+                raise CoreConflictError("core:case-not-current")
+            source, graph_value, _graph_row = self._case_graph(connection, source_id)
+            findings = graph_value.get("findings")
+            if not isinstance(findings, list):
+                raise CoreConflictError("core:case-findings")
+            actionable = [finding for finding in findings if isinstance(finding, dict) and finding.get("kind") != "CONTINUITY_CONFIRMED"]
+            if not actionable:
+                raise CoreConflictError("core:case-no-actionable-finding")
+            target_ids = tuple(sorted(str(finding["finding_id"]) for finding in actionable))
+            target_kinds = tuple(str(finding["kind"]) for finding in sorted(actionable, key=lambda item: str(item["finding_id"])))
+            report_id = str(graph_value["report"]["report_id"])
+            subject = graph_value["subject"]
+            subject_digest = _digest("case-subject", subject)
+            case_id = _digest("case-id", {"reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": source_id, "graph_artifact_id": source["graph_artifact_id"], "graph_report_id": report_id, "profile_digest": self.config.runtime_profile_digest, "subject_digest": subject_digest, "target_finding_ids": list(target_ids), "target_finding_kinds": list(target_kinds)})
             operation_id = _digest("case-operation", {"case_id": case_id})
             existing = self._event(connection, operation_id)
             if existing is not None:
                 material = independent._parse(existing, "core:event-raw")["material"]
                 commit_attempted = True
-                connection.commit()
-                commit_succeeded = True
+                connection.commit(); commit_succeeded = True
                 return str(material["artifact_id"])
-            body = {"schema": "mirror-core-case-v3", "schema_version": 3, "kind": "CASE", "artifact_id": "", "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"], "state": "OPEN", "responsibility": "UNKNOWN", "remediation": "UNOBSERVED", "retest": "UNREQUESTED", "parity": parity, "reason": reason, "flags": dict(FIXED_FLAGS)}
+            body: dict[str, object] = {
+                "schema": "mirror-core-case-v4", "schema_version": 4, "kind": "CASE", "artifact_id": "",
+                "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": source_id,
+                "graph_artifact_id": source["graph_artifact_id"], "graph_report_id": report_id, "graph_profile_digest": graph_value["profile"]["profile_digest"],
+                "subject_digest": subject_digest, "target_finding_ids": list(target_ids), "target_finding_kinds": list(target_kinds),
+                "state": "OPEN", "responsibility": "UNKNOWN", "reason": "ACTIONABLE_FINDING", "action_artifact_id": None,
+                "action_observed_at": None, "retest_source_artifact_id": None, "retest_graph_artifact_id": None, "retest_observation_time": None,
+                "flags": dict(FIXED_FLAGS),
+            }
             body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
             now = self._owner_now(connection)
-            artifact_id, _ = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=None, source_artifact_id=body["source_artifact_id"], operation_id=operation_id, request_digest=_digest("case-request", {"reconciliation_artifact_id": reconciliation_artifact_id}), state="OPEN", observed_at=now)
+            artifact_id, _ = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=None, source_artifact_id=source_id, operation_id=operation_id, request_digest=_digest("case-request", {"reconciliation_artifact_id": reconciliation_artifact_id, "case_id": case_id}), state="OPEN", observed_at=now)
             commit_attempted = True
-            connection.commit()
-            commit_succeeded = True
+            connection.commit(); commit_succeeded = True
             return artifact_id
         except (CoreError, CoreConflictError):
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
             raise
         except sqlite3.Error as exc:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True)
             _sqlite_error(exc)
         finally:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                identity_check=self._assert_database_identity,
-                cleanup_code="core:database",
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
         raise CoreError("core:database")
 
-    def advance_case(self, case_artifact_id: str, *, next_state: str, responsibility: str | None = None, remediation: str | None = None, retest: str | None = None, parity: str | None = None) -> CoreReceipt:
-        _require_digest(case_artifact_id, "core:case-input")
-        if next_state not in CASE_EDGES and next_state not in {"RESOLVED", "SUPERSEDED"}:
-            raise CoreConflictError("core:case-input")
-        supplied = {"responsibility": responsibility, "remediation": remediation, "retest": retest, "parity": parity}
-        allowed = {"responsibility": {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"}, "remediation": {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"}, "retest": {"UNREQUESTED", "REQUESTED", "EXECUTED"}, "parity": {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"}}
-        if any(value is not None and value not in allowed[key] for key, value in supplied.items()):
-            raise CoreConflictError("core:case-value")
-        operation_id = _digest("case-transition-operation", {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied})
-        connection = self._open()
-        commit_attempted = False
-        commit_succeeded = False
+    def record_case_action(self, current_case_artifact_id: str, *, action_raw: bytes, policy: corrective_action.CorrectiveActionPolicyV1, evidence_raw: bytes) -> CoreReceipt:
+        _require_digest(current_case_artifact_id, "core:case-input")
+        if not isinstance(policy, corrective_action.CorrectiveActionPolicyV1):
+            raise CoreConflictError("core:action-policy")
+        if policy.current_case_artifact_id != current_case_artifact_id:
+            raise CoreConflictError("core:action-policy")
+        try:
+            checked = corrective_action_independent.verify_artifact(action_raw, policy=policy.material(), evidence_raw=evidence_raw)
+        except Exception:
+            raise_redacted(CoreConflictError, "core:action-verification")
+        action_id = str(checked["artifact_id"])
+        action_row_id = _digest(
+            "artifact-row-id",
+            {
+                "kind": "CASE_ACTION",
+                "raw": _raw_digest("artifact-bytes", action_raw),
+                "profile_digest": self.config.runtime_profile_digest,
+                "source_artifact_id": policy.source_artifact_id,
+                "predecessor_id": current_case_artifact_id,
+            },
+        )
+        operation_id = _digest("case-transition-operation", {"case_artifact_id": current_case_artifact_id, "action_artifact_id": action_row_id, "transition": "ACTION_RECORDED"})
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
-                commit_attempted = True
-                connection.commit()
-                commit_succeeded = True
-                return self._receipt(existing)
-            prior_row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_artifact_id,)).fetchone()
-            if prior_row is None:
+                commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
+            case_row = connection.execute("SELECT raw,predecessor_id FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (current_case_artifact_id,)).fetchone()
+            if case_row is None:
                 raise CoreConflictError("core:case-missing")
-            prior = independent._parse(prior_row["raw"], "core:artifact")
-            case_id = prior.get("case_id")
-            head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (case_id,)).fetchone()
-            if head is None or head[0] != case_artifact_id:
+            prior = independent._parse(case_row[0], "core:case")
+            if prior.get("state") != "OPEN":
+                raise CoreConflictError("core:case-state")
+            head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (prior["case_id"],)).fetchone()
+            if head is None or head[0] != current_case_artifact_id:
                 raise CoreConflictError("core:case-head")
-            if next_state not in CASE_EDGES.get(str(prior["state"]), set()):
-                raise CoreConflictError("core:case-transition")
-            required = {"RESPONSIBILITY": "responsibility", "REMEDIATION": "remediation", "RETEST": "retest", "PERSISTENCE": "parity"}.get(next_state)
-            if (required is None and any(value is not None for value in supplied.values())) or (required is not None and supplied[required] is None):
-                raise CoreConflictError("core:case-value")
-            if next_state == "RETEST" and prior["remediation"] == "UNOBSERVED":
-                raise CoreConflictError("core:case-remediation")
-            if next_state == "PERSISTENCE" and prior["retest"] != "EXECUTED":
-                raise CoreConflictError("core:case-retest")
-            if next_state == "RESOLVED" and (prior["parity"] != "MATCHED" or prior["remediation"] != "VERIFIED" or prior["retest"] != "EXECUTED"):
-                raise CoreConflictError("core:case-resolve")
-            if next_state == "SUPERSEDED" and prior["state"] != "PERSISTENCE":
-                raise CoreConflictError("core:case-supersede")
-            body = dict(prior); body["state"] = next_state
-            if required is not None:
-                body[required] = supplied[required]
-            body["artifact_id"] = ""
-            body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
+            if (
+                checked["case_id"] != prior["case_id"]
+                or checked["current_case_artifact_id"] != current_case_artifact_id
+                or checked["source_artifact_id"] != prior["source_artifact_id"]
+                or checked["graph_artifact_id"] != prior["graph_artifact_id"]
+                or checked["graph_report_id"] != prior["graph_report_id"]
+                or tuple(checked["target_finding_ids"]) != tuple(prior["target_finding_ids"])
+                or tuple(checked["target_finding_kinds"]) != tuple(prior["target_finding_kinds"])
+            ):
+                raise CoreConflictError("core:action-binding")
             now = self._owner_now(connection)
-            request_material = {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied}
-            artifact_id, event_raw = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=case_artifact_id, source_artifact_id=str(prior["source_artifact_id"]), operation_id=operation_id, request_digest=_digest("case-transition-request", request_material), state=next_state, observed_at=now)
-            commit_attempted = True
-            connection.commit()
-            commit_succeeded = True
+            if int(checked["observed_at"]) > now:
+                raise CoreConflictError("core:action-time")
+            action_op = _digest("case-action-operation", {"action_id": action_id, "case_id": prior["case_id"]})
+            action_req = _digest("case-action-request", {"action_id": action_id, "case_id": prior["case_id"], "evidence_digest": checked["evidence_sha3_512"]})
+            stored_action_row_id, _ = self._admit_artifact(connection, kind="CASE_ACTION", raw=action_raw, profile_digest=self.config.runtime_profile_digest, predecessor_id=current_case_artifact_id, source_artifact_id=prior["source_artifact_id"], operation_id=action_op, request_digest=action_req, state="ACTION_RECORDED", observed_at=now, event_stream_kind="CASE_ACTION", event_stream_id=str(prior["case_id"]))
+            if stored_action_row_id != action_row_id:
+                raise CoreConflictError("core:action-binding")
+            body = dict(prior); body.update({"artifact_id": "", "state": "ACTION_RECORDED", "reason": "ACTION_VERIFIED", "action_artifact_id": action_row_id, "action_observed_at": int(checked["observed_at"])})
+            body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
+            _artifact_id, event_raw = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=current_case_artifact_id, source_artifact_id=str(prior["source_artifact_id"]), operation_id=operation_id, request_digest=_digest("case-transition-request", {"case_artifact_id": current_case_artifact_id, "action_artifact_id": action_row_id, "transition": "ACTION_RECORDED"}), state="ACTION_RECORDED", observed_at=now)
+            commit_attempted = True; connection.commit(); commit_succeeded = True
             return self._receipt(event_raw)
         except (CoreError, CoreConflictError):
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
-            raise
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
         except sqlite3.Error as exc:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                close=False,
-                continue_after_cleanup=True,
-            )
-            _sqlite_error(exc)
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _sqlite_error(exc)
         finally:
-            _finalize_core_connection(
-                connection,
-                commit_attempted=commit_attempted,
-                commit_succeeded=commit_succeeded,
-                identity_check=self._assert_database_identity,
-                cleanup_code="core:database",
-            )
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
+        raise CoreError("core:database")
+
+    def evaluate_case(self, current_case_artifact_id: str, later_source_artifact_id: str) -> CoreReceipt:
+        _require_digest(current_case_artifact_id, "core:case-input")
+        _require_digest(later_source_artifact_id, "core:source-input")
+        operation_id = _digest("case-evaluate-operation", {"case_artifact_id": current_case_artifact_id, "later_source_artifact_id": later_source_artifact_id})
+        connection = self._open(); commit_attempted = False; commit_succeeded = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = self._event(connection, operation_id)
+            if existing is not None:
+                commit_attempted = True; connection.commit(); commit_succeeded = True; return self._receipt(existing)
+            case_row = connection.execute("SELECT raw,predecessor_id FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (current_case_artifact_id,)).fetchone()
+            if case_row is None:
+                raise CoreConflictError("core:case-missing")
+            prior = independent._parse(case_row[0], "core:case")
+            if prior.get("state") != "ACTION_RECORDED":
+                raise CoreConflictError("core:case-state")
+            predecessor_case_id = case_row["predecessor_id"]
+            if type(predecessor_case_id) is not str:
+                raise CoreConflictError("core:case-action")
+            action_id = prior.get("action_artifact_id")
+            if not isinstance(action_id, str):
+                raise CoreConflictError("core:case-action")
+            action_row = connection.execute(
+                "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='CASE_ACTION'",
+                (action_id,),
+            ).fetchone()
+            if action_row is None or type(action_row[0]) is not bytes:
+                raise CoreConflictError("core:case-action")
+            try:
+                action = corrective_action_independent.verify_artifact(action_row[0])
+            except Exception:
+                raise_redacted(CoreConflictError, "core:case-action")
+            if (
+                action["current_case_artifact_id"] != predecessor_case_id
+                or action["case_id"] != prior["case_id"]
+                or action["source_artifact_id"] != prior["source_artifact_id"]
+                or action["graph_artifact_id"] != prior["graph_artifact_id"]
+                or action["graph_report_id"] != prior["graph_report_id"]
+                or tuple(action["target_finding_ids"]) != tuple(prior["target_finding_ids"])
+                or tuple(action["target_finding_kinds"]) != tuple(prior["target_finding_kinds"])
+                or int(action["observed_at"]) != int(prior["action_observed_at"])
+            ):
+                raise CoreConflictError("core:case-action")
+            head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (prior["case_id"],)).fetchone()
+            if head is None or head[0] != current_case_artifact_id:
+                raise CoreConflictError("core:case-head")
+            later, later_graph, _ = self._case_graph(connection, later_source_artifact_id)
+            initial, initial_graph, _ = self._case_graph(connection, str(prior["source_artifact_id"]))
+            source_head = connection.execute(
+                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'"
+            ).fetchone()
+            if source_head is None or source_head[0] != later_source_artifact_id:
+                raise CoreConflictError("core:case-source-not-current")
+            if (
+                later_graph.get("profile", {}).get("profile_id") != initial_graph.get("profile", {}).get("profile_id")
+                or later_graph.get("profile", {}).get("version") != initial_graph.get("profile", {}).get("version")
+                or later_graph.get("profile", {}).get("source_contract_digest") != initial_graph.get("profile", {}).get("source_contract_digest")
+                or later_graph["subject"] != initial_graph["subject"]
+                or later_graph.get("scope") != initial_graph.get("scope")
+            ):
+                raise CoreConflictError("core:case-lineage")
+            if int(later["observation_time"]) <= int(prior["action_observed_at"]):
+                raise CoreConflictError("core:case-chronology")
+            later_findings = {str(item["kind"]) for item in later_graph.get("findings", []) if isinstance(item, dict)}
+            target_kinds = set(str(item) for item in prior["target_finding_kinds"])
+            if later.get("observation_status") in {"INCOMPLETE", "OBSERVATION_ONLY"}:
+                state = "RETEST_FAILED_OR_INDETERMINATE"; reason = "RETEST_INDETERMINATE"
+            elif target_kinds.isdisjoint(later_findings) and "CONTINUITY_CONFIRMED" in later_findings:
+                state = "RESOLVED"; reason = "ALL_TARGET_FINDINGS_CLEARED"
+            else:
+                state = "RETEST_FAILED_OR_INDETERMINATE"; reason = "TARGET_FINDINGS_REMAIN"
+            now = self._owner_now(connection)
+            body = dict(prior); body.update({"artifact_id": "", "state": state, "reason": reason, "retest_source_artifact_id": later_source_artifact_id, "retest_graph_artifact_id": later["graph_artifact_id"], "retest_observation_time": int(later["observation_time"])})
+            body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
+            _artifact_id, event_raw = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=current_case_artifact_id, source_artifact_id=str(prior["source_artifact_id"]), operation_id=operation_id, request_digest=_digest("case-evaluate-request", {"case_artifact_id": current_case_artifact_id, "later_source_artifact_id": later_source_artifact_id, "state": state, "reason": reason}), state=state, observed_at=now)
+            commit_attempted = True; connection.commit(); commit_succeeded = True
+            return self._receipt(event_raw)
+        except (CoreError, CoreConflictError):
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); raise
+        except sqlite3.Error as exc:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, close=False, continue_after_cleanup=True); _sqlite_error(exc)
+        finally:
+            _finalize_core_connection(connection, commit_attempted=commit_attempted, commit_succeeded=commit_succeeded, identity_check=self._assert_database_identity, cleanup_code="core:database")
         raise CoreError("core:database")
 
     @staticmethod

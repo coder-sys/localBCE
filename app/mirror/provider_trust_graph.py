@@ -79,24 +79,15 @@ FINDING_KINDS = (
     FINDING_STALE,
 )
 
-LIFECYCLE_OPEN = "OPEN"
-LIFECYCLE_REMEDIATED = "REMEDIATED"
-LIFECYCLE_RETEST_FAILED = "RETEST_FAILED"
-LIFECYCLES = (LIFECYCLE_OPEN, LIFECYCLE_REMEDIATED, LIFECYCLE_RETEST_FAILED)
-RETEST_PASSED = "PASSED"
-RETEST_FAILED = "FAILED"
-
 MAX_INPUT_BYTES = 262_144
 MAX_ARTIFACT_BYTES = 262_144
 MAX_SOURCES = 2
 MAX_RECORDS_PER_SOURCE = 8
 MAX_FINDINGS = 8
 MAX_DISCREPANCIES = 8
-MAX_PARITY_CASES = 8
 MAX_STRING_BYTES = 512
 MAX_NODES = 4_096
 MAX_DEPTH = 16
-MAX_HISTORY_DEPTH = 1
 MAX_TIMESTAMP = 2_147_483_647
 
 INPUT_KEYS = {
@@ -105,9 +96,6 @@ INPUT_KEYS = {
     "scope",
     "observation_time",
     "sources",
-    "prior_artifact",
-    "remediation",
-    "parity_cases",
 }
 SOURCE_INPUT_KEYS = {
     "source_id",
@@ -138,19 +126,11 @@ RECORD_KEYS = {
     "terminated_at",
     "status",
 }
-PARITY_INPUT_KEYS = {"case_id", "expected_kind", "expected_present"}
-REMEDIATION_INPUT_KEYS = {
-    "action_artifact_id",
-    "submitted_at",
-    "retest_result",
-    "prior_finding_ids",
-}
 SUBJECT_KEYS = {"provider_graph_subject", "scope"}
 SNAPSHOT_KEYS = {"snapshot_id", "snapshot_root", "observation_time"}
 FINDING_KEYS = {
     "finding_id",
     "kind",
-    "lifecycle",
     "subject_key",
     "observation_snapshot_id",
     "evidence_refs",
@@ -160,23 +140,6 @@ DISCREPANCY_KEYS = {
     "kind",
     "responsibility_boundary",
     "evidence_refs",
-    "parity_case_id",
-}
-REMEDIATION_OUTPUT_KEYS = {
-    "action_artifact_id",
-    "submitted_at",
-    "retest_result",
-    "prior_finding_ids",
-    "prior_artifact",
-}
-PARITY_OUTPUT_KEYS = {
-    "case_id",
-    "expected_kind",
-    "expected_present",
-    "observed_kinds",
-    "passed",
-    "evidence_refs",
-    "discrepancy_id",
 }
 IDENTITY_KEYS = {
     "provider_graph_subject",
@@ -187,24 +150,8 @@ IDENTITY_KEYS = {
     "source_coverage_root",
     "findings_root",
     "discrepancies_root",
-    "remediation_root",
-    "parity_root",
-    "lifecycle",
-    "prior_report_id",
-    "prior_snapshot_id",
-    "prior_snapshot_root",
 }
-TRANSITION_KEYS = {
-    "transition_id",
-    "transition_kind",
-    "prior_report_id",
-    "prior_snapshot_id",
-    "prior_snapshot_root",
-    "current_report_id",
-    "current_snapshot_id",
-    "current_snapshot_root",
-}
-REPORT_KEYS = {"report_id", "identity_material", "lifecycle"}
+REPORT_KEYS = {"report_id", "identity_material"}
 AUTHORITY_KEYS = {
     "clearance_authority",
     "payment_authority",
@@ -219,9 +166,6 @@ OUTPUT_KEYS = {
     "source_coverage",
     "findings",
     "discrepancies",
-    "remediation",
-    "parity_cases",
-    "transition",
     "report",
     "authority",
 }
@@ -232,9 +176,6 @@ V2_IDENTITY_KEYS = IDENTITY_KEYS | PROFILE_KEYS
 
 _RE_HEX = re.compile(r"^[0-9a-f]{128}$")
 _RE_RECORD = re.compile(r"^SYNTH_(CREDENTIAL|ENROLLMENT)_RECORD_00[1-8]$")
-_RE_ACTION = re.compile(r"^SYNTH_ACTION_00[1-8]$")
-
-
 @dataclass(frozen=True)
 class _GraphProfile:
     """Internal profile projection shared by the producer's V1/V2 grammar."""
@@ -714,38 +655,20 @@ def _validate_sources(
     return items
 
 
-def _validate_finding(
-    finding: object,
-    *,
-    snapshot_id: str | None = None,
-    profile: _GraphProfile | None = None,
-) -> dict[str, object]:
+def _validate_finding(finding: object, *, snapshot_id: str | None = None, profile: _GraphProfile | None = None) -> dict[str, object]:
     view = _profile_view(profile)
     item = _expect_keys(finding, FINDING_KEYS, "finding")
-    finding_id = _hex(item["finding_id"], "finding:id")
     kind = _text(item["kind"], "finding:kind")
     if kind not in FINDING_KINDS:
         raise ProviderTrustGraphError("finding:kind")
-    lifecycle = _text(item["lifecycle"], "finding:lifecycle")
-    if lifecycle not in LIFECYCLES:
-        raise ProviderTrustGraphError("finding:lifecycle")
     if _text(item["subject_key"], "finding:subject") != view.subject_key:
         raise ProviderTrustGraphError("finding:subject")
     current_snapshot = _text(item["observation_snapshot_id"], "finding:snapshot")
     if snapshot_id is not None and current_snapshot != snapshot_id:
         raise ProviderTrustGraphError("finding:snapshot-mismatch")
     refs = _sorted_unique(item["evidence_refs"], "finding:evidence", maximum=MAX_RECORDS_PER_SOURCE * MAX_SOURCES)
-    expected_id = _digest(
-        "finding-id",
-        {
-            "kind": kind,
-            "subject_key": view.subject_key,
-            "observation_snapshot_id": current_snapshot,
-            "evidence_refs": refs,
-        },
-        profile=view,
-    )
-    if finding_id != expected_id:
+    expected_id = _digest("finding-id", {"kind": kind, "subject_key": view.subject_key, "observation_snapshot_id": current_snapshot, "evidence_refs": refs}, profile=view)
+    if item["finding_id"] != expected_id:
         raise ProviderTrustGraphError("finding:id-mismatch")
     return item
 
@@ -754,195 +677,46 @@ def _findings_root(findings: Sequence[Mapping[str, object]], *, profile: _GraphP
     return _digest("findings-root", {"findings": list(findings)}, profile=profile)
 
 
-def _validate_identity_material(
-    identity: object,
-    *,
-    profile: _GraphProfile | None = None,
-) -> dict[str, object]:
+def _validate_identity_material(identity: object, *, profile: _GraphProfile | None = None) -> dict[str, object]:
     view = _profile_view(profile)
     item = _expect_keys(identity, V2_IDENTITY_KEYS if view.v2 else IDENTITY_KEYS, "report:identity-material")
-    if _text(item["provider_graph_subject"], "identity:subject") != view.subject:
-        raise ProviderTrustGraphError("identity:subject")
-    if _text(item["scope"], "identity:scope") != view.scope:
-        raise ProviderTrustGraphError("identity:scope")
-    if view.v2:
-        if (
-            item["profile_id"] != view.profile_id
-            or item["version"] != view.version
-            or item["profile_digest"] != view.profile_digest
-        ):
-            raise ProviderTrustGraphError("identity:profile")
-    observation_time = _int(item["observation_time"], "identity:observation-time")
+    if item["provider_graph_subject"] != view.subject or item["scope"] != view.scope:
+        raise ProviderTrustGraphError("identity:subject-or-scope")
+    if view.v2 and (item["profile_id"], item["version"], item["profile_digest"]) != (view.profile_id, view.version, view.profile_digest):
+        raise ProviderTrustGraphError("identity:profile")
+    _int(item["observation_time"], "identity:observation-time", minimum=1)
     _text(item["snapshot_id"], "identity:snapshot")
-    _hex(item["snapshot_root"], "identity:snapshot-root")
-    for field in (
-        "source_coverage_root",
-        "findings_root",
-        "discrepancies_root",
-        "parity_root",
-    ):
+    for field in ("snapshot_root", "source_coverage_root", "findings_root", "discrepancies_root"):
         _hex(item[field], "identity:" + field)
-    _hex(item["remediation_root"], "identity:remediation-root", nullable=True)
-    lifecycle = _text(item["lifecycle"], "identity:lifecycle")
-    if lifecycle not in LIFECYCLES:
-        raise ProviderTrustGraphError("identity:lifecycle")
-    _hex(item["prior_report_id"], "identity:prior-report", nullable=True)
-    if item["prior_snapshot_id"] is not None:
-        _text(item["prior_snapshot_id"], "identity:prior-snapshot")
-    _hex(item["prior_snapshot_root"], "identity:prior-snapshot-root", nullable=True)
-    prior_link = (
-        item["prior_report_id"],
-        item["prior_snapshot_id"],
-        item["prior_snapshot_root"],
-    )
-    if not (all(value is None for value in prior_link) or all(value is not None for value in prior_link)):
-        raise ProviderTrustGraphError("identity:prior-link")
-    if observation_time <= 0:
-        raise ProviderTrustGraphError("identity:observation-time")
-    return item
-
-
-def _validate_prior_artifact(
-    prior: object,
-    *,
-    profile: _GraphProfile | None = None,
-) -> dict[str, object]:
-    """Validate a complete, non-retest artifact before it can be retest input."""
-
-    item = _validate_output(prior, allow_retest=False, history_depth=0, profile=profile)
-    report = _expect_keys(item["report"], REPORT_KEYS, "prior-artifact:report")
-    identity = _validate_identity_material(report["identity_material"], profile=profile)
-    if report["lifecycle"] != LIFECYCLE_OPEN or item["remediation"] is not None:
-        raise ProviderTrustGraphError("prior-artifact:must-be-initial-open")
-    if identity["lifecycle"] != LIFECYCLE_OPEN or any(
-        value is not None
-        for value in (
-            identity["prior_report_id"],
-            identity["prior_snapshot_id"],
-            identity["prior_snapshot_root"],
-        )
-    ):
-        raise ProviderTrustGraphError("prior-artifact:must-be-initial-open")
-    transition = _expect_keys(item["transition"], TRANSITION_KEYS, "prior-artifact:transition")
-    if transition["transition_kind"] != "INITIAL" or any(
-        transition[field] is not None
-        for field in ("prior_report_id", "prior_snapshot_id", "prior_snapshot_root")
-    ):
-        raise ProviderTrustGraphError("prior-artifact:must-be-initial-open")
-    return item
-
-
-def _validate_input_parity(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list) or len(value) > MAX_PARITY_CASES:
-        raise ProviderTrustGraphError("parity:count-cap")
-    result: list[dict[str, object]] = []
-    for case in value:
-        item = _expect_keys(case, PARITY_INPUT_KEYS, "parity-case")
-        _text(item["case_id"], "parity:id")
-        kind = _text(item["expected_kind"], "parity:expected-kind")
-        if kind not in FINDING_KINDS:
-            raise ProviderTrustGraphError("parity:expected-kind")
-        _bool(item["expected_present"], "parity:expected-present")
-        result.append(item)
-    ids = [item["case_id"] for item in result]
-    if ids != sorted(ids) or len(set(ids)) != len(ids):
-        raise ProviderTrustGraphError("parity:order-or-duplicate")
-    return result
-
-
-def _validate_input_remediation(value: object) -> dict[str, object] | None:
-    if value is None:
-        return None
-    item = _expect_keys(value, REMEDIATION_INPUT_KEYS, "remediation")
-    action = _text(item["action_artifact_id"], "remediation:action")
-    if _RE_ACTION.fullmatch(action) is None:
-        raise ProviderTrustGraphError("remediation:action")
-    _int(item["submitted_at"], "remediation:submitted-at")
-    result = _text(item["retest_result"], "remediation:result")
-    if result not in (RETEST_PASSED, RETEST_FAILED):
-        raise ProviderTrustGraphError("remediation:result")
-    ids = _sorted_unique(item["prior_finding_ids"], "remediation:prior-findings", maximum=MAX_FINDINGS)
-    if not ids:
-        raise ProviderTrustGraphError("remediation:prior-findings-empty")
     return item
 
 
 def _validate_input(value: object, *, profile: _GraphProfile | None = None) -> dict[str, object]:
     view = _profile_view(profile)
     item = _expect_keys(value, V2_INPUT_KEYS if view.v2 else INPUT_KEYS, "input")
-    if _text(item["schema"], "input:schema") != view.input_schema:
+    if item["schema"] != view.input_schema:
         raise ProviderTrustGraphError("input:schema")
-    if _text(item["provider_graph_subject"], "input:subject") != view.subject:
+    if item["provider_graph_subject"] != view.subject:
         raise ProviderTrustGraphError("input:subject")
-    if _text(item["scope"], "input:scope") != view.scope:
+    if item["scope"] != view.scope:
         raise ProviderTrustGraphError("input:scope")
-    if view.v2 and (
-        item["profile_id"] != view.profile_id
-        or item["profile_version"] != view.version
-        or item["profile_digest"] != view.profile_digest
-    ):
+    if view.v2 and (item["profile_id"], item["profile_version"], item["profile_digest"]) != (view.profile_id, view.version, view.profile_digest):
         raise ProviderTrustGraphError("input:profile")
     observation_time = _int(item["observation_time"], "input:observation-time", minimum=1)
     if view.v2 and not view.observation_start <= observation_time < view.observation_end:  # type: ignore[operator]
         raise ProviderTrustGraphError("input:observation-window")
     _validate_sources(item["sources"], observation_time, output=False, profile=view)
-    if item["prior_artifact"] is not None:
-        _validate_prior_artifact(item["prior_artifact"], profile=view)
-    _validate_input_remediation(item["remediation"])
-    _validate_input_parity(item["parity_cases"])
-    if item["remediation"] is None and item["prior_artifact"] is not None:
-        raise ProviderTrustGraphError("input:prior-artifact-without-remediation")
-    if item["remediation"] is not None and item["prior_artifact"] is None:
-        raise ProviderTrustGraphError("input:remediation-without-prior-artifact")
-    if item["prior_artifact"] is not None:
-        prior = item["prior_artifact"]
-        remediation = item["remediation"]
-        assert isinstance(prior, dict) and isinstance(remediation, dict)
-        prior_snapshot = _expect_keys(prior["observation_snapshot"], SNAPSHOT_KEYS, "prior-artifact:snapshot")
-        prior_observation_time = prior_snapshot["observation_time"]
-        prior_findings = prior["findings"]
-        if remediation["submitted_at"] <= prior_observation_time or remediation["submitted_at"] > observation_time:
-            raise ProviderTrustGraphError("remediation:chronology")
-        prior_ids = {finding["finding_id"] for finding in prior_findings}
-        if not set(remediation["prior_finding_ids"]).issubset(prior_ids):
-            raise ProviderTrustGraphError("remediation:unknown-prior-finding")
     return item
 
 
-def _finding(
-    kind: str,
-    snapshot_id: str,
-    refs: Sequence[str],
-    *,
-    lifecycle: str = LIFECYCLE_OPEN,
-    profile: _GraphProfile | None = None,
-) -> dict[str, object]:
+def _finding(kind: str, snapshot_id: str, refs: Sequence[str], *, profile: _GraphProfile | None = None) -> dict[str, object]:
     view = _profile_view(profile)
-    ordered_refs = sorted(refs)
-    body: dict[str, object] = {
-        "kind": kind,
-        "lifecycle": lifecycle,
-        "subject_key": view.subject_key,
-        "observation_snapshot_id": snapshot_id,
-        "evidence_refs": ordered_refs,
-    }
-    return {"finding_id": _digest("finding-id", {key: body[key] for key in ("kind", "subject_key", "observation_snapshot_id", "evidence_refs")}, profile=view), **body}
+    body = {"kind": kind, "subject_key": view.subject_key, "observation_snapshot_id": snapshot_id, "evidence_refs": sorted(refs)}
+    return {"finding_id": _digest("finding-id", body, profile=view), **body}
 
 
-def _discrepancy(
-    kind: str,
-    responsibility: str,
-    refs: Sequence[str],
-    parity_case_id: str | None,
-    *,
-    profile: _GraphProfile | None = None,
-) -> dict[str, object]:
-    body: dict[str, object] = {
-        "kind": kind,
-        "responsibility_boundary": responsibility,
-        "evidence_refs": sorted(refs),
-        "parity_case_id": parity_case_id,
-    }
+def _discrepancy(kind: str, refs: Sequence[str], *, profile: _GraphProfile | None = None) -> dict[str, object]:
+    body = {"kind": kind, "responsibility_boundary": "UNKNOWN", "evidence_refs": sorted(refs)}
     return {"discrepancy_id": _digest("discrepancy-id", body, profile=profile), **body}
 
 
@@ -975,7 +749,7 @@ def _evaluate(
         return [
             _finding(FINDING_CONFLICT, snapshot_id, refs, profile=view)
         ], [
-            _discrepancy("SOURCE_CONFLICT_EVIDENCE", "SOURCE_RECONCILIATION_REQUIRED", refs, None, profile=view)
+            _discrepancy("SOURCE_CONFLICT_EVIDENCE", refs, profile=view)
         ]
     credential = next(record for record in matches if record["record_kind"] == "CREDENTIAL")
     enrollment = next(record for record in matches if record["record_kind"] == "ENROLLMENT")
@@ -985,236 +759,6 @@ def _evaluate(
     if enrollment["status"] == STATUS_TERMINATED:
         return [_finding(FINDING_TERMINATED, snapshot_id, refs, profile=view)], []
     return [_finding(FINDING_CONTINUITY, snapshot_id, refs, profile=view)], []
-
-
-def _validate_output_parity(value: object, findings: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
-    if not isinstance(value, list) or len(value) > MAX_PARITY_CASES:
-        raise ProviderTrustGraphError("parity:count-cap")
-    observed = {finding["kind"] for finding in findings}
-    result: list[dict[str, object]] = []
-    for raw_case in value:
-        item = _expect_keys(raw_case, PARITY_OUTPUT_KEYS, "parity-output")
-        case_id = _text(item["case_id"], "parity:id")
-        expected_kind = _text(item["expected_kind"], "parity:expected-kind")
-        if expected_kind not in FINDING_KINDS:
-            raise ProviderTrustGraphError("parity:expected-kind")
-        expected_present = _bool(item["expected_present"], "parity:expected-present")
-        observed_kinds = _sorted_unique(item["observed_kinds"], "parity:observed", maximum=MAX_FINDINGS)
-        if observed_kinds != sorted(observed) or any(kind not in FINDING_KINDS for kind in observed_kinds):
-            raise ProviderTrustGraphError("parity:observed-mismatch")
-        passed = _bool(item["passed"], "parity:passed")
-        expected_passed = (expected_kind in observed) == expected_present
-        if passed != expected_passed:
-            raise ProviderTrustGraphError("parity:result-mismatch")
-        refs = _sorted_unique(item["evidence_refs"], "parity:evidence", maximum=MAX_FINDINGS)
-        expected_refs = sorted(finding["finding_id"] for finding in findings if finding["kind"] == expected_kind)
-        if refs != expected_refs:
-            raise ProviderTrustGraphError("parity:evidence-mismatch")
-        discrepancy_id = _hex(item["discrepancy_id"], "parity:discrepancy", nullable=True)
-        if passed and discrepancy_id is not None:
-            raise ProviderTrustGraphError("parity:unexpected-discrepancy")
-        if not passed and discrepancy_id is None:
-            raise ProviderTrustGraphError("parity:missing-discrepancy")
-        result.append(item)
-    ids = [item["case_id"] for item in result]
-    if ids != sorted(ids) or len(set(ids)) != len(ids):
-        raise ProviderTrustGraphError("parity:order-or-duplicate")
-    return result
-
-
-def _validate_discrepancies(
-    value: object,
-    findings: Sequence[Mapping[str, object]],
-    parity: Sequence[Mapping[str, object]],
-    *,
-    profile: _GraphProfile | None = None,
-) -> list[dict[str, object]]:
-    if not isinstance(value, list) or len(value) > MAX_DISCREPANCIES:
-        raise ProviderTrustGraphError("discrepancy:count-cap")
-    finding_ids = {finding["finding_id"] for finding in findings}
-    parity_ids = {case["case_id"] for case in parity}
-    result: list[dict[str, object]] = []
-    for raw in value:
-        item = _expect_keys(raw, DISCREPANCY_KEYS, "discrepancy")
-        discrepancy_id = _hex(item["discrepancy_id"], "discrepancy:id")
-        kind = _text(item["kind"], "discrepancy:kind")
-        if kind not in ("SOURCE_CONFLICT_EVIDENCE", "PARITY_MISMATCH"):
-            raise ProviderTrustGraphError("discrepancy:kind")
-        responsibility = _text(item["responsibility_boundary"], "discrepancy:responsibility")
-        if responsibility not in ("SOURCE_RECONCILIATION_REQUIRED", "EVIDENCE_AND_EXPECTATION_REVIEW"):
-            raise ProviderTrustGraphError("discrepancy:responsibility")
-        refs = _sorted_unique(item["evidence_refs"], "discrepancy:evidence", maximum=MAX_RECORDS_PER_SOURCE * MAX_SOURCES)
-        parity_case_id = item["parity_case_id"]
-        if parity_case_id is not None and parity_case_id not in parity_ids:
-            raise ProviderTrustGraphError("discrepancy:parity-reference")
-        if kind == "PARITY_MISMATCH" and parity_case_id is None:
-            raise ProviderTrustGraphError("discrepancy:parity-reference")
-        if kind == "SOURCE_CONFLICT_EVIDENCE" and parity_case_id is not None:
-            raise ProviderTrustGraphError("discrepancy:source-reference")
-        expected = _digest("discrepancy-id", {key: item[key] for key in DISCREPANCY_KEYS if key != "discrepancy_id"}, profile=profile)
-        if discrepancy_id != expected:
-            raise ProviderTrustGraphError("discrepancy:id-mismatch")
-        if any(ref in finding_ids for ref in refs) and kind == "SOURCE_CONFLICT_EVIDENCE":
-            raise ProviderTrustGraphError("discrepancy:evidence-kind")
-        result.append(item)
-    ids = [item["discrepancy_id"] for item in result]
-    if ids != sorted(ids) or len(set(ids)) != len(ids):
-        raise ProviderTrustGraphError("discrepancy:order-or-duplicate")
-    return result
-
-
-def _validate_output(
-    value: object,
-    *,
-    allow_retest: bool = True,
-    history_depth: int = MAX_HISTORY_DEPTH,
-    profile: _GraphProfile | None = None,
-) -> dict[str, object]:
-    view = _profile_view(profile)
-    item = _expect_keys(value, V2_OUTPUT_KEYS if view.v2 else OUTPUT_KEYS, "artifact")
-    if _text(item["schema"], "artifact:schema") != view.schema:
-        raise ProviderTrustGraphError("artifact:schema")
-    if view.v2:
-        profile_value = _expect_keys(item["profile"], PROFILE_KEYS, "artifact:profile")
-        if profile_value != {"profile_id": view.profile_id, "version": view.version, "profile_digest": view.profile_digest}:
-            raise ProviderTrustGraphError("artifact:profile")
-    subject = _expect_keys(item["subject"], SUBJECT_KEYS, "artifact:subject")
-    if _text(subject["provider_graph_subject"], "artifact:subject") != view.subject or _text(subject["scope"], "artifact:scope") != view.scope:
-        raise ProviderTrustGraphError("artifact:subject")
-    snapshot = _expect_keys(item["observation_snapshot"], SNAPSHOT_KEYS, "artifact:snapshot")
-    snapshot_id = _text(snapshot["snapshot_id"], "snapshot:id")
-    snapshot_root = _hex(snapshot["snapshot_root"], "snapshot:root")
-    observation_time = _int(snapshot["observation_time"], "snapshot:time", minimum=1)
-    if view.v2 and not view.observation_start <= observation_time < view.observation_end:  # type: ignore[operator]
-        raise ProviderTrustGraphError("snapshot:observation-window")
-    _validate_sources(item["source_coverage"], observation_time, output=True, profile=view)
-    source_items = item["source_coverage"]
-    assert isinstance(source_items, list)
-    expected_snapshot_root = _digest(
-        "snapshot-root",
-        {
-            "provider_graph_subject": view.subject,
-            "scope": view.scope,
-            "observation_time": observation_time,
-            "source_roots": [source["source_root"] for source in source_items],
-        },
-        profile=view,
-    )
-    if snapshot_root != expected_snapshot_root:
-        raise ProviderTrustGraphError("snapshot:root-mismatch")
-    expected_snapshot_id = _digest("snapshot-id", {"snapshot_root": snapshot_root, "observation_time": observation_time}, profile=view)
-    if snapshot_id != expected_snapshot_id:
-        raise ProviderTrustGraphError("snapshot:id-mismatch")
-    findings_value = item["findings"]
-    if not isinstance(findings_value, list) or len(findings_value) > MAX_FINDINGS:
-        raise ProviderTrustGraphError("finding:count-cap")
-    findings = [_validate_finding(value, snapshot_id=snapshot_id, profile=view) for value in findings_value]
-    finding_ids = [finding["finding_id"] for finding in findings]
-    if finding_ids != sorted(finding_ids) or len(set(finding_ids)) != len(finding_ids):
-        raise ProviderTrustGraphError("finding:order-or-duplicate")
-    _validate_fact_nonmembership(source_items)
-    source_inputs = [{key: value for key, value in source.items() if key != "source_root"} for source in source_items]
-    expected_sources = _validate_sources(source_inputs, observation_time, output=False, profile=view)
-    expected_source_roots = [_source_root(source, profile=view) for source in expected_sources]
-    if expected_source_roots != [source["source_root"] for source in source_items]:
-        raise ProviderTrustGraphError("source:root-mismatch")
-    expected_findings, expected_discrepancies = _evaluate(expected_sources, observation_time, snapshot_id, profile=view)
-    if expected_findings != findings:
-        raise ProviderTrustGraphError("finding:semantic-mismatch")
-    parity = _validate_output_parity(item["parity_cases"], findings)
-    discrepancies = _validate_discrepancies(item["discrepancies"], findings, parity, profile=view)
-    expected_discrepancy_cores = expected_discrepancies[:]
-    for case in parity:
-        if not case["passed"]:
-            refs = list(case["evidence_refs"])
-            expected_discrepancy_cores.append(
-                _discrepancy("PARITY_MISMATCH", "EVIDENCE_AND_EXPECTATION_REVIEW", refs, case["case_id"], profile=view)
-            )
-    expected_discrepancy_cores.sort(key=lambda entry: entry["discrepancy_id"])
-    if expected_discrepancy_cores != discrepancies:
-        raise ProviderTrustGraphError("discrepancy:semantic-mismatch")
-    remediation = item["remediation"]
-    prior_report_id: str | None = None
-    prior_snapshot_id: str | None = None
-    prior_snapshot_root: str | None = None
-    if remediation is not None:
-        if not allow_retest or history_depth <= 0:
-            raise ProviderTrustGraphError("prior-artifact:nested-retest-forbidden")
-        remediation_item = _expect_keys(remediation, REMEDIATION_OUTPUT_KEYS, "remediation-output")
-        action = _text(remediation_item["action_artifact_id"], "remediation:action")
-        if _RE_ACTION.fullmatch(action) is None:
-            raise ProviderTrustGraphError("remediation:action")
-        submitted = _int(remediation_item["submitted_at"], "remediation:submitted-at")
-        result = _text(remediation_item["retest_result"], "remediation:result")
-        if result not in (RETEST_PASSED, RETEST_FAILED):
-            raise ProviderTrustGraphError("remediation:result")
-        prior_ids = _sorted_unique(remediation_item["prior_finding_ids"], "remediation:prior-findings", maximum=MAX_FINDINGS)
-        if not prior_ids:
-            raise ProviderTrustGraphError("remediation:prior-findings-empty")
-        prior = _validate_prior_artifact(remediation_item["prior_artifact"], profile=view)
-        prior_report = _expect_keys(prior["report"], REPORT_KEYS, "prior-artifact:report")
-        prior_snapshot = _expect_keys(prior["observation_snapshot"], SNAPSHOT_KEYS, "prior-artifact:snapshot")
-        prior_report_id = _hex(prior_report["report_id"], "prior-artifact:report-id")
-        prior_snapshot_id = _text(prior_snapshot["snapshot_id"], "prior-artifact:snapshot-id")
-        prior_snapshot_root = _hex(prior_snapshot["snapshot_root"], "prior-artifact:snapshot-root")
-        prior_findings = prior["findings"]
-        if prior_ids != sorted(prior_ids) or not set(prior_ids).issubset({finding["finding_id"] for finding in prior_findings}):
-            raise ProviderTrustGraphError("remediation:prior-findings")
-        if submitted <= prior_snapshot["observation_time"] or submitted > observation_time:
-            raise ProviderTrustGraphError("remediation:chronology")
-        if result == RETEST_PASSED and findings[0]["kind"] != FINDING_CONTINUITY:
-            raise ProviderTrustGraphError("remediation:passed-result-mismatch")
-        if result == RETEST_FAILED and findings[0]["kind"] == FINDING_CONTINUITY:
-            raise ProviderTrustGraphError("remediation:failed-result-mismatch")
-        lifecycle = LIFECYCLE_REMEDIATED if result == RETEST_PASSED else LIFECYCLE_RETEST_FAILED
-    else:
-        lifecycle = LIFECYCLE_OPEN
-    report = _expect_keys(item["report"], REPORT_KEYS, "report")
-    identity = _validate_identity_material(report["identity_material"], profile=view)
-    report_id = _hex(report["report_id"], "report:id")
-    if report["lifecycle"] != lifecycle or identity["lifecycle"] != lifecycle:
-        raise ProviderTrustGraphError("report:lifecycle")
-    if identity["snapshot_id"] != snapshot_id or identity["snapshot_root"] != snapshot_root or identity["observation_time"] != observation_time:
-        raise ProviderTrustGraphError("report:snapshot-binding")
-    expected_identity = dict(identity)
-    expected_identity["source_coverage_root"] = _digest("source-coverage-root", {"source_roots": [source["source_root"] for source in source_items]}, profile=view)
-    expected_identity["findings_root"] = _findings_root(findings, profile=view)
-    expected_identity["discrepancies_root"] = _digest("discrepancies-root", {"discrepancies": discrepancies}, profile=view)
-    expected_identity["parity_root"] = _digest("parity-root", {"parity_cases": parity}, profile=view)
-    expected_identity["remediation_root"] = _digest("remediation-root", {"remediation": remediation}, profile=view) if remediation is not None else None
-    expected_identity["prior_report_id"] = prior_report_id
-    expected_identity["prior_snapshot_id"] = prior_snapshot_id
-    expected_identity["prior_snapshot_root"] = prior_snapshot_root
-    if identity != expected_identity:
-        raise ProviderTrustGraphError("report:identity-material-mismatch")
-    if report_id != _digest("report-id", identity, profile=view):
-        raise ProviderTrustGraphError("report:id-mismatch")
-    transition = _expect_keys(item["transition"], TRANSITION_KEYS, "transition")
-    transition_kind = _text(transition["transition_kind"], "transition:kind")
-    expected_prior = prior_report_id
-    expected_prior_snapshot = prior_snapshot_id
-    expected_prior_root = prior_snapshot_root
-    if not allow_retest and any(value is not None for value in (expected_prior, expected_prior_snapshot, expected_prior_root)):
-        raise ProviderTrustGraphError("prior-artifact:must-be-initial-open")
-    if transition_kind != ("RETEST" if remediation is not None else "INITIAL"):
-        raise ProviderTrustGraphError("transition:kind")
-    if (transition["prior_report_id"], transition["prior_snapshot_id"], transition["prior_snapshot_root"]) != (expected_prior, expected_prior_snapshot, expected_prior_root):
-        raise ProviderTrustGraphError("transition:prior-binding")
-    if (transition["current_report_id"], transition["current_snapshot_id"], transition["current_snapshot_root"]) != (report_id, snapshot_id, snapshot_root):
-        raise ProviderTrustGraphError("transition:current-binding")
-    transition_core = {key: transition[key] for key in TRANSITION_KEYS if key != "transition_id"}
-    if transition["transition_id"] != _digest("transition-id", transition_core, profile=view):
-        raise ProviderTrustGraphError("transition:id-mismatch")
-    authority = _expect_keys(item["authority"], AUTHORITY_KEYS, "authority")
-    if authority != {
-        "clearance_authority": False,
-        "payment_authority": False,
-        "economic_mutation": False,
-        "production_usable": False,
-        "synthetic_only": True,
-    }:
-        raise ProviderTrustGraphError("authority:flags")
-    return item
 
 
 def _source_for_demo(source_id: str, source_kind: str, *, observation_time: int, records: list[dict[str, object]], complete: bool = True, nonmembership: list[str] | None = None, end: int = 9_000) -> dict[str, object]:
@@ -1299,22 +843,7 @@ def demo_input(case: str = "confirmed") -> dict[str, object]:
             _source_for_demo(SOURCE_CREDENTIAL_ID, SOURCE_CREDENTIAL_KIND, observation_time=observation_time, records=credential_records, complete=credential_complete, nonmembership=credential_nonmembership, end=credential_end),
             _source_for_demo(SOURCE_ENROLLMENT_ID, SOURCE_ENROLLMENT_KIND, observation_time=observation_time, records=enrollment_records, complete=enrollment_complete, nonmembership=enrollment_nonmembership, end=enrollment_end),
         ],
-        "prior_artifact": None,
-        "remediation": None,
-        "parity_cases": [],
     }
-
-
-def refresh_input_digests(value: Mapping[str, object], profile: object | None = None) -> dict[str, object]:
-    """Return a test-only copy with source provenance digests recomputed."""
-
-    result = deepcopy(value)
-    sources = result.get("sources")
-    if isinstance(sources, list):
-        for source in sources:
-            if isinstance(source, dict) and isinstance(source.get("provenance"), dict):
-                source["provenance"]["integrity_digest"] = source_integrity_digest(source, profile)
-    return result
 
 
 def _snapshot(
@@ -1373,86 +902,94 @@ def _process_peak_bytes() -> int | None:
         return None
 
 
-def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[bytes, dict[str, object]]:
-    """Evaluate one bounded input and return canonical artifact plus telemetry."""
+def _validate_output(value: object, *, profile: _GraphProfile | None = None) -> dict[str, object]:
+    """Validate the retained observation/findings grammar only.
 
+    Corrective action and retest state are Core-owned.  They are deliberately
+    absent from this artifact, so an old lifecycle-shaped artifact fails the
+    exact-key check rather than being reinterpreted.
+    """
+    view = _profile_view(profile)
+    item = _expect_keys(value, V2_OUTPUT_KEYS if view.v2 else OUTPUT_KEYS, "artifact")
+    if item["schema"] != view.schema:
+        raise ProviderTrustGraphError("artifact:schema")
+    if view.v2 and item["profile"] != {"profile_id": view.profile_id, "version": view.version, "profile_digest": view.profile_digest}:
+        raise ProviderTrustGraphError("artifact:profile")
+    subject = _expect_keys(item["subject"], SUBJECT_KEYS, "artifact:subject")
+    if subject != {"provider_graph_subject": view.subject, "scope": view.scope}:
+        raise ProviderTrustGraphError("artifact:subject")
+    snapshot = _expect_keys(item["observation_snapshot"], SNAPSHOT_KEYS, "artifact:snapshot")
+    snapshot_id = _text(snapshot["snapshot_id"], "snapshot:id")
+    snapshot_root = _hex(snapshot["snapshot_root"], "snapshot:root")
+    observation_time = _int(snapshot["observation_time"], "snapshot:time", minimum=1)
+    if view.v2 and not view.observation_start <= observation_time < view.observation_end:  # type: ignore[operator]
+        raise ProviderTrustGraphError("snapshot:observation-window")
+    source_items = _validate_sources(item["source_coverage"], observation_time, output=True, profile=view)
+    expected_snapshot_root = _digest("snapshot-root", {"provider_graph_subject": view.subject, "scope": view.scope, "observation_time": observation_time, "source_roots": [source["source_root"] for source in source_items]}, profile=view)
+    if snapshot_root != expected_snapshot_root or snapshot_id != _digest("snapshot-id", {"snapshot_root": snapshot_root, "observation_time": observation_time}, profile=view):
+        raise ProviderTrustGraphError("snapshot:binding")
+    findings_value = item["findings"]
+    if not isinstance(findings_value, list) or len(findings_value) > MAX_FINDINGS:
+        raise ProviderTrustGraphError("finding:count-cap")
+    findings = [_validate_finding(raw, snapshot_id=snapshot_id, profile=view) for raw in findings_value]
+    finding_ids = [finding["finding_id"] for finding in findings]
+    if finding_ids != sorted(finding_ids) or len(set(finding_ids)) != len(finding_ids):
+        raise ProviderTrustGraphError("finding:order-or-duplicate")
+    expected_findings, expected_discrepancies = _evaluate(source_items, observation_time, snapshot_id, profile=view)
+    if findings != expected_findings:
+        raise ProviderTrustGraphError("finding:semantic-mismatch")
+    discrepancies_value = item["discrepancies"]
+    if not isinstance(discrepancies_value, list) or len(discrepancies_value) > MAX_DISCREPANCIES:
+        raise ProviderTrustGraphError("discrepancy:count-cap")
+    discrepancies: list[dict[str, object]] = []
+    finding_set = {finding["finding_id"] for finding in findings}
+    for raw in discrepancies_value:
+        discrepancy = _expect_keys(raw, DISCREPANCY_KEYS, "discrepancy")
+        kind = _text(discrepancy["kind"], "discrepancy:kind")
+        if kind != "SOURCE_CONFLICT_EVIDENCE" or discrepancy["responsibility_boundary"] != "UNKNOWN":
+            raise ProviderTrustGraphError("discrepancy:authority")
+        refs = _sorted_unique(discrepancy["evidence_refs"], "discrepancy:evidence", maximum=MAX_RECORDS_PER_SOURCE * MAX_SOURCES)
+        if not set(refs).isdisjoint(finding_set):
+            raise ProviderTrustGraphError("discrepancy:evidence")
+        if discrepancy["discrepancy_id"] != _digest("discrepancy-id", {"kind": kind, "responsibility_boundary": "UNKNOWN", "evidence_refs": refs}, profile=view):
+            raise ProviderTrustGraphError("discrepancy:id")
+        discrepancies.append(discrepancy)
+    if [entry["discrepancy_id"] for entry in discrepancies] != sorted(entry["discrepancy_id"] for entry in discrepancies) or len({entry["discrepancy_id"] for entry in discrepancies}) != len(discrepancies):
+        raise ProviderTrustGraphError("discrepancy:order-or-duplicate")
+    if discrepancies != expected_discrepancies:
+        raise ProviderTrustGraphError("discrepancy:semantic-mismatch")
+    report = _expect_keys(item["report"], REPORT_KEYS, "report")
+    identity = _validate_identity_material(report["identity_material"], profile=view)
+    if identity["snapshot_id"] != snapshot_id or identity["snapshot_root"] != snapshot_root or identity["observation_time"] != observation_time:
+        raise ProviderTrustGraphError("report:snapshot-binding")
+    expected_identity = dict(identity)
+    expected_identity["source_coverage_root"] = _digest("source-coverage-root", {"source_roots": [source["source_root"] for source in source_items]}, profile=view)
+    expected_identity["findings_root"] = _findings_root(findings, profile=view)
+    expected_identity["discrepancies_root"] = _digest("discrepancies-root", {"discrepancies": discrepancies}, profile=view)
+    if identity != expected_identity or report["report_id"] != _digest("report-id", identity, profile=view):
+        raise ProviderTrustGraphError("report:identity-material-mismatch")
+    authority = _expect_keys(item["authority"], AUTHORITY_KEYS, "authority")
+    if authority != {"clearance_authority": False, "payment_authority": False, "economic_mutation": False, "production_usable": False, "synthetic_only": True}:
+        raise ProviderTrustGraphError("authority:flags")
+    return item
+
+
+def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[bytes, dict[str, object]]:
+    """Build only derived observation/findings evidence; no caller lifecycle."""
     start = time.perf_counter_ns()
     before = _process_peak_bytes()
     view = profile if isinstance(profile, _GraphProfile) else _profile_view(profile)
-    input_value = parse_canonical(raw_input, artifact=False)
-    validated = _validate_input(input_value, profile=view)
+    validated = _validate_input(parse_canonical(raw_input, artifact=False), profile=view)
     observation_time = validated["observation_time"]
     assert isinstance(observation_time, int)
-    input_sources = validated["sources"]
-    assert isinstance(input_sources, list)
-    sources = _validate_sources(input_sources, observation_time, output=False, profile=view)
-    _validate_fact_nonmembership(sources)
+    sources = _validate_sources(validated["sources"], observation_time, output=False, profile=view)
     source_outputs: list[dict[str, object]] = []
     for source in sources:
-        output_source = deepcopy(source)
-        output_source["source_root"] = _source_root(source, profile=view)
-        source_outputs.append(output_source)
+        output = deepcopy(source)
+        output["source_root"] = _source_root(source, profile=view)
+        source_outputs.append(output)
     snapshot_id, snapshot_root = _snapshot(sources, observation_time, profile=view)
     findings, discrepancies = _evaluate(sources, observation_time, snapshot_id, profile=view)
-    input_parity = _validate_input_parity(validated["parity_cases"])
-    parity_outputs: list[dict[str, object]] = []
-    for case in input_parity:
-        expected_kind = case["expected_kind"]
-        observed_kinds = sorted({finding["kind"] for finding in findings})
-        expected_refs = sorted(finding["finding_id"] for finding in findings if finding["kind"] == expected_kind)
-        passed = (expected_kind in observed_kinds) == case["expected_present"]
-        parity_outputs.append(
-            {
-                "case_id": case["case_id"],
-                "expected_kind": expected_kind,
-                "expected_present": case["expected_present"],
-                "observed_kinds": observed_kinds,
-                "passed": passed,
-                "evidence_refs": expected_refs,
-                "discrepancy_id": None,
-            }
-        )
-    for case in parity_outputs:
-        if not case["passed"]:
-            mismatch = _discrepancy(
-                "PARITY_MISMATCH",
-                "EVIDENCE_AND_EXPECTATION_REVIEW",
-                case["evidence_refs"],
-                case["case_id"],
-                profile=view,
-            )
-            discrepancies.append(mismatch)
-            case["discrepancy_id"] = mismatch["discrepancy_id"]
-    discrepancies.sort(key=lambda entry: entry["discrepancy_id"])
-    prior_artifact = validated["prior_artifact"]
-    remediation_input = validated["remediation"]
-    remediation_output: dict[str, object] | None = None
-    prior_report_id: str | None = None
-    prior_snapshot_id: str | None = None
-    prior_snapshot_root: str | None = None
-    if remediation_input is not None:
-        assert isinstance(remediation_input, dict) and isinstance(prior_artifact, dict)
-        prior = _validate_prior_artifact(prior_artifact, profile=view)
-        prior_report = _expect_keys(prior["report"], REPORT_KEYS, "prior-artifact:report")
-        prior_snapshot = _expect_keys(prior["observation_snapshot"], SNAPSHOT_KEYS, "prior-artifact:snapshot")
-        prior_report_id = _hex(prior_report["report_id"], "prior-artifact:report-id")
-        prior_snapshot_id = _text(prior_snapshot["snapshot_id"], "prior-artifact:snapshot-id")
-        prior_snapshot_root = _hex(prior_snapshot["snapshot_root"], "prior-artifact:snapshot-root")
-        current_kind = findings[0]["kind"]
-        if remediation_input["retest_result"] == RETEST_PASSED and current_kind != FINDING_CONTINUITY:
-            raise ProviderTrustGraphError("remediation:passed-result-mismatch")
-        if remediation_input["retest_result"] == RETEST_FAILED and current_kind == FINDING_CONTINUITY:
-            raise ProviderTrustGraphError("remediation:failed-result-mismatch")
-        remediation_output = {
-            "action_artifact_id": remediation_input["action_artifact_id"],
-            "submitted_at": remediation_input["submitted_at"],
-            "retest_result": remediation_input["retest_result"],
-            "prior_finding_ids": remediation_input["prior_finding_ids"],
-            "prior_artifact": deepcopy(prior),
-        }
-        lifecycle = LIFECYCLE_REMEDIATED if remediation_input["retest_result"] == RETEST_PASSED else LIFECYCLE_RETEST_FAILED
-    else:
-        lifecycle = LIFECYCLE_OPEN
     identity: dict[str, object] = {
         "provider_graph_subject": view.subject,
         "scope": view.scope,
@@ -1462,31 +999,10 @@ def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[by
         "source_coverage_root": _digest("source-coverage-root", {"source_roots": [source["source_root"] for source in source_outputs]}, profile=view),
         "findings_root": _findings_root(findings, profile=view),
         "discrepancies_root": _digest("discrepancies-root", {"discrepancies": discrepancies}, profile=view),
-        "remediation_root": _digest("remediation-root", {"remediation": remediation_output}, profile=view) if remediation_output is not None else None,
-        "parity_root": _digest("parity-root", {"parity_cases": parity_outputs}, profile=view),
-        "lifecycle": lifecycle,
-        "prior_report_id": prior_report_id,
-        "prior_snapshot_id": prior_snapshot_id,
-        "prior_snapshot_root": prior_snapshot_root,
     }
     if view.v2:
-        identity = {
-            "profile_id": view.profile_id,
-            "version": view.version,
-            "profile_digest": view.profile_digest,
-            **identity,
-        }
+        identity = {"profile_id": view.profile_id, "version": view.version, "profile_digest": view.profile_digest, **identity}
     report_id = _digest("report-id", identity, profile=view)
-    transition_core: dict[str, object] = {
-        "transition_kind": "RETEST" if remediation_output is not None else "INITIAL",
-        "prior_report_id": prior_report_id,
-        "prior_snapshot_id": prior_snapshot_id,
-        "prior_snapshot_root": prior_snapshot_root,
-        "current_report_id": report_id,
-        "current_snapshot_id": snapshot_id,
-        "current_snapshot_root": snapshot_root,
-    }
-    transition = {"transition_id": _digest("transition-id", transition_core, profile=view), **transition_core}
     artifact: dict[str, object] = {
         "schema": view.schema,
         "subject": {"provider_graph_subject": view.subject, "scope": view.scope},
@@ -1494,57 +1010,22 @@ def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[by
         "source_coverage": source_outputs,
         "findings": findings,
         "discrepancies": discrepancies,
-        "remediation": remediation_output,
-        "parity_cases": parity_outputs,
-        "transition": transition,
-        "report": {"report_id": report_id, "identity_material": identity, "lifecycle": lifecycle},
-        "authority": {
-            "clearance_authority": False,
-            "payment_authority": False,
-            "economic_mutation": False,
-            "production_usable": False,
-            "synthetic_only": True,
-        },
+        "report": {"report_id": report_id, "identity_material": identity},
+        "authority": {"clearance_authority": False, "payment_authority": False, "economic_mutation": False, "production_usable": False, "synthetic_only": True},
     }
     if view.v2:
-        artifact["profile"] = {
-            "profile_id": view.profile_id,
-            "version": view.version,
-            "profile_digest": view.profile_digest,
-        }
+        artifact["profile"] = {"profile_id": view.profile_id, "version": view.version, "profile_digest": view.profile_digest}
     _validate_output(artifact, profile=view)
     raw = _canonical(artifact)
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise ProviderTrustGraphError("artifact:byte-cap")
     after = _process_peak_bytes()
-    peak = max(value for value in (before, after) if value is not None) if any(value is not None for value in (before, after)) else None
-    telemetry: dict[str, object] = {
-        "artifact_bytes": len(raw),
-        "wall_time_ns": time.perf_counter_ns() - start,
-        "process_tree_peak_bytes": peak,
-        "process_tree_scope": "single-process; no child processes",
-        "proof_performance_claim": False,
-    }
-    return raw, telemetry
+    peak_values = [value for value in (before, after) if value is not None]
+    return raw, {"artifact_bytes": len(raw), "wall_time_ns": time.perf_counter_ns() - start, "process_tree_peak_bytes": max(peak_values) if peak_values else None, "process_tree_scope": "single-process; no child processes", "proof_performance_claim": False}
 
 
 def build_demo_report(case: str = "confirmed") -> tuple[bytes, dict[str, object]]:
     return build_report(canonical_input(demo_input(case)))
-
-
-def prior_artifact_from_artifact(raw: bytes, profile: object | None = None) -> dict[str, object]:
-    """Extract the complete initial artifact needed by an append-only retest."""
-
-    artifact = parse_canonical(raw, artifact=True)
-    view = profile if isinstance(profile, _GraphProfile) else _profile_view(profile)
-    _validate_prior_artifact(artifact, profile=view)
-    return deepcopy(artifact)
-
-
-def prior_link_from_artifact(raw: bytes, profile: object | None = None) -> dict[str, object]:
-    """Compatibility helper returning the full artifact, never a partial link."""
-
-    return prior_artifact_from_artifact(raw, profile)
 
 
 def _read_bounded(path: str | Path, maximum: int) -> bytes:

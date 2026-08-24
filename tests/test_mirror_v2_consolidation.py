@@ -16,6 +16,8 @@ from unittest import mock
 
 from app.mirror import core_v2 as core
 from app.mirror import core_v2_independent as core_independent
+from app.mirror import external_corrective_action as corrective_action
+from app.mirror import external_corrective_action_independent as corrective_action_independent
 from app.mirror import external_source_adapter as external_adapter
 from app.mirror import external_governance_approval as governance
 from app.mirror import external_privacy_support_approval as privacy
@@ -408,6 +410,47 @@ class _PrivacyVerifier:
             support_controls=tuple((key, True) for key in privacy.SUPPORT_CONTROL_KEYS),
             zero_phi=True,
             state_owned=True,
+        )
+
+
+class _CorrectiveActionVerifier:
+    identity = "SYNTH_CORRECTIVE_ACTION_VERIFIER"
+    epoch = 1
+
+    def verify(
+        self,
+        evidence_raw: bytes,
+        policy: corrective_action.CorrectiveActionPolicyV1,
+    ) -> corrective_action.VerifiedCorrectiveActionV1:
+        evidence_digest = corrective_action._raw_digest(evidence_raw)
+        observed_at = policy.valid_from + 1
+        action_id = corrective_action._digest(
+            "action-id",
+            {
+                "policy_digest": policy.digest,
+                "evidence_sha3_512": evidence_digest,
+                "action_code": "CORRECTIVE_ACTION_RECORDED",
+                "observed_at": observed_at,
+            },
+        )
+        return corrective_action.VerifiedCorrectiveActionV1(
+            action_id=action_id,
+            policy_digest=policy.digest,
+            case_id=policy.case_id,
+            current_case_artifact_id=policy.current_case_artifact_id,
+            source_artifact_id=policy.source_artifact_id,
+            graph_artifact_id=policy.graph_artifact_id,
+            graph_report_id=policy.graph_report_id,
+            target_finding_ids=policy.target_finding_ids,
+            target_finding_kinds=policy.target_finding_kinds,
+            action_code="CORRECTIVE_ACTION_RECORDED",
+            observed_at=observed_at,
+            valid_from=policy.valid_from,
+            valid_until=policy.valid_until,
+            verifier_id=self.identity,
+            verifier_epoch=self.epoch,
+            evidence_sha3_512=evidence_digest,
+            evidence_byte_length=len(evidence_raw),
         )
 
 
@@ -984,13 +1027,29 @@ class MirrorV2Fixture(unittest.TestCase):
 
     def test_case_heads_are_lineage_scoped_and_interleaved_retries_converge(self) -> None:
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
-        case_b = self._ordered_second_case()
-        a_responsibility = self.core.advance_case(case_a, next_state="RESPONSIBILITY", responsibility="UNKNOWN")
-        b_responsibility = self.core.advance_case(case_b, next_state="RESPONSIBILITY", responsibility="STATE_SOURCE")
-        a_remediation = self.core.advance_case(a_responsibility.subject_id, next_state="REMEDIATION", remediation="PROPOSED")
-        b_remediation = self.core.advance_case(b_responsibility.subject_id, next_state="REMEDIATION", remediation="ASSERTED")
-        self.assertEqual(a_remediation.raw, self.core.advance_case(a_responsibility.subject_id, next_state="REMEDIATION", remediation="PROPOSED").raw)
-        self.assertEqual(b_remediation.raw, self.core.advance_case(b_responsibility.subject_id, next_state="REMEDIATION", remediation="ASSERTED").raw)
+        later = self._admit_later_source()
+        case_b = self.core.admit_case(later["source_result"]["reconciliation_artifact_id"])
+        a_action, a_action_id, a_raw, a_policy, a_evidence = self._record_case_action(case_a)
+        b_action, b_action_id, b_raw, b_policy, b_evidence = self._record_case_action(case_b)
+        self.assertEqual(
+            a_action.raw,
+            self.core.record_case_action(
+                case_a,
+                action_raw=a_raw,
+                policy=a_policy,
+                evidence_raw=a_evidence,
+            ).raw,
+        )
+        self.assertEqual(
+            b_action.raw,
+            self.core.record_case_action(
+                case_b,
+                action_raw=b_raw,
+                policy=b_policy,
+                evidence_raw=b_evidence,
+            ).raw,
+        )
+        self.assertNotEqual(a_action_id, b_action_id)
         verified = self.core.verify()
         self.assertGreaterEqual(verified["artifact_count"], 11)
         connection = sqlite3.connect(self.core_path)
@@ -1003,20 +1062,157 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual({row[0] for row in heads}, set(case_ids))
-        self.assertEqual({row[1] for row in heads}, {a_remediation.subject_id, b_remediation.subject_id})
+        self.assertEqual({row[1] for row in heads}, {a_action_id, b_action_id})
+
+    def test_independent_rejects_rehashed_case_semantics(self) -> None:
+        case_row_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        tampered = self.root / "core-case-semantic.db"
+        shutil.copy2(self.core_path, tampered)
+        connection = sqlite3.connect(tampered)
+        connection.row_factory = sqlite3.Row
+        try:
+            row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_row_id,)).fetchone()
+            event_row = connection.execute("SELECT sequence,event_raw FROM core_events WHERE event_kind='ARTIFACT' AND subject_id=?", (case_row_id,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertIsNotNone(event_row)
+            case = json.loads(bytes(row["raw"]).decode("ascii"))
+            replacement_kind = "CREDENTIAL_EXPIRED" if case["target_finding_kinds"][0] != "CREDENTIAL_EXPIRED" else "ENROLLMENT_TERMINATED"
+            case["target_finding_kinds"][0] = replacement_kind
+            case["artifact_id"] = core._digest("case-artifact", {key: case[key] for key in case if key != "artifact_id"})
+            case_raw = core._canonical(case)
+            rebound_row_id = core._digest(
+                "artifact-row-id",
+                {
+                    "kind": "CASE",
+                    "raw": core._raw_digest("artifact-bytes", case_raw),
+                    "profile_digest": row["profile_digest"],
+                    "source_artifact_id": row["source_artifact_id"],
+                    "predecessor_id": row["predecessor_id"],
+                },
+            )
+            connection.execute("UPDATE core_artifacts SET artifact_id=?,raw=? WHERE artifact_id=?", (rebound_row_id, case_raw, case_row_id))
+            event = json.loads(bytes(event_row["event_raw"]).decode("ascii"))
+            event["material"]["artifact_id"] = rebound_row_id
+            event["material"]["raw_digest"] = core._raw_digest("artifact-bytes", case_raw)
+            event["material"]["raw_length"] = len(case_raw)
+            event["material_digest"] = core._digest("material", event["material"])
+            event["subject_id"] = rebound_row_id
+            event["payload_digest"] = rebound_row_id
+            event["payload_length"] = len(case_raw)
+            event["event_id"] = core._digest("event-id", {key: event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}})
+            event["after_root"] = core_independent._event_root(event)
+            event["stream_after_root"] = core_independent._stream_root(event)
+            event_raw = core._canonical(event)
+            connection.execute("UPDATE core_events SET event_id=?,subject_id=?,event_raw=?,receipt_digest=? WHERE sequence=?", (event["event_id"], rebound_row_id, event_raw, core._raw_digest("receipt", event_raw), event_row["sequence"]))
+            connection.execute("UPDATE core_meta SET head_root=? WHERE meta_id=1", (event["after_root"],))
+            connection.execute("UPDATE core_heads SET head_ref=?,head_root=? WHERE stream_kind='ARTIFACT' AND stream_id=?", (rebound_row_id, event["stream_after_root"], case["case_id"]))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, r"core:case-(?:chain|semantic)"):
+            core_independent.verify_database(tampered, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest)
+
+    def test_case_action_and_retest_are_derived_and_raw_evidence_is_not_persisted(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        connection = sqlite3.connect(self.core_path)
+        try:
+            case = json.loads(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (case_id,)).fetchone()[0]).decode("ascii"))
+        finally:
+            connection.close()
+        self.assertEqual(case["state"], "OPEN")
+        self.assertEqual(case["responsibility"], "UNKNOWN")
+        action_receipt, action_id, action_raw, action_policy, evidence = self._record_case_action(case_id)
+        before_bytes = self.core_path.read_bytes()
+        before_verify = self.core.verify(ingress_path=self.ingress_path)
+        with self.assertRaisesRegex(core.CoreConflictError, "core:action-verification"):
+            self.core.record_case_action(
+                case_id,
+                action_raw=action_raw,
+                policy=replace(action_policy, graph_report_id=_hex("rebound-action-policy")),
+                evidence_raw=evidence,
+            )
+        self.assertEqual(before_bytes, self.core_path.read_bytes())
+        self.assertEqual(before_verify, self.core.verify(ingress_path=self.ingress_path))
+
+        later = self._admit_later_source(subject_seed=None)
+        evaluated = self.core.evaluate_case(action_receipt and json.loads(action_receipt.raw.decode("ascii"))["material"]["artifact_id"], later["source_result"]["source_artifact_id"])
+        final_case_id = json.loads(evaluated.raw.decode("ascii"))["material"]["artifact_id"]
+        connection = sqlite3.connect(self.core_path)
+        try:
+            final_case = json.loads(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (final_case_id,)).fetchone()[0]).decode("ascii"))
+        finally:
+            connection.close()
+        self.assertEqual(final_case["state"], "RETEST_FAILED_OR_INDETERMINATE")
+        self.assertIn(final_case["reason"], {"RETEST_INDETERMINATE", "TARGET_FINDINGS_REMAIN"})
+        self.assertEqual(final_case["responsibility"], "UNKNOWN")
+        self.assertEqual(final_case["retest_source_artifact_id"], later["source_result"]["source_artifact_id"])
+        database_bytes = self.core_path.read_bytes()
+        self.assertNotIn(evidence, database_bytes)
+        self.assertNotIn(evidence, self.core.logical_export())
+        self.assertNotIn(evidence.decode("ascii"), json.dumps(self.core.support(), sort_keys=True))
+        self.assertNotEqual(action_id, final_case_id)
+        core_independent.verify_database(self.core_path, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest, ingress_path=self.ingress_path)
+
+    def test_case_action_and_retest_concurrent_retries_are_idempotent(self) -> None:
+        case_id = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
+        action_receipt, _action_id, action_raw, action_policy, evidence = self._record_case_action(case_id)
+        action_results: list[core.CoreReceipt] = []
+        action_errors: list[BaseException] = []
+
+        def retry_action() -> None:
+            try:
+                action_results.append(self.core.record_case_action(case_id, action_raw=action_raw, policy=action_policy, evidence_raw=evidence))
+            except BaseException as exc:
+                action_errors.append(exc)
+
+        action_threads = [threading.Thread(target=retry_action) for _ in range(2)]
+        for thread in action_threads:
+            thread.start()
+        for thread in action_threads:
+            thread.join()
+        self.assertEqual([], action_errors)
+        self.assertEqual(2, len(action_results))
+        self.assertEqual({action_receipt.raw}, {result.raw for result in action_results})
+
+        conflicting_policy = replace(action_policy, authority_evidence_digest=_hex("conflicting-action-authority"))
+        conflicting_raw = corrective_action.CorrectiveActionService(conflicting_policy, _CorrectiveActionVerifier()).observe(evidence)
+        before_conflict = self.core.verify(ingress_path=self.ingress_path)
+        with self.assertRaisesRegex(core.CoreConflictError, r"core:case-(?:state|head)"):
+            self.core.record_case_action(case_id, action_raw=conflicting_raw, policy=conflicting_policy, evidence_raw=evidence)
+        self.assertEqual(before_conflict, self.core.verify(ingress_path=self.ingress_path))
+
+        later = self._admit_later_source(subject_seed=None)
+        current_case_id = json.loads(action_receipt.raw.decode("ascii"))["material"]["artifact_id"]
+        retest_results: list[core.CoreReceipt] = []
+        retest_errors: list[BaseException] = []
+
+        def retry_retest() -> None:
+            try:
+                retest_results.append(self.core.evaluate_case(current_case_id, later["source_result"]["source_artifact_id"]))
+            except BaseException as exc:
+                retest_errors.append(exc)
+
+        retest_threads = [threading.Thread(target=retry_retest) for _ in range(2)]
+        for thread in retest_threads:
+            thread.start()
+        for thread in retest_threads:
+            thread.join()
+        self.assertEqual([], retest_errors)
+        self.assertEqual(2, len(retest_results))
+        self.assertEqual({retest_results[0].raw}, {result.raw for result in retest_results})
 
     def test_independent_rejects_cross_case_stream_rebinding_after_root_rebinding(self) -> None:
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
-        case_b = self._ordered_second_case()
-        self.core.advance_case(case_a, next_state="RESPONSIBILITY", responsibility="UNKNOWN")
-        b_responsibility = self.core.advance_case(case_b, next_state="RESPONSIBILITY", responsibility="STATE_SOURCE")
+        later = self._admit_later_source()
+        case_b = self.core.admit_case(later["source_result"]["reconciliation_artifact_id"])
+        _, b_action_id, _b_raw, _b_policy, _b_evidence = self._record_case_action(case_b)
         tampered = self.root / "core-cross-case-stream.db"
         shutil.copy2(self.core_path, tampered)
         connection = sqlite3.connect(tampered)
         try:
             event_row = connection.execute("SELECT sequence,event_raw FROM core_events WHERE event_kind='ARTIFACT' ORDER BY sequence DESC LIMIT 1").fetchone()
             event = json.loads(bytes(event_row[1]).decode("ascii"))
-            self.assertEqual(event["material"]["artifact_id"], b_responsibility.subject_id)
+            self.assertEqual(event["material"]["artifact_id"], b_action_id)
             a_head = connection.execute("SELECT head_root FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (json.loads(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (case_a,)).fetchone()[0]).decode("ascii"))["case_id"],)).fetchone()[0]
             event["stream_id"] = json.loads(bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (case_a,)).fetchone()[0]).decode("ascii"))["case_id"]
             event["stream_before_root"] = a_head
@@ -1560,81 +1756,90 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
-    def _ordered_second_case(self, *, finish_case: bool = True) -> str:
-        """Build one later, bounded Core observation for lineage-head tests.
+    def _admit_later_source(self, *, subject_seed: str | None = "case-second-subject", location_variant: str = "changed") -> dict[str, object]:
+        from app.mirror import nc_medicaid_fhir as fhir
+        from tests.test_nc_medicaid_fhir_source import _bundle
 
-        The NC fixture profile fixes its observation time, so the public source
-        path correctly rejects the profile-owned changed Location at equal
-        time.  Case-head tests use a fully shaped synthetic Core projection
-        with a strictly later observation time to exercise the separate Core
-        lineage owner without weakening source chronology.
-        """
-        baseline_source_id = self.source_result["source_artifact_id"]
-        baseline_reconciliation_id = self.source_result["reconciliation_artifact_id"]
-        connection = core._connection(self.core_path)
+        observation_time = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds
+        if subject_seed is None:
+            subject_id = profile.DEFAULT_CAPTURE_CONTEXT.subject_id
+            credential_id = profile.DEFAULT_CAPTURE_CONTEXT.credential_id
+            enrollment_id = profile.DEFAULT_CAPTURE_CONTEXT.enrollment_id
+            locator_digest = profile.DEFAULT_CAPTURE_CONTEXT.subject_locator_digest
+            lease_seed = "case-same-subject"
+        else:
+            subject_id = _hex(subject_seed)
+            credential_id = _hex(subject_seed + "-credential")
+            enrollment_id = _hex(subject_seed + "-enrollment")
+            locator_digest = _hex(subject_seed + "-locator")
+            lease_seed = subject_seed
+        context = profile.DynamicCaptureContext(
+            subject_id,
+            credential_id,
+            enrollment_id,
+            locator_digest,
+            observation_time,
+            observation_time + 10,
+        )
+        request_url = profile.NC_MEDICAID_PROFILE.page_url(0, context)
+        bundle = _bundle(location_variant=location_variant)
+        bundle["link"] = [{"relation": "self", "url": request_url}]
+        transport = fhir.SyntheticFhirTransport({
+            (request_url, 0): fhir.fixture_response(bundle, request_url),
+        })
+        envelope = fhir.build_fixture_envelope(transport, context=context)
+        self.clock.value = observation_time
+        created = self.ingress.ensure_slot(observation_time)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        token = _ingress_token(lease_seed + "-lease")
+        self.ingress.claim_slot(slot_id, lease_token=token)
+        receipt = self.ingress.admit_capture(
+            envelope,
+            evidence_raw=_external_evidence(self.ingress_config, envelope),
+            scheduled_at=observation_time,
+            attempt=1,
+            lease_token=token,
+        )
+        self.core_clock.value = observation_time + 2
+        result = self.core.ingest_source(self.ingress_path, receipt.artifact_id or "")
+        return {"source_result": result, "artifact_id": receipt.artifact_id or "", "observation_time": observation_time, "envelope": envelope}
+
+    def _record_case_action(self, case_artifact_id: str) -> tuple[core.CoreReceipt, str, bytes, corrective_action.CorrectiveActionPolicyV1, bytes]:
+        connection = sqlite3.connect(self.core_path)
         try:
-            connection.execute("BEGIN IMMEDIATE")
-            source_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (baseline_source_id,)).fetchone()
-            if source_row is None:
-                raise AssertionError("baseline source missing")
-            source = json.loads(bytes(source_row[0]).decode("ascii"))
-            source["ingress_artifact_id"] = _hex("ordered-second-ingress")
-            source["envelope_id"] = _hex("ordered-second-envelope")
-            source["envelope_digest"] = _hex("ordered-second-envelope-bytes")
-            source["snapshot_id"] = _hex("ordered-second-snapshot")
-            source["snapshot_root"] = _hex("ordered-second-snapshot-root")
-            source["content_root"] = _hex("ordered-second-content")
-            source["ingress_event_sequence"] = source["ingress_event_sequence"] + 1
-            source["ingress_prefix_root"] = _hex("ordered-second-prefix")
-            source["ingress_after_root"] = _hex("ordered-second-after")
-            source["ingress_head_root"] = _hex("ordered-second-after")
-            source["observation_time"] = profile.FIXTURE_OBSERVATION_TIME + 1
-            source["observation_status"] = "OBSERVED_CHANGED"
-            source["chronology"] = "ADVANCING"
-            source["artifact_id"] = ""
-            source["artifact_id"] = core._digest("source-artifact-id", {key: source[key] for key in source if key not in {"artifact_id", "flags"}})
-            source_raw = core._canonical(source)
-            source_id, _ = self.core._admit_artifact(
-                connection,
-                kind="SOURCE_OBSERVATION",
-                raw=source_raw,
-                profile_digest=self.core_config.runtime_profile_digest,
-                predecessor_id=baseline_source_id,
-                source_artifact_id=source["ingress_artifact_id"],
-                operation_id=core._digest("source-operation", {"ingress_artifact_id": source["ingress_artifact_id"]}),
-                request_digest=core._digest("source-request", {"ingress_artifact_id": source["ingress_artifact_id"]}),
-                state="OBSERVED_CHANGED",
-                observed_at=profile.FIXTURE_OBSERVATION_TIME + 10,
-                ingress_watermark=source["ingress_event_sequence"],
-            )
-            reconciliation = {
-                "schema": "mirror-core-reconciliation-v3", "schema_version": 3, "kind": "RECONCILIATION", "artifact_id": "",
-                "current_source_artifact_id": source_id, "prior_source_artifact_id": baseline_source_id,
-                "current_content_root": source["content_root"], "prior_content_root": json.loads(bytes(source_row[0]).decode("ascii"))["content_root"],
-                "source_status": "COMPLETE", "observation_status": "OBSERVED_CHANGED", "chronology": "ADVANCING", "linkage": "UNCHANGED", "flags": dict(core.FIXED_FLAGS),
-            }
-            reconciliation["artifact_id"] = core._digest("reconciliation-id", {key: reconciliation[key] for key in reconciliation if key != "artifact_id"})
-            reconciliation_id, _ = self.core._admit_artifact(
-                connection,
-                kind="RECONCILIATION",
-                raw=core._canonical(reconciliation),
-                profile_digest=self.core_config.runtime_profile_digest,
-                predecessor_id=baseline_reconciliation_id,
-                source_artifact_id=source_id,
-                operation_id=core._digest("reconciliation-operation", {"source_artifact_id": source_id}),
-                request_digest=core._digest("reconciliation-request", {"source_artifact_id": source_id}),
-                state="OBSERVED_CHANGED",
-                observed_at=profile.FIXTURE_OBSERVATION_TIME + 10,
-                ingress_watermark=source["ingress_event_sequence"],
-            )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
+            case_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_artifact_id,)).fetchone()[0])
+            case = json.loads(case_raw.decode("ascii"))
+            source_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'", (case["source_artifact_id"],)).fetchone()[0])
+            source = json.loads(source_raw.decode("ascii"))
         finally:
             connection.close()
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 10
-        return self.core.admit_case(reconciliation_id) if finish_case else reconciliation_id
+        policy = corrective_action.CorrectiveActionPolicyV1(
+            case_id=case["case_id"],
+            current_case_artifact_id=case_artifact_id,
+            source_artifact_id=case["source_artifact_id"],
+            graph_artifact_id=case["graph_artifact_id"],
+            graph_report_id=case["graph_report_id"],
+            target_finding_ids=tuple(case["target_finding_ids"]),
+            target_finding_kinds=tuple(case["target_finding_kinds"]),
+            verifier_id=_CorrectiveActionVerifier.identity,
+            verifier_epoch=_CorrectiveActionVerifier.epoch,
+            authority_evidence_digest=_hex(case_artifact_id + "-authority")[:128],
+            revocation_head_digest=_hex(case_artifact_id + "-revocation")[:128],
+            terms_digest=_hex(case_artifact_id + "-terms")[:128],
+            retention_policy_digest=_hex(case_artifact_id + "-retention")[:128],
+            valid_from=int(source["observation_time"]),
+            valid_until=int(source["observation_time"]) + 100,
+        )
+        evidence = b"synthetic corrective evidence"
+        action_raw = corrective_action.CorrectiveActionService(policy, _CorrectiveActionVerifier()).observe(evidence)
+        receipt = self.core.record_case_action(
+            case_artifact_id,
+            action_raw=action_raw,
+            policy=policy,
+            evidence_raw=evidence,
+        )
+        action_value = json.loads(receipt.raw.decode("ascii"))["material"]
+        return receipt, str(action_value["artifact_id"]), action_raw, policy, evidence
 
     def test_exact_three_owner_tables_and_full_chain(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
@@ -1755,7 +1960,7 @@ class MirrorV2Fixture(unittest.TestCase):
             self.assertNotIn(field, current)
 
     def test_core_reconciliation_predecessor_is_not_a_source_artifact(self) -> None:
-        self._ordered_second_case(finish_case=False)
+        self._admit_later_source()
         path = self.root / "rebound-reconciliation-predecessor.db"
         shutil.copy2(self.core_path, path)
         connection = sqlite3.connect(path)
@@ -2335,17 +2540,16 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:(profile|artifact-time)"):
             graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_time, time_registry)
 
-        input_parity_value = json.loads(coverage_a.graph_input.decode("utf-8"))
-        input_parity_value["parity_cases"] = [{
-            "case_id": "CASE_001",
-            "expected_kind": "EVIDENCE_INCOMPLETE",
-            "expected_present": True,
-        }]
-        input_parity = graph_producer.canonical_input(input_parity_value)
-        graph_parity, _telemetry = graph_producer.build_report(input_parity, profile=coverage_a.graph_profile)
-        self.assertTrue(graph_independent.verify_input_binding_v2(input_parity, graph_parity, registry)["accepted"])
-        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-parity"):
-            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_parity, registry)
+        input_record_value = json.loads(coverage_a.graph_input.decode("utf-8"))
+        input_record_value["sources"][0]["records"][0]["record_id"] = _hex("rebound-record")
+        input_record_value["sources"][0]["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
+            input_record_value["sources"][0], coverage_a.graph_profile
+        )
+        input_record = graph_producer.canonical_input(input_record_value)
+        graph_record, _telemetry = graph_producer.build_report(input_record, profile=coverage_a.graph_profile)
+        self.assertTrue(graph_independent.verify_input_binding_v2(input_record, graph_record, registry)["accepted"])
+        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-sources"):
+            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_record, registry)
 
     def test_core_structural_only_verification_is_not_upstream_acceptance(self) -> None:
         structural = core_independent.verify_database(
