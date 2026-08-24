@@ -62,7 +62,8 @@ py -3.14 -B experiments/native_v3_phase0/native_v3_fixture.py kat
 py -3.14 -B experiments/native_v3_phase0/native_v3_fixture.py negatives
 cargo run --manifest-path experiments/native_v3_phase0_rust/Cargo.toml --locked --offline -- kat
 cargo run --manifest-path experiments/native_v3_phase0_rust/Cargo.toml --locked --offline -- negatives
-py -3.14 -B -m pytest -q tests/test_active_core_contract.py tests/test_security_freeze_spec.py
+py -3.14 -B -m pytest -q tests/test_active_core_contract.py tests/test_security_freeze_spec.py tests/test_qualification_gate.py
+py -3.14 -B -m tools.qualification_gate inspect
 py -3.14 -B -m pytest -q tests/test_documentation_governance.py
 git diff --check
 ```

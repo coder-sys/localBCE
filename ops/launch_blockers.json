@@ -1,134 +1,61 @@
 {
-  "schema_version": "blind_ledger_launch_blockers_v1",
-  "planning_model": {
-    "internal_engineering_packages": 81,
-    "internal_complete": 33,
-    "internal_open": 48,
-    "external_assurance_gates": 1,
-    "release_candidate_state": "NOT_DEPLOYMENT_READY",
-    "proof_suite_state": "UNSELECTED",
-    "production_usable": false,
-    "contract": "docs/IMPLEMENTATION_ROADMAP.md"
-  },
-  "classification_definitions": {
-    "internal_engineering": "Must be designed, implemented, tested, and packaged by Blind Ledger; outside help is not a closure dependency.",
-    "security_audit_gate": "The one independent assurance gate after all internal engineering packages close.",
-    "activation_input": "A live credential, endpoint, signer, account, or authorization supplied to the finished release; not missing engineering."
-  },
+  "schema_version": "blind_ledger_launch_blockers_v2",
   "blockers": [
     {
-      "id": "LB-001",
-      "title": "Production native STARK prover and verifier",
-      "status": "open",
-      "owner": "cryptography_engineering",
+      "id": "BL-PROOF-SOUNDNESS",
       "classification": "internal_engineering",
-      "external_required": false,
-      "release_candidate_blocker": true,
-      "production_activation_blocker": true,
-      "current_evidence": "A real Rust selected-AIR proof can be generated and independently replayed by the native verifier executable; the exact executable plus AIR program bytes are SHA3-512-domain-separated into the enforced artifact identity, the version-2 proof package is an exact 64 MiB container, and its authenticated transcript is independently checked. Independent composition review established that this is a narrow selected-AIR component, not the complete Wave1A semantic-bus, typed-state, H4 claim/payment/replay/state theorem. Aggregate qualification is fail closed and no current path reaches BUILT_AUDIT_PENDING.",
-      "remaining_work": "Implement and independently verify a verifier-safe H4 proof grammar, the complete semantic-bus trace producer and proof-native M31/Fp16 equality, a verifier-safe typed-state component, and then one fixed-shape version-3 composite grammar and standalone verifier. Close the selected suite, parser, supply-chain, reproducible release, and exact production-verifier qualification gaps without treating version-2 component evidence as the complete theorem.",
-      "exit_criteria": "The complete native STARK prover and independent verifier lane is internally implemented, reproducible, pinned, and qualified for the exact statement, suite, sidecar, and public-input schema, with a per-proof candidate identity in BUILT_AUDIT_PENDING; the global operational proofSuiteId remains unset until deployed acceptance and audit."
-    },
-    {
-      "id": "LB-002",
-      "title": "Final independent Security Audit Gate",
+      "gate": "qualification",
       "status": "open",
-      "owner": "security_owner",
-      "classification": "security_audit_gate",
-      "external_required": true,
-      "release_candidate_blocker": false,
-      "production_activation_blocker": true,
-      "exit_criteria": "One independent audit covers AIR soundness, witness hiding/PQ, wide-state cryptography, native verification, atomic database transitions, supply chain, and privacy/side-channel/operations; all critical and high findings are closed or formally accepted for the exact release identities."
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-006",
-      "title": "Exact claim-proof output and database-transition binding",
-      "status": "closed_internal_nonactivating",
-      "owner": "cryptography_engineering",
+      "id": "BL-PROOF-THROUGHPUT",
       "classification": "internal_engineering",
-      "external_required": false,
-      "release_candidate_blocker": false,
-      "production_activation_blocker": true,
-      "current_evidence": "The exact 12-field projection and full sidecar pass through the real Rust candidate verifier into a serializable SQLite reference. The executable-plus-program identity and a per-store keyed verifier-to-storage authorization channel are enforced. The state and audit bind the authenticated submitter without exposing its raw identifier in audit output. Focused tests cover atomic nullifier/payment/state/audit publication, concurrency, exact and conflicting retry, stale roots, duplicate nullifier roots, pre-commit anchor reservation replay, post-commit anchor-finalization recovery without double advance, delayed finalization after a later transition, pending-operation tampering, rollback detection, restart, backup/restore, audit tampering, and configuration drift.",
-      "remaining_work": "The LB-006 internal exit criteria are met only for local, synthetic, nonactivating evidence. Production database selection/qualification, durable custody, final proof-suite selection, independent audit, real PHI/payments, and activation remain governed by other open packages and blockers.",
-      "exit_criteria": "One real verifier authenticates the exact versioned 12-field output and full sidecar consumed by the atomic database transition; length, order, encoding, proof format, suite, schema, and verifier identities are reproducibly pinned, and no caller-supplied unproven value can advance state."
+      "gate": "qualification",
+      "status": "open",
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-007",
-      "title": "Privacy V2 proof and state migration",
-      "status": "closed_internal_nonactivating",
-      "owner": "cryptography_engineering",
+      "id": "BL-CLEARANCE-STATE-OWNER",
       "classification": "internal_engineering",
-      "external_required": false,
-      "release_candidate_blocker": false,
-      "production_activation_blocker": true,
-      "current_evidence": "The ordered public ABI remains exactly twelve fields. The local schema-v2 SQLite path atomically migrates profile, suite-candidate, schema, verifier, epoch/domain, roots, state binding, immutable history, and audit after pinned native verification. Fresh evidence requires bounded OS randomness and a private freshness seal; exact durable retry survives a new Python process; old-profile races, conflicting retries, reused rollback/recovery domains, anti-rollback failures, and partial writes fail closed. Two real dual-PQ Rust proofs from different private witnesses independently verified with identical public/proof/transcript/envelope shapes; one migration committed and the conflicting second was rejected without another sequence advance. Public artifacts exclude tested amount, decision, PHI, claim, and replacement literals.",
-      "remaining_work": "The LB-007 exit criteria are met only for local, synthetic, nonactivating Phase 2 evidence. Production proof composition, database and durable anti-rollback selection, entropy/custody operations, independent audit, real PHI/payments, and activation remain governed by other open packages and blockers.",
-      "exit_criteria": "The parallel V2 proof and settlement path removes exact amounts, counts, decisions, PHI, and claim ciphertext from public data; differential, inference, known-answer, attack, migration, and rollback tests pass."
+      "gate": "qualification",
+      "status": "open",
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-009",
-      "title": "Provider-neutral PQ KMS/HSM and private-data operations",
-      "status": "open",
-      "owner": "security_operations",
+      "id": "BL-FORMAL-KERNEL",
       "classification": "internal_engineering",
-      "external_required": false,
-      "release_candidate_blocker": true,
-      "production_activation_blocker": true,
-      "activation_inputs": [
-        "provider coordinates",
-        "authorized key handles",
-        "operator identities"
-      ],
-      "current_evidence": "Provider-neutral interfaces and software-only references cover PQ key use, rotation, audit chaining, recovery anchors, incident control, and destructive key-state transitions in local tests.",
-      "remaining_work": "Qualify isolated deployment, authorization, retention, legal hold, backup/restore, crash recovery, verifiable crypto-erasure, provider conformance, and external anti-rollback without claiming HSM or FIPS validation.",
-      "exit_criteria": "Provider-neutral KMS/HSM ports, software/reference implementations, conformance tests, isolated worker deployment, authorization, audit, rotation, retention, legal-hold, backup, crash-recovery, destruction, and crypto-erasure controls are implemented and pass local/sandbox qualification."
+      "gate": "qualification",
+      "status": "open",
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-010",
-      "title": "Zero-knowledge witness-hiding proof backend",
+      "id": "BL-CUSTODY-OPERATIONS",
+      "classification": "deployment_evidence",
+      "gate": "qualification",
       "status": "open",
-      "owner": "cryptography_engineering",
-      "classification": "internal_engineering",
-      "external_required": false,
-      "release_candidate_blocker": true,
-      "production_activation_blocker": true,
-      "current_evidence": "The active Construction-8.2 GKR hiding candidate and bounded simulator records remain nonactivating component evidence. Both selected worker binaries now own fresh OS entropy and zeroize mask/attempt state, and the fixed 64 MiB version-2 package closes one observable-size defect. Independent review found that H4 receipts retain child-output digests rather than a verifier-safe proof, typed state lacks a public replayable transcript and exposes execution material, and the aggregate receipt was self-attestable. The caller-paired receipt/digest path is removed and aggregate status remains AGGREGATE_UNQUALIFIED.",
-      "remaining_work": "Close Z03-Z12 with raw machine-derived evidence: complete exposure inventories, proof-level masking and entropy qualification, durable transcript custody, a closed strict-PQ union ledger, real abort/retry/crash behavior, and actual parser fuzz/unlinkability campaigns. Compose those results only after the verifier-safe H4, semantic-bus equality, typed-state, and version-3 standalone verifier prerequisites exist.",
-      "exit_criteria": "The complete claim backend internally implements and qualifies native zero-knowledge witness hiding; leakage tests cover proof and metadata artifacts; the exact suite reaches BUILT_AUDIT_PENDING."
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-003",
-      "title": "Human governance signer enrollment",
+      "id": "BL-INDEPENDENT-AUDIT",
+      "classification": "external_assurance",
+      "gate": "qualification",
       "status": "open",
-      "owner": "governance_owner",
-      "classification": "activation_input",
-      "external_required": false,
-      "release_candidate_blocker": false,
-      "production_activation_blocker": true,
-      "exit_criteria": "Authorized operators supply multisig signers and run the shipped enrollment, recovery, timelock, audit, and rollback procedures against the audited release."
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-004",
-      "title": "Live government and oracle endpoint activation",
+      "id": "BL-OFFICIAL-RECEIVER",
+      "classification": "external_integration",
+      "gate": "activation",
       "status": "open",
-      "owner": "operations_owner",
-      "classification": "activation_input",
-      "external_required": false,
-      "release_candidate_blocker": false,
-      "production_activation_blocker": true,
-      "exit_criteria": "Authorized operators supply official endpoint versions, credentials, source identities, signing keys, epochs, and governed roots to adapters that already passed I01-I08 local/sandbox conformance."
+      "evidenceSha3_512": null
     },
     {
-      "id": "LB-005",
-      "title": "Payment and jurisdictional authorization",
+      "id": "BL-GOVERNMENT-CONNECTORS",
+      "classification": "external_integration",
+      "gate": "activation",
       "status": "open",
-      "owner": "compliance_owner",
-      "classification": "activation_input",
-      "external_required": false,
-      "release_candidate_blocker": false,
-      "production_activation_blocker": true,
-      "exit_criteria": "Authorized operators supply the approved pilot jurisdiction, payment accounts, limits, and legal/compliance authorization to the audited release without changing product code."
+      "evidenceSha3_512": null
     }
   ]
 }

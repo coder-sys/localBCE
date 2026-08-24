@@ -18,7 +18,6 @@ from app.batch.pq_tree_reference import (
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schemas" / "bl_pq512_vector_v1.schema.json"
 VECTOR_PATH = ROOT / "test_data" / "bl_pq512_foundation_vectors.json"
-ABI_PATH = ROOT / "ops" / "native_stark_public_inputs_v2.json"
 FLAGS = {
     "BL_ENV": "test",
     "BL_DEV": "1",
@@ -70,11 +69,6 @@ class FoundationVectorSchemaTests(unittest.TestCase):
         )
         self.assertEqual(names, PUBLIC_OUTPUT_NAMES)
         self.assertEqual(indices, tuple(range(12)))
-        abi = json.loads(ABI_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(tuple(item["name"] for item in abi["fields"]), PUBLIC_OUTPUT_NAMES)
-        self.assertEqual(tuple(item["index"] for item in abi["fields"]), tuple(range(12)))
-        self.assertEqual({item["solidity_type"] for item in abi["fields"]}, {"bytes32"})
-
         private = self.schema["properties"]["privateSemantics"]["properties"]
         self.assertEqual(
             private["canonicalRecordsHex"]["maxItems"], MAX_FOUNDATION_VECTOR_RECORDS

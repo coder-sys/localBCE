@@ -325,10 +325,6 @@ class ReleaseManifestGateTests(unittest.TestCase):
             gate.PathLane.CURRENT_SOURCE,
             gate.classify_path("docs/DESIGN_IDEOLOGY.md").lane,
         )
-        self.assertEqual(
-            gate.PathLane.EXCLUDED_GENERATED_PRIVATE,
-            gate.classify_path("_handoff_support/cuda_mlpcs_ntt_benchmark.py").lane,
-        )
 
     def test_missing_roots_are_blockers(self) -> None:
         with self.assertRaisesRegex(gate.ManifestGateError, "git root"):

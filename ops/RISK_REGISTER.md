@@ -1,18 +1,18 @@
 # Risk register
 
-The machine-readable authority is `ops/launch_blockers.json`.
+The machine-readable authority is `ops/launch_blockers.json`. Every blocker is fail-closed; no
+open item may be accepted by waiver, caller input, or a derived readiness Boolean.
 
-| Risk | Required treatment |
-| --- | --- |
-| Invalid or privacy-leaking proof | Complete fixed-shape relation, native hiding, independent verification, audit |
-| Forged/stale signed evidence | Algorithm-agile authority signatures; dual-PQ only when the approved threat model requires it, plus exact source/version/epoch/completeness binding |
-| Verifier/database TOCTOU | One serializable transaction with locked roots and nullifier uniqueness |
-| Duplicate/conflicting retries | Idempotency key plus exact request commitment; fail on mismatch |
-| Database loss or rollback | Replication, backup/restore drills, signed append-only log, external anti-rollback |
-| Custody compromise | HSM/FIPS custody, separation of duties, rotation and recovery drills |
-| Build substitution | Locked offline builds, SBOM, hashes, reproducibility |
-| PHI leakage | Fixed public shape, forbidden-field checks, redacted non-PHI events |
-| Source dishonesty or bad policy | Governance, audit, appeals, signer accountability; ZK cannot remove this trust |
-| Availability | Capacity, replicas, failover, recovery objectives, incident response |
+| Blocker | Classification | Gate | Control boundary |
+| --- | --- | --- | --- |
+| BL-PROOF-SOUNDNESS | internal_engineering | qualification | complete theorem, native hiding, and independent verification |
+| BL-PROOF-THROUGHPUT | internal_engineering | qualification | bounded CPU resource and latency evidence |
+| BL-CLEARANCE-STATE-OWNER | internal_engineering | qualification | one Queue/Composition state owner with exact retry/recovery |
+| BL-FORMAL-KERNEL | internal_engineering | qualification | executable Lean semantic/state-transition gate |
+| BL-CUSTODY-OPERATIONS | deployment_evidence | qualification | release identity, custody, rotation, backup, and restore evidence |
+| BL-INDEPENDENT-AUDIT | external_assurance | qualification | independent review of the scoped release |
+| BL-OFFICIAL-RECEIVER | external_integration | activation | approved receiver and acknowledgment boundary |
+| BL-GOVERNMENT-CONNECTORS | external_integration | activation | authorized state source/connectors and operational terms |
 
-No proof, audit, privacy, state, source-authority, or activation blocker may be downgraded to accepted risk. No L2 exists in the current threat surface.
+dual-PQ only when the approved threat model requires it. Open proof, state, formal, custody,
+audit, receiver, and connector risk remains nonqualifying.

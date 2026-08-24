@@ -12,7 +12,7 @@ signature, custody, clearance-transition, and downstream payment-interface code 
 3. After context loss, re-read this file, `CURRENT_TASK.md`, and `STATE.md`. A published source
    archive may omit workspace-only authority records; in that archive, use the current root
    documents and `RELEASE_FILE_MANIFEST.json`.
-4. Use existing Python, Rust, Scarb, and CUDA installations. Keep generated outputs outside release archives.
+4. Use existing Python, Rust, and CUDA installations. Keep generated outputs outside release archives.
 5. For work that changes a gate, proof claim, or continuation decision, also read
    `docs/DESIGN_IDEOLOGY.md` and `docs/IMPLEMENTATION_ROADMAP.md` before acting.
 
@@ -57,20 +57,19 @@ contract. Retired or compatibility documents cannot override any of these author
 
 Do not edit these unless the owner explicitly authorizes the exact change:
 
-- `zk-cairo-sharp/`
-- `app/batch/nullifier.py`
-- `app/batch/leaf.py`
-- `app/batch/stark_binding.py`
-- `app/batch/merkle.py`
-- `app/batch/accumulators.py`
-- `app/batch/batch_orchestrator.py`
+- `app/minimal_clearance_verification_queue.py`
+- `app/minimal_clearance_verification_queue_independent.py`
+- `app/minimal_clearance_composition.py`
+- `app/minimal_clearance_composition_independent.py`
+- `experiments/longfellow_v09_native_v3/`
+- `app/mirror/`
 - `app/oracle_attestation.py`
 - `app/public_inputs.py`
 - `app/canonical_encoding.py`
 
 ## Operational authority
 
-`ops/` is canonical. `experiments/bl_pq512_crypto_foundation/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.
+`ops/` is canonical. `tools/ops_authority.py` freezes its exact regular-file set, lengths, and SHA3-512 identities. Never change policy bytes merely to make a check pass.
 This protects the canonical byte identity; it does not freeze documented gate predicates. Evolve a
 gate through the explicit policy record below, not by mutating authoritative bytes until a check
 passes.

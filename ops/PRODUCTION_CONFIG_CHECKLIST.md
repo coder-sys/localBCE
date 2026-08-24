@@ -1,20 +1,23 @@
 # Production configuration checklist
 
-Status: nonactivating operational checklist.
+Status: nonactivating checklist; no production qualification is claimed.
 
-This checklist applies to the direct application-proof-to-database architecture. It does not
-authorize real PHI or payments.
+1. From the checkout root, run `python -m tools.ops_authority` and
+   `python -m tools.qualification_gate inspect`.
+2. Run the existing release-manifest gate and source-inventory check at the reviewed commit.
+3. Run the causal qualification, Queue, Composition, Longfellow, Mirror operational-owner and
+   recovery/export tests, followed by the privacy-artifact scan.
+4. Verify the exact release, verifier executable, schema/program, governance, source, custody, and
+   receiver identities. No environment-root, deleted readiness module, or legacy compatibility
+   sentinel is a production configuration.
+5. Measure the complete native process tree on the pinned CPU-only laptop: resident memory must be
+   strictly below the exact 5,000,000,000 decimal-byte floor, with no proving-attributable swap or
+   pagefile growth; retain the raw resource evidence and cleanup result.
+6. After evidence closes the six qualification blockers, rerun
+   `python -m tools.qualification_gate require-production`. Only after all eight blockers close,
+   the qualified pin is production-usable, and the receiver/connectors are approved, run
+   `python -m tools.qualification_gate require-activation`.
 
-1. Verify the release contains `app/`, `experiments/`, `ops/`, `tests/`, and `tools/`.
-2. Run `py -3.14 -B -m pytest tests/test_production_readiness.py`.
-3. Run the full Python and Rust regression suites.
-4. Confirm the exact qualified `proofSuiteId`; the current `proofSuiteId=null` sentinel is
-   intentionally nonactivating and is not deployable.
-5. Treat `NATIVE_STARK_DATABASE_TRANSITION` in `ops/production.env.example` as a disabled legacy
-   compatibility sentinel only. It is not a selected verifier, evaluator, or production backend.
-6. Confirm the verifier artifact, state schema, append-only log, anti-rollback, policy, oracle, and
-   governance roots match the approved release.
-7. Confirm test doubles, forced Python rules, and legacy proof wrappers are disabled.
-8. Confirm every release-candidate blocker and the independent audit gate is closed for the exact
-   source, verifier, state schema, custody, image, and release identities.
-9. Supply live credentials and authorizations only after the audited release passes every gate.
+The current inspect command is expected to pass coherently while both require commands fail closed.
+Live credentials, source authorization, receiver endpoints, and state operations are supplied only
+after the corresponding authority and external review gates close.

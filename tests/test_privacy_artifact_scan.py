@@ -246,7 +246,7 @@ class PrivacyArtifactScanTests(unittest.TestCase):
             root = Path(temporary)
             (root / "notes.txt").write_text(
                 "https://example.com/Users/alice\n"
-                "ops/native_stark_public_inputs_v2.json\n",
+                "ops/launch_blockers.json\n",
                 encoding="utf-8",
             )
             findings = scan_artifacts(root)

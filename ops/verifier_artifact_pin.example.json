@@ -1,12 +1,9 @@
 {
-  "schema_version": "blind_ledger_verifier_selection_v1",
-  "environment": "example_non_production",
-  "selection_status": "UNSELECTED",
-  "proof_backend_selected": false,
-  "production_usable": false,
+  "schema_version": "blind_ledger_verifier_artifact_pin_v2",
+  "selection_state": "UNSELECTED",
   "proofSuiteId": null,
-  "verifier_interface": null,
-  "artifact_hash": null,
-  "public_input_schema": null,
-  "source_hashes": []
+  "artifactSha3_512": null,
+  "verifierExecutableSha3_512": null,
+  "production_usable": false,
+  "activation": false
 }

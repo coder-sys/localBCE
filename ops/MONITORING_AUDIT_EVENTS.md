@@ -1,27 +1,25 @@
-# Monitoring And Audit Events
+# Monitoring and audit events
 
-The canonical machine-readable inventory is `ops/monitoring_events.json`. Phase 2 services emit only
-opaque commitments, versions, epochs, status, error class, and correlation digests. It never logs
-PHI, claim documents, exact private amounts, private decisions, ciphertext, raw payloads, or live
-credentials.
+This document owns the monitoring requirements; there is no machine event inventory. Monitoring
+is zero-PHI, append-only, bounded, and fail-closed. Each event carries only a fixed class, release
+and authority digests, epoch, sanitized status, and a non-linkable correlation digest.
 
-Minimum alerts:
+## Required sanitized event classes
 
-- Any failed production-readiness or release-identity check is critical.
-- Any verifier, proof-suite, schema, adapter, source epoch, key-root, image, infrastructure, or
-  release identity change creates an immutable event and blocks an unapproved identity.
-- Any stale source, provenance mismatch, replay, idempotency conflict, credential failure,
-  circuit-breaker opening, retry exhaustion, or adapter downgrade pages without private detail.
-- Any fixed-cadence queue shape or cover-slot mismatch blocks publication.
-- Any key rotation, destruction, incident pause, recovery, or rollback binds the exact checkpoint
-  and release identity through opaque SHA3-512 digests.
-- Any transition into or out of `BUILT_AUDIT_PENDING`, `AUDIT_ACCEPTED`, or activation binds the
-  exact release manifest and approving identities. Monitoring itself never performs that transition.
+Qualification identity changes and proof outcomes; clearance admission, lease, retry, exhaustion,
+application, delivery-indeterminate, reconciliation, and acknowledgment; Mirror intake, quarantine,
+reconciliation, and recovery; custody, rotation, and incident; and backup and restore. Alerts cover
+identity drift, stale or incomplete source state, replay/conflicting retry, verifier rejection,
+resource-limit or cleanup failure, receiver uncertainty, recovery divergence, and unauthorized
+activation transitions.
 
-Retention:
+## Forbidden telemetry
 
-- Contract and incident events: retain for the applicable compliance period.
-- Adapter evidence: retain the capsule, exact source/stream digest, schema/normalization version,
-  source epoch, and audit-safe error class; retain no raw source payload in the public log.
-- Key rotations: retain old/new roots, successor epoch, PQ authority identities, and activation
-  time as digests and metadata only.
+Raw proof, source, receipt, claim, or provider identity; stable claimant/provider fingerprints;
+amounts, nonces, credentials, keys, paths, host identifiers, stdout, stderr, payloads, and
+exception text are forbidden in events, metrics, logs, exports, support, and dashboards. Monitoring
+never selects a verifier, changes a blocker, mutates clearance state, or performs delivery.
+
+Retain sanitized lifecycle and incident evidence only for the applicable state-controlled retention
+period. A failed or indeterminate event remains visible as a fixed class until independently
+resolved; no lower-level exception or private value is emitted.

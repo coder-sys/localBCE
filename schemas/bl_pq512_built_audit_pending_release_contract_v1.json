@@ -31,11 +31,8 @@
     ]
   },
   "publicInputSchema": {
-    "path": "ops/native_stark_public_inputs_v2.json",
-    "bytes": 1807,
-    "sha3_512": "cb9e2c4e248f62832f996f4c2a157985643ffef4ff09ab58002f2265cbc97347862093c77361ead8be7ce68dae9a92f9565a133491899dfb130a2f6c4acc122d",
-    "fieldCount": 12,
-    "fieldType": "bytes32"
+    "status": "RETIRED_OLD_OPS_ABI",
+    "replacement": "ops/verifier_artifact_pin.example.json"
   },
   "sidecar": {
     "magicAscii": "BLPQSC01",

@@ -22,15 +22,6 @@ ACTIVATION_ALLOWED: Final[bool] = False
 PRODUCTION_USABLE: Final[bool] = False
 SOURCE_MARKERS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     (
-        "app/wave4_operations.py",
-        (
-            "class SoftwarePqKmsReference",
-            "class KeyLifecycleRegistry",
-            "class NonceReuseGuard",
-            "software_only",
-        ),
-    ),
-    (
         "experiments/bl_pq512_crypto_foundation/wave3_verifier_state_custody.py",
         (
             "class MlKem1024Aes256ReferenceV1",

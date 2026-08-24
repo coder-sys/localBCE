@@ -10,11 +10,12 @@ clearance system. Rejected architectures are recorded separately and are not mil
 ## Current release gate
 
 `ops/launch_blockers.json` is the machine-readable launch-blocker authority; this section is its
-current human-readable summary. The release candidate remains `NOT_DEPLOYMENT_READY`,
-`proofSuiteId` remains unset, and `production_usable` remains false until the internal engineering
-and independent-assurance gates close. Activation inputs such as live endpoints, signers, payment
-accounts, and legal authorization are supplied only after those gates; official payment rails move
-funds later and are not part of Blind Ledger clearance.
+current human-readable summary. Qualification is governed by the six ordered
+`gate=qualification` identities (`BL-PROOF-SOUNDNESS`, `BL-PROOF-THROUGHPUT`,
+`BL-CLEARANCE-STATE-OWNER`, `BL-FORMAL-KERNEL`, `BL-CUSTODY-OPERATIONS`, and
+`BL-INDEPENDENT-AUDIT`). Activation additionally requires `BL-OFFICIAL-RECEIVER` and
+`BL-GOVERNMENT-CONNECTORS`. The current release remains unselected, `production_usable=false`,
+and inactive; no blocker is closed by prose or a derived readiness field.
 
 ## Completed foundation
 

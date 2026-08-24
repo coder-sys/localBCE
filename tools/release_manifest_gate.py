@@ -78,7 +78,6 @@ ROOT_PATH_ALLOWLIST = frozenset(
         "STATE.md",
         "requirements-dev.txt",
         "requirements.txt",
-        "sample_claim_input.json",
     }
 )
 
@@ -98,12 +97,10 @@ CURRENT_TOP_LEVELS = frozenset(
         "ops",
         "portal_shared",
         "requirements",
-        "rules-engine-rust",
         "schemas",
         "test_data",
         "tests",
         "tools",
-        "zk-cairo-sharp",
     }
 )
 
@@ -113,7 +110,6 @@ RETAINED_PREFIXES = (
     "app/batch/",
     "experiments/bl_pq512_crypto_foundation/",
     "experiments/fixed_shape_claim_air/",
-    "zk-cairo-sharp/",
 )
 
 # These paths are abandoned compatibility designs.  A tracked path in one of them is a
@@ -194,7 +190,6 @@ EXCLUDED_SUFFIXES = frozenset(
 RELEASE_EXCLUDED_PATHS = frozenset(
     {
         "docs/security-freeze/BL-PQ512-v1/hardening.json",
-        "sample_claim_input.json",
         "tests/test_build_release_archive.py",
         "tests/test_privacy_artifact_scan.py",
         "tools/privacy_artifact_scan.py",

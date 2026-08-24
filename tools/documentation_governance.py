@@ -91,9 +91,6 @@ MARKDOWN_REGISTRY = {
     "ops/RISK_REGISTER.md": _registration(
         "ARCHITECTURE.md", "risk-register", "launch blocker and risk treatment index"
     ),
-    "portal_shared/FONT_SOURCES.md": _registration(
-        "ARCHITECTURE.md", "font-provenance", "portal font license and source record"
-    ),
     "docs/RARC_PENDING_DECISION.md": _registration(
         "README.md", "pending-domain-decision", "open RARC/CARC mapping ratification decisions"
     ),
@@ -124,9 +121,6 @@ REMOVED_MARKDOWN_PATHS = frozenset(
         "experiments/bl_pq512_crypto_foundation/README.md",
         "experiments/fixed_shape_claim_air/README.md",
         "experiments/README.md",
-        "zk-cairo-sharp/PROVING_STATUS.md",
-        "zk-cairo-sharp/SECURITY_ATTACK_NOTES.md",
-        "zk-cairo-sharp/README.md",
     }
 )
 
@@ -150,11 +144,10 @@ _REPOSITORY_TOP_LEVELS = {
     "experiments",
     "ops",
     "portal_shared",
-    "zk-cairo-sharp",
 }
 _PROTECTED_ROLES = frozenset()
 _REJECTED_ARCHITECTURES_PATH = "docs/REJECTED_ARCHITECTURES.md"
-_RETIRED_MARKDOWN_PREFIXES = ("experiments/", "zk-cairo-sharp/")
+_RETIRED_MARKDOWN_PREFIXES = ("experiments/",)
 _RETIRED_MARKDOWN_STRUCTURE = (
     re.compile(r"(?im)^\s*#\s+(?:retired|historical|differential|compatibility)\b"),
     re.compile(
