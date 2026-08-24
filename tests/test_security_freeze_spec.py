@@ -29,7 +29,8 @@ def test_ops_authority_text_preserves_the_current_payment_and_custody_meaning() 
     risks = _read(ROOT / "ops" / "RISK_REGISTER.md")
     assert "atomic clearance-state" in deployment
     assert "official state payment system" in deployment
-    assert "5,000,000,000 decimal-byte cap" in checklist
+    assert "at most the exact 5,000,000,000 decimal-byte cap" in checklist
+    assert "strictly below the exact 5,000,000,000 decimal-byte cap" not in checklist
     assert "require-production" in checklist and "require-activation" in checklist
     assert "Category 1 or stronger" in custody
     assert "only when an explicit deployment threat model calls for it" in custody
