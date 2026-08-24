@@ -40,6 +40,7 @@ CASE_EDGES = {
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_ARTIFACT_BYTES = independent.MAX_ARTIFACT_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
+MAX_COMPLETE_FRAME_BYTES = fhir.NC_MEDICAID_PROFILE.transport_caps["complete_frame_bytes"]
 MAX_BATCH_ARTIFACTS = 256
 MAX_IDENTIFIER_BYTES = 128
 _REPARSE_POINT = 0x400
@@ -634,10 +635,29 @@ class CoreServiceV2:
             admissions: dict[str, object] = {}
             for artifact_id in unresolved:
                 item = snapshots[artifact_id]
-                raw_envelope = item.get("raw")
-                if type(raw_envelope) is not bytes:
+                if (
+                    item.get("current_artifact_id") != artifact_id
+                    or item.get("terminal_state") != "QUARANTINED"
+                    or item.get("terminal_event_kind") not in {"ADMIT", "QUARANTINE", "CONFIRM_QUARANTINE"}
+                ):
+                    raise CoreConflictError("core:source-lifecycle")
+                raw_envelope = item.get("envelope_raw")
+                external_evidence_raw = item.get("external_evidence_raw")
+                external_policy = item.get("external_policy")
+                intake_frame = item.get("intake_frame")
+                if (
+                    type(intake_frame) is not bytes
+                    or len(intake_frame) > MAX_COMPLETE_FRAME_BYTES
+                    or type(raw_envelope) is not bytes
+                    or type(external_evidence_raw) is not bytes
+                    or not isinstance(external_policy, Mapping)
+                ):
                     raise CoreConflictError("core:source-raw")
-                admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, fhir.NcMedicaidFhirVerifier()).admit(raw_envelope)
+                admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, fhir.NcMedicaidFhirVerifier()).admit(
+                    raw_envelope,
+                    external_evidence_raw=external_evidence_raw,
+                    external_policy=external_policy,
+                )
                 admissions[artifact_id] = admission
         except (CoreError, CoreConflictError):
             raise
@@ -662,7 +682,7 @@ class CoreServiceV2:
                     continue
                 ing = snapshots[artifact_id]
                 admission = admissions[artifact_id]
-                if ing["database_id"] != self.config.ingress_database_id or ing["chain_id"] != self.config.ingress_chain_id or ing["config_digest"] != self.config.ingress_config_digest or admission.profile_id != profile.NC_MEDICAID_GRAPH_PROFILE.profile_id or admission.profile_version != profile.NC_MEDICAID_GRAPH_PROFILE.version or admission.profile_digest != self.config.runtime_profile_digest or admission.production_source_authentication is not False:
+                if ing["database_id"] != self.config.ingress_database_id or ing["chain_id"] != self.config.ingress_chain_id or ing["config_digest"] != self.config.ingress_config_digest or admission.profile_id != profile.NC_MEDICAID_PROFILE.source_profile_id or admission.profile_version != 3 or admission.source_contract_digest != profile.NC_MEDICAID_PROFILE.profile_digest or admission.production_source_authentication is not False:
                     raise CoreConflictError("core:source-profile")
                 source_head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'").fetchone()
                 predecessor_id = str(source_head[0]) if source_head else None
@@ -681,7 +701,7 @@ class CoreServiceV2:
                 graph_report_id = str(admission.report_id)
                 graph_operation = _digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                 graph_request = _digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest})
-                graph_id, _ = self._admit_artifact(connection, kind="GRAPH", raw=graph_raw, profile_digest=profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=graph_operation, request_digest=graph_request, state="GRAPH", observed_at=now, ingress_watermark=0)
+                graph_id, _ = self._admit_artifact(connection, kind="GRAPH", raw=graph_raw, profile_digest=admission.profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=graph_operation, request_digest=graph_request, state="GRAPH", observed_at=now, ingress_watermark=0)
                 try:
                     admission_receipt = independent._parse(admission.receipt, "core:admission-receipt")
                     if len(independent._canonical(admission_receipt)) > independent.MAX_ADMISSION_RECEIPT_BYTES:
@@ -696,6 +716,7 @@ class CoreServiceV2:
                     "ingress_artifact_id": artifact_id, "ingress_event_sequence": ing["event_sequence"], "ingress_prefix_root": ing.get("event_prefix_root"), "ingress_after_root": ing.get("event_after_root"), "ingress_head_root": ing.get("event_after_root"),
                     "envelope_id": ing["envelope_id"], "envelope_digest": ing["envelope_digest"], "snapshot_id": ing["snapshot_id"], "snapshot_root": ing["snapshot_root"], "content_root": ing["content_root"],
                     "profile_id": ing["profile_id"], "profile_version": ing["profile_version"], "profile_digest": ing["profile_digest"], "runtime_profile_digest": self.config.runtime_profile_digest,
+                    "source_contract_digest": admission.source_contract_digest, "external_artifact_id": admission.external_artifact_id, "external_artifact_digest": admission.external_artifact_digest, "capture_id": admission.capture_id, "capture_context_digest": admission.capture_context_digest, "page_digests": list(admission.page_digests),
                     "observation_time": ing["observation_time"], "fetched_at": ing["fetched_at"], "source_status": ing["source_status"], "freshness": ing["freshness"], "page_complete": bool(ing["page_complete"]), "page_count": ing["page_count"], "resource_count": ing["resource_count"],
                     "graph_artifact_id": graph_id, "graph_artifact_digest": graph_digest, "admission_receipt": admission_receipt, "admission_receipt_digest": _raw_digest("admission-receipt", admission.receipt), "admission_report_id": graph_report_id,
                     "observation_status": status, "chronology": chronology, "flags": dict(FIXED_FLAGS),

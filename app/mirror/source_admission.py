@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
+from app.mirror import external_source_adapter_independent as external_independent
 from app.mirror.error_boundary import raise_redacted
 
 
@@ -139,7 +140,7 @@ class SourceProfile:
             return
         if type(self.source_role_details) is not tuple or len(self.source_role_details) != 2:
             raise ValueError("profile:source-role-details")
-        if self.version != 2:
+        if self.version not in (2, 3):
             raise ValueError("profile:v2-version")
         if any(not isinstance(role, SourceRole) for role in self.source_role_details):
             raise ValueError("profile:source-role-details")
@@ -218,6 +219,17 @@ class VerifiedSourceCoverage:
     source_roles: tuple[str, ...]
     evidence_mode: EvidenceMode
     graph_input: bytes
+    credential_id: str | None = None
+    enrollment_id: str | None = None
+    subject_locator_digest: str | None = None
+    source_contract_digest: str | None = None
+    fetched_at: int | None = None
+    envelope_id: str | None = None
+    snapshot_id: str | None = None
+    snapshot_root: str | None = None
+    page_digests: tuple[str, ...] = ()
+    page_evidence: tuple[dict[str, object], ...] = ()
+    graph_profile: SourceProfile | None = None
 
 
 class SourceVerifier(Protocol):
@@ -250,6 +262,13 @@ class SourceAdmission:
     production_source_authentication: bool
     telemetry: tuple[tuple[str, int | bool | str | None], ...]
     profile_version: int = 1
+    source_contract_digest: str | None = None
+    external_artifact_id: str | None = None
+    external_artifact_digest: str | None = None
+    capture_id: str | None = None
+    capture_context_digest: str | None = None
+    envelope_digest: str | None = None
+    page_digests: tuple[str, ...] = ()
 
 
 MAX_ADAPTER_BYTES = 262_144
@@ -323,13 +342,15 @@ class SourceAdmissionService:
         return result
 
     def _validate_result(self, result: VerifiedSourceCoverage) -> None:
-        profile = self.profile
+        profile = result.graph_profile or self.profile
+        if not isinstance(profile, SourceProfile) or profile.source_contract_digest != self.profile.source_contract_digest:
+            raise SourceAdmissionError("result:profile-mismatch")
         if type(result.profile_id) is not str or result.profile_id != profile.profile_id:
             raise SourceAdmissionError("result:profile-mismatch")
         if (
             type(result.subject) is not str
-            or type(result.scope) is not str
             or result.subject != profile.subject
+            or type(result.scope) is not str
             or result.scope != profile.scope
         ):
             raise SourceAdmissionError("result:subject-or-scope-mismatch")
@@ -337,7 +358,9 @@ class SourceAdmissionService:
             raise SourceAdmissionError("result:observation-mismatch")
         if _v2_profile(profile):
             assert profile.observation_start is not None and profile.observation_end is not None
-            if not profile.observation_start <= result.observation_time < profile.observation_end:
+            # A V2 dynamic capture owns its own observation context. The
+            # configured profile only supplies the source contract interval.
+            if result.source_contract_digest is None and not profile.observation_start <= result.observation_time < profile.observation_end:
                 raise SourceAdmissionError("result:observation-mismatch")
         elif result.observation_time != profile.observation_time:
             raise SourceAdmissionError("result:observation-mismatch")
@@ -357,9 +380,10 @@ class SourceAdmissionService:
             raise SourceAdmissionError("result:evidence-mode-mismatch")
         if type(result.graph_input) is not bytes or not result.graph_input or len(result.graph_input) > graph.MAX_INPUT_BYTES:
             raise SourceAdmissionError("result:graph-input")
+        if result.source_contract_digest is not None and result.source_contract_digest != profile.source_contract_digest:
+            raise SourceAdmissionError("result:source-contract-mismatch")
 
-    def _validate_graph_coverage(self, artifact: dict[str, object]) -> None:
-        profile = self.profile
+    def _validate_graph_coverage(self, artifact: dict[str, object], profile: SourceProfile) -> None:
         subject = artifact.get("subject")
         if subject != {"provider_graph_subject": profile.subject, "scope": profile.scope}:
             raise SourceAdmissionError("graph:profile-mismatch")
@@ -387,8 +411,8 @@ class SourceAdmissionService:
             if (start, end) != (profile.effective_start, profile.effective_end):
                 raise SourceAdmissionError("graph:interval-mismatch")
 
-    def admit(self, adapter_bytes: bytes, *, expected_receipt: bytes | None = None) -> SourceAdmission:
-        """Verify one adapter payload, build one graph, and bind its receipt."""
+    def admit(self, adapter_bytes: bytes, *, external_evidence_raw: bytes | None = None, external_policy: Mapping[str, object] | None = None, expected_receipt: bytes | None = None) -> SourceAdmission:
+        """Verify one exact envelope/evidence pair and bind one graph receipt."""
 
         if type(adapter_bytes) is not bytes or not adapter_bytes:
             raise SourceAdmissionError("adapter:bytes")
@@ -396,18 +420,39 @@ class SourceAdmissionService:
             raise SourceAdmissionError("adapter:byte-cap")
         result = self._verify(adapter_bytes)
         self._validate_result(result)
+        if external_evidence_raw is not None or external_policy is not None:
+            if type(external_evidence_raw) is not bytes or not external_evidence_raw or not isinstance(external_policy, Mapping):
+                raise SourceAdmissionError("external:evidence")
+            try:
+                external = external_independent.verify_bytes(external_evidence_raw, policy=external_policy, capture_raw=adapter_bytes)
+            except Exception:
+                raise_redacted(SourceAdmissionError, "external:evidence-reject")
+            if external.get("derived_status") != "OBSERVATION_ADMITTED":
+                raise SourceAdmissionError("external:not-admitted")
+            if external.get("source_contract_digest") != result.source_contract_digest:
+                raise SourceAdmissionError("external:contract-binding")
+            context = result
+            for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest"):
+                actual = context.subject if key == "subject_id" else getattr(context, key, None)
+                if actual != external.get(key):
+                    raise SourceAdmissionError("external:context-binding")
+            if result.observation_time != external.get("observed_at") or result.fetched_at != external.get("fetched_at") or tuple(result.page_digests) != tuple(digest for _, digest in external.get("page_bindings", ())):
+                raise SourceAdmissionError("external:capture-binding")
+        else:
+            external = None
+        effective_profile = result.graph_profile or self.profile
         try:
-            if _v2_profile(self.profile):
-                graph_artifact, graph_telemetry = graph.build_report(result.graph_input, profile=self.profile)
+            if _v2_profile(effective_profile):
+                graph_artifact, graph_telemetry = graph.build_report(result.graph_input, profile=effective_profile)
             else:
                 graph_artifact, graph_telemetry = graph.build_report(result.graph_input)
         except Exception:
             raise_redacted(SourceAdmissionError, "graph:producer-reject")
         try:
-            if _v2_profile(self.profile):
+            if _v2_profile(effective_profile):
                 independent = graph_independent.verify_bytes_v2(
                     graph_artifact,
-                    {self.profile.profile_id: self.profile},
+                    {effective_profile.profile_id: effective_profile},
                 )
             else:
                 independent = graph_independent.verify_bytes(graph_artifact)
@@ -419,7 +464,7 @@ class SourceAdmissionService:
             artifact = graph.parse_canonical(graph_artifact, artifact=True)
         except Exception:
             raise_redacted(SourceAdmissionError, "graph:artifact-shape")
-        self._validate_graph_coverage(artifact)
+        self._validate_graph_coverage(artifact, effective_profile)
         report_id = independent.get("report_id")
         if not isinstance(report_id, str):
             raise SourceAdmissionError("graph:report-id")
@@ -438,16 +483,19 @@ class SourceAdmissionService:
                 "source_roles": list(result.source_roles),
                 "evidence_mode": result.evidence_mode.value,
                 "graph_input_digest": graph_input_digest,
+                "source_contract_digest": result.source_contract_digest,
+                "envelope_id": result.envelope_id,
+                "page_digests": list(result.page_digests),
             },
         )
         body: dict[str, object] = {
-            "schema": RECEIPT_SCHEMA_V2 if _v2_profile(self.profile) else RECEIPT_SCHEMA,
-            "profile_id": self.profile.profile_id,
-            "profile_version": self.profile.version,
-            "profile_digest": self.profile.profile_digest,
-            "verifier_id": self._identity,
-            "verifier_epoch": self._epoch,
-            "evidence_mode": self.profile.evidence_mode.value,
+            "schema": RECEIPT_SCHEMA_V2 if _v2_profile(effective_profile) else RECEIPT_SCHEMA,
+            "profile_id": effective_profile.profile_id,
+            "profile_version": effective_profile.version,
+            "profile_digest": effective_profile.profile_digest,
+            "verifier_id": effective_profile.verifier_id,
+            "verifier_epoch": effective_profile.verifier_epoch,
+            "evidence_mode": effective_profile.evidence_mode.value,
             "adapter_digest": _raw_digest("adapter", adapter_bytes),
             "source_result_digest": source_result_digest,
             "graph_input_digest": graph_input_digest,
@@ -455,6 +503,14 @@ class SourceAdmissionService:
             "graph_report_id": report_id,
             "production_source_authentication": False,
         }
+        if external is not None:
+            body.update({
+                "external_artifact_id": external["artifact_id"],
+                "external_artifact_digest": _raw_digest("external-artifact", external_evidence_raw),
+                "capture_id": external["capture_id"],
+                "capture_context_digest": _digest("capture-context", {key: external[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")} ),
+                "external_policy_digest": external["policy_digest"],
+            })
         receipt_value = {"receipt_id": _digest("receipt-id", body), **body}
         receipt = _canonical(receipt_value)
         if expected_receipt is not None and (type(expected_receipt) is not bytes or expected_receipt != receipt):
@@ -470,70 +526,31 @@ class SourceAdmissionService:
             )
         )
         return SourceAdmission(
-            profile_id=self.profile.profile_id,
-            profile_digest=self.profile.profile_digest,
-            verifier_id=self._identity,
-            verifier_epoch=self._epoch,
+            profile_id=effective_profile.profile_id,
+            profile_digest=effective_profile.profile_digest,
+            verifier_id=effective_profile.verifier_id,
+            verifier_epoch=effective_profile.verifier_epoch,
             graph_input=result.graph_input,
             graph_artifact=graph_artifact,
             receipt=receipt,
             report_id=report_id,
             production_source_authentication=False,
             telemetry=telemetry,
-            profile_version=self.profile.version,
+            profile_version=effective_profile.version,
+            source_contract_digest=result.source_contract_digest,
+            external_artifact_id=external.get("artifact_id") if external is not None else None,
+            external_artifact_digest=_raw_digest("external-artifact", external_evidence_raw) if external is not None and isinstance(external_evidence_raw, bytes) else None,
+            capture_id=external.get("capture_id") if external is not None else None,
+            capture_context_digest=body.get("capture_context_digest"),
+            envelope_digest=_raw_digest("envelope", adapter_bytes),
+            page_digests=tuple(result.page_digests),
         )
-
-
-@dataclass(frozen=True)
-class SourceAdmissionBinding:
-    """One immutable profile/verifier pair owned by a composition root."""
-
-    profile: SourceProfile
-    verifier: SourceVerifier
-
-
-class MultiSubjectSourceAdmissionService:
-    """Select exactly one configured synthetic profile by verifier acceptance."""
-
-    def __init__(self, bindings: tuple[SourceAdmissionBinding, ...]) -> None:
-        if type(bindings) is not tuple or not bindings:
-            raise SourceAdmissionError("composition:bindings")
-        services: list[SourceAdmissionService] = []
-        profile_ids: set[str] = set()
-        for binding in bindings:
-            if not isinstance(binding, SourceAdmissionBinding) or binding.profile.source_role_details is None:
-                raise SourceAdmissionError("composition:v2-profile-required")
-            if binding.profile.profile_id in profile_ids:
-                raise SourceAdmissionError("composition:duplicate-profile")
-            profile_ids.add(binding.profile.profile_id)
-            services.append(SourceAdmissionService(binding.profile, binding.verifier))
-        self._services = tuple(services)
-        self.profiles = tuple(service.profile for service in services)
-
-    def admit(self, adapter_bytes: bytes, *, expected_receipt: bytes | None = None) -> SourceAdmission:
-        accepted: list[SourceAdmission] = []
-        for service in self._services:
-            try:
-                accepted.append(service.admit(adapter_bytes))
-            except SourceAdmissionError:
-                continue
-        if len(accepted) != 1:
-            if len(accepted) > 1:
-                raise SourceAdmissionError("admission:ambiguous-profile")
-            raise SourceAdmissionError("admission:no-profile")
-        result = accepted[0]
-        if expected_receipt is not None and expected_receipt != result.receipt:
-            raise SourceAdmissionError("retry:conflict")
-        return result
-
 
 __all__ = [
     "EvidenceMode",
     "SourceAdmission",
     "SourceAdmissionError",
     "SourceAdmissionService",
-    "SourceAdmissionBinding",
-    "MultiSubjectSourceAdmissionService",
     "SourceProfile",
     "SourceRole",
     "SourceVerifier",

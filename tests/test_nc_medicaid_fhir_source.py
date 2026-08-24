@@ -72,6 +72,13 @@ def _envelope(*, two_pages: bool = False, total: int | None = 3, last_updated: s
 
 
 def _rebind(value: dict[str, object]) -> bytes:
+    context_value = value["capture_context"]
+    assert isinstance(context_value, dict)
+    context = profile.DynamicCaptureContext(
+        context_value["subject_id"], context_value["credential_id"],
+        context_value["enrollment_id"], context_value["subject_locator_digest"],
+        context_value["observation_time"], context_value["fetched_at"],
+    )
     for page in value["pages"]:
         if not isinstance(page, dict):
             continue
@@ -89,10 +96,11 @@ def _rebind(value: dict[str, object]) -> bytes:
     value["snapshot_id"] = fhir._digest(
         "snapshot-id",
         {
-            "profile": profile.NC_MEDICAID_PROFILE.binding(),
-            "request_identity": fhir._digest("request", {"method": "GET", "url": profile.REQUEST_URL, "query_parameters": [list(item) for item in profile.NC_MEDICAID_PROFILE.query_parameters], "page_parameter": profile.NC_MEDICAID_PROFILE.page_parameter}),
-            "observation_time": profile.NC_MEDICAID_PROFILE.observation_time,
-            "fetched_at": profile.NC_MEDICAID_PROFILE.fetched_at,
+            "profile": profile.NC_MEDICAID_PROFILE.binding(context),
+            "request_identity": fhir._digest("request", {"method": "GET", "url": profile.NC_MEDICAID_PROFILE.page_url(0, context), "query_parameters": [[key, value.replace("{subject_locator_digest}", context.subject_locator_digest)] for key, value in profile.NC_MEDICAID_PROFILE.query_parameters], "page_parameter": profile.NC_MEDICAID_PROFILE.page_parameter}),
+            "capture_context": context.material(),
+            "observation_time": context.observation_time,
+            "fetched_at": context.fetched_at,
             "snapshot_root": snapshot_root,
             "source_status": value["source_status"],
             "failure_code": value["failure_code"],
@@ -107,7 +115,7 @@ def _rebind(value: dict[str, object]) -> bytes:
 
 class NcMedicaidFhirSourceTests(unittest.TestCase):
     def test_fixed_profile_and_contract_digest_are_verifier_owned(self) -> None:
-        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v3", profile.SOURCE_PROFILE_ID)
+        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v4", profile.SOURCE_PROFILE_ID)
         self.assertEqual("https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir", profile.BASE_URL)
         self.assertEqual("provider-directory-observation-associated-with-NCTracks-and-health-plan-contract-data", profile.NC_MEDICAID_PROFILE.source_meaning)
         self.assertEqual("official-hostname-over-tls-unverified", profile.NC_MEDICAID_PROFILE.transport_provenance)
@@ -136,8 +144,8 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         value = json.loads(_envelope().decode("ascii"))
         location = value["pages"][0]["bundle"]["entry"][2]["resource"]
         location["name"] = "Unregistered Synthetic Location"
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
-            independent.verify_bytes(_rebind(value))
+        changed_result = independent.verify_bytes(_rebind(value))
+        self.assertEqual("COMPLETE", changed_result["source_status"])
 
     def test_v2_profile_envelope_is_rejected_without_migration(self) -> None:
         for field, replacement in (
@@ -164,6 +172,27 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         graph_result = graph_independent.verify_bytes_v2(admission.graph_artifact, dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
         self.assertTrue(graph_result["accepted"])
         self.assertEqual("EVIDENCE_INCOMPLETE", json.loads(admission.graph_artifact.decode("ascii"))["findings"][0]["kind"])
+
+    def test_dynamic_capture_context_reaches_source_admission_without_profile_growth(self) -> None:
+        context = profile.DynamicCaptureContext(
+            "1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070,
+        )
+        bundle = _bundle()
+        request_url = profile.NC_MEDICAID_PROFILE.page_url(0, context)
+        bundle["link"][0]["url"] = request_url
+        transport = fhir.SyntheticFhirTransport({
+            (request_url, 0): fhir.fixture_response(bundle, request_url),
+        })
+        raw = fhir.build_fixture_envelope(transport, context=context)
+        result = independent.verify_bytes(raw)
+        admission = SourceAdmissionService(
+            profile.NC_MEDICAID_GRAPH_PROFILE,
+            independent.NcMedicaidFhirVerifier(),
+        ).admit(raw)
+        self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, result["source_contract_digest"])
+        self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, admission.source_contract_digest)
+        graph_input = json.loads(admission.graph_input.decode("ascii"))
+        self.assertEqual(context.subject_id, graph_input["provider_graph_subject"])
 
     def test_two_page_chain_and_missing_total_are_explicitly_bounded(self) -> None:
         raw = _envelope(two_pages=True, total=None)
@@ -214,8 +243,8 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         practitioner["identifier"][0]["value"] = "REAL-PATIENT-123"
         practitioner["name"][0]["family"] = "Jane Patient SSN 123"
         practitioner["name"][0]["given"] = ["jane@example.com"]
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
-            independent.verify_bytes(_rebind(value))
+        dynamic_result = independent.verify_bytes(_rebind(value))
+        self.assertEqual("COMPLETE", dynamic_result["source_status"])
 
         secret_body = b"Bearer SECRET patient=123 C:\\Users\\private"
         secret_url = "https://wrong.example/PRIVATE-PATIENT-123?token=SECRET"
@@ -313,7 +342,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         mutations.append(("resource:duplicate", value))
         value = json.loads(_envelope().decode("ascii"))
         value["pages"][0]["bundle"]["entry"][1]["resource"]["practitioner"] = {"reference": "Location/" + profile.SYNTHETIC_LOCATION_ID}
-        mutations.append(("role:practitioner:reference", value))
+        mutations.append(("reference:binding", value))
         for code, mutated in mutations:
             with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, code):
                 independent.verify_bytes(_rebind(mutated))
@@ -366,11 +395,11 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
             independent.verify_bytes(_rebind(drift))
         marker = deepcopy(value)
         marker["pages"][1]["bundle"]["total"] = 2
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "markers:drift"):
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "total-drift"):
             independent.verify_bytes(_rebind(marker))
         updated = deepcopy(value)
         updated["pages"][1]["bundle"]["meta"]["lastUpdated"] = "2026-08-13T12:00:00Z"
-        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "markers:drift"):
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "marker-drift"):
             independent.verify_bytes(_rebind(updated))
 
     def test_caller_claim_upgrades_and_producer_forgery_reject(self) -> None:
@@ -389,7 +418,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
             independent.verify_bytes(_rebind(value))
 
     def test_stale_partial_and_failed_evidence_cannot_reach_graph(self) -> None:
-        stale = _envelope(last_updated="2020-01-01T00:00:00Z")
+        stale = _envelope(last_updated="1970-01-01T00:00:00Z")
         stale_result = independent.verify_bytes(stale)
         self.assertEqual("STALE", stale_result["source_status"])
         self.assertEqual("stale", stale_result["failure_code"])

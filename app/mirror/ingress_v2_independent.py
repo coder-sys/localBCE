@@ -17,15 +17,25 @@ import sqlite3
 import stat
 from typing import Mapping
 
+from app.mirror import external_source_adapter_independent as external
 from app.mirror import nc_medicaid_fhir_independent as fhir
-from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE
+from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE, SOURCE_CONTRACT_SCHEMA, SOURCE_CONTRACT_VERSION, _digest as _contract_digest
 
 
-SCHEMA = "mirror-ingress-v3"
-SCHEMA_VERSION = 3
-DOMAIN = "BL/MIRROR/INGRESS/V3/"
+SCHEMA = "mirror-ingress-v4"
+SCHEMA_VERSION = 4
+DOMAIN = "BL/MIRROR/INGRESS/V4/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
-MAX_RAW_ENVELOPE_BYTES = 262_144
+MAX_COMPLETE_FRAME_BYTES = fhir.NC_MEDICAID_PROFILE.transport_caps["complete_frame_bytes"]
+# Retained as the bounded intake-blob name used by the existing owner API;
+# its value is the shared complete-frame contract cap.
+MAX_RAW_ENVELOPE_BYTES = MAX_COMPLETE_FRAME_BYTES
+MAX_EXTERNAL_ARTIFACT_BYTES = 64 * 1024
+INTAKE_MAGIC = b"BLMIRROR-INTAKE-V2\0"
+INTAKE_VERSION = 2
+INTAKE_FLAGS = 0
+INTAKE_DIRECTORY_ENTRY_BYTES = 4 + 4 + 4 + 64
+INTAKE_HEADER_BYTES = len(INTAKE_MAGIC) + 4 + 4 + 4 + 4 + 4 + 4 + 64
 MAX_EVENT_BYTES = 786_432
 MAX_CONFIG_BYTES = 8_192
 MAX_IDENTIFIER_BYTES = 128
@@ -279,6 +289,111 @@ def content_root(resources: object) -> str:
         normalized.append({"resourceType": resource_type, "id": resource_id, "resource": resource})
     normalized.sort(key=lambda value: (str(value["resourceType"]), str(value["id"])))
     return _digest("content-root", normalized)
+
+
+def _unpack_intake_frame(raw: object) -> tuple[bytes, bytes, tuple[tuple[int, int, int, str], ...]]:
+    """Return external evidence and the exact FHIR envelope from one frame."""
+    if type(raw) is not bytes or not raw or len(raw) > MAX_COMPLETE_FRAME_BYTES:
+        raise IngressVerificationError("ingress:artifact-raw")
+    if len(raw) < INTAKE_HEADER_BYTES or raw[:len(INTAKE_MAGIC)] != INTAKE_MAGIC:
+        raise IngressVerificationError("ingress:intake-frame")
+    offset = len(INTAKE_MAGIC)
+    version = int.from_bytes(raw[offset:offset + 4], "big")
+    flags = int.from_bytes(raw[offset + 4:offset + 8], "big")
+    evidence_length = int.from_bytes(raw[offset + 8:offset + 12], "big")
+    envelope_length = int.from_bytes(raw[offset + 12:offset + 16], "big")
+    page_count = int.from_bytes(raw[offset + 16:offset + 20], "big")
+    aggregate_length = int.from_bytes(raw[offset + 20:offset + 24], "big")
+    aggregate_digest = raw[offset + 24:offset + 88].hex()
+    if version != INTAKE_VERSION or flags != INTAKE_FLAGS:
+        raise IngressVerificationError("ingress:intake-header")
+    if not 1 <= evidence_length <= MAX_EXTERNAL_ARTIFACT_BYTES or not 1 <= envelope_length <= fhir.NC_MEDICAID_PROFILE.transport_caps["max_envelope_bytes"]:
+        raise IngressVerificationError("ingress:intake-frame")
+    if not 1 <= page_count <= fhir.NC_MEDICAID_PROFILE.transport_caps["max_pages"]:
+        raise IngressVerificationError("ingress:intake-frame")
+    def checked_add(*values: int, limit: int = MAX_COMPLETE_FRAME_BYTES) -> int:
+        if any(type(value) is not int or value < 0 for value in values):
+            raise IngressVerificationError("ingress:intake-arithmetic")
+        total = sum(values)
+        if total > limit:
+            raise IngressVerificationError("ingress:intake-arithmetic")
+        return total
+
+    def checked_mul(left: int, right: int, limit: int = MAX_COMPLETE_FRAME_BYTES) -> int:
+        if type(left) is not int or type(right) is not int or left < 0 or right < 0 or left > limit or right > limit:
+            raise IngressVerificationError("ingress:intake-arithmetic")
+        product = left * right
+        if product > limit:
+            raise IngressVerificationError("ingress:intake-arithmetic")
+        return product
+
+    directory_bytes = checked_mul(page_count, INTAKE_DIRECTORY_ENTRY_BYTES)
+    directory_end = checked_add(INTAKE_HEADER_BYTES, directory_bytes)
+    payload_end = checked_add(directory_end, evidence_length, envelope_length)
+    if payload_end != len(raw) or aggregate_length > envelope_length:
+        raise IngressVerificationError("ingress:intake-frame")
+    directory: list[tuple[int, int, int, str]] = []
+    cursor = INTAKE_HEADER_BYTES
+    for expected_index in range(page_count):
+        index = int.from_bytes(raw[cursor:cursor + 4], "big")
+        page_offset = int.from_bytes(raw[cursor + 4:cursor + 8], "big")
+        page_length = int.from_bytes(raw[cursor + 8:cursor + 12], "big")
+        page_digest = raw[cursor + 12:cursor + 76].hex()
+        cursor += INTAKE_DIRECTORY_ENTRY_BYTES
+        if index != expected_index or len(page_digest) != 128 or any(char not in "0123456789abcdef" for char in page_digest):
+            raise IngressVerificationError("ingress:intake-page-directory")
+        directory.append((index, page_offset, page_length, page_digest))
+    evidence_start = directory_end
+    envelope_start = evidence_start + evidence_length
+    envelope_raw = raw[envelope_start:envelope_start + envelope_length]
+    try:
+        envelope = json.loads(
+            envelope_raw.decode("ascii"),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=lambda _value: (_ for _ in ()).throw(IngressVerificationError("ingress:intake-envelope")),
+        )
+    except IngressVerificationError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise IngressVerificationError("ingress:intake-envelope") from None
+    if not isinstance(envelope, dict) or _canonical(envelope) != envelope_raw or not isinstance(envelope.get("pages"), list) or len(envelope["pages"]) != page_count:
+        raise IngressVerificationError("ingress:intake-envelope")
+    aggregate = bytearray()
+    previous_end = 0
+    search_from = 0
+    for expected_index, page_offset, page_length, page_digest in directory:
+        page = envelope["pages"][expected_index]
+        try:
+            page_raw = _canonical(page)
+        except IngressVerificationError:
+            raise
+        page_end = checked_add(page_offset, page_length, limit=envelope_length)
+        expected_offset = envelope_raw.find(page_raw, search_from)
+        if (
+            page_offset < previous_end
+            or page_length != len(page_raw)
+            or page_end > envelope_length
+            or expected_offset != page_offset
+        ):
+            raise IngressVerificationError("ingress:intake-page-directory")
+        if envelope_raw[page_offset:page_offset + page_length] != page_raw:
+            raise IngressVerificationError("ingress:intake-page-directory")
+        if not isinstance(page, dict) or page.get("sequence") != expected_index or page.get("body_digest") != page_digest:
+            raise IngressVerificationError("ingress:intake-page-binding")
+        aggregate.extend(page_raw)
+        previous_end = page_end
+        search_from = page_end
+    if aggregate_length != len(aggregate) or _raw_digest("frame-pages", bytes(aggregate)) != aggregate_digest:
+        raise IngressVerificationError("ingress:intake-aggregate")
+    start = directory_end
+    return raw[start:start + evidence_length], envelope_raw, tuple(directory)
+
+
+def _external_policy(config: Mapping[str, object]) -> dict[str, object]:
+    value = config.get("external_policy")
+    if not isinstance(value, dict):
+        raise IngressVerificationError("ingress:external-policy")
+    return value
 
 
 def _attestation_digest(value: Mapping[str, object]) -> str:
@@ -578,9 +693,9 @@ def _meta(connection: sqlite3.Connection) -> sqlite3.Row:
     config = _parse(config_raw, "ingress:config", max_bytes=MAX_CONFIG_BYTES)
     expected_config_keys = {
         "schema", "schema_version", "database_id", "chain_id", "policy_digest",
-        "authorization_digest", "terms_digest", "profile_id", "profile_version",
-        "profile_digest", "cadence_seconds", "effective_start", "effective_end",
-        "max_slots", "max_attempts", "lease_seconds", "flags",
+        "authorization_digest", "terms_digest", "source_contract", "source_contract_digest",
+        "external_policy", "external_policy_digest", "cadence_seconds", "effective_start",
+        "effective_end", "max_slots", "max_attempts", "lease_seconds", "flags",
     }
     if set(config) != expected_config_keys:
         raise IngressVerificationError("ingress:config")
@@ -589,16 +704,23 @@ def _meta(connection: sqlite3.Connection) -> sqlite3.Row:
         or config["schema_version"] != SCHEMA_VERSION
         or config["database_id"] != row["database_id"]
         or config["chain_id"] != row["chain_id"]
-        or type(config["profile_id"]) is not str
-        or config["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id
-        or config["profile_version"] != NC_MEDICAID_PROFILE.version
-        or config["profile_digest"] != NC_MEDICAID_PROFILE.profile_digest
+        or config["source_contract"] != NC_MEDICAID_PROFILE.material()
+        or config["source_contract_digest"] != NC_MEDICAID_PROFILE.profile_digest
+        or _contract_digest("source-contract", config["source_contract"]) != config["source_contract_digest"]
         or config["flags"] != FIXED_FLAGS
         or _digest("config", config) != row["config_digest"]
     ):
         raise IngressVerificationError("ingress:config")
-    for key in ("policy_digest", "authorization_digest", "terms_digest", "profile_digest"):
+    for key in ("policy_digest", "authorization_digest", "terms_digest", "source_contract_digest", "external_policy_digest"):
         _hex(config[key], "ingress:config")
+    try:
+        policy = _external_policy(config)
+        if external.policy_digest(policy) != config["external_policy_digest"]:
+            raise IngressVerificationError("ingress:external-policy")
+    except IngressVerificationError:
+        raise
+    except Exception:
+        raise IngressVerificationError("ingress:external-policy") from None
     if (
         type(config["cadence_seconds"]) is not int
         or config["cadence_seconds"] <= 0
@@ -624,7 +746,7 @@ def _meta(connection: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
-def _verify_artifact(row: sqlite3.Row) -> dict[str, object]:
+def _verify_artifact(row: sqlite3.Row, *, config: Mapping[str, object]) -> dict[str, object]:
     expected = (
         "artifact_id", "envelope_id", "envelope_digest", "raw", "profile_id",
         "profile_version", "profile_digest", "observation_time", "fetched_at",
@@ -636,14 +758,23 @@ def _verify_artifact(row: sqlite3.Row) -> dict[str, object]:
         raise IngressVerificationError("ingress:artifact-columns")
     _hex(row["artifact_id"], "ingress:artifact-id")
     raw = row["raw"]
-    if type(raw) is not bytes or not raw or len(raw) > MAX_RAW_ENVELOPE_BYTES:
-        raise IngressVerificationError("ingress:artifact-raw")
-    if row["envelope_digest"] != _raw_digest("envelope", raw):
+    evidence_raw, envelope_raw, frame_pages = _unpack_intake_frame(raw)
+    if row["envelope_digest"] != _raw_digest("envelope", envelope_raw):
         raise IngressVerificationError("ingress:artifact-digest")
     try:
-        result = fhir.verify_bytes(raw)
+        result = fhir.verify_bytes(envelope_raw)
     except Exception:
         raise IngressVerificationError("ingress:envelope") from None
+    try:
+        external_result = external.verify_bytes(evidence_raw, policy=_external_policy(config), capture_raw=envelope_raw)
+    except Exception:
+        raise IngressVerificationError("ingress:external-evidence") from None
+    if external_result.get("derived_status") != "OBSERVATION_ADMITTED" and result["source_status"] == "COMPLETE":
+        raise IngressVerificationError("ingress:external-status")
+    if tuple((index, digest) for index, _offset, _length, digest in frame_pages) != tuple(external_result["page_bindings"]):
+        raise IngressVerificationError("ingress:intake-page-binding")
+    if tuple(result["page_digests"]) != tuple(digest for _index, _offset, _length, digest in frame_pages):
+        raise IngressVerificationError("ingress:intake-page-binding")
     checks = {
         "envelope_id": result["envelope_id"],
         "profile_id": NC_MEDICAID_PROFILE.source_profile_id,
@@ -669,16 +800,7 @@ def _verify_artifact(row: sqlite3.Row) -> dict[str, object]:
     _hex(row["snapshot_id"], "ingress:snapshot-id")
     _hex(row["snapshot_root"], "ingress:snapshot-root")
     _hex(row["content_root"], "ingress:content-root")
-    expected_id = _digest(
-        "artifact-id",
-        {
-            "envelope_digest": row["envelope_digest"],
-            "envelope_id": row["envelope_id"],
-            "profile_digest": row["profile_digest"],
-            "observation_time": row["observation_time"],
-            "snapshot_id": row["snapshot_id"],
-        },
-    )
+    expected_id = _digest("artifact-id", {"intake_digest": _raw_digest("intake", raw), "envelope_digest": row["envelope_digest"], "envelope_id": row["envelope_id"], "external_artifact_id": external_result["artifact_id"], "external_artifact_digest": _raw_digest("external-artifact", evidence_raw), "profile_digest": row["profile_digest"], "observation_time": row["observation_time"], "snapshot_id": row["snapshot_id"]})
     if row["artifact_id"] != expected_id:
         raise IngressVerificationError("ingress:artifact-id")
     if type(row["event_sequence"]) is not int or row["event_sequence"] <= 0:
@@ -704,7 +826,20 @@ def _verify_artifact(row: sqlite3.Row) -> dict[str, object]:
         "event_sequence": row["event_sequence"],
         "_stored_event_sequence": row["event_sequence"],
         "_terminal_event_sequence": None,
+        "_terminal_event_kind": None,
+        "_terminal_slot_id": None,
         "raw": raw,
+        "intake_frame": raw,
+        "envelope_raw": envelope_raw,
+        "external_evidence_raw": evidence_raw,
+        "frame_pages": frame_pages,
+        "external_artifact_id": external_result["artifact_id"],
+        "external_artifact_digest": _raw_digest("external-artifact", evidence_raw),
+        "source_contract_digest": external_result["source_contract_digest"],
+        "capture_id": external_result["capture_id"],
+        "capture_context": {key: external_result[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")},
+        "page_bindings": external_result["page_bindings"],
+        "page_digests": tuple(digest for _index, digest in external_result["page_bindings"]),
         "result": result,
     }
 
@@ -740,6 +875,9 @@ def _verify_fetch_receipt(
     expected = attempts[transport_attempt]
     if not isinstance(expected, Mapping):
         raise IngressVerificationError("ingress:fetch-evidence")
+    expected_request_identity = page.get("request_identity")
+    if not isinstance(expected_request_identity, str):
+        raise IngressVerificationError("ingress:fetch-evidence")
     if (
         value["artifact_id"] != artifact["artifact_id"]
         or value["source_id"] != source_id
@@ -748,7 +886,7 @@ def _verify_fetch_receipt(
         or value["page_index"] != page_index
         or value["lease_attempt"] != lease_attempt
         or value["transport_attempt"] != transport_attempt
-        or value["request_identity"] != expected["request_identity"]
+        or value["request_identity"] != expected_request_identity
         or value["response_digest"] != expected["response_digest"]
         or value["status"] != expected["status"]
         or value["retry_after_seconds"] != expected["retry_after_seconds"]
@@ -997,7 +1135,11 @@ def _verify_event(
             expected_payload = material["artifact_id"]
             expected_payload_length = 0
         elif kind == "CAPTURE":
-            expected_material_keys = {"artifact_id", "envelope_digest", "slot_id", "lease_token_digest", "operation_id"}
+            expected_material_keys = {
+                "artifact_id", "envelope_digest", "intake_digest", "external_artifact_id",
+                "external_artifact_digest", "source_contract_digest", "capture_id",
+                "capture_context", "page_bindings", "slot_id", "lease_token_digest", "operation_id",
+            }
             if "operation_value_digest" in material:
                 expected_material_keys.add("operation_value_digest")
             if set(material) != expected_material_keys:
@@ -1008,6 +1150,13 @@ def _verify_event(
                 or artifact_id not in artifacts
                 or material["slot_id"] != row["slot_id"]
                 or material["envelope_digest"] != artifacts[artifact_id]["envelope_digest"]
+                or material["intake_digest"] != _raw_digest("intake", artifacts[artifact_id]["raw"])
+                or material["external_artifact_id"] != artifacts[artifact_id]["external_artifact_id"]
+                or material["external_artifact_digest"] != artifacts[artifact_id]["external_artifact_digest"]
+                or material["source_contract_digest"] != artifacts[artifact_id]["source_contract_digest"]
+                or material["capture_id"] != artifacts[artifact_id]["capture_id"]
+                or material["capture_context"] != artifacts[artifact_id]["capture_context"]
+                or material["page_bindings"] != [list(item) for item in artifacts[artifact_id]["page_bindings"]]
                 or material["lease_token_digest"] != row["lease_token"]
                 or type(material["operation_id"]) is not str
             ):
@@ -1296,6 +1445,8 @@ def _verify_event(
         artifact["event_prefix_root"] = str(row["before_root"])
         artifact["event_after_root"] = str(row["after_root"])
         artifact["_terminal_event_sequence"] = int(row["sequence"])
+        artifact["_terminal_event_kind"] = kind
+        artifact["_terminal_slot_id"] = str(row["slot_id"])
     slot_times[str(row["slot_id"])] = int(row["observed_at"])
     slot_states[row["slot_id"]] = row["next_state"]
     return row["after_root"]
@@ -1324,21 +1475,21 @@ def _verify_connection(
             raise IngressVerificationError("ingress:database-id")
         if expected_config_digest is not None and meta["config_digest"] != expected_config_digest:
             raise IngressVerificationError("ingress:config")
-        slots = connection.execute("SELECT * FROM ingress_slots ORDER BY slot_id").fetchall()
-        if meta["slot_count"] != len(slots):
-            raise IngressVerificationError("ingress:slot-count")
-        artifacts_rows = connection.execute("SELECT * FROM ingress_artifacts ORDER BY artifact_id").fetchall()
-        artifacts = {row["artifact_id"]: _verify_artifact(row) for row in artifacts_rows}
-        if len(artifacts) != len(artifacts_rows):
-            raise IngressVerificationError("ingress:artifact-duplicate")
-        slot_states: dict[str, str] = {}
-        slot_attempts: dict[str, int] = {}
         config_raw = connection.execute("SELECT config_raw FROM ingress_meta WHERE meta_id=1").fetchone()
         if config_raw is None:
             raise IngressVerificationError("ingress:config")
         config = _parse(config_raw[0], "ingress:config", max_bytes=MAX_CONFIG_BYTES)
+        slots = connection.execute("SELECT * FROM ingress_slots ORDER BY slot_id").fetchall()
+        if meta["slot_count"] != len(slots):
+            raise IngressVerificationError("ingress:slot-count")
         if len(slots) > int(config["max_slots"]):
             raise IngressVerificationError("ingress:capacity")
+        artifacts_rows = connection.execute("SELECT * FROM ingress_artifacts ORDER BY artifact_id").fetchall()
+        artifacts = {row["artifact_id"]: _verify_artifact(row, config=config) for row in artifacts_rows}
+        if len(artifacts) != len(artifacts_rows):
+            raise IngressVerificationError("ingress:artifact-duplicate")
+        slot_states: dict[str, str] = {}
+        slot_attempts: dict[str, int] = {}
         slot_schedules: dict[str, int] = {}
         slot_operations: dict[str, str] = {}
         slot_times: dict[str, int] = {}
@@ -1393,6 +1544,13 @@ def _verify_connection(
                 raise IngressVerificationError("ingress:fetch-capture-binding")
             if artifact["_terminal_event_sequence"] is None or artifact["_stored_event_sequence"] != artifact["_terminal_event_sequence"]:
                 raise IngressVerificationError("ingress:artifact-event-sequence")
+            if artifact["_terminal_event_kind"] is None or artifact["_terminal_slot_id"] is None:
+                raise IngressVerificationError("ingress:artifact-event-sequence")
+            artifact["terminal_event_kind"] = artifact.pop("_terminal_event_kind")
+            artifact["terminal_slot_id"] = artifact.pop("_terminal_slot_id")
+            artifact["terminal_state"] = slot_states.get(artifact["terminal_slot_id"])
+            if artifact["terminal_state"] not in STATES:
+                raise IngressVerificationError("ingress:artifact-state")
             artifact.pop("_stored_event_sequence", None)
             artifact.pop("_terminal_event_sequence", None)
         for row in slots:
@@ -1446,6 +1604,8 @@ def _verify_connection(
             "database_id": meta["database_id"],
             "chain_id": meta["chain_id"],
             "config_digest": meta["config_digest"],
+            "config": dict(config),
+            "external_policy": dict(config["external_policy"]),
             "sequence": meta["sequence"],
             "head_root": meta["head_root"],
             "watermark": meta["watermark"],
@@ -1465,8 +1625,8 @@ def _verify_connection(
                 selected[selected_id] = dict(artifacts[selected_id])
                 selected[selected_id]["watermark"] = selected[selected_id]["event_sequence"]
                 if not include_raw:
-                    selected[selected_id].pop("raw", None)
-                    selected[selected_id].pop("result", None)
+                    for key in ("raw", "intake_frame", "envelope_raw", "external_evidence_raw", "result"):
+                        selected[selected_id].pop(key, None)
             result["selected_artifacts"] = selected
         if quarantine_head is not None and quarantine_head["artifact_id"] is not None:
             result["current_artifact_id"] = quarantine_head["artifact_id"]
@@ -1477,8 +1637,8 @@ def _verify_connection(
             result["current_artifact"] = dict(current)
             result["selected_artifact_id"] = selected_id
             if not include_raw:
-                result["current_artifact"].pop("raw", None)
-                result["current_artifact"].pop("result", None)
+                for key in ("raw", "intake_frame", "envelope_raw", "external_evidence_raw", "result"):
+                    result["current_artifact"].pop(key, None)
         else:
             if artifact_id is not None:
                 raise IngressVerificationError("ingress:artifact-missing")
@@ -1585,6 +1745,7 @@ def read_artifact(path: str | Path, artifact_id: str) -> dict[str, object]:
     returned["database_id"] = result["database_id"]
     returned["chain_id"] = result["chain_id"]
     returned["config_digest"] = result["config_digest"]
+    returned["external_policy"] = dict(result["external_policy"])
     returned["watermark"] = returned["event_sequence"]
     return returned
 
@@ -1601,6 +1762,7 @@ def read_artifact_snapshot(path: str | Path, artifact_id: str) -> dict[str, obje
     returned["database_id"] = result["database_id"]
     returned["chain_id"] = result["chain_id"]
     returned["config_digest"] = result["config_digest"]
+    returned["external_policy"] = dict(result["external_policy"])
     returned["current_artifact_id"] = result["current_artifact_id"]
     returned["watermark"] = returned["event_sequence"]
     return returned
@@ -1626,6 +1788,7 @@ def read_artifact_snapshots(path: str | Path, artifact_ids: tuple[str, ...]) -> 
         item["database_id"] = result["database_id"]
         item["chain_id"] = result["chain_id"]
         item["config_digest"] = result["config_digest"]
+        item["external_policy"] = dict(result["external_policy"])
         item["current_artifact_id"] = result["current_artifact_id"]
         item["watermark"] = item["event_sequence"]
         returned[str(selected_id)] = item
@@ -1659,9 +1822,10 @@ def logical_export(result: Mapping[str, object]) -> bytes:
 
 __all__ = [
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
+    "INTAKE_MAGIC", "INTAKE_VERSION", "INTAKE_FLAGS",
     "IngressVerificationError", "content_root", "verify_database", "verify_bytes",
     "read_artifact", "logical_export", "_canonical", "_digest", "_raw_digest",
-    "_lease_token_digest", "MAX_DATABASE_BYTES", "MAX_RAW_ENVELOPE_BYTES", "MAX_EVENT_BYTES",
+    "_lease_token_digest", "MAX_DATABASE_BYTES", "MAX_COMPLETE_FRAME_BYTES", "MAX_RAW_ENVELOPE_BYTES", "MAX_EVENT_BYTES",
     "MAX_IDENTIFIER_BYTES", "TABLE_COLUMNS", "EXPLICIT_INDEXES", "INDEX_DEFINITIONS", "_index_definitions",
     "read_artifact_snapshot",
     "read_artifact_snapshots",

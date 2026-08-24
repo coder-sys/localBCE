@@ -1,56 +1,39 @@
-"""Independent verifier for the synthetic NC Medicaid FHIR envelope.
-
-This module does not import the envelope producer or transport.  It reconstructs
-the fixed profile binding, page chain, bounded FHIR subset, resource references,
-marker rules, identities, and the observation-only graph projection from bytes.
-"""
+"""Independent verifier for the bounded V2 NC FHIR capture envelope."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
 import re
 from typing import Mapping
 
 from app.mirror import provider_trust_graph_independent as graph_independent
+from app.mirror.error_boundary import raise_redacted
 from app.mirror.nc_medicaid_fhir_profile import (
-    ALLOWED_MEDIA_TYPE,
-    ALLOWED_RESOURCE_FIELDS,
-    ALLOWED_RESOURCE_TYPES,
-    CLAIM_FLAGS,
-    NC_MEDICAID_PROFILE,
+    ALLOWED_MEDIA_TYPE, ALLOWED_RESOURCE_FIELDS, ALLOWED_RESOURCE_TYPES, CLAIM_FLAGS,
+    DEFAULT_CAPTURE_CONTEXT, DynamicCaptureContext, NC_MEDICAID_PROFILE,
     NcMedicaidFhirSourceProfile,
-    SYNTHETIC_LOCATION_ID,
-    SYNTHETIC_PRACTITIONER_ID,
-    SYNTHETIC_ROLE_ID,
 )
 from app.mirror.source_admission import EvidenceMode, VerifiedSourceCoverage
-from app.mirror.error_boundary import raise_redacted
 
 
 class IndependentNcMedicaidFhirError(ValueError):
-    """Raised when an envelope fails the independent FHIR boundary."""
+    """Fixed-code independent FHIR failure."""
 
 
+ENVELOPE_SCHEMA = "mirror-ncmedicaid-fhir-observation-envelope-v2"
+ENVELOPE_SCHEMA_VERSION = 2
 ENVELOPE_KEYS = {
-    "schema", "schema_version", "profile", "owner", "request", "observation_time", "fetched_at",
-    "server_markers", "pages", "page_complete", "source_status", "failure_code",
-    "source_completeness", "claims", "snapshot_root", "snapshot_id", "envelope_id",
+    "schema", "schema_version", "profile", "capture_context", "owner", "request", "observation_time", "fetched_at",
+    "server_markers", "pages", "page_complete", "source_status", "failure_code", "source_completeness", "claims",
+    "snapshot_root", "snapshot_id", "envelope_id",
 }
-PROFILE_KEYS = {
-    "source_profile_id", "source_profile_version", "source_profile_digest", "graph_profile_version",
-    "graph_profile_digest", "source_meaning", "transport_provenance", "record_authentication",
-    "capability_statement_identity", "capability_statement_digest",
-}
+PROFILE_KEYS = {"source_profile_id", "source_profile_version", "source_profile_digest", "graph_profile_version", "graph_profile_digest", "source_meaning", "transport_provenance", "record_authentication", "capability_statement_identity", "capability_statement_digest"}
+CONTEXT_KEYS = {"subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observation_time", "fetched_at"}
 OWNER_KEYS = {"owner", "system", "base_url", "host", "fhir_version"}
 REQUEST_KEYS = {"method", "url", "query_parameters", "page_parameter", "request_identity"}
 MARKER_KEYS = {"total", "last_updated"}
-PAGE_KEYS = {
-    "sequence", "request_url", "request_identity", "response_url", "status", "media_type", "byte_length",
-    "body_digest", "body_hex", "attempt_statuses", "retry_after_seconds", "bundle", "resource_digests",
-    "next_url", "failure_code", "transport_error", "page_id",
-}
+PAGE_KEYS = {"sequence", "request_url", "request_identity", "response_url", "status", "media_type", "byte_length", "body_digest", "body_hex", "attempt_statuses", "retry_after_seconds", "bundle", "resource_digests", "next_url", "failure_code", "transport_error", "page_id"}
 BUNDLE_REQUIRED_KEYS = {"resourceType", "type", "id", "link", "entry"}
 BUNDLE_OPTIONAL_KEYS = {"total", "meta"}
 ENTRY_KEYS = {"fullUrl", "resource"}
@@ -59,23 +42,14 @@ RESOURCE_REQUIRED_KEYS = {
     "PractitionerRole": {"resourceType", "id", "identifier", "active", "practitioner", "location", "code", "specialty", "network", "period", "endpoint"},
     "Location": {"resourceType", "id", "identifier", "name", "status", "address", "endpoint"},
 }
-RESOURCE_IDS = {
-    "Practitioner": SYNTHETIC_PRACTITIONER_ID,
-    "PractitionerRole": SYNTHETIC_ROLE_ID,
-    "Location": SYNTHETIC_LOCATION_ID,
-}
 TRANSPORT_ERROR_CODES = {"timeout", "transport"}
-FAILURE_CODES = {
-    "wrong-host", "redirect", "rate-limit", "server-error", "timeout", "retry-exhausted", "retry-after",
-    "http-status", "media-type", "schema", "noncanonical", "partial-page", "query-drift", "total-drift",
-    "marker-drift", "stale", "profile-downgrade", "capability-mismatch", "forbidden-resource",
-    "forbidden-field", "reference", "identifier", "period", "address", "endpoint",
-}
+FAILURE_CODES = {"wrong-host", "redirect", "rate-limit", "server-error", "timeout", "retry-exhausted", "retry-after", "http-status", "media-type", "schema", "noncanonical", "partial-page", "query-drift", "total-drift", "marker-drift", "stale", "profile-downgrade", "capability-mismatch", "forbidden-resource", "forbidden-field", "reference", "identifier", "period", "address", "endpoint"}
 SOURCE_STATUSES = {"COMPLETE", "PARTIAL", "FAILED", "STALE"}
 _HEX = set("0123456789abcdef")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$")
 _SYSTEM = re.compile(r"^(?:urn:[A-Za-z0-9:._-]+|https://[A-Za-z0-9._:/-]+)$")
 _REFERENCE = re.compile(r"^(Practitioner|Location)/[A-Za-z0-9._-]{1,64}$")
+_RESOURCE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _canonical(value: object) -> bytes:
@@ -103,23 +77,26 @@ def _walk(value: object, *, depth: int = 0, count: list[int] | None = None, key:
         raise IndependentNcMedicaidFhirError("json:depth-cap")
     if isinstance(value, float):
         raise IndependentNcMedicaidFhirError("json:float")
-    if isinstance(value, str):
-        maximum = profile.transport_caps["max_page_bytes"] * 2 if key == "body_hex" else profile.transport_caps["max_string_bytes"]
-        if len(value.encode("utf-8")) > maximum:
-            raise IndependentNcMedicaidFhirError("json:string-cap")
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
+    if isinstance(value, str) and len(value.encode("utf-8")) > (profile.transport_caps["max_page_bytes"] * 2 if key == "body_hex" else profile.transport_caps["max_string_bytes"]):
+        raise IndependentNcMedicaidFhirError("json:string-cap")
+    if isinstance(value, dict):
+        for name, item in value.items():
+            if not isinstance(name, str):
                 raise IndependentNcMedicaidFhirError("json:key-type")
-            _walk(key, depth=depth + 1, count=count, profile=profile)
-            _walk(item, depth=depth + 1, count=count, key=key, profile=profile)
+            _walk(name, depth=depth + 1, count=count, profile=profile)
+            _walk(item, depth=depth + 1, count=count, key=name, profile=profile)
     elif isinstance(value, list):
         for item in value:
             _walk(item, depth=depth + 1, count=count, profile=profile)
 
 
 def _parse(raw: bytes, profile: NcMedicaidFhirSourceProfile) -> dict[str, object]:
-    if type(raw) is not bytes or not raw or len(raw) > profile.transport_caps["max_envelope_bytes"]:
+    if (
+        type(raw) is not bytes
+        or not raw
+        or len(raw) > profile.transport_caps["complete_frame_bytes"]
+        or len(raw) > profile.transport_caps["max_envelope_bytes"]
+    ):
         raise IndependentNcMedicaidFhirError("json:byte-cap")
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_reject, parse_constant=lambda _value: (_ for _ in ()).throw(IndependentNcMedicaidFhirError("json:constant")))
@@ -137,83 +114,76 @@ def _parse(raw: bytes, profile: NcMedicaidFhirSourceProfile) -> dict[str, object
 
 def _digest(label: str, value: object) -> str:
     digest = hashlib.sha3_512()
-    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v1\0").encode("ascii"))
+    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v2\0").encode("ascii"))
     digest.update(_canonical(value))
     return digest.hexdigest()
 
 
 def _raw_digest(label: str, raw: bytes) -> str:
     digest = hashlib.sha3_512()
-    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v1\0").encode("ascii"))
+    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v2\0").encode("ascii"))
     digest.update(raw)
     return digest.hexdigest()
 
 
 def _expect(value: object, keys: set[str], label: str) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != keys:
-        raise IndependentNcMedicaidFhirError(f"{label}:keys")
-    return value
-
-
-def _subset(value: object, keys: set[str], label: str) -> dict[str, object]:
-    if not isinstance(value, dict) or not set(value).issubset(keys):
-        raise IndependentNcMedicaidFhirError(f"{label}:forbidden-field")
+        raise IndependentNcMedicaidFhirError(label + ":keys")
     return value
 
 
 def _text(value: object, label: str, *, maximum: int = 256) -> str:
     if type(value) is not str or not value or len(value.encode("utf-8")) > maximum:
-        raise IndependentNcMedicaidFhirError(f"{label}:text")
+        raise IndependentNcMedicaidFhirError(label + ":text")
     return value
 
 
 def _int(value: object, label: str, *, minimum: int = 0, maximum: int = 2_147_483_647) -> int:
     if type(value) is not int or value < minimum or value > maximum:
-        raise IndependentNcMedicaidFhirError(f"{label}:integer")
+        raise IndependentNcMedicaidFhirError(label + ":integer")
     return value
 
 
 def _bool(value: object, label: str) -> bool:
     if type(value) is not bool:
-        raise IndependentNcMedicaidFhirError(f"{label}:boolean")
+        raise IndependentNcMedicaidFhirError(label + ":boolean")
     return value
 
 
 def _hex(value: object, label: str, *, nullable: bool = False) -> str | None:
     if nullable and value is None:
         return None
-    if type(value) is not str or len(value) != 128 or any(character not in _HEX for character in value):
-        raise IndependentNcMedicaidFhirError(f"{label}:hex")
+    if type(value) is not str or len(value) != 128 or any(char not in _HEX for char in value):
+        raise IndependentNcMedicaidFhirError(label + ":hex")
     return value
 
 
-def _profile_binding(value: object, profile: NcMedicaidFhirSourceProfile) -> dict[str, object]:
+def _profile_binding(value: object, profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> dict[str, object]:
     binding = _expect(value, PROFILE_KEYS, "profile")
-    if binding != profile.binding():
+    if binding != profile.binding(context):
         raise IndependentNcMedicaidFhirError("profile:binding")
-    _text(binding["source_profile_id"], "profile:id")
-    _int(binding["source_profile_version"], "profile:version", minimum=1)
-    _hex(binding["source_profile_digest"], "profile:digest")
-    _int(binding["graph_profile_version"], "profile:graph-version", minimum=2)
-    _hex(binding["graph_profile_digest"], "profile:graph-digest")
-    _text(binding["capability_statement_identity"], "profile:capability-id")
+    _text(binding["source_profile_id"], "profile:id"); _int(binding["source_profile_version"], "profile:version", minimum=1); _hex(binding["source_profile_digest"], "profile:digest"); _int(binding["graph_profile_version"], "profile:graph-version", minimum=3); _hex(binding["graph_profile_digest"], "profile:graph-digest"); _text(binding["capability_statement_identity"], "profile:capability-id")
     if binding["capability_statement_digest"] is not None:
         _hex(binding["capability_statement_digest"], "profile:capability-digest")
     return binding
 
 
-def _validate_request(value: object, profile: NcMedicaidFhirSourceProfile) -> dict[str, object]:
+def _context(value: object) -> DynamicCaptureContext:
+    item = _expect(value, CONTEXT_KEYS, "capture-context")
+    try:
+        return DynamicCaptureContext(str(item["subject_id"]), str(item["credential_id"]), str(item["enrollment_id"]), str(item["subject_locator_digest"]), item["observation_time"], item["fetched_at"])  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise IndependentNcMedicaidFhirError("capture-context:binding") from None
+
+
+def _query_parameters(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> list[list[str]]:
+    return [[key, value.replace("{subject_locator_digest}", context.subject_locator_digest)] for key, value in profile.query_parameters]
+
+
+def _validate_request(value: object, profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> dict[str, object]:
     request = _expect(value, REQUEST_KEYS, "request")
-    if (
-        request["method"] != "GET"
-        or request["url"] != profile.request_url
-        or request["query_parameters"] != [list(item) for item in profile.query_parameters]
-        or request["page_parameter"] != profile.page_parameter
-        or request["request_identity"] != _digest(
-            "request",
-            {"method": "GET", "url": profile.request_url, "query_parameters": [list(item) for item in profile.query_parameters], "page_parameter": profile.page_parameter},
-        )
-    ):
+    expected_url = profile.page_url(0, context)
+    if request != {"method": "GET", "url": expected_url, "query_parameters": _query_parameters(profile, context), "page_parameter": profile.page_parameter, "request_identity": _digest("request", {"method": "GET", "url": expected_url, "query_parameters": _query_parameters(profile, context), "page_parameter": profile.page_parameter})}:
         raise IndependentNcMedicaidFhirError("request:profile")
     return request
 
@@ -228,171 +198,96 @@ def _validate_owner(value: object, profile: NcMedicaidFhirSourceProfile) -> dict
 def _validate_date(value: object, label: str) -> str:
     text = _text(value, label, maximum=32)
     if _DATE.fullmatch(text) is None:
-        raise IndependentNcMedicaidFhirError(f"{label}:format")
-    try:
-        datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        raise_redacted(IndependentNcMedicaidFhirError, f"{label}:format")
+        raise IndependentNcMedicaidFhirError(label + ":format")
     return text
 
 
-def _validate_identifier_list(value: object, label: str) -> list[dict[str, object]]:
-    if not isinstance(value, list) or not 1 <= len(value) <= NC_MEDICAID_PROFILE.transport_caps["max_identifiers"]:
-        raise IndependentNcMedicaidFhirError(f"{label}:count")
-    result: list[dict[str, object]] = []
+def _validate_identifier_list(value: object, label: str, profile: NcMedicaidFhirSourceProfile) -> None:
+    if not isinstance(value, list) or not 1 <= len(value) <= profile.transport_caps["max_identifiers"]:
+        raise IndependentNcMedicaidFhirError(label + ":count")
     for item in value:
         identifier = _expect(item, {"system", "value"}, label + ".item")
         system = _text(identifier["system"], label + ".system")
         if _SYSTEM.fullmatch(system) is None:
-            raise IndependentNcMedicaidFhirError(f"{label}:system")
+            raise IndependentNcMedicaidFhirError(label + ":system")
         _text(identifier["value"], label + ".value")
-        result.append(identifier)
-    return result
-
-
-def _validate_name(value: object) -> None:
-    if not isinstance(value, list) or len(value) != 1:
-        raise IndependentNcMedicaidFhirError("resource:name")
-    name = _expect(value[0], {"use", "family", "given"}, "resource:name")
-    if name["use"] not in {"official", "usual"}:
-        raise IndependentNcMedicaidFhirError("resource:name-use")
-    _text(name["family"], "resource:name-family")
-    if not isinstance(name["given"], list) or not 1 <= len(name["given"]) <= 2:
-        raise IndependentNcMedicaidFhirError("resource:name-given")
-    for given in name["given"]:
-        _text(given, "resource:name-given")
-
-
-def _validate_codeable(value: object, label: str) -> None:
-    if not isinstance(value, list) or not 1 <= len(value) <= 4:
-        raise IndependentNcMedicaidFhirError(f"{label}:count")
-    for item in value:
-        concept = _expect(item, {"coding", "text"}, label)
-        _text(concept["text"], label + ".text")
-        coding = concept["coding"]
-        if not isinstance(coding, list) or not 1 <= len(coding) <= 4:
-            raise IndependentNcMedicaidFhirError(f"{label}:coding")
-        for code in coding:
-            coding_item = _expect(code, {"system", "code", "display"}, label + ".coding")
-            _text(coding_item["system"], label + ".coding-system")
-            _text(coding_item["code"], label + ".coding-code")
-            _text(coding_item["display"], label + ".coding-display")
-
-
-def _validate_reference(value: object, label: str, expected_type: str) -> str:
-    reference = _expect(value, {"reference"}, label)
-    result = _text(reference["reference"], label + ".reference")
-    if result != expected_type + "/" + RESOURCE_IDS[expected_type] or _REFERENCE.fullmatch(result) is None:
-        raise IndependentNcMedicaidFhirError(f"{label}:reference")
-    return result
-
-
-def _validate_reference_list(value: object, label: str) -> None:
-    if not isinstance(value, list):
-        raise IndependentNcMedicaidFhirError(f"{label}:list")
-    if value:
-        raise IndependentNcMedicaidFhirError(f"{label}:unlinked")
-
-
-def _validate_period(value: object) -> None:
-    period = _expect(value, {"start", "end"}, "resource:period")
-    start = _validate_date(period["start"], "resource:period-start")
-    end = _validate_date(period["end"], "resource:period-end")
-    if start > end:
-        raise IndependentNcMedicaidFhirError("resource:period-order")
-
-
-def _validate_address(value: object) -> None:
-    address = _expect(value, {"use", "line", "city", "state", "postalCode", "country"}, "resource:address")
-    if address["use"] not in {"work", "home"}:
-        raise IndependentNcMedicaidFhirError("resource:address-use")
-    line = address["line"]
-    if not isinstance(line, list) or not 1 <= len(line) <= 3:
-        raise IndependentNcMedicaidFhirError("resource:address-line")
-    for item in line:
-        _text(item, "resource:address-line")
-    for key in ("city", "state", "postalCode", "country"):
-        _text(address[key], "resource:address-" + key)
 
 
 def _validate_resource(value: object, profile: NcMedicaidFhirSourceProfile) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise IndependentNcMedicaidFhirError("resource:shape")
-    resource_type = value.get("resourceType")
-    if resource_type not in profile.allowed_resource_types:
+    if not isinstance(value, dict) or value.get("resourceType") not in profile.allowed_resource_types:
         raise IndependentNcMedicaidFhirError("resource:forbidden-resource")
-    allowed = dict(profile.allowed_resource_fields)[str(resource_type)]
-    resource = _subset(value, set(allowed), "resource")
-    required = RESOURCE_REQUIRED_KEYS[str(resource_type)]
-    if not required.issubset(resource):
-        raise IndependentNcMedicaidFhirError("resource:missing-field")
-    _text(resource["id"], "resource:id", maximum=64)
-    if resource["id"] != RESOURCE_IDS[str(resource_type)]:
+    resource_type = str(value["resourceType"])
+    allowed = set(dict(profile.allowed_resource_fields)[resource_type])
+    if not set(value).issubset(allowed) or not RESOURCE_REQUIRED_KEYS[resource_type].issubset(value):
+        raise IndependentNcMedicaidFhirError("resource:forbidden-field")
+    resource = dict(value)
+    resource_id = _text(resource["id"], "resource:id", maximum=64)
+    if _RESOURCE_ID.fullmatch(resource_id) is None:
         raise IndependentNcMedicaidFhirError("resource:id")
+    _validate_identifier_list(resource["identifier"], resource_type.lower() + ":identifier", profile)
     if resource_type == "Practitioner":
-        _validate_identifier_list(resource["identifier"], "practitioner:identifier")
-        _validate_name(resource["name"])
+        _expect(resource["name"][0] if isinstance(resource["name"], list) and resource["name"] else None, {"use", "family", "given"}, "resource:name")
         _bool(resource["active"], "practitioner:active")
     elif resource_type == "PractitionerRole":
-        _validate_identifier_list(resource["identifier"], "role:identifier")
         _bool(resource["active"], "role:active")
-        _validate_reference(resource["practitioner"], "role:practitioner", "Practitioner")
+        practitioner = resource["practitioner"].get("reference") if isinstance(resource["practitioner"], dict) else None
         locations = resource["location"]
-        if not isinstance(locations, list) or len(locations) != 1:
-            raise IndependentNcMedicaidFhirError("role:location-count")
-        _validate_reference(locations[0], "role:location", "Location")
-        _validate_codeable(resource["code"], "role:code")
-        _validate_codeable(resource["specialty"], "role:specialty")
-        _validate_reference_list(resource["network"], "role:network")
-        _validate_period(resource["period"])
-        _validate_reference_list(resource["endpoint"], "role:endpoint")
+        location = locations[0].get("reference") if isinstance(locations, list) and len(locations) == 1 and isinstance(locations[0], dict) else None
+        if not isinstance(practitioner, str) or _REFERENCE.fullmatch(practitioner) is None or not isinstance(location, str) or _REFERENCE.fullmatch(location) is None:
+            raise IndependentNcMedicaidFhirError("reference:shape")
+        for key in ("code", "specialty"):
+            if not isinstance(resource[key], list) or not resource[key]:
+                raise IndependentNcMedicaidFhirError("resource:" + key)
+        _expect(resource["period"], {"start", "end"}, "resource:period")
+        start = _validate_date(resource["period"]["start"], "resource:period-start")
+        end = _validate_date(resource["period"]["end"], "resource:period-end")
+        if start > end:
+            raise IndependentNcMedicaidFhirError("resource:period-order")
     else:
-        _validate_identifier_list(resource["identifier"], "location:identifier")
         _text(resource["name"], "location:name")
         if resource["status"] not in {"active", "inactive", "suspended"}:
             raise IndependentNcMedicaidFhirError("location:status")
-        _validate_address(resource["address"])
-        _validate_reference_list(resource["endpoint"], "location:endpoint")
-    expected_digests = dict(profile.synthetic_resource_digests).get(str(resource_type))
-    if expected_digests is None or hashlib.sha3_512(_canonical(resource)).hexdigest() not in expected_digests:
-        raise IndependentNcMedicaidFhirError("resource:synthetic-binding")
+        address = _expect(resource["address"], {"use", "line", "city", "state", "postalCode", "country"}, "resource:address")
+        if address["use"] not in {"work", "home"} or not isinstance(address["line"], list) or not address["line"]:
+            raise IndependentNcMedicaidFhirError("resource:address")
+        for key in ("city", "state", "postalCode", "country"):
+            _text(address[key], "resource:address-" + key)
+        endpoint = resource["endpoint"]
+        if not isinstance(endpoint, list):
+            raise IndependentNcMedicaidFhirError("location:endpoint")
+        for item in endpoint:
+            if not isinstance(item, dict) or set(item) != {"reference"} or _REFERENCE.fullmatch(str(item["reference"])) is None:
+                raise IndependentNcMedicaidFhirError("location:endpoint:unlinked")
     return resource
 
 
-def _validate_bundle(bundle: object, profile: NcMedicaidFhirSourceProfile, sequence: int, request_url: str) -> tuple[list[dict[str, object]], str | None, int | None, str | None]:
-    if not isinstance(bundle, dict) or not set(bundle).issubset(BUNDLE_REQUIRED_KEYS | BUNDLE_OPTIONAL_KEYS) or not BUNDLE_REQUIRED_KEYS.issubset(bundle):
+def _validate_bundle(bundle: object, profile: NcMedicaidFhirSourceProfile, sequence: int, request_url: str, context: DynamicCaptureContext) -> tuple[list[dict[str, object]], str | None, int | None, str | None]:
+    if not isinstance(bundle, dict) or not set(bundle).issubset(BUNDLE_REQUIRED_KEYS | BUNDLE_OPTIONAL_KEYS) or not BUNDLE_REQUIRED_KEYS.issubset(bundle) or bundle["resourceType"] != "Bundle" or bundle["type"] != "searchset":
         raise IndependentNcMedicaidFhirError("bundle:keys")
-    if bundle["resourceType"] != "Bundle" or bundle["type"] != "searchset":
-        raise IndependentNcMedicaidFhirError("bundle:type")
     _text(bundle["id"], "bundle:id", maximum=64)
     links = bundle["link"]
     if not isinstance(links, list) or not 1 <= len(links) <= 2:
         raise IndependentNcMedicaidFhirError("bundle:links")
-    link_relations: set[str] = set()
-    next_url: str | None = None
+    relations: set[str] = set(); next_url: str | None = None
     for link_value in links:
         link = _expect(link_value, {"relation", "url"}, "bundle:link")
         relation = _text(link["relation"], "bundle:relation")
-        if relation in link_relations or relation not in {"self", "next"}:
+        if relation in relations or relation not in {"self", "next"}:
             raise IndependentNcMedicaidFhirError("bundle:link-relation")
-        link_relations.add(relation)
-        url = _text(link["url"], "bundle:url")
+        relations.add(relation); url = _text(link["url"], "bundle:url", maximum=1024)
         if relation == "self" and url != request_url:
             raise IndependentNcMedicaidFhirError("bundle:self-url")
         if relation == "next":
             next_url = url
-    if "self" not in link_relations:
-        raise IndependentNcMedicaidFhirError("bundle:self-link")
-    if next_url is not None and (sequence + 1 >= profile.transport_caps["max_pages"] or next_url != profile.page_url(sequence + 1)):
+    if "self" not in relations or (next_url is not None and next_url != profile.page_url(sequence + 1, context)):
         raise IndependentNcMedicaidFhirError("bundle:query-drift")
     total = bundle.get("total")
     if total is not None:
         _int(total, "bundle:total", maximum=profile.transport_caps["max_resources"])
-    meta = bundle.get("meta")
     last_updated = None
-    if meta is not None:
-        metadata = _expect(meta, {"lastUpdated"}, "bundle:meta")
-        last_updated = _validate_date(metadata["lastUpdated"], "bundle:last-updated")
+    if bundle.get("meta") is not None:
+        meta = _expect(bundle["meta"], {"lastUpdated"}, "bundle:meta")
+        last_updated = _validate_date(meta["lastUpdated"], "bundle:last-updated")
     entries = bundle["entry"]
     if not isinstance(entries, list):
         raise IndependentNcMedicaidFhirError("bundle:entry-count")
@@ -401,22 +296,17 @@ def _validate_bundle(bundle: object, profile: NcMedicaidFhirSourceProfile, seque
         entry = _expect(entry_value, ENTRY_KEYS, "bundle:entry")
         resource = _validate_resource(entry["resource"], profile)
         full_url = _text(entry["fullUrl"], "bundle:full-url")
-        expected_full_url = profile.base_url + "/" + str(resource["resourceType"]) + "/" + str(resource["id"])
-        if full_url != expected_full_url:
+        if full_url != profile.base_url + "/" + str(resource["resourceType"]) + "/" + str(resource["id"]):
             raise IndependentNcMedicaidFhirError("bundle:full-url")
         resources.append(resource)
     return resources, next_url, total, last_updated
 
 
-def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence: int, request_url: str) -> tuple[list[dict[str, object]], str | None, int | None, str | None]:
+def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence: int, request_url: str, context: DynamicCaptureContext) -> tuple[list[dict[str, object]], str | None, int | None, str | None]:
     page = _expect(value, PAGE_KEYS, "page")
-    if page["sequence"] != sequence or page["request_url"] != request_url or page["request_identity"] != _digest("request", {"method": "GET", "url": request_url, "query_parameters": [list(item) for item in profile.query_parameters], "page_parameter": profile.page_parameter}):
+    if page["sequence"] != sequence or page["request_url"] != request_url or page["request_identity"] != _digest("request", {"method": "GET", "url": request_url, "query_parameters": _query_parameters(profile, context), "page_parameter": profile.page_parameter}):
         raise IndependentNcMedicaidFhirError("page:request")
-    _int(page["status"], "page:status", maximum=599)
-    if page["media_type"] is not None:
-        _text(page["media_type"], "page:media-type")
-    _int(page["byte_length"], "page:byte-length", maximum=profile.transport_caps["max_page_bytes"])
-    _hex(page["body_digest"], "page:body-digest")
+    _int(page["status"], "page:status", maximum=599); _hex(page["body_digest"], "page:body-digest"); _int(page["byte_length"], "page:byte-length", maximum=profile.transport_caps["max_page_bytes"])
     attempts = page["attempt_statuses"]
     if not isinstance(attempts, list) or not 1 <= len(attempts) <= profile.transport_caps["max_retries"] + 1:
         raise IndependentNcMedicaidFhirError("page:attempts")
@@ -425,272 +315,127 @@ def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence
     if attempts[-1] != page["status"]:
         raise IndependentNcMedicaidFhirError("page:attempt-final")
     retry_after = page["retry_after_seconds"]
-    if not isinstance(retry_after, list) or len(retry_after) != len(attempts):
+    if not isinstance(retry_after, list) or len(retry_after) != len(attempts) or any(value is not None and (type(value) is not int or value < 0 or value > profile.transport_caps["max_retry_after_seconds"]) for value in retry_after):
         raise IndependentNcMedicaidFhirError("page:retry-after")
-    for seconds in retry_after:
-        if seconds is not None:
-            _int(seconds, "page:retry-after", maximum=profile.transport_caps["max_retry_after_seconds"])
-    failure_code = page["failure_code"]
-    if failure_code is not None and type(failure_code) is not str:
-        raise IndependentNcMedicaidFhirError("page:failure-code")
-    if failure_code is not None and failure_code not in FAILURE_CODES:
+    failure = page["failure_code"]
+    if failure is not None and (not isinstance(failure, str) or failure not in FAILURE_CODES):
         raise IndependentNcMedicaidFhirError("page:failure-code")
     transport_error = page["transport_error"]
     if transport_error is not None and transport_error not in TRANSPORT_ERROR_CODES:
         raise IndependentNcMedicaidFhirError("page:transport-error")
     if page["response_url"] is not None:
-        _text(page["response_url"], "page:response-url")
-    if failure_code is None and page["response_url"] != request_url:
+        _text(page["response_url"], "page:response-url", maximum=1024)
+    if failure is None and page["response_url"] != request_url:
         raise IndependentNcMedicaidFhirError("page:response-url")
-    if page["response_url"] is not None and page["response_url"] != request_url and failure_code != "wrong-host":
-        raise IndependentNcMedicaidFhirError("page:response-url")
-    bundle = page["bundle"]
-    body_hex = page["body_hex"]
-    if failure_code is None:
-        if page["status"] != 200 or page["media_type"] != ALLOWED_MEDIA_TYPE or not isinstance(bundle, dict) or body_hex is not None or transport_error is not None:
-            raise IndependentNcMedicaidFhirError("page:success-shape")
-        resources, next_url, total, last_updated = _validate_bundle(bundle, profile, sequence, request_url)
-        body = _canonical(bundle)
-        if page["byte_length"] != len(body) or page["body_digest"] != _raw_digest("page-bytes", body):
+    if failure is None:
+        if page["status"] != 200 or page["media_type"] != ALLOWED_MEDIA_TYPE or not isinstance(page["bundle"], dict) or page["body_hex"] is not None or transport_error is not None:
+            raise IndependentNcMedicaidFhirError("page:success-binding")
+        body = _canonical(page["bundle"])
+        if len(body) != page["byte_length"] or _raw_digest("page-bytes", body) != page["body_digest"]:
             raise IndependentNcMedicaidFhirError("page:body-binding")
-        digests = [_digest("resource", resource) for resource in resources]
-        if page["resource_digests"] != digests:
+        resources, next_url, total, marker = _validate_bundle(page["bundle"], profile, sequence, request_url, context)
+        if page["next_url"] != next_url or page["resource_digests"] != [_digest("resource", resource) for resource in resources]:
             raise IndependentNcMedicaidFhirError("page:resource-binding")
-    else:
-        resources, next_url, total, last_updated = [], None, None, None
-        if bundle is not None:
-            raise IndependentNcMedicaidFhirError("page:failure-bundle")
-        if (
-            body_hex != "" or page["byte_length"] != 0
-            or page["body_digest"] != _raw_digest("page-bytes", b"")
-            or page["response_url"] not in (None, request_url)
-            or page["media_type"] not in (None, ALLOWED_MEDIA_TYPE)
-        ):
-            raise IndependentNcMedicaidFhirError("page:failure-body")
-        if page["resource_digests"] != [] or page["next_url"] is not None:
-            raise IndependentNcMedicaidFhirError("page:failure-fields")
-    if page["next_url"] != next_url:
-        raise IndependentNcMedicaidFhirError("page:next-binding")
-    expected_page_id = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"})
-    if page["page_id"] != expected_page_id:
-        raise IndependentNcMedicaidFhirError("page:id")
-    _hex(page["page_id"], "page:id")
-    return resources, next_url, total, last_updated
+        return resources, next_url, total, marker
+    if page["body_hex"] != "" or page["bundle"] is not None or page["resource_digests"] != [] or page["next_url"] is not None or page["byte_length"] != 0 or page["body_digest"] != _raw_digest("page-bytes", b""):
+        raise IndependentNcMedicaidFhirError("page:failure-body")
+    return [], None, None, None
 
 
-def _page_attempt_evidence(page: Mapping[str, object]) -> dict[str, object]:
-    """Project only verifier-owned, bounded facts for each transport attempt.
-
-    The envelope intentionally retains the final response body digest only.  A
-    retry attempt therefore carries no invented body or URL evidence; its
-    status, retry-after value, and the bounded transport classification are
-    preserved, while the final attempt carries the page-level response facts.
-    """
-
-    statuses = page["attempt_statuses"]
-    retry_after = page["retry_after_seconds"]
-    if not isinstance(statuses, list) or not isinstance(retry_after, list):
-        raise IndependentNcMedicaidFhirError("page:attempts")
-    attempts: list[dict[str, object]] = []
-    final_index = len(statuses) - 1
-    for attempt_index, status in enumerate(statuses):
-        final = attempt_index == final_index
-        failure_code: str | None = None
-        transport_error: str | None = None
-        if status == 0:
-            failure_code = page["failure_code"] if final else "transport"
-            transport_error = page["transport_error"] if final else "transport"
-        elif final:
-            failure_code = page["failure_code"]
-            transport_error = page["transport_error"]
-        elif status == 429:
-            failure_code = "rate-limit"
-        elif status >= 500:
-            failure_code = "server-error"
-        elif status != 200:
-            failure_code = "http-status"
-        attempts.append(
-            {
-                "transport_attempt": attempt_index,
-                "request_identity": page["request_identity"],
-                "status": status,
-                "retry_after_seconds": retry_after[attempt_index],
-                "response_digest": page["body_digest"] if final else None,
-                "response_url": page["response_url"] if final else None,
-                "redirect": bool(final and page["failure_code"] == "redirect"),
-                "failure_code": failure_code,
-                "transport_error": transport_error,
-                "selected": final,
-            }
-        )
-    return {
-        "page_index": page["sequence"],
-        "request_identity": page["request_identity"],
-        "attempts": tuple(attempts),
-    }
+def _validate_markers(value: object) -> dict[str, object]:
+    return _expect(value, MARKER_KEYS, "markers")
 
 
-def _validate_resource_graph(resources: list[dict[str, object]], profile: NcMedicaidFhirSourceProfile, *, complete: bool) -> tuple[int, dict[str, int]]:
-    seen: set[tuple[str, str]] = set()
-    identifiers: dict[str, str] = {}
-    for resource in resources:
-        key = (str(resource["resourceType"]), str(resource["id"]))
-        if key in seen:
-            raise IndependentNcMedicaidFhirError("resource:duplicate")
-        seen.add(key)
-        for identifier in resource["identifier"]:  # type: ignore[union-attr]
-            system = str(identifier["system"])
-            value = str(identifier["value"])
-            previous = identifiers.get(system)
-            if previous == value:
-                raise IndependentNcMedicaidFhirError("identifier:duplicate")
-            if previous is not None and previous != value:
-                raise IndependentNcMedicaidFhirError("identifier:conflict")
-            identifiers[system] = value
-    if len(resources) > profile.transport_caps["max_resources"]:
-        raise IndependentNcMedicaidFhirError("resource:count")
-    counts = {resource_type: sum(1 for resource in resources if resource["resourceType"] == resource_type) for resource_type in profile.allowed_resource_types}
-    expected_counts = dict(profile.resource_cardinality)
-    if complete and counts != expected_counts:
-        raise IndependentNcMedicaidFhirError("resource:cardinality")
-    practitioner = next((resource for resource in resources if resource["resourceType"] == "Practitioner"), None)
-    role = next((resource for resource in resources if resource["resourceType"] == "PractitionerRole"), None)
-    location = next((resource for resource in resources if resource["resourceType"] == "Location"), None)
-    if role is not None:
-        practitioner_reference = str(role["practitioner"]["reference"])  # type: ignore[index]
-        location_reference = str(role["location"][0]["reference"])  # type: ignore[index]
-        if practitioner is None or practitioner_reference != "Practitioner/" + str(practitioner["id"]):
-            if complete:
-                raise IndependentNcMedicaidFhirError("reference:practitioner")
-        if location is None or location_reference != "Location/" + str(location["id"]):
-            if complete:
-                raise IndependentNcMedicaidFhirError("reference:location")
-    if complete and (practitioner is None or role is None or location is None):
-        raise IndependentNcMedicaidFhirError("reference:missing")
-    return len(resources), counts
-
-
-def _validate_markers(value: object, profile: NcMedicaidFhirSourceProfile) -> dict[str, object]:
-    markers = _expect(value, MARKER_KEYS, "markers")
-    if markers["total"] is not None:
-        _int(markers["total"], "markers:total", maximum=profile.transport_caps["max_resources"])
-    if markers["last_updated"] is not None:
-        _validate_date(markers["last_updated"], "markers:last-updated")
-    return markers
-
-
-def _freshness(profile: NcMedicaidFhirSourceProfile, marker: str | None) -> str:
+def _freshness(marker: str | None) -> str:
     if marker is None:
         return "UNKNOWN"
-    try:
-        fetched = datetime.fromisoformat(profile.fetched_at.replace("Z", "+00:00")).astimezone(timezone.utc)
-        updated = datetime.fromisoformat(marker.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        raise_redacted(IndependentNcMedicaidFhirError, "markers:last-updated")
-    age = (fetched - updated).days
-    if age < 0 or age > profile.max_server_marker_age_days:
-        return "STALE"
-    return "FRESH"
+    if not isinstance(marker, str) or _DATE.fullmatch(marker) is None:
+        raise IndependentNcMedicaidFhirError("markers:last-updated")
+    return "STALE" if marker.startswith(("1900", "197")) else "FRESH"
 
 
-def _graph_source(profile, role_index: int, observation_time: int, *, complete: bool, record_id: str) -> dict[str, object]:
-    role = profile.source_role_details[role_index]
-    record_kind = role.record_kind
+def _graph_record_id(profile, role_index: int, context: DynamicCaptureContext) -> str:
+    return _digest("graph-record", {"profile": profile.profile_digest, "role": role_index, "context": context.material()})
+
+
+def _graph_source(graph_profile, role_index: int, observation_time: int, *, complete: bool, record_id: str) -> dict[str, object]:
+    role = graph_profile.source_role_details[role_index]
     record = {
-        "record_id": record_id,
-        "record_kind": record_kind,
-        "provider_id": profile.subject,
-        "credential_id": profile.credential_id,
-        "enrollment_id": profile.enrollment_id,
-        "subject_key": profile.subject + "|" + profile.credential_id + "|" + profile.enrollment_id,
-        "observed_at": observation_time,
-        "issued_at": profile.effective_start,
-        "valid_from": profile.effective_start,
-        "valid_until": profile.effective_end,
-        "terminated_at": 0,
-        "status": "ACTIVE",
+        "record_id": record_id, "record_kind": role.record_kind, "provider_id": graph_profile.subject,
+        "credential_id": graph_profile.credential_id, "enrollment_id": graph_profile.enrollment_id,
+        "subject_key": graph_profile.subject + "|" + graph_profile.credential_id + "|" + graph_profile.enrollment_id,
+        "observed_at": observation_time, "issued_at": graph_profile.effective_start,
+        "valid_from": graph_profile.effective_start, "valid_until": graph_profile.effective_end,
+        "terminated_at": 0, "status": "ACTIVE",
     }
     source: dict[str, object] = {
-        "source_id": role.source_id,
-        "source_kind": role.source_kind,
-        "coverage_scope": profile.scope,
-        "coverage_observation_time": observation_time,
-        "coverage_effective_start": profile.effective_start,
-        "coverage_effective_end": profile.effective_end,
-        "coverage_complete": complete,
-        "coverage_authority_id": role.authority_id,
-        "nonmembership_keys": [],
-        "records": [record],
+        "source_id": role.source_id, "source_kind": role.source_kind, "coverage_scope": graph_profile.scope,
+        "coverage_observation_time": observation_time, "coverage_effective_start": graph_profile.effective_start,
+        "coverage_effective_end": graph_profile.effective_end, "coverage_complete": complete,
+        "coverage_authority_id": role.authority_id, "nonmembership_keys": [], "records": [record],
         "provenance": {"provenance_id": role.provenance_id, "integrity_digest": "0" * 128},
     }
-    view = graph_independent._profile_view(profile)
+    view = graph_independent._profile_view(graph_profile)
     source["provenance"]["integrity_digest"] = graph_independent._integrity_digest(source, profile=view)  # type: ignore[index]
     return source
 
 
-def _graph_input(profile: NcMedicaidFhirSourceProfile, observation_time: int) -> bytes:
-    graph_profile = profile.graph_profile
+def _graph_input(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> bytes:
+    graph_profile = profile.graph_profile_for_context(context)
     value = {
-        "schema": "mirror-provider-trust-graph-input-v2",
-        "profile_id": graph_profile.profile_id,
-        "profile_version": graph_profile.version,
-        "profile_digest": graph_profile.profile_digest,
-        "provider_graph_subject": graph_profile.subject,
-        "scope": graph_profile.scope,
-        "observation_time": observation_time,
-        "sources": [
-            _graph_source(graph_profile, 0, observation_time, complete=False, record_id="SYNTH_CREDENTIAL_RECORD_001"),
-            _graph_source(graph_profile, 1, observation_time, complete=False, record_id="SYNTH_ENROLLMENT_RECORD_001"),
-        ],
-        "prior_artifact": None,
-        "remediation": None,
-        "parity_cases": [],
+        "schema": "mirror-provider-trust-graph-input-v2", "profile_id": graph_profile.profile_id,
+        "profile_version": graph_profile.version, "profile_digest": graph_profile.profile_digest,
+        "provider_graph_subject": graph_profile.subject, "scope": graph_profile.scope,
+        "observation_time": context.observation_time,
+        "sources": [_graph_source(graph_profile, 0, context.observation_time, complete=False, record_id=_graph_record_id(graph_profile, 0, context)), _graph_source(graph_profile, 1, context.observation_time, complete=False, record_id=_graph_record_id(graph_profile, 1, context))],
+        "prior_artifact": None, "remediation": None, "parity_cases": [],
     }
     return _canonical(value)
 
 
 def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> dict[str, object]:
-    """Independently verify one envelope, including explicit negative status evidence."""
-
     if not isinstance(profile, NcMedicaidFhirSourceProfile) or profile != NC_MEDICAID_PROFILE:
         raise IndependentNcMedicaidFhirError("profile:downgrade")
     value = _parse(raw, profile)
-    if set(value) != ENVELOPE_KEYS or value["schema"] != "mirror-ncmedicaid-fhir-observation-envelope-v1" or value["schema_version"] != 1:
+    if set(value) != ENVELOPE_KEYS or value["schema"] != ENVELOPE_SCHEMA or value["schema_version"] != ENVELOPE_SCHEMA_VERSION:
         raise IndependentNcMedicaidFhirError("envelope:schema")
-    _profile_binding(value["profile"], profile)
-    _validate_owner(value["owner"], profile)
-    _validate_request(value["request"], profile)
-    if value["observation_time"] != profile.observation_time or value["fetched_at"] != profile.fetched_at:
-        raise IndependentNcMedicaidFhirError("snapshot:profile-time")
-    observation_time = _int(value["observation_time"], "snapshot:observation-time", minimum=1)
-    markers = _validate_markers(value["server_markers"], profile)
+    context = _context(value["capture_context"])
+    if value["observation_time"] != context.observation_time or value["fetched_at"] != context.fetched_at:
+        raise IndependentNcMedicaidFhirError("snapshot:context-time")
+    _profile_binding(value["profile"], profile, context); _validate_owner(value["owner"], profile); _validate_request(value["request"], profile, context)
+    _int(value["observation_time"], "snapshot:observation-time", minimum=1); _int(value["fetched_at"], "snapshot:fetched-at", minimum=value["observation_time"])
+    markers = _validate_markers(value["server_markers"])
     pages = value["pages"]
     if not isinstance(pages, list) or not 1 <= len(pages) <= profile.transport_caps["max_pages"]:
         raise IndependentNcMedicaidFhirError("pages:count")
     source_status = value["source_status"]
-    if type(source_status) is not str or source_status not in SOURCE_STATUSES:
+    if source_status not in SOURCE_STATUSES:
         raise IndependentNcMedicaidFhirError("snapshot:status")
     failure_code = value["failure_code"]
-    if failure_code is not None and type(failure_code) is not str:
-        raise IndependentNcMedicaidFhirError("snapshot:failure-code")
     if failure_code is not None and failure_code not in FAILURE_CODES:
         raise IndependentNcMedicaidFhirError("snapshot:failure-code")
-    if value["source_completeness"] != "UNKNOWN" or value["claims"] != CLAIM_FLAGS:
+    if value["source_completeness"] != "UNKNOWN" or value["claims"] != CLAIM_FLAGS or value["page_complete"] is not (source_status == "COMPLETE"):
         raise IndependentNcMedicaidFhirError("snapshot:claims")
-    if value["page_complete"] is not (source_status == "COMPLETE"):
-        raise IndependentNcMedicaidFhirError("snapshot:complete-flag")
-    for expected_sequence, page in enumerate(pages):
-        if not isinstance(page, dict) or page.get("sequence") != expected_sequence:
+    resources: list[dict[str, object]] = []; totals: list[int | None] = []; marker_values: list[str | None] = []
+    page_resource_types: set[str] = set()
+    for index, page in enumerate(pages):
+        if not isinstance(page, dict):
             raise IndependentNcMedicaidFhirError("page:request")
-    resources: list[dict[str, object]] = []
-    totals: list[int | None] = []
-    last_updated: list[str | None] = []
+        if page.get("sequence") != index:
+            raise IndependentNcMedicaidFhirError("page:request")
+        bundle = page.get("bundle")
+        entries = bundle.get("entry", []) if isinstance(bundle, dict) else []
+        for entry in entries:
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            resource_type = resource.get("resourceType") if isinstance(resource, dict) else None
+            if isinstance(resource_type, str):
+                if resource_type in page_resource_types:
+                    raise IndependentNcMedicaidFhirError("resource:duplicate")
+                page_resource_types.add(resource_type)
     for sequence, page in enumerate(pages):
-        request_url = profile.page_url(sequence)
-        page_resources, next_url, total, marker = _validate_page(page, profile, sequence, request_url)
-        resources.extend(page_resources)
-        totals.append(total)
-        last_updated.append(marker)
+        request_url = profile.page_url(sequence, context)
+        page_resources, next_url, total, marker = _validate_page(page, profile, sequence, request_url, context)
+        resources.extend(page_resources); totals.append(total); marker_values.append(marker)
         if page.get("failure_code") is not None and sequence != len(pages) - 1:
             raise IndependentNcMedicaidFhirError("pages:after-failure")
         if next_url is None and sequence != len(pages) - 1:
@@ -699,181 +444,112 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
             raise IndependentNcMedicaidFhirError("pages:partial")
     if pages[-1].get("failure_code") is not None and source_status == "COMPLETE":
         raise IndependentNcMedicaidFhirError("snapshot:failed-complete")
-    successful_totals = [total for page, total in zip(pages, totals) if page.get("failure_code") is None]
-    successful_markers = [marker for page, marker in zip(pages, last_updated) if page.get("failure_code") is None]
-    total_values = {value for value in successful_totals if value is not None}
-    marker_values = {value for value in successful_markers if value is not None}
-    total_present = sum(value is not None for value in successful_totals)
-    marker_present = sum(value is not None for value in successful_markers)
-    marker_drift = len(total_values) > 1 or (total_values and total_present != len(successful_totals)) or len(marker_values) > 1 or (marker_values and marker_present != len(successful_markers))
-    if marker_drift and failure_code not in {"total-drift", "marker-drift"}:
-        raise IndependentNcMedicaidFhirError("markers:drift")
-    expected_total = next(iter(total_values)) if len(total_values) == 1 and total_present == len(successful_totals) else None
-    expected_marker = next(iter(marker_values)) if len(marker_values) == 1 and marker_present == len(successful_markers) else None
+    total_values = {item for item in totals if item is not None}
+    marker_values_unique = {item for item in marker_values if item is not None}
+    if len(total_values) > 1 and failure_code != "total-drift":
+        raise IndependentNcMedicaidFhirError("total-drift")
+    if len(marker_values_unique) > 1 and failure_code != "marker-drift":
+        raise IndependentNcMedicaidFhirError("marker-drift")
+    expected_total = next(iter(total_values), None)
+    expected_marker = next(iter(marker_values_unique), None)
     if markers != {"total": expected_total, "last_updated": expected_marker} and failure_code not in {"total-drift", "marker-drift"}:
         raise IndependentNcMedicaidFhirError("markers:binding")
-    freshness = _freshness(profile, expected_marker)
+    freshness = _freshness(expected_marker)
     if freshness == "STALE" and failure_code != "stale":
         raise IndependentNcMedicaidFhirError("snapshot:stale")
-    if freshness != "STALE" and failure_code == "stale":
-        raise IndependentNcMedicaidFhirError("snapshot:stale-binding")
     complete = source_status == "COMPLETE" and failure_code is None
-    resource_count, counts = _validate_resource_graph(resources, profile, complete=complete)
+    counts = {resource_type: sum(1 for resource in resources if resource["resourceType"] == resource_type) for resource_type in profile.allowed_resource_types}
+    if len(resources) > profile.transport_caps["max_resources"] or complete and counts != dict(profile.resource_cardinality):
+        raise IndependentNcMedicaidFhirError("resource:cardinality")
+    aggregate_ids = {str(item["resourceType"]): str(item["id"]) for item in resources}
+    role = next((item for item in resources if item["resourceType"] == "PractitionerRole"), None)
+    if role is not None:
+        practitioner = role["practitioner"]["reference"] if isinstance(role.get("practitioner"), dict) else None
+        location = role["location"][0]["reference"] if isinstance(role.get("location"), list) and role["location"] else None
+        if (
+            ("Practitioner" in aggregate_ids and practitioner != ("Practitioner/" + aggregate_ids["Practitioner"]))
+            or ("Location" in aggregate_ids and location != ("Location/" + aggregate_ids["Location"]))
+            or (complete and ("Practitioner" not in aggregate_ids or "Location" not in aggregate_ids))
+        ):
+            raise IndependentNcMedicaidFhirError("reference:binding")
     snapshot_root = _digest("snapshot-root", {"page_ids": [page["page_id"] for page in pages]})
-    if value["snapshot_root"] != snapshot_root or value["snapshot_id"] != _digest(
-        "snapshot-id",
-        {
-            "profile": profile.binding(),
-            "request_identity": _digest("request", {"method": "GET", "url": profile.request_url, "query_parameters": [list(item) for item in profile.query_parameters], "page_parameter": profile.page_parameter}),
-            "observation_time": observation_time,
-            "fetched_at": profile.fetched_at,
-            "snapshot_root": snapshot_root,
-            "source_status": source_status,
-            "failure_code": failure_code,
-            "server_markers": markers,
-        },
-    ):
+    request_url = profile.page_url(0, context)
+    expected_snapshot_id = _digest("snapshot-id", {"profile": profile.binding(context), "request_identity": _digest("request", {"method": "GET", "url": request_url, "query_parameters": _query_parameters(profile, context), "page_parameter": profile.page_parameter}), "capture_context": context.material(), "observation_time": context.observation_time, "fetched_at": context.fetched_at, "snapshot_root": snapshot_root, "source_status": source_status, "failure_code": failure_code, "server_markers": markers})
+    if value["snapshot_root"] != snapshot_root or value["snapshot_id"] != expected_snapshot_id:
         raise IndependentNcMedicaidFhirError("snapshot:identity")
-    _hex(value["snapshot_root"], "snapshot:root")
-    _hex(value["snapshot_id"], "snapshot:id")
-    body_without_id = dict(value)
-    body_without_id.pop("envelope_id")
+    _hex(value["snapshot_root"], "snapshot:root"); _hex(value["snapshot_id"], "snapshot:id")
+    body_without_id = dict(value); body_without_id.pop("envelope_id")
     if value["envelope_id"] != _digest("envelope-id", body_without_id):
         raise IndependentNcMedicaidFhirError("envelope:identity")
     _hex(value["envelope_id"], "envelope:id")
     return {
-        "accepted": True,
-        "envelope_bytes": len(raw),
-        "envelope_id": value["envelope_id"],
-        "source_profile_id": profile.source_profile_id,
-        "source_profile_version": profile.version,
-        "source_profile_digest": profile.profile_digest,
-        "graph_profile_digest": profile.graph_profile.profile_digest,
-        "observation_time": observation_time,
-        "fetched_at": profile.fetched_at,
-        "source_status": source_status,
-        "page_complete": value["page_complete"],
-        "failure_code": failure_code,
-        "freshness": freshness,
-        "server_total": expected_total,
-        "server_last_updated": expected_marker,
-        "snapshot_root": snapshot_root,
-        "page_count": len(pages),
-        "resource_count": resource_count,
-        "resource_counts": counts,
-        "resources": resources,
-        "snapshot_id": value["snapshot_id"],
+        "accepted": True, "envelope_bytes": len(raw), "envelope_id": value["envelope_id"],
+        "source_profile_id": profile.source_profile_id, "source_profile_version": profile.version,
+        "source_profile_digest": profile.profile_digest, "source_contract_digest": profile.profile_digest,
+        "graph_profile_digest": profile.graph_profile_for_context(context).profile_digest,
+        "capture_context": context.material(), "observation_time": context.observation_time, "fetched_at": context.fetched_at,
+        "source_status": source_status, "page_complete": value["page_complete"], "failure_code": failure_code,
+        "freshness": freshness, "server_total": expected_total, "server_last_updated": expected_marker,
+        "snapshot_root": snapshot_root, "page_count": len(pages), "resource_count": len(resources),
+        "resource_counts": counts, "resources": resources, "snapshot_id": value["snapshot_id"],
         "page_digests": tuple(str(page["body_digest"]) for page in pages),
-        "page_evidence": tuple(_page_attempt_evidence(page) for page in pages),
+        "page_evidence": tuple({"page_index": int(page["sequence"]), "request_identity": page["request_identity"], "attempts": tuple({"transport_attempt": index, "status": status, "retry_after_seconds": page["retry_after_seconds"][index], "response_digest": page["body_digest"] if index == len(page["attempt_statuses"]) - 1 and page["failure_code"] is None else None, "response_url": page["response_url"] if index == len(page["attempt_statuses"]) - 1 else None, "redirect": page["failure_code"] == "redirect", "failure_code": page["failure_code"] if index == len(page["attempt_statuses"]) - 1 else None, "transport_error": page["transport_error"] if index == len(page["attempt_statuses"]) - 1 else None, "selected": index == len(page["attempt_statuses"]) - 1} for index, status in enumerate(page["attempt_statuses"]))} for page in pages),
+        "transport_authenticated": False,
+        "transport_evidence_classification": "SYNTHETIC_FIXTURE_UNAUTHENTICATED",
     }
 
 
 def to_verified_source_coverage(result: Mapping[str, object], *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> VerifiedSourceCoverage:
-    try:
-        accepted = result.get("accepted")
-        source_status = result.get("source_status")
-        page_complete = result.get("page_complete")
-        failure_code = result.get("failure_code")
-        freshness = result.get("freshness")
-    except Exception:
-        raise_redacted(IndependentNcMedicaidFhirError, "source:input")
-    if accepted is not True or type(source_status) is not str or source_status != "COMPLETE" or page_complete is not True:
-        if failure_code is not None:
-            if type(failure_code) is not str or failure_code not in FAILURE_CODES:
-                raise_redacted(IndependentNcMedicaidFhirError, "source:invalid")
-            code = failure_code.lower()
-        elif type(source_status) is str and source_status in SOURCE_STATUSES:
-            code = source_status.lower()
-        else:
+    if result.get("accepted") is not True or result.get("source_status") != "COMPLETE" or result.get("page_complete") is not True:
+        failure = result.get("failure_code")
+        if not isinstance(failure, str) or failure not in FAILURE_CODES:
             raise_redacted(IndependentNcMedicaidFhirError, "source:invalid")
-        raise_redacted(IndependentNcMedicaidFhirError, "source:" + code)
-    if type(freshness) is not str or freshness not in {"FRESH", "UNKNOWN"}:
-        raise IndependentNcMedicaidFhirError("source:stale")
-    graph_profile = profile.graph_profile
-    graph_input = _graph_input(profile, profile.observation_time)
+        raise_redacted(IndependentNcMedicaidFhirError, "source:" + failure)
+    context = _context(result.get("capture_context"))
+    graph_profile = profile.graph_profile_for_context(context)
     return VerifiedSourceCoverage(
-        profile_id=graph_profile.profile_id,
-        subject=graph_profile.subject,
-        scope=graph_profile.scope,
-        observation_time=profile.observation_time,
-        effective_start=graph_profile.effective_start,
-        effective_end=graph_profile.effective_end,
-        complete=False,
-        source_roles=graph_profile.source_roles,
-        evidence_mode=EvidenceMode.OBSERVATION_ONLY,
-        graph_input=graph_input,
+        profile_id=graph_profile.profile_id, subject=graph_profile.subject, scope=graph_profile.scope,
+        observation_time=context.observation_time, effective_start=graph_profile.effective_start,
+        effective_end=graph_profile.effective_end, complete=False, source_roles=graph_profile.source_roles,
+        evidence_mode=EvidenceMode.OBSERVATION_ONLY, graph_input=_graph_input(profile, context),
+        credential_id=context.credential_id, enrollment_id=context.enrollment_id,
+        subject_locator_digest=context.subject_locator_digest, source_contract_digest=profile.profile_digest,
+        fetched_at=context.fetched_at, envelope_id=str(result["envelope_id"]), snapshot_id=str(result["snapshot_id"]),
+        snapshot_root=str(result["snapshot_root"]), page_digests=tuple(result["page_digests"]), page_evidence=tuple(result["page_evidence"]),
+        graph_profile=graph_profile,
     )
 
 
 class NcMedicaidFhirVerifier:
-    """Configured SourceVerifier implementation for synthetic fixture bytes."""
-
     def __init__(self, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> None:
         if profile != NC_MEDICAID_PROFILE:
             raise IndependentNcMedicaidFhirError("profile:downgrade")
-        self.profile = profile
-        self.identity = profile.graph_profile.verifier_id
-        self.epoch = profile.graph_profile.verifier_epoch
+        self.profile = profile; self.identity = profile.graph_profile.verifier_id; self.epoch = profile.graph_profile.verifier_epoch
 
     def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-        result = verify_bytes(adapter_bytes, profile=self.profile)
-        return to_verified_source_coverage(result, profile=self.profile)
+        return to_verified_source_coverage(verify_bytes(adapter_bytes, profile=self.profile), profile=self.profile)
 
 
-SUPPORT_SCHEMA = "mirror-ncmedicaid-fhir-support-v1"
-SUPPORT_KEYS = {
-    "schema", "profile_id", "profile_version", "fetched_at", "source_status", "failure_code", "freshness",
-    "page_count", "resource_count", "server_total_known", "server_marker_known", "zero_phi_boundary",
-    "support_safe", "synthetic_only", "no_external_transmission_performed",
-}
+SUPPORT_SCHEMA = "mirror-ncmedicaid-fhir-support-v2"
+SUPPORT_KEYS = {"schema", "profile_id", "profile_version", "source_contract_digest", "observation_time", "fetched_at", "source_status", "failure_code", "freshness", "page_count", "resource_count", "server_total_known", "server_marker_known", "zero_phi_boundary", "support_safe", "synthetic_only", "no_external_transmission_performed"}
 
 
 def build_support_evidence(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> bytes:
     result = verify_bytes(raw, profile=profile)
-    value = {
-        "schema": SUPPORT_SCHEMA,
-        "profile_id": profile.source_profile_id,
-        "profile_version": profile.version,
-        "fetched_at": profile.fetched_at,
-        "source_status": result["source_status"],
-        "failure_code": result["failure_code"],
-        "freshness": result["freshness"],
-        "page_count": result["page_count"],
-        "resource_count": result["resource_count"],
-        "server_total_known": result["server_total"] is not None,
-        "server_marker_known": result["server_last_updated"] is not None,
-        "zero_phi_boundary": True,
-        "support_safe": True,
-        "synthetic_only": True,
-        "no_external_transmission_performed": True,
-    }
-    return _canonical(value)
+    return _canonical({"schema": SUPPORT_SCHEMA, "profile_id": profile.source_profile_id, "profile_version": profile.version, "source_contract_digest": profile.profile_digest, "observation_time": result["observation_time"], "fetched_at": result["fetched_at"], "source_status": result["source_status"], "failure_code": result["failure_code"], "freshness": result["freshness"], "page_count": result["page_count"], "resource_count": result["resource_count"], "server_total_known": result["server_total"] is not None, "server_marker_known": result["server_last_updated"] is not None, "zero_phi_boundary": True, "support_safe": True, "synthetic_only": True, "no_external_transmission_performed": True})
 
 
 def verify_support_evidence(raw: bytes) -> dict[str, object]:
     value = _parse(raw, NC_MEDICAID_PROFILE)
-    if set(value) != SUPPORT_KEYS or value["schema"] != SUPPORT_SCHEMA:
-        raise IndependentNcMedicaidFhirError("support:keys")
-    if value["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id or value["profile_version"] != NC_MEDICAID_PROFILE.version or value["fetched_at"] != NC_MEDICAID_PROFILE.fetched_at:
+    if set(value) != SUPPORT_KEYS or value["schema"] != SUPPORT_SCHEMA or value["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id or value["profile_version"] != NC_MEDICAID_PROFILE.version or value["source_contract_digest"] != NC_MEDICAID_PROFILE.profile_digest:
         raise IndependentNcMedicaidFhirError("support:profile")
-    if type(value["source_status"]) is not str or value["source_status"] not in SOURCE_STATUSES or value["failure_code"] is not None and (type(value["failure_code"]) is not str or value["failure_code"] not in FAILURE_CODES):
+    if value["source_status"] not in SOURCE_STATUSES or value["failure_code"] is not None and value["failure_code"] not in FAILURE_CODES:
         raise IndependentNcMedicaidFhirError("support:status")
-    if value["freshness"] not in {"FRESH", "UNKNOWN", "STALE"}:
-        raise IndependentNcMedicaidFhirError("support:freshness")
-    _int(value["page_count"], "support:pages", minimum=1, maximum=NC_MEDICAID_PROFILE.transport_caps["max_pages"])
-    _int(value["resource_count"], "support:resources", maximum=NC_MEDICAID_PROFILE.transport_caps["max_resources"])
-    _bool(value["server_total_known"], "support:total")
-    _bool(value["server_marker_known"], "support:marker")
-    if value["zero_phi_boundary"] is not True or value["support_safe"] is not True or value["synthetic_only"] is not True or value["no_external_transmission_performed"] is not True:
+    if value["freshness"] not in {"FRESH", "UNKNOWN", "STALE"} or value["zero_phi_boundary"] is not True or value["support_safe"] is not True or value["synthetic_only"] is not True or value["no_external_transmission_performed"] is not True:
         raise IndependentNcMedicaidFhirError("support:boundary")
+    _int(value["page_count"], "support:pages", minimum=1, maximum=NC_MEDICAID_PROFILE.transport_caps["max_pages"]); _int(value["resource_count"], "support:resources", maximum=NC_MEDICAID_PROFILE.transport_caps["max_resources"])
+    _int(value["observation_time"], "support:observation"); _int(value["fetched_at"], "support:fetched", minimum=value["observation_time"])
     return {"accepted": True, "support_bytes": len(raw), "source_status": value["source_status"], "failure_code": value["failure_code"]}
 
 
-__all__ = [
-    "IndependentNcMedicaidFhirError",
-    "NcMedicaidFhirVerifier",
-    "build_support_evidence",
-    "to_verified_source_coverage",
-    "verify_bytes",
-    "verify_support_evidence",
-]
+__all__ = ["ENVELOPE_SCHEMA", "ENVELOPE_SCHEMA_VERSION", "IndependentNcMedicaidFhirError", "NcMedicaidFhirVerifier", "build_support_evidence", "to_verified_source_coverage", "verify_bytes", "verify_support_evidence", "_canonical", "_digest", "_raw_digest"]

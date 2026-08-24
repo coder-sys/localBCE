@@ -20,12 +20,11 @@ def _hex(label: str) -> str:
     return hashlib.sha3_512(label.encode("ascii")).hexdigest()
 
 
-def _policy(**changes: object) -> adapter.ExternalSourcePolicyV1:
+def _policy(**changes: object) -> adapter.ExternalSourcePolicyV2:
     values: dict[str, object] = {
-        "profile_id": "synthetic.external.provider.v1",
-        "version": 1,
-        "subject": "SYNTHETIC_PROVIDER_SCOPE_V1",
-        "scope": "SYNTHETIC_PROVIDER_OBSERVATION_V1",
+        "source_contract_digest": _hex("source-contract"),
+        "capture_schema": "synthetic-capture-v2",
+        "capture_schema_version": 2,
         "logical_endpoint_id": "SYNTHETIC_SOURCE_ENDPOINT_V1",
         "source_roles": ("DIRECTORY_OBSERVER", "STATE_SOURCE_BOUNDARY"),
         "verifier_id": "SYNTHETIC_EXTERNAL_CAPTURE_VERIFIER_V1",
@@ -40,17 +39,17 @@ def _policy(**changes: object) -> adapter.ExternalSourcePolicyV1:
         "max_page_count": 4,
     }
     values.update(changes)
-    return adapter.ExternalSourcePolicyV1(**values)
+    return adapter.ExternalSourcePolicyV2(**values)
 
 
 class _FixtureVerifier:
-    def __init__(self, policy: adapter.ExternalSourcePolicyV1, **changes: object) -> None:
+    def __init__(self, policy: adapter.ExternalSourcePolicyV2, **changes: object) -> None:
         self.verifier_id = policy.verifier_id
         self.verifier_epoch = policy.verifier_epoch
         self.policy = policy
         self.changes = changes
 
-    def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV1:
+    def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV2:
         payload = hashlib.sha3_512(capture_raw).hexdigest()
         values: dict[str, object] = {
             "policy_digest": self.policy.digest,
@@ -64,10 +63,15 @@ class _FixtureVerifier:
             "page_count": 2,
             "server_identity_digest": independent._digest("server-identity", self.policy.logical_endpoint_id),
             "transport_receipt_digest": None,
-            "transport_authenticated": True,
+            "transport_authenticated": False,
             "complete": True,
             "failure_code": "NONE",
             "zero_phi": True,
+            "transport_evidence_classification": adapter.TRANSPORT_EVIDENCE_CLASSIFICATION,
+            "subject_id": _hex("subject"),
+            "credential_id": _hex("credential"),
+            "enrollment_id": _hex("enrollment"),
+            "subject_locator_digest": _hex("locator"),
         }
         values.update(self.changes)
         if "transport_receipt_digest" not in self.changes:
@@ -78,16 +82,17 @@ class _FixtureVerifier:
                     "verifier_id": values["verifier_id"],
                     "verifier_epoch": values["verifier_epoch"],
                     "payload_sha3_512": values["payload_sha3_512"],
-                    "page_digests": list(values["page_digests"]),
+                    "page_bindings": [[index, digest] for index, digest in enumerate(values["page_digests"])],
                     "server_identity_digest": values["server_identity_digest"],
                     "observed_at": values["observed_at"],
                     "fetched_at": values["fetched_at"],
                     "transport_authenticated": values["transport_authenticated"],
                     "complete": values["complete"],
                     "failure_code": values["failure_code"],
+                    "transport_evidence_classification": values["transport_evidence_classification"],
                 },
             )
-        return adapter.VerifiedExternalCaptureV1(**values)
+        return adapter.VerifiedExternalCaptureV2(**values)
 
 
 class ExternalSourceAdapterTests(unittest.TestCase):
@@ -97,7 +102,7 @@ class ExternalSourceAdapterTests(unittest.TestCase):
         self.verifier = _FixtureVerifier(self.policy)
         self.service = adapter.ExternalSourceAdapterService(self.policy, self.verifier)
 
-    def _artifact(self, **changes: object) -> adapter.ExternalSourceArtifactV1:
+    def _artifact(self, **changes: object) -> adapter.ExternalSourceArtifactV2:
         return adapter.ExternalSourceAdapterService(self.policy, _FixtureVerifier(self.policy, **changes)).admit(self.raw)
 
     def _value(self, raw: bytes | None = None) -> dict[str, object]:
@@ -124,7 +129,7 @@ class ExternalSourceAdapterTests(unittest.TestCase):
     def test_all_derived_statuses_have_producer_independent_parity(self) -> None:
         cases = (
             ("admitted", {}, "OBSERVATION_ADMITTED"),
-            ("authority", {"transport_authenticated": False}, "HOLD_AUTHORITY_UNQUALIFIED"),
+            ("authority", {"transport_authenticated": False, "failure_code": "AUTHORITY_UNQUALIFIED"}, "HOLD_AUTHORITY_UNQUALIFIED"),
             ("incomplete", {"complete": False}, "HOLD_INCOMPLETE"),
             ("stale", {"observed_at": 900, "fetched_at": 910}, "HOLD_STALE"),
             ("failure", {"failure_code": "SOURCE_FAILURE"}, "HOLD_SOURCE_FAILURE"),
@@ -170,9 +175,9 @@ class ExternalSourceAdapterTests(unittest.TestCase):
 
     def test_page_order_caps_and_time_failure_modes_fail_closed(self) -> None:
         with self.assertRaises(adapter.ExternalSourceAdapterError):
-            self._artifact(page_digests=(_hex("page-b"), _hex("page-a")))
+            self._artifact(page_bindings=((1, _hex("page-a")), (0, _hex("page-b"))))
         with self.assertRaises(adapter.ExternalSourceAdapterError):
-            self._artifact(page_digests=(_hex("page-a"), _hex("page-a")))
+            self._artifact(page_bindings=((0, _hex("page-a")), (2, _hex("page-b"))))
         with self.assertRaises(adapter.ExternalSourceAdapterError):
             self._artifact(page_count=1)
         capped_policy = _policy(max_page_count=1)
@@ -188,14 +193,14 @@ class ExternalSourceAdapterTests(unittest.TestCase):
 
     def test_raw_capture_race_and_verifier_failures_do_not_emit_artifacts(self) -> None:
         class RaisingVerifier(_FixtureVerifier):
-            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV1:
+            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV2:
                 raise RuntimeError("fixture-failure")
 
         with self.assertRaisesRegex(adapter.ExternalSourceAdapterError, "verifier-failure"):
             adapter.ExternalSourceAdapterService(self.policy, RaisingVerifier(self.policy)).admit(self.raw)
 
         class WrongBytesVerifier(_FixtureVerifier):
-            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV1:
+            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV2:
                 return _FixtureVerifier(self.policy).verify(b"different-snapshot")
 
         with self.assertRaisesRegex(adapter.ExternalSourceAdapterError, "payload-binding"):
@@ -208,7 +213,7 @@ class ExternalSourceAdapterTests(unittest.TestCase):
         canary = "PHI_CANARY Bearer SECRET C:\\Users\\private\\record"
 
         class RaisingVerifier(_FixtureVerifier):
-            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV1:
+            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV2:
                 raise RuntimeError(canary)
 
         with self.assertRaises(adapter.ExternalSourceAdapterError) as caught:
@@ -247,7 +252,7 @@ class ExternalSourceAdapterTests(unittest.TestCase):
         value["unexpected"] = "value"
         mutations.append(("unknown-key", value))
         value = self._value(artifact.raw)
-        value["capture"]["page_digests"] = list(reversed(value["capture"]["page_digests"]))  # type: ignore[index]
+        value["capture"]["page_bindings"] = list(reversed(value["capture"]["page_bindings"]))  # type: ignore[index]
         mutations.append(("page-reorder", value))
         for case_id, mutation in mutations:
             with self.subTest(case_id=case_id):

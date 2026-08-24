@@ -13,6 +13,8 @@ import stat
 import time
 from typing import Callable, Mapping
 
+from app.mirror import external_source_adapter as external
+from app.mirror import external_source_adapter_independent as external_independent
 from app.mirror import ingress_v2_independent as independent
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE
@@ -28,6 +30,12 @@ MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
 MAX_CONFIG_BYTES = independent.MAX_CONFIG_BYTES
 MAX_IDENTIFIER_BYTES = independent.MAX_IDENTIFIER_BYTES
+MAX_COMPLETE_FRAME_BYTES = independent.MAX_COMPLETE_FRAME_BYTES
+INTAKE_MAGIC = independent.INTAKE_MAGIC
+INTAKE_VERSION = independent.INTAKE_VERSION
+INTAKE_FLAGS = independent.INTAKE_FLAGS
+INTAKE_HEADER_BYTES = independent.INTAKE_HEADER_BYTES
+INTAKE_DIRECTORY_ENTRY_BYTES = independent.INTAKE_DIRECTORY_ENTRY_BYTES
 DEFAULT_PAGE_SIZE = 4096
 _SQLITE_PAGE_OVERHEAD_PAGES = 16
 TERMINAL_RESERVE_BYTES = 2 * MAX_EVENT_BYTES + _SQLITE_PAGE_OVERHEAD_PAGES * DEFAULT_PAGE_SIZE
@@ -96,6 +104,16 @@ class IngressConfigV2:
     max_slots: int = 64
     max_attempts: int = 3
     lease_seconds: int = 60
+    source_contract_digest: str = NC_MEDICAID_PROFILE.profile_digest
+    external_capture_schema: str = fhir.ENVELOPE_SCHEMA
+    external_capture_schema_version: int = fhir.ENVELOPE_SCHEMA_VERSION
+    external_logical_endpoint_id: str = "nc-medicaid-fhir-endpoint"
+    external_source_roles: tuple[str, ...] = ("FHIR_CAPTURE",)
+    external_verifier_id: str = "SYNTH_EXTERNAL_SOURCE_VERIFIER_V2"
+    external_verifier_epoch: int = 2
+    freshness_grace_seconds: int = 30
+    max_capture_bytes: int = external.MAX_CAPTURE_BYTES
+    max_page_count: int = 4
 
     def __post_init__(self) -> None:
         _safe_identifier(self.database_id, "ingress:config")
@@ -105,6 +123,29 @@ class IngressConfigV2:
                 char not in "0123456789abcdef" for char in value
             ):
                 raise IngressError("ingress:config")
+        if self.source_contract_digest != NC_MEDICAID_PROFILE.profile_digest:
+            raise IngressError("ingress:config")
+        if self.external_capture_schema != fhir.ENVELOPE_SCHEMA or self.external_capture_schema_version != fhir.ENVELOPE_SCHEMA_VERSION:
+            raise IngressError("ingress:config")
+        _safe_identifier(self.external_logical_endpoint_id, "ingress:config")
+        if (
+            type(self.external_source_roles) is not tuple
+            or not self.external_source_roles
+            or len(set(self.external_source_roles)) != len(self.external_source_roles)
+            or any(type(role) is not str for role in self.external_source_roles)
+        ):
+            raise IngressError("ingress:config")
+        for role in self.external_source_roles:
+            _safe_identifier(role, "ingress:config")
+        _safe_identifier(self.external_verifier_id, "ingress:config")
+        if type(self.external_verifier_epoch) is not int or self.external_verifier_epoch < 1:
+            raise IngressError("ingress:config")
+        if type(self.freshness_grace_seconds) is not int or not 0 <= self.freshness_grace_seconds <= 31_536_000:
+            raise IngressError("ingress:config")
+        if type(self.max_capture_bytes) is not int or not 1 <= self.max_capture_bytes <= external.MAX_CAPTURE_BYTES:
+            raise IngressError("ingress:config")
+        if type(self.max_page_count) is not int or not 1 <= self.max_page_count <= 32:
+            raise IngressError("ingress:config")
         if type(self.cadence_seconds) is not int or self.cadence_seconds <= 0:
             raise IngressError("ingress:config")
         if type(self.effective_start) is not int or type(self.effective_end) is not int or self.effective_start >= self.effective_end:
@@ -117,6 +158,7 @@ class IngressConfigV2:
             raise IngressError("ingress:config")
 
     def material(self) -> dict[str, object]:
+        policy = self.external_policy()
         return {
             "schema": SCHEMA,
             "schema_version": SCHEMA_VERSION,
@@ -125,9 +167,10 @@ class IngressConfigV2:
             "policy_digest": self.policy_digest,
             "authorization_digest": self.authorization_digest,
             "terms_digest": self.terms_digest,
-            "profile_id": NC_MEDICAID_PROFILE.source_profile_id,
-            "profile_version": NC_MEDICAID_PROFILE.version,
-            "profile_digest": NC_MEDICAID_PROFILE.profile_digest,
+            "source_contract": NC_MEDICAID_PROFILE.material(),
+            "source_contract_digest": self.source_contract_digest,
+            "external_policy": policy.material(),
+            "external_policy_digest": policy.digest,
             "cadence_seconds": self.cadence_seconds,
             "effective_start": self.effective_start,
             "effective_end": self.effective_end,
@@ -136,6 +179,27 @@ class IngressConfigV2:
             "lease_seconds": self.lease_seconds,
             "flags": dict(FIXED_FLAGS),
         }
+
+    def external_policy(self) -> external.ExternalSourcePolicyV2:
+        return external.ExternalSourcePolicyV2(
+            source_contract_digest=self.source_contract_digest,
+            capture_schema=self.external_capture_schema,
+            capture_schema_version=self.external_capture_schema_version,
+            logical_endpoint_id=self.external_logical_endpoint_id,
+            source_roles=self.external_source_roles,
+            verifier_id=self.external_verifier_id,
+            verifier_epoch=self.external_verifier_epoch,
+            authorization_artifact_digest=self.authorization_digest,
+            terms_artifact_digest=self.terms_digest,
+            effective_start=self.effective_start,
+            effective_end=self.effective_end,
+            expected_cadence_seconds=self.cadence_seconds,
+            freshness_grace_seconds=self.freshness_grace_seconds,
+            max_capture_bytes=self.max_capture_bytes,
+            max_page_count=self.max_page_count,
+            profile_id=NC_MEDICAID_PROFILE.source_profile_id,
+            version=NC_MEDICAID_PROFILE.version,
+        )
 
     @property
     def digest(self) -> str:
@@ -167,6 +231,65 @@ def _digest(label: str, value: object) -> str:
 
 def _raw_digest(label: str, raw: bytes) -> str:
     return independent._raw_digest(label, raw)
+
+
+def _pack_intake_frame(evidence_raw: bytes, envelope_raw: bytes, page_digests: tuple[str, ...]) -> bytes:
+    if (
+        type(evidence_raw) is not bytes
+        or type(envelope_raw) is not bytes
+        or not evidence_raw
+        or not envelope_raw
+        or len(evidence_raw) > independent.MAX_EXTERNAL_ARTIFACT_BYTES
+        or len(envelope_raw) > fhir.NC_MEDICAID_PROFILE.transport_caps["max_envelope_bytes"]
+        or type(page_digests) is not tuple
+        or not 1 <= len(page_digests) <= fhir.NC_MEDICAID_PROFILE.transport_caps["max_pages"]
+    ):
+        raise IngressError("ingress:intake-frame")
+    try:
+        envelope = json.loads(envelope_raw.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise IngressError("ingress:intake-frame") from None
+    pages = envelope.get("pages") if isinstance(envelope, dict) else None
+    if not isinstance(pages, list) or len(pages) != len(page_digests):
+        raise IngressError("ingress:intake-frame")
+    directory = bytearray()
+    aggregate = bytearray()
+    search_from = 0
+    for index, expected_digest in enumerate(page_digests):
+        page = pages[index]
+        page_raw = _canonical(page)
+        page_offset = envelope_raw.find(page_raw, search_from)
+        if page_offset < search_from or page_offset + len(page_raw) > len(envelope_raw):
+            raise IngressError("ingress:intake-frame")
+        if not isinstance(page, dict) or page.get("sequence") != index or page.get("body_digest") != expected_digest:
+            raise IngressError("ingress:intake-frame")
+        try:
+            digest_bytes = bytes.fromhex(str(expected_digest))
+        except ValueError:
+            raise IngressError("ingress:intake-frame") from None
+        if len(digest_bytes) != 64:
+            raise IngressError("ingress:intake-frame")
+        directory.extend(index.to_bytes(4, "big"))
+        directory.extend(page_offset.to_bytes(4, "big"))
+        directory.extend(len(page_raw).to_bytes(4, "big"))
+        directory.extend(digest_bytes)
+        aggregate.extend(page_raw)
+        search_from = page_offset + len(page_raw)
+    aggregate_digest = bytes.fromhex(_raw_digest("frame-pages", bytes(aggregate)))
+    header = (
+        INTAKE_MAGIC
+        + INTAKE_VERSION.to_bytes(4, "big")
+        + INTAKE_FLAGS.to_bytes(4, "big")
+        + len(evidence_raw).to_bytes(4, "big")
+        + len(envelope_raw).to_bytes(4, "big")
+        + len(pages).to_bytes(4, "big")
+        + len(aggregate).to_bytes(4, "big")
+        + aggregate_digest
+    )
+    frame = header + bytes(directory) + evidence_raw + envelope_raw
+    if len(frame) > MAX_COMPLETE_FRAME_BYTES:
+        raise IngressConflictError("ingress:capacity")
+    return frame
 
 
 def _bounded_string(
@@ -825,7 +948,7 @@ class IngressServiceV2:
             type(event_count) is not int
             or event_count < 0
             or type(raw_artifact_bytes) is not int
-            or not 0 <= raw_artifact_bytes <= independent.MAX_RAW_ENVELOPE_BYTES
+            or not 0 <= raw_artifact_bytes <= MAX_COMPLETE_FRAME_BYTES
             or type(terminal_live_slots) is not int
             or terminal_live_slots < 0
         ):
@@ -1165,6 +1288,7 @@ class IngressServiceV2:
         self,
         envelope_raw: bytes,
         *,
+        evidence_raw: bytes,
         scheduled_at: int,
         attempt: int,
         lease_token: str,
@@ -1185,10 +1309,13 @@ class IngressServiceV2:
         )
         if type(attempt) is not int or not 1 <= attempt <= self.config.max_attempts:
             raise IngressConflictError("ingress:attempt")
-        raw_snapshot = bytes(envelope_raw) if type(envelope_raw) is bytes else b""
+        raw_snapshot = envelope_raw if type(envelope_raw) is bytes else b""
+        evidence_snapshot = evidence_raw if type(evidence_raw) is bytes else b""
         if (
             not raw_snapshot
-            or len(raw_snapshot) > independent.MAX_RAW_ENVELOPE_BYTES
+            or len(raw_snapshot) > fhir.NC_MEDICAID_PROFILE.transport_caps["max_envelope_bytes"]
+            or not evidence_snapshot
+            or len(evidence_snapshot) > independent.MAX_EXTERNAL_ARTIFACT_BYTES
             or type(scheduled_at) is not int
         ):
             raise IngressError("ingress:envelope")
@@ -1196,13 +1323,38 @@ class IngressServiceV2:
             result = fhir.verify_bytes(raw_snapshot)
         except Exception:
             raise_redacted(IngressError, "ingress:envelope-reject")
+        try:
+            external_result = external_independent.verify_artifact(
+                evidence_snapshot,
+                policy=self.config.external_policy().material(),
+                capture_raw=raw_snapshot,
+            )
+        except Exception:
+            raise_redacted(IngressError, "ingress:external-evidence-reject")
+        context = result.get("capture_context")
+        if not isinstance(context, Mapping):
+            raise IngressConflictError("ingress:capture-context")
+        if (
+            external_result["derived_status"] not in external_independent.STATUSES
+            or external_result["payload_sha3_512"] != external_independent._raw_digest(raw_snapshot)
+            or external_result["observed_at"] != result["observation_time"]
+            or external_result["fetched_at"] != result["fetched_at"]
+            or external_result.get("transport_evidence_classification") != external_independent.TRANSPORT_EVIDENCE_CLASSIFICATION
+            or tuple(result["page_digests"]) != tuple(digest for _index, digest in external_result["page_bindings"])
+            or any(context.get(key) != external_result[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest"))
+        ):
+            raise IngressConflictError("ingress:capture-binding")
         if result["observation_time"] != scheduled_at:
             raise IngressConflictError("ingress:observation-slot")
+        frame = _pack_intake_frame(evidence_snapshot, raw_snapshot, tuple(result["page_digests"]))
         artifact_id = _digest(
             "artifact-id",
             {
+                "intake_digest": _raw_digest("intake", frame),
                 "envelope_digest": _raw_digest("envelope", raw_snapshot),
                 "envelope_id": result["envelope_id"],
+                "external_artifact_id": external_result["artifact_id"],
+                "external_artifact_digest": independent._raw_digest("external-artifact", evidence_snapshot),
                 "profile_digest": NC_MEDICAID_PROFILE.profile_digest,
                 "observation_time": result["observation_time"],
                 "snapshot_id": result["snapshot_id"],
@@ -1329,7 +1481,7 @@ class IngressServiceV2:
                         "page_index": int(page["page_index"]),
                         "lease_attempt": int(slot["attempt"]),
                         "transport_attempt": int(attempt_record["transport_attempt"]),
-                        "request_identity": attempt_record["request_identity"],
+                        "request_identity": page["request_identity"],
                         "response_digest": attempt_record["response_digest"],
                         "status": attempt_record["status"],
                         "retry_after_seconds": attempt_record["retry_after_seconds"],
@@ -1350,11 +1502,19 @@ class IngressServiceV2:
                         "slot_id": slot_id,
                     }
                     attestation_receipts.append((material, _canonical(receipt)))
-            complete = result["source_status"] == "COMPLETE" and result["page_complete"] is True and result["freshness"] in {"FRESH", "UNKNOWN"} and result["failure_code"] is None
+            complete = (
+                result["source_status"] == "COMPLETE"
+                and result["page_complete"] is True
+                and result["freshness"] == "FRESH"
+                and result["failure_code"] is None
+                and external_result["derived_status"] == "OBSERVATION_ADMITTED"
+                and external_result["complete"] is True
+                and external_result["failure_code"] == "NONE"
+            )
             if not self._capacity_available(
                 connection,
                 event_count=len(attestation_receipts) + (3 if complete else 2),
-                raw_artifact_bytes=independent.MAX_RAW_ENVELOPE_BYTES,
+                raw_artifact_bytes=MAX_COMPLETE_FRAME_BYTES,
                 terminal_live_slots=self._live_slot_count(connection),
             ):
                 return self._capacity_hold_receipt(
@@ -1368,14 +1528,14 @@ class IngressServiceV2:
                     owner_now=owner_now,
                 )
             row = connection.execute("SELECT * FROM ingress_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
-            if row is not None and bytes(row["raw"]) != raw_snapshot:
+            if row is not None and bytes(row["raw"]) != frame:
                 raise IngressConflictError("ingress:artifact-conflict")
             if row is None:
                 connection.execute(
                     "INSERT INTO ingress_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         artifact_id, result["envelope_id"], _raw_digest("envelope", raw_snapshot),
-                        raw_snapshot, NC_MEDICAID_PROFILE.source_profile_id, NC_MEDICAID_PROFILE.version,
+                        frame, NC_MEDICAID_PROFILE.source_profile_id, NC_MEDICAID_PROFILE.version,
                         NC_MEDICAID_PROFILE.profile_digest, result["observation_time"], result["fetched_at"],
                         result["source_status"], result["failure_code"], result["freshness"],
                         1 if result["page_complete"] else 0, result["snapshot_id"], result["snapshot_root"],
@@ -1417,6 +1577,20 @@ class IngressServiceV2:
             capture_material = {
                 "artifact_id": artifact_id,
                 "envelope_digest": _raw_digest("envelope", raw_snapshot),
+                "intake_digest": _raw_digest("intake", frame),
+                "external_artifact_id": external_result["artifact_id"],
+                "external_artifact_digest": independent._raw_digest("external-artifact", evidence_snapshot),
+                "source_contract_digest": external_result["source_contract_digest"],
+                "capture_id": external_result["capture_id"],
+                "capture_context": {
+                    "subject_id": external_result["subject_id"],
+                    "credential_id": external_result["credential_id"],
+                    "enrollment_id": external_result["enrollment_id"],
+                    "subject_locator_digest": external_result["subject_locator_digest"],
+                    "observed_at": external_result["observed_at"],
+                    "fetched_at": external_result["fetched_at"],
+                },
+                "page_bindings": [list(item) for item in external_result["page_bindings"]],
                 "slot_id": slot_id,
                 "lease_token_digest": token_digest,
                 "operation_id": operation_id,
@@ -1430,7 +1604,7 @@ class IngressServiceV2:
                 attempt=int(slot["attempt"]), lease_token=token_digest,
                 lease_until=slot["lease_until"], material=capture_material,
                 observed_at=owner_now,
-                payload_digest=artifact_id, payload_length=len(raw_snapshot),
+                payload_digest=artifact_id, payload_length=len(frame),
                  head_artifact_id=artifact_id,
             )
             if complete:
@@ -1441,7 +1615,7 @@ class IngressServiceV2:
                     attempt=int(slot["attempt"]), lease_token=token_digest,
                     lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING", "operation_id": operation_id},
                     observed_at=owner_now,
-                    payload_digest=artifact_id, payload_length=len(raw_snapshot),
+                    payload_digest=artifact_id, payload_length=len(frame),
                      head_artifact_id=artifact_id,
                 )
                 next_state = "QUARANTINED"
@@ -1458,7 +1632,7 @@ class IngressServiceV2:
                 attempt=int(slot["attempt"]), lease_token=token_digest,
                 lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": next_state, "operation_id": operation_id},
                 observed_at=owner_now,
-                payload_digest=artifact_id, payload_length=len(raw_snapshot),
+                payload_digest=artifact_id, payload_length=len(frame),
                  stream_kind="QUARANTINE", stream_id=self.config.chain_id,
                  head_artifact_id=artifact_id,
             )

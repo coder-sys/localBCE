@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import shutil
 import sqlite3
@@ -15,11 +16,13 @@ from unittest import mock
 
 from app.mirror import core_v2 as core
 from app.mirror import core_v2_independent as core_independent
+from app.mirror import external_source_adapter as external_adapter
 from app.mirror import external_governance_approval as governance
 from app.mirror import external_privacy_support_approval as privacy
 from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
 from app.mirror import nc_medicaid_fhir_profile as profile
+from app.mirror import nc_medicaid_fhir_independent as fhir_independent
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
 from app.mirror import restore_publication
@@ -31,6 +34,13 @@ def _hex(seed: str) -> str:
 
 def _ingress_token(seed: str) -> str:
     return (seed + "-ingress-token").ljust(32, "x")
+
+
+def _external_evidence(config: ingress.IngressConfigV2, envelope: bytes) -> bytes:
+    result = fhir_independent.verify_bytes(envelope)
+    return external_adapter.build_artifact_from_capture(
+        config.external_policy(), envelope, result
+    ).raw
 
 
 def _rechain_ingress_with_fetch_capture_rebind(path: Path, replacements: dict[int, str]) -> None:
@@ -323,6 +333,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.envelope = _envelope()
         self.ingress_receipt = self.ingress.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("lease-v2"),
@@ -371,7 +382,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.core_config = core.CoreConfigV2(
             database_id="core-v2-synthetic", chain_id="core-chain-v2",
             ingress_database_id=self.ingress_config.database_id, ingress_chain_id=self.ingress_config.chain_id, ingress_config_digest=self.ingress_config.digest,
-            runtime_profile_digest=profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest,
+            runtime_profile_digest=profile.NC_MEDICAID_PROFILE.profile_digest,
             governance_policy_digest=self.governance_policy.digest,
             privacy_policy_digest=self.privacy_policy.digest,
         )
@@ -411,6 +422,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:slot-state"):
             service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=_ingress_token("not-held"),
@@ -425,6 +437,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:lease-expired"):
             service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=_ingress_token("lease-old"),
@@ -440,6 +453,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:attempt"):
             service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=_ingress_token("lease-old"),
@@ -471,6 +485,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.claim_slot(slot_id, lease_token=raw_token)
         receipt = service.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=raw_token,
@@ -510,6 +525,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:attempt"):
             service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=_ingress_token("claim-response-loss"),
@@ -517,6 +533,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(before, self._state_fingerprint(service))
         admitted = service.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=2,
             lease_token=_ingress_token("claim-response-loss"),
@@ -575,6 +592,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressError, "ingress:operation"):
             service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=_ingress_token("bounded-token"),
@@ -698,6 +716,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with mock.patch.object(service, "_append", side_effect=fail_final):
             receipt = service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=lease_token,
@@ -711,6 +730,7 @@ class MirrorV2Fixture(unittest.TestCase):
             receipt.raw,
             service.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=lease_token,
@@ -755,6 +775,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service._capacity_available = lambda *args, **kwargs: False
         receipt = service.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("capacity-hold-token"),
@@ -763,6 +784,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.clock.raise_on_read = True
         self.assertEqual(receipt.raw, service.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("capacity-hold-token"),
@@ -1049,6 +1071,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.claim_slot(slot_id, lease_token=_ingress_token("lease-owner-time"))
         service.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("lease-owner-time"),
@@ -1073,6 +1096,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:operation-conflict"):
             self.ingress.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=1,
                 lease_token=_ingress_token("wrong-after-commit"),
@@ -1081,6 +1105,7 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:operation-conflict"):
             self.ingress.admit_capture(
                 self.envelope,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 attempt=2,
                 lease_token=_ingress_token("lease-v2"),
@@ -1088,6 +1113,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(state_before, self._state_fingerprint(self.ingress))
         retry = self.ingress.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("lease-v2"),
@@ -1189,7 +1215,7 @@ class MirrorV2Fixture(unittest.TestCase):
         second = service.ensure_slot(clock.value)
         second_slot_id = json.loads(second.raw.decode("ascii"))["slot_id"]
         clock.value = base + 100
-        service.admit_capture(self.envelope, scheduled_at=base, attempt=1, lease_token=_ingress_token("lease-first"))
+        service.admit_capture(self.envelope, evidence_raw=_external_evidence(self.ingress_config, self.envelope), scheduled_at=base, attempt=1, lease_token=_ingress_token("lease-first"))
         clock.value = base + 90
         before = self._state_fingerprint(service)
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:clock-rewind"):
@@ -1210,6 +1236,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.claim_slot(slot_id, lease_token=_ingress_token("lease-retry"))
         service.admit_capture(
             retry_envelope,
+            evidence_raw=_external_evidence(self.ingress_config, retry_envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("lease-retry"),
@@ -1261,6 +1288,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.claim_slot(slot_id, lease_token=token)
         service.admit_capture(
             retry_envelope,
+            evidence_raw=_external_evidence(self.ingress_config, retry_envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=token,
@@ -1293,6 +1321,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.claim_slot(slot_id, lease_token=_ingress_token("lease-failed"))
         receipt = service.admit_capture(
             failed_envelope,
+            evidence_raw=_external_evidence(self.ingress_config, failed_envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("lease-failed"),
@@ -1368,6 +1397,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.claim_slot(slot_id, lease_token=_ingress_token("lease-order"))
         service.admit_capture(
             raw,
+            evidence_raw=_external_evidence(self.ingress_config, raw),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("lease-order"),
@@ -1562,7 +1592,9 @@ class MirrorV2Fixture(unittest.TestCase):
             rows = connection.execute("SELECT raw FROM ingress_artifacts").fetchall()
         finally:
             connection.close()
-        self.assertEqual(sum(bytes(row[0]) == self.envelope for row in rows), 1)
+        self.assertEqual(len(rows), 1)
+        intake_frame = bytes(rows[0][0])
+        self.assertEqual(intake_frame.count(self.envelope), 1)
         connection = sqlite3.connect(self.core_path)
         try:
             raw_values = [bytes(row[0]) for row in connection.execute("SELECT raw FROM core_artifacts")]
@@ -1576,6 +1608,151 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotIn(self.envelope, json.dumps(self.ingress.support(), sort_keys=True).encode("ascii"))
         self.assertNotIn(self.envelope, json.dumps(self.core.support(), sort_keys=True).encode("ascii"))
 
+    def test_core_rejects_held_intake_before_first_mutation(self) -> None:
+        from tests.test_nc_medicaid_fhir_source import _rebind
+
+        held_path = self.root / "held-intake.db"
+        held_service = ingress.IngressServiceV2(held_path, self.ingress_config, clock=self.clock)
+        created = held_service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        held_service.claim_slot(slot_id, lease_token=_ingress_token("held-intake"))
+        partial_value = json.loads(self.envelope.decode("ascii"))
+        partial_value["source_status"] = "PARTIAL"
+        partial_value["page_complete"] = False
+        partial = _rebind(partial_value)
+        held_receipt = held_service.admit_capture(
+            partial,
+            evidence_raw=_external_evidence(self.ingress_config, partial),
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token=_ingress_token("held-intake"),
+        )
+        self.assertEqual("HELD", held_receipt.next_state)
+        before = core.CoreServiceV2(self.root / "held-core.db", self.core_config, clock=self.core_clock).verify()
+        held_core = core.CoreServiceV2(self.root / "held-core.db", self.core_config, clock=self.core_clock)
+        with self.assertRaisesRegex(core.CoreConflictError, "core:source-lifecycle"):
+            held_core.ingest_source(held_path, held_receipt.artifact_id or "")
+        after = held_core.verify()
+        self.assertEqual(before["sequence"], after["sequence"])
+        self.assertEqual(before["artifact_count"], after["artifact_count"])
+
+    def test_complete_frame_binding_and_concurrent_idempotency(self) -> None:
+        from tests.test_nc_medicaid_fhir_source import _envelope
+
+        self.assertEqual(262_144, profile.COMPLETE_FRAME_CAP_BYTES)
+        self.assertEqual(profile.COMPLETE_FRAME_CAP_BYTES, ingress.MAX_COMPLETE_FRAME_BYTES)
+        self.assertEqual(profile.COMPLETE_FRAME_CAP_BYTES, ingress_independent.MAX_COMPLETE_FRAME_BYTES)
+        self.assertEqual(profile.COMPLETE_FRAME_CAP_BYTES, core.MAX_COMPLETE_FRAME_BYTES)
+        connection = sqlite3.connect(self.ingress_path)
+        try:
+            frame = bytes(connection.execute("SELECT raw FROM ingress_artifacts").fetchone()[0])
+        finally:
+            connection.close()
+        self.assertLessEqual(len(frame), profile.COMPLETE_FRAME_CAP_BYTES)
+        evidence_raw, envelope_raw, directory = ingress_independent._unpack_intake_frame(frame)
+        self.assertEqual(envelope_raw, self.envelope)
+        self.assertEqual(tuple(index for index, _offset, _length, _digest in directory), (0,))
+        self.assertTrue(evidence_raw)
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:intake-frame"):
+            ingress_independent._unpack_intake_frame(frame[:-1])
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:intake-frame"):
+            ingress_independent._unpack_intake_frame(frame + b"\0")
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:artifact-raw"):
+            ingress_independent._unpack_intake_frame(b"x" * (profile.COMPLETE_FRAME_CAP_BYTES + 1))
+
+        service, slot_id = self._fresh_ingress("concurrent-frame.db")
+        token = _ingress_token("concurrent-frame")
+        service.claim_slot(slot_id, lease_token=token)
+        barrier = threading.Barrier(2)
+        receipts: list[ingress.IngressReceipt] = []
+        errors: list[BaseException] = []
+
+        def admit_same_frame() -> None:
+            try:
+                barrier.wait()
+                receipts.append(service.admit_capture(
+                    self.envelope,
+                    evidence_raw=_external_evidence(self.ingress_config, self.envelope),
+                    scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                    attempt=1,
+                    lease_token=token,
+                ))
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [threading.Thread(target=admit_same_frame) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual([], errors)
+        self.assertEqual(2, len(receipts))
+        self.assertEqual(receipts[0].raw, receipts[1].raw)
+        self.assertEqual(1, service.verify()["artifact_count"])
+
+        conflict_service, conflict_slot = self._fresh_ingress("same-operation-different-frame.db")
+        conflict_token = _ingress_token("same-operation-frame")
+        conflict_service.claim_slot(conflict_slot, lease_token=conflict_token)
+        operation_id = "same-operation-frame"
+        conflict_service.admit_capture(
+            self.envelope,
+            evidence_raw=_external_evidence(self.ingress_config, self.envelope),
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token=conflict_token,
+            operation_id=operation_id,
+        )
+        before = self._state_fingerprint(conflict_service)
+        changed = _envelope(location_variant="changed")
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:operation-conflict"):
+            conflict_service.admit_capture(
+                changed,
+                evidence_raw=_external_evidence(self.ingress_config, changed),
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
+                lease_token=conflict_token,
+                operation_id=operation_id,
+            )
+        self.assertEqual(before, self._state_fingerprint(conflict_service))
+
+    def test_two_dynamic_captures_share_static_contract_and_reach_core(self) -> None:
+        from app.mirror import nc_medicaid_fhir as fhir
+        from tests.test_nc_medicaid_fhir_source import _bundle
+
+        context = profile.DynamicCaptureContext(
+            "5" * 128, "6" * 128, "7" * 128, "8" * 128, 7_060, 7_070,
+        )
+        bundle = _bundle()
+        request_url = profile.NC_MEDICAID_PROFILE.page_url(0, context)
+        bundle["link"][0]["url"] = request_url
+        dynamic_envelope = fhir.build_fixture_envelope(
+            fhir.SyntheticFhirTransport({
+                (request_url, 0): fhir.fixture_response(bundle, request_url),
+            }),
+            context=context,
+        )
+        self.assertEqual(
+            profile.NC_MEDICAID_PROFILE.profile_digest,
+            fhir_independent.verify_bytes(dynamic_envelope)["source_contract_digest"],
+        )
+        self.clock.value = context.observation_time
+        created = self.ingress.ensure_slot(context.observation_time)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        token = _ingress_token("dynamic-second-capture")
+        self.ingress.claim_slot(slot_id, lease_token=token)
+        receipt = self.ingress.admit_capture(
+            dynamic_envelope,
+            evidence_raw=_external_evidence(self.ingress_config, dynamic_envelope),
+            scheduled_at=context.observation_time,
+            attempt=1,
+            lease_token=token,
+        )
+        self.assertEqual("QUARANTINED", receipt.next_state)
+        before_core = self.core.verify(ingress_path=self.ingress_path)
+        result = self.core.ingest_source(self.ingress_path, receipt.artifact_id or "")
+        self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, result["receipt"].raw.decode("ascii").split('"profile_digest":"', 1)[1].split('"', 1)[0])
+        self.assertEqual(before_core["artifact_count"] + 3, self.core.verify(ingress_path=self.ingress_path)["artifact_count"])
+
     def test_profile_owned_changed_observation_rejects_equal_time_without_authority(self) -> None:
         from tests.test_nc_medicaid_fhir_source import _envelope
         changed_path = self.root / "changed-ingress.db"
@@ -1587,6 +1764,7 @@ class MirrorV2Fixture(unittest.TestCase):
         changed_ingress.claim_slot(slot_id, lease_token=_ingress_token("lease-v2-changed"))
         changed_receipt = changed_ingress.admit_capture(
             _envelope(location_variant="changed"),
+            evidence_raw=_external_evidence(self.ingress_config, _envelope(location_variant="changed")),
             scheduled_at=scheduled_at,
             attempt=1,
             lease_token=_ingress_token("lease-v2-changed"),
@@ -1800,6 +1978,7 @@ class MirrorV2Fixture(unittest.TestCase):
         alternate.claim_slot(slot_id, lease_token=_ingress_token("alternate-config"))
         alternate_receipt = alternate.admit_capture(
             self.envelope,
+            evidence_raw=_external_evidence(alternate_config, self.envelope),
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             attempt=1,
             lease_token=_ingress_token("alternate-config"),
@@ -1826,7 +2005,7 @@ class MirrorV2Fixture(unittest.TestCase):
         coverage_a = fhir_independent.to_verified_source_coverage(
             fhir_independent.verify_bytes(self.envelope)
         )
-        registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
+        registry = {coverage_a.graph_profile.profile_id: coverage_a.graph_profile}
         connection = sqlite3.connect(self.core_path)
         try:
             graph_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE kind='GRAPH'").fetchone()[0])
@@ -1842,15 +2021,22 @@ class MirrorV2Fixture(unittest.TestCase):
                 registry,
             )["accepted"]
         )
-        core_independent._replay_source_admission(self.envelope, graph_raw, source_value, verified_a)
+        core_independent._replay_source_admission(
+            self.envelope,
+            graph_raw,
+            source_value,
+            verified_a,
+            external_evidence_raw=_external_evidence(self.ingress_config, self.envelope),
+            external_policy=self.ingress_config.external_policy().material(),
+        )
 
         input_b_value = json.loads(coverage_a.graph_input.decode("utf-8"))
         input_b_value["sources"][0]["coverage_effective_end"] -= 1
         input_b_value["sources"][0]["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
-            input_b_value["sources"][0], profile.NC_MEDICAID_GRAPH_PROFILE
+            input_b_value["sources"][0], coverage_a.graph_profile
         )
         input_b = graph_producer.canonical_input(input_b_value)
-        graph_b, _telemetry = graph_producer.build_report(input_b, profile=profile.NC_MEDICAID_GRAPH_PROFILE)
+        graph_b, _telemetry = graph_producer.build_report(input_b, profile=coverage_a.graph_profile)
         verified_b = graph_independent.verify_artifact_v2(graph_b, registry)
         self.assertTrue(
             graph_independent.verify_input_binding_v2(input_b, graph_b, registry)["accepted"]
@@ -1858,7 +2044,14 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-sources"):
             graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_b, registry)
         with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:source-admission"):
-            core_independent._replay_source_admission(self.envelope, graph_b, source_value, verified_b)
+            core_independent._replay_source_admission(
+                self.envelope,
+                graph_b,
+                source_value,
+                verified_b,
+                external_evidence_raw=_external_evidence(self.ingress_config, self.envelope),
+                external_policy=self.ingress_config.external_policy().material(),
+            )
 
         for label, field, replacement, expected in (
             ("subject", "provider_graph_subject", "SYNTH_OTHER_PROVIDER", "input:subject"),
@@ -1874,19 +2067,23 @@ class MirrorV2Fixture(unittest.TestCase):
                     )
 
         input_time_value = json.loads(coverage_a.graph_input.decode("utf-8"))
+        time_profile = replace(coverage_a.graph_profile, observation_start=6999, observation_end=7002)
+        time_registry = dict(registry)
+        time_registry[time_profile.profile_id] = time_profile
+        input_time_value["profile_digest"] = time_profile.profile_digest
         input_time_value["observation_time"] += 1
         for source in input_time_value["sources"]:
             source["coverage_observation_time"] += 1
             for record in source["records"]:
                 record["observed_at"] += 1
             source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
-                source, profile.NC_MEDICAID_GRAPH_PROFILE
+                source, time_profile
             )
         input_time = graph_producer.canonical_input(input_time_value)
-        graph_time, _telemetry = graph_producer.build_report(input_time, profile=profile.NC_MEDICAID_GRAPH_PROFILE)
-        self.assertTrue(graph_independent.verify_input_binding_v2(input_time, graph_time, registry)["accepted"])
-        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-time"):
-            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_time, registry)
+        graph_time, _telemetry = graph_producer.build_report(input_time, profile=time_profile)
+        self.assertTrue(graph_independent.verify_input_binding_v2(input_time, graph_time, time_registry)["accepted"])
+        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:(profile|artifact-time)"):
+            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_time, time_registry)
 
         input_parity_value = json.loads(coverage_a.graph_input.decode("utf-8"))
         input_parity_value["parity_cases"] = [{
@@ -1895,7 +2092,7 @@ class MirrorV2Fixture(unittest.TestCase):
             "expected_present": True,
         }]
         input_parity = graph_producer.canonical_input(input_parity_value)
-        graph_parity, _telemetry = graph_producer.build_report(input_parity, profile=profile.NC_MEDICAID_GRAPH_PROFILE)
+        graph_parity, _telemetry = graph_producer.build_report(input_parity, profile=coverage_a.graph_profile)
         self.assertTrue(graph_independent.verify_input_binding_v2(input_parity, graph_parity, registry)["accepted"])
         with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-parity"):
             graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_parity, registry)

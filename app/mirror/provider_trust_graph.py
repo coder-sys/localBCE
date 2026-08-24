@@ -93,7 +93,7 @@ MAX_RECORDS_PER_SOURCE = 8
 MAX_FINDINGS = 8
 MAX_DISCREPANCIES = 8
 MAX_PARITY_CASES = 8
-MAX_STRING_BYTES = 128
+MAX_STRING_BYTES = 512
 MAX_NODES = 4_096
 MAX_DEPTH = 16
 MAX_HISTORY_DEPTH = 1
@@ -319,7 +319,7 @@ def _profile_view(profile: object | None) -> _GraphProfile:
     if (
         type(profile_id) is not str
         or type(version) is not int
-        or version != 2
+        or version not in (2, 3)
         or type(subject) is not str
         or type(scope) is not str
         or type(credential_id) is not str
@@ -558,7 +558,10 @@ def _validate_record(
     view = _profile_view(profile)
     item = _expect_keys(record, RECORD_KEYS, "record")
     record_id = _text(item["record_id"], "record:id")
-    if _RE_RECORD.fullmatch(record_id) is None:
+    if view.version == 3:
+        if _RE_HEX.fullmatch(record_id) is None:
+            raise ProviderTrustGraphError("record:id:opaque")
+    elif _RE_RECORD.fullmatch(record_id) is None:
         raise ProviderTrustGraphError("record:id:not-synthetic")
     try:
         role_index = view.source_kinds.index(source_kind)
@@ -566,7 +569,7 @@ def _validate_record(
         raise_redacted(ProviderTrustGraphError, "record:source-mismatch")
     expected_kind = view.record_kinds[role_index]
     expected_prefix = "SYNTH_" + expected_kind
-    if not record_id.startswith(expected_prefix):
+    if view.version != 3 and not record_id.startswith(expected_prefix):
         raise ProviderTrustGraphError("record:id:source-mismatch")
     if item["record_kind"] not in ("CREDENTIAL", "ENROLLMENT"):
         raise ProviderTrustGraphError("record:kind")

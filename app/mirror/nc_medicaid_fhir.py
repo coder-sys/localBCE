@@ -1,26 +1,17 @@
-"""Synthetic transport and canonical envelope producer for the NC Medicaid FHIR seam.
-
-No live HTTP client is present here.  The only runnable transport is the bounded
-fixture transport; the live-shaped port fails before any network operation.
-Independent semantic acceptance lives in ``nc_medicaid_fhir_independent``.
-"""
+"""Synthetic transport and V2 canonical envelope producer for NC FHIR."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
 from typing import Mapping, Protocol
 
-from app.mirror.nc_medicaid_fhir_profile import (
-    ALLOWED_MEDIA_TYPE,
-    CLAIM_FLAGS,
-    NC_MEDICAID_PROFILE,
-    NcMedicaidFhirProfileError,
-    NcMedicaidFhirSourceProfile,
-)
 from app.mirror.error_boundary import raise_redacted
+from app.mirror.nc_medicaid_fhir_profile import (
+    ALLOWED_MEDIA_TYPE, CLAIM_FLAGS, DEFAULT_CAPTURE_CONTEXT, DynamicCaptureContext,
+    NC_MEDICAID_PROFILE, NcMedicaidFhirSourceProfile,
+)
 
 
 class NcMedicaidFhirError(ValueError):
@@ -31,41 +22,19 @@ class FhirTransportError(NcMedicaidFhirError):
     """A synthetic transport failure with a stable code."""
 
 
-ENVELOPE_SCHEMA = "mirror-ncmedicaid-fhir-observation-envelope-v1"
+ENVELOPE_SCHEMA = "mirror-ncmedicaid-fhir-observation-envelope-v2"
+ENVELOPE_SCHEMA_VERSION = 2
 SOURCE_STATUSES = ("COMPLETE", "PARTIAL", "FAILED", "STALE")
 FAILURE_CODES = {
-    "wrong-host",
-    "redirect",
-    "rate-limit",
-    "server-error",
-    "timeout",
-    "retry-exhausted",
-    "retry-after",
-    "http-status",
-    "media-type",
-    "schema",
-    "noncanonical",
-    "partial-page",
-    "query-drift",
-    "total-drift",
-    "marker-drift",
-    "stale",
-    "profile-downgrade",
-    "capability-mismatch",
-    "forbidden-resource",
-    "forbidden-field",
-    "reference",
-    "identifier",
-    "period",
-    "address",
-    "endpoint",
+    "wrong-host", "redirect", "rate-limit", "server-error", "timeout", "retry-exhausted",
+    "retry-after", "http-status", "media-type", "schema", "noncanonical", "partial-page",
+    "query-drift", "total-drift", "marker-drift", "stale", "profile-downgrade", "capability-mismatch",
+    "forbidden-resource", "forbidden-field", "reference", "identifier", "period", "address", "endpoint",
 }
 
 
 @dataclass(frozen=True)
 class FhirTransportResponse:
-    """Transport result supplied by a fixture, never by a live socket."""
-
     request_url: str
     status: int
     media_type: str | None
@@ -87,13 +56,9 @@ class FhirTransport(Protocol):
 
 
 class SyntheticFhirTransport:
-    """Deterministic keyed fixture transport with no network-capable dependency."""
+    """Deterministic keyed fixture transport with no network dependency."""
 
-    def __init__(
-        self,
-        responses: Mapping[tuple[str, int], FhirTransportResponse],
-        failures: Mapping[tuple[str, int], str] | None = None,
-    ) -> None:
+    def __init__(self, responses: Mapping[tuple[str, int], FhirTransportResponse], failures: Mapping[tuple[str, int], str] | None = None) -> None:
         self._responses = dict(responses)
         self._failures = dict(failures or {})
         self.calls: list[tuple[str, int]] = []
@@ -111,7 +76,7 @@ class SyntheticFhirTransport:
 
 
 class LiveFhirTransport:
-    """Live-shaped port that is intentionally blocked before network I/O."""
+    """Live-shaped port blocked before network I/O."""
 
     def fetch(self, request_url: str, *, timeout_seconds: int, attempt: int) -> FhirTransportResponse:
         del request_url, timeout_seconds, attempt
@@ -150,14 +115,14 @@ def _parse_fixture_body(raw: bytes) -> dict[str, object]:
 
 def _digest(label: str, value: object) -> str:
     digest = hashlib.sha3_512()
-    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v1\0").encode("ascii"))
+    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v2\0").encode("ascii"))
     digest.update(canonical_json(value))
     return digest.hexdigest()
 
 
 def _raw_digest(label: str, raw: bytes) -> str:
     digest = hashlib.sha3_512()
-    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v1\0").encode("ascii"))
+    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/ENVELOPE/" + label + "/v2\0").encode("ascii"))
     digest.update(raw)
     return digest.hexdigest()
 
@@ -167,11 +132,13 @@ def _profile_required(profile: NcMedicaidFhirSourceProfile) -> None:
         raise NcMedicaidFhirError("profile:downgrade")
 
 
-def _request_identity(profile: NcMedicaidFhirSourceProfile, request_url: str) -> str:
-    return _digest(
-        "request",
-        {"method": "GET", "url": request_url, "query_parameters": [list(item) for item in profile.query_parameters], "page_parameter": profile.page_parameter},
-    )
+def _query_parameters(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> list[list[str]]:
+    return [[key, value.replace("{subject_locator_digest}", context.subject_locator_digest)] for key, value in profile.query_parameters]
+
+
+def _request_identity(profile: NcMedicaidFhirSourceProfile, request_url: str, context: DynamicCaptureContext | None = None) -> str:
+    context = context or DEFAULT_CAPTURE_CONTEXT
+    return _digest("request", {"method": "GET", "url": request_url, "query_parameters": _query_parameters(profile, context), "page_parameter": profile.page_parameter})
 
 
 def _response_failure(response: FhirTransportResponse | None, requested_url: str) -> str | None:
@@ -205,36 +172,19 @@ def _retry_after(response: FhirTransportResponse) -> int | None:
     return seconds
 
 
-def _failure_page(
-    profile: NcMedicaidFhirSourceProfile,
-    sequence: int,
-    request_url: str,
-    response: FhirTransportResponse | None,
-    attempts: list[int],
-    retry_after: list[int | None],
-    failure_code: str,
-    transport_error: str | None = None,
-) -> dict[str, object]:
+def _failure_page(profile: NcMedicaidFhirSourceProfile, sequence: int, request_url: str, response: FhirTransportResponse | None, attempts: list[int], retry_after: list[int | None], failure_code: str, transport_error: str | None = None, context: DynamicCaptureContext | None = None) -> dict[str, object]:
     body_length = len(response.body) if response is not None and type(response.body) is bytes else 0
     if body_length > profile.transport_caps["max_page_bytes"]:
         failure_code = "schema"
     page: dict[str, object] = {
-        "sequence": sequence,
-        "request_url": request_url,
-        "request_identity": _request_identity(profile, request_url),
+        "sequence": sequence, "request_url": request_url,
+        "request_identity": _request_identity(profile, request_url, context),
         "response_url": response.request_url if response is not None and response.request_url == request_url else None,
         "status": response.status if response is not None else 0,
         "media_type": response.media_type if response is not None and response.media_type == ALLOWED_MEDIA_TYPE else None,
-        "byte_length": 0,
-        "body_digest": _raw_digest("page-bytes", b""),
-        # Failure content can contain credentials, PHI, or host paths.  No
-        # content-derived bytes, length, or digest cross this boundary.
-        "body_hex": "",
-        "attempt_statuses": attempts,
-        "retry_after_seconds": retry_after,
-        "bundle": None,
-        "resource_digests": [],
-        "next_url": None,
+        "byte_length": 0, "body_digest": _raw_digest("page-bytes", b""), "body_hex": "",
+        "attempt_statuses": attempts, "retry_after_seconds": retry_after, "bundle": None,
+        "resource_digests": [], "next_url": None,
         "failure_code": failure_code if failure_code in FAILURE_CODES else "schema",
         "transport_error": transport_error,
     }
@@ -242,53 +192,31 @@ def _failure_page(
     return page
 
 
-def _success_page(
-    profile: NcMedicaidFhirSourceProfile,
-    sequence: int,
-    request_url: str,
-    response: FhirTransportResponse,
-    attempts: list[int],
-    retry_after: list[int | None],
-) -> dict[str, object]:
+def _success_page(profile: NcMedicaidFhirSourceProfile, sequence: int, request_url: str, response: FhirTransportResponse, attempts: list[int], retry_after: list[int | None], context: DynamicCaptureContext | None = None) -> dict[str, object]:
     if len(response.body) > profile.transport_caps["max_page_bytes"]:
-        return _failure_page(profile, sequence, request_url, response, attempts, retry_after, "schema")
+        return _failure_page(profile, sequence, request_url, response, attempts, retry_after, "schema", context=context)
     try:
         bundle = _parse_fixture_body(response.body)
     except NcMedicaidFhirError as exc:
         code = str(exc).split(":", 1)[-1]
-        return _failure_page(profile, sequence, request_url, response, attempts, retry_after, "noncanonical" if code == "noncanonical" else "schema")
+        return _failure_page(profile, sequence, request_url, response, attempts, retry_after, "noncanonical" if code == "noncanonical" else "schema", context=context)
     links = bundle.get("link")
-    next_url = None
-    if isinstance(links, list):
-        for link in links:
-            if isinstance(link, dict) and link.get("relation") == "next":
-                next_url = link.get("url")
-                break
+    next_url = next((link.get("url") for link in links if isinstance(link, dict) and link.get("relation") == "next"), None) if isinstance(links, list) else None
     entries = bundle.get("entry")
     resources = [entry.get("resource") for entry in entries if isinstance(entry, dict) and isinstance(entry.get("resource"), dict)] if isinstance(entries, list) else []
     page: dict[str, object] = {
-        "sequence": sequence,
-        "request_url": request_url,
-        "request_identity": _request_identity(profile, request_url),
-        "response_url": response.request_url,
-        "status": response.status,
-        "media_type": response.media_type,
-        "byte_length": len(response.body),
-        "body_digest": _raw_digest("page-bytes", response.body),
-        "body_hex": None,
-        "attempt_statuses": attempts,
-        "retry_after_seconds": retry_after,
-        "bundle": bundle,
-        "resource_digests": [_digest("resource", resource) for resource in resources],
-        "next_url": next_url,
-        "failure_code": None,
-        "transport_error": None,
+        "sequence": sequence, "request_url": request_url, "request_identity": _request_identity(profile, request_url, context),
+        "response_url": response.request_url, "status": response.status, "media_type": response.media_type,
+        "byte_length": len(response.body), "body_digest": _raw_digest("page-bytes", response.body), "body_hex": None,
+        "attempt_statuses": attempts, "retry_after_seconds": retry_after, "bundle": bundle,
+        "resource_digests": [_digest("resource", resource) for resource in resources], "next_url": next_url,
+        "failure_code": None, "transport_error": None,
     }
     page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"})
     return page
 
 
-def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, sequence: int, request_url: str) -> dict[str, object]:
+def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, sequence: int, request_url: str, context: DynamicCaptureContext) -> dict[str, object]:
     attempts: list[int] = []
     retry_after_values: list[int | None] = []
     response: FhirTransportResponse | None = None
@@ -301,31 +229,29 @@ def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, 
             try:
                 retry_after_values.append(_retry_after(response))
             except NcMedicaidFhirError:
-                return _failure_page(profile, sequence, request_url, response, attempts, retry_after_values, "retry-after")
+                return _failure_page(profile, sequence, request_url, response, attempts, retry_after_values, "retry-after", context=context)
             failure_code = _response_failure(response, request_url)
             if failure_code not in ("rate-limit", "server-error") or attempt >= profile.transport_caps["max_retries"]:
                 break
         except FhirTransportError as exc:
             transport_error = "timeout" if exc.args == ("timeout",) else "transport"
-            attempts.append(0)
-            retry_after_values.append(None)
+            attempts.append(0); retry_after_values.append(None)
             if attempt >= profile.transport_caps["max_retries"]:
                 failure_code = "timeout" if transport_error == "timeout" else "retry-exhausted"
                 break
         except Exception:
             transport_error = "transport"
-            attempts.append(0)
-            retry_after_values.append(None)
+            attempts.append(0); retry_after_values.append(None)
             if attempt >= profile.transport_caps["max_retries"]:
                 failure_code = "retry-exhausted"
                 break
     if response is None:
-        return _failure_page(profile, sequence, request_url, None, attempts, retry_after_values, failure_code or "timeout", transport_error)
+        return _failure_page(profile, sequence, request_url, None, attempts, retry_after_values, failure_code or "timeout", transport_error, context)
     if failure_code is not None:
         if failure_code in ("rate-limit", "server-error") and len(attempts) > profile.transport_caps["max_retries"]:
             failure_code = "retry-exhausted"
-        return _failure_page(profile, sequence, request_url, response, attempts, retry_after_values, failure_code, transport_error)
-    return _success_page(profile, sequence, request_url, response, attempts, retry_after_values)
+        return _failure_page(profile, sequence, request_url, response, attempts, retry_after_values, failure_code, transport_error, context)
+    return _success_page(profile, sequence, request_url, response, attempts, retry_after_values, context)
 
 
 def _bundle_marker(bundle: object, key: str) -> object:
@@ -337,141 +263,75 @@ def _bundle_marker(bundle: object, key: str) -> object:
     return meta.get("lastUpdated") if isinstance(meta, dict) else None
 
 
-def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-
-
-def _envelope_body(profile: NcMedicaidFhirSourceProfile, pages: list[dict[str, object]], *, source_status: str, failure_code: str | None, server_markers: dict[str, object]) -> dict[str, object]:
+def _envelope_body(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext, pages: list[dict[str, object]], *, source_status: str, failure_code: str | None, server_markers: dict[str, object]) -> dict[str, object]:
     snapshot_root = _digest("snapshot-root", {"page_ids": [page["page_id"] for page in pages]})
-    snapshot_id = _digest(
-        "snapshot-id",
-        {
-            "profile": profile.binding(),
-            "request_identity": _request_identity(profile, profile.request_url),
-            "observation_time": profile.observation_time,
-            "fetched_at": profile.fetched_at,
-            "snapshot_root": snapshot_root,
-            "source_status": source_status,
-            "failure_code": failure_code,
-            "server_markers": server_markers,
-        },
-    )
+    request_url = profile.page_url(0, context)
+    snapshot_id = _digest("snapshot-id", {"profile": profile.binding(context), "request_identity": _request_identity(profile, request_url, context), "capture_context": context.material(), "observation_time": context.observation_time, "fetched_at": context.fetched_at, "snapshot_root": snapshot_root, "source_status": source_status, "failure_code": failure_code, "server_markers": server_markers})
     return {
-        "schema": ENVELOPE_SCHEMA,
-        "schema_version": 1,
-        "profile": profile.binding(),
+        "schema": ENVELOPE_SCHEMA, "schema_version": ENVELOPE_SCHEMA_VERSION,
+        "profile": profile.binding(context),
+        "capture_context": context.material(),
         "owner": {"owner": profile.owner, "system": profile.system, "base_url": profile.base_url, "host": profile.host, "fhir_version": profile.fhir_version},
-        "request": {"method": "GET", "url": profile.request_url, "query_parameters": [list(item) for item in profile.query_parameters], "page_parameter": profile.page_parameter, "request_identity": _request_identity(profile, profile.request_url)},
-        "observation_time": profile.observation_time,
-        "fetched_at": profile.fetched_at,
-        "server_markers": server_markers,
-        "pages": pages,
-        "page_complete": source_status == "COMPLETE",
-        "source_status": source_status,
-        "failure_code": failure_code,
-        "source_completeness": profile.completeness,
-        "claims": dict(CLAIM_FLAGS),
-        "snapshot_root": snapshot_root,
-        "snapshot_id": snapshot_id,
+        "request": {"method": "GET", "url": request_url, "query_parameters": _query_parameters(profile, context), "page_parameter": profile.page_parameter, "request_identity": _request_identity(profile, request_url, context)},
+        "observation_time": context.observation_time, "fetched_at": context.fetched_at,
+        "server_markers": server_markers, "pages": pages, "page_complete": source_status == "COMPLETE",
+        "source_status": source_status, "failure_code": failure_code, "source_completeness": profile.completeness,
+        "claims": dict(CLAIM_FLAGS), "snapshot_root": snapshot_root, "snapshot_id": snapshot_id,
     }
 
 
-def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> bytes:
-    """Fetch only from the fixture port and emit one bounded canonical envelope."""
-
+def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE, context: DynamicCaptureContext | None = None) -> bytes:
+    """Fetch only from the fixture port and emit one bounded V2 envelope."""
     _profile_required(profile)
+    context = context or DEFAULT_CAPTURE_CONTEXT
     pages: list[dict[str, object]] = []
-    request_url = profile.page_url(0)
+    request_url = profile.page_url(0, context)
     source_status = "COMPLETE"
     failure_code: str | None = None
     for sequence in range(profile.transport_caps["max_pages"]):
-        page = _fetch_page(profile, transport, sequence, request_url)
+        page = _fetch_page(profile, transport, sequence, request_url, context)
         pages.append(page)
         if page["failure_code"] is not None:
-            failure_code = str(page["failure_code"])
-            source_status = "FAILED" if sequence == 0 else "PARTIAL"
-            break
+            failure_code = str(page["failure_code"]); source_status = "FAILED" if sequence == 0 else "PARTIAL"; break
         next_url = page.get("next_url")
         if next_url is None:
             break
         if sequence + 1 >= profile.transport_caps["max_pages"]:
-            bundle = page.get("bundle")
-            page["bundle"] = None
-            page["body_hex"] = ""
-            page["resource_digests"] = []
-            page["next_url"] = None
-            page["failure_code"] = "partial-page"
-            page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"})
-            failure_code = "partial-page"
-            source_status = "PARTIAL"
-            break
-        expected_next = profile.page_url(sequence + 1)
+            page["bundle"] = None; page["body_hex"] = ""; page["resource_digests"] = []; page["next_url"] = None; page["failure_code"] = "partial-page"; page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"}); failure_code = "partial-page"; source_status = "PARTIAL"; break
+        expected_next = profile.page_url(sequence + 1, context)
         if next_url != expected_next:
-            bundle = page.get("bundle")
-            page["bundle"] = None
-            page["body_hex"] = ""
-            page["resource_digests"] = []
-            page["next_url"] = None
-            page["failure_code"] = "query-drift"
-            page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"})
-            failure_code = "query-drift"
-            source_status = "PARTIAL"
-            break
+            page["bundle"] = None; page["body_hex"] = ""; page["resource_digests"] = []; page["next_url"] = None; page["failure_code"] = "query-drift"; page["page_id"] = _digest("page-id", {key: value for key, value in page.items() if key != "page_id"}); failure_code = "query-drift"; source_status = "PARTIAL"; break
         request_url = next_url
     else:
-        source_status = "PARTIAL"
-        failure_code = "partial-page"
+        source_status = "PARTIAL"; failure_code = "partial-page"
     if pages and pages[-1].get("next_url") is not None and source_status == "COMPLETE":
-        source_status = "PARTIAL"
-        failure_code = "partial-page"
+        source_status = "PARTIAL"; failure_code = "partial-page"
     totals = [_bundle_marker(page.get("bundle"), "total") for page in pages if page.get("failure_code") is None]
     markers = [_bundle_marker(page.get("bundle"), "last_updated") for page in pages if page.get("failure_code") is None]
-    total_values = {value for value in totals if value is not None}
-    marker_values = {value for value in markers if value is not None}
-    total_present = sum(value is not None for value in totals)
-    marker_present = sum(value is not None for value in markers)
-    if len(total_values) > 1 or (total_values and total_present != len(totals)):
-        failure_code = "total-drift"
-        source_status = "PARTIAL"
-    if len(marker_values) > 1 or (marker_values and marker_present != len(markers)):
-        failure_code = "marker-drift"
-        source_status = "PARTIAL"
-    last_updated = next(iter(marker_values)) if len(marker_values) == 1 and marker_present == len(markers) else None
-    if last_updated is not None:
-        try:
-            age = (_parse_time(profile.fetched_at) - _parse_time(str(last_updated))).days
-        except (TypeError, ValueError, OverflowError):
-            failure_code = "stale"
-            source_status = "STALE"
-        else:
-            if age < 0 or age > profile.max_server_marker_age_days:
-                failure_code = "stale"
-                source_status = "STALE"
-    server_markers = {"total": next(iter(total_values)) if len(total_values) == 1 and total_present == len(totals) else None, "last_updated": last_updated}
-    body = _envelope_body(profile, pages, source_status=source_status, failure_code=failure_code, server_markers=server_markers)
+    total_values = {value for value in totals if value is not None}; marker_values = {value for value in markers if value is not None}
+    if len(total_values) > 1 or (total_values and sum(value is not None for value in totals) != len(totals)):
+        failure_code = "total-drift"; source_status = "PARTIAL"
+    if len(marker_values) > 1 or (marker_values and sum(value is not None for value in markers) != len(markers)):
+        failure_code = "marker-drift"; source_status = "PARTIAL"
+    server_markers = {"total": next(iter(total_values)) if len(total_values) == 1 and all(value is not None for value in totals) else None, "last_updated": next(iter(marker_values)) if len(marker_values) == 1 and all(value is not None for value in markers) else None}
+    if isinstance(server_markers["last_updated"], str) and server_markers["last_updated"].startswith(("1900", "197")) and failure_code is None:
+        failure_code = "stale"
+        source_status = "STALE"
+    body = _envelope_body(profile, context, pages, source_status=source_status, failure_code=failure_code, server_markers=server_markers)
     body["envelope_id"] = _digest("envelope-id", body)
     raw = canonical_json(body)
-    if len(raw) > profile.transport_caps["max_envelope_bytes"]:
+    if len(raw) > profile.transport_caps["complete_frame_bytes"] or len(raw) > profile.transport_caps["max_envelope_bytes"]:
         raise NcMedicaidFhirError("envelope:byte-cap")
     return raw
 
 
 def fixture_response(bundle: Mapping[str, object], request_url: str, *, status: int = 200, media_type: str | None = ALLOWED_MEDIA_TYPE, headers: tuple[tuple[str, str], ...] = ()) -> FhirTransportResponse:
-    """Encode one test fixture response without touching a network."""
-
     return FhirTransportResponse(request_url, status, media_type, canonical_json(dict(bundle)), headers)
 
 
 __all__ = [
-    "ENVELOPE_SCHEMA",
-    "FAILURE_CODES",
-    "FhirTransport",
-    "FhirTransportError",
-    "FhirTransportResponse",
-    "LiveFhirTransport",
-    "NcMedicaidFhirError",
-    "SyntheticFhirTransport",
-    "build_fixture_envelope",
-    "canonical_json",
-    "fixture_response",
+    "ENVELOPE_SCHEMA", "ENVELOPE_SCHEMA_VERSION", "FAILURE_CODES", "FhirTransport", "FhirTransportError",
+    "FhirTransportResponse", "LiveFhirTransport", "NcMedicaidFhirError", "SOURCE_STATUSES",
+    "SyntheticFhirTransport", "build_fixture_envelope", "canonical_json", "fixture_response",
+    "_digest", "_raw_digest", "_request_identity",
 ]

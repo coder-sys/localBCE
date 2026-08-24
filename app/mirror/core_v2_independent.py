@@ -15,6 +15,7 @@ import stat
 from typing import Mapping
 
 from app.mirror import ingress_v2_independent as ingress
+from app.mirror import external_source_adapter_independent as external
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_GRAPH_PROFILE_REGISTRY, NC_MEDICAID_PROFILE
 from app.mirror import provider_trust_graph_independent as graph
@@ -26,6 +27,7 @@ DOMAIN = "BL/MIRROR/CORE/V3/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 262_144
 MAX_EVENT_BYTES = 786_432
+MAX_COMPLETE_FRAME_BYTES = fhir.NC_MEDICAID_PROFILE.transport_caps["complete_frame_bytes"]
 MAX_ADMISSION_RECEIPT_BYTES = 32_768
 GENESIS_ROOT = "0" * 128
 TABLES = (
@@ -294,17 +296,23 @@ def _verify_admission_receipt(value: Mapping[str, object], source: Mapping[str, 
         "verifier_id", "verifier_epoch", "evidence_mode", "adapter_digest",
         "source_result_digest", "graph_input_digest", "graph_artifact_digest",
         "graph_report_id", "production_source_authentication",
+        "external_artifact_id", "external_artifact_digest", "capture_id",
+        "capture_context_digest", "external_policy_digest",
     }
     if set(value) != expected or value.get("schema") != "mirror-source-admission-receipt-v2":
         raise CoreVerificationError("core:admission-receipt")
     graph_profile = NC_MEDICAID_PROFILE.graph_profile
-    if value.get("profile_id") != graph_profile.profile_id or value.get("profile_version") != graph_profile.version or value.get("profile_digest") != graph_profile.profile_digest:
+    if value.get("profile_id") != graph_profile.profile_id or value.get("profile_version") != 3:
         raise CoreVerificationError("core:admission-receipt")
     if value.get("verifier_id") != graph_profile.verifier_id or value.get("verifier_epoch") != graph_profile.verifier_epoch or value.get("evidence_mode") != graph_profile.evidence_mode.value or value.get("production_source_authentication") is not False:
         raise CoreVerificationError("core:admission-receipt")
     if type(value.get("verifier_id")) is not str or type(value.get("verifier_epoch")) is not int or value["verifier_epoch"] < 0 or type(value.get("evidence_mode")) is not str:
         raise CoreVerificationError("core:admission-receipt")
-    for key in ("receipt_id", "profile_digest", "adapter_digest", "source_result_digest", "graph_input_digest", "graph_artifact_digest", "graph_report_id"):
+    for key in (
+        "receipt_id", "profile_digest", "adapter_digest", "source_result_digest", "graph_input_digest",
+        "graph_artifact_digest", "graph_report_id", "external_artifact_id", "external_artifact_digest",
+        "capture_id", "capture_context_digest", "external_policy_digest",
+    ):
         _hex(value.get(key), "core:admission-receipt")
     body = {key: value[key] for key in expected if key != "receipt_id"}
     if value["receipt_id"] != _admission_digest("receipt-id", body):
@@ -319,23 +327,49 @@ def _replay_source_admission(
     graph_raw: bytes,
     source: Mapping[str, object],
     graph_result: graph._VerifiedGraphArtifactV2 | None = None,
-) -> None:
-    if type(envelope_raw) is not bytes or not envelope_raw or len(envelope_raw) > ingress.MAX_RAW_ENVELOPE_BYTES:
+    *,
+    external_evidence_raw: bytes | None = None,
+    external_policy: Mapping[str, object] | None = None,
+) -> graph._VerifiedGraphArtifactV2:
+    if type(envelope_raw) is not bytes or not envelope_raw or len(envelope_raw) > fhir.NC_MEDICAID_PROFILE.transport_caps["max_envelope_bytes"]:
         raise CoreVerificationError("core:ingress-binding")
     if type(graph_raw) is not bytes or not graph_raw or len(graph_raw) > MAX_ARTIFACT_BYTES:
         raise CoreVerificationError("core:source-graph")
     try:
         fhir_result = fhir.verify_bytes(envelope_raw, profile=NC_MEDICAID_PROFILE)
         coverage = fhir.to_verified_source_coverage(fhir_result, profile=NC_MEDICAID_PROFILE)
-        checked_graph = graph_result.summary if graph_result is not None else graph.verify_bytes_v2(graph_raw, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
+        if type(external_evidence_raw) is not bytes or not external_evidence_raw or not isinstance(external_policy, Mapping):
+            raise CoreVerificationError("core:external-evidence")
+        external_result = external.verify_artifact(external_evidence_raw, policy=external_policy, capture_raw=envelope_raw)
+        graph_profile = coverage.graph_profile
+        if graph_profile is None:
+            raise CoreVerificationError("core:source-profile")
+        checked_graph_object = graph_result or graph.verify_artifact_v2(
+            graph_raw,
+            {graph_profile.profile_id: graph_profile},
+        )
+        checked_graph = checked_graph_object.summary
         graph._bind_input_to_verified_v2(
             coverage.graph_input,
             graph_raw,
-            verified=graph_result,
+            verified=checked_graph_object,
         )
     except Exception:
         raise CoreVerificationError("core:source-admission") from None
-    graph_profile = NC_MEDICAID_PROFILE.graph_profile
+    if (
+        fhir_result.get("source_status") != "COMPLETE"
+        or fhir_result.get("page_complete") is not True
+        or fhir_result.get("freshness") != "FRESH"
+        or fhir_result.get("failure_code") is not None
+        or external_result.get("derived_status") != "OBSERVATION_ADMITTED"
+        or external_result.get("complete") is not True
+        or external_result.get("failure_code") != "NONE"
+        or external_result.get("source_contract_digest") != NC_MEDICAID_PROFILE.profile_digest
+        or external_result.get("observed_at") != fhir_result.get("observation_time")
+        or external_result.get("fetched_at") != fhir_result.get("fetched_at")
+        or tuple(fhir_result.get("page_digests", ())) != tuple(digest for _index, digest in external_result.get("page_bindings", ()))
+    ):
+        raise CoreVerificationError("core:source-admission")
     if (
         checked_graph.get("accepted") is not True
         or checked_graph.get("profile_id") != graph_profile.profile_id
@@ -355,12 +389,15 @@ def _replay_source_admission(
             "observation_time": coverage.observation_time,
             "effective_start": coverage.effective_start,
             "effective_end": coverage.effective_end,
-            "complete": coverage.complete,
-            "source_roles": list(coverage.source_roles),
-            "evidence_mode": coverage.evidence_mode.value,
-            "graph_input_digest": graph_input_digest,
-        },
-    )
+                "complete": coverage.complete,
+                "source_roles": list(coverage.source_roles),
+                "evidence_mode": coverage.evidence_mode.value,
+                "graph_input_digest": graph_input_digest,
+                "source_contract_digest": coverage.source_contract_digest,
+                "envelope_id": coverage.envelope_id,
+                "page_digests": list(coverage.page_digests),
+            },
+        )
     body = {
         "schema": "mirror-source-admission-receipt-v2",
         "profile_id": coverage.profile_id,
@@ -376,6 +413,16 @@ def _replay_source_admission(
         "graph_report_id": checked_graph.get("report_id"),
         "production_source_authentication": False,
     }
+    body.update({
+        "external_artifact_id": external_result["artifact_id"],
+        "external_artifact_digest": _admission_raw_digest("external-artifact", external_evidence_raw),
+        "capture_id": external_result["capture_id"],
+        "capture_context_digest": _admission_digest(
+            "capture-context",
+            {key: external_result[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")},
+        ),
+        "external_policy_digest": external_result["policy_digest"],
+    })
     expected_receipt = {"receipt_id": _admission_digest("receipt-id", body), **body}
     if source.get("admission_receipt") != expected_receipt:
         raise CoreVerificationError("core:source-admission")
@@ -390,6 +437,15 @@ def _replay_source_admission(
         "profile_id": NC_MEDICAID_PROFILE.source_profile_id,
         "profile_version": NC_MEDICAID_PROFILE.version,
         "profile_digest": NC_MEDICAID_PROFILE.profile_digest,
+        "source_contract_digest": external_result["source_contract_digest"],
+        "external_artifact_id": external_result["artifact_id"],
+        "external_artifact_digest": _admission_raw_digest("external-artifact", external_evidence_raw),
+        "capture_id": external_result["capture_id"],
+        "capture_context_digest": _admission_digest(
+            "capture-context",
+            {key: external_result[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")},
+        ),
+        "page_digests": [digest for _index, digest in external_result["page_bindings"]],
         "observation_time": fhir_result.get("observation_time"),
         "fetched_at": fhir_result.get("fetched_at"),
         "source_status": fhir_result.get("source_status"),
@@ -402,6 +458,7 @@ def _replay_source_admission(
     }
     if any(source.get(key) != expected_value for key, expected_value in expected.items()):
         raise CoreVerificationError("core:source-admission")
+    return checked_graph_object
 
 
 def _verify_source_projection(value: Mapping[str, object], config: Mapping[str, object]) -> None:
@@ -412,6 +469,8 @@ def _verify_source_projection(value: Mapping[str, object], config: Mapping[str, 
         "snapshot_root", "content_root", "profile_id", "profile_version", "profile_digest",
         "runtime_profile_digest", "observation_time", "fetched_at", "source_status", "freshness",
         "page_complete", "page_count", "resource_count", "graph_artifact_id", "graph_artifact_digest",
+        "source_contract_digest", "external_artifact_id", "external_artifact_digest", "capture_id",
+        "capture_context_digest", "page_digests",
         "admission_receipt", "admission_receipt_digest", "admission_report_id", "observation_status", "chronology", "flags",
     }
     if set(value) != expected or value.get("schema") != "mirror-core-source-observation-v3" or value.get("schema_version") != 3 or value.get("kind") != "SOURCE_OBSERVATION" or value.get("flags") != FIXED_FLAGS:
@@ -420,6 +479,7 @@ def _verify_source_projection(value: Mapping[str, object], config: Mapping[str, 
         "artifact_id", "ingress_config_digest", "ingress_prefix_root", "ingress_after_root", "ingress_head_root",
         "envelope_id", "envelope_digest", "snapshot_id", "snapshot_root", "content_root", "profile_digest",
         "runtime_profile_digest", "graph_artifact_digest", "admission_receipt_digest", "admission_report_id",
+        "source_contract_digest", "external_artifact_id", "external_artifact_digest", "capture_id", "capture_context_digest",
     ):
         if key == "ingress_config_digest" and value[key] is None:
             raise CoreVerificationError("core:source-binding")
@@ -436,11 +496,21 @@ def _verify_source_projection(value: Mapping[str, object], config: Mapping[str, 
     if any(type(value[key]) is not int or value[key] < 0 for key in ("profile_version", "observation_time", "page_count", "resource_count")):
         raise CoreVerificationError("core:source-count")
     fetched_at = value["fetched_at"]
-    if type(fetched_at) is not str or not fetched_at or len(fetched_at.encode("ascii", "strict")) > 64:
+    if type(fetched_at) is not int or fetched_at < value["observation_time"]:
         raise CoreVerificationError("core:source-time")
-    if type(value["page_complete"]) is not bool or value["source_status"] not in {"COMPLETE", "PARTIAL", "FAILED", "STALE"} or value["freshness"] not in {"FRESH", "UNKNOWN", "STALE"} or value["observation_status"] not in {"OBSERVED_NEW", "OBSERVED_CONTINUED", "OBSERVED_CHANGED", "INCOMPLETE"} or value["chronology"] not in {"INITIAL", "ADVANCING"}:
+    if (
+        type(value["page_complete"]) is not bool
+        or value["source_status"] != "COMPLETE"
+        or value["freshness"] != "FRESH"
+        or value["page_complete"] is not True
+        or value["observation_status"] not in {"OBSERVED_NEW", "OBSERVED_CONTINUED", "OBSERVED_CHANGED"}
+        or value["chronology"] not in {"INITIAL", "ADVANCING"}
+        or type(value["page_digests"]) is not list
+        or not 1 <= len(value["page_digests"]) <= 32
+        or any(type(item) is not str or len(item) != 128 or any(char not in "0123456789abcdef" for char in item) for item in value["page_digests"])
+    ):
         raise CoreVerificationError("core:source-binding")
-    if value["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id or value["profile_version"] != NC_MEDICAID_PROFILE.version or value["profile_digest"] != NC_MEDICAID_PROFILE.profile_digest or value["ingress_head_root"] != value["ingress_after_root"]:
+    if value["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id or value["profile_version"] != NC_MEDICAID_PROFILE.version or value["profile_digest"] != NC_MEDICAID_PROFILE.profile_digest or value["source_contract_digest"] != config["runtime_profile_digest"] or value["ingress_head_root"] != value["ingress_after_root"]:
         raise CoreVerificationError("core:source-binding")
     if not isinstance(value["admission_receipt"], dict) or len(_canonical(value["admission_receipt"])) > MAX_ADMISSION_RECEIPT_BYTES:
         raise CoreVerificationError("core:admission-receipt")
@@ -561,7 +631,7 @@ def _verify_artifact_value(row: Mapping[str, object], config: Mapping[str, objec
         if value["responsibility"] not in {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"} or value["remediation"] not in {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"} or value["retest"] not in {"UNREQUESTED", "REQUESTED", "EXECUTED"} or value["parity"] not in {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"} or value["reason"] not in {"SOURCE_CHANGED", "SOURCE_INCOMPLETE", "SOURCE_CONFLICTED", "OBSERVATION_ONLY"}:
             raise CoreVerificationError("core:case")
     expected_profile = {
-        "GRAPH": config["runtime_profile_digest"],
+        "GRAPH": row["profile_digest"],
         "SOURCE_OBSERVATION": config["runtime_profile_digest"],
         "RECONCILIATION": config["runtime_profile_digest"],
         "CASE": config["runtime_profile_digest"],
@@ -760,17 +830,20 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                 if material["kind"] == "GRAPH":
                     graph_digest = _raw_digest("graph-artifact", raw_artifact)
                     try:
-                        graph_checked = graph.verify_artifact_v2(raw_artifact, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
+                        graph_value = graph._parse(raw_artifact)
+                        profile_value = graph_value.get("profile")
+                        if not isinstance(profile_value, dict) or profile_value.get("profile_id") != NC_MEDICAID_PROFILE.source_profile_id or profile_value.get("version") != 3 or profile_value.get("profile_digest") != row_artifact["profile_digest"]:
+                            raise CoreVerificationError("core:graph")
+                    except CoreVerificationError:
+                        raise
                     except Exception:
                         raise CoreVerificationError("core:graph") from None
-                    graph_summary = graph_checked.summary
-                    graph_report_id = graph_summary.get("report_id")
-                    if type(graph_report_id) is not str or graph_summary.get("accepted") is not True or graph_summary.get("profile_digest") != row_artifact["profile_digest"]:
+                    graph_report_id = graph_value.get("report", {}).get("report_id") if isinstance(graph_value.get("report"), dict) else None
+                    if type(graph_report_id) is not str or len(graph_report_id) != 128 or any(char not in "0123456789abcdef" for char in graph_report_id):
                         raise CoreVerificationError("core:graph")
                     graph_report_ids[artifact_id] = graph_report_id
                     graph_digests[artifact_id] = graph_digest
                     admission_graph_digests[artifact_id] = _admission_raw_digest("graph-artifact", raw_artifact)
-                    graph_checks[artifact_id] = graph_checked
                     expected_operation = _digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                     expected_request = _digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                 elif material["kind"] == "SOURCE_OBSERVATION":
@@ -1022,30 +1095,70 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                 item = selected.get(ingress_id) if isinstance(selected, dict) else None
                 if source_row is None or not isinstance(item, dict):
                     raise CoreVerificationError("core:ingress-binding")
+                if (
+                    item.get("terminal_state") != "QUARANTINED"
+                    or item.get("terminal_event_kind") not in {"ADMIT", "QUARANTINE", "CONFIRM_QUARANTINE"}
+                    or item.get("source_status") != "COMPLETE"
+                    or item.get("page_complete") != 1
+                    or item.get("freshness") != "FRESH"
+                    or item.get("failure_code") is not None
+                ):
+                    raise CoreVerificationError("core:source-lifecycle")
                 source_value = _parse(source_row["raw"], "core:artifact")
+                envelope_bytes = item.get("envelope_raw")
+                evidence_bytes = item.get("external_evidence_raw")
+                intake_frame = item.get("intake_frame")
+                if (
+                    type(intake_frame) is not bytes
+                    or len(intake_frame) > MAX_COMPLETE_FRAME_BYTES
+                    or type(envelope_bytes) is not bytes
+                    or type(evidence_bytes) is not bytes
+                ):
+                    raise CoreVerificationError("core:ingress-binding")
                 if (
                     source_value["ingress_database_id"] != ingress_result.get("database_id")
                     or source_value["ingress_chain_id"] != ingress_result.get("chain_id")
                     or source_value["ingress_config_digest"] != ingress_result.get("config_digest")
                 ):
                     raise CoreVerificationError("core:ingress-binding")
-                for core_key, ingress_key in (("ingress_artifact_id", "artifact_id"), ("envelope_id", "envelope_id"), ("envelope_digest", "envelope_digest"), ("snapshot_id", "snapshot_id"), ("snapshot_root", "snapshot_root"), ("content_root", "content_root"), ("profile_id", "profile_id"), ("profile_version", "profile_version"), ("profile_digest", "profile_digest"), ("observation_time", "observation_time"), ("fetched_at", "fetched_at"), ("source_status", "source_status"), ("freshness", "freshness"), ("page_complete", "page_complete"), ("page_count", "page_count"), ("resource_count", "resource_count"), ("ingress_event_sequence", "event_sequence"), ("ingress_after_root", "event_after_root"), ("ingress_prefix_root", "event_prefix_root")):
-                    if source_value[core_key] != item.get(ingress_key):
+                for core_key, ingress_key in (("ingress_artifact_id", "artifact_id"), ("envelope_id", "envelope_id"), ("envelope_digest", "envelope_digest"), ("snapshot_id", "snapshot_id"), ("snapshot_root", "snapshot_root"), ("content_root", "content_root"), ("profile_id", "profile_id"), ("profile_version", "profile_version"), ("profile_digest", "profile_digest"), ("observation_time", "observation_time"), ("fetched_at", "fetched_at"), ("source_status", "source_status"), ("freshness", "freshness"), ("page_complete", "page_complete"), ("page_count", "page_count"), ("resource_count", "resource_count"), ("ingress_event_sequence", "event_sequence"), ("ingress_after_root", "event_after_root"), ("ingress_prefix_root", "event_prefix_root"), ("source_contract_digest", "source_contract_digest"), ("external_artifact_id", "external_artifact_id"), ("external_artifact_digest", "external_artifact_digest"), ("capture_id", "capture_id"), ("capture_context_digest", "capture_context_digest"), ("page_digests", "page_digests")):
+                    expected_ingress_value = item.get(ingress_key)
+                    if core_key == "external_artifact_digest":
+                        expected_ingress_value = _admission_raw_digest("external-artifact", evidence_bytes)
+                    elif core_key == "capture_context_digest":
+                        context_value = item.get("capture_context")
+                        if not isinstance(context_value, Mapping):
+                            raise CoreVerificationError("core:ingress-binding")
+                        expected_ingress_value = _admission_digest(
+                            "capture-context",
+                            {key: context_value[key] for key in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest", "observed_at", "fetched_at")},
+                        )
+                    if core_key == "page_digests":
+                        expected_ingress_value = list(item.get("page_digests", ()))
+                    if source_value[core_key] != expected_ingress_value:
                         raise CoreVerificationError("core:ingress-binding")
                 receipt = source_value["admission_receipt"]
-                if not isinstance(item.get("raw"), bytes) or receipt["adapter_digest"] != _admission_raw_digest("adapter", item["raw"]):
+                if type(envelope_bytes) is not bytes or type(evidence_bytes) is not bytes or receipt["adapter_digest"] != _admission_raw_digest("adapter", envelope_bytes):
                     raise CoreVerificationError("core:ingress-binding")
                 if source_value["ingress_head_root"] != item.get("event_after_root"):
                     raise CoreVerificationError("core:ingress-binding")
                 graph_row = actual_artifacts.get(str(source_value["graph_artifact_id"]))
                 if graph_row is None or type(graph_row["raw"]) is not bytes:
                     raise CoreVerificationError("core:source-graph")
-                _replay_source_admission(
-                    item["raw"],
+                checked_source_graph = _replay_source_admission(
+                    envelope_bytes,
                     graph_row["raw"],
                     source_value,
                     graph_checks.get(str(source_value["graph_artifact_id"])),
+                    external_evidence_raw=evidence_bytes,
+                    external_policy=ingress_result.get("external_policy"),
                 )
+                checked_summary = checked_source_graph.summary
+                checked_graph_id = str(source_value["graph_artifact_id"])
+                if checked_summary.get("report_id") != source_value["admission_report_id"] or checked_summary.get("profile_digest") != graph_row["profile_digest"]:
+                    raise CoreVerificationError("core:source-graph")
+                graph_checks[checked_graph_id] = checked_source_graph
+                graph_report_ids[checked_graph_id] = str(checked_summary["report_id"])
             ingress_bound = True
         return {
             "structural_valid": True, "ingress_bound": ingress_bound,
