@@ -29,6 +29,15 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_tracked_ops_is_the_exact_commit_bound_authority() -> None:
+    from experiments.bl_pq512_crypto_foundation.ops_authority import (
+        OPS_AUTHORITY_STATUS,
+        verify_ops_authority,
+    )
+
+    assert verify_ops_authority() == OPS_AUTHORITY_STATUS
+
+
 def test_ops_authority_text_preserves_the_current_payment_and_custody_meaning() -> None:
     deployment = _read(ROOT / "ops" / "DEPLOYMENT_RUNBOOK.md")
     checklist = _read(ROOT / "ops" / "PRODUCTION_CONFIG_CHECKLIST.md")
