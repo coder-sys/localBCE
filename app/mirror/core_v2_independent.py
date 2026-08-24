@@ -897,6 +897,16 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                         if prior_id not in expected_artifacts or expected_artifacts[prior_id]["kind"] != "SOURCE_OBSERVATION":
                             raise CoreVerificationError("core:reconciliation-prior")
                         prior_source = _parse(expected_artifacts[prior_id]["raw"], "core:artifact")
+                    if predecessor_id is None:
+                        if prior_id is not None:
+                            raise CoreVerificationError("core:reconciliation-chain")
+                    else:
+                        predecessor_row = expected_artifacts.get(str(predecessor_id))
+                        if predecessor_row is None or predecessor_row["kind"] != "RECONCILIATION":
+                            raise CoreVerificationError("core:reconciliation-chain")
+                        predecessor_value = _parse(predecessor_row["raw"], "core:artifact")
+                        if predecessor_value["current_source_artifact_id"] != prior_id:
+                            raise CoreVerificationError("core:reconciliation-chain")
                     expected_reconciliation = _expected_reconciliation(
                         current_source,
                         prior_source,

@@ -902,6 +902,24 @@ class MirrorOperationalOwnerV1:
             raise OperationalOwnerError("mirror:operational-indeterminate")
         return tuple(value for value in quarantined if value not in represented_set)
 
+    def _verified_recovery_point_count(self) -> int:
+        """Read the recovery count from one independently verified snapshot."""
+
+        self._assert_owner_identity()
+        try:
+            result = recovery_independent.verify_database(
+                self.recovery_path,
+                expected_database_id=self.recovery_config.database_id,
+                expected_config_digest=self.recovery_config.digest,
+            )
+        except Exception:
+            raise OperationalOwnerError("mirror:operational-indeterminate") from None
+        self._assert_owner_identity()
+        count = result.get("point_count")
+        if type(count) is not int or count < 0 or count > recovery_independent.MAX_RECOVERY_POINTS:
+            raise OperationalOwnerError("mirror:operational-indeterminate")
+        return count
+
     def _process_slot(self, slot: ingress.EligibleSlotV1, counts: dict[str, int], admitted: list[str]) -> None:
         self._assert_owner_identity()
         assert self.ingress is not None
@@ -1044,14 +1062,19 @@ class MirrorOperationalOwnerV1:
             self._assert_owner_identity()
             try:
                 self._assert_port_identity()
+                before_points = self._verified_recovery_point_count()
                 receipt = self.recovery.create_point(self.ingress_path, self.core_path, generation=recovery_generation)
             except Exception:
                 raise OperationalOwnerError("mirror:operational-indeterminate") from None
             self._assert_owner_identity()
+            after_points = self._verified_recovery_point_count()
+            point_delta = after_points - before_points
+            if point_delta not in (0, 1):
+                raise OperationalOwnerError("mirror:operational-indeterminate")
             if type(receipt) is not recovery.RecoveryReceipt or type(receipt.state) is not str or receipt.state not in {"VERIFIED", "PUBLISHED"}:
                 raise OperationalOwnerError("mirror:operational-indeterminate")
-            recovery_created = True
-            counts["recovery_created"] = 1
+            recovery_created = point_delta == 1
+            counts["recovery_created"] = point_delta
         self._assert_owner_identity()
         try:
             ingress_result = ingress_independent.verify_database(

@@ -255,6 +255,20 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
                 with self.assertRaisesRegex(SourceAdmissionError, expected):
                     _service(MutatingVerifier()).admit(_adapter())
 
+    def test_supplied_graph_profile_must_equal_the_configured_profile(self) -> None:
+        configured = _profile()
+
+        class RebindingVerifier(SyntheticTestSourceVerifier):
+            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
+                result = super().verify(adapter_bytes)
+                rebound = replace(configured, profile_id="SYNTHETIC_PROFILE_B", version=2)
+                return replace(result, graph_profile=rebound)
+
+        with self.assertRaisesRegex(SourceAdmissionError, "^result:profile-mismatch$") as caught:
+            SourceAdmissionService(configured, RebindingVerifier()).admit(_adapter())
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_graph_output_profile_and_coverage_rebinding_fail_closed(self) -> None:
         class StaleGraphVerifier(SyntheticTestSourceVerifier):
             def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:

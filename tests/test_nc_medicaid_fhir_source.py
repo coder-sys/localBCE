@@ -196,7 +196,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         raw = fhir.build_fixture_envelope(transport, context=context)
         result = independent.verify_bytes(raw)
         admission = SourceAdmissionService(
-            profile.NC_MEDICAID_GRAPH_PROFILE,
+            profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context),
             independent.NcMedicaidFhirVerifier(),
         ).admit(raw)
         self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, result["source_contract_digest"])

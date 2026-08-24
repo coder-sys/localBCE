@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import re
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from app.mirror.error_boundary import raise_redacted
 
@@ -221,11 +221,11 @@ class VerifiedExternalCaptureV2:
     complete: bool
     failure_code: str
     zero_phi: bool
+    subject_id: str
+    credential_id: str
+    enrollment_id: str
+    subject_locator_digest: str
     transport_evidence_classification: str = TRANSPORT_EVIDENCE_CLASSIFICATION
-    subject_id: str | None = None
-    credential_id: str | None = None
-    enrollment_id: str | None = None
-    subject_locator_digest: str | None = None
     page_bindings: tuple[tuple[int, str], ...] | None = None
 
     def __post_init__(self) -> None:
@@ -260,8 +260,7 @@ class VerifiedExternalCaptureV2:
         if self.transport_evidence_classification != TRANSPORT_EVIDENCE_CLASSIFICATION:
             raise ExternalSourceAdapterError("external:evidence-classification")
         for label, value in (("subject-id", self.subject_id), ("credential-id", self.credential_id), ("enrollment-id", self.enrollment_id), ("subject-locator", self.subject_locator_digest)):
-            if value is not None:
-                _hex(value, label)
+            _hex(value, label)
 
 
 @dataclass(frozen=True)
@@ -401,58 +400,11 @@ def build_artifact(policy: ExternalSourcePolicyV2, verifier: ExternalCaptureVeri
     return ExternalSourceAdapterService(policy, verifier).admit(capture_raw)
 
 
-def build_artifact_from_capture(policy: ExternalSourcePolicyV2, capture_raw: bytes, result: Mapping[str, object]) -> ExternalSourceArtifactV2:
-    """Bind one independently verified envelope result into the V2 artifact."""
-    payload = _raw_digest(capture_raw)
-    page_values = result.get("page_digests")
-    pages = tuple(str(value) for value in page_values) if isinstance(page_values, (tuple, list)) else ()
-    context = result.get("capture_context") if isinstance(result.get("capture_context"), Mapping) else {}
-    server_identity = result.get("server_identity_digest")
-    if not isinstance(server_identity, str):
-        server_identity = _expected_server_identity(policy)
-    source_status = result.get("source_status")
-    freshness = result.get("freshness")
-    raw_failure = result.get("failure_code")
-    if source_status == "PARTIAL":
-        failure_code = "INCOMPLETE"
-    elif source_status in {"FAILED", "STALE"}:
-        failure_code = "STALE" if freshness == "STALE" else "SOURCE_FAILURE"
-    elif raw_failure is None:
-        failure_code = "NONE"
-    else:
-        failure_code = "SOURCE_FAILURE"
-    verified = VerifiedExternalCaptureV2(
-        policy_digest=policy.digest, verifier_id=policy.verifier_id, verifier_epoch=policy.verifier_epoch,
-        capture_id=_capture_id_for_payload(payload), payload_sha3_512=payload,
-        observed_at=int(result["observation_time"]), fetched_at=int(result["fetched_at"]),
-        page_digests=pages, page_count=len(pages), server_identity_digest=server_identity,
-        transport_receipt_digest="0" * 128,
-        transport_authenticated=bool(result.get("transport_authenticated", False)),
-        complete=bool(result.get("page_complete", False) and result.get("source_status") == "COMPLETE"),
-        failure_code=failure_code, zero_phi=True,
-        transport_evidence_classification=str(result.get("transport_evidence_classification", TRANSPORT_EVIDENCE_CLASSIFICATION)),
-        subject_id=context.get("subject_id") if isinstance(context.get("subject_id"), str) else None,
-        credential_id=context.get("credential_id") if isinstance(context.get("credential_id"), str) else None,
-        enrollment_id=context.get("enrollment_id") if isinstance(context.get("enrollment_id"), str) else None,
-        subject_locator_digest=context.get("subject_locator_digest") if isinstance(context.get("subject_locator_digest"), str) else None,
-    )
-    object.__setattr__(verified, "transport_receipt_digest", _expected_transport_receipt(policy, verified, server_identity))
-
-    class _ResultVerifier:
-        verifier_id = policy.verifier_id
-        verifier_epoch = policy.verifier_epoch
-
-        def verify(self, _raw: bytes) -> VerifiedExternalCaptureV2:
-            return verified
-
-    return ExternalSourceAdapterService(policy, _ResultVerifier()).admit(capture_raw)
-
-
 __all__ = [
     "ARTIFACT_KIND", "SCHEMA", "SCHEMA_VERSION", "EVIDENCE_MODE", "CANONICAL_ORDER", "COMPLETENESS_RULE",
     "MAX_ARTIFACT_BYTES", "MAX_CAPTURE_BYTES", "MAX_PAGE_COUNT", "FAILURE_CODES", "STATUSES", "OWNERS",
     "TRANSPORT_EVIDENCE_CLASSIFICATION",
     "NONCLAIMS", "FIXED_FLAGS", "ExternalSourceAdapterError", "ExternalCaptureVerifier",
     "ExternalSourcePolicyV2", "VerifiedExternalCaptureV2", "ExternalSourceArtifactV2",
-    "ExternalSourceAdapterService", "build_artifact", "build_artifact_from_capture",
+    "ExternalSourceAdapterService", "build_artifact",
 ]

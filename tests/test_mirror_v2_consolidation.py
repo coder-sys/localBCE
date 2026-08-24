@@ -36,10 +36,64 @@ def _ingress_token(seed: str) -> str:
     return (seed + "-ingress-token").ljust(32, "x")
 
 
+class _DeterministicExternalCaptureVerifier:
+    """Test-only typed verifier entering through the normal adapter service."""
+
+    def __init__(self, policy: external_adapter.ExternalSourcePolicyV2) -> None:
+        self.verifier_id = policy.verifier_id
+        self.verifier_epoch = policy.verifier_epoch
+        self.policy = policy
+
+    def verify(self, capture_raw: bytes) -> external_adapter.VerifiedExternalCaptureV2:
+        result = fhir_independent.verify_bytes(capture_raw)
+        payload = hashlib.sha3_512(capture_raw).hexdigest()
+        context = result["capture_context"]
+        pages = tuple(result["page_digests"])
+        server_identity = external_adapter._expected_server_identity(self.policy)
+        source_status = result.get("source_status")
+        freshness = result.get("freshness")
+        raw_failure = result.get("failure_code")
+        if source_status == "PARTIAL":
+            failure_code = "INCOMPLETE"
+        elif source_status in {"FAILED", "STALE"}:
+            failure_code = "STALE" if freshness == "STALE" else "SOURCE_FAILURE"
+        elif raw_failure is None:
+            failure_code = "NONE"
+        else:
+            failure_code = "SOURCE_FAILURE"
+        verified = external_adapter.VerifiedExternalCaptureV2(
+            policy_digest=self.policy.digest,
+            verifier_id=self.verifier_id,
+            verifier_epoch=self.verifier_epoch,
+            capture_id=external_adapter._capture_id_for_payload(payload),
+            payload_sha3_512=payload,
+            observed_at=int(result["observation_time"]),
+            fetched_at=int(result["fetched_at"]),
+            page_digests=pages,
+            page_count=len(pages),
+            server_identity_digest=server_identity,
+            transport_receipt_digest="0" * 128,
+            transport_authenticated=False,
+            complete=bool(result.get("page_complete") is True and source_status == "COMPLETE" and raw_failure is None),
+            failure_code=failure_code,
+            zero_phi=True,
+            subject_id=str(context["subject_id"]),
+            credential_id=str(context["credential_id"]),
+            enrollment_id=str(context["enrollment_id"]),
+            subject_locator_digest=str(context["subject_locator_digest"]),
+        )
+        object.__setattr__(
+            verified,
+            "transport_receipt_digest",
+            external_adapter._expected_transport_receipt(self.policy, verified, server_identity),
+        )
+        return verified
+
+
 def _external_evidence(config: ingress.IngressConfigV2, envelope: bytes) -> bytes:
-    result = fhir_independent.verify_bytes(envelope)
-    return external_adapter.build_artifact_from_capture(
-        config.external_policy(), envelope, result
+    policy = config.external_policy()
+    return external_adapter.build_artifact(
+        policy, _DeterministicExternalCaptureVerifier(policy), envelope
     ).raw
 
 
@@ -1506,7 +1560,7 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
-    def _ordered_second_case(self) -> str:
+    def _ordered_second_case(self, *, finish_case: bool = True) -> str:
         """Build one later, bounded Core observation for lineage-head tests.
 
         The NC fixture profile fixes its observation time, so the public source
@@ -1580,7 +1634,7 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
         self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 10
-        return self.core.admit_case(reconciliation_id)
+        return self.core.admit_case(reconciliation_id) if finish_case else reconciliation_id
 
     def test_exact_three_owner_tables_and_full_chain(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
@@ -1658,6 +1712,119 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotIn(self.envelope, self.core.logical_export() if hasattr(self.core, "logical_export") else b"")
         self.assertNotIn(self.envelope, json.dumps(self.ingress.support(), sort_keys=True).encode("ascii"))
         self.assertNotIn(self.envelope, json.dumps(self.core.support(), sort_keys=True).encode("ascii"))
+
+    def test_default_ingress_projection_is_an_explicit_allowlist(self) -> None:
+        artifact_id = self.ingress_receipt.artifact_id or ""
+        internal = ingress_independent.read_artifact_snapshot(self.ingress_path, artifact_id)
+        public = self.ingress.verify()
+        current = public["current_artifact"]
+        self.assertEqual(
+            {
+                "profile_id", "profile_version", "source_status", "failure_code",
+                "freshness", "page_complete", "page_count", "resource_count",
+                "event_sequence",
+            },
+            set(current),
+        )
+        logical = self.ingress.logical_export()
+        self.assertIn(b"mirror-ingress-logical-export-v3", logical)
+        context = internal["capture_context"]
+        identity_canaries = tuple(str(context[key]) for key in (
+            "subject_id", "credential_id", "enrollment_id", "subject_locator_digest",
+        ))
+        raw_canaries = (
+            bytes(internal["raw"]), bytes(internal["envelope_raw"]),
+            bytes(internal["external_evidence_raw"]),
+        )
+        public_surfaces = (
+            repr(public).encode("ascii"), logical,
+            json.dumps(self.ingress.support(), sort_keys=True).encode("ascii"),
+            self.ingress_receipt.raw,
+        )
+        for canary in identity_canaries:
+            with self.subTest(identity=canary):
+                self.assertTrue(all(canary.encode("ascii") not in surface for surface in public_surfaces))
+        for canary in raw_canaries:
+            with self.subTest(raw_length=len(canary)):
+                self.assertTrue(all(canary not in surface for surface in public_surfaces))
+        for field in (
+            "capture_context", "capture_id", "envelope_id", "envelope_digest",
+            "snapshot_id", "snapshot_root", "content_root", "external_artifact_id",
+            "raw", "intake_frame", "envelope_raw", "external_evidence_raw",
+        ):
+            self.assertNotIn(field, current)
+
+    def test_core_reconciliation_predecessor_is_not_a_source_artifact(self) -> None:
+        self._ordered_second_case(finish_case=False)
+        path = self.root / "rebound-reconciliation-predecessor.db"
+        shutil.copy2(self.core_path, path)
+        connection = sqlite3.connect(path)
+        try:
+            rows = connection.execute(
+                "SELECT artifact_id,source_artifact_id,raw,profile_digest,predecessor_id FROM core_artifacts WHERE kind='RECONCILIATION' ORDER BY created_event_sequence"
+            ).fetchall()
+            self.assertEqual(2, len(rows))
+            second_id = rows[1][0]
+            wrong_predecessor = rows[0][1]
+            raw = bytes(rows[1][2])
+            new_id = core_independent._digest(
+                "artifact-row-id",
+                {
+                    "kind": "RECONCILIATION",
+                    "raw": core_independent._raw_digest("artifact-bytes", raw),
+                    "profile_digest": rows[1][3],
+                    "source_artifact_id": rows[1][1],
+                    "predecessor_id": wrong_predecessor,
+                },
+            )
+            connection.execute(
+                "UPDATE core_artifacts SET artifact_id=?,predecessor_id=? WHERE artifact_id=?",
+                (new_id, wrong_predecessor, second_id),
+            )
+            event_row = None
+            for candidate in connection.execute(
+                "SELECT sequence,event_raw FROM core_events WHERE event_kind='ARTIFACT' ORDER BY sequence"
+            ).fetchall():
+                candidate_value = json.loads(bytes(candidate[1]).decode("ascii"))
+                if candidate_value["material"]["artifact_id"] == second_id:
+                    event_row = candidate
+                    break
+            self.assertIsNotNone(event_row)
+            event = json.loads(bytes(event_row[1]).decode("ascii"))
+            material = dict(event["material"])
+            material["artifact_id"] = new_id
+            material["predecessor_id"] = wrong_predecessor
+            event["material"] = material
+            event["material_digest"] = core_independent._digest("material", material)
+            event["payload_digest"] = new_id
+            event["event_id"] = core_independent._digest(
+                "event-id",
+                {key: event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            )
+            event["after_root"] = core_independent._event_root(event)
+            event["stream_after_root"] = core_independent._stream_root(event)
+            event_raw = core_independent._canonical(event)
+            connection.execute(
+                "UPDATE core_events SET event_id=?,event_raw=?,receipt_digest=? WHERE sequence=?",
+                (
+                    event["event_id"], event_raw,
+                    core_independent._raw_digest("receipt", event_raw), event_row[0],
+                ),
+            )
+            connection.execute(
+                "UPDATE core_heads SET head_ref=?,head_root=? WHERE stream_kind='ARTIFACT' AND stream_id='RECONCILIATION'",
+                (new_id, event["stream_after_root"]),
+            )
+            connection.execute("UPDATE core_meta SET head_root=? WHERE meta_id=1", (event["after_root"],))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:reconciliation-chain"):
+            core_independent.verify_database(
+                path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+            )
 
     def test_core_rejects_held_intake_before_first_mutation(self) -> None:
         from tests.test_nc_medicaid_fhir_source import _rebind

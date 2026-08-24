@@ -12,16 +12,14 @@ from unittest import mock
 
 from app.mirror import core_v2 as core
 from app.mirror import core_v2_independent as core_independent
-from app.mirror import external_source_adapter as external
 from app.mirror import ingress_v2 as ingress
 from app.mirror import ingress_v2_independent as ingress_independent
-from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror import nc_medicaid_fhir as fhir_runtime
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import operational_owner as operational
 from app.mirror import recovery_v2 as recovery
 from app.mirror import recovery_v2_independent as recovery_independent
-from tests.test_mirror_v2_consolidation import _Custody, _Storage, _hex
+from tests.test_mirror_v2_consolidation import _Custody, _Storage, _external_evidence, _hex
 from tests.test_nc_medicaid_fhir_source import _bundle, _envelope, _transport
 
 
@@ -48,9 +46,7 @@ class _Port:
         if self.fail:
             raise RuntimeError("CANARY_ACQUISITION_EXCEPTION")
         envelope = _envelope()
-        evidence = external.build_artifact_from_capture(
-            self.config.external_policy(), envelope, fhir.verify_bytes(envelope)
-        ).raw
+        evidence = _external_evidence(self.config, envelope)
         return operational.AcquisitionPayloadV1(envelope, evidence)
 
 
@@ -68,9 +64,7 @@ class _ScheduledPort(_Port):
         envelope = fhir_runtime.build_fixture_envelope(
             _transport(_bundle(last_updated=profile.FIXTURE_LAST_UPDATED)), context=context
         )
-        evidence = external.build_artifact_from_capture(
-            self.config.external_policy(), envelope, fhir.verify_bytes(envelope)
-        ).raw
+        evidence = _external_evidence(self.config, envelope)
         return operational.AcquisitionPayloadV1(envelope, evidence)
 
 
@@ -267,6 +261,10 @@ class MirrorOperationalOwnerTests(unittest.TestCase):
             self.assertEqual(1, second.counts["core_ingested"])
             self.assertEqual(1, ingest.call_count)
             self.assertEqual(1, create_point.call_count)
+            self.assertEqual(1, owner.recovery.verify()["point_count"])
+            retry = owner.run(recovery_generation=1)
+            self.assertFalse(retry.recovery_created)
+            self.assertEqual(0, retry.counts["recovery_created"])
             self.assertEqual(1, owner.recovery.verify()["point_count"])
         finally:
             owner.close()

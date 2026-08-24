@@ -178,6 +178,20 @@ def _canonical(value: object) -> bytes:
         raise IngressVerificationError("ingress:noncanonical") from None
 
 
+_PUBLIC_ARTIFACT_KEYS = (
+    "profile_id", "profile_version", "source_status", "failure_code",
+    "freshness", "page_complete", "page_count", "resource_count",
+    "event_sequence",
+)
+
+
+def _public_artifact(value: Mapping[str, object]) -> dict[str, object]:
+    try:
+        return {key: value[key] for key in _PUBLIC_ARTIFACT_KEYS}
+    except (KeyError, TypeError):
+        raise IngressVerificationError("ingress:projection") from None
+
+
 def _safe_identifier(value: object, label: str) -> str:
     if type(value) is not str or not value:
         raise IngressVerificationError(label)
@@ -1622,11 +1636,12 @@ def _verify_connection(
                 _hex(selected_id, "ingress:artifact-selector")
                 if selected_id not in artifacts:
                     raise IngressVerificationError("ingress:artifact-missing")
-                selected[selected_id] = dict(artifacts[selected_id])
-                selected[selected_id]["watermark"] = selected[selected_id]["event_sequence"]
-                if not include_raw:
-                    for key in ("raw", "intake_frame", "envelope_raw", "external_evidence_raw", "result"):
-                        selected[selected_id].pop(key, None)
+                selected[selected_id] = (
+                    dict(artifacts[selected_id]) if include_raw
+                    else _public_artifact(artifacts[selected_id])
+                )
+                if include_raw:
+                    selected[selected_id]["watermark"] = selected[selected_id]["event_sequence"]
             result["selected_artifacts"] = selected
         if quarantine_head is not None and quarantine_head["artifact_id"] is not None:
             result["current_artifact_id"] = quarantine_head["artifact_id"]
@@ -1634,11 +1649,10 @@ def _verify_connection(
             if selected_id not in artifacts:
                 raise IngressVerificationError("ingress:artifact-missing")
             current = artifacts[selected_id]
-            result["current_artifact"] = dict(current)
+            result["current_artifact"] = (
+                dict(current) if include_raw else _public_artifact(current)
+            )
             result["selected_artifact_id"] = selected_id
-            if not include_raw:
-                for key in ("raw", "intake_frame", "envelope_raw", "external_evidence_raw", "result"):
-                    result["current_artifact"].pop(key, None)
         else:
             if artifact_id is not None:
                 raise IngressVerificationError("ingress:artifact-missing")
@@ -1798,10 +1812,10 @@ def read_artifact_snapshots(path: str | Path, artifact_ids: tuple[str, ...]) -> 
 def logical_export(result: Mapping[str, object]) -> bytes:
     current = result.get("current_artifact")
     if isinstance(current, Mapping):
-        current = {key: value for key, value in current.items() if key not in {"raw", "result"}}
+        current = _public_artifact(current)
     value = {
-        "schema": "mirror-ingress-logical-export-v2",
-        "schema_version": 2,
+        "schema": "mirror-ingress-logical-export-v3",
+        "schema_version": 3,
         "database_id": result["database_id"],
         "chain_id": result["chain_id"],
         "config_digest": result["config_digest"],

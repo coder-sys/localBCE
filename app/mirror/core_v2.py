@@ -704,7 +704,22 @@ class CoreServiceV2:
                     or not isinstance(external_policy, Mapping)
                 ):
                     raise CoreConflictError("core:source-raw")
-                admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, fhir.NcMedicaidFhirVerifier()).admit(
+                capture_context = item.get("capture_context")
+                if not isinstance(capture_context, Mapping):
+                    raise CoreConflictError("core:source-profile")
+                try:
+                    dynamic_context = profile.DynamicCaptureContext(
+                        str(capture_context["subject_id"]),
+                        str(capture_context["credential_id"]),
+                        str(capture_context["enrollment_id"]),
+                        str(capture_context["subject_locator_digest"]),
+                        int(item["observation_time"]),
+                        int(item["fetched_at"]),
+                    )
+                    configured_profile = profile.NC_MEDICAID_PROFILE.graph_profile_for_context(dynamic_context)
+                except Exception:
+                    raise CoreConflictError("core:source-profile") from None
+                admission = SourceAdmissionService(configured_profile, fhir.NcMedicaidFhirVerifier()).admit(
                     raw_envelope,
                     external_evidence_raw=external_evidence_raw,
                     external_policy=external_policy,
@@ -780,6 +795,8 @@ class CoreServiceV2:
                 rec_body: dict[str, object] = {"schema": "mirror-core-reconciliation-v3", "schema_version": 3, "kind": "RECONCILIATION", "artifact_id": "", "current_source_artifact_id": source_id, "prior_source_artifact_id": predecessor_id, "current_content_root": ing["content_root"], "prior_content_root": prior.get("content_root") if prior else None, "source_status": ing["source_status"], "observation_status": status, "chronology": chronology, "linkage": "UNCHANGED" if prior and prior.get("graph_artifact_digest") == graph_digest else "LINKED", "flags": dict(FIXED_FLAGS)}
                 rec_body["artifact_id"] = _digest("reconciliation-id", {key: rec_body[key] for key in rec_body if key != "artifact_id"})
                 rec_predecessor = self._find_reconciliation(connection, predecessor_id) if predecessor_id else None
+                if predecessor_id is not None and rec_predecessor is None:
+                    raise CoreConflictError("core:reconciliation-chain")
                 rec_id, rec_event = self._admit_artifact(connection, kind="RECONCILIATION", raw=_canonical(rec_body), profile_digest=self.config.runtime_profile_digest, predecessor_id=rec_predecessor, source_artifact_id=source_id, operation_id=_digest("reconciliation-operation", {"source_artifact_id": source_id}), request_digest=_digest("reconciliation-request", {"source_artifact_id": source_id}), state=status, observed_at=now, ingress_watermark=int(ing["event_sequence"]))
                 results[artifact_id] = {"source_artifact_id": source_id, "graph_artifact_id": graph_id, "reconciliation_artifact_id": rec_id, "observation_status": status, "receipt": self._receipt(rec_event)}
             connection.commit()

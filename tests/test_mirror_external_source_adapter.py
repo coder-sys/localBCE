@@ -112,6 +112,12 @@ class ExternalSourceAdapterTests(unittest.TestCase):
         body = {key: item for key, item in value.items() if key != "artifact_id"}
         return _canonical({**body, "artifact_id": independent._digest("artifact-id", body)})
 
+    def test_capture_context_identity_fields_are_required(self) -> None:
+        for field in ("subject_id", "credential_id", "enrollment_id", "subject_locator_digest"):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(adapter.ExternalSourceAdapterError, "^external:"):
+                    self._artifact(**{field: None})
+
     def test_policy_is_immutable_and_artifact_is_deterministic_without_raw_capture(self) -> None:
         first = self.service.admit(self.raw)
         second = self.service.admit(self.raw)
