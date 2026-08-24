@@ -19,9 +19,9 @@ from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror.nc_medicaid_fhir_profile import NC_MEDICAID_PROFILE
 
 
-SCHEMA = "mirror-ingress-v2"
-SCHEMA_VERSION = 2
-DOMAIN = "BL/MIRROR/INGRESS/V2/"
+SCHEMA = "mirror-ingress-v3"
+SCHEMA_VERSION = 3
+DOMAIN = "BL/MIRROR/INGRESS/V3/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_RAW_ENVELOPE_BYTES = 262_144
 GENESIS_ROOT = "0" * 128
@@ -72,6 +72,7 @@ EVENT_KEYS = {
     "attempt",
     "lease_token",
     "lease_until",
+    "observed_at",
     "material_digest",
     "payload_digest",
     "payload_length",
@@ -167,17 +168,6 @@ def content_root(resources: object) -> str:
     return _digest("content-root", normalized)
 
 
-def _request_digest(page_index: int) -> str:
-    return _digest(
-        "request",
-        {
-            "profile_id": NC_MEDICAID_PROFILE.source_profile_id,
-            "page_index": page_index,
-            "method": "GET",
-        },
-    )
-
-
 def _attestation_digest(value: Mapping[str, object]) -> str:
     return _digest("attestation", dict(value))
 
@@ -192,6 +182,7 @@ def _event_root(
     stream_id: str,
     slot_id: str,
     next_state: str,
+    observed_at: int,
     material_digest: str,
 ) -> str:
     return _digest(
@@ -205,6 +196,7 @@ def _event_root(
             "stream_id": stream_id,
             "slot_id": slot_id,
             "next_state": next_state,
+            "observed_at": observed_at,
             "material_digest": material_digest,
         },
     )
@@ -218,6 +210,7 @@ def _stream_root(
     stream_kind: str,
     stream_id: str,
     next_state: str,
+    observed_at: int,
     material_digest: str,
 ) -> str:
     return _digest(
@@ -229,6 +222,7 @@ def _stream_root(
             "stream_kind": stream_kind,
             "stream_id": stream_id,
             "next_state": next_state,
+            "observed_at": observed_at,
             "material_digest": material_digest,
         },
     )
@@ -384,30 +378,48 @@ def _verify_fetch_receipt(
     source_id: str,
     page_index: int,
     transport_attempt: int,
+    lease_attempt: int,
+    observed_at: int,
 ) -> dict[str, object]:
     value = _parse(receipt_raw, "ingress:fetch-receipt")
     expected_keys = {
         "schema", "schema_version", "artifact_id", "source_id", "slot_id",
         "page_index", "lease_attempt", "transport_attempt", "attestation_digest",
-        "request_digest", "response_digest", "status", "authenticated", "redirect",
-        "selected",
+        "request_identity", "response_digest", "status", "retry_after_seconds",
+        "response_url", "redirect", "failure_code", "transport_error",
+        "evidence_class", "selected", "observed_at",
     }
     if set(value) != expected_keys or value["schema"] != SCHEMA or value["schema_version"] != SCHEMA_VERSION:
         raise IngressVerificationError("ingress:fetch-receipt-keys")
+    page_evidence = artifact["result"].get("page_evidence") if isinstance(artifact.get("result"), Mapping) else None
+    if not isinstance(page_evidence, tuple) or page_index >= len(page_evidence):
+        raise IngressVerificationError("ingress:fetch-evidence")
+    page = page_evidence[page_index]
+    attempts = page.get("attempts") if isinstance(page, Mapping) else None
+    if not isinstance(attempts, tuple) or transport_attempt >= len(attempts):
+        raise IngressVerificationError("ingress:fetch-evidence")
+    expected = attempts[transport_attempt]
+    if not isinstance(expected, Mapping):
+        raise IngressVerificationError("ingress:fetch-evidence")
     if (
         value["artifact_id"] != artifact["artifact_id"]
         or value["source_id"] != source_id
         or value["source_id"] != NC_MEDICAID_PROFILE.source_profile_id
         or value["slot_id"] != slot_id
         or value["page_index"] != page_index
+        or value["lease_attempt"] != lease_attempt
         or value["transport_attempt"] != transport_attempt
-        or value["request_digest"] != _request_digest(page_index)
-        or value["response_digest"] != artifact["result"]["page_digests"][page_index]
-        or value["status"] != 200
-        or value["authenticated"] is not True
-        or value["redirect"] is not False
-        or value["selected"] is not True
-        or value["lease_attempt"] != 0
+        or value["request_identity"] != expected["request_identity"]
+        or value["response_digest"] != expected["response_digest"]
+        or value["status"] != expected["status"]
+        or value["retry_after_seconds"] != expected["retry_after_seconds"]
+        or value["response_url"] != expected["response_url"]
+        or value["redirect"] != expected["redirect"]
+        or value["failure_code"] != expected["failure_code"]
+        or value["transport_error"] != expected["transport_error"]
+        or value["evidence_class"] != "SYNTHETIC_FIXTURE_UNAUTHENTICATED"
+        or value["selected"] != expected["selected"]
+        or value["observed_at"] != observed_at
     ):
         raise IngressVerificationError("ingress:fetch-binding")
     material = {
@@ -415,12 +427,17 @@ def _verify_fetch_receipt(
         "page_index": value["page_index"],
         "lease_attempt": value["lease_attempt"],
         "transport_attempt": value["transport_attempt"],
-        "request_digest": value["request_digest"],
+        "request_identity": value["request_identity"],
         "response_digest": value["response_digest"],
         "status": value["status"],
-        "authenticated": True,
-        "redirect": False,
-        "selected": True,
+        "retry_after_seconds": value["retry_after_seconds"],
+        "response_url": value["response_url"],
+        "redirect": value["redirect"],
+        "failure_code": value["failure_code"],
+        "transport_error": value["transport_error"],
+        "evidence_class": value["evidence_class"],
+        "selected": value["selected"],
+        "observed_at": value["observed_at"],
     }
     if value["attestation_digest"] != _attestation_digest(material):
         raise IngressVerificationError("ingress:fetch-digest")
@@ -434,6 +451,9 @@ def _verify_event(
     previous_root: str,
     slot_states: dict[str, str],
     slot_attempts: dict[str, int],
+    slot_schedules: Mapping[str, int],
+    slot_times: dict[str, int],
+    slot_leases: dict[str, tuple[str | None, int | None, int]],
     artifacts: Mapping[str, Mapping[str, object]],
     heads: dict[tuple[str, str], tuple[str | None, str, int]],
     stream_roots: dict[tuple[str, str], str],
@@ -443,6 +463,7 @@ def _verify_event(
         "sequence", "event_id", "event_kind", "database_id", "chain_id",
         "stream_kind", "stream_id", "operation_id", "request_digest", "slot_id", "prior_state",
         "next_state", "attempt", "lease_token", "lease_until",
+        "observed_at",
         "material_digest", "payload_digest", "payload_length",
         "before_root", "after_root", "stream_before_root", "stream_after_root",
         "event_raw", "receipt_digest",
@@ -468,6 +489,8 @@ def _verify_event(
             raise IngressVerificationError("ingress:event-receipt")
     if row["before_root"] != previous_root or row["event_kind"] not in EVENT_KINDS:
         raise IngressVerificationError("ingress:event-order")
+    if type(row["observed_at"]) is not int or row["observed_at"] < 0:
+        raise IngressVerificationError("ingress:event-time")
     if row["event_id"] != _digest("event-id", {key: value[key] for key in EVENT_KEYS if key not in {"event_id", "after_root", "stream_after_root"}}):
         raise IngressVerificationError("ingress:event-id")
     if row["receipt_digest"] != _raw_digest("receipt", raw):
@@ -481,6 +504,7 @@ def _verify_event(
         stream_kind=row["stream_kind"],
         stream_id=row["stream_id"],
         next_state=row["next_state"],
+        observed_at=row["observed_at"],
         material_digest=row["material_digest"],
     )
     if row["stream_after_root"] != expected_stream_after:
@@ -494,6 +518,7 @@ def _verify_event(
         stream_id=row["stream_id"],
         slot_id=row["slot_id"],
         next_state=row["next_state"],
+        observed_at=row["observed_at"],
         material_digest=row["material_digest"],
     )
     if row["after_root"] != expected_after:
@@ -507,14 +532,27 @@ def _verify_event(
         raise IngressVerificationError("ingress:event-state")
     if row["next_state"] not in STATES:
         raise IngressVerificationError("ingress:event-state")
+    scheduled_at = slot_schedules.get(str(row["slot_id"]))
+    if scheduled_at is None or row["observed_at"] < scheduled_at:
+        raise IngressVerificationError("ingress:event-time")
+    if row["observed_at"] < slot_times.get(str(row["slot_id"]), scheduled_at):
+        raise IngressVerificationError("ingress:event-chronology")
+    if row["event_kind"] == "CREATE_SLOT" and row["observed_at"] != scheduled_at:
+        raise IngressVerificationError("ingress:event-time")
+    if row["event_kind"] == "LEASE":
+        if type(row["lease_token"]) is not str or not row["lease_token"] or type(row["lease_until"]) is not int or row["lease_until"] <= row["observed_at"]:
+            raise IngressVerificationError("ingress:lease")
+    if row["event_kind"] in {"REQUEUE", "HOLD"}:
+        if type(row["lease_until"]) is not int or row["observed_at"] < row["lease_until"]:
+            raise IngressVerificationError("ingress:lease-expiry")
     allowed = {
         "CREATE_SLOT": ("NONE", "DUE"),
         "LEASE": ("DUE", "LEASED"),
         "REQUEUE": ("LEASED", "DUE"),
-        "CAPTURE": ("DUE", "CAPTURED"),
-        "FETCH_ATTESTATION": (row["prior_state"], row["prior_state"]),
+        "CAPTURE": ("LEASED", "CAPTURED"),
+        "FETCH_ATTESTATION": ("LEASED", "LEASED"),
         "FAIL": ("CAPTURED", "HELD"),
-        "HOLD": ("CAPTURED", "HELD"),
+        "HOLD": ("LEASED", "HELD"),
         "BEGIN_QUARANTINE": ("CAPTURED", "QUARANTINE_PENDING"),
         "RECOVER_QUARANTINE": ("QUARANTINE_UNCONFIRMED", "QUARANTINE_PENDING"),
         "CONFIRM_QUARANTINE": ("QUARANTINE_PENDING", "QUARANTINED"),
@@ -528,7 +566,7 @@ def _verify_event(
     if row["event_kind"] not in allowed:
         raise IngressVerificationError("ingress:event-transition")
     capture_edge = (row["prior_state"], row["next_state"])
-    if row["event_kind"] == "CAPTURE" and capture_edge not in {("DUE", "CAPTURED"), ("LEASED", "CAPTURED")}:
+    if row["event_kind"] == "CAPTURE" and capture_edge != ("LEASED", "CAPTURED"):
         raise IngressVerificationError("ingress:event-transition")
     if row["event_kind"] != "CAPTURE" and capture_edge != allowed[row["event_kind"]]:
         raise IngressVerificationError("ingress:event-transition")
@@ -539,13 +577,35 @@ def _verify_event(
         raise IngressVerificationError("ingress:quarantine-stream")
     if row["event_kind"] == "CREATE_SLOT":
         slot_attempts[row["slot_id"]] = 0
+        slot_leases[row["slot_id"]] = (None, None, 0)
     elif row["event_kind"] == "LEASE":
         if row["attempt"] != slot_attempts.get(row["slot_id"], 0) + 1:
             raise IngressVerificationError("ingress:attempt")
         slot_attempts[row["slot_id"]] = row["attempt"]
+        if slot_leases.get(row["slot_id"], (None, None, 0))[0] is not None:
+            raise IngressVerificationError("ingress:lease-state")
+        slot_leases[row["slot_id"]] = (str(row["lease_token"]), int(row["lease_until"]), int(row["attempt"]))
     elif row["event_kind"] == "REQUEUE":
         if row["attempt"] != slot_attempts.get(row["slot_id"], 0):
             raise IngressVerificationError("ingress:attempt")
+        active = slot_leases.get(row["slot_id"], (None, None, 0))
+        if active[0] != row["lease_token"] or active[1] != row["lease_until"]:
+            raise IngressVerificationError("ingress:lease")
+        slot_leases[row["slot_id"]] = (None, None, int(row["attempt"]))
+    active_lease = slot_leases.get(row["slot_id"], (None, None, 0))
+    if row["event_kind"] in {
+        "FETCH_ATTESTATION", "CAPTURE", "BEGIN_QUARANTINE", "RECOVER_QUARANTINE",
+        "CONFIRM_QUARANTINE", "ADMIT", "QUARANTINE", "QUARANTINE_UNCONFIRMED",
+        "FAIL",
+    }:
+        if (
+            active_lease[0] is None
+            or row["attempt"] != active_lease[2]
+            or row["lease_token"] != active_lease[0]
+            or row["lease_until"] != active_lease[1]
+            or row["observed_at"] >= int(active_lease[1])
+        ):
+            raise IngressVerificationError("ingress:lease")
     if row["event_kind"] == "FETCH_ATTESTATION":
         if (
             row["stream_kind"] != "FETCH"
@@ -570,8 +630,23 @@ def _verify_event(
             source_id=row["source_id"],
             page_index=row["page_index"],
             transport_attempt=row["transport_attempt"],
+            lease_attempt=row["attempt"],
+            observed_at=row["observed_at"],
         )
-        if row["payload_digest"] != receipt["response_digest"] or row["payload_length"] != len(row["receipt_bytes"]):
+        material = {
+            key: receipt[key]
+            for key in (
+                "artifact_id", "page_index", "lease_attempt", "transport_attempt",
+                "request_identity", "response_digest", "status", "retry_after_seconds",
+                "response_url", "redirect", "failure_code", "transport_error",
+                "evidence_class", "selected", "observed_at",
+            )
+        }
+        if (
+            row["material_digest"] != _digest("material", material)
+            or row["payload_digest"] != _digest("fetch-payload", material)
+            or row["payload_length"] != len(row["receipt_bytes"])
+        ):
             raise IngressVerificationError("ingress:fetch-payload")
         fetches.setdefault(str(receipt["artifact_id"]), []).append(receipt)
     elif row["event_kind"] == "CAPTURE":
@@ -593,6 +668,12 @@ def _verify_event(
         head_artifact_id = prior_head[0]
     heads[head_key] = (head_artifact_id, row["stream_after_root"], row["sequence"])
     stream_roots[head_key] = row["stream_after_root"]
+    if row["event_kind"] in {
+        "FAIL", "HOLD", "ADMIT", "QUARANTINE", "CONFIRM_QUARANTINE",
+        "QUARANTINE_UNCONFIRMED", "WITHDRAW", "ARTIFACT_PURGED",
+    }:
+        slot_leases[row["slot_id"]] = (None, None, int(row["attempt"]))
+    slot_times[str(row["slot_id"])] = int(row["observed_at"])
     slot_states[row["slot_id"]] = row["next_state"]
     return row["after_root"]
 
@@ -615,7 +696,7 @@ def verify_database(
             "ingress_slots": ("slot_id", "scheduled_at", "state", "attempt", "lease_token", "lease_until", "artifact_id", "operation_id"),
             "ingress_artifacts": ("artifact_id", "envelope_id", "envelope_digest", "raw", "profile_id", "profile_version", "profile_digest", "observation_time", "fetched_at", "source_status", "failure_code", "freshness", "page_complete", "snapshot_id", "snapshot_root", "content_root", "page_count", "resource_count", "event_sequence"),
             "ingress_heads": ("stream_kind", "stream_id", "artifact_id", "head_root", "event_sequence"),
-            "ingress_events": ("sequence", "event_id", "event_kind", "database_id", "chain_id", "stream_kind", "stream_id", "operation_id", "request_digest", "slot_id", "prior_state", "next_state", "attempt", "lease_token", "lease_until", "material_digest", "payload_digest", "payload_length", "before_root", "after_root", "stream_before_root", "stream_after_root", "event_raw", "receipt_digest", "source_id", "page_index", "transport_attempt", "receipt_bytes"),
+            "ingress_events": ("sequence", "event_id", "event_kind", "database_id", "chain_id", "stream_kind", "stream_id", "operation_id", "request_digest", "slot_id", "prior_state", "next_state", "attempt", "lease_token", "lease_until", "observed_at", "material_digest", "payload_digest", "payload_length", "before_root", "after_root", "stream_before_root", "stream_after_root", "event_raw", "receipt_digest", "source_id", "page_index", "transport_attempt", "receipt_bytes"),
         }
         for table, columns in expected_columns.items():
             if _columns(connection, table) != columns:
@@ -634,6 +715,9 @@ def verify_database(
             raise IngressVerificationError("ingress:artifact-duplicate")
         slot_states: dict[str, str] = {}
         slot_attempts: dict[str, int] = {}
+        slot_schedules = {str(row["slot_id"]): int(row["scheduled_at"]) for row in slots}
+        slot_times: dict[str, int] = {}
+        slot_leases: dict[str, tuple[str | None, int | None, int]] = {}
         previous = GENESIS_ROOT
         heads: dict[tuple[str, str], tuple[str | None, str, int]] = {}
         stream_roots: dict[tuple[str, str], str] = {}
@@ -648,6 +732,9 @@ def verify_database(
                 previous_root=previous,
                 slot_states=slot_states,
                 slot_attempts=slot_attempts,
+                slot_schedules=slot_schedules,
+                slot_times=slot_times,
+                slot_leases=slot_leases,
                 artifacts=artifacts,
                 heads=heads,
                 stream_roots=stream_roots,
@@ -655,15 +742,28 @@ def verify_database(
             )
         for artifact_id, artifact in artifacts.items():
             selected = fetches.get(artifact_id, [])
-            if len(selected) != artifact["page_count"]:
+            page_evidence = artifact["result"].get("page_evidence") if isinstance(artifact.get("result"), Mapping) else None
+            if not isinstance(page_evidence, tuple):
+                raise IngressVerificationError("ingress:fetch-evidence")
+            expected_keys = [
+                (int(page["page_index"]), int(attempt["transport_attempt"]))
+                for page in page_evidence
+                for attempt in page["attempts"]
+            ]
+            actual_keys = [(int(item["page_index"]), int(item["transport_attempt"])) for item in selected]
+            if actual_keys != expected_keys:
                 raise IngressVerificationError("ingress:attestation-count")
-            if [item["page_index"] for item in selected] != list(range(int(artifact["page_count"]))):
-                raise IngressVerificationError("ingress:attestation-order")
         for row in slots:
             if row["slot_id"] not in slot_states or row["state"] != slot_states[row["slot_id"]]:
                 raise IngressVerificationError("ingress:slot-state")
             if row["attempt"] != slot_attempts.get(row["slot_id"], 0):
                 raise IngressVerificationError("ingress:slot-attempt")
+            lease = slot_leases.get(str(row["slot_id"]), (None, None, 0))
+            if row["state"] == "LEASED":
+                if (row["lease_token"], row["lease_until"]) != (lease[0], lease[1]):
+                    raise IngressVerificationError("ingress:slot-lease")
+            elif row["lease_token"] is not None or row["lease_until"] is not None:
+                raise IngressVerificationError("ingress:slot-lease")
             if row["artifact_id"] is not None and row["artifact_id"] not in artifacts:
                 raise IngressVerificationError("ingress:slot-artifact")
         head_rows = connection.execute("SELECT * FROM ingress_heads ORDER BY stream_kind,stream_id").fetchall()

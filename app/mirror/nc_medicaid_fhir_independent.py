@@ -477,6 +477,58 @@ def _validate_page(value: object, profile: NcMedicaidFhirSourceProfile, sequence
     return resources, next_url, total, last_updated
 
 
+def _page_attempt_evidence(page: Mapping[str, object]) -> dict[str, object]:
+    """Project only verifier-owned, bounded facts for each transport attempt.
+
+    The envelope intentionally retains the final response body digest only.  A
+    retry attempt therefore carries no invented body or URL evidence; its
+    status, retry-after value, and the bounded transport classification are
+    preserved, while the final attempt carries the page-level response facts.
+    """
+
+    statuses = page["attempt_statuses"]
+    retry_after = page["retry_after_seconds"]
+    if not isinstance(statuses, list) or not isinstance(retry_after, list):
+        raise IndependentNcMedicaidFhirError("page:attempts")
+    attempts: list[dict[str, object]] = []
+    final_index = len(statuses) - 1
+    for attempt_index, status in enumerate(statuses):
+        final = attempt_index == final_index
+        failure_code: str | None = None
+        transport_error: str | None = None
+        if status == 0:
+            failure_code = page["failure_code"] if final else "transport"
+            transport_error = page["transport_error"] if final else "transport"
+        elif final:
+            failure_code = page["failure_code"]
+            transport_error = page["transport_error"]
+        elif status == 429:
+            failure_code = "rate-limit"
+        elif status >= 500:
+            failure_code = "server-error"
+        elif status != 200:
+            failure_code = "http-status"
+        attempts.append(
+            {
+                "transport_attempt": attempt_index,
+                "request_identity": page["request_identity"],
+                "status": status,
+                "retry_after_seconds": retry_after[attempt_index],
+                "response_digest": page["body_digest"] if final else None,
+                "response_url": page["response_url"] if final else None,
+                "redirect": bool(final and page["failure_code"] == "redirect"),
+                "failure_code": failure_code,
+                "transport_error": transport_error,
+                "selected": final,
+            }
+        )
+    return {
+        "page_index": page["sequence"],
+        "request_identity": page["request_identity"],
+        "attempts": tuple(attempts),
+    }
+
+
 def _validate_resource_graph(resources: list[dict[str, object]], profile: NcMedicaidFhirSourceProfile, *, complete: bool) -> tuple[int, dict[str, int]]:
     seen: set[tuple[str, str]] = set()
     identifiers: dict[str, str] = {}
@@ -711,6 +763,7 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
         "resources": resources,
         "snapshot_id": value["snapshot_id"],
         "page_digests": tuple(str(page["body_digest"]) for page in pages),
+        "page_evidence": tuple(_page_attempt_evidence(page) for page in pages),
     }
 
 

@@ -180,7 +180,12 @@ class MirrorV2Fixture(unittest.TestCase):
         self.ingress.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-v2")
         from tests.test_nc_medicaid_fhir_source import _envelope
         self.envelope = _envelope()
-        self.ingress_receipt = self.ingress.admit_capture(self.envelope, scheduled_at=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-v2")
+        self.ingress_receipt = self.ingress.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            lease_token="lease-v2",
+            observed_at=profile.FIXTURE_OBSERVATION_TIME,
+        )
         ing_snapshot = self.ingress.verify()
         self.governance_policy = governance.ExternalGovernanceApprovalPolicyV1(
             source_policy_digest=self.ingress_config.policy_digest,
@@ -247,6 +252,220 @@ class MirrorV2Fixture(unittest.TestCase):
             ingress_config_digest=self.ingress_config.digest, core_config_digest=self.core_config.digest,
         )
         self.recovery_service = recovery.RecoveryServiceV2(self.recovery_path, self.recovery_config, self.custody, self.storage)
+
+    def _fresh_ingress(self, name: str) -> tuple[ingress.IngressServiceV2, str]:
+        service = ingress.IngressServiceV2(self.root / name, self.ingress_config)
+        created = service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        return service, slot_id
+
+    def _state_fingerprint(self, service: ingress.IngressServiceV2) -> tuple[object, ...]:
+        value = service.verify()
+        return (value["sequence"], value["head_root"], value["event_count"], value["artifact_count"], value["slot_count"])
+
+    def test_capture_requires_active_lease_and_rejects_due_without_mutation(self) -> None:
+        service, _slot_id = self._fresh_ingress("due-capture.db")
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:slot-state"):
+            service.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                lease_token="not-held",
+                observed_at=profile.FIXTURE_OBSERVATION_TIME,
+            )
+        self.assertEqual(before, self._state_fingerprint(service))
+
+    def test_expired_and_stale_leases_reject_without_mutation(self) -> None:
+        service, slot_id = self._fresh_ingress("expired-capture.db")
+        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-old")
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:lease-expired"):
+            service.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                lease_token="lease-old",
+                observed_at=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds,
+            )
+        self.assertEqual(before, self._state_fingerprint(service))
+
+        service.claim_slot(
+            slot_id,
+            now=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1,
+            lease_token="lease-new",
+        )
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:lease-token"):
+            service.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                lease_token="lease-old",
+                observed_at=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1,
+            )
+        self.assertEqual(before, self._state_fingerprint(service))
+
+    def test_committed_retry_after_lease_expiry_is_byte_identical(self) -> None:
+        before = self.ingress_receipt
+        state_before = self._state_fingerprint(self.ingress)
+        retry = self.ingress.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            lease_token="lease-v2",
+            observed_at=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1,
+        )
+        self.assertEqual(before.raw, retry.raw)
+        self.assertEqual(state_before, self._state_fingerprint(self.ingress))
+
+    def test_fetch_events_preserve_verifier_derived_retry_attempts(self) -> None:
+        from app.mirror import nc_medicaid_fhir as fhir
+        from tests.test_nc_medicaid_fhir_source import _bundle, _transport
+
+        request_url = profile.REQUEST_URL
+        throttled = fhir.fixture_response(_bundle(), request_url, status=429, headers=(("Retry-After", "2"),))
+        success = fhir.fixture_response(_bundle(), request_url)
+        retry_envelope = fhir.build_fixture_envelope(
+            _transport(_bundle(), retries={(request_url, 0): throttled, (request_url, 1): success})
+        )
+        service, slot_id = self._fresh_ingress("retry-capture.db")
+        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-retry")
+        service.admit_capture(
+            retry_envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            lease_token="lease-retry",
+            observed_at=profile.FIXTURE_OBSERVATION_TIME,
+        )
+        connection = sqlite3.connect(service.path)
+        try:
+            rows = connection.execute(
+                "SELECT receipt_bytes FROM ingress_events WHERE event_kind='FETCH_ATTESTATION' ORDER BY page_index,transport_attempt"
+            ).fetchall()
+        finally:
+            connection.close()
+        receipts = [json.loads(bytes(row[0]).decode("ascii")) for row in rows]
+        self.assertEqual([429, 200], [value["status"] for value in receipts])
+        self.assertEqual([2, None], [value["retry_after_seconds"] for value in receipts])
+        self.assertEqual([False, True], [value["selected"] for value in receipts])
+        self.assertEqual({"SYNTHETIC_FIXTURE_UNAUTHENTICATED"}, {value["evidence_class"] for value in receipts})
+        self.assertNotIn("authenticated", receipts[0])
+        self.assertTrue(service.verify()["attestation_count"] == 2)
+
+    def test_failed_attempt_events_remain_failure_evidence(self) -> None:
+        from app.mirror import nc_medicaid_fhir as fhir
+        from tests.test_nc_medicaid_fhir_source import _bundle
+
+        request_url = profile.REQUEST_URL
+        throttled = fhir.fixture_response(_bundle(), request_url, status=429, headers=(("Retry-After", "2"),))
+        failed_envelope = fhir.build_fixture_envelope(fhir.SyntheticFhirTransport({(request_url, 0): throttled}))
+        service, slot_id = self._fresh_ingress("failed-capture.db")
+        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-failed")
+        receipt = service.admit_capture(
+            failed_envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            lease_token="lease-failed",
+            observed_at=profile.FIXTURE_OBSERVATION_TIME,
+        )
+        self.assertEqual("HELD", receipt.next_state)
+        connection = sqlite3.connect(service.path)
+        try:
+            rows = connection.execute(
+                "SELECT receipt_bytes FROM ingress_events WHERE event_kind='FETCH_ATTESTATION' ORDER BY page_index,transport_attempt"
+            ).fetchall()
+        finally:
+            connection.close()
+        receipts = [json.loads(bytes(row[0]).decode("ascii")) for row in rows]
+        self.assertGreaterEqual(len(receipts), 2)
+        self.assertTrue(any(value["status"] != 200 for value in receipts))
+        self.assertTrue(all(value["evidence_class"] == "SYNTHETIC_FIXTURE_UNAUTHENTICATED" for value in receipts))
+        self.assertEqual("FAILED", json.loads(failed_envelope.decode("ascii"))["source_status"])
+        self.assertTrue(service.verify()["attestation_count"] == len(receipts))
+
+    def test_independent_replay_rejects_observed_time_and_fetch_receipt_forgery(self) -> None:
+        tampered_time = self.root / "tampered-time.db"
+        shutil.copy2(self.ingress_path, tampered_time)
+        connection = sqlite3.connect(tampered_time)
+        try:
+            connection.execute("UPDATE ingress_events SET observed_at=observed_at+1 WHERE event_kind='FETCH_ATTESTATION'")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_database(tampered_time, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
+
+        tampered_lease = self.root / "tampered-lease.db"
+        shutil.copy2(self.ingress_path, tampered_lease)
+        connection = sqlite3.connect(tampered_lease)
+        try:
+            connection.execute(
+                "UPDATE ingress_events SET lease_token=? WHERE event_kind='FETCH_ATTESTATION'",
+                ("forged-lease-token",),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_database(tampered_lease, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
+
+        tampered_receipt = self.root / "tampered-receipt.db"
+        shutil.copy2(self.ingress_path, tampered_receipt)
+        connection = sqlite3.connect(tampered_receipt)
+        try:
+            row = connection.execute("SELECT sequence,receipt_bytes FROM ingress_events WHERE event_kind='FETCH_ATTESTATION'").fetchone()
+            forged = json.loads(bytes(row[1]).decode("ascii"))
+            forged["status"] = 201
+            forged["evidence_class"] = "SYNTHETIC_FIXTURE_UNAUTHENTICATED"
+            forged_raw = json.dumps(forged, sort_keys=True, separators=(",", ":")).encode("ascii")
+            connection.execute("UPDATE ingress_events SET receipt_bytes=? WHERE sequence=?", (forged_raw, row[0]))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_database(tampered_receipt, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
+
+    def test_independent_replay_rejects_omitted_and_reordered_attempts(self) -> None:
+        from app.mirror import nc_medicaid_fhir as fhir
+        from tests.test_nc_medicaid_fhir_source import _bundle, _transport
+
+        request_url = profile.REQUEST_URL
+        throttled = fhir.fixture_response(_bundle(), request_url, status=429, headers=(("Retry-After", "2"),))
+        success = fhir.fixture_response(_bundle(), request_url)
+        raw = fhir.build_fixture_envelope(
+            _transport(_bundle(), retries={(request_url, 0): throttled, (request_url, 1): success})
+        )
+        service, slot_id = self._fresh_ingress("attempt-order.db")
+        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-order")
+        service.admit_capture(
+            raw,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            lease_token="lease-order",
+            observed_at=profile.FIXTURE_OBSERVATION_TIME,
+        )
+
+        omitted = self.root / "omitted-attempt.db"
+        shutil.copy2(service.path, omitted)
+        connection = sqlite3.connect(omitted)
+        try:
+            connection.execute(
+                "DELETE FROM ingress_events WHERE event_kind='FETCH_ATTESTATION' AND transport_attempt=1"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_database(omitted, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
+
+        reordered = self.root / "reordered-attempt.db"
+        shutil.copy2(service.path, reordered)
+        connection = sqlite3.connect(reordered)
+        try:
+            rows = connection.execute(
+                "SELECT sequence,receipt_bytes FROM ingress_events WHERE event_kind='FETCH_ATTESTATION' ORDER BY transport_attempt"
+            ).fetchall()
+            connection.execute("UPDATE ingress_events SET receipt_bytes=? WHERE sequence=?", (rows[1][1], rows[0][0]))
+            connection.execute("UPDATE ingress_events SET receipt_bytes=? WHERE sequence=?", (rows[0][1], rows[1][0]))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_database(reordered, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -344,6 +563,7 @@ class MirrorV2Fixture(unittest.TestCase):
             _envelope(location_variant="changed"),
             scheduled_at=scheduled_at,
             lease_token="lease-v2-changed",
+            observed_at=scheduled_at,
         )
         result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
         self.assertEqual(result["observation_status"], "OBSERVED_CHANGED")

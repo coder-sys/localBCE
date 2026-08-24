@@ -219,6 +219,7 @@ def _init(path: Path, config: IngressConfigV2) -> None:
                     attempt INTEGER NOT NULL,
                     lease_token TEXT,
                     lease_until INTEGER,
+                    observed_at INTEGER NOT NULL,
                     material_digest TEXT NOT NULL,
                     payload_digest TEXT NOT NULL,
                     payload_length INTEGER NOT NULL,
@@ -291,6 +292,7 @@ class IngressServiceV2:
         attempt: int,
         lease_token: str | None,
         lease_until: int | None,
+        observed_at: int,
         material: Mapping[str, object],
         payload_digest: str,
         payload_length: int,
@@ -333,6 +335,7 @@ class IngressServiceV2:
             "attempt": attempt,
             "lease_token": lease_token,
             "lease_until": lease_until,
+            "observed_at": observed_at,
             "material_digest": _digest("material", material),
             "payload_digest": payload_digest,
             "payload_length": payload_length,
@@ -355,6 +358,7 @@ class IngressServiceV2:
             stream_id=str(body["stream_id"]),
             slot_id=slot_id,
             next_state=next_state,
+            observed_at=observed_at,
             material_digest=str(body["material_digest"]),
         )
         body["stream_after_root"] = independent._stream_root(
@@ -364,16 +368,17 @@ class IngressServiceV2:
             stream_kind=stream_kind,
             stream_id=stream_id,
             next_state=next_state,
+            observed_at=observed_at,
             material_digest=str(body["material_digest"]),
         )
         raw = _canonical(body)
         receipt_digest = _raw_digest("receipt", raw)
         connection.execute(
-            "INSERT INTO ingress_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ingress_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 sequence, body["event_id"], kind, self.config.database_id,
                 self.config.chain_id, body["stream_kind"], body["stream_id"], operation_id, request_digest, slot_id,
-                prior_state, next_state, attempt, lease_token, lease_until,
+                prior_state, next_state, attempt, lease_token, lease_until, observed_at,
                 body["material_digest"], payload_digest, payload_length,
                 body["before_root"], body["after_root"], body["stream_before_root"], body["stream_after_root"], raw, receipt_digest,
                 source_id, page_index, transport_attempt, receipt_bytes,
@@ -452,6 +457,7 @@ class IngressServiceV2:
                 attempt=0,
                 lease_token=None,
                 lease_until=None,
+                observed_at=scheduled_at,
                 material={"slot_id": slot_id, "scheduled_at": scheduled_at},
                 payload_digest=_digest("slot-payload", {"slot_id": slot_id, "scheduled_at": scheduled_at}),
                 payload_length=0,
@@ -495,6 +501,7 @@ class IngressServiceV2:
                     slot_id=slot_id, prior_state="LEASED", next_state=next_state,
                     attempt=int(row["attempt"]), lease_token=str(row["lease_token"]),
                     lease_until=int(row["lease_until"]),
+                    observed_at=now,
                     material={"slot_id": slot_id, "action": kind, "attempt": row["attempt"]},
                     payload_digest=_digest("lease-recovery", {"slot_id": slot_id, "attempt": row["attempt"]}),
                     payload_length=0,
@@ -520,6 +527,7 @@ class IngressServiceV2:
                 request_digest=request_digest, slot_id=slot_id, prior_state="DUE",
                 next_state="LEASED", attempt=attempt, lease_token=lease_token,
                 lease_until=lease_until, material=material,
+                observed_at=now,
                 payload_digest=_digest("lease-payload", material), payload_length=0,
             )
             connection.execute(
@@ -547,11 +555,19 @@ class IngressServiceV2:
         envelope_raw: bytes,
         *,
         scheduled_at: int,
-        lease_token: str | None = None,
+        lease_token: str,
+        observed_at: int,
         operation_id: str | None = None,
     ) -> IngressReceipt:
         raw_snapshot = bytes(envelope_raw) if type(envelope_raw) is bytes else b""
-        if not raw_snapshot or len(raw_snapshot) > independent.MAX_RAW_ENVELOPE_BYTES:
+        if (
+            not raw_snapshot
+            or len(raw_snapshot) > independent.MAX_RAW_ENVELOPE_BYTES
+            or type(scheduled_at) is not int
+            or type(observed_at) is not int
+            or type(lease_token) is not str
+            or not lease_token
+        ):
             raise IngressError("ingress:envelope")
         try:
             result = fhir.verify_bytes(raw_snapshot)
@@ -572,22 +588,6 @@ class IngressServiceV2:
         slot_id = _digest("slot-id", {"config_digest": self.config.digest, "scheduled_at": scheduled_at})
         operation_id = operation_id or _digest("capture-operation", {"slot_id": slot_id, "artifact_id": artifact_id})
         request_digest = _digest("request", {"operation_id": operation_id, "slot_id": slot_id, "artifact_id": artifact_id})
-        attestation_materials: list[dict[str, object]] = []
-        for index, response_digest in enumerate(result["page_digests"]):
-            material = {
-                "artifact_id": artifact_id,
-                "page_index": index,
-                "lease_attempt": 0,
-                "transport_attempt": 0,
-                "request_digest": independent._request_digest(index),
-                "response_digest": response_digest,
-                "status": 200,
-                "authenticated": True,
-                "redirect": False,
-                "selected": True,
-            }
-            material["attestation_digest"] = independent._attestation_digest(material)
-            attestation_materials.append(material)
         connection = _connection(self.path)
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -603,10 +603,46 @@ class IngressServiceV2:
                     raise IngressConflictError("ingress:operation-conflict")
                 connection.commit()
                 return self._receipt(bytes(existing["event_raw"]), artifact_id=artifact_id, next_state=str(existing["next_state"]))
-            if slot["state"] not in {"DUE", "LEASED"}:
+            if slot["state"] != "LEASED":
                 raise IngressConflictError("ingress:slot-state")
-            if slot["state"] == "LEASED" and lease_token != slot["lease_token"]:
+            if lease_token != slot["lease_token"]:
                 raise IngressConflictError("ingress:lease-token")
+            if slot["lease_until"] is None or observed_at < scheduled_at:
+                raise IngressConflictError("ingress:lease-state")
+            if observed_at >= int(slot["lease_until"]):
+                raise IngressConflictError("ingress:lease-expired")
+            if int(slot["attempt"]) < 1 or int(slot["attempt"]) > self.config.max_attempts:
+                raise IngressConflictError("ingress:attempt-exhausted")
+            attestation_materials: list[dict[str, object]] = []
+            page_evidence = result.get("page_evidence")
+            if not isinstance(page_evidence, tuple):
+                raise IngressError("ingress:envelope-evidence")
+            for page in page_evidence:
+                attempts = page.get("attempts") if isinstance(page, Mapping) else None
+                if not isinstance(attempts, tuple):
+                    raise IngressError("ingress:envelope-evidence")
+                for attempt in attempts:
+                    if not isinstance(attempt, Mapping):
+                        raise IngressError("ingress:envelope-evidence")
+                    material = {
+                        "artifact_id": artifact_id,
+                        "page_index": int(page["page_index"]),
+                        "lease_attempt": int(slot["attempt"]),
+                        "transport_attempt": int(attempt["transport_attempt"]),
+                        "request_identity": attempt["request_identity"],
+                        "response_digest": attempt["response_digest"],
+                        "status": attempt["status"],
+                        "retry_after_seconds": attempt["retry_after_seconds"],
+                        "response_url": attempt["response_url"],
+                        "redirect": attempt["redirect"],
+                        "failure_code": attempt["failure_code"],
+                        "transport_error": attempt["transport_error"],
+                        "evidence_class": "SYNTHETIC_FIXTURE_UNAUTHENTICATED",
+                        "selected": attempt["selected"],
+                        "observed_at": observed_at,
+                    }
+                    material["attestation_digest"] = independent._attestation_digest(material)
+                    attestation_materials.append(material)
             row = connection.execute("SELECT * FROM ingress_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
             if row is not None and bytes(row["raw"]) != raw_snapshot:
                 raise IngressConflictError("ingress:artifact-conflict")
@@ -636,19 +672,22 @@ class IngressServiceV2:
                     "fetch-operation",
                     {"operation_id": operation_id, "page_index": material["page_index"], "transport_attempt": material["transport_attempt"]},
                 )
+                event_material = dict(material)
+                event_material.pop("attestation_digest", None)
                 self._append(
                     connection,
                     kind="FETCH_ATTESTATION",
                     operation_id=fetch_operation,
-                    request_digest=str(material["request_digest"]),
+                    request_digest=str(material["request_identity"]),
                     slot_id=slot_id,
                     prior_state=str(slot["state"]),
                     next_state=str(slot["state"]),
                     attempt=int(slot["attempt"]),
                     lease_token=lease_token,
                     lease_until=slot["lease_until"],
-                    material=material,
-                    payload_digest=str(material["response_digest"]),
+                    observed_at=observed_at,
+                    material=event_material,
+                    payload_digest=_digest("fetch-payload", event_material),
                     payload_length=len(receipt_raw),
                     stream_kind="FETCH",
                     stream_id=slot_id,
@@ -670,8 +709,9 @@ class IngressServiceV2:
                 request_digest=request_digest, slot_id=slot_id,
                 prior_state=str(slot["state"]), next_state="CAPTURED",
                 attempt=int(slot["attempt"]), lease_token=lease_token,
-                 lease_until=slot["lease_until"], material=capture_material,
-                 payload_digest=artifact_id, payload_length=len(raw_snapshot),
+                lease_until=slot["lease_until"], material=capture_material,
+                observed_at=observed_at,
+                payload_digest=artifact_id, payload_length=len(raw_snapshot),
                  head_artifact_id=artifact_id,
             )
             if complete:
@@ -680,8 +720,9 @@ class IngressServiceV2:
                     request_digest=request_digest, slot_id=slot_id,
                     prior_state="CAPTURED", next_state="QUARANTINE_PENDING",
                     attempt=int(slot["attempt"]), lease_token=lease_token,
-                     lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING"},
-                     payload_digest=artifact_id, payload_length=len(raw_snapshot),
+                    lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING"},
+                    observed_at=observed_at,
+                    payload_digest=artifact_id, payload_length=len(raw_snapshot),
                      head_artifact_id=artifact_id,
                 )
                 next_state = "QUARANTINED"
@@ -697,7 +738,8 @@ class IngressServiceV2:
                 prior_state=final_prior, next_state=next_state,
                 attempt=int(slot["attempt"]), lease_token=lease_token,
                 lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": next_state},
-                 payload_digest=artifact_id, payload_length=len(raw_snapshot),
+                observed_at=observed_at,
+                payload_digest=artifact_id, payload_length=len(raw_snapshot),
                  stream_kind="QUARANTINE", stream_id=self.config.chain_id,
                  head_artifact_id=artifact_id,
             )
