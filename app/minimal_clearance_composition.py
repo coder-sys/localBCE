@@ -297,6 +297,8 @@ class CompositionConfigV2:
         _blob(self.receiver_identity, 32, "receiver_identity")
         if self.state_profile_identity is None and self.state_store_identity is not None:
             object.__setattr__(self, "state_profile_identity", bytes(self.state_store_identity))
+        elif self.state_profile_identity is not None and self.state_store_identity is not None and self.state_profile_identity != self.state_store_identity:
+            raise CompositionIntegrityError("state_profile_alias_conflict")
         if self.state_profile_identity is not None:
             _blob(self.state_profile_identity, 64, "state_profile_identity")
         if self.expected_statement is not None and (type(self.expected_statement) is not bytes or len(self.expected_statement) != 3340):
@@ -442,9 +444,12 @@ def _parse_receipt(raw: bytes) -> dict[str, Any]:
     for name in digest_names:
         size = 32 if name in {"artifact_sha256", "circuit_id"} else 64
         _hex_blob(value[name], size, "receipt_" + name)
-    for name in ("sequence_before", "sequence_after", "clearance_count_before", "clearance_count_after", "settled_batch_count_before", "settled_batch_count_after", "policy_result", "effective_directive"):
+    for name in ("sequence_before", "sequence_after", "clearance_count_before", "clearance_count_after", "settled_batch_count_before", "settled_batch_count_after"):
         if type(value[name]) is not int or value[name] < 0:
             raise CompositionIntegrityError("receipt_integer")
+    for name in ("policy_result", "effective_directive"):
+        if type(value[name]) is not int or not 1 <= value[name] <= 5:
+            raise CompositionIntegrityError("receipt_directive")
     if value["proof_session_accepted"] is not True or value["economic_mutation"] is not False or value["proof_suite_id"] is not None:
         raise CompositionIntegrityError("receipt_nonactivation")
     return value
@@ -1134,13 +1139,15 @@ class ClearanceCompositionStoreV2:
 
     def _commit_ack(self, *, job_id: str, operation_id: bytes, ack_raw: bytes, expected_idem: bytes, mode: str, dispatch_work: CompositionOutboxWorkV2 | None = None, reconciliation_work: CompositionReconciliationWorkV2 | None = None) -> CompositionDeliveryResultV2:
         with closing(self._connect()) as connection:
-            row = connection.execute("SELECT o.envelope_bytes,o.idempotency_key,d.queue_operation_id FROM outbox_jobs o JOIN application_dispositions d ON d.disposition_id=o.disposition_id WHERE o.job_id=?", (job_id,)).fetchone()
+            row = connection.execute("SELECT o.operation_id,o.envelope_bytes,o.idempotency_key,d.queue_operation_id FROM outbox_jobs o JOIN application_dispositions d ON d.disposition_id=o.disposition_id WHERE o.job_id=?", (job_id,)).fetchone()
         if row is None:
             raise CompositionIntegrityError("outbox_job_missing")
-        envelope_bytes = bytes(row[0])
-        if bytes.fromhex(str(_parse_envelope(envelope_bytes)["operation_id"])) != bytes(row[2]):
+        if bytes(row[0]) != operation_id:
+            raise CompositionIntegrityError("ack_outbox_operation_binding")
+        envelope_bytes = bytes(row[1])
+        if bytes.fromhex(str(_parse_envelope(envelope_bytes)["operation_id"])) != bytes(row[3]):
             raise CompositionIntegrityError("ack_historical_operation_binding")
-        ack, env_digest, ack_digest, qualification = self._validate_ack(ack_raw, envelope_bytes=envelope_bytes, operation_id=operation_id, job_id=job_id, expected_idem=bytes(row[1]))
+        ack, env_digest, ack_digest, qualification = self._validate_ack(ack_raw, envelope_bytes=envelope_bytes, operation_id=operation_id, job_id=job_id, expected_idem=bytes(row[2]))
         now = int(self.clock.now_ms())
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1169,8 +1176,7 @@ class ClearanceCompositionStoreV2:
                 if changed.rowcount != 1:
                     raise CompositionIndeterminateError("ack_status_cas")
                 connection.execute("INSERT INTO outbox_acks VALUES (?,?,?,?,?,?,?,?,?)", (job_id, "ACKNOWLEDGED", ack_raw, ack_digest, operation_id, now, qualification, self.config.profile_digest, str(ack["acknowledgment_id"])))
-                if reconciliation_work is not None:
-                    connection.execute("UPDATE reconciliation_records SET status='ACKNOWLEDGED',worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='LEASED'", (now, job_id))
+                connection.execute("UPDATE reconciliation_records SET status='ACKNOWLEDGED',worker_id=NULL,token=NULL,leased_ms=NULL,expires_ms=NULL,updated_ms=?,last_error_code=NULL WHERE job_id=? AND status IN ('DISCOVERED','LEASED')", (now, job_id))
                 self._append_outbox_transition(connection, kind="ACKNOWLEDGED_BY_RECONCILIATION" if reconciliation_work is not None else "ACKNOWLEDGED", job_id=job_id, event={"status": "ACKNOWLEDGED", "mode": mode, "ack_digest": _hex(ack_digest), "acknowledgment_id": str(ack["acknowledgment_id"]), "effective_directive": int(ack["effective_directive"]), "policy_result": int(_parse_envelope(envelope_bytes)["policy_result"]), "profile_digest": _hex(self.config.profile_digest), "at_ms": now})
                 self._fault("before_ack_commit")
                 connection.execute("COMMIT")
@@ -1246,7 +1252,7 @@ class ClearanceCompositionStoreV2:
             try:
                 self._meta(connection)
                 self._recover_reconciliation(connection, now)
-                row = connection.execute("SELECT * FROM reconciliation_records WHERE status='DISCOVERED' AND next_eligible_ms<=? ORDER BY created_ms,job_id LIMIT 1", (now,)).fetchone()
+                row = connection.execute("SELECT r.* FROM reconciliation_records r JOIN outbox_jobs o ON o.job_id=r.job_id WHERE r.status='DISCOVERED' AND o.status='DELIVERY_UNCONFIRMED' AND r.next_eligible_ms<=? ORDER BY r.created_ms,r.job_id LIMIT 1", (now,)).fetchone()
                 if row is None:
                     connection.execute("COMMIT")
                     return None

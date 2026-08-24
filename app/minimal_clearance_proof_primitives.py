@@ -17,9 +17,6 @@ import stat
 import tempfile
 from typing import Callable, Final
 
-from app.batch.poseidon import FIELD_MODULUS
-from app.governance_authority_v2 import GovernanceAuthorityV2
-from app.production_boundary import ProductionBoundaryError
 from app.minimal_clearance_verifier_process import (
     CAP_BYTES,
     ContainedVerifierResult,
@@ -28,7 +25,7 @@ from app.minimal_clearance_verifier_process import (
 )
 
 
-class MinimalClearanceProofStateError(ProductionBoundaryError):
+class MinimalClearanceProofStateError(RuntimeError):
     """Fail-closed errors at the proof-to-state boundary."""
 
 
@@ -53,7 +50,6 @@ _STATE_HEADER_BYTES: Final[int] = 150
 _STATE_DIGEST_COUNT: Final[int] = 23
 _ZERO_SUITE = bytes(_DIGEST_BYTES)
 _PRIVATE_ZK_ID_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/IDENTITY/v1\x00"
-_PRIVATE_ZK_FIELD_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/FIELD/v1\x00"
 
 
 def _private_zk_wide(label: str) -> bytes:
@@ -62,30 +58,13 @@ def _private_zk_wide(label: str) -> bytes:
     return digest.digest()
 
 
-def _private_zk_field(label: str) -> bytes:
-    digest = hashlib.sha3_512(_PRIVATE_ZK_FIELD_DOMAIN)
-    digest.update(label.encode("ascii"))
-    value = int.from_bytes(digest.digest(), "big")
-    return (value % (FIELD_MODULUS - 1) + 1).to_bytes(32, "big")
-
-
 PRIVATE_ZK_MODE_ID = _private_zk_wide("mode.PRIVATE_ZK.v1")
 PRIVATE_ZK_DATABASE_CONTEXT_ID = _private_zk_wide("database-context.v1")
 PRIVATE_ZK_DATABASE_SCHEMA_ID = _private_zk_wide("database-schema.v1")
 PRIVATE_ZK_DATABASE_PROGRAM_ID = _private_zk_wide("database-program.v1")
-PRIVATE_ZK_DATABASE_DOMAIN = _private_zk_field("database-domain.v1")
-PRIVATE_ZK_INITIAL_NULLIFIER_ROOT = _private_zk_wide("nullifier-genesis.v1")
 PRIVATE_ZK_INITIAL_PAYMENT_ROOT = _private_zk_wide("payment-genesis.v1")
 PRIVATE_ZK_INITIAL_CLEARANCE_ROOT = _private_zk_wide("clearance-genesis.v1")
 PRIVATE_ZK_EPOCH = 7
-PRIVATE_ZK_GOVERNANCE_AUTHORITY = GovernanceAuthorityV2(
-    profile_code=3,
-    epoch=PRIVATE_ZK_EPOCH,
-    claim_truth_roots_512=tuple(_private_zk_wide(f"truth-root-{index}.v1") for index in range(6)),
-    claim_truth_authority_digest_512=_private_zk_wide("truth-authority.v1"),
-    nullifier_authority_id_512=_private_zk_wide("nullifier-authority.v1"),
-    pepper_commitment_512=_private_zk_wide("pepper.v1"),
-)
 _PRIVATE_ZK_PROFILE_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00"
 
 
@@ -970,4 +949,3 @@ __all__ = (
     "MinimalProofStatementV1", "MinimalProofAcceptanceV1",
     "NativeMinimalClearanceVerifier", "parse_acceptance_bytes",
 )
-

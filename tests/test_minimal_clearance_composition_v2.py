@@ -119,6 +119,26 @@ class CompositionV2Tests(unittest.TestCase):
         self.assertEqual(acknowledged.status, "ACKNOWLEDGED")
         self.assertEqual(lookup.calls, 1)
         self.assertEqual(store.snapshot()["outbox_counts"]["ACKNOWLEDGED"], 1)
+        verify_database(store.path, expected_config=config.as_json)
+        restored = self.root / "acknowledged-restored.sqlite3"
+        restore_export_to_fresh_database(restored, store.export_bytes(), expected_config=config.as_json)
+        verify_database(restored, expected_config=config.as_json)
+
+    def test_dispatch_ack_converges_existing_reconciliation_record(self) -> None:
+        queue = self._verified_queue()
+        config = self._config()
+        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
+        store.process_verified_job(queue.path, "job-1")
+        work = store.claim_next_outbox("dispatch-worker")
+        self.assertIsNotNone(work)
+        store._mark_delivery_unconfirmed(work, "response_loss")
+        retry = store.claim_next_outbox("retry-worker")
+        self.assertIsNotNone(retry)
+        receiver = _Receiver(config)
+        acknowledged = store.dispatch(retry, receiver=receiver)
+        self.assertEqual(acknowledged.status, "ACKNOWLEDGED")
+        self.assertIsNone(store.claim_reconciliation_next("reconcile-worker"))
+        verify_database(store.path, expected_config=config.as_json)
 
     def test_negative_reconciliation_does_not_redispatch_or_change_delivery(self) -> None:
         queue = self._verified_queue()
@@ -192,8 +212,22 @@ class CompositionV2Tests(unittest.TestCase):
             verify_database(store.path, expected_config=config.as_json)
 
     def test_composition_runtime_has_no_settlement_owner_dependency(self) -> None:
+        paths = (
+            "app/minimal_clearance_composition.py",
+            "app/minimal_clearance_composition_independent.py",
+            "app/minimal_clearance_proof_primitives.py",
+            "app/minimal_clearance_verification_queue.py",
+            "app/minimal_clearance_verification_queue_independent.py",
+        )
+        forbidden = (
+            "transactional_database_boundary", "production_boundary", "governance_authority_v2",
+            "app.batch", "privacy_v2", "experiments.bl_pq512_crypto_foundation",
+        )
+        for path in paths:
+            source = Path(path).read_text(encoding="utf-8")
+            for prefix in forbidden:
+                self.assertNotIn(prefix, source, f"{path}: forbidden active dependency {prefix}")
         source = inspect.getsource(composition_module)
-        self.assertNotIn("transactional_database_boundary", source)
         self.assertNotIn("SQLiteSettlementStoreV2", source)
 
     def test_direct_backup_restore_and_v1_database_rejection(self) -> None:
