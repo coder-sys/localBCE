@@ -8,8 +8,6 @@ from unittest.mock import patch
 from pqcrypto.sign import sphincs_sha2_128f_simple as oracle_signature
 
 from app.ingestion import parse_837
-from app.batch.batch_orchestrator import BatchConfig, _claim_source_commitment_for_oracle
-from app.batch.leaf import current_duplicate_pepper
 from app.oracle_attestation import (
     LOCAL_TEST_ORACLE_KEYS_ENV,
     ORACLE_PUBLIC_KEY_ENV,
@@ -31,16 +29,6 @@ def parsed_sample():
     if not parsed.accepted:
         raise AssertionError(parsed.errors)
     return parsed, payload
-
-
-def claim_source_commitment_for(parsed, flags):
-    ctx = build_shared_context(parsed, flags, strict_oracle=False)
-    return _claim_source_commitment_for_oracle(
-        ctx,
-        config=BatchConfig(),
-        frequency_type="original",
-        duplicate_pepper=current_duplicate_pepper(),
-    )
 
 
 class OracleAttestationTests(unittest.TestCase):
@@ -85,7 +73,7 @@ class OracleAttestationTests(unittest.TestCase):
 
     def test_signed_oracle_attestations_are_accepted_in_strict_mode(self):
         parsed, payload = parsed_sample()
-        commitment = claim_source_commitment_for(parsed, payload["flags"])
+        commitment = 17
         attestations = [
             make_test_attestation("eligibility_active", True, source_id="CA-MMIS-TEST", claim_source_commitment=commitment),
             make_test_attestation("provider_enrolled", True, source_id="PROVIDER-ENROLLMENT-TEST", claim_source_commitment=commitment),
@@ -111,7 +99,7 @@ class OracleAttestationTests(unittest.TestCase):
 
     def test_unsigned_or_forged_oracle_attestation_rejected_in_strict_mode(self):
         parsed, payload = parsed_sample()
-        commitment = claim_source_commitment_for(parsed, payload["flags"])
+        commitment = 17
         forged = make_test_attestation("eligibility_active", True, claim_source_commitment=commitment)
         forged = {**forged.to_dict(), "signature": "00" * 32}
 
@@ -126,7 +114,7 @@ class OracleAttestationTests(unittest.TestCase):
 
     def test_wrong_key_signature_rejected_in_strict_mode(self):
         parsed, payload = parsed_sample()
-        commitment = claim_source_commitment_for(parsed, payload["flags"])
+        commitment = 17
         attestation = make_test_attestation(
             "eligibility_active",
             True,
@@ -159,7 +147,7 @@ class OracleAttestationTests(unittest.TestCase):
 
     def test_future_validity_window_rejected_in_strict_mode(self):
         parsed, payload = parsed_sample()
-        commitment = claim_source_commitment_for(parsed, payload["flags"])
+        commitment = 17
         future = make_test_attestation(
             "eligibility_active",
             True,

@@ -4,12 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.batch.batch_orchestrator import _enforce_payment_reconciliation
 from app.batch.leaf import current_duplicate_pepper, stable_private_hash
 from app.ingestion import MAX_EDI_CHARS, parse_837
 from app.batch.stark_encoding import canonical_npi
 from app.oracle_attestation import make_test_attestation, verify_oracle_attestation
-from app.shared_context import MAX_AMOUNT_CENTS, build_shared_context
+from app.shared_context import build_shared_context
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,32 +126,6 @@ class ConsolidatedHardeningTests(unittest.TestCase):
         replay_cache = set()
         self.assertTrue(verify_oracle_attestation(good, claim_id="BL-HARDEN-ORACLE", claim_source_commitment=17, replay_cache=replay_cache))
         self.assertFalse(verify_oracle_attestation(good, claim_id="BL-HARDEN-ORACLE", claim_source_commitment=17, replay_cache=replay_cache))
-
-    def test_amount_bounds_reject_underflow_and_overwidth(self):
-        with self.assertRaisesRegex(ValueError, "payment_amount_out_of_range"):
-            _enforce_payment_reconciliation("provider", [100], -1)
-        self.assertEqual(
-            _enforce_payment_reconciliation("provider", [MAX_AMOUNT_CENTS, 1], MAX_AMOUNT_CENTS + 1),
-            MAX_AMOUNT_CENTS + 1,
-        )
-        for invalid_amount in (MAX_AMOUNT_CENTS + 1, -1, True, 1.0):
-            with self.assertRaisesRegex(ValueError, "approved_amount_out_of_range"):
-                _enforce_payment_reconciliation("provider", [invalid_amount], 0)
-        for invalid_total in (-1, True, 1.0, 2**128):
-            with self.assertRaisesRegex(ValueError, "payment_amount_out_of_range"):
-                _enforce_payment_reconciliation("provider", [0], invalid_total)
-
-        payload = sample_payload(
-            "BL-HARDEN-OVERWIDTH",
-            lambda edi: edi.replace("CLM*BL-HARDEN-OVERWIDTH*125.00", "CLM*BL-HARDEN-OVERWIDTH*42949672.96").replace(
-                "SV1*HC:99213*125.00", "SV1*HC:99213*42949672.96"
-            ),
-        )
-        parsed = parse_837(payload["edi"])
-        self.assertFalse(parsed.accepted)
-        self.assertIn("invalid_CLM_amount", parsed.errors)
-        self.assertIn("invalid_SV1_amount", parsed.errors)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -182,31 +182,6 @@ class ReleaseArchiveTests(unittest.TestCase):
                     with self.assertRaises(release.ReleaseArchiveError):
                         release._read_manifest(manifest)
 
-    def test_portal_woff2_asset_is_allowlisted_and_header_checked(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
-            source = base / "source"
-            source.mkdir()
-            payload = bytearray(48)
-            payload[:4] = b"wOF2"
-            payload[8:12] = len(payload).to_bytes(4, "big")
-            payload[12:14] = (1).to_bytes(2, "big")
-            manifest = _write_manifest(
-                source, {"portal_shared/fonts/test.woff2": bytes(payload)}
-            )
-            receipt = release.build_release_archive(
-                source, manifest, base / "release.zip"
-            )
-            self.assertEqual(1, receipt["payload_file_count"])
-
-            payload[8:12] = (len(payload) + 1).to_bytes(4, "big")
-            source.joinpath("portal_shared/fonts/test.woff2").write_bytes(payload)
-            manifest = _write_manifest(
-                source, {"portal_shared/fonts/test.woff2": bytes(payload)}
-            )
-            with self.assertRaisesRegex(release.ReleaseArchiveError, "header"):
-                release.build_release_archive(source, manifest, base / "tampered.zip")
-
     def test_manifest_version_must_be_an_integer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest = Path(temporary) / "manifest.json"

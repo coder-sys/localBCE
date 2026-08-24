@@ -97,7 +97,6 @@ CURRENT_TOP_LEVELS = frozenset(
         "experiments",
         "ops",
         "portal_shared",
-        "provider_portal",
         "requirements",
         "rules-engine-rust",
         "schemas",

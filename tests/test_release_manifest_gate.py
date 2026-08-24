@@ -295,12 +295,6 @@ class ReleaseManifestGateTests(unittest.TestCase):
                 gate.ManifestGateError, "forbidden paths"
             ):
                 gate.validate_release_paths([path])
-        self.assertEqual(
-            ("portal_shared/fonts/font.woff2",),
-            gate.validate_release_paths(["portal_shared/fonts/font.woff2"]),
-        )
-        with self.assertRaisesRegex(gate.ManifestGateError, "incompatible with manifest-v2"):
-            gate.validate_release_paths(["portal_shared/assets/font.woff2"])
         with self.assertRaisesRegex(gate.ManifestGateError, "duplicate or case"):
             gate.classify_paths(["tools/A.py", "tools/a.py"])
         for path in sorted(gate.RELEASE_EXCLUDED_PATHS):

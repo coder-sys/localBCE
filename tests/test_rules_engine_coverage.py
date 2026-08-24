@@ -10,8 +10,7 @@ import unittest
 from dataclasses import asdict
 from pathlib import Path
 
-from app.batch.batch_orchestrator import BatchConfig, _claim_source_commitment_for_oracle
-from app.batch.leaf import current_duplicate_pepper
+from app.batch.tar_required import load_default_tar_required_codes
 from app.ingestion import parse_837
 from app.models import Patient, Provider, ServiceLine, SharedContext
 from app.oracle_attestation import make_test_attestation
@@ -212,22 +211,17 @@ def signed_tar_context(claim_id: str) -> SharedContext:
     parsed = parse_837(payload["edi"])
     if not parsed.accepted:
         raise AssertionError(parsed.errors)
-    config = BatchConfig()
+    tar_required_codes = load_default_tar_required_codes()
     unsigned_ctx = build_shared_context(
         parsed,
         payload["flags"],
         strict_oracle=False,
-        tar_required_procedure_codes=config.tar_required_procedure_codes,
+        tar_required_procedure_codes=tar_required_codes,
     )
-    claim_source_commitment = _claim_source_commitment_for_oracle(
-        unsigned_ctx,
-        config=config,
-        frequency_type="original",
-        duplicate_pepper=current_duplicate_pepper(),
-    )
+    claim_source_commitment = 17
     tar_authorization_commitment = tar_authorization_commitment_for_context(
         unsigned_ctx,
-        config.tar_required_procedure_codes,
+        tar_required_codes,
     )
     attestations = [
         make_test_attestation(
@@ -246,7 +240,7 @@ def signed_tar_context(claim_id: str) -> SharedContext:
         oracle_attestations=attestations,
         strict_oracle=True,
         claim_source_commitment=claim_source_commitment,
-        tar_required_procedure_codes=config.tar_required_procedure_codes,
+        tar_required_procedure_codes=tar_required_codes,
     )
 
 

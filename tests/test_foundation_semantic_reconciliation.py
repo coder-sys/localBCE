@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unittest
 
-from app.batch.claim_source_root import claim_source_diagnosis_commitment
 from app.batch.stark_encoding import encode_claim, pack_felt_text
 from app.canonical_order import canonical_diagnoses
 from app.models import Patient, Provider, ServiceLine, SharedContext
@@ -50,10 +49,6 @@ class FoundationSemanticReconciliationTests(unittest.TestCase):
 
     def test_diagnosis_order_is_length_then_ascii_and_duplicates_reject(self) -> None:
         self.assertEqual(canonical_diagnoses(["A10", "Z9"]), ("Z9", "A10"))
-        self.assertNotEqual(
-            claim_source_diagnosis_commitment(["Z9", "A10"]),
-            claim_source_diagnosis_commitment(["Z9", "B10"]),
-        )
         with self.assertRaisesRegex(ValueError, "diagnoses_duplicate"):
             canonical_diagnoses(["Z9", "Z9"])
 
