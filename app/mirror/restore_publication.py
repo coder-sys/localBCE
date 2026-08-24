@@ -696,6 +696,59 @@ def _existing_target(target: Path, image: bytes) -> tuple[bytes, tuple[int, int,
     return raw, identity
 
 
+def _preflight_target_namespace(
+    target: Path,
+    image: bytes,
+    *,
+    role: str,
+    pair_operation_id: str,
+    semantic: str,
+    binding: str,
+    existing: tuple[bytes, tuple[int, int, int, int]] | None,
+) -> None:
+    """Validate an owned remnant before either member of the pair is linked."""
+
+    namespace = _namespace(target, pair_operation_id)
+    if not os.path.lexists(os.fspath(namespace)):
+        return
+    _namespace_identity(namespace)
+    entries = _namespace_entries(namespace)
+    if not entries <= {"marker.json", "stage.db", "publication.json"}:
+        _fail(RestorePublicationVerification, "restore-publication:foreign-stage")
+    marker = namespace / "marker.json"
+    expected_marker = _marker(target, role=role, pair_operation_id=pair_operation_id, image=image, semantic=semantic, binding=binding)
+    if os.path.lexists(os.fspath(marker)):
+        marker_raw, _marker_identity = _read_file(marker, cap=MAX_MARKER_BYTES, allow_empty=True, nlinks=(1,))
+        if len(marker_raw) > len(expected_marker) or marker_raw != expected_marker[:len(marker_raw)]:
+            _fail(RestorePublicationVerification, "restore-publication:marker")
+    elif existing is not None:
+        _fail(RestorePublicationVerification, "restore-publication:marker")
+    stage = namespace / "stage.db"
+    receipt = namespace / "publication.json"
+    if existing is not None:
+        # A pre-existing target is adoptable only with a complete receipt or
+        # an exact owned stage that can finish that receipt.  Marker-only
+        # state is indeterminate and must be rejected before the other target
+        # can be published.
+        if "stage.db" not in entries and "publication.json" not in entries:
+            _fail(RestorePublicationConflict, "restore-publication:receipt")
+        if "stage.db" in entries:
+            stage_raw, stage_identity = _read_file(stage, cap=MAX_IMAGE_BYTES, allow_empty=False, nlinks=(1, 2))
+            if stage_raw != image or (stage_identity[:2] != existing[1][:2] and stage_identity[2] != 1):
+                _fail(RestorePublicationConflict, "restore-publication:stage-ownership")
+        if "publication.json" in entries and "stage.db" not in entries:
+            _validate_receipt(receipt, _receipt_body(target, role=role, pair_operation_id=pair_operation_id, semantic=semantic, binding=binding, image=image, identity=existing[1]))
+        return
+    # An absent target may resume a marker or an exact-prefix stage, but a
+    # receipt without its target is never a valid adoption claim.
+    if "publication.json" in entries:
+        _fail(RestorePublicationConflict, "restore-publication:receipt")
+    if "stage.db" in entries:
+        stage_raw, _stage_identity = _read_file(stage, cap=MAX_IMAGE_BYTES, allow_empty=True, nlinks=(1,))
+        if not image.startswith(stage_raw):
+            _fail(RestorePublicationConflict, "restore-publication:stage-conflict")
+
+
 def _result(kind: str, created: bool, semantic: str, image: bytes, identity: tuple[int, int, int, int]) -> PublicationResultV1:
     if kind not in {"CREATED_THIS_CALL", "ADOPTED_EXISTING"} or type(created) is not bool:
         _fail(RestorePublicationVerification, "restore-publication:result")
@@ -839,10 +892,17 @@ def publish_pair_create_only(
         core_evidence = _invoke_verifier(verify_core, core_image, ingress_image)
         _check_binding(core_evidence, core_expected, "restore-publication:core-binding")
         core_semantic = _semantic_digest(core_evidence)
+        _preflight_target_namespace(ingress_path, ingress_image, role="ingress", pair_operation_id=operation, semantic=ingress_semantic, binding=_binding_digest(ingress_expected), existing=existing_ingress)
+        _preflight_target_namespace(core_path, core_image, role="core", pair_operation_id=operation, semantic=core_semantic, binding=_binding_digest(core_expected), existing=existing_core)
         if _safe_parent(ingress_path.parent) != parent_ingress or _safe_parent(core_path.parent) != parent_core:
             _fail(RestorePublicationConflict, "restore-publication:parent")
-        ingress_result = _publish_one(ingress_path, ingress_image, role="ingress", pair_operation_id=operation, semantic=ingress_semantic, verifier=verify_ingress, expected=ingress_expected, existing=existing_ingress)
+        # Core is the dependent read-only projection.  Publish it first so a
+        # partial physical pair can never expose Ingress custody without its
+        # independently verified consumer-side binding.  The catalog still
+        # owns the logical PUBLISHED transition, and retry never removes a
+        # target already created by an earlier invocation.
         core_result = _publish_one(core_path, core_image, role="core", pair_operation_id=operation, semantic=core_semantic, verifier=lambda raw: verify_core(raw, ingress_image), expected=core_expected, existing=existing_core)
+        ingress_result = _publish_one(ingress_path, ingress_image, role="ingress", pair_operation_id=operation, semantic=ingress_semantic, verifier=verify_ingress, expected=ingress_expected, existing=existing_ingress)
         _fault("before_pair_cleanup")
         _cleanup_namespace(_namespace(ingress_path, operation), ingress_path, ingress_image)
         _cleanup_namespace(_namespace(core_path, operation), core_path, core_image)

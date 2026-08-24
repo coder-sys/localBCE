@@ -29,10 +29,6 @@ def _hex(seed: str) -> str:
     return hashlib.sha3_512(seed.encode("ascii")).hexdigest()
 
 
-def _token(seed: str) -> str:
-    return _hex("delivery-token:" + seed)
-
-
 def _ingress_token(seed: str) -> str:
     return (seed + "-ingress-token").ljust(32, "x")
 
@@ -305,8 +301,8 @@ class MirrorV2Fixture(unittest.TestCase):
         self.privacy_raw = privacy.ExternalPrivacySupportApprovalService(self.privacy_policy, _PrivacyVerifier(self.privacy_policy)).observe(b"synthetic privacy assertion").raw
         self.core_config = core.CoreConfigV2(
             database_id="core-v2-synthetic", chain_id="core-chain-v2",
-            ingress_database_id=self.ingress_config.database_id,
-            runtime_profile_digest=_hex("runtime-profile"),
+            ingress_database_id=self.ingress_config.database_id, ingress_chain_id=self.ingress_config.chain_id, ingress_config_digest=self.ingress_config.digest,
+            runtime_profile_digest=profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest,
             governance_policy_digest=self.governance_policy.digest,
             privacy_policy_digest=self.privacy_policy.digest,
         )
@@ -777,7 +773,6 @@ class MirrorV2Fixture(unittest.TestCase):
     def test_core_v2_has_exact_six_tables_columns_and_one_explicit_index(self) -> None:
         self.assertIn("clock", inspect.signature(core.CoreServiceV2).parameters)
         self.assertNotIn("now", inspect.signature(core.CoreServiceV2.open_session).parameters)
-        self.assertNotIn("now", inspect.signature(core.CoreServiceV2.begin_delivery).parameters)
         connection = sqlite3.connect(self.core_path)
         try:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
@@ -793,7 +788,7 @@ class MirrorV2Fixture(unittest.TestCase):
 
     def test_case_heads_are_lineage_scoped_and_interleaved_retries_converge(self) -> None:
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
-        case_b = self._changed_case()
+        case_b = self._ordered_second_case()
         a_responsibility = self.core.advance_case(case_a, next_state="RESPONSIBILITY", responsibility="UNKNOWN")
         b_responsibility = self.core.advance_case(case_b, next_state="RESPONSIBILITY", responsibility="STATE_SOURCE")
         a_remediation = self.core.advance_case(a_responsibility.subject_id, next_state="REMEDIATION", remediation="PROPOSED")
@@ -816,7 +811,7 @@ class MirrorV2Fixture(unittest.TestCase):
 
     def test_independent_rejects_cross_case_stream_rebinding_after_root_rebinding(self) -> None:
         case_a = self.core.admit_case(self.source_result["reconciliation_artifact_id"] or "")
-        case_b = self._changed_case()
+        case_b = self._ordered_second_case()
         self.core.advance_case(case_a, next_state="RESPONSIBILITY", responsibility="UNKNOWN")
         b_responsibility = self.core.advance_case(case_b, next_state="RESPONSIBILITY", responsibility="STATE_SOURCE")
         tampered = self.root / "core-cross-case-stream.db"
@@ -860,7 +855,7 @@ class MirrorV2Fixture(unittest.TestCase):
             with self.assertRaisesRegex(core.CoreConflictError, "core:capacity"):
                 self.core._append(connection, kind="SESSION_OPEN", operation_id=core._digest("oversize-event-operation", {"event": 1}), subject_id="0" * 128, request_digest=core._digest("oversize-event-request", {"event": 1}), prior_state="NONE", next_state="OPEN", attempt=0, observed_at=self.core_clock.value, material={"oversize": "x" * core.MAX_EVENT_BYTES}, payload_digest="0" * 128, payload_length=0, stream_kind="SESSION", stream_id="0" * 128, head_ref="0" * 128)
             maximum_artifact_material = {
-                "artifact_id": "0" * 128, "kind": "CASE", "raw_hex": "00" * core.MAX_ARTIFACT_BYTES,
+                "artifact_id": "0" * 128, "kind": "CASE",
                 "raw_digest": core._raw_digest("artifact-bytes", b"\0" * core.MAX_ARTIFACT_BYTES),
                 "raw_length": core.MAX_ARTIFACT_BYTES, "profile_digest": self.core_config.runtime_profile_digest,
                 "source_artifact_id": None, "predecessor_id": None, "current_state": "OPEN", "ingress_watermark": 0,
@@ -929,7 +924,7 @@ class MirrorV2Fixture(unittest.TestCase):
         try:
             row = connection.execute("SELECT sequence,event_raw FROM core_events WHERE event_kind='OBSERVATION'").fetchone()
             event = json.loads(bytes(row[1]).decode("ascii"))
-            event["material"]["session"]["last_slot"] = 99
+            event["material"]["observation"]["counts"]["observed"] = 99
             event["material_digest"] = core_independent._digest("material", event["material"])
             event["event_id"] = core_independent._digest(
                 "event-id",
@@ -949,10 +944,10 @@ class MirrorV2Fixture(unittest.TestCase):
             core_independent.verify_database(tampered, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest)
 
     def test_core_global_clock_and_old_observation_retry_are_owner_bound(self) -> None:
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 10
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 62
         second = self.core.observe(self.session_id, 1, "DISCREPANCY", counts={"observed": 1, "changed": 1})
         before = self.core.verify()
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 9
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 61
         with self.assertRaisesRegex(core.CoreConflictError, "core:clock-rewind"):
             self.core.observe(self.session_id, 2, "PARITY", counts={"observed": 2, "changed": 0})
         self.assertEqual(before["head_root"], self.core.verify()["head_root"])
@@ -961,50 +956,14 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(retry.raw, self.core.observe(self.session_id, 0, "PARITY", counts={"observed": 1, "changed": 0}).raw)
         self.assertNotEqual(second.raw, retry.raw)
 
-    def test_delivery_tokens_are_digest_only_and_terminal_retry_is_clock_free(self) -> None:
-        token = _token("digest-only")
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 20
-        intent = self.core.begin_delivery(self.session_id, "digest-job", lease_token=token)
+    def test_core_observation_cadence_rejects_early_slot_without_mutation(self) -> None:
         before = self.core.verify()
-        with self.assertRaisesRegex(core.CoreConflictError, "core:delivery-token"):
-            self.core.acknowledge_delivery(self.session_id, job_id="digest-job", lease_token=_token("wrong"), response_digest=_hex("response"))
-        self.assertEqual(before["head_root"], self.core.verify()["head_root"])
-        connection = sqlite3.connect(self.core_path)
-        try:
-            database_bytes = self.core_path.read_bytes()
-            export = self.core.logical_export()
-            support = json.dumps(self.core.support(), sort_keys=True).encode("ascii")
-            events = [bytes(row[0]) for row in connection.execute("SELECT event_raw FROM core_events")]
-        finally:
-            connection.close()
-        self.assertNotIn(token.encode("ascii"), database_bytes)
-        self.assertNotIn(token.encode("ascii"), export)
-        self.assertNotIn(token.encode("ascii"), support)
-        self.assertTrue(any(intent.raw == event for event in events))
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 50
-        response = _hex("digest-response")
-        ack = self.core.acknowledge_delivery(self.session_id, job_id="digest-job", lease_token=token, response_digest=response)
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 100
-        self.core_clock.raise_on_read = True
-        self.assertEqual(ack.raw, self.core.acknowledge_delivery(self.session_id, job_id="digest-job", lease_token=token, response_digest=response).raw)
-
-    def test_delivery_active_token_conflict_and_stream_identity(self) -> None:
-        token = _token("active")
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 20
-        self.core.begin_delivery(self.session_id, "same-job", lease_token=token)
-        before = self.core.verify()
-        with self.assertRaisesRegex(core.CoreConflictError, "core:delivery-lease"):
-            self.core.begin_delivery(self.session_id, "same-job", lease_token=_token("different"))
-        self.assertEqual(before["head_root"], self.core.verify()["head_root"])
-        connection = sqlite3.connect(self.core_path)
-        try:
-            rows = connection.execute("SELECT stream_kind,stream_id,head_ref FROM core_heads ORDER BY stream_kind,stream_id").fetchall()
-        finally:
-            connection.close()
-        delivery = [row for row in rows if row[0] == "DELIVERY"]
-        self.assertEqual(1, len(delivery))
-        self.assertEqual(core_independent._digest("delivery-id", {"session_id": self.session_id, "job_id": "same-job"}), delivery[0][1])
-        self.assertEqual(delivery[0][1], delivery[0][2])
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 10
+        with self.assertRaisesRegex(core.CoreConflictError, "core:observation-cadence"):
+            self.core.observe(self.session_id, 1, "PARITY", counts={"observed": 1, "changed": 0})
+        after = self.core.verify()
+        self.assertEqual(before["head_root"], after["head_root"])
+        self.assertEqual(before["event_count"], after["event_count"])
 
     def test_owner_clock_rewind_rejects_without_mutation(self) -> None:
         service, slot_id = self._fresh_ingress("clock-rewind.db")
@@ -1330,9 +1289,9 @@ class MirrorV2Fixture(unittest.TestCase):
         connection = core._connection(path)
         try:
             connection.execute("BEGIN IMMEDIATE")
-            source_raw = core._canonical({"schema": "mirror-core-source-observation-v2", "schema_version": 2, "kind": "SOURCE_OBSERVATION", "artifact_id": "0" * 128})
-            governance_raw = core._canonical({"schema": "mirror-core-governance-v2", "schema_version": 2, "kind": "GOVERNANCE", "artifact_id": "0" * 128, "decision": "GRANTED", "valid_from": valid_from, "valid_until": valid_until, "flags": dict(core.FIXED_FLAGS)})
-            privacy_raw = core._canonical({"schema": "mirror-core-privacy-v2", "schema_version": 2, "kind": "PRIVACY", "artifact_id": "0" * 128, "privacy_decision": "GRANTED", "support_decision": "GRANTED", "valid_from": valid_from, "valid_until": valid_until, "flags": dict(core.FIXED_FLAGS)})
+            source_raw = core._canonical({"schema": "mirror-core-source-observation-v3", "schema_version": 3, "kind": "SOURCE_OBSERVATION", "artifact_id": "0" * 128, "runtime_profile_digest": self.core_config.runtime_profile_digest})
+            governance_raw = core._canonical({"schema": "mirror-core-governance-v3", "schema_version": 3, "kind": "GOVERNANCE", "artifact_id": "0" * 128, "decision": "GRANTED", "policy_digest": self.core_config.governance_policy_digest, "valid_from": valid_from, "valid_until": valid_until, "flags": dict(core.FIXED_FLAGS)})
+            privacy_raw = core._canonical({"schema": "mirror-core-privacy-v3", "schema_version": 3, "kind": "PRIVACY", "artifact_id": "0" * 128, "privacy_decision": "GRANTED", "support_decision": "GRANTED", "policy_digest": self.core_config.privacy_policy_digest, "valid_from": valid_from, "valid_until": valid_until, "flags": dict(core.FIXED_FLAGS)})
             source_id, _ = service._admit_artifact(connection, kind="SOURCE_OBSERVATION", raw=source_raw, profile_digest=self.core_config.runtime_profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("test-source-operation", {"name": name}), request_digest=core._digest("test-source-request", {"name": name}), state="OBSERVED_NEW", observed_at=now)
             governance_id, _ = service._admit_artifact(connection, kind="GOVERNANCE", raw=governance_raw, profile_digest=self.core_config.governance_policy_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("test-governance-operation", {"name": name}), request_digest=core._digest("test-governance-request", {"name": name}), state="GRANTED", observed_at=now)
             privacy_id, _ = service._admit_artifact(connection, kind="PRIVACY", raw=privacy_raw, profile_digest=self.core_config.privacy_policy_digest, predecessor_id=None, source_artifact_id=None, operation_id=core._digest("test-privacy-operation", {"name": name}), request_digest=core._digest("test-privacy-request", {"name": name}), state="GRANTED", observed_at=now)
@@ -1344,17 +1303,80 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
-    def _changed_case(self) -> str:
-        from tests.test_nc_medicaid_fhir_source import _envelope
-        changed_path = self.root / "interleaved-changed-ingress.db"
-        changed_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME)
-        changed_ingress = ingress.IngressServiceV2(changed_path, self.ingress_config, clock=changed_clock)
-        created = changed_ingress.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
-        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
-        changed_ingress.claim_slot(slot_id, lease_token=_ingress_token("lease-interleaved-changed"))
-        changed_receipt = changed_ingress.admit_capture(_envelope(location_variant="changed"), scheduled_at=profile.FIXTURE_OBSERVATION_TIME, attempt=1, lease_token=_ingress_token("lease-interleaved-changed"))
-        result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
-        return self.core.admit_case(result["reconciliation_artifact_id"] or "")
+    def _ordered_second_case(self) -> str:
+        """Build one later, bounded Core observation for lineage-head tests.
+
+        The NC fixture profile fixes its observation time, so the public source
+        path correctly rejects the profile-owned changed Location at equal
+        time.  Case-head tests use a fully shaped synthetic Core projection
+        with a strictly later observation time to exercise the separate Core
+        lineage owner without weakening source chronology.
+        """
+        baseline_source_id = self.source_result["source_artifact_id"]
+        baseline_reconciliation_id = self.source_result["reconciliation_artifact_id"]
+        connection = core._connection(self.core_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            source_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (baseline_source_id,)).fetchone()
+            if source_row is None:
+                raise AssertionError("baseline source missing")
+            source = json.loads(bytes(source_row[0]).decode("ascii"))
+            source["ingress_artifact_id"] = _hex("ordered-second-ingress")
+            source["envelope_id"] = _hex("ordered-second-envelope")
+            source["envelope_digest"] = _hex("ordered-second-envelope-bytes")
+            source["snapshot_id"] = _hex("ordered-second-snapshot")
+            source["snapshot_root"] = _hex("ordered-second-snapshot-root")
+            source["content_root"] = _hex("ordered-second-content")
+            source["ingress_prefix_root"] = _hex("ordered-second-prefix")
+            source["ingress_after_root"] = _hex("ordered-second-after")
+            source["ingress_head_root"] = _hex("ordered-second-after")
+            source["observation_time"] = profile.FIXTURE_OBSERVATION_TIME + 1
+            source["observation_status"] = "OBSERVED_CHANGED"
+            source["chronology"] = "ADVANCING"
+            source["artifact_id"] = ""
+            source["artifact_id"] = core._digest("source-artifact-id", {key: source[key] for key in source if key not in {"artifact_id", "flags"}})
+            source_raw = core._canonical(source)
+            source_id, _ = self.core._admit_artifact(
+                connection,
+                kind="SOURCE_OBSERVATION",
+                raw=source_raw,
+                profile_digest=self.core_config.runtime_profile_digest,
+                predecessor_id=baseline_source_id,
+                source_artifact_id=source["ingress_artifact_id"],
+                operation_id=core._digest("source-operation", {"ingress_artifact_id": source["ingress_artifact_id"]}),
+                request_digest=core._digest("source-request", {"ingress_artifact_id": source["ingress_artifact_id"]}),
+                state="OBSERVED_CHANGED",
+                observed_at=profile.FIXTURE_OBSERVATION_TIME + 10,
+                ingress_watermark=source["ingress_event_sequence"],
+            )
+            reconciliation = {
+                "schema": "mirror-core-reconciliation-v3", "schema_version": 3, "kind": "RECONCILIATION", "artifact_id": "",
+                "current_source_artifact_id": source_id, "prior_source_artifact_id": baseline_source_id,
+                "current_content_root": source["content_root"], "prior_content_root": json.loads(bytes(source_row[0]).decode("ascii"))["content_root"],
+                "source_status": "COMPLETE", "observation_status": "OBSERVED_CHANGED", "chronology": "ADVANCING", "linkage": "LINKED", "flags": dict(core.FIXED_FLAGS),
+            }
+            reconciliation["artifact_id"] = core._digest("reconciliation-id", {key: reconciliation[key] for key in reconciliation if key != "artifact_id"})
+            reconciliation_id, _ = self.core._admit_artifact(
+                connection,
+                kind="RECONCILIATION",
+                raw=core._canonical(reconciliation),
+                profile_digest=self.core_config.runtime_profile_digest,
+                predecessor_id=baseline_reconciliation_id,
+                source_artifact_id=source_id,
+                operation_id=core._digest("reconciliation-operation", {"source_artifact_id": source_id}),
+                request_digest=core._digest("reconciliation-request", {"source_artifact_id": source_id}),
+                state="OBSERVED_CHANGED",
+                observed_at=profile.FIXTURE_OBSERVATION_TIME + 10,
+                ingress_watermark=source["ingress_event_sequence"],
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 10
+        return self.core.admit_case(reconciliation_id)
 
     def test_exact_three_owner_tables_and_full_chain(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
@@ -1386,7 +1408,7 @@ class MirrorV2Fixture(unittest.TestCase):
             else:
                 self.assertEqual(names, expected & {name for name in expected if name.startswith("recovery_")})
 
-    def test_fetch_attestations_are_typed_events_and_delivery_is_durable(self) -> None:
+    def test_fetch_attestations_are_typed_events_and_core_has_no_delivery_subsystem(self) -> None:
         connection = sqlite3.connect(self.ingress_path)
         try:
             names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
@@ -1404,20 +1426,12 @@ class MirrorV2Fixture(unittest.TestCase):
             self.assertTrue(all(row[2] is not None and len(row[3]) == 128 and row[4] > 0 for row in heads))
         finally:
             connection.close()
-        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 20
-        token = _token("synthetic-job-v2")
-        intent = self.core.begin_delivery(self.session_id, "synthetic-job-v2", lease_token=token)
-        self.assertEqual(
-            self.core.begin_delivery(self.session_id, "synthetic-job-v2", lease_token=token).raw,
-            intent.raw,
-        )
-        response_digest = _hex("receiver-ack")
-        ack = self.core.acknowledge_delivery(self.session_id, job_id="synthetic-job-v2", lease_token=token, response_digest=response_digest)
-        self.assertEqual(
-            self.core.acknowledge_delivery(self.session_id, job_id="synthetic-job-v2", lease_token=token, response_digest=response_digest).raw,
-            ack.raw,
-        )
-        self.assertEqual(self.core.verify(ingress_path=self.ingress_path)["event_count"], 10)
+        core_connection = sqlite3.connect(self.core_path)
+        try:
+            self.assertNotIn("DELIVERY", {row[0] for row in core_connection.execute("SELECT DISTINCT event_kind FROM core_events")})
+        finally:
+            core_connection.close()
+        self.assertEqual(self.core.verify(ingress_path=self.ingress_path)["event_count"], 8)
 
     def test_raw_envelope_is_ingress_only_and_exports_are_raw_free(self) -> None:
         connection = sqlite3.connect(self.ingress_path)
@@ -1439,7 +1453,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotIn(self.envelope, json.dumps(self.ingress.support(), sort_keys=True).encode("ascii"))
         self.assertNotIn(self.envelope, json.dumps(self.core.support(), sort_keys=True).encode("ascii"))
 
-    def test_profile_owned_changed_observation_reaches_core_case_without_authority(self) -> None:
+    def test_profile_owned_changed_observation_rejects_equal_time_without_authority(self) -> None:
         from tests.test_nc_medicaid_fhir_source import _envelope
         changed_path = self.root / "changed-ingress.db"
         scheduled_at = profile.FIXTURE_OBSERVATION_TIME
@@ -1454,41 +1468,14 @@ class MirrorV2Fixture(unittest.TestCase):
             attempt=1,
             lease_token=_ingress_token("lease-v2-changed"),
         )
-        result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
-        self.assertEqual(result["observation_status"], "OBSERVED_CHANGED")
-        case_id = self.core.admit_case(result["reconciliation_artifact_id"] or "")
-        responsibility = self.core.advance_case(
-            case_id,
-            next_state="RESPONSIBILITY",
-            responsibility="UNKNOWN",
-        )
-        remediation = self.core.advance_case(
-            responsibility.subject_id,
-            next_state="REMEDIATION",
-            remediation="PROPOSED",
-        )
-        retest = self.core.advance_case(
-            remediation.subject_id,
-            next_state="RETEST",
-            retest="EXECUTED",
-        )
-        persistence = self.core.advance_case(
-            retest.subject_id,
-            next_state="PERSISTENCE",
-            parity="DIVERGENT",
-        )
-        self.assertEqual(
-            self.core.advance_case(
-                retest.subject_id,
-                next_state="PERSISTENCE",
-                parity="DIVERGENT",
-            ).raw,
-            persistence.raw,
-        )
-        verified = self.core.verify()
-        self.assertGreaterEqual(verified["artifact_count"], 7)
-        self.assertFalse(verified["flags"]["payment_authority"])
-        self.assertEqual(persistence.subject_id, self.core.admit_case(result["reconciliation_artifact_id"] or ""))
+        ingress_independent.verify_database(changed_path, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
+        before = self.core.verify()
+        with self.assertRaisesRegex(core.CoreConflictError, "core:source-chronology"):
+            self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
+        after = self.core.verify()
+        self.assertEqual(before["sequence"], after["sequence"])
+        self.assertEqual(before["head_root"], after["head_root"])
+        self.assertFalse(after["flags"]["payment_authority"])
 
     def test_old_or_wrong_database_schema_rejected_without_claim(self) -> None:
         old = self.root / "old.db"
@@ -1517,6 +1504,7 @@ class MirrorV2Fixture(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
+
         with self.assertRaisesRegex(ingress.IngressError, "ingress:database"):
             ingress.IngressServiceV2(bad_ingress, self.ingress_config)
         bad_core = self.root / "bad-core-state.db"
@@ -1587,30 +1575,28 @@ class MirrorV2Fixture(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_core_structural_only_verification_is_not_upstream_acceptance(self) -> None:
+        structural = core_independent.verify_database(
+            self.core_path,
+            expected_database_id=self.core_config.database_id,
+            expected_config_digest=self.core_config.digest,
+        )
+        self.assertTrue(structural["structural_valid"])
+        self.assertFalse(structural["ingress_bound"])
+        bound = core_independent.verify_database(
+            self.core_path,
+            expected_database_id=self.core_config.database_id,
+            expected_config_digest=self.core_config.digest,
+            ingress_path=self.ingress_path,
+        )
+        self.assertTrue(bound["structural_valid"])
+        self.assertTrue(bound["ingress_bound"])
+
     def test_removed_later_views_are_not_core_artifact_kinds(self) -> None:
         for kind in ("DENOMINATOR", "CONTRACT", "TRANSACTION", "MONEY", "TRANSITION", "STATE_VALUE"):
             self.assertNotIn(kind, core.ARTIFACT_KINDS)
         self.assertFalse(core.FIXED_FLAGS.get("policyResult", False))
         self.assertFalse(core.FIXED_FLAGS.get("effectiveDirective", False))
-
-    def test_delivery_response_loss_requeues_with_bounded_exhaustion(self) -> None:
-        now = profile.FIXTURE_OBSERVATION_TIME + 100
-        self.core_clock.value = now
-        lease = _token("delivery-retry-1")
-        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease)
-        self.core.mark_delivery_unknown(self.session_id, job_id="retry-job-v2", lease_token=lease)
-        lease = _token("delivery-retry-2")
-        self.core_clock.value = now + self.core_config.cadence_seconds + 1
-        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease)
-        self.core.mark_delivery_unknown(self.session_id, job_id="retry-job-v2", lease_token=lease)
-        lease = _token("delivery-retry-3")
-        self.core_clock.value = now + 2 * (self.core_config.cadence_seconds + 1)
-        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease)
-        self.core.mark_delivery_unknown(self.session_id, job_id="retry-job-v2", lease_token=lease)
-        self.core_clock.value = now + 3 * (self.core_config.cadence_seconds + 1)
-        terminal = self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=_token("delivery-retry-4"))
-        self.assertEqual("EXHAUSTED", terminal.next_state)
-        self.assertEqual(self.core.verify(ingress_path=self.ingress_path)["flags"]["payment_authority"], False)
 
     def test_key_revocation_blocks_restore_and_storage_corruption(self) -> None:
         point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
@@ -2117,7 +2103,7 @@ class MirrorV2Fixture(unittest.TestCase):
         core_expected = {"database_id": "core", "head_root": "f" * 128}
 
         def fault(point: str) -> None:
-            if point == "after_ingress_link":
+            if point == "after_core_link":
                 raise RuntimeError("host path and credential canary")
 
         operation = _hex("pair-link-fault")
@@ -2137,9 +2123,9 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual("restore-publication:fault", str(caught.exception))
         self.assertIsNone(caught.exception.__cause__)
         self.assertIsNone(caught.exception.__context__)
-        self.assertTrue(ingress_target.exists())
-        self.assertFalse(core_target.exists())
-        receipt = restore_publication._namespace(ingress_target, operation) / "publication.json"
+        self.assertFalse(ingress_target.exists())
+        self.assertTrue(core_target.exists())
+        receipt = restore_publication._namespace(core_target, operation) / "publication.json"
         receipt.write_bytes(receipt.read_bytes()[:17])
         retry = restore_publication.publish_pair_create_only(
             ingress_target=ingress_target,
@@ -2152,8 +2138,8 @@ class MirrorV2Fixture(unittest.TestCase):
             verify_ingress=lambda raw: dict(ingress_expected),
             verify_core=lambda raw, exact_ingress: dict(core_expected),
         )
-        self.assertEqual("ADOPTED_EXISTING", retry.ingress.kind)
-        self.assertEqual("CREATED_THIS_CALL", retry.core.kind)
+        self.assertEqual("CREATED_THIS_CALL", retry.ingress.kind)
+        self.assertEqual("ADOPTED_EXISTING", retry.core.kind)
         self.assertEqual([], list(self.root.glob(".mirror-restore-pair-v1-*")))
 
     def test_restore_publication_rejects_all_target_sidecars_and_verifier_canary(self) -> None:
@@ -2516,7 +2502,7 @@ class MirrorV2Fixture(unittest.TestCase):
 
         def publish_with_revocation(**kwargs: object) -> object:
             def fault(point_name: str) -> None:
-                if point_name == "after_ingress_link":
+                if point_name == "after_core_link":
                     self.custody.revoked.add(("synthetic-key", 1))
                     raise RuntimeError("revocation path credential canary")
             with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
@@ -2525,8 +2511,8 @@ class MirrorV2Fixture(unittest.TestCase):
         with mock.patch.object(restore_publication, "publish_pair_create_only", publish_with_revocation):
             with self.assertRaises(recovery.RecoveryError):
                 self.recovery_service.restore_point(point.point_id, target_i, target_c)
-        self.assertTrue(target_i.exists())
-        self.assertFalse(target_c.exists())
+        self.assertFalse(target_i.exists())
+        self.assertTrue(target_c.exists())
         self.assertEqual("PUBLICATION_PENDING", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
         with self.assertRaises(recovery.RecoveryConflictError):
             self.recovery_service.restore_point(point.point_id, target_i, target_c)
@@ -2539,7 +2525,7 @@ class MirrorV2Fixture(unittest.TestCase):
         other_c = self.root / "pending-other-core.db"
 
         def fault(point_name: str) -> None:
-            if point_name == "before_ingress_link":
+            if point_name == "before_core_link":
                 raise RuntimeError("response lost before first link")
 
         with self.assertRaises(recovery.RecoveryError):
@@ -2564,14 +2550,14 @@ class MirrorV2Fixture(unittest.TestCase):
         other_c = self.root / "linked-other-core.db"
 
         def fault(point_name: str) -> None:
-            if point_name == "after_ingress_link":
+            if point_name == "after_core_link":
                 raise RuntimeError("response lost after first link")
 
         with self.assertRaises(recovery.RecoveryError):
             with mock.patch.object(restore_publication, "_FAULT_HOOK", fault):
                 self.recovery_service.restore_point(point.point_id, first_i, first_c)
-        first_inode = os.stat(first_i).st_ino
-        self.assertFalse(first_c.exists())
+        first_inode = os.stat(first_c).st_ino
+        self.assertFalse(first_i.exists())
         self.assertEqual("PUBLICATION_PENDING", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
         with self.assertRaises(recovery.RecoveryConflictError):
             self.recovery_service.restore_point(point.point_id, other_i, other_c)
@@ -2579,7 +2565,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertFalse(other_c.exists())
         resumed = self.recovery_service.restore_point(point.point_id, first_i, first_c)
         self.assertEqual("PUBLISHED", resumed.state)
-        self.assertEqual(first_inode, os.stat(first_i).st_ino)
+        self.assertEqual(first_inode, os.stat(first_c).st_ino)
         self.assertEqual("PUBLISHED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
 
     def test_recovery_published_retry_is_destination_bound_and_path_free(self) -> None:
@@ -2657,7 +2643,7 @@ class MirrorV2Fixture(unittest.TestCase):
         pending_c = self.root / "rebound-pending-core.db"
 
         def fault(point_name: str) -> None:
-            if point_name == "before_ingress_link":
+            if point_name == "before_core_link":
                 raise RuntimeError("pending claim fault")
 
         with self.assertRaises(recovery.RecoveryError):

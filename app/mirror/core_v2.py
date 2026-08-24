@@ -1,17 +1,19 @@
-"""The single six-table durable Mirror Core V2 owner.
+"""The single six-table durable Mirror Core V3 owner.
 
-Core is a read-only evidence and continuity owner.  It does not send to a
-receiver, adjudicate, authorize payment, or own ingress raw source bytes.
+Core is a read-only evidence, reconciliation, and observation owner.  It has
+no delivery, payment, clearance, settlement, adjudication, or source-truth
+authority.  Raw source custody remains with Ingress.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hmac
+import hashlib
 import json
+import os
 from pathlib import Path
-import re
 import sqlite3
+import stat
 import time
 from typing import Mapping
 
@@ -21,9 +23,8 @@ from app.mirror import external_privacy_support_approval_independent as privacy
 from app.mirror import ingress_v2_independent as ingress
 from app.mirror import nc_medicaid_fhir_independent as fhir
 from app.mirror import nc_medicaid_fhir_profile as profile
-from app.mirror import provider_trust_graph_independent as graph_independent
-from app.mirror.source_admission import SourceAdmissionService
 from app.mirror.error_boundary import raise_redacted
+from app.mirror.source_admission import SourceAdmissionService
 
 
 SCHEMA = independent.SCHEMA
@@ -36,22 +37,37 @@ CASE_EDGES = {
     "REMEDIATION": {"RETEST"}, "RETEST": {"PERSISTENCE"},
     "PERSISTENCE": {"RESOLVED", "SUPERSEDED"},
 }
-TOKEN_RE = re.compile(r"^[0-9a-f]{128}$")
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_ARTIFACT_BYTES = independent.MAX_ARTIFACT_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
+MAX_BATCH_ARTIFACTS = 256
+MAX_IDENTIFIER_BYTES = 128
+_REPARSE_POINT = 0x400
+_SIDECARS = ("-wal", "-shm", "-journal")
 
 
 class CoreError(ValueError):
-    """Public-safe core error."""
+    """Public-safe Core error."""
 
 
 class CoreConflictError(CoreError):
-    """A stale or conflicting core request."""
+    """A stale, conflicting, or rebound Core request."""
 
 
 class CoreBusyError(CoreError):
-    """A bounded core writer failure."""
+    """A bounded Core writer contention failure."""
+
+
+def _safe_identifier(value: object, label: str) -> str:
+    if type(value) is not str or not value:
+        raise CoreError(label)
+    try:
+        raw = value.encode("ascii")
+    except UnicodeEncodeError:
+        raise CoreError(label) from None
+    if len(raw) > MAX_IDENTIFIER_BYTES or any(not (char.isalnum() or char in "._:-") for char in value):
+        raise CoreError(label)
+    return value
 
 
 @dataclass(frozen=True)
@@ -59,32 +75,38 @@ class CoreConfigV2:
     database_id: str
     chain_id: str
     ingress_database_id: str
+    ingress_chain_id: str
     runtime_profile_digest: str
     governance_policy_digest: str
     privacy_policy_digest: str
+    ingress_config_digest: str
     max_sessions: int = 8
     max_slots_per_session: int = 16
     cadence_seconds: int = 60
-    max_delivery_attempts: int = 3
 
     def __post_init__(self) -> None:
-        if any(type(value) is not str or not value for value in (self.database_id, self.chain_id, self.ingress_database_id)):
-            raise CoreError("core:config")
+        for value in (self.database_id, self.chain_id, self.ingress_database_id, self.ingress_chain_id):
+            _safe_identifier(value, "core:config")
         for value in (self.runtime_profile_digest, self.governance_policy_digest, self.privacy_policy_digest):
             if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
                 raise CoreError("core:config")
-        if type(self.max_sessions) is not int or not 1 <= self.max_sessions <= 64 or type(self.max_slots_per_session) is not int or not 1 <= self.max_slots_per_session <= 256 or type(self.cadence_seconds) is not int or self.cadence_seconds <= 0 or type(self.max_delivery_attempts) is not int or not 1 <= self.max_delivery_attempts <= 8:
+        if type(self.ingress_config_digest) is not str or len(self.ingress_config_digest) != 128 or any(char not in "0123456789abcdef" for char in self.ingress_config_digest):
+            raise CoreError("core:config")
+        if type(self.max_sessions) is not int or not 1 <= self.max_sessions <= 64 or type(self.max_slots_per_session) is not int or not 1 <= self.max_slots_per_session <= 256 or type(self.cadence_seconds) is not int or self.cadence_seconds <= 0:
             raise CoreError("core:config")
 
     def material(self) -> dict[str, object]:
         return {
-            "schema": SCHEMA, "schema_version": SCHEMA_VERSION, "database_id": self.database_id,
-            "chain_id": self.chain_id, "ingress_database_id": self.ingress_database_id,
+            "schema": SCHEMA, "schema_version": SCHEMA_VERSION,
+            "database_id": self.database_id, "chain_id": self.chain_id,
+            "ingress_database_id": self.ingress_database_id,
+            "ingress_chain_id": self.ingress_chain_id,
+            "ingress_config_digest": self.ingress_config_digest,
             "runtime_profile_digest": self.runtime_profile_digest,
             "governance_policy_digest": self.governance_policy_digest,
-            "privacy_policy_digest": self.privacy_policy_digest, "max_sessions": self.max_sessions,
-            "max_slots_per_session": self.max_slots_per_session, "cadence_seconds": self.cadence_seconds,
-            "max_delivery_attempts": self.max_delivery_attempts, "flags": dict(FIXED_FLAGS),
+            "privacy_policy_digest": self.privacy_policy_digest,
+            "max_sessions": self.max_sessions, "max_slots_per_session": self.max_slots_per_session,
+            "cadence_seconds": self.cadence_seconds, "flags": dict(FIXED_FLAGS),
         }
 
     @property
@@ -118,52 +140,114 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return independent._raw_digest(label, raw)
 
 
-def _is_capacity_error(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return any(marker in text for marker in ("database or disk is full", "max_page_count", "page count", "too big"))
+def _require_digest(value: object, label: str) -> str:
+    if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
+        raise CoreConflictError(label)
+    return value
 
 
-def _raise_sqlite_error(exc: sqlite3.Error, *, busy: bool = False) -> None:
-    if _is_capacity_error(exc):
+def _sqlite_error(exc: sqlite3.Error, *, busy: bool = False) -> None:
+    error_name = getattr(exc, "sqlite_errorname", "")
+    if error_name in {"SQLITE_FULL", "SQLITE_TOOBIG"}:
         raise_redacted(CoreError, "core:capacity")
-    if busy and ("locked" in str(exc).lower() or "busy" in str(exc).lower()):
+    if busy and error_name in {"SQLITE_BUSY", "SQLITE_LOCKED"}:
         raise_redacted(CoreBusyError, "core:busy")
     raise_redacted(CoreError, "core:database")
 
 
-def _connection(path: Path) -> sqlite3.Connection:
+def _is_reparse(info: os.stat_result) -> bool:
+    return bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT)
+
+
+def _sidecar_present(path: Path) -> bool:
+    return any(os.path.lexists(os.fspath(path) + suffix) for suffix in _SIDECARS)
+
+
+def _path_identity(path: Path, *, allow_missing: bool) -> tuple[int, int] | None:
     try:
-        if path.is_file() and path.stat().st_size > MAX_DATABASE_BYTES:
-            raise_redacted(CoreError, "core:capacity")
+        parent = os.lstat(path.parent)
+        if not stat.S_ISDIR(parent.st_mode) or _is_reparse(parent):
+            raise CoreError("core:database-open")
+        if _sidecar_present(path):
+            raise CoreError("core:database-open")
+        info = os.lstat(path)
+    except FileNotFoundError:
+        if allow_missing:
+            return None
+        raise CoreError("core:database-open") from None
     except CoreError:
         raise
     except OSError:
         raise_redacted(CoreError, "core:database-open")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or _is_reparse(info) or info.st_nlink != 1:
+        raise CoreError("core:database-open")
+    if info.st_size > MAX_DATABASE_BYTES:
+        raise CoreError("core:capacity")
+    return int(info.st_dev), int(info.st_ino)
+
+
+def _configure(connection: sqlite3.Connection) -> None:
     try:
-        connection = sqlite3.connect(path, timeout=0.25, isolation_level=None)
-        connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=250")
-        connection.execute("PRAGMA journal_mode=DELETE")
+        mode = str(connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0]).lower()
+        if mode != "delete":
+            raise CoreError("core:database-open")
         connection.execute("PRAGMA synchronous=FULL")
+        if int(connection.execute("PRAGMA synchronous").fetchone()[0]) != 2:
+            raise CoreError("core:database-open")
         page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        if page_size != 4096 or page_count < 0 or page_size * page_count > MAX_DATABASE_BYTES:
+            raise CoreError("core:capacity")
         max_pages = MAX_DATABASE_BYTES // page_size
-        if page_size <= 0 or max_pages <= 0:
-            raise_redacted(CoreError, "core:capacity")
-        configured_pages = int(connection.execute(f"PRAGMA max_page_count={max_pages}").fetchone()[0])
-        if configured_pages <= 0 or configured_pages * page_size > MAX_DATABASE_BYTES:
-            raise_redacted(CoreError, "core:capacity")
-        if path.is_file() and path.stat().st_size > MAX_DATABASE_BYTES:
-            raise_redacted(CoreError, "core:capacity")
-        return connection
+        configured = int(connection.execute(f"PRAGMA max_page_count={max_pages}").fetchone()[0])
+        if configured <= 0 or configured > max_pages or configured * page_size > MAX_DATABASE_BYTES:
+            raise CoreError("core:capacity")
+        if int(connection.execute("PRAGMA page_count").fetchone()[0]) > configured:
+            raise CoreError("core:capacity")
     except CoreError:
         raise
+    except sqlite3.Error as exc:
+        _sqlite_error(exc)
+
+
+def _connection(path: Path, *, expected_identity: tuple[int, int] | None = None, create: bool = False) -> sqlite3.Connection:
+    before = _path_identity(path, allow_missing=create)
+    if create and expected_identity is not None:
+        raise CoreError("core:database-open")
+    if not create and before is None:
+        raise CoreError("core:database-open")
+    if expected_identity is not None and (before is None or before != expected_identity):
+        raise CoreError("core:database-open")
+    connection: sqlite3.Connection | None = None
+    try:
+        if create:
+            connection = sqlite3.connect(path, isolation_level=None, timeout=0.25)
+        else:
+            connection = sqlite3.connect(path.absolute().as_uri() + "?mode=rw", uri=True, isolation_level=None, timeout=0.25)
+        after_connect = _path_identity(path, allow_missing=False)
+        if expected_identity is not None and after_connect != expected_identity:
+            raise CoreError("core:database-open")
+        _configure(connection)
+        after_setup = _path_identity(path, allow_missing=False)
+        if after_setup != after_connect or (expected_identity is not None and after_setup != expected_identity):
+            raise CoreError("core:database-open")
+        connection.row_factory = sqlite3.Row
+        return connection
+    except CoreError:
+        if connection is not None:
+            connection.close()
+        raise
     except OSError:
+        if connection is not None:
+            connection.close()
         raise_redacted(CoreError, "core:database-open")
     except sqlite3.Error as exc:
-        if _is_capacity_error(exc):
-            raise_redacted(CoreError, "core:capacity")
-        raise_redacted(CoreError, "core:database-open")
+        if connection is not None:
+            connection.close()
+        _sqlite_error(exc)
+    raise CoreError("core:database-open")
 
 
 def _table_names(connection: sqlite3.Connection) -> tuple[str, ...]:
@@ -174,101 +258,52 @@ def _columns(connection: sqlite3.Connection, table: str) -> tuple[str, ...]:
     return tuple(row[1] for row in connection.execute("SELECT * FROM pragma_table_info(?) ORDER BY cid", (table,)).fetchall())
 
 
-def _init(path: Path, config: CoreConfigV2) -> None:
-    connection = _connection(path)
-    try:
-        current = _table_names(connection)
-        if current and current != tuple(sorted(TABLES)):
-            raise CoreError("core:legacy-schema")
-        if not current:
-            connection.executescript(
-                """
-                CREATE TABLE core_meta(
-                    meta_id INTEGER PRIMARY KEY CHECK(meta_id=1),
-                    schema TEXT NOT NULL,
-                    schema_version INTEGER NOT NULL,
-                    database_id TEXT NOT NULL,
-                    chain_id TEXT NOT NULL,
-                    config_digest TEXT NOT NULL,
-                    sequence INTEGER NOT NULL,
-                    head_root TEXT NOT NULL,
-                    ingress_database_id TEXT NOT NULL,
-                    ingress_watermark INTEGER NOT NULL
-                );
-                CREATE TABLE core_artifacts(
-                    artifact_id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    raw BLOB NOT NULL,
-                    profile_digest TEXT NOT NULL,
-                    source_artifact_id TEXT,
-                    predecessor_id TEXT,
-                    current_state TEXT NOT NULL,
-                    created_event_sequence INTEGER NOT NULL
-                );
-                CREATE TABLE core_heads(
-                    stream_kind TEXT NOT NULL,
-                    stream_id TEXT NOT NULL,
-                    head_ref TEXT NOT NULL,
-                    head_root TEXT NOT NULL,
-                    event_sequence INTEGER NOT NULL,
-                    PRIMARY KEY(stream_kind,stream_id)
-                );
-                CREATE TABLE core_sessions(
-                    session_id TEXT PRIMARY KEY,
-                    state TEXT NOT NULL,
-                    source_artifact_id TEXT NOT NULL,
-                    governance_artifact_id TEXT NOT NULL,
-                    privacy_artifact_id TEXT NOT NULL,
-                    head_root TEXT NOT NULL,
-                    last_slot INTEGER NOT NULL,
-                    delivery_state TEXT NOT NULL,
-                    delivery_job_id TEXT,
-                    delivery_attempt INTEGER NOT NULL,
-                    delivery_lease_token_digest TEXT,
-                    delivery_lease_until INTEGER,
-                    delivery_response_digest TEXT,
-                    delivery_error_code TEXT
-                );
-                CREATE TABLE core_slots(
-                    session_id TEXT NOT NULL,
-                    slot_number INTEGER NOT NULL,
-                    result_digest TEXT NOT NULL,
-                    result_raw BLOB NOT NULL,
-                    PRIMARY KEY(session_id,slot_number),
-                    FOREIGN KEY(session_id) REFERENCES core_sessions(session_id)
-                );
-                CREATE TABLE core_events(
-                    sequence INTEGER PRIMARY KEY,
-                    event_id TEXT NOT NULL UNIQUE,
-                    event_kind TEXT NOT NULL,
-                    operation_id TEXT NOT NULL UNIQUE,
-                    subject_id TEXT NOT NULL,
-                    event_raw BLOB NOT NULL,
-                    receipt_digest TEXT NOT NULL
-                );
-                CREATE INDEX core_artifacts_kind_source_event_idx ON core_artifacts(kind,source_artifact_id,created_event_sequence);
-                """
-            )
-            connection.execute(
-                "INSERT INTO core_meta(meta_id,schema,schema_version,database_id,chain_id,config_digest,sequence,head_root,ingress_database_id,ingress_watermark) VALUES(1,?,?,?,?,?,?,?,?,?)",
-                (SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, 0, independent.GENESIS_ROOT, config.ingress_database_id, 0),
-            )
-        else:
-            for table, columns in independent.TABLE_COLUMNS.items():
-                if _columns(connection, table) != columns:
-                    raise CoreError("core:legacy-schema")
+def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
+    existing = _path_identity(path, allow_missing=True)
+    if existing is not None:
+        independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
+        connection = _connection(path, expected_identity=existing)
+        try:
+            if _table_names(connection) != tuple(sorted(TABLES)) or any(_columns(connection, table) != columns for table, columns in independent.TABLE_COLUMNS.items()):
+                raise CoreError("core:legacy-schema")
             indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'").fetchall()}
             if indexes != {independent.EXPLICIT_INDEX}:
                 raise CoreError("core:legacy-schema")
             row = connection.execute("SELECT * FROM core_meta WHERE meta_id=1").fetchone()
-            if row is None or row["schema"] != SCHEMA or row["schema_version"] != SCHEMA_VERSION or row["database_id"] != config.database_id or row["chain_id"] != config.chain_id or row["config_digest"] != config.digest or row["ingress_database_id"] != config.ingress_database_id:
+            if row is None or bytes(row["config_raw"]) != _canonical(config.material()) or row["database_id"] != config.database_id or row["chain_id"] != config.chain_id:
                 raise CoreError("core:identity")
+        finally:
+            connection.close()
+        return existing
+
+    connection = _connection(path, create=True)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("CREATE TABLE core_meta(meta_id INTEGER PRIMARY KEY CHECK(meta_id=1),schema TEXT NOT NULL,schema_version INTEGER NOT NULL,database_id TEXT NOT NULL,chain_id TEXT NOT NULL,config_digest TEXT NOT NULL,config_raw BLOB NOT NULL,sequence INTEGER NOT NULL,head_root TEXT NOT NULL,ingress_database_id TEXT NOT NULL,ingress_watermark INTEGER NOT NULL)")
+        connection.execute("CREATE TABLE core_artifacts(artifact_id TEXT PRIMARY KEY,kind TEXT NOT NULL,raw BLOB NOT NULL,profile_digest TEXT NOT NULL,source_artifact_id TEXT,predecessor_id TEXT,current_state TEXT NOT NULL,created_event_sequence INTEGER NOT NULL)")
+        connection.execute("CREATE TABLE core_heads(stream_kind TEXT NOT NULL,stream_id TEXT NOT NULL,head_ref TEXT NOT NULL,head_root TEXT NOT NULL,event_sequence INTEGER NOT NULL,PRIMARY KEY(stream_kind,stream_id))")
+        connection.execute("CREATE TABLE core_sessions(session_id TEXT PRIMARY KEY,state TEXT NOT NULL,source_artifact_id TEXT NOT NULL,governance_artifact_id TEXT NOT NULL,privacy_artifact_id TEXT NOT NULL,head_root TEXT NOT NULL,last_slot INTEGER NOT NULL)")
+        connection.execute("CREATE TABLE core_slots(session_id TEXT NOT NULL,slot_number INTEGER NOT NULL,result_digest TEXT NOT NULL,result_raw BLOB NOT NULL,PRIMARY KEY(session_id,slot_number),FOREIGN KEY(session_id) REFERENCES core_sessions(session_id))")
+        connection.execute("CREATE TABLE core_events(sequence INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,event_kind TEXT NOT NULL,operation_id TEXT NOT NULL UNIQUE,subject_id TEXT NOT NULL,event_raw BLOB NOT NULL,receipt_digest TEXT NOT NULL)")
+        connection.execute("CREATE INDEX core_artifacts_kind_source_event_idx ON core_artifacts(kind,source_artifact_id,created_event_sequence)")
+        connection.execute("INSERT INTO core_meta(meta_id,schema,schema_version,database_id,chain_id,config_digest,config_raw,sequence,head_root,ingress_database_id,ingress_watermark) VALUES(1,?,?,?,?,?,?,?,?,?,?)", (SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, _canonical(config.material()), 0, independent.GENESIS_ROOT, config.ingress_database_id, 0))
+        connection.commit()
     except CoreError:
+        connection.rollback()
         raise
+    except sqlite3.OperationalError as exc:
+        connection.rollback()
+        _sqlite_error(exc, busy=True)
     except sqlite3.Error as exc:
-        _raise_sqlite_error(exc)
+        connection.rollback()
+        _sqlite_error(exc)
     finally:
         connection.close()
+    independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
+    identity = _path_identity(path, allow_missing=False)
+    if identity is None:
+        raise CoreError("core:database-open")
+    return identity
 
 
 class CoreServiceV2:
@@ -278,10 +313,20 @@ class CoreServiceV2:
         self.clock = clock if clock is not None else lambda: int(time.time())
         if not callable(self.clock):
             raise CoreError("core:clock")
-        _init(self.path, config)
+        self._database_identity = _init(self.path, config)
+
+    def _open(self) -> sqlite3.Connection:
+        return _connection(self.path, expected_identity=self._database_identity)
 
     def verify(self, *, ingress_path: str | Path | None = None) -> dict[str, object]:
         return independent.verify_database(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, ingress_path=ingress_path)
+
+    def logical_export(self) -> bytes:
+        return independent.logical_export(self.verify())
+
+    def support(self) -> dict[str, object]:
+        result = self.verify()
+        return {"schema": "mirror-core-support-v3", "artifact_count": result["artifact_count"], "session_count": result["session_count"], "slot_count": result["slot_count"], "event_count": result["event_count"], "structural_valid": result["structural_valid"], "ingress_bound": result["ingress_bound"], "flags": dict(FIXED_FLAGS)}
 
     def _owner_now(self, connection: sqlite3.Connection) -> int:
         try:
@@ -291,20 +336,23 @@ class CoreServiceV2:
         if type(value) is not int or value < 0:
             raise CoreError("core:clock")
         row = connection.execute("SELECT event_raw FROM core_events ORDER BY sequence DESC LIMIT 1").fetchone()
-        latest = None
         if row is not None:
-            try:
-                latest = independent._parse(bytes(row[0]), "core:event-raw")["observed_at"]
-            except Exception:
+            raw = row[0]
+            if type(raw) is not bytes or len(raw) > MAX_EVENT_BYTES:
                 raise CoreError("core:event")
-        if latest is not None and value < int(latest):
-            raise CoreConflictError("core:clock-rewind")
+            latest = independent._parse(raw, "core:event-raw")["observed_at"]
+            if type(latest) is not int or value < latest:
+                raise CoreConflictError("core:clock-rewind")
         return value
 
     @staticmethod
     def _event(connection: sqlite3.Connection, operation_id: str) -> bytes | None:
         row = connection.execute("SELECT event_raw FROM core_events WHERE operation_id=?", (operation_id,)).fetchone()
-        return bytes(row[0]) if row is not None else None
+        if row is None:
+            return None
+        if type(row[0]) is not bytes or len(row[0]) > MAX_EVENT_BYTES:
+            raise CoreError("core:receipt")
+        return bytes(row[0])
 
     @staticmethod
     def _receipt(raw: bytes) -> CoreReceipt:
@@ -314,25 +362,14 @@ class CoreServiceV2:
             raise_redacted(CoreError, "core:receipt")
         return CoreReceipt(raw=raw, operation_id=str(value["operation_id"]), event_id=str(value["event_id"]), subject_id=str(value["subject_id"]), next_state=str(value["next_state"]), sequence=int(value["sequence"]), after_root=str(value["after_root"]))
 
-    @staticmethod
-    def _session_snapshot(row: Mapping[str, object]) -> dict[str, object]:
-        return {key: row[key] for key in independent.SESSION_FIELDS}
-
     def _append(self, connection: sqlite3.Connection, *, kind: str, operation_id: str, subject_id: str, request_digest: str, prior_state: str, next_state: str, attempt: int, observed_at: int, material: Mapping[str, object], payload_digest: str, payload_length: int, stream_kind: str, stream_id: str, head_ref: str, ingress_watermark: int = 0) -> bytes:
         meta = connection.execute("SELECT * FROM core_meta WHERE meta_id=1").fetchone()
         if meta is None:
             raise CoreError("core:meta")
         sequence = int(meta["sequence"]) + 1
-        stream_row = connection.execute("SELECT head_root FROM core_heads WHERE stream_kind=? AND stream_id=?", (stream_kind, stream_id)).fetchone()
-        stream_before = str(stream_row[0]) if stream_row is not None else independent.GENESIS_ROOT
-        body: dict[str, object] = {
-            "schema": SCHEMA, "schema_version": SCHEMA_VERSION, "database_id": self.config.database_id, "chain_id": self.config.chain_id,
-            "sequence": sequence, "event_id": "", "event_kind": kind, "stream_kind": stream_kind, "stream_id": stream_id,
-            "operation_id": operation_id, "subject_id": subject_id, "request_digest": request_digest, "prior_state": prior_state,
-            "next_state": next_state, "attempt": attempt, "observed_at": observed_at, "material": dict(material),
-            "material_digest": _digest("material", material), "payload_digest": payload_digest, "payload_length": payload_length,
-            "before_root": str(meta["head_root"]), "after_root": "", "stream_before_root": stream_before, "stream_after_root": "",
-        }
+        stream = connection.execute("SELECT head_root FROM core_heads WHERE stream_kind=? AND stream_id=?", (stream_kind, stream_id)).fetchone()
+        stream_before = str(stream[0]) if stream is not None else independent.GENESIS_ROOT
+        body: dict[str, object] = {"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "database_id": self.config.database_id, "chain_id": self.config.chain_id, "sequence": sequence, "event_id": "", "event_kind": kind, "stream_kind": stream_kind, "stream_id": stream_id, "operation_id": operation_id, "subject_id": subject_id, "request_digest": request_digest, "prior_state": prior_state, "next_state": next_state, "attempt": attempt, "observed_at": observed_at, "material": dict(material), "material_digest": _digest("material", material), "payload_digest": payload_digest, "payload_length": payload_length, "before_root": str(meta["head_root"]), "after_root": "", "stream_before_root": stream_before, "stream_after_root": ""}
         body["event_id"] = _digest("event-id", {key: body[key] for key in independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}})
         body["after_root"] = independent._event_root(body)
         body["stream_after_root"] = independent._stream_root(body)
@@ -354,95 +391,171 @@ class CoreServiceV2:
         if existing_event is not None:
             value = independent._parse(existing_event, "core:event-raw")
             material = value.get("material")
-            if value.get("event_kind") != "ARTIFACT" or not isinstance(material, dict) or material.get("artifact_id") != artifact_id or material.get("raw_digest") != _raw_digest("artifact-bytes", raw):
+            expected_material = {
+                "artifact_id": artifact_id, "kind": kind,
+                "raw_digest": _raw_digest("artifact-bytes", raw), "raw_length": len(raw),
+                "profile_digest": profile_digest, "source_artifact_id": source_artifact_id,
+                "predecessor_id": predecessor_id, "current_state": state,
+                "ingress_watermark": ingress_watermark,
+            }
+            if value.get("event_kind") != "ARTIFACT" or material != expected_material or value.get("request_digest") != request_digest:
                 raise CoreConflictError("core:operation-conflict")
             return artifact_id, existing_event
         existing = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
         if existing is not None:
             if bytes(existing["raw"]) != raw or existing["profile_digest"] != profile_digest or existing["source_artifact_id"] != source_artifact_id or existing["predecessor_id"] != predecessor_id or existing["current_state"] != state:
                 raise CoreConflictError("core:artifact-conflict")
-            raise CoreError("core:artifact-receipt")
+            raise CoreConflictError("core:artifact-receipt")
+        parsed = independent._parse(raw, "core:artifact")
+        stream_id = str(parsed["case_id"]) if kind == "CASE" else kind
         connection.execute("INSERT INTO core_artifacts(artifact_id,kind,raw,profile_digest,source_artifact_id,predecessor_id,current_state,created_event_sequence) VALUES(?,?,?,?,?,?,?,0)", (artifact_id, kind, raw, profile_digest, source_artifact_id, predecessor_id, state))
-        material = {"artifact_id": artifact_id, "kind": kind, "raw_hex": raw.hex(), "raw_digest": _raw_digest("artifact-bytes", raw), "raw_length": len(raw), "profile_digest": profile_digest, "source_artifact_id": source_artifact_id, "predecessor_id": predecessor_id, "current_state": state, "ingress_watermark": ingress_watermark}
-        stream_id = kind
-        if kind == "CASE":
-            try:
-                case_value = independent._parse(raw, "core:artifact")
-                stream_id = str(case_value["case_id"])
-            except (independent.CoreVerificationError, KeyError, TypeError):
-                raise_redacted(CoreConflictError, "core:case")
+        material = {"artifact_id": artifact_id, "kind": kind, "raw_digest": _raw_digest("artifact-bytes", raw), "raw_length": len(raw), "profile_digest": profile_digest, "source_artifact_id": source_artifact_id, "predecessor_id": predecessor_id, "current_state": state, "ingress_watermark": ingress_watermark}
         event_raw = self._append(connection, kind="ARTIFACT", operation_id=operation_id, subject_id=artifact_id, request_digest=request_digest, prior_state="NONE", next_state=kind, attempt=0, observed_at=observed_at, material=material, payload_digest=artifact_id, payload_length=len(raw), stream_kind="ARTIFACT", stream_id=stream_id, head_ref=artifact_id, ingress_watermark=ingress_watermark)
-        sequence = json.loads(event_raw.decode("ascii"))["sequence"]
+        sequence = independent._parse(event_raw, "core:event-raw")["sequence"]
         connection.execute("UPDATE core_artifacts SET created_event_sequence=? WHERE artifact_id=?", (sequence, artifact_id))
         return artifact_id, event_raw
 
+    @staticmethod
+    def _source_status(ing: Mapping[str, object], prior: Mapping[str, object] | None) -> tuple[str, str]:
+        if prior is None:
+            return ("INCOMPLETE" if ing.get("source_status") != "COMPLETE" else "OBSERVED_NEW", "INITIAL")
+        if int(ing["observation_time"]) <= int(prior["observation_time"]):
+            raise CoreConflictError("core:source-chronology")
+        status = "INCOMPLETE" if ing.get("source_status") != "COMPLETE" else ("OBSERVED_CONTINUED" if ing.get("content_root") == prior.get("content_root") else "OBSERVED_CHANGED")
+        return status, "ADVANCING"
+
+    @staticmethod
+    def _result_from_event(connection: sqlite3.Connection, event_raw: bytes) -> dict[str, object]:
+        event = independent._parse(event_raw, "core:event-raw")
+        source_id = str(event["subject_id"]) if event["event_kind"] == "ARTIFACT" else None
+        if event["event_kind"] == "ARTIFACT":
+            row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (source_id,)).fetchone()
+            if row is None:
+                raise CoreError("core:receipt")
+            body = independent._parse(row[0], "core:artifact")
+            if body.get("kind") == "SOURCE_OBSERVATION":
+                rec = connection.execute("SELECT artifact_id FROM core_artifacts WHERE kind='RECONCILIATION' AND source_artifact_id=? ORDER BY created_event_sequence DESC LIMIT 1", (source_id,)).fetchone()
+                graph_id = body.get("graph_artifact_id")
+                return {"source_artifact_id": source_id, "graph_artifact_id": graph_id, "reconciliation_artifact_id": str(rec[0]) if rec else None, "observation_status": body.get("observation_status"), "receipt": CoreServiceV2._receipt(event_raw)}
+        raise CoreError("core:receipt")
+
     def ingest_source(self, ingress_path: str | Path, artifact_id: str) -> dict[str, object]:
+        result = self.ingest_sources(ingress_path, (artifact_id,))
+        return result[0]
+
+    def ingest_sources(self, ingress_path: str | Path, artifact_ids: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+        if type(artifact_ids) is not tuple or not artifact_ids or len(artifact_ids) > MAX_BATCH_ARTIFACTS or len(set(artifact_ids)) != len(artifact_ids):
+            raise CoreConflictError("core:source-batch")
+        for value in artifact_ids:
+            if type(value) is not str or len(value) != 128 or any(char not in "0123456789abcdef" for char in value):
+                raise CoreConflictError("core:source-input")
+        connection = self._open()
         try:
-            ing = ingress.read_artifact(ingress_path, artifact_id)
-            raw_envelope = ing["raw"]
-            fhir.verify_bytes(raw_envelope)
-            admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, fhir.NcMedicaidFhirVerifier()).admit(raw_envelope)
-            graph_raw = bytes(admission.graph_artifact)
-            graph_result = graph_independent.verify_bytes_v2(graph_raw, dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
-            if graph_result.get("accepted") is not True:
-                raise CoreError("core:graph-reject")
-            graph_artifact_digest = _raw_digest("graph-artifact", graph_raw)
-        except CoreError:
+            connection.execute("BEGIN")
+            local: dict[str, dict[str, object]] = {}
+            unresolved: list[str] = []
+            for artifact_id in artifact_ids:
+                operation = _digest("source-operation", {"ingress_artifact_id": artifact_id})
+                event = self._event(connection, operation)
+                if event is None:
+                    unresolved.append(artifact_id)
+                else:
+                    local[artifact_id] = self._result_from_event(connection, event)
+            connection.rollback()
+        finally:
+            connection.close()
+        if not unresolved:
+            return tuple(local[value] for value in artifact_ids)
+        try:
+            snapshots = ingress.read_artifact_snapshots(ingress_path, tuple(unresolved))
+            if any(not isinstance(snapshots.get(value), dict) or snapshots[value].get("artifact_id") != value for value in unresolved):
+                raise CoreConflictError("core:source-not-current")
+            admissions: dict[str, object] = {}
+            for artifact_id in unresolved:
+                item = snapshots[artifact_id]
+                raw_envelope = item.get("raw")
+                if type(raw_envelope) is not bytes:
+                    raise CoreConflictError("core:source-raw")
+                admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, fhir.NcMedicaidFhirVerifier()).admit(raw_envelope)
+                admissions[artifact_id] = admission
+        except (CoreError, CoreConflictError):
             raise
         except Exception:
             raise_redacted(CoreError, "core:ingress-reject")
-        ingress_watermark = int(ing["event_sequence"])
-        source_operation = _digest("source-operation", {"ingress_artifact_id": artifact_id})
-        connection = _connection(self.path)
+
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            existing_event = self._event(connection, source_operation)
-            if existing_event is not None:
-                parsed = independent._parse(existing_event, "core:event-raw")
-                material = parsed.get("material")
-                if not isinstance(material, dict) or material.get("artifact_id") != parsed.get("subject_id"):
-                    raise CoreError("core:source-receipt")
-                row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (material["artifact_id"],)).fetchone()
-                if row is None:
-                    raise CoreError("core:source-receipt")
-                source_value = independent._parse(bytes(row[0]))
-                if source_value.get("ingress_artifact_id") != artifact_id or source_value.get("envelope_digest") != ing["envelope_digest"] or source_value.get("content_root") != ing["content_root"]:
-                    raise CoreConflictError("core:source-conflict")
-                connection.commit()
-                return {"source_artifact_id": str(material["artifact_id"]), "graph_artifact_id": str(source_value["graph_artifact_id"]), "reconciliation_artifact_id": self._find_reconciliation(connection, str(material["artifact_id"])), "observation_status": source_value["observation_status"], "receipt": self._receipt(existing_event)}
-            current = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'").fetchone()
-            predecessor_id = str(current[0]) if current is not None else None
-            prior = None
-            if predecessor_id is not None:
-                prior_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (predecessor_id,)).fetchone()
-                if prior_row is None:
-                    raise CoreError("core:head")
-                prior = independent._parse(bytes(prior_row[0]))
-            chronology = "INITIAL" if prior is None else ("EQUAL" if prior.get("observation_time") == ing["observation_time"] else "ADVANCING")
-            status = "OBSERVED_NEW" if prior is None else ("INCOMPLETE" if ing["source_status"] != "COMPLETE" else ("OBSERVED_CONTINUED" if prior.get("content_root") == ing["content_root"] else "OBSERVED_CHANGED"))
             now = self._owner_now(connection)
-            graph_body = _canonical({"schema": "mirror-core-graph-v2", "schema_version": 2, "kind": "GRAPH", "artifact_id": str(graph_result["report_id"]), "graph": json.loads(graph_raw.decode("ascii")), "graph_digest": graph_artifact_digest, "flags": dict(FIXED_FLAGS)})
-            graph_id, _ = self._admit_artifact(connection, kind="GRAPH", raw=graph_body, profile_digest=profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=_digest("graph-operation", {"graph_id": str(graph_result["report_id"]), "graph_digest": graph_artifact_digest}), request_digest=_digest("graph-request", {"graph_id": str(graph_result["report_id"]), "graph_digest": graph_artifact_digest}), state="GRAPH", observed_at=now, ingress_watermark=ingress_watermark)
-            source_body = {"schema": "mirror-core-source-observation-v2", "schema_version": 2, "kind": "SOURCE_OBSERVATION", "artifact_id": "", "ingress_database_id": self.config.ingress_database_id, "ingress_artifact_id": artifact_id, "ingress_event_sequence": ing["event_sequence"], "ingress_head_root": ing["head_root"], "envelope_id": ing["envelope_id"], "envelope_digest": ing["envelope_digest"], "snapshot_id": ing["snapshot_id"], "snapshot_root": ing["snapshot_root"], "content_root": ing["content_root"], "profile_id": ing["profile_id"], "profile_version": ing["profile_version"], "profile_digest": ing["profile_digest"], "source_status": ing["source_status"], "freshness": ing["freshness"], "page_count": ing["page_count"], "resource_count": ing["resource_count"], "graph_artifact_id": graph_id, "graph_artifact_digest": graph_artifact_digest, "observation_status": status, "chronology": chronology, "flags": dict(FIXED_FLAGS)}
-            source_body["artifact_id"] = _digest("source-artifact-id", {key: source_body[key] for key in source_body if key not in {"artifact_id", "flags"}})
-            source_raw = _canonical(source_body)
-            source_id, _ = self._admit_artifact(connection, kind="SOURCE_OBSERVATION", raw=source_raw, profile_digest=ing["profile_digest"], predecessor_id=predecessor_id, source_artifact_id=artifact_id, operation_id=source_operation, request_digest=_digest("source-request", {"ingress_artifact_id": artifact_id}), state=status, observed_at=now, ingress_watermark=ingress_watermark)
-            rec_body = {"schema": "mirror-core-reconciliation-v2", "schema_version": 2, "kind": "RECONCILIATION", "artifact_id": "", "current_source_artifact_id": source_id, "prior_source_artifact_id": predecessor_id, "current_content_root": ing["content_root"], "prior_content_root": prior.get("content_root") if prior else None, "source_status": ing["source_status"], "observation_status": status, "chronology": chronology, "linkage": "UNCHANGED" if prior and prior.get("graph_artifact_digest") == graph_artifact_digest else "LINKED", "flags": dict(FIXED_FLAGS)}
-            rec_body["artifact_id"] = _digest("reconciliation-id", {key: rec_body[key] for key in rec_body if key != "artifact_id"})
-            rec_id, rec_event = self._admit_artifact(connection, kind="RECONCILIATION", raw=_canonical(rec_body), profile_digest=ing["profile_digest"], predecessor_id=self._find_reconciliation(connection, predecessor_id) if predecessor_id else None, source_artifact_id=source_id, operation_id=_digest("reconciliation-operation", {"source_artifact_id": source_id}), request_digest=_digest("reconciliation-request", {"source_artifact_id": source_id}), state=status, observed_at=now, ingress_watermark=ingress_watermark)
+            results: dict[str, dict[str, object]] = dict(local)
+            ordered = sorted(unresolved, key=lambda value: int(snapshots[value]["event_sequence"]))
+            for artifact_id in ordered:
+                operation = _digest("source-operation", {"ingress_artifact_id": artifact_id})
+                existing = self._event(connection, operation)
+                if existing is not None:
+                    results[artifact_id] = self._result_from_event(connection, existing)
+                    continue
+                ing = snapshots[artifact_id]
+                admission = admissions[artifact_id]
+                if ing["database_id"] != self.config.ingress_database_id or ing["chain_id"] != self.config.ingress_chain_id or ing["config_digest"] != self.config.ingress_config_digest or admission.profile_id != profile.NC_MEDICAID_GRAPH_PROFILE.profile_id or admission.profile_version != profile.NC_MEDICAID_GRAPH_PROFILE.version or admission.profile_digest != self.config.runtime_profile_digest or admission.production_source_authentication is not False:
+                    raise CoreConflictError("core:source-profile")
+                source_head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'").fetchone()
+                predecessor_id = str(source_head[0]) if source_head else None
+                prior = None
+                if predecessor_id is not None:
+                    prior_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=?", (predecessor_id,)).fetchone()
+                    if prior_row is None:
+                        raise CoreError("core:source-head")
+                    prior = independent._parse(prior_row[0], "core:artifact")
+                status, chronology = self._source_status(ing, prior)
+                graph_raw = bytes(admission.graph_artifact)
+                graph_digest = _raw_digest("graph-artifact", graph_raw)
+                graph_report_id = str(admission.report_id)
+                graph_operation = _digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest})
+                graph_request = _digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest})
+                graph_id, _ = self._admit_artifact(connection, kind="GRAPH", raw=graph_raw, profile_digest=profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest, predecessor_id=None, source_artifact_id=None, operation_id=graph_operation, request_digest=graph_request, state="GRAPH", observed_at=now, ingress_watermark=0)
+                try:
+                    admission_receipt = independent._parse(admission.receipt, "core:admission-receipt")
+                    if len(independent._canonical(admission_receipt)) > independent.MAX_ADMISSION_RECEIPT_BYTES:
+                        raise CoreConflictError("core:admission-receipt")
+                except CoreConflictError:
+                    raise
+                except Exception:
+                    raise_redacted(CoreError, "core:admission-receipt")
+                source_body: dict[str, object] = {
+                    "schema": "mirror-core-source-observation-v3", "schema_version": 3, "kind": "SOURCE_OBSERVATION", "artifact_id": "",
+                    "ingress_database_id": ing["database_id"], "ingress_chain_id": ing["chain_id"], "ingress_config_digest": ing["config_digest"],
+                    "ingress_artifact_id": artifact_id, "ingress_event_sequence": ing["event_sequence"], "ingress_prefix_root": ing.get("event_prefix_root"), "ingress_after_root": ing.get("event_after_root"), "ingress_head_root": ing.get("event_after_root"),
+                    "envelope_id": ing["envelope_id"], "envelope_digest": ing["envelope_digest"], "snapshot_id": ing["snapshot_id"], "snapshot_root": ing["snapshot_root"], "content_root": ing["content_root"],
+                    "profile_id": ing["profile_id"], "profile_version": ing["profile_version"], "profile_digest": ing["profile_digest"], "runtime_profile_digest": self.config.runtime_profile_digest,
+                    "observation_time": ing["observation_time"], "fetched_at": ing["fetched_at"], "source_status": ing["source_status"], "freshness": ing["freshness"], "page_complete": bool(ing["page_complete"]), "page_count": ing["page_count"], "resource_count": ing["resource_count"],
+                    "graph_artifact_id": graph_id, "graph_artifact_digest": graph_digest, "admission_receipt": admission_receipt, "admission_receipt_digest": _raw_digest("admission-receipt", admission.receipt), "admission_report_id": graph_report_id,
+                    "observation_status": status, "chronology": chronology, "flags": dict(FIXED_FLAGS),
+                }
+                if any(source_body[key] is None for key in ("ingress_prefix_root", "ingress_after_root")):
+                    raise CoreError("core:source-boundary")
+                source_body["artifact_id"] = _digest("source-artifact-id", {key: source_body[key] for key in source_body if key not in {"artifact_id", "flags"}})
+                source_raw = _canonical(source_body)
+                source_id, _ = self._admit_artifact(connection, kind="SOURCE_OBSERVATION", raw=source_raw, profile_digest=self.config.runtime_profile_digest, predecessor_id=predecessor_id, source_artifact_id=artifact_id, operation_id=operation, request_digest=_digest("source-request", {"ingress_artifact_id": artifact_id}), state=status, observed_at=now, ingress_watermark=int(ing["event_sequence"]))
+                rec_body: dict[str, object] = {"schema": "mirror-core-reconciliation-v3", "schema_version": 3, "kind": "RECONCILIATION", "artifact_id": "", "current_source_artifact_id": source_id, "prior_source_artifact_id": predecessor_id, "current_content_root": ing["content_root"], "prior_content_root": prior.get("content_root") if prior else None, "source_status": ing["source_status"], "observation_status": status, "chronology": chronology, "linkage": "UNCHANGED" if prior and prior.get("graph_artifact_digest") == graph_digest else "LINKED", "flags": dict(FIXED_FLAGS)}
+                rec_body["artifact_id"] = _digest("reconciliation-id", {key: rec_body[key] for key in rec_body if key != "artifact_id"})
+                rec_predecessor = self._find_reconciliation(connection, predecessor_id) if predecessor_id else None
+                rec_id, rec_event = self._admit_artifact(connection, kind="RECONCILIATION", raw=_canonical(rec_body), profile_digest=self.config.runtime_profile_digest, predecessor_id=rec_predecessor, source_artifact_id=source_id, operation_id=_digest("reconciliation-operation", {"source_artifact_id": source_id}), request_digest=_digest("reconciliation-request", {"source_artifact_id": source_id}), state=status, observed_at=now, ingress_watermark=int(ing["event_sequence"]))
+                results[artifact_id] = {"source_artifact_id": source_id, "graph_artifact_id": graph_id, "reconciliation_artifact_id": rec_id, "observation_status": status, "receipt": self._receipt(rec_event)}
             connection.commit()
-            return {"source_artifact_id": source_id, "graph_artifact_id": graph_id, "reconciliation_artifact_id": rec_id, "observation_status": status, "receipt": self._receipt(rec_event)}
-        except (CoreConflictError, CoreError):
+            return tuple(results[value] for value in artifact_ids)
+        except (CoreError, CoreConflictError):
             connection.rollback()
             raise
         except sqlite3.OperationalError as exc:
             connection.rollback()
-            _raise_sqlite_error(exc, busy=True)
+            _sqlite_error(exc, busy=True)
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
+        raise CoreError("core:database")
 
     @staticmethod
     def _find_reconciliation(connection: sqlite3.Connection, source_id: str | None) -> str | None:
@@ -452,11 +565,11 @@ class CoreServiceV2:
         return str(row[0]) if row else None
 
     def _admit_approval(self, raw: bytes, *, kind: str, profile_digest: str, decision: str) -> str:
-        value = independent._parse(raw)
-        if value.get("kind") != kind or value.get("flags") != FIXED_FLAGS or (kind == "GOVERNANCE" and value.get("decision") != decision) or (kind == "PRIVACY" and value.get("privacy_decision") != decision):
+        value = independent._parse(raw, "core:artifact")
+        if value.get("kind") != kind or value.get("flags") != FIXED_FLAGS or value.get("policy_digest") != profile_digest:
             raise CoreError("core:approval")
         operation_id = _digest("approval-operation", {"kind": kind, "raw": _raw_digest("approval", raw)})
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
@@ -466,7 +579,7 @@ class CoreServiceV2:
             head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (kind,)).fetchone()
             predecessor = str(head[0]) if head else None
             now = self._owner_now(connection)
-            artifact_id, _event = self._admit_artifact(connection, kind=kind, raw=raw, profile_digest=profile_digest, predecessor_id=predecessor, source_artifact_id=None, operation_id=operation_id, request_digest=_digest("approval-request", {"kind": kind, "raw": _raw_digest("approval", raw)}), state=decision, observed_at=now)
+            artifact_id, _ = self._admit_artifact(connection, kind=kind, raw=raw, profile_digest=profile_digest, predecessor_id=predecessor, source_artifact_id=None, operation_id=operation_id, request_digest=_digest("approval-request", {"kind": kind, "raw": _raw_digest("approval", raw)}), state=decision, observed_at=now)
             connection.commit()
             return artifact_id
         except (CoreError, CoreConflictError):
@@ -474,19 +587,20 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
+        raise CoreError("core:database")
 
     def admit_governance(self, raw: bytes, *, policy: object, evidence_raw: bytes) -> str:
         try:
             result = governance.verify_artifact(raw, policy=policy.material(), evidence_raw=evidence_raw)
-            if result.get("accepted") is not True:
+            value = independent._parse(raw, "core:artifact")
+            if result.get("accepted") is not True or value.get("policy_digest") != self.config.governance_policy_digest or value.get("policy_digest") != policy.digest:
                 raise CoreError("core:governance")
-            value = independent._parse(raw)
             assertion = value["assertion"]
-            projection = {"schema": "mirror-core-governance-v2", "schema_version": 2, "kind": "GOVERNANCE", "artifact_id": value["artifact_id"], "decision": assertion["decision"], "policy_digest": value["policy_digest"], "evidence_digest": assertion["evidence_sha3_512"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "valid_from": assertion["valid_from"], "valid_until": assertion["valid_until"], "flags": dict(FIXED_FLAGS)}
-            return self._admit_approval(_canonical(projection), kind="GOVERNANCE", profile_digest=str(policy.digest), decision=str(assertion["decision"]))
+            projection = {"schema": "mirror-core-governance-v3", "schema_version": 3, "kind": "GOVERNANCE", "artifact_id": value["artifact_id"], "decision": assertion["decision"], "policy_digest": value["policy_digest"], "evidence_digest": assertion["evidence_sha3_512"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "valid_from": assertion["valid_from"], "valid_until": assertion["valid_until"], "flags": dict(FIXED_FLAGS)}
+            return self._admit_approval(_canonical(projection), kind="GOVERNANCE", profile_digest=self.config.governance_policy_digest, decision=str(assertion["decision"]))
         except CoreError:
             raise
         except Exception:
@@ -495,12 +609,12 @@ class CoreServiceV2:
     def admit_privacy(self, raw: bytes, *, policy: object, evidence_raw: bytes) -> str:
         try:
             result = privacy.verify_artifact(raw, policy=policy.material(), evidence_raw=evidence_raw)
-            if result.get("accepted") is not True:
+            value = independent._parse(raw, "core:artifact")
+            if result.get("accepted") is not True or value.get("policy_digest") != self.config.privacy_policy_digest or value.get("policy_digest") != policy.digest:
                 raise CoreError("core:privacy")
-            value = independent._parse(raw)
             assertion = value["assertion"]
-            projection = {"schema": "mirror-core-privacy-v2", "schema_version": 2, "kind": "PRIVACY", "artifact_id": value["artifact_id"], "privacy_decision": assertion["privacy_decision"], "support_decision": assertion["support_decision"], "policy_digest": value["policy_digest"], "evidence_digest": assertion["evidence_sha3_512"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "valid_from": assertion["valid_from"], "valid_until": assertion["valid_until"], "flags": dict(FIXED_FLAGS)}
-            return self._admit_approval(_canonical(projection), kind="PRIVACY", profile_digest=str(policy.digest), decision=str(assertion["privacy_decision"]))
+            projection = {"schema": "mirror-core-privacy-v3", "schema_version": 3, "kind": "PRIVACY", "artifact_id": value["artifact_id"], "privacy_decision": assertion["privacy_decision"], "support_decision": assertion["support_decision"], "policy_digest": value["policy_digest"], "evidence_digest": assertion["evidence_sha3_512"], "verifier_id": assertion["verifier_id"], "verifier_epoch": assertion["verifier_epoch"], "valid_from": assertion["valid_from"], "valid_until": assertion["valid_until"], "flags": dict(FIXED_FLAGS)}
+            return self._admit_approval(_canonical(projection), kind="PRIVACY", profile_digest=self.config.privacy_policy_digest, decision=str(assertion["privacy_decision"]))
         except CoreError:
             raise
         except Exception:
@@ -509,33 +623,23 @@ class CoreServiceV2:
     def admit_case(self, reconciliation_artifact_id: str) -> str:
         if type(reconciliation_artifact_id) is not str or len(reconciliation_artifact_id) != 128 or any(char not in "0123456789abcdef" for char in reconciliation_artifact_id):
             raise CoreConflictError("core:case-input")
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT raw,source_artifact_id FROM core_artifacts WHERE artifact_id=? AND kind='RECONCILIATION'", (reconciliation_artifact_id,)).fetchone()
             if row is None:
                 raise CoreConflictError("core:case-reconciliation")
-            reconciliation = independent._parse(bytes(row[0]))
+            reconciliation = independent._parse(row[0], "core:artifact")
             reason = "SOURCE_CHANGED" if reconciliation["observation_status"] == "OBSERVED_CHANGED" else ("SOURCE_INCOMPLETE" if reconciliation["observation_status"] == "INCOMPLETE" else "OBSERVATION_ONLY")
             parity = "DIVERGENT" if reason == "SOURCE_CHANGED" else ("PARTIAL" if reason == "SOURCE_INCOMPLETE" else "UNKNOWN")
             case_id = _digest("case-id", {"reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"]})
             operation_id = _digest("case-operation", {"case_id": case_id})
-            existing_event = self._event(connection, operation_id)
-            if existing_event is not None:
+            existing = self._event(connection, operation_id)
+            if existing is not None:
+                material = independent._parse(existing, "core:event-raw")["material"]
                 connection.commit()
-                existing_value = independent._parse(existing_event, "core:event-raw")
-                existing_case = None
-                material = existing_value.get("material")
-                if isinstance(material, dict) and isinstance(material.get("raw_hex"), str):
-                    try:
-                        existing_case = independent._parse(bytes.fromhex(material["raw_hex"]), "core:artifact").get("case_id")
-                    except (ValueError, independent.CoreVerificationError):
-                        raise_redacted(CoreConflictError, "core:case")
-                if existing_case != case_id or existing_value.get("stream_id") != case_id:
-                    raise CoreConflictError("core:case-stream")
-                head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (existing_case,)).fetchone()
-                return str(head[0]) if head is not None else str(existing_value["material"]["artifact_id"])
-            body = {"schema": "mirror-core-case-v2", "schema_version": 2, "kind": "CASE", "artifact_id": "", "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"], "state": "OPEN", "responsibility": "UNKNOWN", "remediation": "UNOBSERVED", "retest": "UNREQUESTED", "parity": parity, "reason": reason, "flags": dict(FIXED_FLAGS)}
+                return str(material["artifact_id"])
+            body = {"schema": "mirror-core-case-v3", "schema_version": 3, "kind": "CASE", "artifact_id": "", "case_id": case_id, "reconciliation_artifact_id": reconciliation_artifact_id, "source_artifact_id": reconciliation["current_source_artifact_id"], "state": "OPEN", "responsibility": "UNKNOWN", "remediation": "UNOBSERVED", "retest": "UNREQUESTED", "parity": parity, "reason": reason, "flags": dict(FIXED_FLAGS)}
             body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
             now = self._owner_now(connection)
             artifact_id, _ = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=None, source_artifact_id=body["source_artifact_id"], operation_id=operation_id, request_digest=_digest("case-request", {"reconciliation_artifact_id": reconciliation_artifact_id}), state="OPEN", observed_at=now)
@@ -546,46 +650,37 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
+        raise CoreError("core:database")
 
     def advance_case(self, case_artifact_id: str, *, next_state: str, responsibility: str | None = None, remediation: str | None = None, retest: str | None = None, parity: str | None = None) -> CoreReceipt:
-        if type(case_artifact_id) is not str or len(case_artifact_id) != 128 or any(char not in "0123456789abcdef" for char in case_artifact_id) or next_state not in CASE_EDGES and next_state not in {"RESOLVED", "SUPERSEDED"}:
+        _require_digest(case_artifact_id, "core:case-input")
+        if next_state not in CASE_EDGES and next_state not in {"RESOLVED", "SUPERSEDED"}:
             raise CoreConflictError("core:case-input")
         supplied = {"responsibility": responsibility, "remediation": remediation, "retest": retest, "parity": parity}
+        allowed = {"responsibility": {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"}, "remediation": {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"}, "retest": {"UNREQUESTED", "REQUESTED", "EXECUTED"}, "parity": {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"}}
+        if any(value is not None and value not in allowed[key] for key, value in supplied.items()):
+            raise CoreConflictError("core:case-value")
         operation_id = _digest("case-transition-operation", {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied})
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
-                existing_value = independent._parse(existing, "core:event-raw")
-                material = existing_value.get("material")
-                try:
-                    existing_case = independent._parse(bytes.fromhex(material["raw_hex"]), "core:artifact").get("case_id") if isinstance(material, dict) and isinstance(material.get("raw_hex"), str) else None
-                except (ValueError, independent.CoreVerificationError):
-                    raise_redacted(CoreConflictError, "core:case")
-                if existing_case is None or existing_value.get("stream_id") != existing_case:
-                    raise CoreConflictError("core:case-stream")
                 connection.commit()
                 return self._receipt(existing)
             prior_row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=? AND kind='CASE'", (case_artifact_id,)).fetchone()
             if prior_row is None:
                 raise CoreConflictError("core:case-missing")
-            prior = independent._parse(bytes(prior_row["raw"]))
+            prior = independent._parse(prior_row["raw"], "core:artifact")
             case_id = prior.get("case_id")
-            if type(case_id) is not str or not case_id:
-                raise CoreConflictError("core:case")
             head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (case_id,)).fetchone()
             if head is None or head[0] != case_artifact_id:
                 raise CoreConflictError("core:case-head")
             if next_state not in CASE_EDGES.get(str(prior["state"]), set()):
                 raise CoreConflictError("core:case-transition")
-            allowed = {"responsibility": {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"}, "remediation": {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"}, "retest": {"UNREQUESTED", "REQUESTED", "EXECUTED"}, "parity": {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"}}
-            for key, value in supplied.items():
-                if value is not None and value not in allowed[key]:
-                    raise CoreConflictError("core:case-value")
             required = {"RESPONSIBILITY": "responsibility", "REMEDIATION": "remediation", "RETEST": "retest", "PERSISTENCE": "parity"}.get(next_state)
             if (required is None and any(value is not None for value in supplied.values())) or (required is not None and supplied[required] is None):
                 raise CoreConflictError("core:case-value")
@@ -597,14 +692,14 @@ class CoreServiceV2:
                 raise CoreConflictError("core:case-resolve")
             if next_state == "SUPERSEDED" and prior["state"] != "PERSISTENCE":
                 raise CoreConflictError("core:case-supersede")
-            body = dict(prior)
-            body["state"] = next_state
+            body = dict(prior); body["state"] = next_state
             if required is not None:
                 body[required] = supplied[required]
             body["artifact_id"] = ""
             body["artifact_id"] = _digest("case-artifact", {key: body[key] for key in body if key != "artifact_id"})
             now = self._owner_now(connection)
-            artifact_id, event_raw = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=case_artifact_id, source_artifact_id=str(prior["source_artifact_id"]), operation_id=operation_id, request_digest=_digest("case-transition-request", {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied}), state=next_state, observed_at=now)
+            request_material = {"case_artifact_id": case_artifact_id, "next_state": next_state, **supplied}
+            artifact_id, event_raw = self._admit_artifact(connection, kind="CASE", raw=_canonical(body), profile_digest=self.config.runtime_profile_digest, predecessor_id=case_artifact_id, source_artifact_id=str(prior["source_artifact_id"]), operation_id=operation_id, request_digest=_digest("case-transition-request", request_material), state=next_state, observed_at=now)
             connection.commit()
             return self._receipt(event_raw)
         except (CoreError, CoreConflictError):
@@ -612,49 +707,62 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
+        raise CoreError("core:database")
+
+    @staticmethod
+    def _session(connection: sqlite3.Connection, session_id: str) -> sqlite3.Row:
+        if type(session_id) is not str or len(session_id) != 128 or any(char not in "0123456789abcdef" for char in session_id):
+            raise CoreConflictError("core:session-input")
+        row = connection.execute("SELECT * FROM core_sessions WHERE session_id=?", (session_id,)).fetchone()
+        if row is None:
+            raise CoreConflictError("core:session-missing")
+        return row
 
     def open_session(self, *, source_artifact_id: str, governance_artifact_id: str, privacy_artifact_id: str) -> CoreReceipt:
+        _require_digest(source_artifact_id, "core:authority-head")
+        _require_digest(governance_artifact_id, "core:authority-head")
+        _require_digest(privacy_artifact_id, "core:authority-head")
         session_id = _digest("session-id", {"source": source_artifact_id, "governance": governance_artifact_id, "privacy": privacy_artifact_id, "config": self.config.digest})
         operation_id = _digest("session-operation", {"session_id": session_id, "action": "OPEN"})
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
                 connection.commit()
                 return self._receipt(existing)
+            now = self._owner_now(connection)
             for kind, expected in (("SOURCE_OBSERVATION", source_artifact_id), ("GOVERNANCE", governance_artifact_id), ("PRIVACY", privacy_artifact_id)):
+                if type(expected) is not str or len(expected) != 128 or any(char not in "0123456789abcdef" for char in expected):
+                    raise CoreConflictError("core:authority-head")
                 head = connection.execute("SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?", (kind,)).fetchone()
                 if head is None or head[0] != expected:
                     raise CoreConflictError("core:authority-head")
-            gov_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='GOVERNANCE'", (governance_artifact_id,)).fetchone()
-            privacy_row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='PRIVACY'", (privacy_artifact_id,)).fetchone()
-            if gov_row is None or privacy_row is None:
-                raise CoreConflictError("core:authority-missing")
-            try:
-                gov = independent._parse(bytes(gov_row[0]), "core:artifact")
-                pval = independent._parse(bytes(privacy_row[0]), "core:artifact")
-            except (independent.CoreVerificationError, TypeError, ValueError, KeyError):
-                raise_redacted(CoreConflictError, "core:authority")
-            now = self._owner_now(connection)
+            rows = {}
+            for kind, identifier in (("SOURCE_OBSERVATION", source_artifact_id), ("GOVERNANCE", governance_artifact_id), ("PRIVACY", privacy_artifact_id)):
+                row = connection.execute("SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind=?", (identifier, kind)).fetchone()
+                if row is None or type(row[0]) is not bytes:
+                    raise CoreConflictError("core:authority-missing")
+                rows[kind] = independent._parse(row[0], "core:artifact")
+            gov = rows["GOVERNANCE"]; pval = rows["PRIVACY"]; source = rows["SOURCE_OBSERVATION"]
+            if source.get("runtime_profile_digest") != self.config.runtime_profile_digest or gov.get("policy_digest") != self.config.governance_policy_digest or pval.get("policy_digest") != self.config.privacy_policy_digest:
+                raise CoreConflictError("core:authority-config")
             if gov.get("decision") != "GRANTED" or pval.get("privacy_decision") != "GRANTED" or pval.get("support_decision") != "GRANTED":
                 raise CoreConflictError("core:authority-negative")
             for authority in (gov, pval):
-                valid_from = authority.get("valid_from")
-                valid_until = authority.get("valid_until")
-                if type(valid_from) is not int or type(valid_until) is not int or valid_from < 0 or valid_until < valid_from or valid_from > now or now > valid_until:
+                if type(authority.get("valid_from")) is not int or type(authority.get("valid_until")) is not int or int(authority["valid_from"]) > now or now > int(authority["valid_until"]):
                     raise CoreConflictError("core:authority-window")
-            count = int(connection.execute("SELECT COUNT(*) FROM core_sessions").fetchone()[0])
-            if count >= self.config.max_sessions:
+            capacity_row = connection.execute("SELECT session_id FROM core_sessions ORDER BY session_id LIMIT 1 OFFSET ?", (self.config.max_sessions,)).fetchone()
+            if capacity_row is not None:
                 raise CoreConflictError("core:capacity")
-            row = {"session_id": session_id, "state": "OPEN", "source_artifact_id": source_artifact_id, "governance_artifact_id": governance_artifact_id, "privacy_artifact_id": privacy_artifact_id, "head_root": "", "last_slot": -1, "delivery_state": "DUE", "delivery_job_id": None, "delivery_attempt": 0, "delivery_lease_token_digest": None, "delivery_lease_until": None, "delivery_response_digest": None, "delivery_error_code": None}
-            connection.execute("INSERT INTO core_sessions(session_id,state,source_artifact_id,governance_artifact_id,privacy_artifact_id,head_root,last_slot,delivery_state,delivery_job_id,delivery_attempt,delivery_lease_token_digest,delivery_lease_until,delivery_response_digest,delivery_error_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(row[key] for key in independent.TABLE_COLUMNS["core_sessions"]))
-            material = {key: row[key] for key in independent.SESSION_FIELDS}
+            material = {"session_id": session_id, "state": "OPEN", "source_artifact_id": source_artifact_id, "governance_artifact_id": governance_artifact_id, "privacy_artifact_id": privacy_artifact_id, "last_slot": -1}
+            connection.execute("INSERT INTO core_sessions(session_id,state,source_artifact_id,governance_artifact_id,privacy_artifact_id,head_root,last_slot) VALUES(?,?,?,?,?,?,?)", (session_id, "OPEN", source_artifact_id, governance_artifact_id, privacy_artifact_id, independent.GENESIS_ROOT, -1))
             raw = self._append(connection, kind="SESSION_OPEN", operation_id=operation_id, subject_id=session_id, request_digest=_digest("session-request", {"session_id": session_id}), prior_state="NONE", next_state="OPEN", attempt=0, observed_at=now, material={"session": material}, payload_digest=source_artifact_id, payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
-            connection.execute("UPDATE core_sessions SET head_root=? WHERE session_id=?", (json.loads(raw.decode("ascii"))["stream_after_root"], session_id))
+            stream_root = independent._parse(raw, "core:event-raw")["stream_after_root"]
+            connection.execute("UPDATE core_sessions SET head_root=? WHERE session_id=?", (stream_root, session_id))
             connection.commit()
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
@@ -662,20 +770,15 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
-
-    @staticmethod
-    def _session(connection: sqlite3.Connection, session_id: str) -> sqlite3.Row:
-        row = connection.execute("SELECT * FROM core_sessions WHERE session_id=?", (session_id,)).fetchone()
-        if row is None:
-            raise CoreConflictError("core:session-missing")
-        return row
+        raise CoreError("core:database")
 
     def start_session(self, session_id: str) -> CoreReceipt:
+        _require_digest(session_id, "core:session-input")
         operation_id = _digest("session-operation", {"session_id": session_id, "action": "START"})
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
@@ -686,10 +789,9 @@ class CoreServiceV2:
             if row["state"] != "OPEN":
                 raise CoreConflictError("core:session-state")
             now = self._owner_now(connection)
-            snapshot = self._session_snapshot(row)
-            snapshot["state"] = "RUNNING"
-            raw = self._append(connection, kind="SESSION_START", operation_id=operation_id, subject_id=session_id, request_digest=_digest("session-request", {"session_id": session_id, "action": "START"}), prior_state="OPEN", next_state="RUNNING", attempt=0, observed_at=now, material={"session": snapshot}, payload_digest=session_id, payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
-            connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("RUNNING", json.loads(raw.decode("ascii"))["stream_after_root"], session_id))
+            raw = self._append(connection, kind="SESSION_START", operation_id=operation_id, subject_id=session_id, request_digest=_digest("session-request", {"session_id": session_id, "action": "START"}), prior_state="OPEN", next_state="RUNNING", attempt=0, observed_at=now, material={"delta": {"state": "RUNNING"}}, payload_digest=session_id, payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
+            event = independent._parse(raw, "core:event-raw")
+            connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("RUNNING", event["stream_after_root"], session_id))
             connection.commit()
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
@@ -697,21 +799,23 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
+        raise CoreError("core:database")
 
     def observe(self, session_id: str, slot_number: int, result: str, *, counts: Mapping[str, int] | None = None) -> CoreReceipt:
+        _require_digest(session_id, "core:observation-input")
         if type(slot_number) is not int or slot_number < 0 or slot_number >= self.config.max_slots_per_session or result not in independent.OBSERVATION_RESULTS:
             raise CoreConflictError("core:observation-input")
-        counts = dict(counts or {"observed": 0, "changed": 0})
-        if set(counts) != {"observed", "changed"} or any(type(value) is not int or value < 0 or value > 64 for value in counts.values()):
+        values = dict(counts or {"observed": 0, "changed": 0})
+        if set(values) != {"observed", "changed"} or any(type(value) is not int or value < 0 or value > 64 for value in values.values()):
             raise CoreConflictError("core:observation-input")
-        observation = {"schema": "mirror-core-observation-v2", "schema_version": 2, "session_id": session_id, "slot_number": slot_number, "result": result, "counts": {"changed": counts["changed"], "observed": counts["observed"]}, "flags": dict(FIXED_FLAGS)}
+        observation = {"schema": "mirror-core-observation-v3", "schema_version": 3, "session_id": session_id, "slot_number": slot_number, "result": result, "counts": {"changed": values["changed"], "observed": values["observed"]}, "flags": dict(FIXED_FLAGS)}
         observation["result_digest"] = _digest("observation", {key: observation[key] for key in observation if key != "result_digest"})
         result_raw = _canonical(observation)
         operation_id = _digest("observation-operation", {"session_id": session_id, "slot_number": slot_number})
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
@@ -722,22 +826,28 @@ class CoreServiceV2:
                 connection.commit()
                 return self._receipt(existing)
             row = self._session(connection, session_id)
-            if row["state"] != "RUNNING":
-                raise CoreConflictError("core:session-state")
-            expected_slot = int(row["last_slot"]) + 1
-            if slot_number != expected_slot:
+            if row["state"] != "RUNNING" or slot_number != int(row["last_slot"]) + 1:
                 raise CoreConflictError("core:observation-order")
-            old = connection.execute("SELECT result_raw FROM core_slots WHERE session_id=? AND slot_number=?", (session_id, slot_number)).fetchone()
-            if old is not None:
-                if bytes(old[0]) != result_raw:
-                    raise CoreConflictError("core:observation-conflict")
-                raise CoreError("core:observation-receipt")
             now = self._owner_now(connection)
-            snapshot = self._session_snapshot(row)
-            snapshot["last_slot"] = slot_number
+            if int(row["last_slot"]) >= 0:
+                head = connection.execute("SELECT event_sequence FROM core_heads WHERE stream_kind='SESSION' AND stream_id=?", (session_id,)).fetchone()
+                if head is None:
+                    raise CoreError("core:session-head")
+                previous_row = connection.execute("SELECT event_raw FROM core_events WHERE sequence=?", (int(head[0]),)).fetchone()
+                if previous_row is None or type(previous_row[0]) is not bytes or len(previous_row[0]) > MAX_EVENT_BYTES:
+                    raise CoreError("core:session-head")
+                try:
+                    previous_event = independent._parse(previous_row[0], "core:event-raw")
+                except Exception:
+                    raise_redacted(CoreError, "core:session-head")
+                if previous_event.get("event_kind") != "OBSERVATION" or previous_event.get("subject_id") != session_id or type(previous_event.get("observed_at")) is not int:
+                    raise CoreError("core:session-head")
+                if now < int(previous_event["observed_at"]) + self.config.cadence_seconds:
+                    raise CoreConflictError("core:observation-cadence")
             connection.execute("INSERT INTO core_slots(session_id,slot_number,result_digest,result_raw) VALUES(?,?,?,?)", (session_id, slot_number, observation["result_digest"], result_raw))
-            raw = self._append(connection, kind="OBSERVATION", operation_id=operation_id, subject_id=session_id, request_digest=_digest("observation-request", {"session_id": session_id, "slot_number": slot_number}), prior_state="RUNNING", next_state="RUNNING", attempt=0, observed_at=now, material={"observation": observation, "session": snapshot}, payload_digest=observation["result_digest"], payload_length=len(result_raw), stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
-            connection.execute("UPDATE core_sessions SET last_slot=?,head_root=? WHERE session_id=?", (slot_number, json.loads(raw.decode("ascii"))["stream_after_root"], session_id))
+            raw = self._append(connection, kind="OBSERVATION", operation_id=operation_id, subject_id=session_id, request_digest=_digest("observation-request", {"session_id": session_id, "slot_number": slot_number}), prior_state="RUNNING", next_state="RUNNING", attempt=0, observed_at=now, material={"observation": observation}, payload_digest=observation["result_digest"], payload_length=len(result_raw), stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
+            event = independent._parse(raw, "core:event-raw")
+            connection.execute("UPDATE core_sessions SET last_slot=?,head_root=? WHERE session_id=?", (slot_number, event["stream_after_root"], session_id))
             connection.commit()
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
@@ -745,15 +855,18 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
+        raise CoreError("core:database")
 
     def pause_if_stale(self, session_id: str, current_source_artifact_id: str, *, reason: str = "SOURCE_SUPERSEDED") -> CoreReceipt:
+        _require_digest(session_id, "core:pause-input")
+        _require_digest(current_source_artifact_id, "core:pause-input")
         if reason not in {"SOURCE_SUPERSEDED", "AUTHORITY_EXPIRED", "AUTHORITY_INDETERMINATE"}:
             raise CoreConflictError("core:pause-reason")
         operation_id = _digest("pause-operation", {"session_id": session_id, "reason": reason, "current_source_artifact_id": current_source_artifact_id})
-        connection = _connection(self.path)
+        connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
@@ -761,15 +874,12 @@ class CoreServiceV2:
                 connection.commit()
                 return self._receipt(existing)
             row = self._session(connection, session_id)
-            if row["source_artifact_id"] == current_source_artifact_id:
-                raise CoreConflictError("core:source-current")
-            if row["state"] != "RUNNING":
+            if row["source_artifact_id"] == current_source_artifact_id or row["state"] != "RUNNING":
                 raise CoreConflictError("core:pause-state")
             now = self._owner_now(connection)
-            snapshot = self._session_snapshot(row)
-            snapshot["state"] = "PAUSED"
-            raw = self._append(connection, kind="SESSION_PAUSE", operation_id=operation_id, subject_id=session_id, request_digest=_digest("pause-request", {"session_id": session_id, "reason": reason, "current_source_artifact_id": current_source_artifact_id}), prior_state="RUNNING", next_state="PAUSED", attempt=0, observed_at=now, material={"session": snapshot, "current_source_artifact_id": current_source_artifact_id, "reason": reason}, payload_digest=_digest("pause-reason", {"reason": reason}), payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
-            connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("PAUSED", json.loads(raw.decode("ascii"))["stream_after_root"], session_id))
+            raw = self._append(connection, kind="SESSION_PAUSE", operation_id=operation_id, subject_id=session_id, request_digest=_digest("pause-request", {"session_id": session_id, "reason": reason, "current_source_artifact_id": current_source_artifact_id}), prior_state="RUNNING", next_state="PAUSED", attempt=0, observed_at=now, material={"state": "PAUSED", "reason": reason, "current_source_artifact_id": current_source_artifact_id}, payload_digest=_digest("pause-reason", {"reason": reason}), payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
+            event = independent._parse(raw, "core:event-raw")
+            connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("PAUSED", event["stream_after_root"], session_id))
             connection.commit()
             return self._receipt(raw)
         except (CoreError, CoreConflictError):
@@ -777,148 +887,10 @@ class CoreServiceV2:
             raise
         except sqlite3.Error as exc:
             connection.rollback()
-            _raise_sqlite_error(exc)
+            _sqlite_error(exc)
         finally:
             connection.close()
-
-    @staticmethod
-    def _token_digest(token: str) -> str:
-        if type(token) is not str or TOKEN_RE.fullmatch(token) is None:
-            raise CoreConflictError("core:delivery-token")
-        return _digest("delivery-token", {"token": token})
-
-    def _delivery_requeue(self, connection: sqlite3.Connection, row: sqlite3.Row, *, job_id: str, delivery_id: str, now: int, reason: str) -> bytes:
-        prior_token = row["delivery_lease_token_digest"]
-        prior_lease = row["delivery_lease_until"]
-        snapshot = self._session_snapshot(row)
-        snapshot.update({"delivery_state": "DUE", "delivery_job_id": job_id, "delivery_lease_token_digest": None, "delivery_lease_until": None, "delivery_response_digest": None, "delivery_error_code": None})
-        raw = self._append(connection, kind="DELIVERY_REQUEUE", operation_id=_digest("delivery-requeue-operation", {"session_id": row["session_id"], "job_id": job_id, "attempt": row["delivery_attempt"]}), subject_id=str(row["session_id"]), request_digest=_digest("delivery-request", {"session_id": row["session_id"], "job_id": job_id, "action": "REQUEUE", "attempt": row["delivery_attempt"], "prior_token_digest": prior_token}), prior_state=str(row["delivery_state"]), next_state="DUE", attempt=int(row["delivery_attempt"]), observed_at=now, material={"session": snapshot, "job_id": job_id, "delivery_id": delivery_id, "expired_attempt": int(row["delivery_attempt"]), "prior_token_digest": prior_token, "prior_lease_until": prior_lease, "reason": reason}, payload_digest=_digest("delivery-requeue-payload", {"job_id": job_id, "attempt": row["delivery_attempt"]}), payload_length=0, stream_kind="DELIVERY", stream_id=delivery_id, head_ref=delivery_id)
-        connection.execute("UPDATE core_sessions SET delivery_state='DUE',delivery_job_id=?,delivery_lease_token_digest=NULL,delivery_lease_until=NULL,delivery_response_digest=NULL,delivery_error_code=NULL WHERE session_id=?", (job_id, row["session_id"]))
-        return raw
-
-    def _delivery_exhaust(self, connection: sqlite3.Connection, row: sqlite3.Row, *, job_id: str, delivery_id: str, now: int) -> bytes:
-        snapshot = self._session_snapshot(row)
-        snapshot.update({"delivery_state": "EXHAUSTED", "delivery_job_id": job_id, "delivery_response_digest": None, "delivery_error_code": "ATTEMPTS_EXHAUSTED"})
-        raw = self._append(connection, kind="DELIVERY_EXHAUSTED", operation_id=_digest("delivery-exhausted-operation", {"session_id": row["session_id"], "job_id": job_id, "attempt": row["delivery_attempt"]}), subject_id=str(row["session_id"]), request_digest=_digest("delivery-request", {"session_id": row["session_id"], "job_id": job_id, "action": "EXHAUSTED", "attempt": row["delivery_attempt"]}), prior_state=str(row["delivery_state"]), next_state="EXHAUSTED", attempt=int(row["delivery_attempt"]), observed_at=now, material={"session": snapshot, "job_id": job_id, "delivery_id": delivery_id, "token_digest": row["delivery_lease_token_digest"], "lease_until": row["delivery_lease_until"], "error_code": "ATTEMPTS_EXHAUSTED", "max_attempts": self.config.max_delivery_attempts}, payload_digest=_digest("delivery-exhausted-payload", {"job_id": job_id, "attempt": row["delivery_attempt"]}), payload_length=0, stream_kind="DELIVERY", stream_id=delivery_id, head_ref=delivery_id)
-        connection.execute("UPDATE core_sessions SET delivery_state='EXHAUSTED',delivery_job_id=?,delivery_response_digest=NULL,delivery_error_code='ATTEMPTS_EXHAUSTED' WHERE session_id=?", (job_id, row["session_id"]))
-        return raw
-
-    def begin_delivery(self, session_id: str, job_id: str, *, lease_token: str) -> CoreReceipt:
-        if any(type(value) is not str or not value for value in (session_id, job_id)):
-            raise CoreConflictError("core:delivery-input")
-        token_digest = self._token_digest(lease_token)
-        connection = _connection(self.path)
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            row = self._session(connection, session_id)
-            if row["delivery_job_id"] is not None and row["delivery_job_id"] != job_id:
-                raise CoreConflictError("core:delivery-job")
-            state = str(row["delivery_state"])
-            delivery_id = _digest("delivery-id", {"session_id": session_id, "job_id": job_id})
-            if state == "INTENT" and row["delivery_lease_token_digest"] is not None and hmac.compare_digest(str(row["delivery_lease_token_digest"]), token_digest):
-                op = _digest("delivery-intent-operation", {"session_id": session_id, "job_id": job_id, "attempt": row["delivery_attempt"], "token_digest": token_digest})
-                existing = self._event(connection, op)
-                if existing is None:
-                    raise CoreError("core:delivery-receipt")
-                now = self._owner_now(connection)
-                if row["delivery_lease_until"] is not None and now < int(row["delivery_lease_until"]):
-                    connection.commit()
-                    return self._receipt(existing)
-                raise CoreConflictError("core:delivery-stale-token")
-            if state in {"ACK", "EXHAUSTED"}:
-                raise CoreConflictError("core:delivery-exhausted" if state == "EXHAUSTED" else "core:delivery-state")
-            now = self._owner_now(connection)
-            if state in {"INTENT", "UNKNOWN"}:
-                if row["delivery_lease_until"] is None or now < int(row["delivery_lease_until"]):
-                    raise CoreConflictError("core:delivery-lease")
-                if int(row["delivery_attempt"]) >= self.config.max_delivery_attempts:
-                    raw = self._delivery_exhaust(connection, row, job_id=job_id, delivery_id=delivery_id, now=now)
-                    connection.commit()
-                    return self._receipt(raw)
-                self._delivery_requeue(connection, row, job_id=job_id, delivery_id=delivery_id, now=now, reason="LEASE_EXPIRED")
-                row = self._session(connection, session_id)
-                state = "DUE"
-            if state != "DUE":
-                raise CoreConflictError("core:delivery-state")
-            attempt = int(row["delivery_attempt"]) + 1
-            if attempt > self.config.max_delivery_attempts:
-                raise CoreConflictError("core:delivery-exhausted")
-            lease_until = now + self.config.cadence_seconds
-            operation_id = _digest("delivery-intent-operation", {"session_id": session_id, "job_id": job_id, "attempt": attempt, "token_digest": token_digest})
-            snapshot = self._session_snapshot(row)
-            snapshot.update({"delivery_state": "INTENT", "delivery_job_id": job_id, "delivery_attempt": attempt, "delivery_lease_token_digest": token_digest, "delivery_lease_until": lease_until, "delivery_response_digest": None, "delivery_error_code": None})
-            raw = self._append(connection, kind="DELIVERY_INTENT", operation_id=operation_id, subject_id=session_id, request_digest=_digest("delivery-request", {"session_id": session_id, "job_id": job_id, "attempt": attempt, "token_digest": token_digest}), prior_state="DUE", next_state="INTENT", attempt=attempt, observed_at=now, material={"session": snapshot, "job_id": job_id, "delivery_id": delivery_id, "token_digest": token_digest, "lease_until": lease_until}, payload_digest=_digest("delivery-job", {"session_id": session_id, "job_id": job_id, "delivery_id": delivery_id}), payload_length=0, stream_kind="DELIVERY", stream_id=delivery_id, head_ref=delivery_id)
-            connection.execute("UPDATE core_sessions SET delivery_state='INTENT',delivery_job_id=?,delivery_attempt=?,delivery_lease_token_digest=?,delivery_lease_until=?,delivery_response_digest=NULL,delivery_error_code=NULL WHERE session_id=?", (job_id, attempt, token_digest, lease_until, session_id))
-            connection.commit()
-            return self._receipt(raw)
-        except (CoreError, CoreConflictError):
-            connection.rollback()
-            raise
-        except sqlite3.Error as exc:
-            connection.rollback()
-            _raise_sqlite_error(exc)
-        finally:
-            connection.close()
-
-    def acknowledge_delivery(self, session_id: str, *, job_id: str, lease_token: str, response_digest: str) -> CoreReceipt:
-        return self._finish_delivery(session_id, job_id=job_id, lease_token=lease_token, response_digest=response_digest, unknown=False)
-
-    def mark_delivery_unknown(self, session_id: str, *, job_id: str, lease_token: str, code: str = "RESPONSE_LOST") -> CoreReceipt:
-        if code not in {"RESPONSE_LOST", "TIMEOUT", "REMOTE_INDETERMINATE"}:
-            raise CoreConflictError("core:delivery-code")
-        return self._finish_delivery(session_id, job_id=job_id, lease_token=lease_token, response_digest=None, unknown=True, code=code)
-
-    def _finish_delivery(self, session_id: str, *, job_id: str, lease_token: str, response_digest: str | None, unknown: bool, code: str = "RESPONSE_LOST") -> CoreReceipt:
-        if any(type(value) is not str or not value for value in (session_id, job_id)):
-            raise CoreConflictError("core:delivery-input")
-        token_digest = self._token_digest(lease_token)
-        if response_digest is not None and (len(response_digest) != 128 or any(char not in "0123456789abcdef" for char in response_digest)):
-            raise CoreConflictError("core:delivery-response")
-        connection = _connection(self.path)
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            row = self._session(connection, session_id)
-            state = str(row["delivery_state"])
-            if state in {"ACK", "UNKNOWN"}:
-                match = row["delivery_job_id"] == job_id and row["delivery_lease_token_digest"] is not None and hmac.compare_digest(str(row["delivery_lease_token_digest"]), token_digest) and ((not unknown and state == "ACK" and row["delivery_response_digest"] == response_digest) or (unknown and state == "UNKNOWN" and row["delivery_error_code"] == code))
-                if not match:
-                    raise CoreConflictError("core:delivery-token")
-                op = _digest("delivery-finish-operation", {"session_id": session_id, "job_id": job_id, "attempt": row["delivery_attempt"], "action": "UNKNOWN" if unknown else "ACK", "token_digest": token_digest, "response_digest": response_digest, "code": code if unknown else None})
-                existing = self._event(connection, op)
-                if existing is None:
-                    raise CoreError("core:delivery-receipt")
-                connection.commit()
-                return self._receipt(existing)
-            if state != "INTENT" or row["delivery_job_id"] != job_id or row["delivery_lease_token_digest"] is None or not hmac.compare_digest(str(row["delivery_lease_token_digest"]), token_digest):
-                raise CoreConflictError("core:delivery-token")
-            now = self._owner_now(connection)
-            if row["delivery_lease_until"] is None or now >= int(row["delivery_lease_until"]):
-                raise CoreConflictError("core:delivery-lease-expired")
-            next_state = "UNKNOWN" if unknown else "ACK"
-            event_kind = "DELIVERY_RESPONSE_UNKNOWN" if unknown else "DELIVERY_ACK"
-            op = _digest("delivery-finish-operation", {"session_id": session_id, "job_id": job_id, "attempt": row["delivery_attempt"], "action": "UNKNOWN" if unknown else "ACK", "token_digest": token_digest, "response_digest": response_digest, "code": code if unknown else None})
-            snapshot = self._session_snapshot(row)
-            snapshot.update({"delivery_state": next_state, "delivery_response_digest": response_digest, "delivery_error_code": code if unknown else None})
-            material = {"session": snapshot, "job_id": job_id, "delivery_id": _digest("delivery-id", {"session_id": session_id, "job_id": job_id}), "token_digest": token_digest, ("error_code" if unknown else "response_digest"): code if unknown else response_digest}
-            raw = self._append(connection, kind=event_kind, operation_id=op, subject_id=session_id, request_digest=_digest("delivery-request", {"session_id": session_id, "job_id": job_id, "attempt": row["delivery_attempt"], "action": event_kind, "token_digest": token_digest}), prior_state="INTENT", next_state=next_state, attempt=int(row["delivery_attempt"]), observed_at=now, material=material, payload_digest=_digest("delivery-response", {"job_id": job_id, "response_digest": response_digest, "code": code if unknown else None}), payload_length=0, stream_kind="DELIVERY", stream_id=material["delivery_id"], head_ref=material["delivery_id"])
-            connection.execute("UPDATE core_sessions SET delivery_state=?,delivery_response_digest=?,delivery_error_code=? WHERE session_id=?", (next_state, response_digest, code if unknown else None, session_id))
-            connection.commit()
-            return self._receipt(raw)
-        except (CoreError, CoreConflictError):
-            connection.rollback()
-            raise
-        except sqlite3.Error as exc:
-            connection.rollback()
-            _raise_sqlite_error(exc)
-        finally:
-            connection.close()
-
-    def logical_export(self) -> bytes:
-        return independent.logical_export(self.verify())
-
-    def support(self) -> dict[str, object]:
-        result = self.verify()
-        return {"schema": "mirror-core-support-v2", "artifact_count": result["artifact_count"], "session_count": result["session_count"], "slot_count": result["slot_count"], "event_count": result["event_count"], "flags": dict(FIXED_FLAGS)}
+        raise CoreError("core:database")
 
 
-__all__ = ["CoreConfigV2", "CoreReceipt", "CoreError", "CoreConflictError", "CoreBusyError", "CoreServiceV2", "SCHEMA", "SCHEMA_VERSION", "TABLES", "ARTIFACT_KINDS", "FIXED_FLAGS"]
+__all__ = ["CoreConfigV2", "CoreReceipt", "CoreError", "CoreConflictError", "CoreBusyError", "CoreServiceV2", "SCHEMA", "SCHEMA_VERSION", "TABLES", "ARTIFACT_KINDS", "FIXED_FLAGS", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES"]

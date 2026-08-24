@@ -1057,6 +1057,8 @@ def _verify_event(
         if artifact is None:
             raise IngressVerificationError("ingress:event-artifact")
         artifact["event_sequence"] = int(row["sequence"])
+        artifact["event_prefix_root"] = str(row["before_root"])
+        artifact["event_after_root"] = str(row["after_root"])
         artifact["_terminal_event_sequence"] = int(row["sequence"])
     slot_times[str(row["slot_id"])] = int(row["observed_at"])
     slot_states[row["slot_id"]] = row["next_state"]
@@ -1321,6 +1323,7 @@ def read_artifact(path: str | Path, artifact_id: str) -> dict[str, object]:
     returned["head_root"] = result["head_root"]
     returned["database_id"] = result["database_id"]
     returned["chain_id"] = result["chain_id"]
+    returned["config_digest"] = result["config_digest"]
     returned["watermark"] = returned["event_sequence"]
     return returned
 
@@ -1336,6 +1339,7 @@ def read_artifact_snapshot(path: str | Path, artifact_id: str) -> dict[str, obje
     returned["head_root"] = result["head_root"]
     returned["database_id"] = result["database_id"]
     returned["chain_id"] = result["chain_id"]
+    returned["config_digest"] = result["config_digest"]
     returned["current_artifact_id"] = result["current_artifact_id"]
     returned["watermark"] = returned["event_sequence"]
     return returned
@@ -1360,6 +1364,7 @@ def read_artifact_snapshots(path: str | Path, artifact_ids: tuple[str, ...]) -> 
         item["head_root"] = result["head_root"]
         item["database_id"] = result["database_id"]
         item["chain_id"] = result["chain_id"]
+        item["config_digest"] = result["config_digest"]
         item["current_artifact_id"] = result["current_artifact_id"]
         item["watermark"] = item["event_sequence"]
         returned[str(selected_id)] = item
