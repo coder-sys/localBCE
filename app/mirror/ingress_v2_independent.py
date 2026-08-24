@@ -27,6 +27,7 @@ DOMAIN = "BL/MIRROR/INGRESS/V3/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_RAW_ENVELOPE_BYTES = 262_144
 MAX_EVENT_BYTES = 786_432
+MAX_IDENTIFIER_BYTES = 128
 GENESIS_ROOT = "0" * 128
 TABLES = (
     "ingress_meta",
@@ -121,9 +122,32 @@ TABLE_COLUMNS = {
 EXPLICIT_INDEXES = (
     "ingress_events_chain_idx",
     "ingress_events_operation_idx",
+    "ingress_events_observed_at_idx",
     "ingress_fetch_natural_key_idx",
     "ingress_slots_due_idx",
 )
+INDEX_DEFINITIONS = {
+    "ingress_events_chain_idx": (
+        "ingress_events", 1, 0, ("chain_id", "sequence"),
+        "create unique index ingress_events_chain_idx on ingress_events(chain_id,sequence)",
+    ),
+    "ingress_events_operation_idx": (
+        "ingress_events", 0, 0, ("operation_id", "event_kind"),
+        "create index ingress_events_operation_idx on ingress_events(operation_id,event_kind)",
+    ),
+    "ingress_events_observed_at_idx": (
+        "ingress_events", 0, 0, ("observed_at", "sequence"),
+        "create index ingress_events_observed_at_idx on ingress_events(observed_at,sequence)",
+    ),
+    "ingress_fetch_natural_key_idx": (
+        "ingress_events", 1, 1, ("source_id", "slot_id", "page_index", "transport_attempt"),
+        "create unique index ingress_fetch_natural_key_idx on ingress_events(source_id,slot_id,page_index,transport_attempt) where event_kind='fetch_attestation'",
+    ),
+    "ingress_slots_due_idx": (
+        "ingress_slots", 0, 0, ("state", "lease_until", "slot_id"),
+        "create index ingress_slots_due_idx on ingress_slots(state,lease_until,slot_id)",
+    ),
+}
 _REPARSE_POINT = 0x400
 _SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 
@@ -140,6 +164,32 @@ def _canonical(value: object) -> bytes:
         ).encode("ascii")
     except (TypeError, ValueError, UnicodeEncodeError):
         raise IngressVerificationError("ingress:noncanonical") from None
+
+
+def _safe_identifier(value: object, label: str) -> str:
+    if type(value) is not str or not value:
+        raise IngressVerificationError(label)
+    if len(value) > MAX_IDENTIFIER_BYTES:
+        raise IngressVerificationError(label)
+    try:
+        raw = value.encode("ascii")
+    except UnicodeEncodeError:
+        raise IngressVerificationError(label) from None
+    if (
+        len(raw) > MAX_IDENTIFIER_BYTES
+        or not ("A" <= value[0] <= "Z" or "a" <= value[0] <= "z" or "0" <= value[0] <= "9")
+        or any(
+            not (
+                "A" <= character <= "Z"
+                or "a" <= character <= "z"
+                or "0" <= character <= "9"
+                or character in "._:-"
+            )
+            for character in value
+        )
+    ):
+        raise IngressVerificationError(label)
+    return value
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -307,6 +357,41 @@ def _index_names(connection: sqlite3.Connection) -> tuple[str, ...]:
         "SELECT name FROM sqlite_master WHERE type='index' "
         "AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name"
     ).fetchall())
+
+
+def _normalize_index_sql(value: object) -> str:
+    if type(value) is not str:
+        raise IngressVerificationError("ingress:indexes")
+    return " ".join(value.strip().lower().split())
+
+
+def _index_definitions(connection: sqlite3.Connection) -> dict[str, tuple[object, ...]]:
+    rows = connection.execute(
+        "SELECT name,tbl_name,sql FROM sqlite_master WHERE type='index' "
+        "AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name"
+    ).fetchall()
+    if {str(row[0]) for row in rows} != set(EXPLICIT_INDEXES):
+        raise IngressVerificationError("ingress:indexes")
+    actual: dict[str, tuple[object, ...]] = {}
+    for row in rows:
+        name = str(row[0])
+        expected = INDEX_DEFINITIONS.get(name)
+        if expected is None:
+            raise IngressVerificationError("ingress:indexes")
+        table, unique, partial, columns, sql = expected
+        escaped_table = str(row[1]).replace("'", "''")
+        index_rows = connection.execute(f"PRAGMA index_list('{escaped_table}')").fetchall()
+        index_row = next((item for item in index_rows if str(item[1]) == name), None)
+        if index_row is None or int(index_row[2]) != unique or int(index_row[4]) != partial:
+            raise IngressVerificationError("ingress:indexes")
+        escaped_name = name.replace("'", "''")
+        actual_columns = tuple(str(item[2]) for item in connection.execute(
+            f"PRAGMA index_info('{escaped_name}')"
+        ).fetchall())
+        if str(row[1]) != table or actual_columns != columns or _normalize_index_sql(row[2]) != sql:
+            raise IngressVerificationError("ingress:indexes")
+        actual[name] = expected
+    return actual
 
 
 def _is_reparse(info: os.stat_result) -> bool:
@@ -483,10 +568,8 @@ def _meta(connection: sqlite3.Connection) -> sqlite3.Row:
     if row["schema"] != SCHEMA or row["schema_version"] != SCHEMA_VERSION:
         raise IngressVerificationError("ingress:schema")
     _hex(row["config_digest"], "ingress:config")
-    if type(row["database_id"]) is not str or not row["database_id"]:
-        raise IngressVerificationError("ingress:database-id")
-    if type(row["chain_id"]) is not str or not row["chain_id"]:
-        raise IngressVerificationError("ingress:chain-id")
+    _safe_identifier(row["database_id"], "ingress:database-id")
+    _safe_identifier(row["chain_id"], "ingress:chain-id")
     if type(row["sequence"]) is not int or row["sequence"] < 0:
         raise IngressVerificationError("ingress:sequence")
     if type(row["watermark"]) is not int or row["watermark"] < 0 or type(row["slot_count"]) is not int or row["slot_count"] < 0:
@@ -992,7 +1075,7 @@ def _verify_connection(
     try:
         if _table_names(connection) != tuple(sorted(TABLES)):
             raise IngressVerificationError("ingress:tables")
-        if _index_names(connection) != tuple(sorted(EXPLICIT_INDEXES)):
+        if _index_definitions(connection) != INDEX_DEFINITIONS:
             raise IngressVerificationError("ingress:indexes")
         _check_page_limits(connection, configure=False)
         for table, columns in TABLE_COLUMNS.items():
@@ -1154,6 +1237,10 @@ def verify_database(
     artifact_id: str | None = None,
     artifact_ids: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
+    if expected_database_id is not None:
+        _safe_identifier(expected_database_id, "ingress:database-id")
+    if expected_config_digest is not None:
+        _hex(expected_config_digest, "ingress:config")
     if artifact_id is not None:
         _hex(artifact_id, "ingress:artifact-selector")
     if artifact_ids is not None:
@@ -1309,7 +1396,7 @@ __all__ = [
     "IngressVerificationError", "content_root", "verify_database", "verify_bytes",
     "read_artifact", "logical_export", "_canonical", "_digest", "_raw_digest",
     "_lease_token_digest", "MAX_DATABASE_BYTES", "MAX_RAW_ENVELOPE_BYTES", "MAX_EVENT_BYTES",
-    "TABLE_COLUMNS", "EXPLICIT_INDEXES",
+    "MAX_IDENTIFIER_BYTES", "TABLE_COLUMNS", "EXPLICIT_INDEXES", "INDEX_DEFINITIONS", "_index_definitions",
     "read_artifact_snapshot",
     "read_artifact_snapshots",
 ]

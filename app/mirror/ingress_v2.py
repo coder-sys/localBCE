@@ -26,10 +26,10 @@ STATES = independent.STATES
 FIXED_FLAGS = dict(independent.FIXED_FLAGS)
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
+MAX_IDENTIFIER_BYTES = independent.MAX_IDENTIFIER_BYTES
 DEFAULT_PAGE_SIZE = 4096
-TERMINAL_RESERVE_BYTES = 2 * (
-    ((MAX_EVENT_BYTES + DEFAULT_PAGE_SIZE - 1) // DEFAULT_PAGE_SIZE) + 2
-) * DEFAULT_PAGE_SIZE
+_SQLITE_PAGE_OVERHEAD_PAGES = 16
+TERMINAL_RESERVE_BYTES = 2 * MAX_EVENT_BYTES + _SQLITE_PAGE_OVERHEAD_PAGES * DEFAULT_PAGE_SIZE
 _LIVE_STATES = (
     "DUE", "LEASED", "CAPTURED", "QUARANTINE_PENDING", "QUARANTINE_UNCONFIRMED",
 )
@@ -37,6 +37,7 @@ _REPARSE_POINT = 0x400
 _SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _MAX_CALLER_STRING_BYTES = 1024
 _MAX_OPERATION_VALUE_BYTES = 256
+_MIN_LEASE_TOKEN_BYTES = 32
 
 
 def _utc_epoch_seconds() -> int:
@@ -55,6 +56,32 @@ class IngressBusyError(IngressError):
     """A bounded writer contention failure."""
 
 
+def _safe_identifier(value: object, label: str) -> str:
+    if type(value) is not str or not value:
+        raise IngressError(label)
+    if len(value) > MAX_IDENTIFIER_BYTES:
+        raise IngressError(label)
+    try:
+        raw = value.encode("ascii")
+    except UnicodeEncodeError:
+        raise IngressError(label) from None
+    if (
+        len(raw) > MAX_IDENTIFIER_BYTES
+        or not ("A" <= value[0] <= "Z" or "a" <= value[0] <= "z" or "0" <= value[0] <= "9")
+        or any(
+            not (
+                "A" <= character <= "Z"
+                or "a" <= character <= "z"
+                or "0" <= character <= "9"
+                or character in "._:-"
+            )
+            for character in value
+        )
+    ):
+        raise IngressError(label)
+    return value
+
+
 @dataclass(frozen=True)
 class IngressConfigV2:
     database_id: str
@@ -70,10 +97,8 @@ class IngressConfigV2:
     lease_seconds: int = 60
 
     def __post_init__(self) -> None:
-        if any(type(value) is not str or not value for value in (
-            self.database_id, self.chain_id,
-        )):
-            raise IngressError("ingress:config")
+        _safe_identifier(self.database_id, "ingress:config")
+        _safe_identifier(self.chain_id, "ingress:config")
         for value in (self.policy_digest, self.authorization_digest, self.terms_digest):
             if type(value) is not str or len(value) != 128 or any(
                 char not in "0123456789abcdef" for char in value
@@ -143,11 +168,21 @@ def _raw_digest(label: str, raw: bytes) -> str:
     return independent._raw_digest(label, raw)
 
 
-def _bounded_string(value: object, label: str, *, max_bytes: int = _MAX_CALLER_STRING_BYTES) -> str:
+def _bounded_string(
+    value: object,
+    label: str,
+    *,
+    max_bytes: int = _MAX_CALLER_STRING_BYTES,
+    min_bytes: int = 1,
+    ascii_only: bool = False,
+) -> str:
     if type(value) is not str or not value:
         raise IngressError(label)
+    if len(value) > max_bytes:
+        raise IngressError(label)
     try:
-        if len(value.encode("utf-8")) > max_bytes:
+        encoded = value.encode("ascii" if ascii_only else "utf-8")
+        if not min_bytes <= len(encoded) <= max_bytes:
             raise IngressError(label)
     except UnicodeEncodeError:
         raise IngressError(label) from None
@@ -237,9 +272,14 @@ def _connection(
     *,
     timeout: float = 0.25,
     configure_cap: bool = True,
+    expected_identity: tuple[int, int] | None = None,
 ) -> sqlite3.Connection:
     database = Path(path)
     before = _path_identity(database, allow_missing=True)
+    if expected_identity is not None and (
+        before is None or (before[0], before[1]) != expected_identity
+    ):
+        raise IngressError("ingress:database-open")
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(database, timeout=timeout, isolation_level=None)
@@ -261,6 +301,8 @@ def _connection(
                 raise IngressError("ingress:capacity")
         after = _path_identity(database, allow_missing=False)
         if after is None or (before is not None and after != before):
+            raise IngressError("ingress:database-open")
+        if expected_identity is not None and (after[0], after[1]) != expected_identity:
             raise IngressError("ingress:database-open")
         return connection
     except IngressError:
@@ -311,7 +353,10 @@ def _schema_matches(connection: sqlite3.Connection) -> bool:
         return False
     if any(_columns(connection, table) != columns for table, columns in independent.TABLE_COLUMNS.items()):
         return False
-    return _index_names(connection) == tuple(sorted(independent.EXPLICIT_INDEXES))
+    try:
+        return independent._index_definitions(connection) == independent.INDEX_DEFINITIONS
+    except (independent.IngressVerificationError, sqlite3.Error, TypeError, ValueError):
+        return False
 
 
 _SCHEMA_DDL = (
@@ -402,6 +447,7 @@ _SCHEMA_DDL = (
     "CREATE INDEX ingress_slots_due_idx ON ingress_slots(state,lease_until,slot_id)",
     "CREATE UNIQUE INDEX ingress_events_chain_idx ON ingress_events(chain_id,sequence)",
     "CREATE INDEX ingress_events_operation_idx ON ingress_events(operation_id,event_kind)",
+    "CREATE INDEX ingress_events_observed_at_idx ON ingress_events(observed_at,sequence)",
     "CREATE UNIQUE INDEX ingress_fetch_natural_key_idx ON ingress_events(source_id,slot_id,page_index,transport_attempt) WHERE event_kind='FETCH_ATTESTATION'",
 )
 
@@ -467,11 +513,36 @@ class IngressServiceV2:
         self.config = config
         self._clock = clock or _utc_epoch_seconds
         _init(self.path, config)
+        before = _path_identity(self.path, allow_missing=False)
+        if before is None:
+            raise IngressError("ingress:database-open")
+        try:
+            independent.verify_database(
+                self.path,
+                expected_database_id=config.database_id,
+                expected_config_digest=config.digest,
+            )
+        except independent.IngressVerificationError:
+            raise IngressError("ingress:database") from None
+        after = _path_identity(self.path, allow_missing=False)
+        if after is None or (after[0], after[1]) != (before[0], before[1]):
+            raise IngressError("ingress:database-open")
+        self._database_identity = (before[0], before[1])
 
     def close(self) -> None:
         return None
 
+    def _assert_database_identity(self) -> None:
+        current = _path_identity(self.path, allow_missing=False)
+        if current is None or (current[0], current[1]) != self._database_identity:
+            raise IngressError("ingress:database-open")
+
+    def _writer_connection(self) -> sqlite3.Connection:
+        self._assert_database_identity()
+        return _connection(self.path, expected_identity=self._database_identity)
+
     def verify(self, *, include_raw: bool = False) -> dict[str, object]:
+        self._assert_database_identity()
         return independent.verify_database(
             self.path,
             expected_database_id=self.config.database_id,
@@ -639,7 +710,9 @@ class IngressServiceV2:
         return value
 
     def _last_observed_at(self, connection: sqlite3.Connection) -> int | None:
-        row = connection.execute("SELECT MAX(observed_at) FROM ingress_events").fetchone()
+        row = connection.execute(
+            "SELECT observed_at FROM ingress_events ORDER BY observed_at DESC,sequence DESC LIMIT 1"
+        ).fetchone()
         if row is None or row[0] is None:
             return None
         value = row[0]
@@ -683,19 +756,26 @@ class IngressServiceV2:
         self,
         connection: sqlite3.Connection,
         *,
-        growth_bytes: int,
+        event_count: int,
+        raw_artifact_bytes: int,
         terminal_live_slots: int,
     ) -> bool:
         page_size, page_count, max_pages = self._page_snapshot(connection)
-        if type(growth_bytes) is not int or growth_bytes < 0 or terminal_live_slots < 0:
+        if (
+            type(event_count) is not int
+            or event_count < 0
+            or type(raw_artifact_bytes) is not int
+            or not 0 <= raw_artifact_bytes <= independent.MAX_RAW_ENVELOPE_BYTES
+            or type(terminal_live_slots) is not int
+            or terminal_live_slots < 0
+        ):
             raise IngressError("ingress:capacity")
-        growth_pages = (growth_bytes + page_size - 1) // page_size
-        reserve_bytes = max(
-            TERMINAL_RESERVE_BYTES,
-            ((MAX_EVENT_BYTES + page_size - 1) // page_size + 2) * page_size * 2,
-        )
-        reserve_pages = ((reserve_bytes + page_size - 1) // page_size) * terminal_live_slots
-        return page_count + growth_pages + reserve_pages <= max_pages
+        event_bound = 2 * MAX_EVENT_BYTES + _SQLITE_PAGE_OVERHEAD_PAGES * page_size
+        page_overhead = _SQLITE_PAGE_OVERHEAD_PAGES * page_size
+        required_bytes = event_count * event_bound + raw_artifact_bytes + page_overhead
+        reserve_bytes = max(TERMINAL_RESERVE_BYTES, event_bound)
+        required_pages = (required_bytes + reserve_bytes * terminal_live_slots + page_size - 1) // page_size
+        return page_count + required_pages <= max_pages
 
     def _capacity_hold_receipt(
         self,
@@ -747,6 +827,61 @@ class IngressServiceV2:
         connection.commit()
         return self._receipt(raw, artifact_id=artifact_id, next_state="HELD")
 
+    def _capacity_hold_after_full(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        slot_id: str,
+        artifact_id: str,
+        operation_id: str,
+        request_digest: str,
+        attempt: int,
+        lease_token_digest: str,
+    ) -> IngressReceipt:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            slot = connection.execute(
+                "SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)
+            ).fetchone()
+            if (
+                slot is None
+                or slot["state"] != "LEASED"
+                or slot["attempt"] != attempt
+                or type(slot["lease_token"]) is not str
+                or not hmac.compare_digest(slot["lease_token"], lease_token_digest)
+                or type(slot["lease_until"]) is not int
+            ):
+                raise IngressConflictError("ingress:capacity")
+            owner_now = self._owner_now()
+            last_observed_at = self._last_observed_at(connection)
+            if last_observed_at is not None and owner_now < last_observed_at:
+                raise IngressConflictError("ingress:clock-rewind")
+            if owner_now >= int(slot["lease_until"]):
+                raise IngressConflictError("ingress:lease-expired")
+            return self._capacity_hold_receipt(
+                connection,
+                slot=slot,
+                artifact_id=artifact_id,
+                operation_id=operation_id,
+                request_digest=request_digest,
+                lease_token=lease_token_digest,
+                owner_now=owner_now,
+            )
+        except (IngressConflictError, IngressError):
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        except sqlite3.OperationalError as exc:
+            if connection.in_transaction:
+                connection.rollback()
+            if _is_capacity_error(exc):
+                raise_redacted(IngressConflictError, "ingress:capacity")
+            raise_redacted(IngressError, "ingress:database")
+        except sqlite3.Error:
+            if connection.in_transaction:
+                connection.rollback()
+            raise_redacted(IngressError, "ingress:database")
+
     def ensure_slot(self, scheduled_at: int) -> IngressReceipt:
         if type(scheduled_at) is not int or not (
             self.config.effective_start <= scheduled_at <= self.config.effective_end
@@ -758,7 +893,7 @@ class IngressServiceV2:
         )
         operation_id = _digest("slot-operation", {"slot_id": slot_id})
         request_digest = _digest("request", {"operation_id": operation_id, "scheduled_at": scheduled_at})
-        connection = _connection(self.path)
+        connection = self._writer_connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -777,10 +912,10 @@ class IngressServiceV2:
             if meta is None or int(meta[0]) >= self.config.max_slots:
                 raise IngressConflictError("ingress:capacity")
             live_slots = self._live_slot_count(connection)
-            _page_size, _page_count, _max_pages = self._page_snapshot(connection)
             if not self._capacity_available(
                 connection,
-                growth_bytes=MAX_EVENT_BYTES + 2 * _page_size,
+                event_count=1,
+                raw_artifact_bytes=0,
                 terminal_live_slots=live_slots + 1,
             ):
                 raise IngressConflictError("ingress:capacity")
@@ -831,8 +966,13 @@ class IngressServiceV2:
 
     def claim_slot(self, slot_id: str, *, lease_token: str) -> IngressReceipt:
         slot_id = _bounded_digest_string(slot_id, "ingress:lease")
-        lease_token = _bounded_string(lease_token, "ingress:lease")
-        connection = _connection(self.path)
+        lease_token = _bounded_string(
+            lease_token,
+            "ingress:lease",
+            min_bytes=_MIN_LEASE_TOKEN_BYTES,
+            ascii_only=True,
+        )
+        connection = self._writer_connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -882,7 +1022,8 @@ class IngressServiceV2:
                 terminal_live_slots = live_slots
             if required_events and not self._capacity_available(
                 connection,
-                growth_bytes=required_events * MAX_EVENT_BYTES + 2 * self._page_snapshot(connection)[0],
+                event_count=required_events,
+                raw_artifact_bytes=0,
                 terminal_live_slots=terminal_live_slots,
             ):
                 raise IngressConflictError("ingress:capacity")
@@ -969,7 +1110,12 @@ class IngressServiceV2:
                 "ingress:operation",
                 max_bytes=_MAX_OPERATION_VALUE_BYTES,
             )
-        lease_token = _bounded_string(lease_token, "ingress:envelope")
+        lease_token = _bounded_string(
+            lease_token,
+            "ingress:envelope",
+            min_bytes=_MIN_LEASE_TOKEN_BYTES,
+            ascii_only=True,
+        )
         if type(attempt) is not int or not 1 <= attempt <= self.config.max_attempts:
             raise IngressConflictError("ingress:attempt")
         raw_snapshot = bytes(envelope_raw) if type(envelope_raw) is bytes else b""
@@ -1008,7 +1154,8 @@ class IngressServiceV2:
                 },
             )
         request_digest = _digest("request", {"operation_id": operation_id, "slot_id": slot_id, "artifact_id": artifact_id})
-        connection = _connection(self.path)
+        submitted_token_digest = _lease_token_digest(self.config, slot_id, attempt, lease_token)
+        connection = self._writer_connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
             slot = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
@@ -1033,9 +1180,6 @@ class IngressServiceV2:
                 committed_attempt = int(existing["attempt"])
                 if attempt != committed_attempt:
                     raise IngressConflictError("ingress:operation-conflict")
-                submitted_token_digest = _lease_token_digest(
-                    self.config, slot_id, committed_attempt, lease_token,
-                )
                 if (
                     existing["slot_id"] != slot_id
                     or existing["operation_id"] != operation_id
@@ -1084,7 +1228,7 @@ class IngressServiceV2:
                 raise IngressConflictError("ingress:lease-token")
             if attempt != int(slot["attempt"]):
                 raise IngressConflictError("ingress:attempt")
-            token_digest = _lease_token_digest(self.config, slot_id, attempt, lease_token)
+            token_digest = submitted_token_digest
             if not hmac.compare_digest(str(slot["lease_token"]), token_digest):
                 raise IngressConflictError("ingress:lease-token")
             if slot["lease_until"] is None:
@@ -1093,7 +1237,6 @@ class IngressServiceV2:
                 raise IngressConflictError("ingress:lease-expired")
             if int(slot["attempt"]) < 1 or int(slot["attempt"]) > self.config.max_attempts:
                 raise IngressConflictError("ingress:attempt-exhausted")
-            attestation_materials: list[dict[str, object]] = []
             page_evidence = result.get("page_evidence")
             if not isinstance(page_evidence, tuple):
                 raise IngressError("ingress:envelope-evidence")
@@ -1102,28 +1245,27 @@ class IngressServiceV2:
                 attempts = page.get("attempts") if isinstance(page, Mapping) else None
                 if not isinstance(attempts, tuple):
                     raise IngressError("ingress:envelope-evidence")
-                for attempt in attempts:
-                    if not isinstance(attempt, Mapping):
+                for attempt_record in attempts:
+                    if not isinstance(attempt_record, Mapping):
                         raise IngressError("ingress:envelope-evidence")
                     material = {
                         "artifact_id": artifact_id,
                         "page_index": int(page["page_index"]),
                         "lease_attempt": int(slot["attempt"]),
-                        "transport_attempt": int(attempt["transport_attempt"]),
-                        "request_identity": attempt["request_identity"],
-                        "response_digest": attempt["response_digest"],
-                        "status": attempt["status"],
-                        "retry_after_seconds": attempt["retry_after_seconds"],
-                        "response_url": attempt["response_url"],
-                        "redirect": attempt["redirect"],
-                        "failure_code": attempt["failure_code"],
-                        "transport_error": attempt["transport_error"],
+                        "transport_attempt": int(attempt_record["transport_attempt"]),
+                        "request_identity": attempt_record["request_identity"],
+                        "response_digest": attempt_record["response_digest"],
+                        "status": attempt_record["status"],
+                        "retry_after_seconds": attempt_record["retry_after_seconds"],
+                        "response_url": attempt_record["response_url"],
+                        "redirect": attempt_record["redirect"],
+                        "failure_code": attempt_record["failure_code"],
+                        "transport_error": attempt_record["transport_error"],
                         "evidence_class": "SYNTHETIC_FIXTURE_UNAUTHENTICATED",
-                        "selected": attempt["selected"],
+                        "selected": attempt_record["selected"],
                         "observed_at": owner_now,
                     }
                     material["attestation_digest"] = independent._attestation_digest(material)
-                    attestation_materials.append(material)
                     receipt = {
                         "schema": SCHEMA,
                         "schema_version": SCHEMA_VERSION,
@@ -1132,14 +1274,11 @@ class IngressServiceV2:
                         "slot_id": slot_id,
                     }
                     attestation_receipts.append((material, _canonical(receipt)))
-            estimated_growth = (
-                len(raw_snapshot)
-                + sum(len(receipt_raw) + 2048 for _material, receipt_raw in attestation_receipts)
-                + 4 * 2048
-            )
+            complete = result["source_status"] == "COMPLETE" and result["page_complete"] is True and result["freshness"] in {"FRESH", "UNKNOWN"} and result["failure_code"] is None
             if not self._capacity_available(
                 connection,
-                growth_bytes=estimated_growth,
+                event_count=len(attestation_receipts) + (3 if complete else 2),
+                raw_artifact_bytes=independent.MAX_RAW_ENVELOPE_BYTES,
                 terminal_live_slots=self._live_slot_count(connection),
             ):
                 return self._capacity_hold_receipt(
@@ -1197,7 +1336,6 @@ class IngressServiceV2:
                     receipt_bytes=receipt_raw,
                     head_artifact_id=artifact_id,
                 )
-            complete = result["source_status"] == "COMPLETE" and result["page_complete"] is True and result["freshness"] in {"FRESH", "UNKNOWN"} and result["failure_code"] is None
             capture_material = {
                 "artifact_id": artifact_id,
                 "envelope_digest": _raw_digest("envelope", raw_snapshot),
@@ -1260,14 +1398,30 @@ class IngressServiceV2:
         except sqlite3.OperationalError as exc:
             connection.rollback()
             if _is_capacity_error(exc):
-                raise_redacted(IngressConflictError, "ingress:capacity")
+                return self._capacity_hold_after_full(
+                    connection,
+                    slot_id=slot_id,
+                    artifact_id=artifact_id,
+                    operation_id=operation_id,
+                    request_digest=request_digest,
+                    attempt=attempt,
+                    lease_token_digest=submitted_token_digest,
+                )
             if "locked" in str(exc).lower() or "busy" in str(exc).lower():
                 raise_redacted(IngressBusyError, "ingress:busy")
             raise_redacted(IngressError, "ingress:database")
         except sqlite3.Error as exc:
             connection.rollback()
             if _is_capacity_error(exc):
-                raise_redacted(IngressConflictError, "ingress:capacity")
+                return self._capacity_hold_after_full(
+                    connection,
+                    slot_id=slot_id,
+                    artifact_id=artifact_id,
+                    operation_id=operation_id,
+                    request_digest=request_digest,
+                    attempt=attempt,
+                    lease_token_digest=submitted_token_digest,
+                )
             raise_redacted(IngressError, "ingress:database")
         finally:
             connection.close()
@@ -1295,4 +1449,5 @@ __all__ = [
     "IngressConfigV2", "IngressReceipt", "IngressError",
     "IngressConflictError", "IngressBusyError", "IngressServiceV2",
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
+    "MAX_IDENTIFIER_BYTES", "INDEX_DEFINITIONS",
 ]
