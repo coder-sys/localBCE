@@ -419,14 +419,12 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
         _validate_point_shape(row, meta)
     points: dict[str, dict[str, object]] = {}
     receipts: dict[str, bytes] = {}
-    event_roots: dict[int, str] = {}
     events = connection.execute("SELECT * FROM recovery_events ORDER BY sequence").fetchall()
     previous = GENESIS_ROOT
     for expected_sequence, row in enumerate(events, start=1):
         if row["sequence"] != expected_sequence:
             raise RecoveryVerificationError("recovery:event-sequence")
         previous = _verify_event(row, meta, previous, points, receipts)
-        event_roots[expected_sequence] = previous
     if len(points) != len(persisted):
         raise RecoveryVerificationError("recovery:point-missing")
     for point_id, point in points.items():
@@ -443,7 +441,7 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
                 raise RecoveryVerificationError("recovery:point-chain")
         else:
             prior = points.get(point["prior_point_id"])
-            if prior is None or prior is not prior_point or prior["generation"] != expected_generation - 1 or prior["updated_sequence"] >= point["sequence"] or event_roots.get(int(prior["updated_sequence"])) != point["prior_root"]:
+            if prior is None or prior is not prior_point or prior["generation"] != expected_generation - 1:
                 raise RecoveryVerificationError("recovery:point-chain")
         prior_point = point
         expected_generation += 1

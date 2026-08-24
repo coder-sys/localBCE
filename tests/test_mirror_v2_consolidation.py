@@ -1454,6 +1454,61 @@ class MirrorV2Fixture(unittest.TestCase):
         self.core_path.unlink()
         self.assertEqual(first.raw, service.create_point(self.ingress_path, self.core_path, generation=1).raw)
 
+    def test_recovery_interleaved_pending_predecessor_retry_preserves_historical_chain(self) -> None:
+        class PutThenLoseResponse(_Storage):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lost = True
+
+            def put_if_absent(self, object_id: str, sealed: bytes, *, key_id: str, key_epoch: int) -> recovery.StorageReceipt:
+                receipt = super().put_if_absent(object_id, sealed, key_id=key_id, key_epoch=key_epoch)
+                if self.lost:
+                    self.lost = False
+                    raise RuntimeError("response lost after storage commit")
+                return receipt
+
+        storage = PutThenLoseResponse()
+        service = recovery.RecoveryServiceV2(self.root / "interleaved-pending-recovery.db", self.recovery_config, self.custody, storage)
+        with self.assertRaises(recovery.RecoveryIndeterminateError):
+            service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("OBJECT_PENDING", recovery_independent.select_point(service.path, generation=1)["point"]["state"])
+
+        second = service.create_point(self.ingress_path, self.core_path, generation=2)
+        self.assertEqual("VERIFIED", second.state)
+        self.ingress_path.unlink()
+        self.core_path.unlink()
+        first = service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("VERIFIED", first.state)
+        snapshot = recovery_independent.verify_database(
+            service.path,
+            expected_database_id=self.recovery_config.database_id,
+            expected_config_digest=self.recovery_config.digest,
+        )
+        self.assertEqual(2, snapshot["point_count"])
+        self.assertEqual(2, snapshot["states"]["VERIFIED"])
+
+    def test_recovery_interleaved_predecessor_publish_preserves_historical_chain(self) -> None:
+        service = recovery.RecoveryServiceV2(self.root / "interleaved-publish-recovery.db", self.recovery_config, self.custody, self.storage)
+        first = service.create_point(self.ingress_path, self.core_path, generation=1)
+        second = service.create_point(self.ingress_path, self.core_path, generation=2)
+        self.assertEqual("VERIFIED", first.state)
+        self.assertEqual("VERIFIED", second.state)
+
+        published = service.restore_point(
+            first.point_id,
+            self.root / "interleaved-publish-ingress.db",
+            self.root / "interleaved-publish-core.db",
+        )
+        self.assertEqual("PUBLISHED", published.state)
+        snapshot = recovery_independent.verify_database(
+            service.path,
+            expected_database_id=self.recovery_config.database_id,
+            expected_config_digest=self.recovery_config.digest,
+        )
+        self.assertEqual(2, snapshot["point_count"])
+        self.assertEqual(1, snapshot["states"]["PUBLISHED"])
+        self.assertEqual(1, snapshot["states"]["VERIFIED"])
+
     def test_recovery_exact_images_are_verified_once_and_wrong_image_fails_before_catalog_mutation(self) -> None:
         before = self.recovery_service.verify()
         with self.assertRaises(ingress_independent.IngressVerificationError):
