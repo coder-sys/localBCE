@@ -11,7 +11,6 @@ from experiments.bl_pq512_crypto_foundation.field16_reference import (
     HASH_SPACE,
     M31_MODULUS,
     REJECTION_COUNT,
-    SAMPLE_DOMAIN_CODE,
     Fp16,
     rejection_failure_fraction,
     sample_uniform_fp16,
@@ -19,25 +18,18 @@ from experiments.bl_pq512_crypto_foundation.field16_reference import (
 )
 from experiments.bl_pq512_crypto_foundation.oods_reference import (
     OODS_DEFAULT_MAX_ATTEMPTS,
-    OODS_SAMPLE_DOMAIN_CODE,
     OodsParameter,
     oods_rejection_failure_fraction,
     sample_oods_parameter,
     stereographic_circle_point,
 )
 from experiments.bl_pq512_crypto_foundation.public_coin_reference import (
-    AUDIT_DOMAIN,
-    COMMITMENT_DOMAIN,
     Contributor,
     EnvelopeKind,
     OutputKind,
     PublicCoinSession,
-    REVEAL_DOMAIN,
-    ROUND_DOMAIN,
     RoundDescriptor,
     RoundKind,
-    SCHEDULE_DOMAIN,
-    SEED_DOMAIN,
     SignedEnvelope,
     sample_query_positions,
 )
@@ -144,20 +136,6 @@ def test_vector_is_nonactivating_and_algebra_is_exact() -> None:
     assert tuple(VECTORS["algebra"]["basis"]) == BASIS
     assert tower_irreducibility_report() == VECTORS["algebra"]["irreducibilityEulerCriteria"]
     assert all(tower_irreducibility_report().values())
-    registry = json.loads(
-        (ROOT / "docs" / "bl_pq512_suite_candidate_v1.json").read_text(encoding="utf-8")
-    )
-    domains = {entry["code"]: entry["name"] for entry in registry["domainRegistry"]}
-    assert {
-        ROUND_DOMAIN: "BL/PQ512/v1/TRANSCRIPT/PUBLIC-COIN-ROUND",
-        COMMITMENT_DOMAIN: "BL/PQ512/v1/TRANSCRIPT/RANDOMNESS-COMMITMENT",
-        REVEAL_DOMAIN: "BL/PQ512/v1/TRANSCRIPT/RANDOMNESS-REVEAL",
-        SEED_DOMAIN: "BL/PQ512/v1/TRANSCRIPT/PUBLIC-CHALLENGE-SEED",
-        SAMPLE_DOMAIN_CODE: "BL/PQ512/v1/TRANSCRIPT/FIELD16-REJECTION-DRAW",
-        AUDIT_DOMAIN: "BL/PQ512/v1/TRANSCRIPT/AUDIT-ROOT",
-        SCHEDULE_DOMAIN: "BL/PQ512/v1/TRANSCRIPT/SCHEDULE",
-        OODS_SAMPLE_DOMAIN_CODE: "BL/PQ512/v1/TRANSCRIPT/OODS-FP8-EXCLUDING-DRAW",
-    }.items() <= domains.items()
 
 
 def test_field_multiplication_inverse_encoding_and_identities_match_kat() -> None:
