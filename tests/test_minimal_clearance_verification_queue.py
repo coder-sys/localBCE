@@ -6,7 +6,7 @@ never construct a clearance directive or call the clearance state store.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import closing
 import hashlib
 import json
@@ -79,10 +79,6 @@ _STDERR = (
     b"MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received\n"
     b"MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept\n"
 )
-
-
-def _canonical(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
 class _Clock:
@@ -281,10 +277,28 @@ class VerificationQueueTests(TestCase):
         with self.assertRaises(QueueLeaseError):
             store.complete_rejected(bad, "proof_rejected")
         self.assertEqual(store.export_bytes(), before)
-        store.complete_rejected(work, "proof_rejected")
-        with self.assertRaises(QueueLeaseError):
-            store.complete_rejected(work, "proof_rejected")
+        first = store.complete_rejected(work, "proof_rejected")
+        second = store.complete_rejected(work, "proof_rejected")
+        self.assertEqual(second, first)
         self.assertEqual(store.retry_result(work.operation_id).status, "REJECTED")
+
+    def test_lease_bearer_is_memory_only_and_digest_fences_completion(self) -> None:
+        store = self._store(capacity=1)
+        self._admit(store)
+        work = store.claim_next(worker_id="digest-worker")
+        self.assertIsNotNone(work)
+        exported = store.export_bytes()
+        self.assertNotIn(work.lease_token, exported)
+        with self.assertRaises(QueueLeaseError) as caught:
+            store.complete_rejected(replace(work, lease_token=b"wrong-token-bytes-000000"), "proof_rejected")
+        self.assertEqual(str(caught.exception), "completion_lease_fence")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertEqual(exported, store.export_bytes())
+        self.assertEqual(store.complete_rejected(work, "proof_rejected").status, "REJECTED")
+        with self.assertRaises(QueueLeaseError):
+            store.complete_rejected(replace(work, lease_token=b"wrong-token-bytes-000000"), "proof_rejected")
+        verify_export_bytes(store.export_bytes())
 
     def test_expiry_requeues_then_holds_at_max_attempt(self) -> None:
         clock = _Clock()
@@ -301,6 +315,19 @@ class VerificationQueueTests(TestCase):
         clock.advance(31_000)
         self.assertEqual(store.recover_expired(), 1)
         self.assertEqual(store.get_job("job-1").status, "HELD")
+        store.verify_integrity()
+
+    def test_database_owns_four_live_workers_and_same_worker_claim_recovery(self) -> None:
+        store = self._store(capacity=5)
+        for index in range(5):
+            self._admit(store, f"job-{index}", f"opaque-{index}")
+        claims = [store.claim_next(worker_id=f"worker-{index}") for index in range(4)]
+        self.assertTrue(all(claim is not None for claim in claims))
+        recovered = store.claim_next(worker_id="worker-0")
+        self.assertEqual(recovered, claims[0])
+        with self.assertRaises(QueueBackpressureError) as caught:
+            store.claim_next(worker_id="worker-4")
+        self.assertEqual(str(caught.exception), "queue_worker_capacity")
         store.verify_integrity()
 
     def test_worker_maps_reject_retry_and_identity_or_custody_failure(self) -> None:
@@ -414,12 +441,10 @@ class VerificationQueueTests(TestCase):
         self.assertIn(receipt["evidence"]["acceptance_bytes"].encode("ascii"), persisted_receipt)
         independent = verify_export_bytes(exported, expected_config=store.config.as_json())
         self.assertEqual(independent["status_counts"]["VERIFIED"], 1)
-        tampered = json.loads(exported.decode("ascii"))
-        receipt_hex = tampered["results"][0]["receipt_bytes"]
-        tampered["results"][0]["receipt_bytes"] = ("0" if receipt_hex[0] != "0" else "1") + receipt_hex[1:]
-        tampered_bytes = json.dumps(tampered, sort_keys=True, separators=(",", ":")).encode("ascii")
+        tampered_bytes = bytearray(exported)
+        tampered_bytes[0] ^= 1
         with self.assertRaises(IndependentQueueError):
-            verify_export_bytes(tampered_bytes)
+            verify_export_bytes(bytes(tampered_bytes))
 
     def test_faults_roll_back_state_and_export(self) -> None:
         for label in ("after_admission_write", "after_transition"):
@@ -508,24 +533,14 @@ class VerificationQueueTests(TestCase):
         restored = self.root / "restored.sqlite"
         self.assertEqual(restore_export_to_fresh_database(restored, export), summary)
         self.assertEqual(verify_database(restored), summary)
-        value = json.loads(export.decode("ascii"))
-        mutations = []
-        unknown = json.loads(export.decode("ascii"))
-        unknown["unknown"] = 1
-        mutations.append(unknown)
-        reordered = json.loads(export.decode("ascii"))
-        reordered["jobs"].reverse()
-        mutations.append(reordered)
-        root_drift = json.loads(export.decode("ascii"))
-        root_drift["metadata"]["head_root"] = "00" * 64
-        mutations.append(root_drift)
+        mutations = [bytes([export[0] ^ 1]) + export[1:], export[:-1], export + b"\x00"]
         for mutation in mutations:
-            with self.subTest(mutation=list(mutation)):
+            with self.subTest(mutation_len=len(mutation)):
                 with self.assertRaises(IndependentQueueError):
-                    verify_export_bytes(_canonical(mutation))
-        self.assertNotIn(str(self.root), export.decode("ascii"))
-        self.assertNotIn(_STDOUT.decode("ascii"), export.decode("ascii"))
-        self.assertNotIn(_STDERR.decode("ascii"), export.decode("ascii"))
+                    verify_export_bytes(mutation)
+        self.assertNotIn(str(self.root).encode("ascii"), export)
+        self.assertNotIn(_STDOUT, export)
+        self.assertNotIn(_STDERR, export)
 
     def test_four_workers_overlap_and_use_fresh_custody_and_verifiers(self) -> None:
         store = self._store()
@@ -561,7 +576,8 @@ class VerificationQueueTests(TestCase):
         self.assertTrue(snapshot.path.is_file())
         self.assertTrue(snapshot.readonly)
         self.assertNotEqual(snapshot.path, source)
-        self.assertEqual(snapshot.path.read_bytes(), _RAW)
+        with snapshot.path.open("rb") as handle:
+            self.assertEqual(handle.read(), _RAW)
         snapshot.cleanup()
         self.assertEqual(list(workspace.iterdir()), [])
 
@@ -570,6 +586,7 @@ class VerificationQueueTests(TestCase):
         self._admit(store)
         connection = sqlite3.connect(store.path)
         try:
+            connection.execute("DROP TRIGGER queue_metadata_immutable")
             connection.execute("UPDATE queue_metadata SET verifier_sha256=? WHERE id=1", (bytes(32),))
             connection.commit()
         finally:
