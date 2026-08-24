@@ -2268,6 +2268,104 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertGreaterEqual(custody.seal_count, 2)
         self.assertEqual(receipt.raw, service.create_point(self.ingress_path, self.core_path, generation=1).raw)
 
+    def test_recovery_transaction_finalizer_redacts_rollback_and_close_failures(self) -> None:
+        class FaultConnection:
+            def __init__(self, inner: sqlite3.Connection, *, fail_rollback: bool = False, fail_close: bool = False) -> None:
+                self.inner = inner
+                self.fail_rollback = fail_rollback
+                self.fail_close = fail_close
+
+            def rollback(self) -> None:
+                if self.fail_rollback:
+                    raise RuntimeError("CANARY_ROLLBACK_PHI_PATH")
+                self.inner.rollback()
+
+            def close(self) -> None:
+                if self.fail_close:
+                    self.inner.close()
+                    raise RuntimeError("CANARY_CLOSE_PHI_PATH")
+                self.inner.close()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self.inner, name)
+
+        for fault in ("rollback", "close"):
+            with self.subTest(fault=fault):
+                service = recovery.RecoveryServiceV2(self.root / f"finalizer-{fault}.db", self.recovery_config, _Custody(), _Storage())
+                original_open = service._open
+
+                def open_fault(*, _fault=fault):
+                    return FaultConnection(original_open(), fail_rollback=_fault == "rollback", fail_close=_fault == "close")
+
+                with mock.patch.object(service, "_open", side_effect=open_fault):
+                    with mock.patch.object(service, "_append", side_effect=recovery.RecoveryError("recovery:precommit")):
+                        with self.assertRaises(recovery.RecoveryIndeterminateError) as caught:
+                            service.create_point(self.ingress_path, self.core_path, generation=1)
+                self.assertEqual("recovery:transaction-indeterminate", str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertNotIn("CANARY_", repr(caught.exception))
+                self.assertTrue(service.verify()["accepted"])
+                self.assertEqual(0, service.verify()["point_count"])
+
+    def test_recovery_commit_then_raise_retries_one_durable_generation(self) -> None:
+        service = recovery.RecoveryServiceV2(self.root / "commit-then-raise-recovery.db", self.recovery_config, _Custody(), _Storage())
+        original_commit = service._commit
+        calls = 0
+
+        def commit_then_raise(connection: sqlite3.Connection) -> None:
+            nonlocal calls
+            calls += 1
+            original_commit(connection)
+            if calls == 2:
+                raise RuntimeError("CANARY_COMMIT_PHI_PATH")
+
+        with mock.patch.object(service, "_commit", side_effect=commit_then_raise):
+            with self.assertRaises(recovery.RecoveryIndeterminateError) as caught:
+                service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("recovery:transaction-indeterminate", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY_", repr(caught.exception))
+        pending = recovery_independent.select_point(service.path, generation=1)
+        self.assertEqual("OBJECT_PENDING", pending["point"]["state"])
+        self.assertEqual(1, pending["summary"]["point_count"])
+        self.assertEqual(2, pending["summary"]["event_count"])
+        retry = service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("VERIFIED", retry.state)
+        after = service.verify()
+        self.assertEqual(1, after["point_count"])
+        self.assertEqual(3, after["event_count"])
+        self.assertEqual(retry.raw, service.create_point(self.ingress_path, self.core_path, generation=1).raw)
+        self.assertEqual(after, service.verify())
+
+    def test_recovery_precommit_failure_retries_without_durable_partial_effect(self) -> None:
+        service = recovery.RecoveryServiceV2(self.root / "precommit-retry-recovery.db", self.recovery_config, _Custody(), _Storage())
+        original_append = service._append
+        failed = True
+
+        def fail_once(connection: sqlite3.Connection, **kwargs: object) -> bytes:
+            nonlocal failed
+            if failed:
+                failed = False
+                raise recovery.RecoveryError("recovery:precommit")
+            return original_append(connection, **kwargs)
+
+        with mock.patch.object(service, "_append", side_effect=fail_once):
+            with self.assertRaises(recovery.RecoveryError) as caught:
+                service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("recovery:precommit", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertTrue(service.verify()["accepted"])
+        self.assertEqual(0, service.verify()["point_count"])
+        receipt = service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("VERIFIED", receipt.state)
+        snapshot = service.verify()
+        self.assertEqual(1, snapshot["point_count"])
+        self.assertEqual(3, snapshot["event_count"])
+        self.assertEqual(receipt.raw, service.create_point(self.ingress_path, self.core_path, generation=1).raw)
+
     def test_recovery_pending_key_revocation_records_invalidated_state(self) -> None:
         custody = _Custody()
         storage = _FailOnceStorage()

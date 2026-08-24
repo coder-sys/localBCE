@@ -463,7 +463,10 @@ class RecoveryServiceV2:
         try:
             self._assert_database_identity()
         except Exception:
-            connection.close()
+            try:
+                connection.close()
+            except BaseException:
+                raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
             raise
         return connection
 
@@ -477,13 +480,7 @@ class RecoveryServiceV2:
         self._assert_database_identity(allow_journal=True)
 
     def _commit(self, connection: sqlite3.Connection) -> None:
-        self._assert_database_identity(allow_journal=True)
-        try:
-            connection.commit()
-        except Exception:
-            self._assert_database_identity(allow_journal=True)
-            raise
-        self._assert_database_identity(allow_journal=True)
+        connection.commit()
 
     def _close(self, connection: sqlite3.Connection) -> None:
         failure: BaseException | None = None
@@ -497,7 +494,58 @@ class RecoveryServiceV2:
             if failure is None:
                 failure = error
         if failure is not None:
-            raise failure
+            raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+
+    def _finish_transaction(self, connection: sqlite3.Connection, *, commit: bool = True, error: BaseException | None = None) -> None:
+        """Finalize one service mutation without exposing transaction uncertainty."""
+        if commit:
+            if error is not None:
+                self._finish_transaction(connection, commit=False, error=error)
+            try:
+                self._assert_database_identity(allow_journal=True)
+            except RecoveryError as precommit_error:
+                self._finish_transaction(connection, commit=False, error=precommit_error)
+            except BaseException:
+                self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:database"))
+            try:
+                self._commit(connection)
+            except BaseException:
+                try:
+                    self._close(connection)
+                except BaseException:
+                    pass
+                raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+            try:
+                self._assert_database_identity(allow_journal=True)
+            except BaseException:
+                try:
+                    self._close(connection)
+                except BaseException:
+                    pass
+                raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+            try:
+                self._close(connection)
+            except BaseException:
+                raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+            return
+
+        rollback_failed = False
+        try:
+            connection.rollback()
+        except BaseException:
+            rollback_failed = True
+        try:
+            self._close(connection)
+        except BaseException:
+            raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+        if rollback_failed:
+            raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+        if error is None:
+            return
+        error.__cause__ = None
+        error.__context__ = None
+        error.__suppress_context__ = True
+        raise error
 
     def _select_point(self, *args: object, **kwargs: object) -> dict[str, object]:
         self._assert_database_identity()
@@ -623,23 +671,23 @@ class RecoveryServiceV2:
             self._begin(connection)
             row = connection.execute("SELECT * FROM recovery_points WHERE point_id=?", (point_id,)).fetchone()
             if row is None or row["state"] != "OBJECT_PENDING":
-                connection.rollback()
+                transaction = connection
+                connection = None
+                self._finish_transaction(transaction, commit=False)
                 return
             material = {"point_id": row["point_id"], "object_id": row["object_id"], "key_id": row["key_id"], "key_epoch": row["key_epoch"], "reason": "key-revoked"}
             raw = self._append(connection, kind="INVALIDATED", point_id=str(row["point_id"]), operation_id=str(row["operation_id"]), request_digest=str(row["request_digest"]), prior_state="OBJECT_PENDING", next_state="INVALIDATED", material=material, payload_digest=str(row["object_id"]), payload_length=0)
             sequence = independent._parse(raw, "recovery:receipt")["sequence"]
             connection.execute("UPDATE recovery_points SET state='INVALIDATED',updated_sequence=? WHERE point_id=?", (sequence, point_id))
-            self._commit(connection)
-        except RecoveryError:
-            connection.rollback()
-            raise
+        except RecoveryError as error:
+            self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.Error as error:
-            connection.rollback()
-            if _sqlite_is_capacity(error):
-                _capacity()
-            raise_redacted(RecoveryError, "recovery:invalidate")
-        finally:
-            self._close(connection)
+            mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:invalidate")
+            self._finish_transaction(connection, commit=False, error=mapped)
+        except Exception:
+            self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:invalidate"))
+        else:
+            self._finish_transaction(connection)
 
     @staticmethod
     def _bounded_bytes(value: object, maximum: int, label: str) -> bytes:
@@ -691,26 +739,28 @@ class RecoveryServiceV2:
                 event = connection.execute("SELECT event_raw FROM recovery_events WHERE point_id=? AND next_state=? ORDER BY sequence DESC LIMIT 1", (point["point_id"], current["state"])).fetchone()
                 if event is None:
                     raise RecoveryError("recovery:receipt")
-                self._commit(connection)
-                return self._receipt(event[0])
+                receipt = self._receipt(event[0])
+                transaction = connection
+                connection = None
+                self._finish_transaction(transaction)
+                return receipt
             if current["state"] != "OBJECT_PENDING" or dict(current) != dict(point):
                 raise RecoveryConflictError("recovery:state")
             material = {"point_id": point["point_id"], "object_id": point["object_id"], "bundle_digest": point["bundle_digest"], "bundle_length": point["bundle_length"], "storage_id": point["storage_id"], "key_id": point["key_id"], "key_epoch": point["key_epoch"]}
             raw = self._append(connection, kind="VERIFIED", point_id=str(point["point_id"]), operation_id=str(point["operation_id"]), request_digest=str(point["request_digest"]), prior_state="OBJECT_PENDING", next_state="VERIFIED", material=material, payload_digest=str(point["object_id"]), payload_length=0)
             sequence = independent._parse(raw, "recovery:receipt")["sequence"]
             connection.execute("UPDATE recovery_points SET state='VERIFIED',updated_sequence=? WHERE point_id=?", (sequence, point["point_id"]))
-            self._commit(connection)
-            return self._receipt(raw)
-        except (RecoveryError, RecoveryConflictError):
-            connection.rollback()
-            raise
+            receipt = self._receipt(raw)
+        except (RecoveryError, RecoveryConflictError) as error:
+            self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.Error as error:
-            connection.rollback()
-            if _sqlite_is_capacity(error):
-                _capacity()
-            raise_redacted(RecoveryError, "recovery:database")
-        finally:
-            self._close(connection)
+            mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database")
+            self._finish_transaction(connection, commit=False, error=mapped)
+        except Exception:
+            self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:database"))
+        else:
+            self._finish_transaction(connection)
+            return receipt
 
     def _complete_storage(self, point: Mapping[str, object], bundle: bytes, sealed: bytes) -> RecoveryReceipt:
         key_id, key_epoch, object_id = str(point["key_id"]), int(point["key_epoch"]), str(point["object_id"])
@@ -774,18 +824,16 @@ class RecoveryServiceV2:
             if row is None and connection.execute("SELECT point_id FROM recovery_points ORDER BY generation,point_id LIMIT 1 OFFSET ?", (MAX_RECOVERY_POINTS - 1,)).fetchone() is not None:
                 raise RecoveryError("recovery:capacity")
             result = dict(row) if row is not None else None
-            self._commit(connection)
-            return result
-        except RecoveryError:
-            connection.rollback()
-            raise
+        except RecoveryError as error:
+            self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.Error as error:
-            connection.rollback()
-            if _sqlite_is_capacity(error):
-                _capacity()
-            raise_redacted(RecoveryError, "recovery:database")
-        finally:
-            self._close(connection)
+            mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database")
+            self._finish_transaction(connection, commit=False, error=mapped)
+        except Exception:
+            self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:database"))
+        else:
+            self._finish_transaction(connection)
+            return result
 
     def _finish_existing(self, selected: Mapping[str, object], ingress_path: Path, core_path: Path) -> RecoveryReceipt:
         point = selected["point"]
@@ -848,7 +896,9 @@ class RecoveryServiceV2:
                 raise RecoveryError("recovery:meta")
             existing_row = connection.execute("SELECT * FROM recovery_points WHERE generation=?", (generation,)).fetchone()
             if existing_row is not None:
-                connection.rollback()
+                transaction = connection
+                connection = None
+                self._finish_transaction(transaction, commit=False)
                 selected = self._select_point(self.path, generation=generation, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest)
                 return self._finish_existing(selected, Path(ingress_path), Path(core_path))
             if connection.execute("SELECT point_id FROM recovery_points ORDER BY generation,point_id LIMIT 1 OFFSET ?", (MAX_RECOVERY_POINTS - 1,)).fetchone() is not None:
@@ -884,23 +934,32 @@ class RecoveryServiceV2:
             pending_sequence = int(independent._parse(pending, "recovery:receipt")["sequence"])
             connection.execute("UPDATE recovery_points SET state='OBJECT_PENDING',updated_sequence=? WHERE point_id=?", (pending_sequence, point_id))
             connection.execute("UPDATE recovery_meta SET current_generation=? WHERE meta_id=1", (generation,))
-            self._commit(connection)
             point["state"] = "OBJECT_PENDING"
             point["sequence"] = prepare_sequence
             point["updated_sequence"] = pending_sequence
-        except RecoveryError:
-            connection.rollback()
-            raise
+        except RecoveryError as error:
+            if connection is None:
+                error.__cause__ = None
+                error.__context__ = None
+                error.__suppress_context__ = True
+                raise error
+            self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.IntegrityError:
-            connection.rollback()
-            raise RecoveryConflictError("recovery:conflict")
+            if connection is None:
+                raise_redacted(RecoveryConflictError, "recovery:conflict")
+            self._finish_transaction(connection, commit=False, error=RecoveryConflictError("recovery:conflict"))
         except sqlite3.Error as error:
-            connection.rollback()
-            if _sqlite_is_capacity(error):
-                _capacity()
-            raise_redacted(RecoveryError, "recovery:database")
-        finally:
-            self._close(connection)
+            mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database")
+            if connection is None:
+                raise mapped from None
+            self._finish_transaction(connection, commit=False, error=mapped)
+        except Exception:
+            if connection is None:
+                raise_redacted(RecoveryError, "recovery:database")
+            self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:database"))
+        else:
+            self._finish_transaction(connection)
+            connection = None
         if self._custody_state(key.key_id, key.key_epoch) != "ACTIVE":
             self._invalidate(point_id, "key-revoked")
             raise RecoveryConflictError("recovery:key-revoked")
@@ -1013,9 +1072,9 @@ class RecoveryServiceV2:
             if current is None or not self._same_point_immutable(point, current):
                 raise RecoveryConflictError("recovery:point-conflict")
             if current["state"] == "PUBLISHED":
-                connection.rollback()
-                self._close(connection)
+                transaction = connection
                 connection = None
+                self._finish_transaction(transaction, commit=False)
                 current_selected = self._select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("PUBLISHED",))
                 current_material = current_selected["event"].get("material")
                 if not isinstance(current_material, dict) or any(current_material.get(key) != claim[key] for key in claim):
@@ -1035,22 +1094,25 @@ class RecoveryServiceV2:
                 pending_event = independent._parse(pending_raw, "recovery:publication")
                 pending_sequence = int(pending_event["sequence"])
                 connection.execute("UPDATE recovery_points SET state='PUBLICATION_PENDING',updated_sequence=? WHERE point_id=?", (pending_sequence, point_id))
-                self._commit(connection)
-                self._close(connection)
-                connection = None
-        except (RecoveryError, RecoveryConflictError):
-            if connection is not None:
-                connection.rollback()
-            raise
+        except (RecoveryError, RecoveryConflictError) as error:
+            if connection is None:
+                error.__cause__ = None
+                error.__context__ = None
+                error.__suppress_context__ = True
+                raise error
+            self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.Error as error:
-            if connection is not None:
-                connection.rollback()
-            if _sqlite_is_capacity(error):
-                _capacity()
-            raise_redacted(RecoveryError, "recovery:database")
-        finally:
-            if connection is not None:
-                self._close(connection)
+            mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database")
+            if connection is None:
+                raise mapped from None
+            self._finish_transaction(connection, commit=False, error=mapped)
+        except Exception:
+            if connection is None:
+                raise_redacted(RecoveryError, "recovery:database")
+            self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:database"))
+        else:
+            self._finish_transaction(connection)
+            connection = None
 
         try:
             self._assert_database_identity()
@@ -1087,9 +1149,9 @@ class RecoveryServiceV2:
             if current is None or not self._same_point_immutable(point, current):
                 raise RecoveryConflictError("recovery:point-conflict")
             if current["state"] == "PUBLISHED":
-                connection.rollback()
-                self._close(connection)
+                transaction = connection
                 connection = None
+                self._finish_transaction(transaction, commit=False)
                 current_selected = self._select_point(self.path, point_id=point_id, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, allowed_states=("PUBLISHED",))
                 current_material = current_selected["event"].get("material")
                 if not isinstance(current_material, dict) or any(current_material.get(key) != claim[key] for key in claim):
@@ -1108,21 +1170,27 @@ class RecoveryServiceV2:
             raw = self._append(connection, kind="PUBLISHED", point_id=point_id, operation_id=str(current["operation_id"]), request_digest=str(current["request_digest"]), prior_state="PUBLICATION_PENDING", next_state="PUBLISHED", material=published_material, payload_digest=str(current["object_id"]), payload_length=0)
             sequence = independent._parse(raw, "recovery:receipt")["sequence"]
             connection.execute("UPDATE recovery_points SET state='PUBLISHED',updated_sequence=? WHERE point_id=?", (sequence, point_id))
-            self._commit(connection)
-            return self._receipt(raw)
-        except (RecoveryError, RecoveryConflictError):
-            if connection is not None:
-                connection.rollback()
-            raise
+            receipt = self._receipt(raw)
+        except (RecoveryError, RecoveryConflictError) as error:
+            if connection is None:
+                error.__cause__ = None
+                error.__context__ = None
+                error.__suppress_context__ = True
+                raise error
+            self._finish_transaction(connection, commit=False, error=error)
         except sqlite3.Error as error:
-            if connection is not None:
-                connection.rollback()
-            if _sqlite_is_capacity(error):
-                _capacity()
-            raise_redacted(RecoveryError, "recovery:database")
-        finally:
-            if connection is not None:
-                self._close(connection)
+            mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database")
+            if connection is None:
+                raise mapped from None
+            self._finish_transaction(connection, commit=False, error=mapped)
+        except Exception:
+            if connection is None:
+                raise_redacted(RecoveryError, "recovery:database")
+            self._finish_transaction(connection, commit=False, error=RecoveryError("recovery:database"))
+        else:
+            self._finish_transaction(connection)
+            connection = None
+            return receipt
 
     def bootstrap(self, point_id: str) -> bytes:
         try:
