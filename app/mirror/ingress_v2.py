@@ -26,6 +26,7 @@ STATES = independent.STATES
 FIXED_FLAGS = dict(independent.FIXED_FLAGS)
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
 MAX_EVENT_BYTES = independent.MAX_EVENT_BYTES
+MAX_CONFIG_BYTES = independent.MAX_CONFIG_BYTES
 MAX_IDENTIFIER_BYTES = independent.MAX_IDENTIFIER_BYTES
 DEFAULT_PAGE_SIZE = 4096
 _SQLITE_PAGE_OVERHEAD_PAGES = 16
@@ -405,6 +406,7 @@ _SCHEMA_DDL = (
         database_id TEXT NOT NULL,
         chain_id TEXT NOT NULL,
         config_digest TEXT NOT NULL,
+        config_raw BLOB NOT NULL,
         sequence INTEGER NOT NULL,
         head_root TEXT NOT NULL,
         watermark INTEGER NOT NULL,
@@ -517,11 +519,14 @@ def _init(path: Path, config: IngressConfigV2) -> None:
             connection.execute("BEGIN IMMEDIATE")
             for statement in _SCHEMA_DDL:
                 connection.execute(statement)
+            config_raw = _canonical(config.material())
+            if len(config_raw) > MAX_CONFIG_BYTES:
+                raise IngressError("ingress:config")
             connection.execute(
-                "INSERT INTO ingress_meta VALUES(1,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO ingress_meta VALUES(1,?,?,?,?,?,?,?,?,?,?)",
                 (
                     SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id,
-                    config.digest, 0, independent.GENESIS_ROOT, 0, 0,
+                    config.digest, config_raw, 0, independent.GENESIS_ROOT, 0, 0,
                 ),
             )
             connection.commit()
@@ -669,6 +674,7 @@ class IngressServiceV2:
             "lease_token": lease_token,
             "lease_until": lease_until,
             "observed_at": observed_at,
+            "material": dict(material),
             "material_digest": _digest("material", material),
             "payload_digest": payload_digest,
             "payload_length": payload_length,
@@ -838,6 +844,7 @@ class IngressServiceV2:
         slot: sqlite3.Row,
         artifact_id: str,
         operation_id: str,
+        operation_value_digest: str | None,
         request_digest: str,
         lease_token: str,
         owner_now: int,
@@ -850,6 +857,15 @@ class IngressServiceV2:
             "artifact_id": artifact_id,
             "reason": "CAPACITY",
         })
+        material = {
+            "slot_id": str(slot["slot_id"]),
+            "artifact_id": artifact_id,
+            "operation_id": operation_id,
+            "decision": "HELD",
+            "reason": "CAPACITY",
+        }
+        if operation_value_digest is not None:
+            material["operation_value_digest"] = operation_value_digest
         raw = self._append(
             connection,
             kind="HOLD",
@@ -862,12 +878,7 @@ class IngressServiceV2:
             lease_token=lease_token,
             lease_until=int(slot["lease_until"]),
             observed_at=owner_now,
-            material={
-                "slot_id": str(slot["slot_id"]),
-                "artifact_id": artifact_id,
-                "decision": "HELD",
-                "reason": "CAPACITY",
-            },
+            material=material,
             payload_digest=artifact_id,
             payload_length=0,
             stream_kind="QUARANTINE",
@@ -888,6 +899,7 @@ class IngressServiceV2:
         slot_id: str,
         artifact_id: str,
         operation_id: str,
+        operation_value_digest: str | None,
         request_digest: str,
         attempt: int,
         lease_token_digest: str,
@@ -917,6 +929,7 @@ class IngressServiceV2:
                 slot=slot,
                 artifact_id=artifact_id,
                 operation_id=operation_id,
+                operation_value_digest=operation_value_digest,
                 request_digest=request_digest,
                 lease_token=lease_token_digest,
                 owner_now=owner_now,
@@ -993,7 +1006,7 @@ class IngressServiceV2:
                 lease_token=None,
                 lease_until=None,
                 observed_at=owner_now,
-                material={"slot_id": slot_id, "scheduled_at": scheduled_at},
+                material={"slot_id": slot_id, "scheduled_at": scheduled_at, "operation_id": operation_id},
                 payload_digest=_digest("slot-payload", {"slot_id": slot_id, "scheduled_at": scheduled_at}),
                 payload_length=0,
             )
@@ -1095,7 +1108,7 @@ class IngressServiceV2:
                     attempt=int(row["attempt"]), lease_token=str(row["lease_token"]),
                     lease_until=int(row["lease_until"]),
                     observed_at=owner_now,
-                    material={"slot_id": slot_id, "action": kind, "attempt": row["attempt"]},
+                    material={"slot_id": slot_id, "action": kind, "attempt": row["attempt"], "operation_id": row["operation_id"]},
                     payload_digest=_digest("lease-recovery", {"slot_id": slot_id, "attempt": row["attempt"]}),
                     payload_length=0,
                 )
@@ -1115,7 +1128,7 @@ class IngressServiceV2:
             lease_until = owner_now + self.config.lease_seconds
             token_digest = _lease_token_digest(self.config, slot_id, attempt, lease_token)
             request_digest = _digest("request", {"slot_id": slot_id, "action": "LEASE", "attempt": attempt})
-            material = {"slot_id": slot_id, "attempt": attempt, "lease_token": token_digest, "lease_until": lease_until}
+            material = {"slot_id": slot_id, "attempt": attempt, "lease_token": token_digest, "lease_until": lease_until, "operation_id": row["operation_id"]}
             raw = self._append(
                 connection, kind="LEASE", operation_id=str(row["operation_id"]),
                 request_digest=request_digest, slot_id=slot_id, prior_state="DUE",
@@ -1196,15 +1209,24 @@ class IngressServiceV2:
             },
         )
         slot_id = _digest("slot-id", {"config_digest": self.config.digest, "scheduled_at": scheduled_at})
+        operation_value_digest = None
         if operation_value is None:
             operation_id = _digest("capture-operation", {"slot_id": slot_id, "artifact_id": artifact_id})
         else:
+            operation_value_digest = _digest(
+                "caller-operation-value",
+                {
+                    "database_id": self.config.database_id,
+                    "config_digest": self.config.digest,
+                    "value": operation_value,
+                },
+            )
             operation_id = _digest(
                 "caller-operation",
                 {
                     "database_id": self.config.database_id,
                     "config_digest": self.config.digest,
-                    "value": operation_value,
+                    "value_digest": operation_value_digest,
                 },
             )
         request_digest = _digest("request", {"operation_id": operation_id, "slot_id": slot_id, "artifact_id": artifact_id})
@@ -1340,6 +1362,7 @@ class IngressServiceV2:
                     slot=slot,
                     artifact_id=artifact_id,
                     operation_id=str(operation_id),
+                    operation_value_digest=operation_value_digest,
                     request_digest=request_digest,
                     lease_token=token_digest,
                     owner_now=owner_now,
@@ -1367,6 +1390,7 @@ class IngressServiceV2:
                 )
                 event_material = dict(material)
                 event_material.pop("attestation_digest", None)
+                event_material["capture_operation_id"] = operation_id
                 self._append(
                     connection,
                     kind="FETCH_ATTESTATION",
@@ -1395,7 +1419,10 @@ class IngressServiceV2:
                 "envelope_digest": _raw_digest("envelope", raw_snapshot),
                 "slot_id": slot_id,
                 "lease_token_digest": token_digest,
+                "operation_id": operation_id,
             }
+            if operation_value_digest is not None:
+                capture_material["operation_value_digest"] = operation_value_digest
             capture_raw = self._append(
                 connection, kind="CAPTURE", operation_id=operation_id,
                 request_digest=request_digest, slot_id=slot_id,
@@ -1412,7 +1439,7 @@ class IngressServiceV2:
                     request_digest=request_digest, slot_id=slot_id,
                     prior_state="CAPTURED", next_state="QUARANTINE_PENDING",
                     attempt=int(slot["attempt"]), lease_token=token_digest,
-                    lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING"},
+                    lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING", "operation_id": operation_id},
                     observed_at=owner_now,
                     payload_digest=artifact_id, payload_length=len(raw_snapshot),
                      head_artifact_id=artifact_id,
@@ -1429,7 +1456,7 @@ class IngressServiceV2:
                 request_digest=request_digest, slot_id=slot_id,
                 prior_state=final_prior, next_state=next_state,
                 attempt=int(slot["attempt"]), lease_token=token_digest,
-                lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": next_state},
+                lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": next_state, "operation_id": operation_id},
                 observed_at=owner_now,
                 payload_digest=artifact_id, payload_length=len(raw_snapshot),
                  stream_kind="QUARANTINE", stream_id=self.config.chain_id,
@@ -1441,8 +1468,8 @@ class IngressServiceV2:
                 (sequence, artifact_id),
             )
             connection.execute(
-                "UPDATE ingress_slots SET state=?,artifact_id=?,operation_id=?,lease_token=NULL,lease_until=NULL WHERE slot_id=?",
-                (next_state, artifact_id, operation_id, slot_id),
+                "UPDATE ingress_slots SET state=?,artifact_id=?,lease_token=NULL,lease_until=NULL WHERE slot_id=?",
+                (next_state, artifact_id, slot_id),
             )
             connection.commit()
             return self._receipt(final_raw, artifact_id=artifact_id, next_state=next_state)
@@ -1457,6 +1484,7 @@ class IngressServiceV2:
                     slot_id=slot_id,
                     artifact_id=artifact_id,
                     operation_id=operation_id,
+                    operation_value_digest=operation_value_digest,
                     request_digest=request_digest,
                     attempt=attempt,
                     lease_token_digest=submitted_token_digest,
@@ -1472,6 +1500,7 @@ class IngressServiceV2:
                     slot_id=slot_id,
                     artifact_id=artifact_id,
                     operation_id=operation_id,
+                    operation_value_digest=operation_value_digest,
                     request_digest=request_digest,
                     attempt=attempt,
                     lease_token_digest=submitted_token_digest,

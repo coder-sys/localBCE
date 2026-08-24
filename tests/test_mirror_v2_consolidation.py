@@ -1327,6 +1327,7 @@ class MirrorV2Fixture(unittest.TestCase):
             source["snapshot_id"] = _hex("ordered-second-snapshot")
             source["snapshot_root"] = _hex("ordered-second-snapshot-root")
             source["content_root"] = _hex("ordered-second-content")
+            source["ingress_event_sequence"] = source["ingress_event_sequence"] + 1
             source["ingress_prefix_root"] = _hex("ordered-second-prefix")
             source["ingress_after_root"] = _hex("ordered-second-after")
             source["ingress_head_root"] = _hex("ordered-second-after")
@@ -1353,7 +1354,7 @@ class MirrorV2Fixture(unittest.TestCase):
                 "schema": "mirror-core-reconciliation-v3", "schema_version": 3, "kind": "RECONCILIATION", "artifact_id": "",
                 "current_source_artifact_id": source_id, "prior_source_artifact_id": baseline_source_id,
                 "current_content_root": source["content_root"], "prior_content_root": json.loads(bytes(source_row[0]).decode("ascii"))["content_root"],
-                "source_status": "COMPLETE", "observation_status": "OBSERVED_CHANGED", "chronology": "ADVANCING", "linkage": "LINKED", "flags": dict(core.FIXED_FLAGS),
+                "source_status": "COMPLETE", "observation_status": "OBSERVED_CHANGED", "chronology": "ADVANCING", "linkage": "UNCHANGED", "flags": dict(core.FIXED_FLAGS),
             }
             reconciliation["artifact_id"] = core._digest("reconciliation-id", {key: reconciliation[key] for key in reconciliation if key != "artifact_id"})
             reconciliation_id, _ = self.core._admit_artifact(
@@ -1470,7 +1471,7 @@ class MirrorV2Fixture(unittest.TestCase):
         )
         ingress_independent.verify_database(changed_path, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)
         before = self.core.verify()
-        with self.assertRaisesRegex(core.CoreConflictError, "core:source-chronology"):
+        with self.assertRaisesRegex(core.CoreConflictError, "core:source-predecessor"):
             self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
         after = self.core.verify()
         self.assertEqual(before["sequence"], after["sequence"])
@@ -1574,6 +1575,122 @@ class MirrorV2Fixture(unittest.TestCase):
             self.assertEqual({"core_artifacts_kind_source_event_idx"}, explicit)
         finally:
             connection.close()
+
+    def test_ingress_config_material_slot_projection_and_rehashed_event_are_bound(self) -> None:
+        connection = sqlite3.connect(self.ingress_path)
+        try:
+            meta = connection.execute("SELECT config_raw,config_digest FROM ingress_meta WHERE meta_id=1").fetchone()
+            self.assertIsNotNone(meta)
+            self.assertEqual(bytes(meta[0]), ingress_independent._canonical(self.ingress_config.material()))
+            self.assertEqual(meta[1], ingress_independent._digest("config", self.ingress_config.material()))
+        finally:
+            connection.close()
+
+        bad_config = self.root / "bad-ingress-config-material.db"
+        shutil.copy2(self.ingress_path, bad_config)
+        connection = sqlite3.connect(bad_config)
+        try:
+            raw, _digest_value = connection.execute("SELECT config_raw,config_digest FROM ingress_meta WHERE meta_id=1").fetchone()
+            config_value = json.loads(bytes(raw).decode("ascii"))
+            config_value["cadence_seconds"] = self.ingress_config.cadence_seconds * 2
+            config_raw = ingress_independent._canonical(config_value)
+            connection.execute(
+                "UPDATE ingress_meta SET config_raw=?,config_digest=? WHERE meta_id=1",
+                (config_raw, ingress_independent._digest("config", config_value)),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:(slot|event|config)"):
+            ingress_independent.verify_database(bad_config)
+
+        for field, replacement in (("scheduled_at", profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds), ("operation_id", "0" * 128)):
+            bad_slot = self.root / ("bad-slot-" + field + ".db")
+            shutil.copy2(self.ingress_path, bad_slot)
+            connection = sqlite3.connect(bad_slot)
+            try:
+                connection.execute(f"UPDATE ingress_slots SET {field}=?", (replacement,))
+                connection.commit()
+            finally:
+                connection.close()
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:slot"):
+                    ingress_independent.verify_database(bad_slot)
+
+        bad_event = self.root / "bad-rehashed-ingress-material.db"
+        shutil.copy2(self.ingress_path, bad_event)
+        connection = sqlite3.connect(bad_event)
+        try:
+            row = connection.execute("SELECT sequence,event_raw FROM ingress_events WHERE event_kind='ADMIT'").fetchone()
+            value = json.loads(bytes(row[1]).decode("ascii"))
+            value["material"]["decision"] = "HELD"
+            value["material_digest"] = ingress_independent._digest("material", value["material"])
+            value["event_id"] = ingress_independent._digest(
+                "event-id",
+                {key: value[key] for key in ingress_independent.EVENT_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            )
+            value["after_root"] = ingress_independent._event_root(
+                sequence=value["sequence"], previous=value["before_root"], event_id=value["event_id"],
+                event_kind=value["event_kind"], stream_kind=value["stream_kind"], stream_id=value["stream_id"],
+                slot_id=value["slot_id"], next_state=value["next_state"], observed_at=value["observed_at"],
+                material_digest=value["material_digest"],
+            )
+            value["stream_after_root"] = ingress_independent._stream_root(
+                sequence=value["sequence"], previous=value["stream_before_root"], event_id=value["event_id"],
+                stream_kind=value["stream_kind"], stream_id=value["stream_id"], next_state=value["next_state"],
+                observed_at=value["observed_at"], material_digest=value["material_digest"],
+            )
+            event_raw = ingress_independent._canonical(value)
+            connection.execute(
+                "UPDATE ingress_events SET event_id=?,material_digest=?,after_root=?,stream_after_root=?,event_raw=?,receipt_digest=? WHERE sequence=?",
+                (value["event_id"], value["material_digest"], value["after_root"], value["stream_after_root"], event_raw, ingress_independent._raw_digest("receipt", event_raw), row[0]),
+            )
+            connection.execute("UPDATE ingress_meta SET head_root=? WHERE meta_id=1", (value["after_root"],))
+            connection.execute(
+                "UPDATE ingress_heads SET head_root=? WHERE stream_kind='QUARANTINE' AND stream_id=?",
+                (value["stream_after_root"], self.ingress_config.chain_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:event-artifact"):
+            ingress_independent.verify_database(bad_event)
+
+    def test_core_rejects_valid_ingress_with_different_pinned_config(self) -> None:
+        alternate_config = ingress.IngressConfigV2(
+            database_id=self.ingress_config.database_id,
+            chain_id=self.ingress_config.chain_id,
+            policy_digest=self.ingress_config.policy_digest,
+            authorization_digest=self.ingress_config.authorization_digest,
+            terms_digest=_hex("alternate-ingress-terms"),
+            effective_start=self.ingress_config.effective_start,
+            effective_end=self.ingress_config.effective_end,
+            cadence_seconds=self.ingress_config.cadence_seconds,
+            max_slots=self.ingress_config.max_slots,
+            max_attempts=self.ingress_config.max_attempts,
+            lease_seconds=self.ingress_config.lease_seconds,
+        )
+        alternate_path = self.root / "alternate-ingress-config.db"
+        alternate_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME)
+        alternate = ingress.IngressServiceV2(alternate_path, alternate_config, clock=alternate_clock)
+        created = alternate.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        alternate.claim_slot(slot_id, lease_token=_ingress_token("alternate-config"))
+        alternate_receipt = alternate.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token=_ingress_token("alternate-config"),
+        )
+        self.assertIsNotNone(alternate_receipt.artifact_id)
+        ingress_independent.verify_database(alternate_path, expected_database_id=alternate_config.database_id, expected_config_digest=alternate_config.digest)
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:(config|ingress-binding|database)"):
+            core_independent.verify_database(
+                self.core_path,
+                expected_database_id=self.core_config.database_id,
+                expected_config_digest=self.core_config.digest,
+                ingress_path=alternate_path,
+            )
 
     def test_core_structural_only_verification_is_not_upstream_acceptance(self) -> None:
         structural = core_independent.verify_database(

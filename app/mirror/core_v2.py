@@ -419,10 +419,154 @@ class CoreServiceV2:
     def _source_status(ing: Mapping[str, object], prior: Mapping[str, object] | None) -> tuple[str, str]:
         if prior is None:
             return ("INCOMPLETE" if ing.get("source_status") != "COMPLETE" else "OBSERVED_NEW", "INITIAL")
+        if int(ing["event_sequence"]) <= int(prior["ingress_event_sequence"]):
+            raise CoreConflictError("core:source-chronology")
         if int(ing["observation_time"]) <= int(prior["observation_time"]):
             raise CoreConflictError("core:source-chronology")
         status = "INCOMPLETE" if ing.get("source_status") != "COMPLETE" else ("OBSERVED_CONTINUED" if ing.get("content_root") == prior.get("content_root") else "OBSERVED_CHANGED")
         return status, "ADVANCING"
+
+    @staticmethod
+    def _ingress_projection_matches(source: Mapping[str, object], ing: Mapping[str, object]) -> bool:
+        for source_key, ingress_key in (
+            ("ingress_database_id", "database_id"),
+            ("ingress_chain_id", "chain_id"),
+            ("ingress_config_digest", "config_digest"),
+            ("ingress_artifact_id", "artifact_id"),
+            ("ingress_event_sequence", "event_sequence"),
+            ("ingress_prefix_root", "event_prefix_root"),
+            ("ingress_after_root", "event_after_root"),
+            ("envelope_id", "envelope_id"),
+            ("envelope_digest", "envelope_digest"),
+            ("snapshot_id", "snapshot_id"),
+            ("snapshot_root", "snapshot_root"),
+            ("content_root", "content_root"),
+            ("profile_id", "profile_id"),
+            ("profile_version", "profile_version"),
+            ("profile_digest", "profile_digest"),
+            ("observation_time", "observation_time"),
+            ("fetched_at", "fetched_at"),
+            ("source_status", "source_status"),
+            ("freshness", "freshness"),
+            ("page_complete", "page_complete"),
+            ("page_count", "page_count"),
+            ("resource_count", "resource_count"),
+        ):
+            if source.get(source_key) != ing.get(ingress_key):
+                return False
+        return source.get("ingress_head_root") == ing.get("event_after_root")
+
+    @staticmethod
+    def _authority_staleness(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        now: int,
+    ) -> tuple[str | None, dict[str, str | None]]:
+        heads: dict[str, str | None] = {}
+        for kind in ("SOURCE_OBSERVATION", "GOVERNANCE", "PRIVACY"):
+            head = connection.execute(
+                "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id=?",
+                (kind,),
+            ).fetchone()
+            heads[kind] = str(head[0]) if head is not None else None
+        if heads["SOURCE_OBSERVATION"] != row["source_artifact_id"]:
+            return "SOURCE_SUPERSEDED", heads
+        if heads["GOVERNANCE"] != row["governance_artifact_id"] or heads["PRIVACY"] != row["privacy_artifact_id"]:
+            return "AUTHORITY_INDETERMINATE", heads
+        authority_rows: list[sqlite3.Row] = []
+        for kind in ("GOVERNANCE", "PRIVACY"):
+            authority = connection.execute(
+                "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind=?",
+                (row["governance_artifact_id"] if kind == "GOVERNANCE" else row["privacy_artifact_id"], kind),
+            ).fetchone()
+            if authority is None or type(authority[0]) is not bytes:
+                return "AUTHORITY_INDETERMINATE", heads
+            try:
+                value = independent._parse(authority[0], "core:artifact")
+            except independent.CoreVerificationError:
+                return "AUTHORITY_INDETERMINATE", heads
+            authority_rows.append(value)  # type: ignore[arg-type]
+        governance_value, privacy_value = authority_rows
+        if (
+            governance_value.get("decision") != "GRANTED"
+            or privacy_value.get("privacy_decision") != "GRANTED"
+            or privacy_value.get("support_decision") != "GRANTED"
+        ):
+            return "AUTHORITY_INDETERMINATE", heads
+        for value in (governance_value, privacy_value):
+            if type(value.get("valid_from")) is not int or type(value.get("valid_until")) is not int:
+                return "AUTHORITY_INDETERMINATE", heads
+            if now < int(value["valid_from"]) or now > int(value["valid_until"]):
+                return "AUTHORITY_EXPIRED", heads
+        return None, heads
+
+    @staticmethod
+    def _latest_pause_receipt(connection: sqlite3.Connection, session_id: str) -> CoreReceipt:
+        head = connection.execute(
+            "SELECT event_sequence FROM core_heads WHERE stream_kind='SESSION' AND stream_id=?",
+            (session_id,),
+        ).fetchone()
+        if head is None:
+            raise CoreError("core:session-head")
+        event = connection.execute(
+            "SELECT event_raw FROM core_events WHERE sequence=?",
+            (int(head[0]),),
+        ).fetchone()
+        if event is None or type(event[0]) is not bytes:
+            raise CoreError("core:session-head")
+        parsed = independent._parse(event[0], "core:event-raw")
+        if parsed.get("event_kind") != "SESSION_PAUSE":
+            raise CoreConflictError("core:session-paused")
+        return CoreServiceV2._receipt(bytes(event[0]))
+
+    def _append_pause(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        operation_id: str,
+        request_digest: str,
+        trigger: str,
+        observed_at: int,
+        slot_number: int | None = None,
+        observation_digest: str | None = None,
+    ) -> CoreReceipt:
+        reason, heads = self._authority_staleness(connection, row, observed_at)
+        if reason is None:
+            raise CoreConflictError("core:pause-current")
+        material = {
+            "state": "PAUSED",
+            "reason": reason,
+            "trigger": trigger,
+            "current_source_artifact_id": heads["SOURCE_OBSERVATION"],
+            "current_governance_artifact_id": heads["GOVERNANCE"],
+            "current_privacy_artifact_id": heads["PRIVACY"],
+            "slot_number": slot_number,
+            "observation_digest": observation_digest,
+        }
+        raw = self._append(
+            connection,
+            kind="SESSION_PAUSE",
+            operation_id=operation_id,
+            subject_id=str(row["session_id"]),
+            request_digest=request_digest,
+            prior_state=str(row["state"]),
+            next_state="PAUSED",
+            attempt=0,
+            observed_at=observed_at,
+            material=material,
+            payload_digest=_digest("pause-reason", {"reason": reason}),
+            payload_length=0,
+            stream_kind="SESSION",
+            stream_id=str(row["session_id"]),
+            head_ref=str(row["session_id"]),
+        )
+        event = independent._parse(raw, "core:event-raw")
+        connection.execute(
+            "UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?",
+            ("PAUSED", event["stream_after_root"], row["session_id"]),
+        )
+        return self._receipt(raw)
 
     @staticmethod
     def _result_from_event(connection: sqlite3.Connection, event_raw: bytes) -> dict[str, object]:
@@ -461,15 +605,32 @@ class CoreServiceV2:
                     unresolved.append(artifact_id)
                 else:
                     local[artifact_id] = self._result_from_event(connection, event)
+            predecessor_ingress_id: str | None = None
+            if unresolved:
+                source_head = connection.execute(
+                    "SELECT head_ref FROM core_heads WHERE stream_kind='ARTIFACT' AND stream_id='SOURCE_OBSERVATION'"
+                ).fetchone()
+                if source_head is not None:
+                    prior_row = connection.execute(
+                        "SELECT raw FROM core_artifacts WHERE artifact_id=? AND kind='SOURCE_OBSERVATION'",
+                        (source_head[0],),
+                    ).fetchone()
+                    if prior_row is None or type(prior_row[0]) is not bytes:
+                        raise CoreError("core:source-head")
+                    prior_source = independent._parse(prior_row[0], "core:artifact")
+                    predecessor_ingress_id = str(prior_source["ingress_artifact_id"])
             connection.rollback()
         finally:
             connection.close()
         if not unresolved:
             return tuple(local[value] for value in artifact_ids)
         try:
-            snapshots = ingress.read_artifact_snapshots(ingress_path, tuple(unresolved))
+            selected_ids = tuple(dict.fromkeys(unresolved + ([predecessor_ingress_id] if predecessor_ingress_id else [])))
+            snapshots = ingress.read_artifact_snapshots(ingress_path, selected_ids)
             if any(not isinstance(snapshots.get(value), dict) or snapshots[value].get("artifact_id") != value for value in unresolved):
                 raise CoreConflictError("core:source-not-current")
+            if predecessor_ingress_id is not None and not isinstance(snapshots.get(predecessor_ingress_id), dict):
+                raise CoreConflictError("core:source-predecessor")
             admissions: dict[str, object] = {}
             for artifact_id in unresolved:
                 item = snapshots[artifact_id]
@@ -480,6 +641,10 @@ class CoreServiceV2:
                 admissions[artifact_id] = admission
         except (CoreError, CoreConflictError):
             raise
+        except ingress.IngressVerificationError:
+            if predecessor_ingress_id is not None:
+                raise CoreConflictError("core:source-predecessor")
+            raise CoreConflictError("core:ingress-reject")
         except Exception:
             raise_redacted(CoreError, "core:ingress-reject")
 
@@ -507,6 +672,9 @@ class CoreServiceV2:
                     if prior_row is None:
                         raise CoreError("core:source-head")
                     prior = independent._parse(prior_row[0], "core:artifact")
+                    prior_ingress = snapshots.get(str(prior["ingress_artifact_id"]))
+                    if not isinstance(prior_ingress, dict) or not self._ingress_projection_matches(prior, prior_ingress):
+                        raise CoreConflictError("core:source-predecessor")
                 status, chronology = self._source_status(ing, prior)
                 graph_raw = bytes(admission.graph_artifact)
                 graph_digest = _raw_digest("graph-artifact", graph_raw)
@@ -778,17 +946,39 @@ class CoreServiceV2:
     def start_session(self, session_id: str) -> CoreReceipt:
         _require_digest(session_id, "core:session-input")
         operation_id = _digest("session-operation", {"session_id": session_id, "action": "START"})
+        request_digest = _digest("session-request", {"session_id": session_id, "action": "START"})
         connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._event(connection, operation_id)
             if existing is not None:
+                parsed = independent._parse(existing, "core:event-raw")
+                if parsed.get("event_kind") not in {"SESSION_START", "SESSION_PAUSE"}:
+                    raise CoreConflictError("core:operation-conflict")
+                if parsed.get("event_kind") == "SESSION_PAUSE" and parsed.get("material", {}).get("trigger") != "START":
+                    raise CoreConflictError("core:operation-conflict")
                 connection.commit()
                 return self._receipt(existing)
             row = self._session(connection, session_id)
+            if row["state"] == "PAUSED":
+                receipt = self._latest_pause_receipt(connection, session_id)
+                connection.commit()
+                return receipt
             if row["state"] != "OPEN":
                 raise CoreConflictError("core:session-state")
             now = self._owner_now(connection)
+            reason, _heads = self._authority_staleness(connection, row, now)
+            if reason is not None:
+                receipt = self._append_pause(
+                    connection,
+                    row,
+                    operation_id=operation_id,
+                    request_digest=request_digest,
+                    trigger="START",
+                    observed_at=now,
+                )
+                connection.commit()
+                return receipt
             raw = self._append(connection, kind="SESSION_START", operation_id=operation_id, subject_id=session_id, request_digest=_digest("session-request", {"session_id": session_id, "action": "START"}), prior_state="OPEN", next_state="RUNNING", attempt=0, observed_at=now, material={"delta": {"state": "RUNNING"}}, payload_digest=session_id, payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
             event = independent._parse(raw, "core:event-raw")
             connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("RUNNING", event["stream_after_root"], session_id))
@@ -821,14 +1011,43 @@ class CoreServiceV2:
             existing = self._event(connection, operation_id)
             if existing is not None:
                 parsed = independent._parse(existing, "core:event-raw")
-                if not isinstance(parsed.get("material"), dict) or parsed["material"].get("observation") != observation:
+                material = parsed.get("material")
+                exact_observation = isinstance(material, dict) and material.get("observation") == observation
+                exact_pause = (
+                    isinstance(material, dict)
+                    and parsed.get("event_kind") == "SESSION_PAUSE"
+                    and material.get("trigger") == "OBSERVATION"
+                    and material.get("slot_number") == slot_number
+                    and material.get("observation_digest") == observation["result_digest"]
+                )
+                if not exact_observation and not exact_pause:
                     raise CoreConflictError("core:observation-conflict")
                 connection.commit()
                 return self._receipt(existing)
             row = self._session(connection, session_id)
-            if row["state"] != "RUNNING" or slot_number != int(row["last_slot"]) + 1:
+            if row["state"] == "PAUSED":
+                receipt = self._latest_pause_receipt(connection, session_id)
+                connection.commit()
+                return receipt
+            if row["state"] not in {"OPEN", "RUNNING"}:
                 raise CoreConflictError("core:observation-order")
             now = self._owner_now(connection)
+            reason, _heads = self._authority_staleness(connection, row, now)
+            if reason is not None:
+                receipt = self._append_pause(
+                    connection,
+                    row,
+                    operation_id=operation_id,
+                    request_digest=_digest("observation-request", {"session_id": session_id, "slot_number": slot_number}),
+                    trigger="OBSERVATION",
+                    observed_at=now,
+                    slot_number=slot_number,
+                    observation_digest=observation["result_digest"],
+                )
+                connection.commit()
+                return receipt
+            if row["state"] != "RUNNING" or slot_number != int(row["last_slot"]) + 1:
+                raise CoreConflictError("core:observation-order")
             if int(row["last_slot"]) >= 0:
                 head = connection.execute("SELECT event_sequence FROM core_heads WHERE stream_kind='SESSION' AND stream_id=?", (session_id,)).fetchone()
                 if head is None:
@@ -860,12 +1079,10 @@ class CoreServiceV2:
             connection.close()
         raise CoreError("core:database")
 
-    def pause_if_stale(self, session_id: str, current_source_artifact_id: str, *, reason: str = "SOURCE_SUPERSEDED") -> CoreReceipt:
+    def pause_if_stale(self, session_id: str) -> CoreReceipt:
         _require_digest(session_id, "core:pause-input")
-        _require_digest(current_source_artifact_id, "core:pause-input")
-        if reason not in {"SOURCE_SUPERSEDED", "AUTHORITY_EXPIRED", "AUTHORITY_INDETERMINATE"}:
-            raise CoreConflictError("core:pause-reason")
-        operation_id = _digest("pause-operation", {"session_id": session_id, "reason": reason, "current_source_artifact_id": current_source_artifact_id})
+        operation_id = _digest("pause-operation", {"session_id": session_id, "trigger": "RECONCILE"})
+        request_digest = _digest("pause-request", {"session_id": session_id, "trigger": "RECONCILE"})
         connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -874,14 +1091,23 @@ class CoreServiceV2:
                 connection.commit()
                 return self._receipt(existing)
             row = self._session(connection, session_id)
-            if row["source_artifact_id"] == current_source_artifact_id or row["state"] != "RUNNING":
+            if row["state"] == "PAUSED":
+                receipt = self._latest_pause_receipt(connection, session_id)
+                connection.commit()
+                return receipt
+            if row["state"] not in {"OPEN", "RUNNING"}:
                 raise CoreConflictError("core:pause-state")
             now = self._owner_now(connection)
-            raw = self._append(connection, kind="SESSION_PAUSE", operation_id=operation_id, subject_id=session_id, request_digest=_digest("pause-request", {"session_id": session_id, "reason": reason, "current_source_artifact_id": current_source_artifact_id}), prior_state="RUNNING", next_state="PAUSED", attempt=0, observed_at=now, material={"state": "PAUSED", "reason": reason, "current_source_artifact_id": current_source_artifact_id}, payload_digest=_digest("pause-reason", {"reason": reason}), payload_length=0, stream_kind="SESSION", stream_id=session_id, head_ref=session_id)
-            event = independent._parse(raw, "core:event-raw")
-            connection.execute("UPDATE core_sessions SET state=?,head_root=? WHERE session_id=?", ("PAUSED", event["stream_after_root"], session_id))
+            receipt = self._append_pause(
+                connection,
+                row,
+                operation_id=operation_id,
+                request_digest=request_digest,
+                trigger="RECONCILE",
+                observed_at=now,
+            )
             connection.commit()
-            return self._receipt(raw)
+            return receipt
         except (CoreError, CoreConflictError):
             connection.rollback()
             raise

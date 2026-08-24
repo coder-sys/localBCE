@@ -27,6 +27,7 @@ DOMAIN = "BL/MIRROR/INGRESS/V3/"
 MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_RAW_ENVELOPE_BYTES = 262_144
 MAX_EVENT_BYTES = 786_432
+MAX_CONFIG_BYTES = 8_192
 MAX_IDENTIFIER_BYTES = 128
 GENESIS_ROOT = "0" * 128
 TABLES = (
@@ -77,6 +78,7 @@ EVENT_KEYS = {
     "lease_token",
     "lease_until",
     "observed_at",
+    "material",
     "material_digest",
     "payload_digest",
     "payload_length",
@@ -93,7 +95,7 @@ EVENT_KEYS = {
 TABLE_COLUMNS = {
     "ingress_meta": (
         "meta_id", "schema", "schema_version", "database_id", "chain_id",
-        "config_digest", "sequence", "head_root", "watermark", "slot_count",
+        "config_digest", "config_raw", "sequence", "head_root", "watermark", "slot_count",
     ),
     "ingress_slots": (
         "slot_id", "scheduled_at", "state", "attempt", "lease_token",
@@ -561,7 +563,7 @@ def _meta(connection: sqlite3.Connection) -> sqlite3.Row:
         raise IngressVerificationError("ingress:meta")
     expected = (
         "meta_id", "schema", "schema_version", "database_id", "chain_id",
-        "config_digest", "sequence", "head_root", "watermark", "slot_count",
+        "config_digest", "config_raw", "sequence", "head_root", "watermark", "slot_count",
     )
     if tuple(row.keys()) != expected or row["meta_id"] != 1:
         raise IngressVerificationError("ingress:meta")
@@ -570,6 +572,47 @@ def _meta(connection: sqlite3.Connection) -> sqlite3.Row:
     _hex(row["config_digest"], "ingress:config")
     _safe_identifier(row["database_id"], "ingress:database-id")
     _safe_identifier(row["chain_id"], "ingress:chain-id")
+    config_raw = row["config_raw"]
+    if type(config_raw) is not bytes or not config_raw or len(config_raw) > MAX_CONFIG_BYTES:
+        raise IngressVerificationError("ingress:config")
+    config = _parse(config_raw, "ingress:config", max_bytes=MAX_CONFIG_BYTES)
+    expected_config_keys = {
+        "schema", "schema_version", "database_id", "chain_id", "policy_digest",
+        "authorization_digest", "terms_digest", "profile_id", "profile_version",
+        "profile_digest", "cadence_seconds", "effective_start", "effective_end",
+        "max_slots", "max_attempts", "lease_seconds", "flags",
+    }
+    if set(config) != expected_config_keys:
+        raise IngressVerificationError("ingress:config")
+    if (
+        config["schema"] != SCHEMA
+        or config["schema_version"] != SCHEMA_VERSION
+        or config["database_id"] != row["database_id"]
+        or config["chain_id"] != row["chain_id"]
+        or type(config["profile_id"]) is not str
+        or config["profile_id"] != NC_MEDICAID_PROFILE.source_profile_id
+        or config["profile_version"] != NC_MEDICAID_PROFILE.version
+        or config["profile_digest"] != NC_MEDICAID_PROFILE.profile_digest
+        or config["flags"] != FIXED_FLAGS
+        or _digest("config", config) != row["config_digest"]
+    ):
+        raise IngressVerificationError("ingress:config")
+    for key in ("policy_digest", "authorization_digest", "terms_digest", "profile_digest"):
+        _hex(config[key], "ingress:config")
+    if (
+        type(config["cadence_seconds"]) is not int
+        or config["cadence_seconds"] <= 0
+        or type(config["effective_start"]) is not int
+        or type(config["effective_end"]) is not int
+        or config["effective_start"] >= config["effective_end"]
+        or type(config["max_slots"]) is not int
+        or not 1 <= config["max_slots"] <= 4096
+        or type(config["max_attempts"]) is not int
+        or not 1 <= config["max_attempts"] <= 8
+        or type(config["lease_seconds"]) is not int
+        or not 1 <= config["lease_seconds"] <= 86_400
+    ):
+        raise IngressVerificationError("ingress:config")
     if type(row["sequence"]) is not int or row["sequence"] < 0:
         raise IngressVerificationError("ingress:sequence")
     if type(row["watermark"]) is not int or row["watermark"] < 0 or type(row["slot_count"]) is not int or row["slot_count"] < 0:
@@ -765,14 +808,17 @@ def _verify_event(
     row: sqlite3.Row,
     *,
     meta: sqlite3.Row,
+    config: Mapping[str, object],
     previous_root: str,
     slot_states: dict[str, str],
     slot_attempts: dict[str, int],
     slot_schedules: Mapping[str, int],
+    slot_operations: dict[str, str],
     slot_times: dict[str, int],
     global_observed_at: list[int | None],
     slot_leases: dict[str, tuple[str | None, int | None, int]],
     artifacts: Mapping[str, Mapping[str, object]],
+    capture_operations: dict[str, str],
     heads: dict[tuple[str, str], tuple[str | None, str, int]],
     stream_roots: dict[tuple[str, str], str],
     fetches: dict[str, list[dict[str, object]]],
@@ -800,8 +846,11 @@ def _verify_event(
     if type(raw) is not bytes or not raw or len(raw) > MAX_EVENT_BYTES:
         raise IngressVerificationError("ingress:event-raw")
     value = _parse(raw, "ingress:event-raw")
-    if set(value) != EVENT_KEYS:
+    if set(value) != EVENT_KEYS or not isinstance(value.get("material"), dict):
         raise IngressVerificationError("ingress:event-keys")
+    material = value["material"]
+    if value["material_digest"] != _digest("material", material):
+        raise IngressVerificationError("ingress:material-digest")
     for key in EVENT_KEYS:
         if key not in row.keys():
             continue
@@ -849,6 +898,181 @@ def _verify_event(
     )
     if row["after_root"] != expected_after:
         raise IngressVerificationError("ingress:event-root")
+    kind = str(row["event_kind"])
+    expected_operation: str
+    expected_request: str
+    expected_payload: str
+    expected_payload_length: int
+    if kind == "CREATE_SLOT":
+        if set(material) != {"slot_id", "scheduled_at", "operation_id"}:
+            raise IngressVerificationError("ingress:event-material")
+        scheduled_at = material["scheduled_at"]
+        if (
+            material["slot_id"] != row["slot_id"]
+            or type(scheduled_at) is not int
+            or scheduled_at < int(config["effective_start"])
+            or scheduled_at > int(config["effective_end"])
+            or (scheduled_at - int(config["effective_start"])) % int(config["cadence_seconds"]) != 0
+        ):
+            raise IngressVerificationError("ingress:slot-grid")
+        expected_slot_id = _digest("slot-id", {"config_digest": meta["config_digest"], "scheduled_at": scheduled_at})
+        expected_operation = _digest("slot-operation", {"slot_id": expected_slot_id})
+        if material["operation_id"] != expected_operation or row["slot_id"] != expected_slot_id:
+            raise IngressVerificationError("ingress:slot-identity")
+        if not isinstance(slot_schedules, dict):
+            raise IngressVerificationError("ingress:event-state")
+        slot_schedules[row["slot_id"]] = scheduled_at
+        slot_operations[row["slot_id"]] = expected_operation
+        expected_request = _digest("request", {"operation_id": expected_operation, "scheduled_at": scheduled_at})
+        expected_payload = _digest("slot-payload", {"slot_id": expected_slot_id, "scheduled_at": scheduled_at})
+        expected_payload_length = 0
+    else:
+        scheduled_at = slot_schedules.get(str(row["slot_id"]))
+        if scheduled_at is None or str(row["slot_id"]) not in slot_operations:
+            raise IngressVerificationError("ingress:event-time")
+        slot_operation = slot_operations[str(row["slot_id"])]
+        if kind == "LEASE":
+            if set(material) != {"slot_id", "attempt", "lease_token", "lease_until", "operation_id"}:
+                raise IngressVerificationError("ingress:event-material")
+            if material["slot_id"] != row["slot_id"] or material["operation_id"] != slot_operation:
+                raise IngressVerificationError("ingress:event-material")
+            if (
+                type(row["attempt"]) is not int
+                or not 1 <= row["attempt"] <= int(config["max_attempts"])
+                or type(row["lease_until"]) is not int
+                or row["lease_until"] != row["observed_at"] + int(config["lease_seconds"])
+                or material["attempt"] != row["attempt"]
+                or material["lease_token"] != row["lease_token"]
+                or material["lease_until"] != row["lease_until"]
+            ):
+                raise IngressVerificationError("ingress:lease")
+            expected_operation = slot_operation
+            expected_request = _digest("request", {"slot_id": row["slot_id"], "action": "LEASE", "attempt": row["attempt"]})
+            expected_payload = _digest("lease-payload", material)
+            expected_payload_length = 0
+        elif kind in {"REQUEUE", "HOLD"} and row["receipt_bytes"] is None:
+            if set(material) != {"slot_id", "action", "attempt", "operation_id"}:
+                raise IngressVerificationError("ingress:event-material")
+            if material != {"slot_id": row["slot_id"], "action": kind, "attempt": row["attempt"], "operation_id": slot_operation}:
+                raise IngressVerificationError("ingress:event-material")
+            expected_operation = slot_operation
+            expected_request = _digest("request", {"slot_id": row["slot_id"], "action": kind})
+            expected_payload = _digest("lease-recovery", {"slot_id": row["slot_id"], "attempt": row["attempt"]})
+            expected_payload_length = 0
+        elif kind == "HOLD" and row["receipt_bytes"] is not None:
+            expected_material_keys = {"slot_id", "artifact_id", "operation_id", "decision", "reason"}
+            if "operation_value_digest" in material:
+                expected_material_keys.add("operation_value_digest")
+            if set(material) != expected_material_keys:
+                raise IngressVerificationError("ingress:event-material")
+            if (
+                material["slot_id"] != row["slot_id"]
+                or material["decision"] != "HELD"
+                or material["reason"] != "CAPACITY"
+                or type(material["artifact_id"]) is not str
+                or type(material["operation_id"]) is not str
+            ):
+                raise IngressVerificationError("ingress:capacity-receipt")
+            _hex(material["artifact_id"], "ingress:capacity-artifact")
+            _hex(material["operation_id"], "ingress:operation")
+            if "operation_value_digest" in material:
+                _hex(material["operation_value_digest"], "ingress:operation-value")
+                expected_operation = _digest(
+                    "caller-operation",
+                    {
+                        "database_id": meta["database_id"],
+                        "config_digest": meta["config_digest"],
+                        "value_digest": material["operation_value_digest"],
+                    },
+                )
+            else:
+                expected_operation = _digest(
+                    "capture-operation",
+                    {"slot_id": row["slot_id"], "artifact_id": material["artifact_id"]},
+                )
+            if material["operation_id"] != expected_operation:
+                raise IngressVerificationError("ingress:capacity-receipt")
+            expected_request = _digest("request", {"operation_id": expected_operation, "slot_id": row["slot_id"], "artifact_id": material["artifact_id"]})
+            expected_payload = material["artifact_id"]
+            expected_payload_length = 0
+        elif kind == "CAPTURE":
+            expected_material_keys = {"artifact_id", "envelope_digest", "slot_id", "lease_token_digest", "operation_id"}
+            if "operation_value_digest" in material:
+                expected_material_keys.add("operation_value_digest")
+            if set(material) != expected_material_keys:
+                raise IngressVerificationError("ingress:event-material")
+            artifact_id = material["artifact_id"]
+            if (
+                type(artifact_id) is not str
+                or artifact_id not in artifacts
+                or material["slot_id"] != row["slot_id"]
+                or material["envelope_digest"] != artifacts[artifact_id]["envelope_digest"]
+                or material["lease_token_digest"] != row["lease_token"]
+                or type(material["operation_id"]) is not str
+            ):
+                raise IngressVerificationError("ingress:event-capture")
+            _hex(material["operation_id"], "ingress:operation")
+            if "operation_value_digest" in material:
+                _hex(material["operation_value_digest"], "ingress:operation-value")
+                expected_operation = _digest(
+                    "caller-operation",
+                    {
+                        "database_id": meta["database_id"],
+                        "config_digest": meta["config_digest"],
+                        "value_digest": material["operation_value_digest"],
+                    },
+                )
+            else:
+                expected_operation = _digest(
+                    "capture-operation",
+                    {"slot_id": row["slot_id"], "artifact_id": artifact_id},
+                )
+            if material["operation_id"] != expected_operation:
+                raise IngressVerificationError("ingress:event-capture")
+            capture_operations[artifact_id] = expected_operation
+            expected_request = _digest("request", {"operation_id": expected_operation, "slot_id": row["slot_id"], "artifact_id": artifact_id})
+            expected_payload = artifact_id
+            raw_artifact = artifacts[artifact_id]["raw"]
+            expected_payload_length = len(raw_artifact) if type(raw_artifact) is bytes else -1
+        elif kind == "FETCH_ATTESTATION":
+            if set(material) != {
+                "artifact_id", "page_index", "lease_attempt", "transport_attempt",
+                "request_identity", "response_digest", "status", "retry_after_seconds",
+                "response_url", "redirect", "failure_code", "transport_error",
+                "evidence_class", "selected", "observed_at", "capture_operation_id",
+            }:
+                raise IngressVerificationError("ingress:event-material")
+            capture_operation = material["capture_operation_id"]
+            _hex(capture_operation, "ingress:operation")
+            expected_operation = _digest(
+                "fetch-operation",
+                {"operation_id": capture_operation, "page_index": material["page_index"], "transport_attempt": material["transport_attempt"]},
+            )
+            expected_request = str(material["request_identity"])
+            expected_payload = _digest("fetch-payload", material)
+            expected_payload_length = len(row["receipt_bytes"]) if type(row["receipt_bytes"]) is bytes else -1
+        else:
+            if set(material) != {"artifact_id", "decision", "operation_id"}:
+                raise IngressVerificationError("ingress:event-material")
+            artifact_id = material["artifact_id"]
+            if (
+                type(artifact_id) is not str
+                or artifact_id not in artifacts
+                or material["decision"] != row["next_state"]
+                or capture_operations.get(artifact_id) != material["operation_id"]
+            ):
+                raise IngressVerificationError("ingress:event-artifact")
+            expected_operation = str(material["operation_id"])
+            expected_request = _digest("request", {"operation_id": expected_operation, "slot_id": row["slot_id"], "artifact_id": artifact_id})
+            expected_payload = str(artifact_id)
+            raw_artifact = artifacts[artifact_id]["raw"]
+            expected_payload_length = len(raw_artifact) if type(raw_artifact) is bytes else -1
+    if row["operation_id"] != expected_operation or row["request_digest"] != expected_request:
+        raise IngressVerificationError("ingress:event-operation")
+    if row["payload_digest"] != expected_payload or row["payload_length"] != expected_payload_length:
+        raise IngressVerificationError("ingress:event-payload")
+    if type(row["attempt"]) is not int or not 0 <= row["attempt"] <= int(config["max_attempts"]):
+        raise IngressVerificationError("ingress:attempt")
     capacity_hold = row["event_kind"] == "HOLD" and row["receipt_bytes"] is not None
     if capacity_hold:
         if row["stream_kind"] != "QUARANTINE" or row["stream_id"] != meta["chain_id"]:
@@ -1009,6 +1233,10 @@ def _verify_event(
                 "evidence_class", "selected", "observed_at",
             )
         }
+        capture_operation = value["material"].get("capture_operation_id")
+        if type(capture_operation) is not str:
+            raise IngressVerificationError("ingress:event-material")
+        material["capture_operation_id"] = capture_operation
         if (
             row["material_digest"] != _digest("material", material)
             or row["payload_digest"] != _digest("fetch-payload", material)
@@ -1097,10 +1325,18 @@ def _verify_connection(
             raise IngressVerificationError("ingress:artifact-duplicate")
         slot_states: dict[str, str] = {}
         slot_attempts: dict[str, int] = {}
-        slot_schedules = {str(row["slot_id"]): int(row["scheduled_at"]) for row in slots}
+        config_raw = connection.execute("SELECT config_raw FROM ingress_meta WHERE meta_id=1").fetchone()
+        if config_raw is None:
+            raise IngressVerificationError("ingress:config")
+        config = _parse(config_raw[0], "ingress:config", max_bytes=MAX_CONFIG_BYTES)
+        if len(slots) > int(config["max_slots"]):
+            raise IngressVerificationError("ingress:capacity")
+        slot_schedules: dict[str, int] = {}
+        slot_operations: dict[str, str] = {}
         slot_times: dict[str, int] = {}
         global_observed_at: list[int | None] = [None]
         slot_leases: dict[str, tuple[str | None, int | None, int]] = {}
+        capture_operations: dict[str, str] = {}
         previous = GENESIS_ROOT
         heads: dict[tuple[str, str], tuple[str | None, str, int]] = {}
         stream_roots: dict[tuple[str, str], str] = {}
@@ -1112,14 +1348,17 @@ def _verify_connection(
             previous = _verify_event(
                 row,
                 meta=meta,
+                config=config,
                 previous_root=previous,
                 slot_states=slot_states,
                 slot_attempts=slot_attempts,
                 slot_schedules=slot_schedules,
+                slot_operations=slot_operations,
                 slot_times=slot_times,
                 global_observed_at=global_observed_at,
                 slot_leases=slot_leases,
                 artifacts=artifacts,
+                capture_operations=capture_operations,
                 heads=heads,
                 stream_roots=stream_roots,
                 fetches=fetches,
@@ -1142,7 +1381,14 @@ def _verify_connection(
             artifact.pop("_stored_event_sequence", None)
             artifact.pop("_terminal_event_sequence", None)
         for row in slots:
-            if row["slot_id"] not in slot_states or row["state"] != slot_states[row["slot_id"]]:
+            if (
+                row["slot_id"] not in slot_states
+                or row["state"] != slot_states[row["slot_id"]]
+                or row["slot_id"] not in slot_schedules
+                or row["scheduled_at"] != slot_schedules[row["slot_id"]]
+                or row["slot_id"] not in slot_operations
+                or row["operation_id"] != slot_operations[row["slot_id"]]
+            ):
                 raise IngressVerificationError("ingress:slot-state")
             if row["attempt"] != slot_attempts.get(row["slot_id"], 0):
                 raise IngressVerificationError("ingress:slot-attempt")
