@@ -29,10 +29,6 @@ class MinimalClearanceProofStateError(RuntimeError):
     """Fail-closed errors at the proof-to-state boundary."""
 
 
-class MinimalClearanceIndeterminateError(MinimalClearanceProofStateError):
-    """The database committed but finalization returned an uncertain result."""
-
-
 _DIGEST_BYTES: Final[int] = 64
 _SHA256_BYTES: Final[int] = 32
 _PUBLIC_BYTES: Final[int] = 3340
@@ -945,7 +941,7 @@ class NativeMinimalClearanceVerifier:
 
 
 __all__ = (
-    "MinimalClearanceProofStateError", "MinimalClearanceIndeterminateError",
+    "MinimalClearanceProofStateError",
     "MinimalProofStatementV1", "MinimalProofAcceptanceV1",
     "NativeMinimalClearanceVerifier", "parse_acceptance_bytes",
 )

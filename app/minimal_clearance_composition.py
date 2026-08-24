@@ -52,10 +52,6 @@ class CompositionIndeterminateError(CompositionError):
     pass
 
 
-class CompositionHeldError(CompositionError):
-    pass
-
-
 _SCHEMA_VERSION: Final[int] = 2
 _SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/COMPOSITION/v2"
 _HANDOFF_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE/OFFICIAL-HANDOFF/v2"
@@ -1429,7 +1425,7 @@ __all__ = (
     "CompositionBackpressureError", "CompositionClock", "CompositionConfigV2", "CompositionConflictError",
     "CompositionDeliveryResultV2", "CompositionError", "CompositionIndeterminateError", "CompositionIntegrityError",
     "CompositionLeaseError", "CompositionLookupQueryV2", "CompositionOutboxWorkV2", "CompositionProcessResultV2",
-    "CompositionReconciliationWorkV2", "CompositionHeldError", "ClearanceCompositionStoreV2",
+    "CompositionReconciliationWorkV2", "ClearanceCompositionStoreV2",
     "MinimalClearanceCompositionConfigV2", "MinimalClearanceCompositionStoreV2", "MinimalClearanceCompositionDispatcherV2",
     "OfficialAckEvidenceProfileV2", "OfficialStateReceiverLookupPort", "OfficialStateReceiverPort",
     "SyntheticAckEvidenceProfileV2", "acknowledgment_digest", "build_directive_envelope", "build_synthetic_acknowledgment",
