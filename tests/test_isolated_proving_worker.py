@@ -17,6 +17,7 @@ from tools import encrypted_witness_envelope
 from tools import isolated_proving_worker
 from tools import proving_submission
 from tools.local_kms_simulator import LocalKmsSimulator
+from tools.proving_resource_policy import policy_file_bytes, derive_policy
 
 
 class IsolatedProvingWorkerTests(unittest.TestCase):
@@ -115,7 +116,7 @@ class IsolatedProvingWorkerTests(unittest.TestCase):
             )
             path = self.root / "witness.envelope.json"
             encrypted_witness_envelope.write_envelope(path, envelope)
-            with self.assertRaisesRegex(RuntimeError, "principal does not match"):
+            with self.assertRaisesRegex(RuntimeError, "encrypted_package_rejected"):
                 isolated_proving_worker.decrypt_authorized_package(
                     path,
                     batch_record=self.record,
@@ -128,7 +129,7 @@ class IsolatedProvingWorkerTests(unittest.TestCase):
             wrong_record["record_sha256"] = proving_submission._sha256(
                 {k: v for k, v in wrong_record.items() if k != "record_sha256"}
             )
-            with self.assertRaisesRegex(RuntimeError, "agency does not match"):
+            with self.assertRaisesRegex(RuntimeError, "queue_envelope_binding"):
                 isolated_proving_worker.decrypt_authorized_package(
                     path,
                     batch_record=wrong_record,
@@ -168,7 +169,7 @@ class IsolatedProvingWorkerTests(unittest.TestCase):
                 queue_root=queue_root,
                 job_id="job-a",
             )
-            with self.assertRaisesRegex(RuntimeError, "replay rejected"):
+            with self.assertRaisesRegex(RuntimeError, "queue_package_replay"):
                 isolated_proving_worker.decrypt_authorize_and_reserve(
                     path,
                     batch_record=self.record,
@@ -188,7 +189,7 @@ class IsolatedProvingWorkerTests(unittest.TestCase):
             invalid_path = self.root / "invalid.envelope.json"
             encrypted_witness_envelope.write_envelope(invalid_path, invalid)
             invalid_queue = self.root / "invalid-queue"
-            with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+            with self.assertRaisesRegex(RuntimeError, "encrypted_package_rejected"):
                 isolated_proving_worker.decrypt_authorize_and_reserve(
                     invalid_path,
                     batch_record=self.record,
@@ -201,20 +202,21 @@ class IsolatedProvingWorkerTests(unittest.TestCase):
             self.assertEqual([], list(claims.iterdir()) if claims.exists() else [])
 
     def test_proof_failure_propagates_and_pipe_payload_is_not_a_command_argument(self) -> None:
-        process = mock.Mock(returncode=9)
-        containment = mock.Mock()
+        process = mock.Mock(exit_code=9, output_overflow=False)
+        policy_path = self.root / "resource-policy.json"
+        policy_path.write_bytes(policy_file_bytes(derive_policy({"BL_PROVER_THREADS": "1"})))
         with mock.patch.object(
             isolated_proving_worker,
-            "_start_contained_process",
-            return_value=(process, containment),
+            "run_contained_process",
+            return_value=process,
         ) as start:
             self.assertEqual(
                 9,
                 isolated_proving_worker.run_proof_with_pipe(
                     self.package,
                     output_dir=self.root / "proof",
-                    threads=8,
-                    policy_path=self.root / "trusted-policy.json",
+                    resource_policy_path=policy_path,
+                    evidence_policy_path=self.root / "trusted-policy.json",
                     ram_token="a" * 32,
                 ),
             )
@@ -222,8 +224,7 @@ class IsolatedProvingWorkerTests(unittest.TestCase):
         self.assertNotIn("serialized_arguments_hex_json", " ".join(command))
         self.assertIn("a" * 32, command)
         self.assertIn(str(self.root / "trusted-policy.json"), command)
-        self.assertIsNotNone(process.communicate.call_args.kwargs["input"])
-        containment.assert_called_once_with()
+        self.assertIsNotNone(start.call_args.kwargs["input_bytes"])
 
 
 if __name__ == "__main__":

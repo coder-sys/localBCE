@@ -14,28 +14,54 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import secrets
-import signal
+import shutil
 import socket
-import subprocess
+import stat
 import sys
 import time
 from typing import Any
 
-from tools.batch_package import load_batch_package
-from tools.encrypted_witness_envelope import load_envelope, validate_envelope_authorization
+from tools.batch_package import validate_batch_package
+from tools.encrypted_witness_envelope import (
+    validate_envelope,
+    validate_envelope_authorization,
+)
 from tools import proving_evidence_policy as evidence_policy
+from tools.proving_process_boundary import ProvingProcessError, run_contained_process
+from tools.proving_resource_policy import (
+    MAX_AUDIT_BYTES,
+    MAX_AUDIT_EVENTS,
+    MAX_AUDIT_LINE_BYTES,
+    MAX_JOB_BYTES,
+    MAX_NONTERMINAL_JOBS,
+    MAX_OWNED_FILES,
+    MAX_QUEUE_BYTES,
+    MAX_STDERR_BYTES,
+    MAX_STDOUT_BYTES,
+    MAX_TOTAL_JOBS,
+    ProvingResourcePolicyError,
+    ProvingResourcePolicyV1,
+    derive_policy,
+    policy_file_bytes,
+    read_policy_file,
+    validate_bound_policy,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTECTED_CAIRO = ROOT / "zk-cairo-sharp"
-RUNNER_SCHEMA_VERSION = 1
+RUNNER_SCHEMA_VERSION = 2
 JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TERMINAL_STATES = {"succeeded", "failed"}
 AUDIT_SCHEMA_VERSION = 1
 PACKAGE_RESERVATION_SCHEMA_VERSION = 1
 MAX_PACKAGE_RESERVATION_BYTES = 4096
+MAX_JSON_BYTES = 8 * 1024 * 1024
+MAX_STATUS_BYTES = 2 * 1024 * 1024
+_ADMISSION_EVENT_RESERVE = 1 + (2 * 2) + 1
 
 
 def _utc_now() -> str:
@@ -52,63 +78,233 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _path_error(code: str) -> RuntimeError:
+    return RuntimeError(code)
 
 
-def _write_json_atomic(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+_PUBLIC_CODE_PATTERN = re.compile(
+    r"(?:batch|encrypted|evidence|proof|proving|queue|trusted)_[a-z0-9_]{1,95}\Z"
+)
+
+
+def _public_call(operation: Any, fallback: str) -> Any:
+    code = fallback
     try:
-        temporary.write_bytes(_canonical_json_bytes(value) + b"\n")
+        return operation()
+    except Exception as exc:
+        candidate = str(exc)
+        if _PUBLIC_CODE_PATTERN.fullmatch(candidate):
+            code = candidate
+    raise RuntimeError(code)
+
+
+def _regular_file_stat(path: Path) -> os.stat_result:
+    if not isinstance(path, Path):
+        raise _path_error("queue_file_invalid")
+    try:
+        before = os.lstat(path)
+    except OSError:
+        raise _path_error("queue_file_unavailable") from None
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise _path_error("queue_file_not_regular")
+    return before
+
+
+def _bounded_regular_read(path: Path, maximum_bytes: int) -> bytes:
+    if type(maximum_bytes) is not int or not 0 < maximum_bytes <= MAX_JOB_BYTES:
+        raise _path_error("queue_file_cap_invalid")
+    before = _regular_file_stat(path)
+    if before.st_size > maximum_bytes:
+        raise _path_error("queue_file_cap")
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > maximum_bytes:
+            raise _path_error("queue_file_identity")
+        data = bytearray()
+        while len(data) <= maximum_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, maximum_bytes + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > maximum_bytes:
+                raise _path_error("queue_file_cap")
+        after_open = os.fstat(descriptor)
+    except RuntimeError as exc:
+        raise exc
+    except (OSError, ValueError):
+        raise _path_error("queue_file_read") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                raise _path_error("queue_file_close") from None
+    try:
+        after = os.lstat(path)
+    except OSError:
+        raise _path_error("queue_file_replaced") from None
+    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    opened_identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+    after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISREG(after.st_mode)
+        or opened_identity != identity
+        or after_identity != identity
+        or len(data) != before.st_size
+        or len(data) != after.st_size
+        or len(data) != after_open.st_size
+    ):
+        raise _path_error("queue_file_identity")
+    return bytes(data)
+
+
+def _hash_regular_file(path: Path, maximum_bytes: int) -> tuple[int, str, str]:
+    before = _regular_file_stat(path)
+    if before.st_size > maximum_bytes:
+        raise _path_error("queue_file_cap")
+    descriptor: int | None = None
+    sha256 = hashlib.sha256()
+    sha3 = hashlib.sha3_512()
+    total = 0
+    try:
+        flags = os.O_RDONLY | (os.O_BINARY if hasattr(os, "O_BINARY") else 0)
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > maximum_bytes:
+            raise _path_error("queue_file_identity")
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise _path_error("queue_file_cap")
+            sha256.update(chunk)
+            sha3.update(chunk)
+        after_open = os.fstat(descriptor)
+    except RuntimeError as exc:
+        raise exc
+    except (OSError, ValueError):
+        raise _path_error("queue_file_read") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                raise _path_error("queue_file_close") from None
+    try:
+        after = os.lstat(path)
+    except OSError:
+        raise _path_error("queue_file_replaced") from None
+    expected = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISREG(after.st_mode)
+        or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != expected
+        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != expected
+        or (after_open.st_dev, after_open.st_ino, after_open.st_size, after_open.st_mtime_ns) != expected
+        or total != before.st_size
+    ):
+        raise _path_error("queue_file_identity")
+    return total, sha256.hexdigest(), sha3.hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    """Bounded compatibility helper used only by focused evidence tests."""
+
+    return _hash_regular_file(path, MAX_JOB_BYTES)[1]
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _path_error("queue_json_duplicate_key")
+        result[key] = value
+    return result
+
+
+def _write_bytes_atomic(path: Path, payload: bytes, *, maximum_bytes: int = MAX_JSON_BYTES) -> None:
+    if type(payload) is not bytes or len(payload) > maximum_bytes:
+        raise _path_error("queue_write_cap")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
+    try:
+        temporary.write_bytes(payload)
         os.replace(temporary, path)
+    except OSError:
+        raise _path_error("queue_write") from None
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+def _write_json_atomic(path: Path, value: object) -> None:
+    _write_bytes_atomic(path, _canonical_json_bytes(value) + b"\n")
+
+
+def _read_json(path: Path, *, maximum_bytes: int = MAX_JSON_BYTES) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            _bounded_regular_read(path, maximum_bytes).decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except RuntimeError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _path_error("queue_json_invalid") from None
     if not isinstance(value, dict):
-        raise RuntimeError(f"expected a JSON object: {path}")
+        raise _path_error("queue_json_object")
     return value
 
 
-def _default_threads() -> int:
-    configured = os.environ.get("BL_PROVER_THREADS")
-    if configured is not None:
-        try:
-            value = int(configured)
-        except ValueError as exc:
-            raise RuntimeError("BL_PROVER_THREADS must be a positive integer") from exc
-        if value < 1:
-            raise RuntimeError("BL_PROVER_THREADS must be a positive integer")
-        return value
-    return min(os.cpu_count() or 1, 8)
-
-
 def _prepare_queue_root(path: Path) -> Path:
-    root = path.resolve()
+    if not isinstance(path, Path):
+        raise _path_error("queue_root_invalid")
+    candidate = Path(os.path.abspath(os.fspath(path)))
+    try:
+        existing = os.lstat(candidate)
+    except FileNotFoundError:
+        existing = None
+    except OSError:
+        raise _path_error("queue_root_unavailable") from None
+    if existing is not None:
+        if stat.S_ISLNK(existing.st_mode):
+            raise _path_error("queue_root_not_directory")
+        if not stat.S_ISDIR(existing.st_mode):
+            raise _path_error("queue_root_not_directory")
+    root = candidate.resolve()
     try:
         root.relative_to(ROOT)
     except ValueError:
         pass
     else:
-        raise RuntimeError(f"queue root must be outside the application source tree: {root}")
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "jobs").mkdir(exist_ok=True)
-    (root / "package_claims").mkdir(exist_ok=True)
+        raise _path_error("queue_root_inside_source")
+    try:
+        if root.exists() and (root.is_symlink() or not root.is_dir()):
+            raise _path_error("queue_root_not_directory")
+        root.mkdir(parents=True, exist_ok=True)
+        for directory in (root / "jobs", root / "package_claims"):
+            if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
+                raise _path_error("queue_root_not_directory")
+            directory.mkdir(exist_ok=True)
+    except RuntimeError:
+        raise
+    except OSError:
+        raise _path_error("queue_root_unavailable") from None
     return root
 
 
 def _reserve_package_once(root: Path, package_sha256: str, job_id: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", package_sha256):
-        raise RuntimeError("invalid package_sha256")
+        raise _path_error("queue_package_digest")
     if not JOB_ID_PATTERN.fullmatch(job_id):
-        raise RuntimeError("invalid reservation job_id")
+        raise _path_error("queue_job_id")
     reservation = root / "package_claims" / package_sha256
     payload = _canonical_json_bytes(
         {
@@ -121,12 +317,11 @@ def _reserve_package_once(root: Path, package_sha256: str, job_id: str) -> None:
 
     def existing_is_same_job() -> bool:
         try:
-            with reservation.open("rb") as stream:
-                existing_bytes = stream.read(MAX_PACKAGE_RESERVATION_BYTES + 1)
+            existing_bytes = _bounded_regular_read(reservation, MAX_PACKAGE_RESERVATION_BYTES)
             if len(existing_bytes) > MAX_PACKAGE_RESERVATION_BYTES:
                 return False
             existing = json.loads(existing_bytes.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError):
             return False
         return (
             isinstance(existing, dict)
@@ -153,7 +348,7 @@ def _reserve_package_once(root: Path, package_sha256: str, job_id: str) -> None:
         except FileExistsError as exc:
             if existing_is_same_job():
                 return
-            raise RuntimeError(f"batch package replay rejected: {package_sha256}") from exc
+            raise _path_error("queue_package_replay") from None
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -223,7 +418,7 @@ class _AuditLock:
             except FileExistsError as exc:
                 if attempt == 0 and _remove_stale_process_lock(self.path):
                     continue
-                raise RuntimeError(f"audit log is locked: {self.path}") from exc
+                raise _path_error("queue_audit_locked") from None
         assert self.descriptor is not None
         payload = _canonical_json_bytes(
             {"pid": os.getpid(), "hostname": socket.gethostname(), "started_at": _utc_now()}
@@ -241,47 +436,160 @@ class _AuditLock:
 
 def _verified_audit_events(root: Path) -> list[dict[str, Any]]:
     path = root / "audit.jsonl"
-    if not path.exists():
+    try:
+        initial = os.lstat(path)
+    except FileNotFoundError:
         return []
+    except OSError:
+        raise _path_error("queue_audit_unavailable") from None
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
+        raise _path_error("queue_audit_not_regular")
+    if initial.st_size > MAX_AUDIT_BYTES:
+        raise _path_error("queue_audit_bytes")
     events: list[dict[str, Any]] = []
     previous_hash = ""
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    try:
+        stream = path.open("rb")
+    except OSError:
+        raise _path_error("queue_audit_unavailable") from None
+    try:
+      line_number = 0
+      while True:
+        raw_line = stream.readline(MAX_AUDIT_LINE_BYTES + 1)
+        if not raw_line:
+            break
+        line_number += 1
+        if len(raw_line) > MAX_AUDIT_LINE_BYTES:
+            raise _path_error("queue_audit_line_bytes")
+        if not raw_line.endswith(b"\n"):
+            raise _path_error("queue_audit_line_encoding")
+        line = raw_line[:-1]
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"audit log contains invalid JSON at line {line_number}") from exc
+            event = json.loads(
+                line.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_keys,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, RuntimeError):
+            raise _path_error("queue_audit_json") from None
         if not isinstance(event, dict):
-            raise RuntimeError(f"audit log event is not an object at line {line_number}")
+            raise _path_error("queue_audit_event")
+        if line_number > MAX_AUDIT_EVENTS:
+            raise _path_error("queue_audit_events")
         recorded_hash = event.get("event_sha256")
         unsigned = dict(event)
         unsigned.pop("event_sha256", None)
         if event.get("sequence") != line_number or event.get("previous_event_sha256") != previous_hash:
-            raise RuntimeError(f"audit log chain is broken at line {line_number}")
+            raise _path_error("queue_audit_chain")
         computed_hash = _sha256_bytes(_canonical_json_bytes(unsigned))
         if recorded_hash != computed_hash:
-            raise RuntimeError(f"audit log integrity check failed at line {line_number}")
+            raise _path_error("queue_audit_integrity")
         previous_hash = computed_hash
         events.append(event)
+    finally:
+        stream.close()
+    try:
+        final = os.lstat(path)
+    except OSError:
+        raise _path_error("queue_audit_replaced") from None
+    if (
+        stat.S_ISLNK(final.st_mode)
+        or not stat.S_ISREG(final.st_mode)
+        or (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns)
+        != (initial.st_dev, initial.st_ino, initial.st_size, initial.st_mtime_ns)
+    ):
+        raise _path_error("queue_audit_replaced")
     return events
+
+
+def _append_audit_event_unlocked(
+    root: Path,
+    events: list[dict[str, Any]],
+    event_type: str,
+    details: dict[str, object],
+) -> None:
+    if len(events) >= MAX_AUDIT_EVENTS:
+        raise _path_error("queue_audit_events")
+    event: dict[str, object] = {
+        "schema_version": AUDIT_SCHEMA_VERSION,
+        "sequence": len(events) + 1,
+        "previous_event_sha256": events[-1]["event_sha256"] if events else "",
+        "recorded_at": _utc_now(),
+        "event_type": event_type,
+        "details": details,
+    }
+    event["event_sha256"] = _sha256_bytes(_canonical_json_bytes(event))
+    raw = _canonical_json_bytes(event) + b"\n"
+    if len(raw) > MAX_AUDIT_LINE_BYTES:
+        raise _path_error("queue_audit_line_bytes")
+    path = root / "audit.jsonl"
+    descriptor: int | None = None
+    try:
+        try:
+            before = os.lstat(path)
+        except FileNotFoundError:
+            before = None
+        if before is not None and (stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode)):
+            raise _path_error("queue_audit_not_regular")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(path, flags, 0o600)
+        opened = os.fstat(descriptor)
+        expected_size = 0 if before is None else before.st_size
+        expected_identity = None if before is None else (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_size != expected_size
+            or expected_identity is not None
+            and (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+            != expected_identity
+        ):
+            raise _path_error("queue_audit_replaced")
+        if opened.st_size + len(raw) > MAX_AUDIT_BYTES:
+            raise _path_error("queue_audit_bytes")
+        offset = 0
+        while offset < len(raw):
+            written = os.write(descriptor, raw[offset:])
+            if written <= 0:
+                raise _path_error("queue_audit_write")
+            offset += written
+        os.fsync(descriptor)
+        after_open = os.fstat(descriptor)
+        if after_open.st_size != opened.st_size + len(raw):
+            raise _path_error("queue_audit_write")
+    except RuntimeError:
+        raise
+    except OSError:
+        raise _path_error("queue_audit_write") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                raise _path_error("queue_audit_write") from None
+    try:
+        final = os.lstat(path)
+    except OSError:
+        raise _path_error("queue_audit_replaced") from None
+    if (
+        stat.S_ISLNK(final.st_mode)
+        or not stat.S_ISREG(final.st_mode)
+        or final.st_size != expected_size + len(raw)
+        or before is not None
+        and (final.st_dev, final.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise _path_error("queue_audit_replaced")
 
 
 def _append_audit_event(root: Path, event_type: str, details: dict[str, object]) -> None:
     with _AuditLock(root):
         events = _verified_audit_events(root)
-        event: dict[str, object] = {
-            "schema_version": AUDIT_SCHEMA_VERSION,
-            "sequence": len(events) + 1,
-            "previous_event_sha256": events[-1]["event_sha256"] if events else "",
-            "recorded_at": _utc_now(),
-            "event_type": event_type,
-            "details": details,
-        }
-        event["event_sha256"] = _sha256_bytes(_canonical_json_bytes(event))
-        path = root / "audit.jsonl"
-        with path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(_canonical_json_bytes(event).decode("utf-8") + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        _append_audit_event_unlocked(root, events, event_type, details)
 
 
 def _require_job_audit_binding(root: Path, request: dict[str, Any]) -> None:
@@ -292,18 +600,147 @@ def _require_job_audit_binding(root: Path, request: dict[str, Any]) -> None:
         "package_sha256": request.get("package_sha256", ""),
         "authorized_principal": request.get("authorized_principal", ""),
         "agency_id": request.get("agency_id", ""),
+        "resource_policy_sha256": request.get("resource_policy_sha256", ""),
     }
     for event in _verified_audit_events(root):
         if event.get("event_type") == "job_enqueued" and event.get("details") == expected:
             return
-    raise RuntimeError(
-        f"job request has no matching verified enqueue audit event: {request['job_id']}"
-    )
+    raise _path_error("queue_enqueue_audit_binding")
 
 
 def _validate_positive(name: str, value: int) -> None:
-    if value < 1:
-        raise RuntimeError(f"{name} must be at least 1")
+    if type(value) is not int or value < 1:
+        raise _path_error("queue_claim_count")
+
+
+def _load_batch_package_bounded(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(_bounded_regular_read(path.resolve(), MAX_JSON_BYTES).decode("utf-8"))
+        return validate_batch_package(value)
+    except RuntimeError:
+        raise _path_error("queue_package_invalid") from None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _path_error("queue_package_json") from None
+
+
+def _load_envelope_bounded(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(_bounded_regular_read(path.resolve(), 2 * 1024 * 1024).decode("utf-8"))
+        return validate_envelope(value)
+    except RuntimeError:
+        raise _path_error("queue_envelope_invalid") from None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _path_error("queue_envelope_json") from None
+
+
+def _measure_queue(root: Path, policy: ProvingResourcePolicyV1) -> tuple[int, int, int, int]:
+    """Return (regular-file count, bytes, total jobs, nonterminal jobs)."""
+
+    file_count = 0
+    total_bytes = 0
+
+    def visit(directory: Path, *, job_bytes: list[int] | None = None, count_global: bool = True) -> None:
+        nonlocal file_count, total_bytes
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            raise _path_error("queue_measurement") from None
+        try:
+            for entry in entries:
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    raise _path_error("queue_measurement") from None
+                if stat.S_ISLNK(info.st_mode):
+                    raise _path_error("queue_symlink")
+                if stat.S_ISREG(info.st_mode):
+                    if count_global:
+                        file_count += 1
+                        total_bytes += int(info.st_size)
+                    if job_bytes is not None:
+                        job_bytes[0] += int(info.st_size)
+                        if job_bytes[0] > policy.max_job_bytes:
+                            raise _path_error("queue_job_bytes")
+                elif stat.S_ISDIR(info.st_mode):
+                    visit(Path(entry.path), job_bytes=job_bytes, count_global=count_global)
+                else:
+                    raise _path_error("queue_nonregular")
+                if count_global and (file_count > policy.max_owned_files or total_bytes > policy.max_queue_bytes):
+                    raise _path_error("queue_capacity")
+        finally:
+            entries.close()
+
+    visit(root)
+    jobs_directory = root / "jobs"
+    total_jobs = 0
+    nonterminal_jobs = 0
+    try:
+        job_entries = os.scandir(jobs_directory)
+    except OSError:
+        raise _path_error("queue_measurement") from None
+    try:
+        for entry in job_entries:
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise _path_error("queue_job_directory")
+            total_jobs += 1
+            if total_jobs > policy.max_total_jobs:
+                raise _path_error("queue_total_capacity")
+            job_bytes = [0]
+            visit(Path(entry.path), job_bytes=job_bytes, count_global=False)
+            status_path = Path(entry.path) / "status.json"
+            status = _read_json(status_path, maximum_bytes=MAX_STATUS_BYTES)
+            if status.get("state") in {"queued", "retrying", "running"}:
+                nonterminal_jobs += 1
+                if nonterminal_jobs > policy.max_nonterminal_jobs:
+                    raise _path_error("queue_nonterminal_capacity")
+    finally:
+        job_entries.close()
+    return file_count, total_bytes, total_jobs, nonterminal_jobs
+
+
+def _measure_job_bytes(job_dir: Path, policy: ProvingResourcePolicyV1) -> int:
+    total = 0
+
+    def visit(directory: Path) -> None:
+        nonlocal total
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            raise _path_error("queue_measurement") from None
+        try:
+            for entry in entries:
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    raise _path_error("queue_measurement") from None
+                if stat.S_ISLNK(info.st_mode):
+                    raise _path_error("queue_symlink")
+                if stat.S_ISREG(info.st_mode):
+                    total += int(info.st_size)
+                    if total > policy.max_job_bytes:
+                        raise _path_error("queue_job_bytes")
+                elif stat.S_ISDIR(info.st_mode):
+                    visit(Path(entry.path))
+                else:
+                    raise _path_error("queue_nonregular")
+        finally:
+            entries.close()
+
+    visit(job_dir)
+    return total
+
+
+def _remove_uncommitted_job(job_dir: Path) -> None:
+    try:
+        if job_dir.is_symlink():
+            raise _path_error("queue_job_directory")
+        if job_dir.exists():
+            shutil.rmtree(job_dir)
+    except RuntimeError:
+        raise
+    except OSError:
+        raise _path_error("queue_rollback") from None
 
 
 def enqueue_job(
@@ -311,20 +748,19 @@ def enqueue_job(
     *,
     job_id: str,
     claim_count: int,
-    threads: int,
-    max_attempts: int,
-    timeout_seconds: int,
 ) -> dict[str, Any]:
-    if os.environ.get("BL_ENV", "").strip().lower() in {"prod", "production"}:
-        raise RuntimeError("synthetic claim-count jobs are disabled in production")
-    return _enqueue_request(
-        queue_root,
-        job_id=job_id,
-        claim_count=claim_count,
-        threads=threads,
-        max_attempts=max_attempts,
-        timeout_seconds=timeout_seconds,
-        batch_package_path=None,
+    return _public_call(
+        lambda: (
+            _path_error("queue_synthetic_production")
+            if os.environ.get("BL_ENV", "").strip().lower() in {"prod", "production"}
+            else _enqueue_request(
+                queue_root,
+                job_id=job_id,
+                claim_count=claim_count,
+                batch_package_path=None,
+            )
+        ),
+        "queue_request_rejected",
     )
 
 
@@ -333,24 +769,22 @@ def enqueue_package_job(
     *,
     job_id: str,
     batch_package_path: Path,
-    threads: int,
-    max_attempts: int,
-    timeout_seconds: int,
 ) -> dict[str, Any]:
-    if os.environ.get("BL_ENV", "").strip().lower() in {"prod", "production"}:
-        raise RuntimeError(
-            "production forbids plaintext witness package queues; encrypted envelope required"
+    def operation() -> dict[str, Any]:
+        if os.environ.get("BL_ENV", "").strip().lower() in {"prod", "production"}:
+            raise _path_error("queue_plaintext_production")
+        package = _load_batch_package_bounded(batch_package_path)
+        return _enqueue_request(
+            queue_root,
+            job_id=job_id,
+            claim_count=int(package["claim_count"]),
+            batch_package_path=batch_package_path.resolve(),
+            package=package,
         )
-    package = load_batch_package(batch_package_path.resolve())
-    return _enqueue_request(
-        queue_root,
-        job_id=job_id,
-        claim_count=int(package["claim_count"]),
-        threads=threads,
-        max_attempts=max_attempts,
-        timeout_seconds=timeout_seconds,
-        batch_package_path=batch_package_path.resolve(),
-        package=package,
+
+    return _public_call(
+        operation,
+        "queue_request_rejected",
     )
 
 
@@ -361,27 +795,30 @@ def enqueue_encrypted_package_job(
     encrypted_envelope_path: Path,
     batch_record: dict[str, Any],
     authenticated_principal: str,
-    threads: int,
-    max_attempts: int,
-    timeout_seconds: int,
 ) -> dict[str, Any]:
-    envelope = load_envelope(encrypted_envelope_path.resolve())
-    validate_envelope_authorization(
-        envelope,
-        authenticated_principal=authenticated_principal,
-    )
-    return _enqueue_request(
-        queue_root,
-        job_id=job_id,
-        claim_count=int(envelope["claim_count"]),
-        threads=threads,
-        max_attempts=max_attempts,
-        timeout_seconds=timeout_seconds,
-        batch_package_path=None,
-        encrypted_envelope_path=encrypted_envelope_path.resolve(),
-        envelope=envelope,
-        batch_record=batch_record,
-        authenticated_principal=authenticated_principal,
+    def operation() -> dict[str, Any]:
+        from tools.proving_submission import validate_batch_record
+
+        validated_record = validate_batch_record(dict(batch_record))
+        envelope = _load_envelope_bounded(encrypted_envelope_path)
+        validate_envelope_authorization(
+            envelope,
+            authenticated_principal=authenticated_principal,
+        )
+        return _enqueue_request(
+            queue_root,
+            job_id=job_id,
+            claim_count=int(envelope["claim_count"]),
+            batch_package_path=None,
+            encrypted_envelope_path=encrypted_envelope_path.resolve(),
+            envelope=envelope,
+            batch_record=validated_record,
+            authenticated_principal=authenticated_principal,
+        )
+
+    return _public_call(
+        operation,
+        "queue_request_rejected",
     )
 
 
@@ -390,9 +827,6 @@ def _enqueue_request(
     *,
     job_id: str,
     claim_count: int,
-    threads: int,
-    max_attempts: int,
-    timeout_seconds: int,
     batch_package_path: Path | None,
     package: dict[str, Any] | None = None,
     encrypted_envelope_path: Path | None = None,
@@ -401,141 +835,207 @@ def _enqueue_request(
     authenticated_principal: str = "",
 ) -> dict[str, Any]:
     if not JOB_ID_PATTERN.fullmatch(job_id):
-        raise RuntimeError(
-            "job_id must be 1-64 characters using only letters, digits, dot, underscore, or hyphen"
-        )
+        raise _path_error("queue_job_id")
     _validate_positive("claim_count", claim_count)
-    _validate_positive("threads", threads)
-    _validate_positive("max_attempts", max_attempts)
-    _validate_positive("timeout_seconds", timeout_seconds)
+    policy = derive_policy()
 
     root = _prepare_queue_root(queue_root)
     job_dir = root / "jobs" / job_id
-    if job_dir.exists():
-        raise RuntimeError(f"job already exists and cannot be overwritten: {job_id}")
-    if package is not None:
-        _reserve_package_once(root, str(package["package_sha256"]), job_id)
-    try:
-        job_dir.mkdir()
-    except FileExistsError as exc:
-        raise RuntimeError(f"job already exists and cannot be overwritten: {job_id}") from exc
+    with _AuditLock(root):
+        events = _verified_audit_events(root)
+        _, _, total_jobs, nonterminal_jobs = _measure_queue(root, policy)
+        if total_jobs >= policy.max_total_jobs:
+            raise _path_error("queue_total_capacity")
+        if nonterminal_jobs >= policy.max_nonterminal_jobs:
+            raise _path_error("queue_nonterminal_capacity")
+        if len(events) + _ADMISSION_EVENT_RESERVE > policy.max_audit_events:
+            raise _path_error("queue_audit_headroom")
+        try:
+            audit_size = (root / "audit.jsonl").stat().st_size
+        except FileNotFoundError:
+            audit_size = 0
+        except OSError:
+            raise _path_error("queue_audit_unavailable") from None
+        if audit_size + (_ADMISSION_EVENT_RESERVE * policy.max_audit_line_bytes) > policy.max_audit_bytes:
+            raise _path_error("queue_audit_headroom")
 
-    request: dict[str, Any] = {
-        "schema_version": RUNNER_SCHEMA_VERSION,
-        "job_id": job_id,
-        "claim_count": claim_count,
-        "threads": threads,
-        "max_attempts": max_attempts,
-        "timeout_seconds": timeout_seconds,
-        "created_at": _utc_now(),
-        "input_kind": (
-            "encrypted_envelope"
-            if encrypted_envelope_path is not None
-            else "batch_package" if batch_package_path is not None else "synthetic"
-        ),
-    }
-    if batch_package_path is not None:
-        assert package is not None
-        package_snapshot = job_dir / "batch_package.json"
-        package_snapshot.write_bytes(batch_package_path.read_bytes())
-        load_batch_package(package_snapshot)
-        request.update(
-            {
-                "package_sha256": package["package_sha256"],
-                "witness_sha256": package["witness_sha256"],
-                "package_id": package["package_id"],
-                "batch_id": package["batch_id"],
-                "authorized_principal": package["authorization"]["principal"],
-                "agency_id": package["authorization"].get("agency_id", "local-dev"),
-                "retain_until": package["retain_until"],
+        reservation = root / "package_claims" / str(package["package_sha256"]) if package is not None else None
+        reservation_preexisting = bool(reservation and reservation.exists())
+        try:
+            if job_dir.exists():
+                raise _path_error("queue_duplicate_job")
+            if package is not None:
+                _reserve_package_once(root, str(package["package_sha256"]), job_id)
+            job_dir.mkdir()
+            request: dict[str, Any] = {
+                "schema_version": RUNNER_SCHEMA_VERSION,
+                "job_id": job_id,
+                "claim_count": claim_count,
+                "created_at": _utc_now(),
+                "input_kind": (
+                    "encrypted_envelope"
+                    if encrypted_envelope_path is not None
+                    else "batch_package" if batch_package_path is not None else "synthetic"
+                ),
+                "resource_policy": policy.as_json(),
+                "resource_policy_sha256": policy.digest,
             }
-        )
-    if encrypted_envelope_path is not None:
-        assert envelope is not None and batch_record is not None
-        envelope_snapshot = job_dir / "witness.envelope.json"
-        _write_json_atomic(envelope_snapshot, envelope)
-        load_envelope(envelope_snapshot)
-        _write_json_atomic(job_dir / "batch_record.json", batch_record)
-        request.update(
-            {
-                "package_sha256": envelope["package_sha256"],
-                "witness_sha256": envelope["witness_sha256"],
-                "envelope_sha256": envelope["envelope_sha256"],
-                "agency_id": envelope["agency_id"],
-                "retain_until": envelope["retain_until"],
-                "authorized_principal": authenticated_principal,
-                "batch_record_sha256": batch_record.get("record_sha256", ""),
+            _write_bytes_atomic(job_dir / "resource_policy.json", policy_file_bytes(policy))
+            if batch_package_path is not None:
+                assert package is not None
+                package_snapshot = job_dir / "batch_package.json"
+                _write_bytes_atomic(
+                    package_snapshot,
+                    _bounded_regular_read(batch_package_path, MAX_JSON_BYTES),
+                )
+                _load_batch_package_bounded(package_snapshot)
+                request.update(
+                    {
+                        "package_sha256": package["package_sha256"],
+                        "witness_sha256": package["witness_sha256"],
+                        "package_id": package["package_id"],
+                        "batch_id": package["batch_id"],
+                        "authorized_principal": package["authorization"]["principal"],
+                        "agency_id": package["authorization"].get("agency_id", "local-dev"),
+                        "retain_until": package["retain_until"],
+                    }
+                )
+            if encrypted_envelope_path is not None:
+                assert envelope is not None and batch_record is not None
+                _write_json_atomic(job_dir / "witness.envelope.json", envelope)
+                _load_envelope_bounded(job_dir / "witness.envelope.json")
+                _write_json_atomic(job_dir / "batch_record.json", batch_record)
+                request.update(
+                    {
+                        "package_sha256": envelope["package_sha256"],
+                        "witness_sha256": envelope["witness_sha256"],
+                        "envelope_sha256": envelope["envelope_sha256"],
+                        "agency_id": envelope["agency_id"],
+                        "retain_until": envelope["retain_until"],
+                        "authorized_principal": authenticated_principal,
+                        "batch_record_sha256": batch_record.get("record_sha256", ""),
+                    }
+                )
+            request["request_sha256"] = _sha256_bytes(_canonical_json_bytes(request))
+            status = {
+                "schema_version": RUNNER_SCHEMA_VERSION,
+                "job_id": job_id,
+                "state": "queued",
+                "request_sha256": request["request_sha256"],
+                "resource_policy_sha256": policy.digest,
+                "attempts": [],
+                "updated_at": _utc_now(),
             }
-        )
-    request["request_sha256"] = _sha256_bytes(_canonical_json_bytes(request))
-    status = {
-        "schema_version": RUNNER_SCHEMA_VERSION,
-        "job_id": job_id,
-        "state": "queued",
-        "request_sha256": request["request_sha256"],
-        "attempts": [],
-        "updated_at": _utc_now(),
-    }
-    _write_json_atomic(job_dir / "request.json", request)
-    _write_json_atomic(job_dir / "status.json", status)
-    _append_audit_event(
-        root,
-        "job_enqueued",
-        {
-            "job_id": job_id,
-            "request_sha256": request["request_sha256"],
-            "input_kind": request["input_kind"],
-            "package_sha256": request.get("package_sha256", ""),
-            "authorized_principal": request.get("authorized_principal", ""),
-            "agency_id": request.get("agency_id", ""),
-        },
-    )
-    return status
+            _write_json_atomic(job_dir / "request.json", request)
+            _write_json_atomic(job_dir / "status.json", status, )
+            file_count, queue_bytes, _, _ = _measure_queue(root, policy)
+            job_bytes = _measure_job_bytes(job_dir, policy)
+            if file_count > policy.max_owned_files or queue_bytes > policy.max_queue_bytes or job_bytes > policy.max_job_bytes:
+                raise _path_error("queue_capacity")
+            details = {
+                "job_id": job_id,
+                "request_sha256": request["request_sha256"],
+                "input_kind": request["input_kind"],
+                "package_sha256": request.get("package_sha256", ""),
+                "authorized_principal": request.get("authorized_principal", ""),
+                "agency_id": request.get("agency_id", ""),
+                "resource_policy_sha256": policy.digest,
+            }
+            _append_audit_event_unlocked(root, events, "job_enqueued", details)
+            return status
+        except BaseException:
+            _remove_uncommitted_job(job_dir)
+            if reservation is not None and not reservation_preexisting:
+                try:
+                    reservation.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
 
 def _validate_request(request: dict[str, Any], path: Path) -> None:
+    if not isinstance(request, dict):
+        raise _path_error("queue_request_schema")
     recorded_hash = request.get("request_sha256")
     unsigned_request = dict(request)
     unsigned_request.pop("request_sha256", None)
     computed_hash = _sha256_bytes(_canonical_json_bytes(unsigned_request))
-    if recorded_hash != computed_hash:
-        raise RuntimeError(f"job request integrity check failed: {path}")
+    if type(recorded_hash) is not str or recorded_hash != computed_hash:
+        raise _path_error("queue_request_integrity")
     if request.get("schema_version") != RUNNER_SCHEMA_VERSION:
-        raise RuntimeError(f"unsupported job request schema: {path}")
+        raise _path_error("queue_request_schema")
     job_id = request.get("job_id")
     if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
-        raise RuntimeError(f"invalid job_id in request: {path}")
-    for name in ("claim_count", "threads", "max_attempts", "timeout_seconds"):
-        value = request.get(name)
-        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-            raise RuntimeError(f"invalid {name} in request: {path}")
+        raise _path_error("queue_request_job_id")
+    claim_count = request.get("claim_count")
+    if type(claim_count) is not int or claim_count < 1:
+        raise _path_error("queue_request_claim_count")
+    policy = validate_bound_policy(
+        request.get("resource_policy"), request.get("resource_policy_sha256")
+    )
+    if not isinstance(path, Path):
+        raise _path_error("queue_request_file")
+    try:
+        if read_policy_file(path.parent / "resource_policy.json") != policy:
+            raise _path_error("queue_request_policy_binding")
+    except ProvingResourcePolicyError:
+        raise _path_error("queue_request_policy_binding") from None
     input_kind = request.get("input_kind", "synthetic")
     if input_kind not in {"synthetic", "batch_package", "encrypted_envelope"}:
-        raise RuntimeError(f"invalid input_kind in request: {path}")
+        raise _path_error("queue_request_input_kind")
+    common = {
+        "schema_version", "job_id", "claim_count", "created_at", "input_kind",
+        "resource_policy", "resource_policy_sha256", "request_sha256",
+    }
+    if not isinstance(request.get("created_at"), str):
+        raise _path_error("queue_request_created_at")
     if input_kind == "batch_package":
+        expected = common | {
+            "package_sha256", "witness_sha256", "package_id", "batch_id",
+            "authorized_principal", "agency_id", "retain_until",
+        }
+        if set(request) != expected:
+            raise _path_error("queue_request_keys")
         package_path = path.parent / "batch_package.json"
-        package = load_batch_package(package_path)
+        package = _load_batch_package_bounded(package_path)
         for field in ("package_sha256", "witness_sha256", "package_id", "batch_id"):
             if request.get(field) != package.get(field):
-                raise RuntimeError(f"job request is not bound to its batch package: {path}")
+                raise _path_error("queue_request_package_binding")
         if request.get("authorized_principal") != package["authorization"]["principal"]:
-            raise RuntimeError(f"job request principal does not match its batch package: {path}")
+            raise _path_error("queue_request_package_binding")
         if request.get("agency_id") != package["authorization"].get("agency_id", "local-dev"):
-            raise RuntimeError(f"job request agency does not match its batch package: {path}")
-    if input_kind == "encrypted_envelope":
-        envelope = load_envelope(path.parent / "witness.envelope.json")
-        validate_envelope_authorization(
-            envelope,
-            authenticated_principal=str(request.get("authorized_principal", "")),
-        )
-        for field in ("package_sha256", "witness_sha256", "envelope_sha256", "agency_id"):
+            raise _path_error("queue_request_package_binding")
+        if request.get("retain_until") != package.get("retain_until"):
+            raise _path_error("queue_request_package_binding")
+    elif input_kind == "encrypted_envelope":
+        expected = common | {
+            "package_sha256", "witness_sha256", "envelope_sha256", "agency_id",
+            "retain_until", "authorized_principal", "batch_record_sha256",
+        }
+        if set(request) != expected:
+            raise _path_error("queue_request_keys")
+        envelope = _load_envelope_bounded(path.parent / "witness.envelope.json")
+        try:
+            validate_envelope_authorization(
+                envelope,
+                authenticated_principal=str(request.get("authorized_principal", "")),
+            )
+        except RuntimeError:
+            raise _path_error("queue_request_envelope_binding") from None
+        for field in ("package_sha256", "witness_sha256", "envelope_sha256", "agency_id", "retain_until"):
             if request.get(field) != envelope.get(field):
-                raise RuntimeError(f"job request is not bound to its encrypted envelope: {path}")
+                raise _path_error("queue_request_envelope_binding")
         record = _read_json(path.parent / "batch_record.json")
         if request.get("batch_record_sha256") != record.get("record_sha256"):
-            raise RuntimeError(f"job request is not bound to its batch record: {path}")
-
-
+            raise _path_error("queue_request_record_binding")
+        from tools.proving_submission import validate_batch_record
+        try:
+            validate_batch_record(record)
+        except RuntimeError:
+            raise _path_error("queue_request_record_binding") from None
+    else:
+        if set(request) != common:
+            raise _path_error("queue_request_keys")
 class _QueueLock:
     def __init__(self, queue_root: Path) -> None:
         self.path = queue_root / ".prover.lock"
@@ -551,9 +1051,7 @@ class _QueueLock:
             except FileExistsError as exc:
                 if attempt == 0 and self._remove_stale_lock():
                     continue
-                raise RuntimeError(
-                    f"another proof runner holds the queue lock; inspect before removing it: {self.path}"
-                ) from exc
+                raise _path_error("queue_runner_locked") from None
         assert self.descriptor is not None
         payload = _canonical_json_bytes(
             {"pid": os.getpid(), "hostname": socket.gethostname(), "started_at": _utc_now()}
@@ -574,14 +1072,21 @@ class _QueueLock:
 
 def _next_queued_job(root: Path) -> Path | None:
     candidates: list[tuple[str, str, Path]] = []
-    for job_dir in (root / "jobs").iterdir():
-        if not job_dir.is_dir():
-            continue
+    try:
+        job_dirs = list((root / "jobs").iterdir())
+    except OSError:
+        raise _path_error("queue_measurement") from None
+    for job_dir in job_dirs:
+        info = _regular_file_stat(job_dir) if job_dir.is_file() else None
+        if info is not None:
+            raise _path_error("queue_job_directory")
+        if job_dir.is_symlink() or not job_dir.is_dir():
+            raise _path_error("queue_job_directory")
         status_path = job_dir / "status.json"
         request_path = job_dir / "request.json"
         if not status_path.is_file() or not request_path.is_file():
-            continue
-        status = _read_json(status_path)
+            raise _path_error("queue_job_shape")
+        status = _read_json(status_path, maximum_bytes=MAX_STATUS_BYTES)
         if status.get("state") not in {"queued", "retrying"}:
             continue
         request = _read_json(request_path)
@@ -590,18 +1095,30 @@ def _next_queued_job(root: Path) -> Path | None:
 
 
 def _recover_interrupted_jobs(root: Path) -> None:
-    for status_path in sorted((root / "jobs").glob("*/status.json")):
-        status = _read_json(status_path)
+    try:
+        status_paths = sorted((root / "jobs").glob("*/status.json"))
+    except OSError:
+        raise _path_error("queue_measurement") from None
+    for status_path in status_paths:
+        status = _read_json(status_path, maximum_bytes=MAX_STATUS_BYTES)
         if status.get("state") != "running":
             continue
         request_path = status_path.with_name("request.json")
         request = _read_json(request_path)
         _validate_request(request, request_path)
+        try:
+            policy = validate_bound_policy(
+                request.get("resource_policy"), request.get("resource_policy_sha256")
+            )
+        except ProvingResourcePolicyError:
+            raise _path_error("queue_request_policy_binding") from None
         _require_job_audit_binding(root, request)
         active_attempt = status.get("active_attempt")
         if isinstance(active_attempt, bool) or not isinstance(active_attempt, int) or active_attempt < 1:
-            raise RuntimeError(f"running job has an invalid active attempt: {status_path.parent.name}")
+            raise _path_error("queue_active_attempt")
         attempts = list(status.get("attempts", []))
+        if len(attempts) >= policy.max_attempts:
+            raise _path_error("queue_attempt_exhaustion")
         attempts.append(
             {
                 "attempt": active_attempt,
@@ -609,10 +1126,10 @@ def _recover_interrupted_jobs(root: Path) -> None:
                 "succeeded": False,
                 "retryable": True,
                 "failure_class": "interrupted",
-                "error": "proof runner stopped before the attempt reached a terminal result",
+                "error_code": "interrupted_attempt",
             }
         )
-        next_state = "retrying" if active_attempt < request["max_attempts"] else "failed"
+        next_state = "retrying" if active_attempt < policy.max_attempts else "failed"
         _update_status(
             status_path,
             status,
@@ -633,13 +1150,14 @@ def _validate_success_manifest(
     policy: evidence_policy.ProvingEvidencePolicy | None = None,
 ) -> dict[str, Any]:
     if policy is None:
-        raise RuntimeError("an independently provisioned trusted evidence policy is required")
+        raise _path_error("queue_evidence_policy_required")
     manifest_path = attempt_dir / "run_manifest.json"
-    if not manifest_path.is_file():
-        raise RuntimeError("proof command exited successfully without run_manifest.json")
-    manifest = evidence_policy.read_canonical_json_object(
-        manifest_path, maximum_bytes=16 * 1024 * 1024
-    )
+    try:
+        manifest = _read_json(manifest_path, maximum_bytes=MAX_JSON_BYTES)
+    except RuntimeError:
+        raise _path_error("queue_manifest_invalid") from None
+    if _canonical_json_bytes(manifest) + b"\n" != _bounded_regular_read(manifest_path, MAX_JSON_BYTES):
+        raise _path_error("queue_manifest_noncanonical")
     required_true = {
         "semantic_output_match": manifest.get("semantic_output_match"),
         "independent_verifier": manifest.get("independent_verifier"),
@@ -648,60 +1166,66 @@ def _validate_success_manifest(
     if manifest.get("status") != "independently_verified" or not all(
         value is True for value in required_true.values()
     ):
-        raise RuntimeError(f"proof manifest does not establish verified success: {manifest_path}")
+        raise _path_error("queue_manifest_status")
     if manifest.get("evidence_scope") != evidence_policy.POLICY_PURPOSE:
-        raise RuntimeError(f"proof manifest evidence scope is invalid: {manifest_path}")
+        raise _path_error("queue_manifest_scope")
     if manifest.get("production_verifier_claimed") is not False:
-        raise RuntimeError(f"proof manifest makes an unauthorized production claim: {manifest_path}")
+        raise _path_error("queue_manifest_production_claim")
     if manifest.get("settlement_contract_verification_run") is not False:
-        raise RuntimeError(f"proof manifest makes an unauthorized settlement claim: {manifest_path}")
+        raise _path_error("queue_manifest_settlement_claim")
     if manifest.get("verification_interface") != evidence_policy.VERIFIER_INTERFACE:
-        raise RuntimeError(f"proof manifest verifier interface is invalid: {manifest_path}")
+        raise _path_error("queue_manifest_interface")
 
     expected_policy = {
-        "path": str(policy.path),
+        "storage_key": "trusted-evidence-policy",
         "registry_sha3_512": policy.registry_sha3_512,
         "sha3_512": policy.sha3_512,
     }
     if manifest.get("evidence_policy") != expected_policy:
-        raise RuntimeError(f"proof manifest policy is missing, altered, or unapproved: {manifest_path}")
+        raise _path_error("queue_manifest_policy")
     expected_provenance = evidence_policy.trusted_manifest_bindings(policy)
     if manifest.get("trusted_provenance") != expected_provenance:
-        raise RuntimeError(f"proof manifest provenance is missing, altered, or unapproved: {manifest_path}")
+        raise _path_error("queue_manifest_provenance")
     expected_source = expected_provenance["source_manifest_sha3_512"]
     before = manifest.get("protected_source_manifest_sha3_512_before")
     after = manifest.get("protected_source_manifest_sha3_512_after")
     if before != expected_source or after != expected_source:
-        raise RuntimeError(f"protected source manifest is missing, altered, or unapproved: {manifest_path}")
+        raise _path_error("queue_manifest_source")
 
     proof = manifest.get("proof")
     if not isinstance(proof, dict):
-        raise RuntimeError(f"proof metadata is missing: {manifest_path}")
+        raise _path_error("queue_manifest_proof")
     if set(proof) != {"bytes", "path", "sha256", "sha3_512"}:
-        raise RuntimeError(f"proof metadata is ambiguous or incomplete: {manifest_path}")
+        raise _path_error("queue_manifest_proof")
     proof_path_value = proof.get("path")
-    if not isinstance(proof_path_value, str):
-        raise RuntimeError(f"proof path is missing: {manifest_path}")
-    proof_path = Path(proof_path_value).resolve()
+    if (
+        not isinstance(proof_path_value, str)
+        or not proof_path_value
+        or Path(proof_path_value).is_absolute()
+        or any(part in {"", ".", ".."} for part in PurePosixPath(proof_path_value).parts)
+        or PurePosixPath(proof_path_value).as_posix() != proof_path_value
+    ):
+        raise _path_error("queue_manifest_proof")
+    proof_path = (attempt_dir / Path(*PurePosixPath(proof_path_value).parts)).resolve()
     try:
         proof_path.relative_to(attempt_dir.resolve())
-    except ValueError as exc:
-        raise RuntimeError(f"proof path escapes its attempt directory: {proof_path}") from exc
-    if not proof_path.is_file():
-        raise RuntimeError(f"verified proof file is missing: {proof_path}")
-    actual_bytes = proof_path.stat().st_size
-    actual_hash = _sha256_file(proof_path)
-    actual_sha3_512 = evidence_policy.sha3_512_file(proof_path)
+    except ValueError:
+        raise _path_error("queue_manifest_proof_path") from None
+    try:
+        proof_path.relative_to(attempt_dir.resolve())
+        actual_bytes, actual_hash, actual_sha3_512 = _hash_regular_file(proof_path, MAX_JOB_BYTES)
+    except (RuntimeError, OSError, ValueError):
+        raise _path_error("queue_manifest_proof_file") from None
     if (
         proof.get("bytes") != actual_bytes
         or proof.get("sha256") != actual_hash
         or proof.get("sha3_512") != actual_sha3_512
     ):
-        raise RuntimeError(f"verified proof metadata does not match the proof file: {proof_path}")
+        raise _path_error("queue_manifest_proof_binding")
 
     return {
-        "manifest": str(manifest_path),
-        "proof_path": str(proof_path),
+        "manifest_storage_key": "run_manifest.json",
+        "proof_storage_key": proof_path.relative_to(attempt_dir.resolve()).as_posix(),
         "proof_bytes": actual_bytes,
         "proof_sha256": actual_hash,
         "proof_sha3_512": actual_sha3_512,
@@ -717,80 +1241,19 @@ def _validate_success_manifest(
 def _update_status(path: Path, status: dict[str, Any], **changes: object) -> None:
     status.update(changes)
     status["updated_at"] = _utc_now()
-    _write_json_atomic(path, status)
+    _write_bytes_atomic(path, _canonical_json_bytes(status) + b"\n", maximum_bytes=MAX_STATUS_BYTES)
 
 
-def _terminate_process_tree(
-    process: subprocess.Popen[Any], *, force: bool
-) -> dict[str, Any]:
-    """Terminate a prover and its descendants, or fail closed if that is unproven."""
-
-    if process.poll() is not None:
-        return {
-            "ok": True,
-            "tree_confirmed": True,
-            "method": "already_exited",
-        }
-
-    if os.name == "nt":
-        command = ["taskkill", "/PID", str(process.pid), "/T"]
-        if force:
-            command.append("/F")
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            result = None
-            error = str(exc)
-        else:
-            if result.returncode == 0:
-                return {
-                    "ok": True,
-                    "tree_confirmed": True,
-                    "method": "taskkill_tree",
-                    "command": command,
-                    "returncode": result.returncode,
-                }
-            error = f"taskkill exited with code {result.returncode}"
-        if process.poll() is not None:
-            return {
-                "ok": True,
-                "tree_confirmed": True,
-                "method": "exited_during_taskkill",
-                "command": command,
-                "error": error,
-            }
-        try:
-            process.kill()
-        except OSError as exc:
-            error = f"{error}; parent kill failed: {exc}"
-        return {
-            "ok": False,
-            "tree_confirmed": False,
-            "method": "taskkill_tree_failed",
-            "command": command,
-            "error": error,
-        }
-
+def _cleanup_ephemeral_diagnostics(attempt_dir: Path) -> None:
     try:
-        os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
-    except OSError as exc:
-        return {
-            "ok": False,
-            "tree_confirmed": False,
-            "method": "process_group_failed",
-            "error": str(exc),
-        }
-    return {
-        "ok": True,
-        "tree_confirmed": True,
-        "method": "process_group",
-    }
+        paths = [item for item in attempt_dir.rglob("*") if item.is_file() and item.name.endswith(".log")]
+    except OSError:
+        raise _path_error("queue_diagnostic_cleanup") from None
+    for item in paths:
+        try:
+            item.unlink(missing_ok=True)
+        except OSError:
+            raise _path_error("queue_diagnostic_cleanup") from None
 
 
 def _run_attempt(
@@ -800,16 +1263,24 @@ def _run_attempt(
     status: dict[str, Any],
     queue_root: Path,
 ) -> tuple[bool, bool, dict[str, Any]]:
+    started = time.monotonic()
+    attempt_dir.parent.mkdir(parents=True, exist_ok=True)
     try:
+        resource_policy = validate_bound_policy(
+            request.get("resource_policy"), request.get("resource_policy_sha256")
+        )
+        if read_policy_file(status_path.parent / "resource_policy.json") != resource_policy:
+            raise ProvingResourcePolicyError("proving_policy_binding")
         policy_path = evidence_policy.policy_path_from_environment()
         policy = evidence_policy.load_approved_policy(policy_path)
         attestation_before = evidence_policy.attest_policy(
             policy, source_root=PROTECTED_CAIRO
         )
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError):
         return False, False, {
             "failure_class": "trusted_evidence_policy",
-            "error": str(exc),
+            "error_code": "trusted_evidence_policy",
+            "elapsed_seconds": round(time.monotonic() - started, 3),
         }
 
     command = [
@@ -817,12 +1288,10 @@ def _run_attempt(
         "-m",
         "tools.run_verified_bootloader_proof",
     ]
-    ram_cleanup_path: str | None = None
     if request.get("input_kind", "synthetic") == "batch_package":
         command.extend(["--batch-package", str(status_path.parent / "batch_package.json")])
     elif request.get("input_kind") == "encrypted_envelope":
         ram_token = secrets.token_hex(16)
-        ram_cleanup_path = f"/dev/shm/blind-ledger-witness-{ram_token}.json"
         command = [
             sys.executable,
             "-m",
@@ -846,160 +1315,115 @@ def _run_attempt(
         [
             "--output-dir",
             str(attempt_dir),
-            "--threads",
-            str(request["threads"]),
+            "--resource-policy",
+            str(status_path.parent / "resource_policy.json"),
             "--evidence-policy",
             str(policy.path),
         ]
     )
-    attempt_dir.parent.mkdir(parents=True, exist_ok=True)
-    stdout_path = attempt_dir.parent / f"{attempt_dir.name}.runner.stdout.log"
-    stderr_path = attempt_dir.parent / f"{attempt_dir.name}.runner.stderr.log"
-    started = time.monotonic()
     try:
-        with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr:
-            process = subprocess.Popen(
-                command,
-                cwd=ROOT,
-                stdout=stdout,
-                stderr=stderr,
-                text=True,
-                shell=False,
-                start_new_session=(os.name != "nt"),
-            )
-            last_heartbeat = 0.0
-            timed_out = False
-            while process.poll() is None:
-                elapsed = time.monotonic() - started
-                if elapsed >= request["timeout_seconds"]:
-                    timed_out = True
-                    process_tree_termination = _terminate_process_tree(
-                        process, force=True
-                    )
-                    try:
-                        process.wait(timeout=30)
-                    except subprocess.TimeoutExpired:
-                        process_tree_termination = {
-                            **process_tree_termination,
-                            "ok": False,
-                            "tree_confirmed": False,
-                            "error": "process remained alive after tree termination",
-                        }
-                    break
-                if elapsed - last_heartbeat >= 5.0:
-                    last_heartbeat = elapsed
-                    _update_status(
-                        status_path,
-                        status,
-                        heartbeat_at=_utc_now(),
-                        elapsed_seconds=round(elapsed, 3),
-                    )
-                time.sleep(1.0)
-            returncode = process.returncode
-    except OSError as exc:
-        if ram_cleanup_path is not None:
-            subprocess.run(
-                ["wsl", "rm", "-f", "--", ram_cleanup_path],
-                capture_output=True,
-                check=False,
-                timeout=30,
-            )
-        return False, True, {
-            "failure_class": "process_launch",
-            "error": str(exc),
-            "command": command,
-            "stdout_log": str(stdout_path),
-            "stderr_log": str(stderr_path),
-        }
-
-    if ram_cleanup_path is not None:
-        subprocess.run(
-            ["wsl", "rm", "-f", "--", ram_cleanup_path],
-            capture_output=True,
-            check=False,
-            timeout=30,
+        result = run_contained_process(
+            command,
+            cwd=ROOT,
+            policy=resource_policy,
+            owned_root=status_path.parent,
         )
-    elapsed = time.monotonic() - started
-    if timed_out:
-        if not process_tree_termination["tree_confirmed"]:
-            return False, False, {
-                "failure_class": "process_tree_termination",
-                "error": "timed out prover process tree could not be confirmed terminated",
-                "process_tree_termination": process_tree_termination,
-                "command": command,
-                "elapsed_seconds": elapsed,
-                "stdout_log": str(stdout_path),
-                "stderr_log": str(stderr_path),
-            }
-        return False, True, {
-            "failure_class": "timeout",
-            "error": f"proof command exceeded {request['timeout_seconds']} seconds",
-            "process_tree_termination": process_tree_termination,
-            "command": command,
-            "elapsed_seconds": elapsed,
-            "stdout_log": str(stdout_path),
-            "stderr_log": str(stderr_path),
+    except (OSError, RuntimeError, ValueError, ProvingProcessError) as exc:
+        _cleanup_ephemeral_diagnostics(attempt_dir)
+        code = getattr(exc, "code", "process_launch")
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+            code = "process_launch"
+        capacity_failure = code.startswith("proving_process_owned_")
+        return False, not capacity_failure, {
+            "failure_class": "queue_capacity" if capacity_failure else "process_launch",
+            "error_code": "queue_capacity" if capacity_failure else "process_launch",
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "cap_enforced": os.name == "nt",
+            "tree_confirmed": False,
         }
-    if returncode != 0:
+    elapsed = time.monotonic() - started
+    telemetry = {
+        "elapsed_seconds": round(elapsed, 3),
+        "stdout_bytes": min(result.stdout_bytes, MAX_STDOUT_BYTES),
+        "stderr_bytes": min(result.stderr_bytes, MAX_STDERR_BYTES),
+        "peak_job_commit_bytes": result.peak_job_commit_bytes,
+        "cap_bytes": result.cap_bytes,
+        "cap_enforced": result.cap_enforced,
+        "active_process_limit": result.active_process_limit,
+        "timed_out": result.timed_out,
+        "tree_confirmed": result.tree_confirmed,
+    }
+    if result.output_overflow:
+        _cleanup_ephemeral_diagnostics(attempt_dir)
+        return False, False, {
+            "failure_class": "output_cap",
+            "error_code": "output_cap",
+            **telemetry,
+        }
+    if getattr(result, "capacity_breach", False) is True:
+        _cleanup_ephemeral_diagnostics(attempt_dir)
+        return False, False, {
+            "failure_class": "queue_capacity",
+            "error_code": "queue_capacity",
+            **telemetry,
+        }
+    if result.timed_out:
+        _cleanup_ephemeral_diagnostics(attempt_dir)
+        return False, bool(result.tree_confirmed), {
+            "failure_class": "timeout" if result.tree_confirmed else "process_tree_termination",
+            "error_code": "timeout" if result.tree_confirmed else "process_tree_termination",
+            **telemetry,
+        }
+    if result.exit_code != 0:
+        _cleanup_ephemeral_diagnostics(attempt_dir)
         return False, False, {
             "failure_class": "proof_command",
-            "error": f"proof command exited with code {returncode}",
-            "command": command,
-            "returncode": returncode,
-            "elapsed_seconds": elapsed,
-            "stdout_log": str(stdout_path),
-            "stderr_log": str(stderr_path),
+            "error_code": "proof_command",
+            "return_code": result.exit_code,
+            **telemetry,
         }
     try:
         attestation_after = evidence_policy.attest_policy(
             policy, source_root=PROTECTED_CAIRO
         )
         if attestation_after != attestation_before:
-            raise RuntimeError("trusted proof source or tool attestation changed during the job")
+            raise RuntimeError("policy_attestation")
         verified = _validate_success_manifest(attempt_dir, policy)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError):
+        _cleanup_ephemeral_diagnostics(attempt_dir)
         return False, False, {
             "failure_class": "trusted_evidence_verification",
-            "error": str(exc),
-            "command": command,
-            "elapsed_seconds": elapsed,
-            "stdout_log": str(stdout_path),
-            "stderr_log": str(stderr_path),
+            "error_code": "trusted_evidence_verification",
+            **telemetry,
         }
     if request.get("input_kind") in {"batch_package", "encrypted_envelope"}:
-        manifest = _read_json(attempt_dir / "run_manifest.json")
+        manifest = _read_json(attempt_dir / "run_manifest.json", maximum_bytes=MAX_JSON_BYTES)
         package_record = manifest.get("batch_package")
         if not isinstance(package_record, dict) or package_record.get("package_sha256") != request.get(
             "package_sha256"
         ):
+            _cleanup_ephemeral_diagnostics(attempt_dir)
             return False, False, {
                 "failure_class": "batch_package_binding",
-                "error": "verified proof manifest is not bound to the queued batch package",
-                "command": command,
-                "elapsed_seconds": elapsed,
-                "stdout_log": str(stdout_path),
-                "stderr_log": str(stderr_path),
+                "error_code": "batch_package_binding",
+                **telemetry,
             }
         verified["package_sha256"] = request["package_sha256"]
         if request.get("input_kind") == "encrypted_envelope":
             verified["envelope_sha256"] = request["envelope_sha256"]
-    verified.update(
-        {
-            "command": command,
-            "elapsed_seconds": elapsed,
-            "stdout_log": str(stdout_path),
-            "stderr_log": str(stderr_path),
-        }
-    )
+    verified.update(telemetry)
+    _cleanup_ephemeral_diagnostics(attempt_dir)
     return True, False, verified
 
 
 def run_next_job(queue_root: Path) -> dict[str, Any] | None:
     root = _prepare_queue_root(queue_root)
+    queue_policy = derive_policy()
     with _QueueLock(root):
         _verified_audit_events(root)
+        _measure_queue(root, queue_policy)
         _recover_interrupted_jobs(root)
         job_dir = _next_queued_job(root)
         if job_dir is None:
@@ -1009,15 +1433,21 @@ def run_next_job(queue_root: Path) -> dict[str, Any] | None:
         request = _read_json(request_path)
         _validate_request(request, request_path)
         _require_job_audit_binding(root, request)
-        status = _read_json(status_path)
+        resource_policy = validate_bound_policy(
+            request["resource_policy"], request["resource_policy_sha256"]
+        )
+        status = _read_json(status_path, maximum_bytes=MAX_STATUS_BYTES)
         if status.get("request_sha256") != request.get("request_sha256"):
-            raise RuntimeError(f"job status is bound to a different request: {job_dir.name}")
+            raise _path_error("queue_status_binding")
 
-        completed_attempts = len(status.get("attempts", []))
-        for attempt_number in range(completed_attempts + 1, request["max_attempts"] + 1):
+        attempts_value = status.get("attempts", [])
+        if not isinstance(attempts_value, list) or len(attempts_value) > resource_policy.max_attempts:
+            raise _path_error("queue_attempt_history")
+        completed_attempts = len(attempts_value)
+        for attempt_number in range(completed_attempts + 1, resource_policy.max_attempts + 1):
             attempt_dir = job_dir / "attempts" / f"attempt-{attempt_number:03d}"
             if attempt_dir.exists():
-                raise RuntimeError(f"refusing to overwrite existing attempt directory: {attempt_dir}")
+                raise _path_error("queue_attempt_directory")
             _update_status(
                 status_path,
                 status,
@@ -1038,6 +1468,20 @@ def run_next_job(queue_root: Path) -> dict[str, Any] | None:
                 status,
                 root,
             )
+            try:
+                _measure_queue(root, resource_policy)
+            except RuntimeError:
+                succeeded = False
+                retryable = False
+                result = {
+                    "failure_class": "queue_capacity",
+                    "error_code": "queue_capacity",
+                    "elapsed_seconds": result.get("elapsed_seconds", 0.0),
+                    "stdout_bytes": result.get("stdout_bytes", 0),
+                    "stderr_bytes": result.get("stderr_bytes", 0),
+                    "cap_enforced": result.get("cap_enforced", os.name == "nt"),
+                    "tree_confirmed": result.get("tree_confirmed", True),
+                }
             attempt_record = {
                 "attempt": attempt_number,
                 "finished_at": _utc_now(),
@@ -1056,6 +1500,7 @@ def run_next_job(queue_root: Path) -> dict[str, Any] | None:
                     "succeeded": succeeded,
                     "failure_class": result.get("failure_class", ""),
                     "proof_sha256": result.get("proof_sha256", ""),
+                    "resource_policy_sha256": request["resource_policy_sha256"],
                 },
             )
             if succeeded:
@@ -1068,7 +1513,7 @@ def run_next_job(queue_root: Path) -> dict[str, Any] | None:
                     result=result,
                 )
                 return status
-            if retryable and attempt_number < request["max_attempts"]:
+            if retryable and attempt_number < resource_policy.max_attempts:
                 _update_status(
                     status_path,
                     status,
@@ -1087,7 +1532,7 @@ def run_next_job(queue_root: Path) -> dict[str, Any] | None:
                 last_failure=result,
             )
             return status
-        raise RuntimeError(f"job has no remaining attempts but is not terminal: {job_dir.name}")
+        raise _path_error("queue_attempt_exhaustion")
 
 
 def _print_status(queue_root: Path, job_id: str | None) -> None:
@@ -1143,9 +1588,6 @@ def main() -> None:
     enqueue.add_argument("--queue-root", type=Path, required=True)
     enqueue.add_argument("--job-id", required=True)
     enqueue.add_argument("--claim-count", type=int, required=True)
-    enqueue.add_argument("--threads", type=int, default=_default_threads())
-    enqueue.add_argument("--max-attempts", type=int, default=2)
-    enqueue.add_argument("--timeout-seconds", type=int, default=1800)
 
     enqueue_package = subparsers.add_parser(
         "enqueue-package", help="Queue one signed immutable batch witness package."
@@ -1153,9 +1595,6 @@ def main() -> None:
     enqueue_package.add_argument("--queue-root", type=Path, required=True)
     enqueue_package.add_argument("--job-id", required=True)
     enqueue_package.add_argument("--batch-package", type=Path, required=True)
-    enqueue_package.add_argument("--threads", type=int, default=_default_threads())
-    enqueue_package.add_argument("--max-attempts", type=int, default=2)
-    enqueue_package.add_argument("--timeout-seconds", type=int, default=1800)
 
     run_next = subparsers.add_parser("run-next", help="Run one queued job under an exclusive lock.")
     run_next.add_argument("--queue-root", type=Path, required=True)
@@ -1175,9 +1614,6 @@ def main() -> None:
             args.queue_root,
             job_id=args.job_id,
             claim_count=args.claim_count,
-            threads=args.threads,
-            max_attempts=args.max_attempts,
-            timeout_seconds=args.timeout_seconds,
         )
         print(f"job_id={result['job_id']}")
         print("state=queued")
@@ -1188,9 +1624,6 @@ def main() -> None:
             args.queue_root,
             job_id=args.job_id,
             batch_package_path=args.batch_package,
-            threads=args.threads,
-            max_attempts=args.max_attempts,
-            timeout_seconds=args.timeout_seconds,
         )
         print(f"job_id={result['job_id']}")
         print("state=queued")
@@ -1206,7 +1639,7 @@ def main() -> None:
         if result["state"] == "succeeded":
             verified = result["result"]
             print(f"proof_sha256={verified['proof_sha256']}")
-            print(f"proof_path={verified['proof_path']}")
+            print(f"proof_storage_key={verified['proof_storage_key']}")
             print(
                 "settlement_contract_verification_run="
                 f"{str(verified['settlement_contract_verification_run']).lower()}"
@@ -1223,6 +1656,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        print(str(exc), file=sys.stderr)
-        raise SystemExit(1) from exc
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        print("queue_request_rejected", file=sys.stderr)
+        raise SystemExit(1) from None

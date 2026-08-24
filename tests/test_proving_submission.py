@@ -92,23 +92,20 @@ class ProvingSubmissionTests(unittest.TestCase):
             batch_record=self.record,
             batch_package_path=path,
             authenticated_principal=actor,
-            threads=8,
-            max_attempts=2,
-            timeout_seconds=300,
         )
 
     def test_authorized_batch_is_bound_and_routed_to_its_agency_queue(self) -> None:
         status = self._submit(self._package_path())
         self.assertEqual("queued", status["state"])
-        self.assertEqual("agency-a", Path(status["agency_queue_root"]).name)
+        self.assertEqual("agencies/agency-a", status["agency_queue_storage_key"])
 
     def test_wrong_principal_and_changed_public_outputs_are_rejected(self) -> None:
         path = self._package_path()
-        with self.assertRaisesRegex(RuntimeError, "principal does not match"):
+        with self.assertRaisesRegex(RuntimeError, "queue_submission_rejected"):
             self._submit(path, actor="attacker@agency.gov")
 
         changed = self._package_path(outputs=["0x2", "0x9"])
-        with self.assertRaisesRegex(RuntimeError, "public outputs do not match"):
+        with self.assertRaisesRegex(RuntimeError, "queue_submission_rejected"):
             self._submit(changed)
 
     def test_cross_agency_key_use_and_package_replay_are_rejected(self) -> None:
@@ -122,23 +119,20 @@ class ProvingSubmissionTests(unittest.TestCase):
 
         path = self._package_path()
         self._submit(path)
-        with self.assertRaisesRegex(RuntimeError, "replay rejected"):
+        with self.assertRaisesRegex(RuntimeError, "queue_package_replay"):
             self._submit(path, job_id="job-2")
 
     def test_tampered_batch_record_is_rejected_before_queueing(self) -> None:
         path = self._package_path()
         tampered = dict(self.record)
         tampered["claim_count"] = 2
-        with self.assertRaisesRegex(RuntimeError, "integrity check failed"):
+        with self.assertRaisesRegex(RuntimeError, "queue_submission_rejected"):
             proving_submission.submit_batch_package(
                 self.root / "queue",
                 job_id="tampered-record",
                 batch_record=tampered,
                 batch_package_path=path,
                 authenticated_principal="operator@agency.gov",
-                threads=8,
-                max_attempts=2,
-                timeout_seconds=300,
             )
 
     def test_future_and_expired_packages_are_rejected_before_queueing(self) -> None:
@@ -175,16 +169,13 @@ class ProvingSubmissionTests(unittest.TestCase):
         )
         path = self.root / "future-package.json"
         batch_package.write_batch_package(path, package)
-        with self.assertRaisesRegex(RuntimeError, "creation time is in the future"):
+        with self.assertRaisesRegex(RuntimeError, "queue_submission_rejected"):
             proving_submission.submit_batch_package(
                 self.root / "queue",
                 job_id="future-job",
                 batch_record=future_record,
                 batch_package_path=path,
                 authenticated_principal="operator@agency.gov",
-                threads=8,
-                max_attempts=2,
-                timeout_seconds=300,
             )
 
         expired_record = proving_submission.create_batch_record(
@@ -223,22 +214,19 @@ class ProvingSubmissionTests(unittest.TestCase):
         )
         expired_path = self.root / "expired-package.json"
         batch_package.write_batch_package(expired_path, expired_package)
-        with self.assertRaisesRegex(RuntimeError, "retention window has expired"):
+        with self.assertRaisesRegex(RuntimeError, "queue_submission_rejected"):
             proving_submission.submit_batch_package(
                 self.root / "queue",
                 job_id="expired-job",
                 batch_record=expired_record,
                 batch_package_path=expired_path,
                 authenticated_principal="operator@agency.gov",
-                threads=8,
-                max_attempts=2,
-                timeout_seconds=300,
             )
 
     def test_plaintext_witness_package_is_rejected_in_production(self) -> None:
         path = self._package_path()
         with mock.patch.dict(os.environ, {"BL_ENV": "production"}):
-            with self.assertRaisesRegex(RuntimeError, "encrypted witness envelope"):
+            with self.assertRaisesRegex(RuntimeError, "queue_plaintext_production"):
                 self._submit(path)
 
 

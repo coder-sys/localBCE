@@ -85,9 +85,6 @@ class EncryptedProvingSubmissionTests(unittest.TestCase):
                     batch_record=record,
                     encrypted_envelope_path=path,
                     authenticated_principal="operator@agency.gov",
-                    threads=8,
-                    max_attempts=2,
-                    timeout_seconds=300,
                 )
                 self.assertEqual("queued", status["state"])
                 queue_text = "\n".join(
@@ -106,23 +103,17 @@ class EncryptedProvingSubmissionTests(unittest.TestCase):
                     batch_record=record,
                     encrypted_envelope_path=path,
                     authenticated_principal="operator@agency.gov",
-                    threads=8,
-                    max_attempts=2,
-                    timeout_seconds=300,
                 )
                 self.assertEqual("queued", duplicate["state"])
                 self.assertEqual([], list((agency_queue / "package_claims").iterdir()))
 
-                with self.assertRaisesRegex(RuntimeError, "principal does not match"):
+                with self.assertRaisesRegex(RuntimeError, "queue_submission_rejected"):
                     proving_submission.submit_encrypted_batch_package(
                         root / "queue",
                         job_id="job-attacker",
                         batch_record=record,
                         encrypted_envelope_path=path,
                         authenticated_principal="attacker@agency.gov",
-                        threads=8,
-                        max_attempts=2,
-                        timeout_seconds=300,
                     )
                 self.assertFalse((agency_queue / "jobs" / "job-attacker").exists())
 

@@ -8,10 +8,11 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 from typing import Any, Mapping
 
-from tools.batch_package import load_batch_package
-from tools.encrypted_witness_envelope import load_envelope, validate_envelope_authorization
+from tools.batch_package import validate_batch_package
+from tools.encrypted_witness_envelope import validate_envelope, validate_envelope_authorization
 from tools.proving_job_runner import enqueue_encrypted_package_job, enqueue_package_job
 
 
@@ -27,6 +28,76 @@ _BATCH_RECORD_FIELDS = {
     "source_system",
     "record_sha256",
 }
+_MAX_SUBMISSION_JSON_BYTES = 8 * 1024 * 1024
+_PUBLIC_CODE_PATTERN = re.compile(
+    r"(?:batch|encrypted|evidence|proof|proving|queue|trusted)_[a-z0-9_]{1,95}\Z"
+)
+
+
+def _public_call(operation: Any, fallback: str) -> Any:
+    code = fallback
+    try:
+        return operation()
+    except Exception as exc:
+        candidate = str(exc)
+        if _PUBLIC_CODE_PATTERN.fullmatch(candidate):
+            code = candidate
+    raise RuntimeError(code)
+
+
+def _bounded_json(path: Path, maximum_bytes: int = _MAX_SUBMISSION_JSON_BYTES) -> dict[str, Any]:
+    descriptor: int | None = None
+    try:
+        before = os.lstat(path)
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise RuntimeError("submission_file_not_regular")
+        if before.st_size > maximum_bytes:
+            raise RuntimeError("submission_file_cap")
+        descriptor = os.open(path, os.O_RDONLY | (os.O_BINARY if hasattr(os, "O_BINARY") else 0))
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > maximum_bytes:
+            raise RuntimeError("submission_file_identity")
+        raw_buffer = bytearray()
+        while len(raw_buffer) <= maximum_bytes:
+            chunk = os.read(descriptor, maximum_bytes + 1 - len(raw_buffer))
+            if not chunk:
+                break
+            raw_buffer.extend(chunk)
+            if len(raw_buffer) > maximum_bytes:
+                raise RuntimeError("submission_file_cap")
+        after_open = os.fstat(descriptor)
+    except RuntimeError:
+        raise
+    except (OSError, ValueError):
+        raise RuntimeError("submission_file_invalid") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                raise RuntimeError("submission_file_invalid") from None
+    try:
+        after = os.lstat(path)
+    except OSError:
+        raise RuntimeError("submission_file_identity") from None
+    expected = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISREG(after.st_mode)
+        or len(raw_buffer) != before.st_size
+        or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != expected
+        or (after_open.st_dev, after_open.st_ino, after_open.st_size, after_open.st_mtime_ns)
+        != expected
+        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != expected
+    ):
+        raise RuntimeError("submission_file_identity")
+    try:
+        value = json.loads(bytes(raw_buffer).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RuntimeError("submission_file_invalid") from None
+    if not isinstance(value, dict):
+        raise RuntimeError("submission_file_object")
+    return value
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -96,8 +167,8 @@ def validate_batch_record(record: object) -> dict[str, Any]:
     _hex_outputs(record.get("expected_output_values"))
     try:
         created_at = datetime.fromisoformat(str(record.get("created_at")))
-    except ValueError as exc:
-        raise RuntimeError("invalid batch record created_at") from exc
+    except ValueError:
+        raise RuntimeError("invalid batch record created_at") from None
     if created_at.tzinfo is None:
         raise RuntimeError("batch record created_at must include a timezone")
     if not isinstance(record.get("source_system"), str) or not record["source_system"]:
@@ -162,32 +233,26 @@ def submit_batch_package(
     batch_record: Mapping[str, Any],
     batch_package_path: Path,
     authenticated_principal: str,
-    threads: int,
-    max_attempts: int,
-    timeout_seconds: int,
 ) -> dict[str, Any]:
-    if os.environ.get("BL_ENV", "").strip().lower() in {"prod", "production"}:
-        raise RuntimeError(
-            "production proving requires an encrypted witness envelope; plaintext package rejected"
+    def operation() -> dict[str, Any]:
+        if os.environ.get("BL_ENV", "").strip().lower() in {"prod", "production"}:
+            raise RuntimeError("queue_plaintext_production")
+        record = validate_batch_record(dict(batch_record))
+        package = validate_batch_package(_bounded_json(batch_package_path.resolve()))
+        validate_package_submission(
+            record,
+            package,
+            authenticated_principal=authenticated_principal,
         )
-    record = validate_batch_record(dict(batch_record))
-    package = load_batch_package(batch_package_path.resolve())
-    validate_package_submission(
-        record,
-        package,
-        authenticated_principal=authenticated_principal,
-    )
+        agency_root = queue_root.resolve() / "agencies" / record["agency_id"]
+        status = enqueue_package_job(
+            agency_root,
+            job_id=job_id,
+            batch_package_path=batch_package_path,
+        )
+        return {**status, "agency_queue_storage_key": f"agencies/{record['agency_id']}"}
 
-    agency_root = queue_root.resolve() / "agencies" / record["agency_id"]
-    status = enqueue_package_job(
-        agency_root,
-        job_id=job_id,
-        batch_package_path=batch_package_path,
-        threads=threads,
-        max_attempts=max_attempts,
-        timeout_seconds=timeout_seconds,
-    )
-    return {**status, "agency_queue_root": str(agency_root)}
+    return _public_call(operation, "queue_submission_rejected")
 
 
 def submit_encrypted_batch_package(
@@ -197,29 +262,28 @@ def submit_encrypted_batch_package(
     batch_record: Mapping[str, Any],
     encrypted_envelope_path: Path,
     authenticated_principal: str,
-    threads: int,
-    max_attempts: int,
-    timeout_seconds: int,
 ) -> dict[str, Any]:
-    record = validate_batch_record(dict(batch_record))
-    envelope = load_envelope(encrypted_envelope_path.resolve())
-    validate_envelope_authorization(
-        envelope,
-        authenticated_principal=authenticated_principal,
-    )
-    if envelope["agency_id"] != record["agency_id"]:
-        raise RuntimeError("encrypted envelope agency does not match the batch record")
-    if envelope["claim_count"] != record["claim_count"]:
-        raise RuntimeError("encrypted envelope claim count does not match the batch record")
-    agency_root = queue_root.resolve() / "agencies" / record["agency_id"]
-    status = enqueue_encrypted_package_job(
-        agency_root,
-        job_id=job_id,
-        encrypted_envelope_path=encrypted_envelope_path,
-        batch_record=record,
-        authenticated_principal=authenticated_principal,
-        threads=threads,
-        max_attempts=max_attempts,
-        timeout_seconds=timeout_seconds,
-    )
-    return {**status, "agency_queue_root": str(agency_root)}
+    def operation() -> dict[str, Any]:
+        record = validate_batch_record(dict(batch_record))
+        envelope = validate_envelope(
+            _bounded_json(encrypted_envelope_path.resolve(), 2 * 1024 * 1024)
+        )
+        validate_envelope_authorization(
+            envelope,
+            authenticated_principal=authenticated_principal,
+        )
+        if envelope["agency_id"] != record["agency_id"]:
+            raise RuntimeError("queue_envelope_binding")
+        if envelope["claim_count"] != record["claim_count"]:
+            raise RuntimeError("queue_envelope_binding")
+        agency_root = queue_root.resolve() / "agencies" / record["agency_id"]
+        status = enqueue_encrypted_package_job(
+            agency_root,
+            job_id=job_id,
+            encrypted_envelope_path=encrypted_envelope_path,
+            batch_record=record,
+            authenticated_principal=authenticated_principal,
+        )
+        return {**status, "agency_queue_storage_key": f"agencies/{record['agency_id']}"}
+
+    return _public_call(operation, "queue_submission_rejected")

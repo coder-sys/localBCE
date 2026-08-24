@@ -35,14 +35,11 @@ class ProvingJobRunnerTests(unittest.TestCase):
         self._temporary.cleanup()
         self._environment.stop()
 
-    def _enqueue(self, *, job_id: str = "job-001", max_attempts: int = 2) -> dict:
+    def _enqueue(self, *, job_id: str = "job-001") -> dict:
         return runner.enqueue_job(
             self.queue_root,
             job_id=job_id,
             claim_count=1,
-            threads=8,
-            max_attempts=max_attempts,
-            timeout_seconds=300,
         )
 
     def _package_path(self) -> Path:
@@ -68,30 +65,30 @@ class ProvingJobRunnerTests(unittest.TestCase):
         runner._validate_request(request, request_path)
         self.assertEqual("queued", status["state"])
         self.assertEqual(request["request_sha256"], status["request_sha256"])
-        self.assertEqual(8, request["threads"])
+        self.assertEqual(8, request["resource_policy"]["threads"])
 
     def test_duplicate_job_id_is_never_overwritten(self) -> None:
         self._enqueue()
-        with self.assertRaisesRegex(RuntimeError, "cannot be overwritten"):
+        with self.assertRaisesRegex(RuntimeError, "queue_duplicate_job"):
             self._enqueue()
 
     def test_tampered_request_fails_integrity_check(self) -> None:
         self._enqueue()
         request_path = self.queue_root / "jobs" / "job-001" / "request.json"
         request = json.loads(request_path.read_text(encoding="utf-8"))
-        request["threads"] = 16
+        request["resource_policy"]["threads"] = 16
 
-        with self.assertRaisesRegex(RuntimeError, "integrity check failed"):
+        with self.assertRaisesRegex(RuntimeError, "queue_request_integrity"):
             runner._validate_request(request, request_path)
 
     def test_queue_root_inside_source_tree_is_rejected(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "outside the application source tree"):
+        with self.assertRaisesRegex(RuntimeError, "queue_root_inside_source"):
             runner._prepare_queue_root(runner.ROOT / ".forbidden-proving-queue")
 
     def test_exclusive_lock_rejects_a_second_runner(self) -> None:
         root = runner._prepare_queue_root(self.queue_root)
         with runner._QueueLock(root):
-            with self.assertRaisesRegex(RuntimeError, "another proof runner"):
+            with self.assertRaisesRegex(RuntimeError, "queue_runner_locked"):
                 with runner._QueueLock(root):
                     self.fail("a second proof runner acquired the same queue")
 
@@ -106,7 +103,7 @@ class ProvingJobRunnerTests(unittest.TestCase):
             "status": "independently_verified",
             "evidence_scope": evidence_policy.POLICY_PURPOSE,
             "evidence_policy": {
-                "path": str(policy.path),
+                "storage_key": "trusted-evidence-policy",
                 "registry_sha3_512": policy.registry_sha3_512,
                 "sha3_512": policy.sha3_512,
             },
@@ -124,7 +121,7 @@ class ProvingJobRunnerTests(unittest.TestCase):
                 "source_manifest_sha3_512"
             ],
             "proof": {
-                "path": str(proof_path.resolve()),
+                "path": "proof.json",
                 "bytes": proof_path.stat().st_size,
                 "sha256": runner._sha256_file(proof_path),
                 "sha3_512": evidence_policy.sha3_512_file(proof_path),
@@ -138,7 +135,7 @@ class ProvingJobRunnerTests(unittest.TestCase):
         self.assertTrue(result["independent_verifier"])
 
         proof_path.write_bytes(b"tampered-proof-bytes")
-        with self.assertRaisesRegex(RuntimeError, "does not match the proof file"):
+        with self.assertRaisesRegex(RuntimeError, "queue_manifest_proof_binding"):
             runner._validate_success_manifest(attempt_dir, policy)
 
     def test_child_authored_equal_provenance_is_not_trusted(self) -> None:
@@ -156,28 +153,29 @@ class ProvingJobRunnerTests(unittest.TestCase):
                 "protected_source_manifest_before": "f" * 64,
                 "protected_source_manifest_after": "f" * 64,
                 "proof": {
-                    "path": str(proof_path.resolve()),
+                    "path": "proof.json",
                     "bytes": proof_path.stat().st_size,
                     "sha256": runner._sha256_file(proof_path),
                 },
             },
         )
 
-        with self.assertRaisesRegex(RuntimeError, "independently provisioned"):
+        with self.assertRaisesRegex(RuntimeError, "queue_evidence_policy_required"):
             runner._validate_success_manifest(attempt_dir)
 
     def test_transient_failure_retries_but_permanent_failure_does_not(self) -> None:
-        self._enqueue(job_id="retry-job", max_attempts=2)
+        self._enqueue(job_id="retry-job")
         verified_result = {
             "proof_sha256": "b" * 64,
-            "proof_path": str(self.queue_root / "proof.json"),
+            "proof_storage_key": "proof.json",
+            "manifest_storage_key": "run_manifest.json",
             "settlement_contract_verification_run": False,
         }
         with mock.patch.object(
             runner,
             "_run_attempt",
             side_effect=[
-                (False, True, {"failure_class": "timeout", "error": "timed out"}),
+                (False, True, {"failure_class": "timeout", "error_code": "timeout"}),
                 (True, False, verified_result),
             ],
         ) as run_attempt:
@@ -188,14 +186,14 @@ class ProvingJobRunnerTests(unittest.TestCase):
         self.assertEqual(2, len(retry_status["attempts"]))
         self.assertEqual(2, run_attempt.call_count)
 
-        self._enqueue(job_id="permanent-job", max_attempts=3)
+        self._enqueue(job_id="permanent-job")
         with mock.patch.object(
             runner,
             "_run_attempt",
             return_value=(
                 False,
                 False,
-                {"failure_class": "verification_manifest", "error": "invalid proof"},
+                {"failure_class": "verification_manifest", "error_code": "verification_manifest"},
             ),
         ) as run_attempt:
             permanent_status = runner.run_next_job(self.queue_root)
@@ -210,9 +208,6 @@ class ProvingJobRunnerTests(unittest.TestCase):
             self.queue_root,
             job_id="real-batch-job",
             batch_package_path=self._package_path(),
-            threads=8,
-            max_attempts=2,
-            timeout_seconds=300,
         )
         request_path = self.queue_root / "jobs" / "real-batch-job" / "request.json"
         request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -225,7 +220,7 @@ class ProvingJobRunnerTests(unittest.TestCase):
         package = json.loads(snapshot.read_text(encoding="utf-8"))
         package["witness"]["serialized_arguments_hex_json"][0] = "0x9"
         snapshot.write_text(json.dumps(package), encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "witness integrity"):
+        with self.assertRaisesRegex(RuntimeError, "queue_package_invalid"):
             runner._validate_request(request, request_path)
 
     def test_hash_chained_audit_log_detects_tampering(self) -> None:
@@ -236,7 +231,7 @@ class ProvingJobRunnerTests(unittest.TestCase):
         tampered = json.loads(audit_path.read_text(encoding="utf-8"))
         tampered["details"]["job_id"] = "forged"
         audit_path.write_text(json.dumps(tampered) + "\n", encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "integrity check failed"):
+        with self.assertRaisesRegex(RuntimeError, "queue_audit_integrity"):
             runner._verified_audit_events(self.queue_root)
 
     def test_stale_local_audit_lock_is_recovered_but_live_lock_is_not(self) -> None:
@@ -256,44 +251,23 @@ class ProvingJobRunnerTests(unittest.TestCase):
         self.assertEqual("recovery_test", runner._verified_audit_events(root)[0]["event_type"])
 
         with runner._AuditLock(root):
-            with self.assertRaisesRegex(RuntimeError, "audit log is locked"):
+            with self.assertRaisesRegex(RuntimeError, "queue_audit_locked"):
                 with runner._AuditLock(root):
                     self.fail("a second audit writer acquired a live lock")
 
     def test_process_probe_recognizes_the_current_windows_process_without_signaling_it(self) -> None:
         self.assertTrue(runner._process_is_alive(os.getpid()))
 
-    def test_windows_timeout_uses_fail_closed_process_tree_termination(self) -> None:
-        process = mock.Mock(pid=1234)
-        process.poll.return_value = None
-        taskkill = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
-        with (
-            mock.patch.object(runner.os, "name", "nt"),
-            mock.patch.object(runner.subprocess, "run", taskkill),
-        ):
-            result = runner._terminate_process_tree(process, force=True)
-
-        self.assertTrue(result["ok"])
-        self.assertTrue(result["tree_confirmed"])
-        taskkill.assert_called_once_with(
-            ["taskkill", "/PID", "1234", "/T", "/F"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        process.kill.assert_not_called()
-
     def test_job_without_matching_enqueue_audit_event_is_never_run(self) -> None:
         self._enqueue()
         (self.queue_root / "audit.jsonl").unlink()
         with mock.patch.object(runner, "_run_attempt") as run_attempt:
-            with self.assertRaisesRegex(RuntimeError, "no matching verified enqueue audit event"):
+            with self.assertRaisesRegex(RuntimeError, "queue_enqueue_audit_binding"):
                 runner.run_next_job(self.queue_root)
         run_attempt.assert_not_called()
 
     def test_interrupted_attempt_is_recovered_without_overwriting_it(self) -> None:
-        self._enqueue(max_attempts=2)
+        self._enqueue()
         status_path = self.queue_root / "jobs" / "job-001" / "status.json"
         status = json.loads(status_path.read_text(encoding="utf-8"))
         runner._update_status(status_path, status, state="running", active_attempt=1)
@@ -305,7 +279,8 @@ class ProvingJobRunnerTests(unittest.TestCase):
                 False,
                 {
                     "proof_sha256": "b" * 64,
-                    "proof_path": str(self.queue_root / "proof.json"),
+                    "proof_storage_key": "proof.json",
+                    "manifest_storage_key": "run_manifest.json",
                     "settlement_contract_verification_run": False,
                 },
             ),
@@ -320,9 +295,6 @@ class ProvingJobRunnerTests(unittest.TestCase):
             self.queue_root,
             job_id="retained-job",
             batch_package_path=self._package_path(),
-            threads=8,
-            max_attempts=2,
-            timeout_seconds=300,
         )
         report = runner.retention_report(
             self.queue_root, now=datetime(2040, 1, 1, tzinfo=timezone.utc)
@@ -337,18 +309,12 @@ class ProvingJobRunnerTests(unittest.TestCase):
             self.queue_root,
             job_id="first-package-job",
             batch_package_path=package_path,
-            threads=8,
-            max_attempts=2,
-            timeout_seconds=300,
         )
-        with self.assertRaisesRegex(RuntimeError, "replay rejected"):
+        with self.assertRaisesRegex(RuntimeError, "queue_package_replay"):
             runner.enqueue_package_job(
                 self.queue_root,
                 job_id="replayed-package-job",
                 batch_package_path=package_path,
-                threads=8,
-                max_attempts=2,
-                timeout_seconds=300,
             )
 
     def test_authenticated_reservation_is_atomic_and_same_job_idempotent(self) -> None:
@@ -361,20 +327,17 @@ class ProvingJobRunnerTests(unittest.TestCase):
         )
         self.assertEqual("job-a", reservation["job_id"])
         self.assertEqual(package_sha256, reservation["package_sha256"])
-        with self.assertRaisesRegex(RuntimeError, "replay rejected"):
+        with self.assertRaisesRegex(RuntimeError, "queue_package_replay"):
             runner._reserve_package_once(root, package_sha256, "job-b")
 
     def test_production_refuses_direct_plaintext_package_queue_bypass(self) -> None:
         package_path = self._package_path()
         with mock.patch.dict(os.environ, {"BL_ENV": "production"}):
-            with self.assertRaisesRegex(RuntimeError, "plaintext witness package queues"):
+            with self.assertRaisesRegex(RuntimeError, "queue_plaintext_production"):
                 runner.enqueue_package_job(
                     self.queue_root,
                     job_id="forbidden-production-job",
                     batch_package_path=package_path,
-                    threads=8,
-                    max_attempts=2,
-                    timeout_seconds=300,
                 )
 
 

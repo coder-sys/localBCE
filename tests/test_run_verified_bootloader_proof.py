@@ -25,25 +25,24 @@ class VerifiedBootloaderProofTests(unittest.TestCase):
                 "expected_output_values": ["0x2"],
             },
         }
-        with mock.patch.object(runner, "load_batch_package", return_value=package), mock.patch.object(
-            runner.measure, "_build_batch_witness"
-        ) as synthetic_builder:
+        with mock.patch.object(runner, "_read_bounded_json", return_value=package), mock.patch.object(
+            runner, "validate_batch_package", return_value=package
+        ):
             bundle, claim_count, loaded_package = runner._load_proving_input(
                 None, runner.Path("package.json")
             )
-        synthetic_builder.assert_not_called()
         self.assertEqual(7, claim_count)
         self.assertEqual(["0x1"], bundle["serialized_arguments_hex_json"])
         self.assertIs(package, loaded_package)
 
     def test_synthetic_input_is_rejected_in_production(self) -> None:
         with mock.patch.dict(runner.os.environ, {"BL_ENV": "production"}):
-            with self.assertRaisesRegex(RuntimeError, "disabled in production"):
+            with self.assertRaisesRegex(RuntimeError, "proof_synthetic_production"):
                 runner._load_proving_input(1, None)
 
     def test_plaintext_package_input_is_rejected_in_production(self) -> None:
         with mock.patch.dict(runner.os.environ, {"BL_ENV": "production"}):
-            with self.assertRaisesRegex(RuntimeError, "plaintext witness package proving"):
+            with self.assertRaisesRegex(RuntimeError, "proof_plaintext_production"):
                 runner._load_proving_input(None, runner.Path("package.json"))
 
     def test_default_blake_channel_does_not_override_upstream_defaults(self) -> None:
@@ -73,7 +72,7 @@ class VerifiedBootloaderProofTests(unittest.TestCase):
         )
 
     def test_unknown_channel_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unsupported prover channel"):
+        with self.assertRaisesRegex(ValueError, "proof_channel"):
             runner._prover_parameters("unknown")
 
     def test_piped_package_builds_the_same_bundle_without_a_plaintext_file(self) -> None:
@@ -91,12 +90,12 @@ class VerifiedBootloaderProofTests(unittest.TestCase):
         self.assertIs(package, loaded)
 
     def test_wsl_ram_staging_sends_payload_over_stdin(self) -> None:
-        completed = mock.Mock(returncode=0, stdout=b"", stderr=b"")
-        with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(runner, "_run", return_value=completed) as run:
             runner._write_wsl_ram_file(
                 "/dev/shm/blind-ledger-witness-test.json", b"[\"0x1\"]"
             )
-        self.assertEqual(b"[\"0x1\"]", run.call_args.kwargs["input"])
+        self.assertEqual(b"[\"0x1\"]", run.call_args.kwargs["input_bytes"])
         self.assertNotIn("0x1", " ".join(run.call_args.args[0]))
 
 

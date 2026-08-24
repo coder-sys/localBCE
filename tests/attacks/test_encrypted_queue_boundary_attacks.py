@@ -142,9 +142,6 @@ class EncryptedQueueBoundaryAttackTests(unittest.TestCase):
                     batch_record=self.record,
                     encrypted_envelope_path=path,
                     authenticated_principal="synthetic-operator@example.invalid",
-                    threads=1,
-                    max_attempts=1,
-                    timeout_seconds=60,
                 )
                 claims = (
                     root
@@ -155,7 +152,7 @@ class EncryptedQueueBoundaryAttackTests(unittest.TestCase):
                 )
                 self.assertEqual([], list(claims.iterdir()))
 
-                with self.assertRaisesRegex(RuntimeError, "principal does not match"):
+                with self.assertRaisesRegex(RuntimeError, "encrypted_package_rejected"):
                     isolated_proving_worker.decrypt_authorized_package(
                         path,
                         batch_record=self.record,
@@ -177,7 +174,7 @@ class EncryptedQueueBoundaryAttackTests(unittest.TestCase):
                 )
                 forged_path = root / "forged-authorization.envelope.json"
                 encrypted.write_envelope(forged_path, forged)
-                with self.assertRaisesRegex(RuntimeError, "authorization failed"):
+                with self.assertRaisesRegex(RuntimeError, "encrypted_package_rejected"):
                     isolated_proving_worker.decrypt_authorized_package(
                         forged_path,
                         batch_record=self.record,
@@ -196,7 +193,7 @@ class EncryptedQueueBoundaryAttackTests(unittest.TestCase):
                 invalid_path = root / "invalid.envelope.json"
                 encrypted.write_envelope(invalid_path, invalid)
                 invalid_queue = root / "invalid-queue"
-                with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+                with self.assertRaisesRegex(RuntimeError, "encrypted_package_rejected"):
                     isolated_proving_worker.decrypt_authorize_and_reserve(
                         invalid_path,
                         batch_record=self.record,

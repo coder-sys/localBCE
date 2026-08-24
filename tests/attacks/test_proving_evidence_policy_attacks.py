@@ -14,6 +14,7 @@ from tests.proving_policy_fixtures import trusted_policy, valid_policy_value
 from tools import proving_evidence_policy as evidence_policy
 from tools import proving_job_runner
 from tools import run_verified_bootloader_proof
+from tools.proving_resource_policy import derive_policy, policy_file_bytes
 
 
 class ProvingEvidencePolicyAttackTests(unittest.TestCase):
@@ -177,14 +178,16 @@ class ProvingEvidencePolicyAttackTests(unittest.TestCase):
     def test_job_runner_does_not_launch_without_independent_policy(self) -> None:
         attempt = self.root / "attempt-no-policy"
         status_path = self.root / "status.json"
+        resource_policy = derive_policy({"BL_PROVER_THREADS": "1"})
+        (self.root / "resource_policy.json").write_bytes(policy_file_bytes(resource_policy))
         request = {
             "input_kind": "synthetic",
             "claim_count": 1,
-            "threads": 1,
-            "timeout_seconds": 30,
+            "resource_policy": resource_policy.as_json(),
+            "resource_policy_sha256": resource_policy.digest,
         }
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
-            proving_job_runner.subprocess, "Popen"
+            proving_job_runner, "run_contained_process"
         ) as launch:
             succeeded, transient, result = proving_job_runner._run_attempt(
                 request,
@@ -211,7 +214,7 @@ class ProvingEvidencePolicyAttackTests(unittest.TestCase):
             "status": "independently_verified",
             "evidence_scope": evidence_policy.POLICY_PURPOSE,
             "evidence_policy": {
-                "path": str(policy.path),
+                "storage_key": "trusted-evidence-policy",
                 "registry_sha3_512": policy.registry_sha3_512,
                 "sha3_512": policy.sha3_512,
             },
@@ -229,14 +232,14 @@ class ProvingEvidencePolicyAttackTests(unittest.TestCase):
                 "source_manifest_sha3_512"
             ],
             "proof": {
-                "path": str(proof_path.resolve()),
+                "path": "proof.json",
                 "bytes": proof_path.stat().st_size,
                 "sha256": proving_job_runner._sha256_file(proof_path),
                 "sha3_512": evidence_policy.sha3_512_file(proof_path),
             },
         }
         proving_job_runner._write_json_atomic(attempt / "run_manifest.json", manifest)
-        with self.assertRaisesRegex(RuntimeError, "provenance is missing, altered, or unapproved"):
+        with self.assertRaisesRegex(RuntimeError, "queue_manifest_provenance"):
             proving_job_runner._validate_success_manifest(attempt, policy)
 
     def test_release_runner_has_distinct_prove_and_verify_commands(self) -> None:
