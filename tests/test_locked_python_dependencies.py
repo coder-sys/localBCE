@@ -47,13 +47,7 @@ def test_current_manifest_locks_profiles_and_dual_hashes_reconcile() -> None:
     assert len(digests.sha3_512) == 128
     production = {"cffi", "cryptography", "pqcrypto", "pycparser"}
     development = production | {
-        "anyio",
-        "certifi",
         "colorama",
-        "h11",
-        "httpcore",
-        "httpx",
-        "idna",
         "iniconfig",
         "packaging",
         "pluggy",
