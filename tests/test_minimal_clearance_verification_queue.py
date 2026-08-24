@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 from unittest import TestCase
 import app.minimal_clearance_verification_queue as queue_module
@@ -42,6 +43,7 @@ from app.minimal_clearance_verification_queue_independent import (
     verify_database,
     verify_export_bytes,
 )
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
 
 
 _RETAINED_ARTIFACT = Path(r"C:\Temp\blind-ledger-minimal-clearance-proof-20260817c\minimal_clearance_case0.blmc")
@@ -184,7 +186,7 @@ class VerificationQueueTests(TestCase):
 
     def test_v3_config_and_capacity_are_fixed(self) -> None:
         config = self._config(capacity=512)
-        self.assertEqual(config.as_json()["schema_version"], 3)
+        self.assertEqual(config.as_json()["schema_version"], 4)
         self.assertEqual(config.as_json()["max_worker_concurrency"], 1)
         self.assertEqual(config.lease_seconds, 3_600)
         self.assertEqual(config.max_attempts, 3)
@@ -284,7 +286,7 @@ class VerificationQueueTests(TestCase):
         )
         self.assertEqual(result.status, "QUEUED")
         self.assertEqual(result.error_code, "verifier_timeout")
-        self.assertEqual(store._snapshot()["counts"]["VERIFIED"], 0)
+        self.assertEqual(store._snapshot()["counts"]["CANDIDATE"], 0)
 
     def test_export_restore_and_independent_binary_parity(self) -> None:
         store = self._store()
@@ -303,10 +305,77 @@ class VerificationQueueTests(TestCase):
         store = self._store(capacity=2)
         self._verify_one(store, "job-a")
         self._verify_one(store, "job-b", factory=_Factory())
+        with self.assertRaises(IndependentQueueError):
+            read_verified_jobs(store.path, ("job-a",), expected_config=store.config.as_json())
+        store._promote_candidates()
         jobs = read_verified_jobs(store.path, ("job-b", "job-a"), expected_config=store.config.as_json())
         self.assertEqual(tuple(job.job_id for job in jobs), ("job-b", "job-a"))
         with self.assertRaises(IndependentQueueError):
             read_verified_jobs(store.path, ("job-a", "job-a"), expected_config=store.config.as_json())
+
+    def test_candidate_promotion_is_one_batch_and_duplicate_promotion_is_empty(self) -> None:
+        store = self._store()
+        candidate = self._verify_one(store)
+        self.assertEqual(candidate.status, "CANDIDATE")
+        self.assertEqual(store._snapshot()["counts"]["VERIFIED"], 0)
+        first = store._promote_candidates()
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0]["accepted_count"], 1)
+        self.assertEqual(store._snapshot()["counts"]["VERIFIED"], 1)
+        self.assertEqual(store._promote_candidates(), ())
+        summary = verify_database(store.path, expected_config=store.config.as_json())
+        self.assertEqual(summary["accepted_batch_count"], 1)
+
+    def test_restart_promotes_durable_candidate_before_new_native_work(self) -> None:
+        from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime
+
+        runtime_root = self.root / "candidate-runtime-root"
+        runtime_root.mkdir()
+        profile = ExperimentalPrivateZkProfile.supplied(Path(sys.executable), _VERIFIER)
+        runtime_config = QueueConfig.from_profile(
+            profile,
+            queue_id="minimal-clearance-queue-v4",
+            capacity=512,
+            artifact_bytes_cap=512 * 1024 * 1024,
+            installation_id=derive_installation_id(runtime_root),
+        )
+        database = runtime_root / "queue.sqlite"
+        owner = _QueueRuntimeOwnership(
+            lock_path=database.with_name(database.name + ".runtime-lock"),
+            parent=database.parent,
+        )
+        self._owners.append(owner)
+        store = _VerificationQueueStore(path=database, config=runtime_config, owner=owner)
+        self._verify_one(store)
+        owner.close()
+        self._owners.remove(owner)
+        runtime = MinimalClearanceVerificationRuntime(
+            root=runtime_root,
+            profile=profile,
+            source_root=self.source_root,
+        )
+        try:
+            result = runtime.run(max_jobs=1)
+            self.assertEqual(result.outcome, "ACCEPTED")
+            self.assertEqual(result.accepted_count, 1)
+            self.assertEqual(result.verified, 1)
+        finally:
+            runtime.close()
+
+    def test_accept_batch_event_mutation_rejects_independent_replay(self) -> None:
+        store = self._store()
+        self._verify_one(store)
+        store._promote_candidates()
+        with closing(sqlite3.connect(store.path)) as connection:
+            connection.execute("DROP TRIGGER queue_transitions_no_update")
+            row = connection.execute("SELECT sequence,event_bytes FROM queue_transitions WHERE transition_kind='ACCEPT_BATCH'").fetchone()
+            self.assertIsNotNone(row)
+            event = json.loads(bytes(row[1]).decode("ascii"))
+            event["image_sha3_512"] = "00" * 64
+            connection.execute("UPDATE queue_transitions SET event_bytes=? WHERE sequence=?", (json.dumps(event, sort_keys=True, separators=(",", ":")).encode("ascii"), int(row[0])))
+            connection.commit()
+        with self.assertRaises(IndependentQueueError):
+            verify_database(store.path)
 
     def test_independent_verification_rejects_claim_event_row_drift(self) -> None:
         store = self._store()

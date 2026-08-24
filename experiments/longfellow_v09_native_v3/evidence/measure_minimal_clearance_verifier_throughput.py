@@ -24,6 +24,7 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
 from app.minimal_clearance_verification_queue_independent import (
     read_verified_jobs,
     restore_export_to_fresh_database,
@@ -33,7 +34,7 @@ from app.minimal_clearance_verification_queue_independent import (
 from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime
 
 
-SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFIER-SERIAL-RUNTIME/v1"
+SCHEMA = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFIER-SERIAL-RUNTIME/v4"
 ARTIFACT_SHA256 = "69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB38E"
 ARTIFACT_SHA3_512 = "A2D3DDBA8C6ECAABC70147793185318FA7910E8EBBA0675D614E95885DAC23331C3F2FE3689F30748B030C9A26D55D704DB244C5DC36136896F6B87F42045BE1"
 VERIFIER_SHA256 = "E2BD096389E7D9CB3F8D83314747CA3D493DF6C30D86A57041F74B84F0023F3E"
@@ -150,10 +151,14 @@ def run_serial(
 
     if type(job_count) is not int or not 1 <= job_count <= MAX_JOBS:
         _fail("job_count")
-    if any(path.exists() or path.is_symlink() for path in (database, restore_database, evidence_output)):
+    runtime_root = database
+    if runtime_root.exists() or runtime_root.is_symlink():
         _fail("fresh_target_required")
-    if not isinstance(workspace_parent, Path) or not workspace_parent.is_dir() or workspace_parent.is_symlink():
-        _fail("workspace_parent")
+    if not runtime_root.parent.is_dir() or runtime_root.parent.is_symlink():
+        _fail("runtime_root_parent")
+    runtime_root.mkdir()
+    if any(path.exists() or path.is_symlink() for path in (restore_database, evidence_output)):
+        _fail("fresh_target_required")
     artifact_size, artifact_hash, artifact_readonly = _bounded_digest(artifact, ARTIFACT_BYTES)
     verifier_size, verifier_hash, _ = _bounded_digest(verifier)
     if artifact_size != ARTIFACT_BYTES or artifact_hash != ARTIFACT_SHA256 or not artifact_readonly:
@@ -167,27 +172,21 @@ def run_serial(
         bytes.fromhex(ARTIFACT_SHA256),
         bytes.fromhex(ARTIFACT_SHA3_512),
     )
-    config = QueueConfig(
-        "minimal-clearance-serial-exercise-v3",
-        1,
-        bytes.fromhex(VERIFIER_SHA256),
-        512 * 1024 * 1024,
-    )
+    profile = ExperimentalPrivateZkProfile.supplied(verifier, bytes.fromhex(VERIFIER_SHA256))
+    config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-serial-exercise-v4", capacity=512, artifact_bytes_cap=512 * 1024 * 1024, installation_id=derive_installation_id(runtime_root))
     job_ids = tuple(f"serial-job-{index}" for index in range(job_count))
     started = time.perf_counter()
     try:
         with MinimalClearanceVerificationRuntime(
-            database=database,
-            config=config,
-            executable=verifier,
+            root=runtime_root,
+            profile=profile,
             source_root=artifact.parent,
-            workspace_parent=workspace_parent,
         ) as runtime:
             for job_id in job_ids:
                 runtime.admit(job_id=job_id, metadata=metadata)
             runtime_result = runtime.run(max_jobs=job_count)
-            runtime.verify_integrity()
-            exported = runtime.export_bytes()
+            runtime._verify_integrity()
+            exported = runtime._export_bytes()
     except ThroughputError:
         raise
     except BaseException:
@@ -197,10 +196,11 @@ def run_serial(
         _fail("serial_runtime_not_verified")
 
     try:
-        producer_summary = verify_database(database, expected_config=config.as_json())
+        runtime_database = runtime_root / "queue.sqlite"
+        producer_summary = verify_database(runtime_database, expected_config=config.as_json())
         export_summary = verify_export_bytes(exported, expected_config=config.as_json())
         restored_summary = restore_export_to_fresh_database(restore_database, exported)
-        jobs = read_verified_jobs(database, job_ids, expected_config=config.as_json())
+        jobs = read_verified_jobs(runtime_database, job_ids, expected_config=config.as_json())
     except BaseException:
         _fail("independent_reconstruction")
     if producer_summary != export_summary or export_summary != restored_summary:

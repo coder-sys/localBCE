@@ -21,6 +21,7 @@ if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
 from app.minimal_clearance_verification_queue_independent import (
     read_verified_jobs,
     restore_export_to_fresh_database,
@@ -55,10 +56,14 @@ def _json_bytes(value: dict[str, Any]) -> bytes:
 
 
 def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, restore_database: Path, evidence_output: Path) -> dict[str, Any]:
-    if any(path.exists() or path.is_symlink() for path in (database, restore_database, evidence_output)):
+    runtime_root = database
+    if runtime_root.exists() or runtime_root.is_symlink():
         raise RuntimeError("fresh_target_required")
-    if not workspace.is_dir() or workspace.is_symlink():
-        raise RuntimeError("workspace_parent_required")
+    if not runtime_root.parent.is_dir() or runtime_root.parent.is_symlink():
+        raise RuntimeError("runtime_root_parent_required")
+    runtime_root.mkdir()
+    if any(path.exists() or path.is_symlink() for path in (restore_database, evidence_output)):
+        raise RuntimeError("fresh_target_required")
     artifact_size, artifact_hash, artifact_readonly = _read_identity(artifact)
     if artifact_size != ARTIFACT_BYTES or artifact_hash != ARTIFACT_SHA256 or not artifact_readonly:
         raise RuntimeError("retained_artifact_identity")
@@ -68,31 +73,31 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
 
     artifact_ref = artifact.name
     metadata = ArtifactMetadata(artifact_ref, ARTIFACT_BYTES, bytes.fromhex(ARTIFACT_SHA256), bytes.fromhex(ARTIFACT_SHA3_512))
-    config = QueueConfig("minimal-clearance-queue-exercise-v3", 4, bytes.fromhex(VERIFIER_SHA256), 512 * 1024 * 1024)
+    profile = ExperimentalPrivateZkProfile.supplied(verifier, bytes.fromhex(VERIFIER_SHA256))
+    config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-queue-exercise-v4", capacity=512, artifact_bytes_cap=512 * 1024 * 1024, installation_id=derive_installation_id(runtime_root))
     job_ids = tuple(f"queue-job-{index}" for index in range(4))
     started = time.perf_counter()
     with MinimalClearanceVerificationRuntime(
-        database=database,
-        config=config,
-        executable=verifier,
+        root=runtime_root,
+        profile=profile,
         source_root=artifact.parent,
-        workspace_parent=workspace,
     ) as runtime:
         for job_id in job_ids:
             runtime.admit(job_id=job_id, metadata=metadata)
         runtime_result = runtime.run(max_jobs=4)
-        runtime.verify_integrity()
-        exported = runtime.export_bytes()
+        runtime._verify_integrity()
+        exported = runtime._export_bytes()
     wave_wall_ms = max(1, int(round((time.perf_counter() - started) * 1000)))
     if runtime_result.indeterminate or runtime_result.verified != 4:
         raise RuntimeError("queue_verification_not_verified")
 
-    producer_summary = verify_database(database, expected_config=config.as_json())
+    runtime_database = runtime_root / "queue.sqlite"
+    producer_summary = verify_database(runtime_database, expected_config=config.as_json())
     export_summary = verify_export_bytes(exported, expected_config=config.as_json())
     restored_summary = restore_export_to_fresh_database(restore_database, exported)
     if producer_summary != export_summary or export_summary != restored_summary:
         raise RuntimeError("independent_reconstruction_mismatch")
-    jobs = read_verified_jobs(database, job_ids, expected_config=config.as_json())
+    jobs = read_verified_jobs(runtime_database, job_ids, expected_config=config.as_json())
     if len(jobs) != 4 or any(job.exit_code != 0 or job.timed_out or not job.cap_enforced for job in jobs):
         raise RuntimeError("queue_receipt_not_verified")
     artifact_size_after, artifact_hash_after, artifact_readonly_after = _read_identity(artifact)
@@ -109,7 +114,7 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
         for job in jobs
     ]
     output = {
-        "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/INTEGRATION-EVIDENCE/v2",
+        "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/INTEGRATION-EVIDENCE/v4",
         "queue_schema": config.as_json()["schema_version"],
         "queue_id": config.queue_id,
         "verification_count": runtime_result.processed,
@@ -140,7 +145,7 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
         "wave_wall_ms": wave_wall_ms,
         "per_job": per_job,
         "transition_claim_count": int(export_summary["claim_count"]),
-        "transition_complete_verified_count": int(export_summary["completion_count"]),
+        "transition_complete_candidate_count": int(export_summary["completion_count"]),
         "queue_reconstruction_parity": True,
         "export_restore_parity": True,
         "runtime_recovered_leases": runtime_result.recovered_leases,

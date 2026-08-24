@@ -51,10 +51,10 @@ class _FakeRuntime:
         self.runs.append(max_jobs)
         return _FakeRuntimeResult()
 
-    def verify_integrity(self):
+    def _verify_integrity(self):
         self.integrity_checked = True
 
-    def export_bytes(self):
+    def _export_bytes(self):
         return b"verified-sqlite-image"
 
 
@@ -70,7 +70,7 @@ class MinimalClearanceVerifierThroughputTests(TestCase):
         ):
             self.assertNotIn(forbidden, source)
         self.assertIn("MinimalClearanceVerificationRuntime", source)
-        self.assertIn("workspace_parent=workspace_parent", source)
+        self.assertIn("root=runtime_root", source)
 
     def test_run_serial_uses_runtime_and_aggregate_independent_facts(self):
         _FakeRuntime.instances.clear()
@@ -123,7 +123,7 @@ class MinimalClearanceVerifierThroughputTests(TestCase):
             runtime = _FakeRuntime.instances[0]
             self.assertEqual(runtime.admissions, ["serial-job-0", "serial-job-1"])
             self.assertEqual(runtime.runs, [2])
-            self.assertEqual(runtime.kwargs["workspace_parent"], workspace)
+            self.assertEqual(runtime.kwargs["root"], database)
             self.assertTrue(runtime.closed)
             self.assertEqual(record["verification_count"], 2)
             self.assertEqual(record["distinct_worker_count"], 1)

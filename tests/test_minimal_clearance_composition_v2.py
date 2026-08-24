@@ -73,6 +73,7 @@ class CompositionV2Tests(unittest.TestCase):
     def _verified(self, job_id: str = "job-1", *, factory=None):
         queue = self.queue_tests._store()
         self.queue_tests._verify_one(queue, job_id, factory=factory or queue_fixtures._Factory())
+        queue._promote_candidates()
         return queue
 
     def _store(self, config: CompositionConfigV2 | None = None, **kwargs):

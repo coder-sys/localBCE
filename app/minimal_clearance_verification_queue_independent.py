@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -51,11 +52,28 @@ class IndependentVerifiedQueueJob:
     stderr_sha3_512: bytes
 
 
-_SCHEMA_VERSION: Final[int] = 3
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v3"
-_STATUS: Final = frozenset({"QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"})
-_NONTERMINAL: Final = frozenset({"QUEUED", "LEASED"})
+@dataclass(frozen=True, slots=True)
+class IndependentBatchAcceptance:
+    image_sha3_512: bytes
+    pre_head_root: bytes
+    pre_transition_count: int
+    config_digest: bytes
+    profile_digest: bytes
+    profile_epoch: int
+    installation_id: bytes
+    installation_epoch: int
+    operation_ids: tuple[bytes, ...]
+    member_set_digest: bytes
+    batch_id: bytes
+    accepted_count: int
+
+
+_SCHEMA_VERSION: Final[int] = 4
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v4"
+_STATUS: Final = frozenset({"QUEUED", "LEASED", "CANDIDATE", "VERIFIED", "REJECTED", "HELD"})
+_NONTERMINAL: Final = frozenset({"QUEUED", "LEASED", "CANDIDATE"})
 _TERMINAL: Final = frozenset({"VERIFIED", "REJECTED", "HELD"})
+_RESULT_STATUS: Final = frozenset({"CANDIDATE", "REJECTED", "HELD"})
 _MAX_DATABASE: Final[int] = 64 * 1024 * 1024
 _MAX_CAPACITY: Final[int] = 512
 _MAX_WORKERS: Final[int] = 1
@@ -75,17 +93,65 @@ _RETRYABLE_CODES: Final = frozenset({
     "verifier_containment_shape", "verifier_containment", "verifier_resource", "verifier_timeout",
     "verifier_process_unavailable", "verifier_memory_cap", "verifier_statement_reconstruction", "verifier_preflight_rejected",
 })
-_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v3\x00"
-_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v3\x00"
-_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v3\x00"
-_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v3\x00"
-_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v3\x00"
-_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v3\x00"
-_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v3\x00"
+_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v4\x00"
+_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v4\x00"
+_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v4\x00"
+_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v4\x00"
+_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v4\x00"
+_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v4\x00"
+_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v4\x00"
+_BATCH_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPT-BATCH/v4\x00"
 RESTORE_CAPABILITY_LIMITATION_COUNT = 0
 
+_PROFILE_EPOCH: Final[int] = 7
+_PROFILE_CIRCUIT_ID: Final[bytes] = bytes.fromhex("1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0")
+_PROFILE_ROLE: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE/v1"
+_PROFILE_DIMENSIONS: Final[tuple[int, int, int, int]] = (36_969, 26_721, 217, 12_158_968)
+_PROFILE_DIRECTIVES: Final[tuple[str, ...]] = ("CLEAR", "HOLD", "HUMAN_REVIEW", "BLOCK", "EXCEPTION_APPROVED")
+
+
+def _hash_text(domain: bytes, value: str) -> bytes:
+    return hashlib.sha3_512(domain + b"\x00" + value.encode("ascii")).digest()
+
+
+def _profile_digest(verifier: bytes) -> bytes:
+    parts = (
+        (3).to_bytes(4, "big"), _PROFILE_ROLE, bytes(64),
+        _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+        _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(_PROFILE_DIRECTIVES)),
+        _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
+        _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
+        _hash_text(b"BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program"),
+        _hash_text(b"BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy"),
+        _hash_text(b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail"),
+        _PROFILE_CIRCUIT_ID, b"".join(v.to_bytes(8, "big") for v in _PROFILE_DIMENSIONS),
+        _PROFILE_EPOCH.to_bytes(8, "big"), b"proofSuiteId=null", b"production_usable=false", b"activation=false", verifier,
+    )
+    digest = hashlib.sha3_512(b"BL/NATIVE-V3/PRIVATE-ZK/STATIC-PROFILE/v4\x00")
+    for part in parts:
+        digest.update(len(part).to_bytes(8, "big")); digest.update(part)
+    return digest.digest()
+
+
+def _statement_profile_matches(statement: Any) -> bool:
+    try:
+        fixed = {
+            "protocol_version": 3, "proof_role": _PROFILE_ROLE, "proof_suite": bytes(64),
+            "execution_context": _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+            "automatic_control_set": _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(_PROFILE_DIRECTIVES)),
+            "evaluator_id": _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
+            "schema_id": _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
+            "program_id": _hash_text(b"BL/NATIVE-V3/PROGRAM/v1", "minimal-clearance-program"),
+            "policy_id": _hash_text(b"BL/NATIVE-V3/POLICY/v1", "minimal-five-directive-policy"),
+            "settlement_domain": _hash_text(b"BL/NATIVE-V3/SETTLEMENT-DOMAIN/v2", "official-state-rail"),
+            "epoch": _PROFILE_EPOCH,
+        }
+        return all(statement.get(key) == value for key, value in fixed.items())
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
-    "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "verifier_sha256", "artifact_bytes_cap", "head_root", "next_transition_seq", "next_admission_seq", "storage_used_bytes", "storage_reserved_bytes", "nonterminal_count", "live_lease_count"),
+    "queue_metadata": ("id", "schema_version", "queue_id", "config_json", "config_digest", "verifier_sha256", "artifact_bytes_cap", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "head_root", "next_transition_seq", "next_admission_seq", "storage_used_bytes", "storage_reserved_bytes", "nonterminal_count", "live_lease_count"),
     "queue_jobs": ("job_id", "operation_id", "material_digest", "artifact_ref", "artifact_bytes", "artifact_sha256", "artifact_sha3_512", "status", "admission_seq", "attempt", "next_eligible_ms", "created_ms", "updated_ms", "last_error_code"),
     "queue_leases": ("job_id", "worker_id", "token_digest", "attempt", "claim_sequence", "leased_ms", "expires_ms"),
     "queue_results": ("operation_id", "job_id", "terminal_status", "receipt_bytes", "error_code", "completed_ms", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"),
@@ -96,11 +162,11 @@ _INDEXES = frozenset({"queue_jobs_status_eligible", "queue_leases_expiry", "queu
 _TRIGGER_NAMES = frozenset({"queue_jobs_no_delete", "queue_jobs_no_update", "queue_leases_no_update", "queue_results_no_update", "queue_results_no_delete", "queue_transitions_no_update", "queue_transitions_no_delete", "queue_metadata_immutable"})
 
 _TABLE_SQL: Final[dict[str, str]] = {
-    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=3), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
-    "queue_jobs": "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT)",
+    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=4), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), profile_digest BLOB NOT NULL CHECK(length(profile_digest)=64), profile_epoch INTEGER NOT NULL CHECK(profile_epoch=7), installation_id BLOB NOT NULL CHECK(length(installation_id)=64), installation_epoch INTEGER NOT NULL CHECK(installation_epoch>=1), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
+    "queue_jobs": "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','CANDIDATE','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT)",
     "queue_leases": "CREATE TABLE queue_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3), claim_sequence INTEGER NOT NULL UNIQUE CHECK(claim_sequence>=1), leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id))",
-    "queue_results": "CREATE TABLE queue_results (operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=64), job_id TEXT NOT NULL UNIQUE, terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_bytes BLOB CHECK(receipt_bytes IS NULL OR length(receipt_bytes)<=16384), error_code TEXT, completed_ms INTEGER NOT NULL CHECK(completed_ms>=0), claim_sequence INTEGER NOT NULL CHECK(claim_sequence>=1), worker_id TEXT NOT NULL, leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), token_digest BLOB NOT NULL CHECK(length(token_digest)=64), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), CHECK((terminal_status='VERIFIED' AND receipt_bytes IS NOT NULL AND error_code IS NULL) OR (terminal_status IN ('REJECTED','HELD') AND receipt_bytes IS NULL AND error_code IS NOT NULL)))",
-    "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), transition_kind TEXT NOT NULL, job_id TEXT NOT NULL, operation_id BLOB NOT NULL CHECK(length(operation_id)=64), before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL, event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id))",
+    "queue_results": "CREATE TABLE queue_results (operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=64), job_id TEXT NOT NULL UNIQUE, terminal_status TEXT NOT NULL CHECK(terminal_status IN ('CANDIDATE','REJECTED','HELD')), receipt_bytes BLOB CHECK(receipt_bytes IS NULL OR length(receipt_bytes)<=16384), error_code TEXT, completed_ms INTEGER NOT NULL CHECK(completed_ms>=0), claim_sequence INTEGER NOT NULL CHECK(claim_sequence>=1), worker_id TEXT NOT NULL, leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), token_digest BLOB NOT NULL CHECK(length(token_digest)=64), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), CHECK((terminal_status='CANDIDATE' AND receipt_bytes IS NOT NULL AND error_code IS NULL) OR (terminal_status IN ('REJECTED','HELD') AND receipt_bytes IS NULL AND error_code IS NOT NULL)))",
+    "queue_transitions": "CREATE TABLE queue_transitions (sequence INTEGER PRIMARY KEY CHECK(sequence>=1), transition_kind TEXT NOT NULL, job_id TEXT, operation_id BLOB, before_root BLOB NOT NULL CHECK(length(before_root)=64), after_root BLOB NOT NULL CHECK(length(after_root)=64), event_bytes BLOB NOT NULL CHECK(length(event_bytes)<=65536), event_digest BLOB NOT NULL UNIQUE CHECK(length(event_digest)=64), CHECK((transition_kind='ACCEPT_BATCH' AND job_id IS NULL AND operation_id IS NULL) OR (transition_kind<>'ACCEPT_BATCH' AND job_id IS NOT NULL AND operation_id IS NOT NULL AND length(operation_id)=64)), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id))",
 }
 _INDEX_SQL: Final[dict[str, str]] = {"queue_jobs_status_eligible": "CREATE INDEX queue_jobs_status_eligible ON queue_jobs(status,next_eligible_ms,admission_seq)", "queue_leases_expiry": "CREATE INDEX queue_leases_expiry ON queue_leases(expires_ms,job_id)", "queue_leases_worker_unique": "CREATE UNIQUE INDEX queue_leases_worker_unique ON queue_leases(worker_id)"}
 _TRIGGER_SQL: Final[dict[str, str]] = {
@@ -111,7 +177,7 @@ _TRIGGER_SQL: Final[dict[str, str]] = {
     "queue_results_no_delete": "CREATE TRIGGER queue_results_no_delete BEFORE DELETE ON queue_results BEGIN SELECT RAISE(ABORT,'queue_results_immutable'); END",
     "queue_transitions_no_update": "CREATE TRIGGER queue_transitions_no_update BEFORE UPDATE ON queue_transitions BEGIN SELECT RAISE(ABORT,'queue_transitions_append_only'); END",
     "queue_transitions_no_delete": "CREATE TRIGGER queue_transitions_no_delete BEFORE DELETE ON queue_transitions BEGIN SELECT RAISE(ABORT,'queue_transitions_append_only'); END",
-    "queue_metadata_immutable": "CREATE TRIGGER queue_metadata_immutable BEFORE UPDATE OF id,schema_version,queue_id,config_json,config_digest,verifier_sha256,artifact_bytes_cap ON queue_metadata BEGIN SELECT RAISE(ABORT,'queue_metadata_immutable'); END",
+    "queue_metadata_immutable": "CREATE TRIGGER queue_metadata_immutable BEFORE UPDATE OF id,schema_version,queue_id,config_json,config_digest,verifier_sha256,artifact_bytes_cap,profile_digest,profile_epoch,installation_id,installation_epoch ON queue_metadata BEGIN SELECT RAISE(ABORT,'queue_metadata_immutable'); END",
 }
 
 
@@ -162,13 +228,15 @@ def _integer(value: Any, code: str, *, minimum: int = 0) -> int:
 
 
 def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
-    keys = {"schema_version", "queue_id", "capacity", "lease_seconds", "max_attempts", "max_worker_concurrency", "verifier_sha256", "artifact_bytes_cap", "retryable_codes"}
+    keys = {"schema_version", "queue_id", "capacity", "lease_seconds", "max_attempts", "max_worker_concurrency", "verifier_sha256", "artifact_bytes_cap", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "circuit_id", "proof_suite_id", "production_usable", "activation", "retryable_codes"}
     if type(value) is not dict or set(value) != keys or value["schema_version"] != _SCHEMA_VERSION: _fail("config_keys")
     queue_id = _token(value["queue_id"], "config_queue_id"); capacity = _integer(value["capacity"], "config_capacity", minimum=1); lease_seconds = _integer(value["lease_seconds"], "config_lease_seconds", minimum=1)
     if capacity > _MAX_CAPACITY or lease_seconds != _LEASE_SECONDS or value["max_attempts"] != 3 or value["max_worker_concurrency"] != _MAX_WORKERS: _fail("config_bounds")
     artifact_cap = _integer(value["artifact_bytes_cap"], "config_artifact_cap", minimum=1)
     if artifact_cap > 512 * 1024 * 1024: _fail("config_artifact_cap")
-    _blob(value["verifier_sha256"], 32, "config_verifier"); retryable = value["retryable_codes"]
+    verifier = _blob(value["verifier_sha256"], 32, "config_verifier")
+    if _blob(value["profile_digest"], 64, "config_profile") != _profile_digest(verifier) or value["profile_epoch"] != _PROFILE_EPOCH or _blob(value["installation_id"], 64, "config_installation") is None or type(value["installation_epoch"]) is not int or value["installation_epoch"] < 1 or _blob(value["circuit_id"], 32, "config_circuit") != _PROFILE_CIRCUIT_ID or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False: _fail("config_profile")
+    retryable = value["retryable_codes"]
     if type(retryable) is not list or tuple(retryable) != tuple(sorted(_RETRYABLE_CODES)): _fail("config_retryable")
     canonical = _json_bytes(value); return value, canonical, _sha(_MATERIAL_DOMAIN, canonical)
 
@@ -185,6 +253,7 @@ def _parse_evidence(value: Any, verifier: bytes) -> dict[str, Any]:
     if result["verifier_sha256"] != verifier or result["cap_bytes"] != _CAP_BYTES or result["cap_enforced"] is not True or result["active_process_limit"] != _ACTIVE_PROCESS_LIMIT or result["timed_out"] is not False or result["exit_code"] != 0 or not 0 <= result["peak_job_commit_bytes"] <= _CAP_BYTES: _fail("receipt_containment_binding")
     try: acceptance = parse_acceptance_bytes(result["acceptance_bytes"])
     except Exception: _fail("receipt_acceptance_invalid")
+    if not _statement_profile_matches(acceptance.statement): _fail("receipt_profile")
     if acceptance.canonical_bytes() != result["acceptance_bytes"] or acceptance.artifact_bytes != result["artifact_bytes"] or acceptance.artifact_sha256 != result["artifact_sha256"] or acceptance.artifact_digest != result["artifact_sha3_512"] or acceptance.circuit_id != result["circuit_id"] or _sha(_ACCEPTANCE_DOMAIN, result["acceptance_bytes"]) != result["proof_acceptance_digest"]: _fail("receipt_acceptance_binding")
     return result
 
@@ -231,13 +300,21 @@ def _schema(connection: sqlite3.Connection) -> None:
 def _event_expected(kind: str, event: Any) -> None:
     if kind == "ADMIT": keys = {"at_ms", "status", "admission_seq", "attempt", "created_ms", "next_eligible_ms", "material_digest"}
     elif kind == "CLAIM": keys = {"at_ms", "status", "attempt", "worker_id", "leased_ms", "expires_ms", "claim_sequence", "token_digest"}
+    elif kind == "ACCEPT_BATCH": keys = {"schema", "accepted_ms", "batch_id", "image_sha3_512", "pre_head_root", "pre_transition_count", "config_digest", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "operation_ids", "member_set_digest", "accepted_count"}
     elif kind in {"LEASE_EXPIRE_QUEUED", "LEASE_EXPIRE_HELD", "LEASE_RECOVER_QUEUED", "LEASE_RECOVER_HELD", "RETRY_QUEUED"}: keys = {"at_ms", "status", "attempt", "error_code", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"}
     elif kind.startswith("COMPLETE_"): keys = {"at_ms", "status", "attempt", "error_code", "receipt_digest", "claim_sequence", "worker_id", "leased_ms", "expires_ms", "token_digest"}
     else: _fail("transition_kind")
     if type(event) is not dict or set(event) != keys: _fail("transition_event_keys")
-    if type(event["status"]) is not str or event["status"] not in _STATUS: _fail("transition_status")
-    _integer(event["at_ms"], "transition_time")
-    if kind == "ADMIT":
+    if kind != "ACCEPT_BATCH":
+        if type(event["status"]) is not str or event["status"] not in _STATUS: _fail("transition_status")
+        _integer(event["at_ms"], "transition_time")
+    if kind == "ACCEPT_BATCH":
+        if event["schema"] != _SCHEMA or type(event["operation_ids"]) is not list or not 1 <= len(event["operation_ids"]) <= 256 or event["accepted_count"] != len(event["operation_ids"]): _fail("transition_batch_shape")
+        _integer(event["accepted_ms"], "transition_batch_time"); _blob(event["batch_id"], 64, "transition_batch_id"); _blob(event["image_sha3_512"], 64, "transition_batch_image"); _blob(event["pre_head_root"], 64, "transition_batch_head"); _integer(event["pre_transition_count"], "transition_batch_count"); _blob(event["config_digest"], 64, "transition_batch_config"); _blob(event["profile_digest"], 64, "transition_batch_profile");
+        if event["profile_epoch"] != _PROFILE_EPOCH: _fail("transition_batch_profile_epoch")
+        _blob(event["installation_id"], 64, "transition_batch_installation"); _integer(event["installation_epoch"], "transition_batch_installation_epoch", minimum=1); _blob(event["member_set_digest"], 64, "transition_batch_members")
+        if any(type(item) is not str or re.fullmatch(r"[0-9A-F]{128}", item) is None for item in event["operation_ids"]): _fail("transition_batch_operation")
+    elif kind == "ADMIT":
         if event["status"] != "QUEUED" or event["attempt"] != 0: _fail("transition_admit_status")
         _integer(event["admission_seq"], "transition_admission", minimum=1); _integer(event["created_ms"], "transition_created"); _integer(event["next_eligible_ms"], "transition_next"); _blob(event["material_digest"], 64, "transition_material")
     elif kind == "CLAIM":
@@ -254,7 +331,7 @@ def _event_expected(kind: str, event: Any) -> None:
         if kind == "LEASE_RECOVER_HELD" and (event["status"] != "HELD" or event["error_code"] != "runtime_restart"): _fail("transition_recover_status")
         if kind.startswith("COMPLETE_"):
             expected = kind.removeprefix("COMPLETE_")
-            if expected not in _TERMINAL or event["status"] != expected: _fail("transition_complete_status")
+            if expected not in {"CANDIDATE", "REJECTED", "HELD"} or event["status"] != expected: _fail("transition_complete_status")
             if event["receipt_digest"] is not None: _blob(event["receipt_digest"], 64, "transition_receipt_digest")
 
 
@@ -348,11 +425,11 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
     try: config_value = json.loads(bytes(meta[3]).decode("ascii"))
     except (TypeError, UnicodeDecodeError, json.JSONDecodeError): _fail("metadata_config")
     config, canonical, config_digest = _parse_config(config_value); verifier = _blob(config["verifier_sha256"], 32, "config_verifier")
-    if bytes(meta[3]) != canonical or bytes(meta[4]) != config_digest or bytes(meta[5]) != verifier or int(meta[6]) != config["artifact_bytes_cap"]: _fail("metadata_binding")
+    if bytes(meta[3]) != canonical or bytes(meta[4]) != config_digest or bytes(meta[5]) != verifier or int(meta[6]) != config["artifact_bytes_cap"] or bytes(meta[7]) != _blob(config["profile_digest"], 64, "config_profile") or int(meta[8]) != _PROFILE_EPOCH or bytes(meta[9]) != _blob(config["installation_id"], 64, "config_installation") or int(meta[10]) != int(config["installation_epoch"]): _fail("metadata_binding")
     if expected_config is not None and _parse_config(dict(expected_config))[0] != config: _fail("expected_config_mismatch")
     jobs = connection.execute("SELECT * FROM queue_jobs ORDER BY admission_seq").fetchall(); leases = connection.execute("SELECT * FROM queue_leases ORDER BY job_id").fetchall(); results = connection.execute("SELECT * FROM queue_results ORDER BY job_id").fetchall(); transitions = connection.execute("SELECT * FROM queue_transitions ORDER BY sequence").fetchall()
     page_bytes = int(connection.execute("PRAGMA page_count").fetchone()[0]) * _PAGE_SIZE
-    if len(jobs) != int(meta[9]) or len(transitions) != int(meta[8]) or int(meta[10]) != page_bytes or int(meta[11]) != int(meta[12]) * _MAX_TERMINAL_GROWTH or int(meta[12]) != sum(1 for row in jobs if row[7] in _NONTERMINAL) or int(meta[13]) != len(leases) or page_bytes + int(meta[11]) > _MAX_DATABASE or len(leases) > _MAX_WORKERS: _fail("metadata_counters")
+    if len(jobs) != int(meta[13]) or len(transitions) != int(meta[12]) or int(meta[14]) != page_bytes or int(meta[15]) != int(meta[16]) * _MAX_TERMINAL_GROWTH or int(meta[16]) != sum(1 for row in jobs if row[7] in _NONTERMINAL) or int(meta[17]) != len(leases) or page_bytes + int(meta[15]) > _MAX_DATABASE or len(leases) > _MAX_WORKERS: _fail("metadata_counters")
     job_map: dict[str, tuple[Any, ...]] = {}; operation_ids: set[bytes] = set()
     for index, row in enumerate(jobs, 1):
         if len(row) != 14: _fail("job_shape")
@@ -360,16 +437,16 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None or type(operation) is not bytes or len(operation) != 64 or operation in operation_ids or type(material) is not bytes or len(material) != 64 or admission != index: _fail("job_identity")
         if type(ref) is not str or _TOKEN.fullmatch(ref) is None or type(size) is not int or not 0 < size <= config["artifact_bytes_cap"] or type(sha256) is not bytes or len(sha256) != 32 or type(sha3) is not bytes or len(sha3) != 64 or status not in _STATUS or type(attempt) is not int or not 0 <= attempt <= 3: _fail("job_fields")
         if any(type(item) is not int or item < 0 for item in (next_ms, created, updated)) or (error is not None and (type(error) is not str or _CODE.fullmatch(error) is None)): _fail("job_fields")
-        metadata = {"artifact_ref": ref, "artifact_bytes": size, "artifact_sha256": _hex(sha256), "artifact_sha3_512": _hex(sha3)}; expected_material = _sha(_MATERIAL_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), _json_bytes(metadata), verifier); expected_operation = _sha(_OPERATION_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), expected_material)
+        metadata = {"artifact_ref": ref, "artifact_bytes": size, "artifact_sha256": _hex(sha256), "artifact_sha3_512": _hex(sha3)}; profile = _blob(config["profile_digest"], 64, "config_profile"); installation = _blob(config["installation_id"], 64, "config_installation"); expected_material = _sha(_MATERIAL_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), _json_bytes(metadata), verifier, profile, int(config["profile_epoch"]).to_bytes(8, "big"), installation, int(config["installation_epoch"]).to_bytes(8, "big")); expected_operation = _sha(_OPERATION_DOMAIN, config["queue_id"].encode("ascii"), job_id.encode("ascii"), expected_material, config_digest)
         if material != expected_material or operation != expected_operation: _fail("job_material")
         job_map[job_id] = tuple(row); operation_ids.add(operation)
     result_map: dict[bytes, tuple[Any, ...]] = {}
     for row in results:
-        if len(row) != 11 or type(row[0]) is not bytes or len(row[0]) != 64 or row[0] in result_map or row[1] not in job_map or row[0] != job_map[row[1]][1] or row[2] not in _TERMINAL or row[2] != job_map[row[1]][7]: _fail("result_binding")
+        if len(row) != 11 or type(row[0]) is not bytes or len(row[0]) != 64 or row[0] in result_map or row[1] not in job_map or row[0] != job_map[row[1]][1] or row[2] not in _RESULT_STATUS or (row[2] == "CANDIDATE" and job_map[row[1]][7] not in {"CANDIDATE", "VERIFIED"}) or (row[2] != "CANDIDATE" and row[2] != job_map[row[1]][7]): _fail("result_binding")
         if row[3] is not None and (type(row[3]) is not bytes or len(row[3]) > _MAX_RECEIPT): _fail("result_receipt")
         if row[4] is not None and (type(row[4]) is not str or _CODE.fullmatch(row[4]) is None): _fail("result_error")
         if type(row[5]) is not int or type(row[6]) is not int or row[6] < 1 or type(row[7]) is not str or _TOKEN.fullmatch(row[7]) is None or type(row[8]) is not int or type(row[9]) is not int or row[9] <= row[8] or type(row[10]) is not bytes or len(row[10]) != 64: _fail("result_claim_binding")
-        if (row[2] == "VERIFIED") != (row[3] is not None) or (row[2] != "VERIFIED") != (row[4] is not None): _fail("result_terminal_shape")
+        if (row[2] == "CANDIDATE") != (row[3] is not None) or (row[2] != "CANDIDATE") != (row[4] is not None): _fail("result_terminal_shape")
         result_map[bytes(row[0])] = tuple(row)
     lease_map: dict[str, tuple[Any, ...]] = {}; worker_ids: set[str] = set()
     for row in leases:
@@ -377,14 +454,40 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
         lease_map[str(row[0])] = tuple(row); worker_ids.add(str(row[1]))
     replay: dict[str, dict[str, Any]] = {}
     expected_head = _sha(_GENESIS_DOMAIN, config["queue_id"].encode("ascii"), config_digest); claim_count = 0; completion_count = 0; distinct_workers: set[str] = set()
+    accepted_members: set[bytes] = set(); accepted_batches = 0
     for index, row in enumerate(transitions, 1):
-        if len(row) != 8 or row[0] != index or row[2] not in job_map or row[3] != job_map[row[2]][1] or row[4] != expected_head or type(row[6]) is not bytes or type(row[7]) is not bytes or len(row[7]) != 64: _fail("transition_binding")
-        event_digest = _sha(_EVENT_DOMAIN, int(row[0]).to_bytes(8, "big"), str(row[1]).encode("ascii"), str(row[2]).encode("ascii"), bytes(row[3]), bytes(row[6]))
+        if len(row) != 8 or row[0] != index or row[4] != expected_head or type(row[6]) is not bytes or type(row[7]) is not bytes or len(row[7]) != 64: _fail("transition_binding")
+        if row[2] is None or row[3] is None:
+            if str(row[1]) != "ACCEPT_BATCH": _fail("transition_identity")
+            event_job = b""; event_operation = b""
+        else:
+            if row[2] not in job_map or row[3] != job_map[row[2]][1]: _fail("transition_binding")
+            event_job = str(row[2]).encode("ascii"); event_operation = bytes(row[3])
+        event_digest = _sha(_EVENT_DOMAIN, int(row[0]).to_bytes(8, "big"), str(row[1]).encode("ascii"), event_job, event_operation, bytes(row[6]))
         if event_digest != row[7] or _sha(_HEAD_DOMAIN, expected_head, index.to_bytes(8, "big"), event_digest) != row[5]: _fail("transition_chain")
         try: event = json.loads(bytes(row[6]).decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError): _fail("transition_event")
         if bytes(row[6]) != _json_bytes(event): _fail("transition_event")
-        kind = str(row[1]); _event_expected(kind, event); job = job_map[str(row[2])]; current = replay.get(str(row[2]))
+        kind = str(row[1]); _event_expected(kind, event)
+        if kind == "ACCEPT_BATCH":
+            if int(event["pre_transition_count"]) != index - 1 or bytes.fromhex(str(event["pre_head_root"])) != bytes(row[4]) or bytes.fromhex(str(event["config_digest"])) != config_digest or bytes.fromhex(str(event["profile_digest"])) != bytes(meta[7]) or bytes.fromhex(str(event["installation_id"])) != bytes(meta[9]) or int(event["installation_epoch"]) != int(meta[10]): _fail("batch_binding")
+            operation_order = [bytes.fromhex(item) for item in event["operation_ids"]]
+            candidate_rows = [item for item in transitions[: index - 1] if str(item[1]) == "COMPLETE_CANDIDATE"]
+            expected_candidates = [bytes(item[3]) for item in candidate_rows if replay.get(str(item[2]), {}).get("status") == "CANDIDATE"]
+            # Promotion takes the oldest deterministic candidate prefix.  A
+            # suffix comparison would reject the first batch (and could let a
+            # reordered >256-member batch evade the intended queue order).
+            if operation_order != expected_candidates[:len(operation_order)] or any(operation in accepted_members for operation in operation_order): _fail("batch_members")
+            member_digest = _sha(_BATCH_DOMAIN, b"".join(operation_order))
+            if member_digest != bytes.fromhex(str(event["member_set_digest"])) or _sha(_BATCH_DOMAIN, bytes.fromhex(str(event["image_sha3_512"])), bytes(row[4]), int(event["pre_transition_count"]).to_bytes(8, "big"), config_digest, bytes(meta[7]), int(meta[8]).to_bytes(8, "big"), bytes(meta[9]), int(meta[10]).to_bytes(8, "big"), member_digest, int(event["accepted_count"]).to_bytes(8, "big")) != bytes.fromhex(str(event["batch_id"])): _fail("batch_identity")
+            for operation in operation_order:
+                target = next((job_id for job_id, value in job_map.items() if bytes(value[1]) == operation), None)
+                if target is None or replay[target]["status"] != "CANDIDATE": _fail("batch_candidate")
+                replay[target].update(status="VERIFIED", updated=int(event["accepted_ms"]), error=None); accepted_members.add(operation)
+            accepted_batches += 1
+        else:
+            if row[2] is None: _fail("transition_identity")
+            job = job_map[str(row[2])]; current = replay.get(str(row[2]))
         if kind == "ADMIT":
             if current is not None or event["admission_seq"] != job[8] or event["material_digest"] != _hex(bytes(job[2])) or event["created_ms"] != job[11] or event["at_ms"] != job[11]: _fail("transition_admission_binding")
             replay[str(row[2])] = {"status": "QUEUED", "attempt": 0, "next": int(event["next_eligible_ms"]), "updated": int(event["at_ms"]), "error": None}
@@ -413,26 +516,79 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
                 if result is None or result[6] != claim["claim_sequence"] or result[7] != claim["worker_id"] or result[8] != claim["leased_ms"] or result[9] != claim["expires_ms"] or result[10] != _blob(claim["token_digest"], 64, "transition_digest") or result[2] != event["status"] or result[4] != event["error_code"]: _fail("transition_result_binding")
                 receipt_digest = None if result[3] is None else _hex(_sha(_RECEIPT_DOMAIN, bytes(result[3])))
                 if event.get("receipt_digest") != receipt_digest: _fail("transition_receipt_binding")
-                if event["status"] == "VERIFIED":
+                if event["status"] == "CANDIDATE":
                     try: receipt_value = json.loads(bytes(result[3]).decode("ascii")); receipt = _parse_receipt(receipt_value, config)
                     except (UnicodeDecodeError, json.JSONDecodeError): _fail("verified_receipt")
                     if bytes(result[3]) != _json_bytes(receipt_value) or receipt["job_id"] != str(job[0]) or receipt["operation_id"] != bytes(job[1]) or receipt["attempt"] != job[9] or receipt["evidence"]["artifact_bytes"] != job[4] or receipt["evidence"]["artifact_sha256"] != job[5] or receipt["evidence"]["artifact_sha3_512"] != job[6]: _fail("verified_receipt_binding")
                 if kind.startswith("COMPLETE_"): completion_count += 1
-                current.update(status=str(event["status"]), updated=int(event["at_ms"]), error=None if event["status"] == "VERIFIED" else str(event["error_code"]), claim=None)
+                current.update(status=str(event["status"]), updated=int(event["at_ms"]), error=None if event["status"] == "CANDIDATE" else str(event["error_code"]), claim=None)
+        elif kind == "ACCEPT_BATCH":
+            pass
         else:
             _fail("transition_kind")
         expected_head = bytes(row[5])
-    if expected_head != bytes(meta[7]) or set(replay) != set(job_map): _fail("transition_final")
+    if expected_head != bytes(meta[11]) or set(replay) != set(job_map): _fail("transition_final")
     for job_id, job in job_map.items():
         state = replay[job_id]
         if state["status"] != job[7] or state["attempt"] != job[9] or state["next"] != job[10] or state["updated"] != job[12] or state["error"] != job[13]: _fail("job_replay_binding")
         operation = bytes(job[1]); has_lease = job_id in lease_map; has_result = operation in result_map
-        if (job[7] == "LEASED") != has_lease or (job[7] in _TERMINAL) != has_result or (job[7] in _NONTERMINAL and has_result): _fail("job_state_binding")
+        if (job[7] == "LEASED") != has_lease or (job[7] in {"CANDIDATE", "VERIFIED", "REJECTED", "HELD"}) != has_result or (job[7] in {"QUEUED", "LEASED"} and has_result): _fail("job_state_binding")
         if has_lease:
             lease = lease_map[job_id]; claim = state.get("claim")
             if claim is None or lease[4] != claim["claim_sequence"] or lease[1] != claim["worker_id"] or lease[3] != claim["attempt"] or lease[5] != claim["leased_ms"] or lease[6] != claim["expires_ms"] or lease[2] != _blob(claim["token_digest"], 64, "lease_digest"): _fail("lease_history_binding")
     counts = {status: sum(1 for row in jobs if row[7] == status) for status in sorted(_STATUS)}
-    return {"schema": _SCHEMA, "queue_id": config["queue_id"], "head_root": _hex(bytes(meta[7])), "status_counts": counts, "lease_count": len(leases), "transition_count": len(transitions), "config_digest": _hex(config_digest), "storage_used_bytes": int(meta[10]), "storage_reserved_bytes": int(meta[11]), "claim_count": claim_count, "completion_count": completion_count, "distinct_worker_count": len(distinct_workers)}
+    return {"schema": _SCHEMA, "queue_id": config["queue_id"], "head_root": _hex(bytes(meta[11])), "status_counts": counts, "lease_count": len(leases), "transition_count": len(transitions), "config_digest": _hex(config_digest), "profile_digest": _hex(bytes(meta[7])), "profile_epoch": int(meta[8]), "installation_id": _hex(bytes(meta[9])), "installation_epoch": int(meta[10]), "storage_used_bytes": int(meta[14]), "storage_reserved_bytes": int(meta[15]), "claim_count": claim_count, "completion_count": completion_count, "distinct_worker_count": len(distinct_workers), "accepted_batch_count": accepted_batches}
+
+
+def verify_completed_batch(
+    image_bytes: bytes,
+    completed_operation_ids: list[bytes] | tuple[bytes, ...],
+    *,
+    expected_profile: Mapping[str, Any] | None = None,
+    expected_installation: Mapping[str, Any] | None = None,
+) -> IndependentBatchAcceptance:
+    """Replay one immutable image once and select its candidate members."""
+    if type(image_bytes) is not bytes or not 0 < len(image_bytes) <= _MAX_DATABASE: _fail("batch_image_bounds")
+    if type(completed_operation_ids) not in (list, tuple) or not 1 <= len(completed_operation_ids) <= 256 or len(set(completed_operation_ids)) != len(completed_operation_ids) or any(type(item) is not bytes or len(item) != 64 for item in completed_operation_ids): _fail("batch_operation_ids")
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        try: connection.deserialize(bytes(image_bytes))
+        except (sqlite3.Error, ValueError, MemoryError): _fail("batch_image")
+        connection.execute("BEGIN")
+        summary = _verify_connection(connection)
+        metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()
+        if metadata is None: _fail("batch_metadata")
+        try: config = json.loads(bytes(metadata[0]).decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError): _fail("batch_config")
+        if expected_profile is not None:
+            for key in ("profile_digest", "profile_epoch", "circuit_id", "proof_suite_id", "production_usable", "activation"):
+                if expected_profile.get(key) != config.get(key): _fail("batch_profile")
+        if expected_installation is not None:
+            for key in ("installation_id", "installation_epoch"):
+                if expected_installation.get(key) != config.get(key): _fail("batch_installation")
+        candidate_rows = connection.execute("SELECT j.operation_id FROM queue_jobs j JOIN queue_transitions t ON t.operation_id=j.operation_id WHERE j.status='CANDIDATE' AND t.transition_kind='COMPLETE_CANDIDATE' ORDER BY t.sequence").fetchall()
+        ordered = tuple(bytes(row[0]) for row in candidate_rows)
+        requested = tuple(completed_operation_ids)
+        if ordered[: len(requested)] != requested: _fail("batch_candidate_set")
+        if len(requested) != min(256, len(ordered)): _fail("batch_candidate_set")
+        config_digest = bytes.fromhex(str(summary["config_digest"]))
+        profile_digest = bytes.fromhex(str(summary["profile_digest"]))
+        installation_id = bytes.fromhex(str(summary["installation_id"]))
+        pre_head = bytes.fromhex(str(summary["head_root"]))
+        pre_count = int(summary["transition_count"])
+        member_digest = _sha(_BATCH_DOMAIN, b"".join(requested))
+        image_digest = hashlib.sha3_512(image_bytes).digest()
+        batch_id = _sha(_BATCH_DOMAIN, image_digest, pre_head, pre_count.to_bytes(8, "big"), config_digest, profile_digest, int(summary["profile_epoch"]).to_bytes(8, "big"), installation_id, int(summary["installation_epoch"]).to_bytes(8, "big"), member_digest, len(requested).to_bytes(8, "big"))
+        connection.execute("COMMIT")
+        return IndependentBatchAcceptance(image_digest, pre_head, pre_count, config_digest, profile_digest, int(summary["profile_epoch"]), installation_id, int(summary["installation_epoch"]), requested, member_digest, batch_id, len(requested))
+    except IndependentQueueError:
+        if connection.in_transaction: connection.execute("ROLLBACK")
+        raise
+    except (sqlite3.Error, ValueError, MemoryError):
+        if connection.in_transaction: connection.execute("ROLLBACK")
+        _fail("batch_replay")
+    finally:
+        connection.close()
 
 
 def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -483,7 +639,7 @@ def _database_bytes(path: Path) -> bytes:
 
 
 def _verified_job_from_row(row: tuple[Any, ...], config: Mapping[str, Any], summary: Mapping[str, Any]) -> IndependentVerifiedQueueJob:
-    if len(row) != 16 or row[7] != "VERIFIED" or row[14] != "VERIFIED" or row[15] is None: _fail("job_not_verified")
+    if len(row) != 16 or row[7] != "VERIFIED" or row[14] != "CANDIDATE" or row[15] is None: _fail("job_not_verified")
     try:
         receipt_bytes = bytes(row[15]); receipt_value = json.loads(receipt_bytes.decode("ascii")); receipt = _parse_receipt(receipt_value, config); evidence = receipt["evidence"]
         return IndependentVerifiedQueueJob(queue_id=str(config["queue_id"]), config_digest=bytes.fromhex(str(summary["config_digest"])), verifier_sha256=bytes(evidence["verifier_sha256"]), job_id=str(row[0]), operation_id=bytes(receipt["operation_id"]), attempt=int(receipt["attempt"]), receipt_bytes=receipt_bytes, receipt_id=bytes(receipt["receipt_id"]), acceptance_bytes=bytes(evidence["acceptance_bytes"]), proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]), artifact_ref=str(row[3]), artifact_bytes=int(row[4]), artifact_sha256=bytes(row[5]), artifact_sha3_512=bytes(row[6]), circuit_id=bytes(evidence["circuit_id"]), peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]), cap_bytes=int(evidence["cap_bytes"]), cap_enforced=bool(evidence["cap_enforced"]), active_process_limit=int(evidence["active_process_limit"]), timed_out=bool(evidence["timed_out"]), exit_code=int(evidence["exit_code"]), stdout_sha3_512=bytes(evidence["stdout_sha3_512"]), stderr_sha3_512=bytes(evidence["stderr_sha3_512"]))
@@ -577,4 +733,4 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
             except (OSError, ValueError): pass
 
 
-__all__ = ("IndependentQueueError", "IndependentVerifiedQueueJob", "read_verified_job", "read_verified_jobs", "restore_export_to_fresh_database", "verify_database", "verify_export_bytes")
+__all__ = ("IndependentBatchAcceptance", "IndependentQueueError", "IndependentVerifiedQueueJob", "read_verified_job", "read_verified_jobs", "restore_export_to_fresh_database", "verify_completed_batch", "verify_database", "verify_export_bytes")

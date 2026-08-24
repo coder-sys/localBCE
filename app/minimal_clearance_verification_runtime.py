@@ -30,10 +30,15 @@ from app.minimal_clearance_verification_queue import (
     _is_reparse,
     _owned_directory,
 )
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
 
 
 class VerificationRuntimeError(RuntimeError):
     """A fixed-code runtime boundary error."""
+
+
+_MAX_WORKSPACE_ENTRIES = 256
+_MAX_WORKSPACE_BYTES = 64 * 1024 * 1024
 
 
 def _raise_fixed(code: str) -> None:
@@ -46,18 +51,49 @@ def _raise_fixed(code: str) -> None:
         raise
 
 
+def _hex_batch(value: object) -> str:
+    if type(value) is not bytes or len(value) != 64:
+        _raise_fixed("runtime_promotion")
+    return value.hex().upper()
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeRunResult:
     """Sanitized aggregate result; no identifiers, paths, or evidence bytes."""
-
-    processed: int
-    verified: int
-    rejected: int
-    held: int
-    requeued: int
-    indeterminate: bool
+    outcome: str
+    code: str | None
+    accepted_count: int | None
+    rejected_count: int | None
+    held_count: int | None
+    requeued_count: int | None
+    acceptance_batch_ids: tuple[str, ...]
+    acceptance_head_roots: tuple[str, ...]
     recovered_leases: int
     scavenged_workspaces: int
+
+    @property
+    def processed(self) -> int:
+        return 0 if self.outcome == "INDETERMINATE" else int(self.accepted_count or 0) + int(self.rejected_count or 0) + int(self.held_count or 0) + int(self.requeued_count or 0)
+
+    @property
+    def verified(self) -> int:
+        return int(self.accepted_count or 0)
+
+    @property
+    def rejected(self) -> int:
+        return int(self.rejected_count or 0)
+
+    @property
+    def held(self) -> int:
+        return int(self.held_count or 0)
+
+    @property
+    def requeued(self) -> int:
+        return int(self.requeued_count or 0)
+
+    @property
+    def indeterminate(self) -> bool:
+        return self.outcome == "INDETERMINATE"
 
 
 def _identity(path: Path) -> tuple[int, int, int, int]:
@@ -102,13 +138,24 @@ def _remove_owned_workspace(directory: Path, expected_identity: tuple[int, int, 
         marker_dev, marker_ino, marker_nlink, marker_bytes = _marker_bytes(marker)
         if marker_bytes != _WORKSPACE_MARKER:
             raise OSError
-        entries = list(directory.iterdir())
-        for entry in entries:
-            item = os.lstat(entry)
+        entries: list[tuple[Path, os.stat_result]] = []
+        total_bytes = 0
+        with os.scandir(directory) as scan:
+            for entry in scan:
+                if len(entries) >= _MAX_WORKSPACE_ENTRIES:
+                    raise OSError
+                item = entry.stat(follow_symlinks=False)
+                entries.append((Path(entry.path), item))
+                total_bytes += int(item.st_size)
+                if total_bytes > _MAX_WORKSPACE_BYTES:
+                    raise OSError
+        for entry, item in entries:
             if entry == marker:
                 if (int(item.st_dev), int(item.st_ino), int(item.st_nlink)) != (marker_dev, marker_ino, marker_nlink) or not stat.S_ISREG(item.st_mode) or _is_reparse(item):
                     raise OSError
                 continue
+            if entry.name != "artifact.bin":
+                raise OSError
             if not stat.S_ISREG(item.st_mode) or int(item.st_nlink) != 1 or _is_reparse(item):
                 raise OSError
             current = os.lstat(entry)
@@ -137,7 +184,12 @@ def _scavenge_workspaces(parent: Path) -> int:
     try:
         parent_stat = os.lstat(parent)
         parent_identity = (int(parent_stat.st_dev), int(parent_stat.st_ino), int(parent_stat.st_nlink))
-        entries = list(parent.iterdir())
+        entries: list[Path] = []
+        with os.scandir(parent) as scan:
+            for entry in scan:
+                if len(entries) >= _MAX_WORKSPACE_ENTRIES:
+                    raise OSError
+                entries.append(Path(entry.path))
     except (OSError, ValueError):
         _raise_fixed("runtime_workspace_parent")
     removed = 0
@@ -165,15 +217,19 @@ class MinimalClearanceVerificationRuntime:
     def __init__(
         self,
         *,
-        database: Path,
-        config: QueueConfig,
-        executable: Path,
+        root: Path,
+        profile: ExperimentalPrivateZkProfile,
         source_root: Path,
-        workspace_parent: Path,
     ) -> None:
-        if type(config) is not QueueConfig or not isinstance(database, Path) or not isinstance(executable, Path):
+        if not isinstance(root, Path) or type(profile) is not ExperimentalPrivateZkProfile or not root.is_absolute() or not _owned_directory(root) or not isinstance(source_root, Path):
             _raise_fixed("runtime_configuration")
-        if not isinstance(source_root, Path) or not isinstance(workspace_parent, Path):
+        try:
+            workspace_parent = root / "workspaces"
+            if not workspace_parent.exists(): workspace_parent.mkdir()
+            database = root / "queue.sqlite"
+            executable = profile.executable
+            config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-queue-v4", capacity=512, artifact_bytes_cap=512 * 1024 * 1024, installation_id=derive_installation_id(root), installation_epoch=1)
+        except (OSError, ValueError):
             _raise_fixed("runtime_configuration")
         if not _owned_directory(source_root) or not _workspace_parent_ok(workspace_parent):
             _raise_fixed("runtime_workspace_parent")
@@ -181,6 +237,10 @@ class MinimalClearanceVerificationRuntime:
         self._database_owner: _QueueRuntimeOwnership | None = None
         self._workspace_owner: _QueueRuntimeOwnership | None = None
         self._database_path = database
+        self._root = root
+        self._root_identity = None if root is None else _directory_identity(root)
+        self._source_root = source_root
+        self._source_identity = _directory_identity(source_root)
         self._workspace_parent = workspace_parent
         self._store: _VerificationQueueStore | None = None
         self._custody: _FilesystemArtifactCustody | None = None
@@ -209,6 +269,7 @@ class MinimalClearanceVerificationRuntime:
                 owner=self._database_owner,
             )
             self._recovered_leases = self._store._recover_startup_leases()
+            self._promotion_batches = self._store._promote_candidates()
             self._custody = _FilesystemArtifactCustody(source_root=source_root, workspace_parent=workspace_parent)
             self._verifier = NativeMinimalClearanceVerifier(
                 executable,
@@ -238,6 +299,10 @@ class MinimalClearanceVerificationRuntime:
                 lock_path=self._workspace_parent / ".BLV3-WORKSPACE-PARENT-LOCK",
                 parent=self._workspace_parent,
             )
+            if _directory_identity(self._source_root) != self._source_identity:
+                _raise_fixed(VerificationRuntimeError("runtime_source_root"))
+            if self._root is not None and _directory_identity(self._root) != self._root_identity:
+                _raise_fixed(VerificationRuntimeError("runtime_root"))
         except BaseException:
             _raise_fixed("runtime_owner")
 
@@ -247,7 +312,9 @@ class MinimalClearanceVerificationRuntime:
             _raise_fixed("runtime_closed")
         if type(max_jobs) is not int or not 1 <= max_jobs <= 256:
             _raise_fixed("runtime_max_jobs")
-        processed = verified = rejected = held = requeued = 0
+        startup_batches = self._promotion_batches
+        self._promotion_batches = ()
+        candidate = rejected = held = requeued = 0
         indeterminate = False
         for _ in range(max_jobs):
             self._assert_owners()
@@ -260,9 +327,8 @@ class MinimalClearanceVerificationRuntime:
                 self._assert_owners()
             if result is None:
                 break
-            processed += 1
-            if result.status == "VERIFIED":
-                verified += 1
+            if result.status == "CANDIDATE":
+                candidate += 1
             elif result.status == "REJECTED":
                 rejected += 1
             elif result.status == "HELD":
@@ -272,17 +338,19 @@ class MinimalClearanceVerificationRuntime:
             else:
                 indeterminate = True
                 break
+        batches: tuple[dict[str, object], ...] = tuple(startup_batches)
+        if not indeterminate:
+            try:
+                batches += self._store._promote_candidates()
+            except QueueIndeterminateError:
+                indeterminate = True
         self._assert_owners()
-        return RuntimeRunResult(
-            processed=processed,
-            verified=verified,
-            rejected=rejected,
-            held=held,
-            requeued=requeued,
-            indeterminate=indeterminate,
-            recovered_leases=self._recovered_leases,
-            scavenged_workspaces=self._scavenged_workspaces,
-        )
+        if indeterminate:
+            return RuntimeRunResult("INDETERMINATE", "runtime_indeterminate", None, None, None, None, (), (), self._recovered_leases, self._scavenged_workspaces)
+        if candidate == rejected == held == requeued == 0 and not batches:
+            return RuntimeRunResult("EMPTY", None, None, None, None, None, (), (), self._recovered_leases, self._scavenged_workspaces)
+        accepted = sum(int(item.get("accepted_count", 0)) for item in batches)
+        return RuntimeRunResult("ACCEPTED", None, accepted, rejected, held, requeued, tuple(_hex_batch(item.get("batch_id")) for item in batches), tuple(_hex_batch(item.get("head_root")) for item in batches), self._recovered_leases, self._scavenged_workspaces)
 
     def admit(self, *, job_id: str, metadata: ArtifactMetadata) -> None:
         self._assert_owners()
@@ -293,7 +361,7 @@ class MinimalClearanceVerificationRuntime:
         finally:
             self._assert_owners()
 
-    def verify_integrity(self) -> None:
+    def _verify_integrity(self) -> None:
         self._assert_owners()
         if self._closed or self._store is None:
             _raise_fixed("runtime_closed")
@@ -302,21 +370,12 @@ class MinimalClearanceVerificationRuntime:
         finally:
             self._assert_owners()
 
-    def export_bytes(self) -> bytes:
+    def _export_bytes(self) -> bytes:
         self._assert_owners()
         if self._closed or self._store is None:
             _raise_fixed("runtime_closed")
         try:
             return self._store._export_bytes()
-        finally:
-            self._assert_owners()
-
-    def snapshot(self) -> dict[str, object]:
-        self._assert_owners()
-        if self._closed or self._store is None:
-            _raise_fixed("runtime_closed")
-        try:
-            return self._store._snapshot()
         finally:
             self._assert_owners()
 
