@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 from pathlib import Path
 import os
@@ -19,6 +20,43 @@ def _metadata(*, inode: int = 7, size: int = 3, mtime: int = 11, mode: int | Non
         st_mtime_ns=mtime,
         st_mode=stat.S_IFREG if mode is None else mode,
     )
+
+
+def test_windows_by_handle_file_information_abi() -> None:
+    information = proof._ByHandleFileInformation
+    assert ctypes.sizeof(information) == 52
+    assert information.dwFileAttributes.offset == 0
+    assert information.ftCreationTime.offset == 4
+    assert information.ftLastAccessTime.offset == 12
+    assert information.ftLastWriteTime.offset == 20
+    assert information.dwVolumeSerialNumber.offset == 28
+    assert information.nFileSizeHigh.offset == 32
+    assert information.nFileSizeLow.offset == 36
+    assert information.nNumberOfLinks.offset == 40
+    assert information.nFileIndexHigh.offset == 44
+    assert information.nFileIndexLow.offset == 48
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires the real Windows file-custody ABI")
+def test_real_windows_held_file_custody(tmp_path: Path) -> None:
+    path = tmp_path / "ordinary-executable-shaped.bin"
+    payload = b"held-file-custody"
+    path.write_bytes(payload)
+
+    held = proof._open_held_file(path, maximum=4096, executable=True)
+    try:
+        assert held.path == path
+        held._assert_path_and_chain()
+        assert held._read_held() == payload
+        size, digest = held.digest("sha256")
+        assert size == len(payload)
+        assert digest == hashlib.sha256(payload).digest()
+        held.reset()
+        held._assert_path_and_chain()
+        assert held.descriptor >= 0
+    finally:
+        held.close()
+    assert path.read_bytes() == payload
 
 
 def test_stable_read_is_descriptor_owned_and_bounded(tmp_path: Path) -> None:

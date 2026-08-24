@@ -82,6 +82,23 @@ _FILE_FLAG_OPEN_REPARSE_POINT: Final[int] = 0x00200000
 _FILE_FLAG_BACKUP_SEMANTICS: Final[int] = 0x02000000
 
 
+class _ByHandleFileInformation(ctypes.Structure):
+    """The Windows BY_HANDLE_FILE_INFORMATION ABI (four-byte FILETIME alignment)."""
+
+    _fields_ = [
+        ("dwFileAttributes", wintypes.DWORD),
+        ("ftCreationTime", wintypes.FILETIME),
+        ("ftLastAccessTime", wintypes.FILETIME),
+        ("ftLastWriteTime", wintypes.FILETIME),
+        ("dwVolumeSerialNumber", wintypes.DWORD),
+        ("nFileSizeHigh", wintypes.DWORD),
+        ("nFileSizeLow", wintypes.DWORD),
+        ("nNumberOfLinks", wintypes.DWORD),
+        ("nFileIndexHigh", wintypes.DWORD),
+        ("nFileIndexLow", wintypes.DWORD),
+    ]
+
+
 def _is_reparse(metadata: os.stat_result) -> bool:
     return bool(
         int(getattr(metadata, "st_file_attributes", 0))
@@ -1037,21 +1054,7 @@ class _HeldWindowsFile:
         self._kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
 
     def _validate_handle(self, raw: int, *, expect_directory: bool) -> None:
-        class _FileInformation(ctypes.Structure):
-            _fields_ = [
-                ("dwFileAttributes", ctypes.wintypes.DWORD),
-                ("ftCreationTime", ctypes.c_ulonglong),
-                ("ftLastAccessTime", ctypes.c_ulonglong),
-                ("ftLastWriteTime", ctypes.c_ulonglong),
-                ("dwVolumeSerialNumber", ctypes.wintypes.DWORD),
-                ("nFileSizeHigh", ctypes.wintypes.DWORD),
-                ("nFileSizeLow", ctypes.wintypes.DWORD),
-                ("nNumberOfLinks", ctypes.wintypes.DWORD),
-                ("nFileIndexHigh", ctypes.wintypes.DWORD),
-                ("nFileIndexLow", ctypes.wintypes.DWORD),
-            ]
-
-        information = _FileInformation()
+        information = _ByHandleFileInformation()
         if not self._kernel32.GetFileInformationByHandle(
             ctypes.wintypes.HANDLE(raw), ctypes.byref(information)
         ):
