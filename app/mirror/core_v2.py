@@ -261,6 +261,16 @@ def _path_identity(path: Path, *, allow_missing: bool) -> tuple[int, int] | None
     return int(info.st_dev), int(info.st_ino)
 
 
+def _require_path_identity(path: Path, expected: tuple[int, int]) -> tuple[int, int]:
+    try:
+        current = _path_identity(path, allow_missing=False)
+    except CoreError:
+        raise_redacted(CoreError, "core:database-open")
+    if current != expected:
+        raise_redacted(CoreError, "core:database-open")
+    return current
+
+
 def _configure(connection: sqlite3.Connection) -> None:
     try:
         connection.execute("PRAGMA foreign_keys=ON")
@@ -345,8 +355,16 @@ def _columns(connection: sqlite3.Connection, table: str) -> tuple[str, ...]:
 def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
     existing = _path_identity(path, allow_missing=True)
     if existing is not None:
-        independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
+        try:
+            independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
+        except independent.CoreVerificationError:
+            _require_path_identity(path, existing)
+            raise
         connection = _connection(path, expected_identity=existing)
+
+        def _existing_identity() -> None:
+            _require_path_identity(path, existing)
+
         try:
             if _table_names(connection) != tuple(sorted(TABLES)) or any(_columns(connection, table) != columns for table, columns in independent.TABLE_COLUMNS.items()):
                 raise CoreError("core:legacy-schema")
@@ -359,19 +377,26 @@ def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
         finally:
             _finalize_core_connection(
                 connection,
-                identity_check=lambda: _path_identity(path, allow_missing=False),
+                identity_check=_existing_identity,
                 transactional=False,
                 cleanup_code="core:database-open",
             )
         return existing
 
     connection = _connection(path, create=True)
+    try:
+        initial_identity = _path_identity(path, allow_missing=False)
+    except CoreError:
+        _finalize_core_connection(connection, transactional=False, cleanup_code="core:database-open")
+        raise
+    if initial_identity is None:
+        _finalize_core_connection(connection, transactional=False, cleanup_code="core:database-open")
+        raise CoreError("core:database-open")
     commit_attempted = False
     commit_succeeded = False
 
     def _postcommit_identity() -> None:
-        if _path_identity(path, allow_missing=False) is None:
-            raise CoreError("core:database-open")
+        _require_path_identity(path, initial_identity)
 
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -421,11 +446,14 @@ def _init(path: Path, config: CoreConfigV2) -> tuple[int, int]:
             identity_check=_postcommit_identity,
             cleanup_code="core:database-initialize",
         )
-    independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
-    identity = _path_identity(path, allow_missing=False)
-    if identity is None:
-        raise CoreError("core:database-open")
-    return identity
+    _require_path_identity(path, initial_identity)
+    try:
+        independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
+    except independent.CoreVerificationError:
+        _require_path_identity(path, initial_identity)
+        raise
+    _require_path_identity(path, initial_identity)
+    return initial_identity
 
 
 class CoreServiceV2:
@@ -441,9 +469,7 @@ class CoreServiceV2:
         return _connection(self.path, expected_identity=self._database_identity)
 
     def _assert_database_identity(self) -> None:
-        current = _path_identity(self.path, allow_missing=False)
-        if current is None or current != self._database_identity:
-            raise CoreError("core:database-open")
+        _require_path_identity(self.path, self._database_identity)
 
     def _operational_represented_ingress_artifact_ids(self, limit: int) -> tuple[str, ...]:
         """Return the bounded raw-free source representation projection."""
@@ -492,7 +518,19 @@ class CoreServiceV2:
                 )
 
     def verify(self, *, ingress_path: str | Path | None = None) -> dict[str, object]:
-        return independent.verify_database(self.path, expected_database_id=self.config.database_id, expected_config_digest=self.config.digest, ingress_path=ingress_path)
+        self._assert_database_identity()
+        try:
+            result = independent.verify_database(
+                self.path,
+                expected_database_id=self.config.database_id,
+                expected_config_digest=self.config.digest,
+                ingress_path=ingress_path,
+            )
+        except independent.CoreVerificationError:
+            self._assert_database_identity()
+            raise
+        self._assert_database_identity()
+        return result
 
     def logical_export(self) -> bytes:
         return independent.logical_export(self.verify())

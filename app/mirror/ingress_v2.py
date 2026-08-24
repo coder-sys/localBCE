@@ -452,6 +452,16 @@ def _path_identity(database: Path, *, allow_missing: bool) -> tuple[int, int, in
     return (int(info.st_dev), int(info.st_ino), int(info.st_nlink), int(info.st_size))
 
 
+def _require_path_identity(database: Path, expected: tuple[int, int]) -> tuple[int, int]:
+    try:
+        current = _path_identity(database, allow_missing=False)
+    except IngressError:
+        raise_redacted(IngressError, "ingress:database-open")
+    if current is None or (current[0], current[1]) != expected:
+        raise_redacted(IngressError, "ingress:database-open")
+    return expected
+
+
 def _configure_page_limit(connection: sqlite3.Connection) -> tuple[int, int, int]:
     try:
         page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
@@ -699,7 +709,7 @@ _SCHEMA_DDL = (
 )
 
 
-def _init(path: Path, config: IngressConfigV2) -> None:
+def _init(path: Path, config: IngressConfigV2) -> tuple[int, int]:
     existing = _path_identity(path, allow_missing=True)
     creating = existing is None or _is_uninitialized_database(path)
     if not creating:
@@ -710,6 +720,7 @@ def _init(path: Path, config: IngressConfigV2) -> None:
                 expected_config_digest=config.digest,
             )
         except independent.IngressVerificationError:
+            _require_path_identity(path, (existing[0], existing[1]))
             raise IngressError("ingress:database") from None
     connection = _connection(
         path,
@@ -717,16 +728,20 @@ def _init(path: Path, config: IngressConfigV2) -> None:
         expected_identity=None if existing is None else (existing[0], existing[1]),
         create=existing is None,
     )
+    try:
+        initial_identity = _path_identity(path, allow_missing=False)
+    except IngressError:
+        _finalize_owner_connection(connection, transactional=False, cleanup_code="ingress:database-open")
+        raise
+    if initial_identity is None:
+        _finalize_owner_connection(connection, transactional=False, cleanup_code="ingress:database-open")
+        raise IngressError("ingress:database-open")
+    initial_identity = (initial_identity[0], initial_identity[1])
     commit_attempted = False
     commit_succeeded = False
 
     def _postcommit_identity() -> None:
-        current = _path_identity(path, allow_missing=False)
-        if current is None or (
-            existing is not None
-            and (current[0], current[1]) != (existing[0], existing[1])
-        ):
-            raise IngressError("ingress:database-open")
+        _require_path_identity(path, initial_identity)
 
     try:
         current = _table_names(connection)
@@ -772,8 +787,11 @@ def _init(path: Path, config: IngressConfigV2) -> None:
             commit_attempted=commit_attempted,
             commit_succeeded=commit_succeeded,
             identity_check=_postcommit_identity,
-            cleanup_code="ingress:database-initialize",
+            transactional=creating,
+            cleanup_code="ingress:database-initialize" if creating else "ingress:database-open",
         )
+    _require_path_identity(path, initial_identity)
+    return initial_identity
 
 
 class IngressServiceV2:
@@ -791,10 +809,8 @@ class IngressServiceV2:
         self.path = Path(path)
         self.config = config
         self._clock = clock or _utc_epoch_seconds
-        _init(self.path, config)
-        before = _path_identity(self.path, allow_missing=False)
-        if before is None:
-            raise IngressError("ingress:database-open")
+        self._database_identity = _init(self.path, config)
+        _require_path_identity(self.path, self._database_identity)
         try:
             independent.verify_database(
                 self.path,
@@ -802,19 +818,15 @@ class IngressServiceV2:
                 expected_config_digest=config.digest,
             )
         except independent.IngressVerificationError:
+            _require_path_identity(self.path, self._database_identity)
             raise IngressError("ingress:database") from None
-        after = _path_identity(self.path, allow_missing=False)
-        if after is None or (after[0], after[1]) != (before[0], before[1]):
-            raise IngressError("ingress:database-open")
-        self._database_identity = (before[0], before[1])
+        _require_path_identity(self.path, self._database_identity)
 
     def close(self) -> None:
         return None
 
     def _assert_database_identity(self) -> None:
-        current = _path_identity(self.path, allow_missing=False)
-        if current is None or (current[0], current[1]) != self._database_identity:
-            raise IngressError("ingress:database-open")
+        _require_path_identity(self.path, self._database_identity)
 
     def _writer_connection(self) -> sqlite3.Connection:
         self._assert_database_identity()
@@ -822,12 +834,18 @@ class IngressServiceV2:
 
     def verify(self, *, include_raw: bool = False) -> dict[str, object]:
         self._assert_database_identity()
-        return independent.verify_database(
-            self.path,
-            expected_database_id=self.config.database_id,
-            expected_config_digest=self.config.digest,
-            include_raw=include_raw,
-        )
+        try:
+            result = independent.verify_database(
+                self.path,
+                expected_database_id=self.config.database_id,
+                expected_config_digest=self.config.digest,
+                include_raw=include_raw,
+            )
+        except independent.IngressVerificationError:
+            self._assert_database_identity()
+            raise
+        self._assert_database_identity()
+        return result
 
     def _append(
         self,

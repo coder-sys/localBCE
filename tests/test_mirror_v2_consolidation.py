@@ -3835,6 +3835,177 @@ class MirrorV2Fixture(unittest.TestCase):
                 self.assertNotIn(canary, str(caught.exception))
                 self.assertNotIn(canary, rendered)
 
+    def test_owner_public_reads_reject_latched_identity_replacement(self) -> None:
+        def replace_with_identical_copy(path: Path, label: str) -> None:
+            replacement = self.root / f"{label}-replacement.db"
+            shutil.copy2(path, replacement)
+            os.replace(replacement, path)
+
+        replace_with_identical_copy(self.ingress_path, "ingress-public")
+        for operation in (self.ingress.verify, self.ingress.logical_export, self.ingress.support):
+            with self.assertRaisesRegex(ingress.IngressError, "^ingress:database-open$") as caught:
+                operation()
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+
+        replace_with_identical_copy(self.core_path, "core-public")
+        for operation in (self.core.verify, self.core.logical_export, self.core.support):
+            with self.assertRaisesRegex(core.CoreError, "^core:database-open$") as caught:
+                operation()
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+
+    def test_owner_verify_rejects_replacement_after_independent_read(self) -> None:
+        def replace_after_read(original, path: Path, label: str):
+            def wrapped(*args: object, **kwargs: object):
+                result = original(*args, **kwargs)
+                replacement = self.root / f"{label}-after-read.db"
+                shutil.copy2(path, replacement)
+                os.replace(replacement, path)
+                return result
+            return wrapped
+
+        with mock.patch.object(
+            ingress.independent,
+            "verify_database",
+            side_effect=replace_after_read(ingress.independent.verify_database, self.ingress_path, "ingress"),
+        ):
+            with self.assertRaisesRegex(ingress.IngressError, "^ingress:database-open$") as caught:
+                self.ingress.verify()
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+        with mock.patch.object(
+            core.independent,
+            "verify_database",
+            side_effect=replace_after_read(core.independent.verify_database, self.core_path, "core"),
+        ):
+            with self.assertRaisesRegex(core.CoreError, "^core:database-open$") as caught:
+                self.core.verify()
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_new_owner_init_rejects_postcommit_identity_replacement(self) -> None:
+        root = self.root
+
+        def swap_connection(original, target: Path, kwargs: dict[str, object]):
+            class CommitSwap:
+                def __init__(self, inner: sqlite3.Connection) -> None:
+                    self.inner = inner
+
+                @property
+                def in_transaction(self) -> bool:
+                    return False
+
+                def execute(self, sql: str, *parameters: object):
+                    return self.inner.execute(sql, *parameters)
+
+                def commit(self) -> None:
+                    self.inner.commit()
+                    self.inner.close()
+                    replacement = root / f"{target.stem}-postcommit.db"
+                    shutil.copy2(target, replacement)
+                    os.replace(replacement, target)
+
+                def rollback(self) -> None:
+                    self.inner.rollback()
+
+                def close(self) -> None:
+                    return None
+
+                def __getattr__(self, name: str) -> object:
+                    return getattr(self.inner, name)
+
+            return CommitSwap(original(target, **kwargs))
+
+        ingress_path = self.root / "ingress-postcommit-init.db"
+        ingress_original_connection = ingress._connection
+        with mock.patch.object(
+            ingress,
+            "_connection",
+            side_effect=lambda target, **kwargs: swap_connection(ingress_original_connection, Path(target), kwargs),
+        ):
+            with self.assertRaisesRegex(ingress.IngressIndeterminateError, "^ingress:transaction-indeterminate$") as caught:
+                ingress.IngressServiceV2(ingress_path, self.ingress_config, clock=self.clock)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(str(ingress_path), str(caught.exception))
+        self.assertNotIn(str(ingress_path), "".join(traceback.format_exception(caught.exception)))
+        self.assertIsNotNone(ingress.IngressServiceV2(ingress_path, self.ingress_config, clock=self.clock).verify())
+
+        core_path = self.root / "core-postcommit-init.db"
+        core_original_connection = core._connection
+        with mock.patch.object(
+            core,
+            "_connection",
+            side_effect=lambda target, **kwargs: swap_connection(core_original_connection, Path(target), kwargs),
+        ):
+            with self.assertRaisesRegex(core.CoreIndeterminateError, "^core:transaction-indeterminate$") as caught:
+                core.CoreServiceV2(core_path, self.core_config, clock=self.core_clock)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(str(core_path), str(caught.exception))
+        self.assertNotIn(str(core_path), "".join(traceback.format_exception(caught.exception)))
+        self.assertIsNotNone(core.CoreServiceV2(core_path, self.core_config, clock=self.core_clock).verify())
+
+    def test_existing_owner_init_rejects_postclose_identity_replacement(self) -> None:
+        root = self.root
+
+        def swap_on_close(original, target: Path, expected_identity):
+            class CloseSwap:
+                def __init__(self, inner: sqlite3.Connection) -> None:
+                    self.inner = inner
+
+                @property
+                def in_transaction(self) -> bool:
+                    return False
+
+                def execute(self, sql: str, *parameters: object):
+                    return self.inner.execute(sql, *parameters)
+
+                def rollback(self) -> None:
+                    self.inner.rollback()
+
+                def close(self) -> None:
+                    self.inner.close()
+                    replacement = root / f"{target.stem}-postclose.db"
+                    shutil.copy2(target, replacement)
+                    os.replace(replacement, target)
+
+                def __getattr__(self, name: str) -> object:
+                    return getattr(self.inner, name)
+
+            return CloseSwap(original(target, expected_identity=expected_identity))
+
+        core_path = self.root / "core-postclose-init.db"
+        shutil.copy2(self.core_path, core_path)
+        core_original_connection = core._connection
+        core_expected_identity = core._path_identity(core_path, allow_missing=False)
+        with mock.patch.object(
+            core,
+            "_connection",
+            side_effect=lambda target, **kwargs: swap_on_close(core_original_connection, Path(target), core_expected_identity),
+        ):
+            with self.assertRaisesRegex(core.CoreError, "^core:database-open$") as caught:
+                core.CoreServiceV2(core_path, self.core_config, clock=self.core_clock)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+        ingress_path = self.root / "ingress-postclose-init.db"
+        shutil.copy2(self.ingress_path, ingress_path)
+        ingress_original_connection = ingress._connection
+        ingress_path_identity = ingress._path_identity(ingress_path, allow_missing=False)
+        ingress_expected_identity = (ingress_path_identity[0], ingress_path_identity[1])
+        with mock.patch.object(
+            ingress,
+            "_connection",
+            side_effect=lambda target, **kwargs: swap_on_close(ingress_original_connection, Path(target), ingress_expected_identity),
+        ):
+            with self.assertRaisesRegex(ingress.IngressError, "^ingress:database-open$") as caught:
+                ingress.IngressServiceV2(ingress_path, self.ingress_config, clock=self.clock)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
 
 if __name__ == "__main__":
     unittest.main()
