@@ -303,16 +303,29 @@ def _verify_config(config: Mapping[str, Any]) -> tuple[bytes, bytes]:
     if type(config) is not dict or config.get("schema_version") != _SCHEMA_VERSION or config.get("proof_suite_id") is not None or config.get("production_usable") is not False or config.get("activation") is not False or tuple(config.get("directives", ())) != _DIRECTIVES:
         _fail("config")
     try:
+        if not isinstance(config.get("composition_id"), str) or not isinstance(config.get("queue_id"), str) or _fixed_ascii(config["composition_id"]) is None or _fixed_ascii(config["queue_id"]) is None:
+            _fail("config_identifiers")
         canonical = _json_bytes(config)
         digest = _sha(_MATERIAL, canonical)
         queue_digest = bytes.fromhex(str(config["queue_config_digest"]))
         verifier = bytes.fromhex(str(config["verifier_sha256"]))
         receiver = bytes.fromhex(str(config["receiver_identity"]))
         profile = bytes.fromhex(str(config["ack_evidence_profile_digest"]))
+        state_identity = config.get("state_profile_identity")
+        if state_identity is not None and len(bytes.fromhex(str(state_identity))) != 64:
+            _fail("config_state_identity")
+        expected_statement = config.get("expected_statement")
+        if expected_statement is not None and len(bytes.fromhex(str(expected_statement))) != 3340:
+            _fail("config_expected_statement")
     except (KeyError, ValueError) as exc:
         raise IndependentCompositionError("config_fields") from exc
     if len(queue_digest) != 64 or len(verifier) != 32 or len(receiver) != 32 or len(profile) != 64:
         _fail("config_width")
+    for name, maximum in (("receiver_epoch", 2**63), ("verifier_epoch", 2**63), ("capacity", 10_000), ("reconciliation_capacity", 10_000), ("lease_seconds", 3_600), ("reconciliation_lease_seconds", 3_600)):
+        if type(config.get(name)) is not int or not 1 <= config[name] <= maximum:
+            _fail("config_integer")
+    if config.get("max_attempts") != 3 or config.get("busy_timeout_ms") != 5_000:
+        _fail("config_fixed")
     return digest, profile
 
 
@@ -332,6 +345,8 @@ def _verify_rows(value: dict[str, Any], *, expected_config: Mapping[str, Any] | 
     metadata_profile = _blob(metadata[12], 64, "metadata_profile")
     metadata_state_identity = _blob(metadata[8], 64, "metadata_state_identity", nullable=True)
     metadata_expected_statement = _blob(metadata[13], 3340, "metadata_expected_statement", nullable=True)
+    config_state_identity = _blob(config.get("state_profile_identity"), 64, "config_state_identity", nullable=True)
+    config_expected_statement = _blob(config.get("expected_statement"), 3340, "config_expected_statement", nullable=True)
     if (
         int(metadata[1]) != _SCHEMA_VERSION or str(metadata[2]) != config["composition_id"]
         or metadata_config_digest != config_digest or metadata_queue_digest != bytes.fromhex(str(config["queue_config_digest"]))
@@ -339,6 +354,8 @@ def _verify_rows(value: dict[str, Any], *, expected_config: Mapping[str, Any] | 
         or metadata_receiver != bytes.fromhex(str(config["receiver_identity"]))
         or int(metadata[10]) != int(config["receiver_epoch"]) or int(metadata[11]) != int(config["verifier_epoch"])
         or metadata_profile != profile_digest or metadata[14] is not None or metadata[15] != 0 or metadata[16] != 0
+        or (config_state_identity is not None and metadata_state_identity != config_state_identity)
+        or (config_expected_statement is not None and metadata_expected_statement != config_expected_statement)
     ):
         _fail("metadata_binding")
     rows: dict[str, list[list[Any]]] = {}
@@ -609,7 +626,7 @@ def _verify_rows(value: dict[str, Any], *, expected_config: Mapping[str, Any] | 
             or type(row[5]) is not int or row[5] < 0 or row[5] > int(config["max_attempts"])
             or any(type(row[index]) is not int or row[index] < 0 for index in (10, 11, 12))
             or (row[4] == "ACKNOWLEDGED" and outbox[6] != "ACKNOWLEDGED")
-            or (row[4] != "ACKNOWLEDGED" and outbox[6] != "DELIVERY_UNCONFIRMED")
+            or (row[4] != "ACKNOWLEDGED" and outbox[6] not in {"DELIVERY_UNCONFIRMED", "LEASED"})
         ):
             _fail("reconciliation_binding")
         if row[4] == "LEASED":

@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 import inspect
 
 import tests.test_minimal_clearance_verification_queue as queue_fixtures
@@ -168,6 +169,14 @@ class CompositionV2Tests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
                 )
             }
+        self.assertEqual(
+            tables,
+            {
+                "composition_metadata", "composition_state", "composition_transitions", "proof_requests",
+                "proof_audit", "proof_transitions", "application_dispositions", "outbox_jobs", "outbox_leases",
+                "outbox_acks", "outbox_transitions", "reconciliation_records",
+            },
+        )
         self.assertNotIn("metadata", tables)
         self.assertNotIn("settlement_requests", tables)
         self.assertNotIn("migration_requests", tables)
@@ -245,6 +254,83 @@ class CompositionV2Tests(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             ClearanceCompositionStoreV2(path=legacy, config=config)
         self.assertIn("wrong_schema", str(caught.exception))
+
+    def test_composition_commit_faults_have_no_partial_state_and_exact_retry(self) -> None:
+        queue = self._verified_queue()
+        config = self._config()
+        before = {"fired": False}
+
+        def before_fault(label: str) -> None:
+            if label == "before_composition_commit" and not before["fired"]:
+                before["fired"] = True
+                raise RuntimeError("commit_not_started")
+
+        path = self.root / "composition.sqlite3"
+        store = ClearanceCompositionStoreV2(path=path, config=config, before_fault=before_fault)
+        with self.assertRaises(RuntimeError):
+            store.process_verified_job(queue.path, "job-1")
+        with closing(sqlite3.connect(path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM composition_state").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM application_dispositions").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM outbox_jobs").fetchone()[0], 0)
+        restarted = ClearanceCompositionStoreV2(path=path, config=config)
+        committed = restarted.process_verified_job(queue.path, "job-1")
+        self.assertEqual(committed.status, "APPLIED")
+
+        after = {"fired": False}
+
+        def after_fault(label: str) -> None:
+            if label == "after_composition_commit" and not after["fired"]:
+                after["fired"] = True
+                raise RuntimeError("commit_response_lost")
+
+        uncertain_store = ClearanceCompositionStoreV2(path=self.root / "after.sqlite3", config=config, after_commit_fault=after_fault)
+        with self.assertRaises(Exception):
+            uncertain_store.process_verified_job(queue.path, "job-1")
+        retry = uncertain_store.process_verified_job(queue.path, "job-1")
+        self.assertTrue(retry.duplicate_convergence)
+        verify_database(uncertain_store.path, expected_config=config.as_json)
+
+    def test_concurrent_duplicate_composition_converges_once(self) -> None:
+        queue = self._verified_queue()
+        config = self._config()
+        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config)
+
+        def process() -> object:
+            return store.process_verified_job(queue.path, "job-1")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _unused: process(), (0, 1)))
+        self.assertEqual(sorted(result.status for result in results), ["APPLIED", "APPLIED"])
+        self.assertEqual(sum(result.duplicate_convergence for result in results), 1)
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM application_dispositions").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM outbox_jobs").fetchone()[0], 1)
+        verify_database(store.path, expected_config=config.as_json)
+
+    def test_expired_outbox_lease_rejects_stale_token_and_recovers(self) -> None:
+        queue = self._verified_queue()
+        clock = queue_fixtures._Clock(1_000)
+        config = CompositionConfigV2(
+            queue_id=self.queue_tests._config().queue_id,
+            queue_config_digest=self.queue_tests._config().digest,
+            verifier_sha256=queue_fixtures._VERIFIER,
+            receiver_identity=bytes(range(32)),
+            lease_seconds=1,
+        )
+        store = ClearanceCompositionStoreV2(path=self.root / "composition.sqlite3", config=config, clock=clock)
+        store.process_verified_job(queue.path, "job-1")
+        work = store.claim_next_outbox("worker-1")
+        self.assertIsNotNone(work)
+        clock.advance(1_001)
+        receiver = _Receiver(config)
+        with self.assertRaises(Exception):
+            store.dispatch(work, receiver=receiver)
+        self.assertEqual(receiver.calls, 0)
+        recovered = store.claim_next_outbox("worker-2")
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered.attempt, 2)
+        verify_database(store.path, expected_config=config.as_json)
 
 
 if __name__ == "__main__":
