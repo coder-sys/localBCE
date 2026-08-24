@@ -7,7 +7,8 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from typing import Mapping
+import time
+from typing import Callable, Mapping
 
 from app.mirror import ingress_v2_independent as independent
 from app.mirror import nc_medicaid_fhir_independent as fhir
@@ -21,6 +22,10 @@ TABLES = independent.TABLES
 STATES = independent.STATES
 FIXED_FLAGS = dict(independent.FIXED_FLAGS)
 MAX_DATABASE_BYTES = independent.MAX_DATABASE_BYTES
+
+
+def _utc_epoch_seconds() -> int:
+    return int(time.time())
 
 
 class IngressError(ValueError):
@@ -263,9 +268,18 @@ def _init(path: Path, config: IngressConfigV2) -> None:
 class IngressServiceV2:
     """Owns scheduling, raw envelope custody, fetch attestations, and quarantine state."""
 
-    def __init__(self, path: str | Path, config: IngressConfigV2) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        config: IngressConfigV2,
+        *,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
+        if clock is not None and not callable(clock):
+            raise IngressError("ingress:clock")
         self.path = Path(path)
         self.config = config
+        self._clock = clock or _utc_epoch_seconds
         _init(self.path, config)
 
     def close(self) -> None:
@@ -413,6 +427,27 @@ class IngressServiceV2:
             database_id=self.config.database_id,
         )
 
+    def _owner_now(self) -> int:
+        try:
+            value = self._clock()
+        except Exception:
+            raise_redacted(IngressError, "ingress:clock")
+        if type(value) is not int or value < 0:
+            raise IngressError("ingress:clock")
+        return value
+
+    def _last_observed_at(self, connection: sqlite3.Connection, slot_id: str) -> int | None:
+        row = connection.execute(
+            "SELECT MAX(observed_at) FROM ingress_events WHERE slot_id=?",
+            (slot_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        value = row[0]
+        if type(value) is not int or value < 0:
+            raise IngressError("ingress:event-time")
+        return value
+
     def ensure_slot(self, scheduled_at: int) -> IngressReceipt:
         if type(scheduled_at) is not int or not (
             self.config.effective_start <= scheduled_at <= self.config.effective_end
@@ -442,6 +477,7 @@ class IngressServiceV2:
             meta = connection.execute("SELECT slot_count FROM ingress_meta WHERE meta_id=1").fetchone()
             if meta is None or int(meta[0]) >= self.config.max_slots:
                 raise IngressConflictError("ingress:capacity")
+            owner_now = self._owner_now()
             connection.execute(
                 "INSERT INTO ingress_slots(slot_id,scheduled_at,state,attempt,lease_token,lease_until,artifact_id,operation_id) VALUES(?,?,?,?,?,?,?,?)",
                 (slot_id, scheduled_at, "DUE", 0, None, None, None, operation_id),
@@ -457,7 +493,7 @@ class IngressServiceV2:
                 attempt=0,
                 lease_token=None,
                 lease_until=None,
-                observed_at=scheduled_at,
+                observed_at=owner_now,
                 material={"slot_id": slot_id, "scheduled_at": scheduled_at},
                 payload_digest=_digest("slot-payload", {"slot_id": slot_id, "scheduled_at": scheduled_at}),
                 payload_length=0,
@@ -479,8 +515,8 @@ class IngressServiceV2:
         finally:
             connection.close()
 
-    def claim_slot(self, slot_id: str, *, now: int, lease_token: str) -> IngressReceipt:
-        if any(type(value) is not str or not value for value in (slot_id, lease_token)) or type(now) is not int:
+    def claim_slot(self, slot_id: str, *, lease_token: str) -> IngressReceipt:
+        if any(type(value) is not str or not value for value in (slot_id, lease_token)):
             raise IngressError("ingress:lease")
         connection = _connection(self.path)
         try:
@@ -488,7 +524,11 @@ class IngressServiceV2:
             row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
             if row is None:
                 raise IngressConflictError("ingress:slot-missing")
-            if row["state"] == "LEASED" and row["lease_until"] is not None and row["lease_until"] <= now:
+            owner_now = self._owner_now()
+            last_observed_at = self._last_observed_at(connection, slot_id)
+            if last_observed_at is not None and owner_now < last_observed_at:
+                raise IngressConflictError("ingress:clock-rewind")
+            if row["state"] == "LEASED" and row["lease_until"] is not None and row["lease_until"] <= owner_now:
                 if row["attempt"] >= self.config.max_attempts:
                     next_state = "HELD"
                     kind = "HOLD"
@@ -501,7 +541,7 @@ class IngressServiceV2:
                     slot_id=slot_id, prior_state="LEASED", next_state=next_state,
                     attempt=int(row["attempt"]), lease_token=str(row["lease_token"]),
                     lease_until=int(row["lease_until"]),
-                    observed_at=now,
+                    observed_at=owner_now,
                     material={"slot_id": slot_id, "action": kind, "attempt": row["attempt"]},
                     payload_digest=_digest("lease-recovery", {"slot_id": slot_id, "attempt": row["attempt"]}),
                     payload_length=0,
@@ -514,12 +554,12 @@ class IngressServiceV2:
                     connection.commit()
                     return self._receipt(raw, artifact_id=row["artifact_id"], next_state=next_state)
                 row = connection.execute("SELECT * FROM ingress_slots WHERE slot_id=?", (slot_id,)).fetchone()
-            if row["state"] != "DUE" or row["scheduled_at"] > now:
+            if row["state"] != "DUE" or row["scheduled_at"] > owner_now:
                 raise IngressConflictError("ingress:lease-state")
             attempt = int(row["attempt"]) + 1
             if attempt > self.config.max_attempts:
                 raise IngressConflictError("ingress:attempt-exhausted")
-            lease_until = now + self.config.lease_seconds
+            lease_until = owner_now + self.config.lease_seconds
             request_digest = _digest("request", {"slot_id": slot_id, "action": "LEASE", "attempt": attempt})
             material = {"slot_id": slot_id, "attempt": attempt, "lease_token": lease_token, "lease_until": lease_until}
             raw = self._append(
@@ -527,7 +567,7 @@ class IngressServiceV2:
                 request_digest=request_digest, slot_id=slot_id, prior_state="DUE",
                 next_state="LEASED", attempt=attempt, lease_token=lease_token,
                 lease_until=lease_until, material=material,
-                observed_at=now,
+                observed_at=owner_now,
                 payload_digest=_digest("lease-payload", material), payload_length=0,
             )
             connection.execute(
@@ -556,7 +596,6 @@ class IngressServiceV2:
         *,
         scheduled_at: int,
         lease_token: str,
-        observed_at: int,
         operation_id: str | None = None,
     ) -> IngressReceipt:
         raw_snapshot = bytes(envelope_raw) if type(envelope_raw) is bytes else b""
@@ -564,7 +603,6 @@ class IngressServiceV2:
             not raw_snapshot
             or len(raw_snapshot) > independent.MAX_RAW_ENVELOPE_BYTES
             or type(scheduled_at) is not int
-            or type(observed_at) is not int
             or type(lease_token) is not str
             or not lease_token
         ):
@@ -603,13 +641,19 @@ class IngressServiceV2:
                     raise IngressConflictError("ingress:operation-conflict")
                 connection.commit()
                 return self._receipt(bytes(existing["event_raw"]), artifact_id=artifact_id, next_state=str(existing["next_state"]))
+            owner_now = self._owner_now()
+            last_observed_at = self._last_observed_at(connection, slot_id)
+            if last_observed_at is not None and owner_now < last_observed_at:
+                raise IngressConflictError("ingress:clock-rewind")
+            if owner_now < scheduled_at:
+                raise IngressConflictError("ingress:lease-state")
             if slot["state"] != "LEASED":
                 raise IngressConflictError("ingress:slot-state")
             if lease_token != slot["lease_token"]:
                 raise IngressConflictError("ingress:lease-token")
-            if slot["lease_until"] is None or observed_at < scheduled_at:
+            if slot["lease_until"] is None or owner_now < scheduled_at:
                 raise IngressConflictError("ingress:lease-state")
-            if observed_at >= int(slot["lease_until"]):
+            if owner_now >= int(slot["lease_until"]):
                 raise IngressConflictError("ingress:lease-expired")
             if int(slot["attempt"]) < 1 or int(slot["attempt"]) > self.config.max_attempts:
                 raise IngressConflictError("ingress:attempt-exhausted")
@@ -639,7 +683,7 @@ class IngressServiceV2:
                         "transport_error": attempt["transport_error"],
                         "evidence_class": "SYNTHETIC_FIXTURE_UNAUTHENTICATED",
                         "selected": attempt["selected"],
-                        "observed_at": observed_at,
+                        "observed_at": owner_now,
                     }
                     material["attestation_digest"] = independent._attestation_digest(material)
                     attestation_materials.append(material)
@@ -685,7 +729,7 @@ class IngressServiceV2:
                     attempt=int(slot["attempt"]),
                     lease_token=lease_token,
                     lease_until=slot["lease_until"],
-                    observed_at=observed_at,
+                    observed_at=owner_now,
                     material=event_material,
                     payload_digest=_digest("fetch-payload", event_material),
                     payload_length=len(receipt_raw),
@@ -710,7 +754,7 @@ class IngressServiceV2:
                 prior_state=str(slot["state"]), next_state="CAPTURED",
                 attempt=int(slot["attempt"]), lease_token=lease_token,
                 lease_until=slot["lease_until"], material=capture_material,
-                observed_at=observed_at,
+                observed_at=owner_now,
                 payload_digest=artifact_id, payload_length=len(raw_snapshot),
                  head_artifact_id=artifact_id,
             )
@@ -721,7 +765,7 @@ class IngressServiceV2:
                     prior_state="CAPTURED", next_state="QUARANTINE_PENDING",
                     attempt=int(slot["attempt"]), lease_token=lease_token,
                     lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": "QUARANTINE_PENDING"},
-                    observed_at=observed_at,
+                    observed_at=owner_now,
                     payload_digest=artifact_id, payload_length=len(raw_snapshot),
                      head_artifact_id=artifact_id,
                 )
@@ -738,7 +782,7 @@ class IngressServiceV2:
                 prior_state=final_prior, next_state=next_state,
                 attempt=int(slot["attempt"]), lease_token=lease_token,
                 lease_until=slot["lease_until"], material={"artifact_id": artifact_id, "decision": next_state},
-                observed_at=observed_at,
+                observed_at=owner_now,
                 payload_digest=artifact_id, payload_length=len(raw_snapshot),
                  stream_kind="QUARANTINE", stream_id=self.config.chain_id,
                  head_artifact_id=artifact_id,

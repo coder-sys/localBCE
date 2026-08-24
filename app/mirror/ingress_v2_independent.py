@@ -533,12 +533,13 @@ def _verify_event(
     if row["next_state"] not in STATES:
         raise IngressVerificationError("ingress:event-state")
     scheduled_at = slot_schedules.get(str(row["slot_id"]))
-    if scheduled_at is None or row["observed_at"] < scheduled_at:
+    if scheduled_at is None:
         raise IngressVerificationError("ingress:event-time")
-    if row["observed_at"] < slot_times.get(str(row["slot_id"]), scheduled_at):
+    if row["event_kind"] != "CREATE_SLOT" and row["observed_at"] < scheduled_at:
+        raise IngressVerificationError("ingress:event-time")
+    previous_observed_at = slot_times.get(str(row["slot_id"]))
+    if previous_observed_at is not None and row["observed_at"] < previous_observed_at:
         raise IngressVerificationError("ingress:event-chronology")
-    if row["event_kind"] == "CREATE_SLOT" and row["observed_at"] != scheduled_at:
-        raise IngressVerificationError("ingress:event-time")
     if row["event_kind"] == "LEASE":
         if type(row["lease_token"]) is not str or not row["lease_token"] or type(row["lease_until"]) is not int or row["lease_until"] <= row["observed_at"]:
             raise IngressVerificationError("ingress:lease")

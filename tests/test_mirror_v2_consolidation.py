@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import shutil
@@ -20,6 +21,17 @@ from app.mirror import recovery_v2 as recovery
 
 def _hex(seed: str) -> str:
     return hashlib.sha3_512(seed.encode("ascii")).hexdigest()
+
+
+class _ManualClock:
+    def __init__(self, value: int) -> None:
+        self.value = value
+        self.raise_on_read = False
+
+    def __call__(self) -> int:
+        if self.raise_on_read:
+            raise RuntimeError("clock read must not be needed for exact retry")
+        return self.value
 
 
 class _Custody:
@@ -174,17 +186,17 @@ class MirrorV2Fixture(unittest.TestCase):
             cadence_seconds=60,
             max_slots=8,
         )
-        self.ingress = ingress.IngressServiceV2(self.ingress_path, self.ingress_config)
+        self.clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME)
+        self.ingress = ingress.IngressServiceV2(self.ingress_path, self.ingress_config, clock=self.clock)
         created = self.ingress.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
         slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
-        self.ingress.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-v2")
+        self.ingress.claim_slot(slot_id, lease_token="lease-v2")
         from tests.test_nc_medicaid_fhir_source import _envelope
         self.envelope = _envelope()
         self.ingress_receipt = self.ingress.admit_capture(
             self.envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             lease_token="lease-v2",
-            observed_at=profile.FIXTURE_OBSERVATION_TIME,
         )
         ing_snapshot = self.ingress.verify()
         self.governance_policy = governance.ExternalGovernanceApprovalPolicyV1(
@@ -254,7 +266,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.recovery_service = recovery.RecoveryServiceV2(self.recovery_path, self.recovery_config, self.custody, self.storage)
 
     def _fresh_ingress(self, name: str) -> tuple[ingress.IngressServiceV2, str]:
-        service = ingress.IngressServiceV2(self.root / name, self.ingress_config)
+        service = ingress.IngressServiceV2(self.root / name, self.ingress_config, clock=self.clock)
         created = service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
         slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
         return service, slot_id
@@ -271,26 +283,25 @@ class MirrorV2Fixture(unittest.TestCase):
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 lease_token="not-held",
-                observed_at=profile.FIXTURE_OBSERVATION_TIME,
             )
         self.assertEqual(before, self._state_fingerprint(service))
 
     def test_expired_and_stale_leases_reject_without_mutation(self) -> None:
         service, slot_id = self._fresh_ingress("expired-capture.db")
-        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-old")
+        service.claim_slot(slot_id, lease_token="lease-old")
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds
         before = self._state_fingerprint(service)
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:lease-expired"):
             service.admit_capture(
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 lease_token="lease-old",
-                observed_at=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds,
             )
         self.assertEqual(before, self._state_fingerprint(service))
 
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1
         service.claim_slot(
             slot_id,
-            now=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1,
             lease_token="lease-new",
         )
         before = self._state_fingerprint(service)
@@ -299,18 +310,65 @@ class MirrorV2Fixture(unittest.TestCase):
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
                 lease_token="lease-old",
-                observed_at=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1,
             )
         self.assertEqual(before, self._state_fingerprint(service))
+        connection = sqlite3.connect(service.path)
+        try:
+            lease_events = connection.execute(
+                "SELECT attempt, observed_at FROM ingress_events WHERE slot_id=? AND event_kind='LEASE' ORDER BY sequence",
+                (slot_id,),
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertEqual([1, 2], [int(row[0]) for row in lease_events])
+        self.assertEqual([profile.FIXTURE_OBSERVATION_TIME, self.clock.value], [int(row[1]) for row in lease_events])
+
+    def test_public_ingress_operations_have_no_per_call_time_override(self) -> None:
+        claim_parameters = inspect.signature(ingress.IngressServiceV2.claim_slot).parameters
+        capture_parameters = inspect.signature(ingress.IngressServiceV2.admit_capture).parameters
+        self.assertNotIn("now", claim_parameters)
+        self.assertNotIn("observed_at", capture_parameters)
+        self.assertIn("clock", inspect.signature(ingress.IngressServiceV2).parameters)
+
+    def test_owner_clock_rewind_rejects_without_mutation(self) -> None:
+        service, slot_id = self._fresh_ingress("clock-rewind.db")
+        service.claim_slot(slot_id, lease_token="lease-clock")
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME - 1
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:clock-rewind"):
+            service.claim_slot(slot_id, lease_token="lease-rewind")
+        self.assertEqual(before, self._state_fingerprint(service))
+
+    def test_owner_clock_binds_all_capture_events_to_one_time(self) -> None:
+        service, slot_id = self._fresh_ingress("owner-time.db")
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME + 5
+        service.claim_slot(slot_id, lease_token="lease-owner-time")
+        service.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            lease_token="lease-owner-time",
+        )
+        connection = sqlite3.connect(service.path)
+        try:
+            rows = connection.execute(
+                "SELECT event_kind, observed_at, event_raw FROM ingress_events WHERE event_kind IN ('FETCH_ATTESTATION','CAPTURE','BEGIN_QUARANTINE','ADMIT') ORDER BY sequence"
+            ).fetchall()
+        finally:
+            connection.close()
+        self.assertTrue(rows)
+        expected = profile.FIXTURE_OBSERVATION_TIME + 5
+        self.assertEqual({expected}, {int(row[1]) for row in rows})
+        self.assertTrue(all(json.loads(bytes(row[2]).decode("ascii"))["observed_at"] == expected for row in rows))
 
     def test_committed_retry_after_lease_expiry_is_byte_identical(self) -> None:
         before = self.ingress_receipt
         state_before = self._state_fingerprint(self.ingress)
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1
+        self.clock.raise_on_read = True
         retry = self.ingress.admit_capture(
             self.envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             lease_token="lease-v2",
-            observed_at=profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1,
         )
         self.assertEqual(before.raw, retry.raw)
         self.assertEqual(state_before, self._state_fingerprint(self.ingress))
@@ -326,12 +384,11 @@ class MirrorV2Fixture(unittest.TestCase):
             _transport(_bundle(), retries={(request_url, 0): throttled, (request_url, 1): success})
         )
         service, slot_id = self._fresh_ingress("retry-capture.db")
-        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-retry")
+        service.claim_slot(slot_id, lease_token="lease-retry")
         service.admit_capture(
             retry_envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             lease_token="lease-retry",
-            observed_at=profile.FIXTURE_OBSERVATION_TIME,
         )
         connection = sqlite3.connect(service.path)
         try:
@@ -356,12 +413,11 @@ class MirrorV2Fixture(unittest.TestCase):
         throttled = fhir.fixture_response(_bundle(), request_url, status=429, headers=(("Retry-After", "2"),))
         failed_envelope = fhir.build_fixture_envelope(fhir.SyntheticFhirTransport({(request_url, 0): throttled}))
         service, slot_id = self._fresh_ingress("failed-capture.db")
-        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-failed")
+        service.claim_slot(slot_id, lease_token="lease-failed")
         receipt = service.admit_capture(
             failed_envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             lease_token="lease-failed",
-            observed_at=profile.FIXTURE_OBSERVATION_TIME,
         )
         self.assertEqual("HELD", receipt.next_state)
         connection = sqlite3.connect(service.path)
@@ -431,12 +487,11 @@ class MirrorV2Fixture(unittest.TestCase):
             _transport(_bundle(), retries={(request_url, 0): throttled, (request_url, 1): success})
         )
         service, slot_id = self._fresh_ingress("attempt-order.db")
-        service.claim_slot(slot_id, now=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-order")
+        service.claim_slot(slot_id, lease_token="lease-order")
         service.admit_capture(
             raw,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
             lease_token="lease-order",
-            observed_at=profile.FIXTURE_OBSERVATION_TIME,
         )
 
         omitted = self.root / "omitted-attempt.db"
@@ -554,16 +609,16 @@ class MirrorV2Fixture(unittest.TestCase):
     def test_profile_owned_changed_observation_reaches_core_case_without_authority(self) -> None:
         from tests.test_nc_medicaid_fhir_source import _envelope
         changed_path = self.root / "changed-ingress.db"
-        changed_ingress = ingress.IngressServiceV2(changed_path, self.ingress_config)
         scheduled_at = profile.FIXTURE_OBSERVATION_TIME
+        changed_clock = _ManualClock(scheduled_at)
+        changed_ingress = ingress.IngressServiceV2(changed_path, self.ingress_config, clock=changed_clock)
         created = changed_ingress.ensure_slot(scheduled_at)
         slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
-        changed_ingress.claim_slot(slot_id, now=scheduled_at, lease_token="lease-v2-changed")
+        changed_ingress.claim_slot(slot_id, lease_token="lease-v2-changed")
         changed_receipt = changed_ingress.admit_capture(
             _envelope(location_variant="changed"),
             scheduled_at=scheduled_at,
             lease_token="lease-v2-changed",
-            observed_at=scheduled_at,
         )
         result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
         self.assertEqual(result["observation_status"], "OBSERVED_CHANGED")
