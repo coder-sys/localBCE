@@ -20,8 +20,10 @@ import secrets
 import sqlite3
 import stat
 import tempfile
+from threading import Lock
 import time
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
+import weakref
 
 from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
@@ -34,10 +36,19 @@ from app.minimal_clearance_verifier_process import ContainedVerifierResult
 
 # Capture the genuine class-owned boundaries once, before any caller can hand
 # the worker an object with instance-shadowed methods or a monkey-patched
-# subclass.  Calls below use these references directly after the exact-type
-# and class-dictionary checks.
+# subclass.  The verifier boundary dispatches transitively to _ensure_preflight
+# and _run, so all four class-owned methods are part of the attestation.
 _NATIVE_IDENTITY_METHOD: Final = NativeMinimalClearanceVerifier.identity_sha256
 _NATIVE_VERIFY_METHOD: Final = NativeMinimalClearanceVerifier.verify
+_NATIVE_PREFLIGHT_METHOD: Final = NativeMinimalClearanceVerifier._ensure_preflight
+_NATIVE_RUN_METHOD: Final = NativeMinimalClearanceVerifier._run
+
+# A concrete verifier carries mutable process/containment telemetry.  A weak,
+# process-owned claim prevents a caller-controlled factory from sharing one
+# mutable object across workers while allowing abandoned objects to be
+# collected without an unbounded registry.
+_VERIFIER_CLAIM_LOCK: Final = Lock()
+_VERIFIER_CLAIMED: Final = weakref.WeakSet()
 
 
 class VerificationQueueError(RuntimeError):
@@ -1496,10 +1507,29 @@ class QueueWorker:
             if type(verifier) is not NativeMinimalClearanceVerifier:
                 return False
             attributes = vars(verifier)
-            if "identity_sha256" in attributes or "verify" in attributes:
+            if any(name in attributes for name in ("identity_sha256", "verify", "_ensure_preflight", "_run")):
                 return False
             methods = type(verifier).__dict__
-            return methods.get("identity_sha256") is _NATIVE_IDENTITY_METHOD and methods.get("verify") is _NATIVE_VERIFY_METHOD
+            return (
+                methods.get("identity_sha256") is _NATIVE_IDENTITY_METHOD
+                and methods.get("verify") is _NATIVE_VERIFY_METHOD
+                and methods.get("_ensure_preflight") is _NATIVE_PREFLIGHT_METHOD
+                and methods.get("_run") is _NATIVE_RUN_METHOD
+            )
+        except BaseException:
+            return False
+
+    @staticmethod
+    def _claim_attested_native_verifier(verifier: object) -> bool:
+        """Claim one attested mutable verifier object exactly once."""
+        if not QueueWorker._attested_native_verifier(verifier):
+            return False
+        try:
+            with _VERIFIER_CLAIM_LOCK:
+                if verifier in _VERIFIER_CLAIMED:
+                    return False
+                _VERIFIER_CLAIMED.add(verifier)
+                return True
         except BaseException:
             return False
 
@@ -1582,7 +1612,7 @@ class QueueWorker:
             verifier = self.verifier_factory()
         except BaseException:
             return self._snapshot_failure(work, snapshot, "verifier_factory")
-        if not self._attested_native_verifier(verifier):
+        if not self._claim_attested_native_verifier(verifier):
             return self._snapshot_failure(work, snapshot, "verifier_type")
         try:
             identity = _NATIVE_IDENTITY_METHOD(verifier)

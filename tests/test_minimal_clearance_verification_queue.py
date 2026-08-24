@@ -183,6 +183,7 @@ class _Factory:
         self.barrier = barrier
         self.identity = identity
         self.containment = containment
+        self.verify_calls = 0
         self.instances: list[_Verifier] = []
 
     def __call__(self) -> NativeMinimalClearanceVerifier:
@@ -203,6 +204,7 @@ class _Factory:
             return current.identity
 
         def verify(current: NativeMinimalClearanceVerifier, artifact_path: Path) -> MinimalProofAcceptanceV1:
+            self.verify_calls += 1
             if current.barrier is not None:
                 current.barrier.wait(timeout=10)
             if current.failure is not None:
@@ -829,6 +831,73 @@ class VerificationQueueTests(TestCase):
         ).process_one()
         self.assertEqual(subclass_result.status, "HELD")
         self.assertEqual(subclass_result.error_code, "verifier_type")
+
+    def test_worker_rejects_transitive_verifier_shadows_before_native_call(self) -> None:
+        for shadow_name in ("_run", "_ensure_preflight"):
+            with self.subTest(shadow_name=shadow_name):
+                store = self._store()
+                job_id = f"transitive-{shadow_name[1:]}"
+                self._admit(store, job_id)
+                factory = _Factory()
+                verifier = factory()
+                called = {"shadow": False}
+
+                def forged_shadow(*_args: object, **_kwargs: object) -> object:
+                    called["shadow"] = True
+                    return object()
+
+                setattr(verifier, shadow_name, forged_shadow)
+
+                class ShadowFactory:
+                    def __call__(self) -> NativeMinimalClearanceVerifier:
+                        return verifier
+
+                result = QueueWorker(
+                    store=store, worker_id=f"transitive-worker-{shadow_name[1:]}",
+                    custody=_Custody(self.root / f"transitive-custody-{shadow_name[1:]}"),
+                    verifier_factory=ShadowFactory(),
+                ).process_one()
+                self.assertEqual(result.status, "HELD")
+                self.assertEqual(result.error_code, "verifier_type")
+                self.assertFalse(called["shadow"])
+                self.assertEqual(factory.verify_calls, 0)
+                self.assertNotIn(b"forged", store.export_bytes())
+
+    def test_verifier_object_claim_is_single_use_across_concurrent_and_sequential_workers(self) -> None:
+        store = self._store(capacity=3)
+        for index in range(3):
+            self._admit(store, f"singleton-{index}", f"singleton-ref-{index}")
+        factory = _Factory(containment=_Containment(stdout=b"singleton-telemetry"))
+        shared = factory()
+
+        class SingletonFactory:
+            def __call__(self) -> NativeMinimalClearanceVerifier:
+                return shared
+
+        singleton = SingletonFactory()
+        workers = tuple(
+            QueueWorker(
+                store=store, worker_id=f"singleton-worker-{index}",
+                custody=_Custody(self.root / f"singleton-custody-{index}"),
+                verifier_factory=singleton,
+            )
+            for index in range(2)
+        )
+        concurrent = run_bounded_workers(workers)
+        self.assertEqual(sum(result is not None and result.status == "VERIFIED" for result in concurrent), 1)
+        self.assertEqual(sum(result is not None and result.status == "HELD" and result.error_code == "verifier_type" for result in concurrent), 1)
+        self.assertEqual(factory.verify_calls, 1)
+
+        sequential = QueueWorker(
+            store=store, worker_id="singleton-worker-sequential",
+            custody=_Custody(self.root / "singleton-custody-sequential"),
+            verifier_factory=singleton,
+        ).process_one()
+        self.assertEqual(sequential.status, "HELD")
+        self.assertEqual(sequential.error_code, "verifier_type")
+        self.assertEqual(factory.verify_calls, 1)
+        self.assertNotIn(b"singleton-telemetry", store.export_bytes())
+        store.verify_integrity()
 
     def test_custody_and_factory_errors_cannot_acquire_proof_authority(self) -> None:
         canary = "claimant_123"
