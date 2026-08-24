@@ -474,6 +474,41 @@ class VerificationQueueTests(TestCase):
             store._promote_candidates()
         self.assertEqual(verify_database(store.path, expected_config=store.config.as_json())["status_counts"]["VERIFIED"], 1)
         self.assertEqual(store._promote_candidates(), ())
+        path, config, owner = store.path, store.config, store._owner
+        owner.close()
+        self._owners.remove(owner)
+        restarted_owner = _QueueRuntimeOwnership(
+            lock_path=path.with_name(path.name + ".runtime-lock"),
+            parent=path.parent,
+        )
+        self._owners.append(restarted_owner)
+        restarted = _VerificationQueueStore(path=path, config=config, owner=restarted_owner)
+        self.assertEqual(restarted._snapshot()["counts"]["VERIFIED"], 1)
+        self.assertEqual(restarted._promote_candidates(), ())
+
+    def test_promotion_rollback_cleanup_failure_is_fixed_indeterminate(self) -> None:
+        store = self._store()
+        self._verify_one(store)
+        original_commit = store._commit
+        commit_calls = {"count": 0}
+
+        def close_before_uncertain_commit(connection: sqlite3.Connection) -> None:
+            commit_calls["count"] += 1
+            if commit_calls["count"] == 2:
+                connection.close()
+                raise VerificationQueueError("commit_uncertain")
+            original_commit(connection)
+
+        store._commit = close_before_uncertain_commit  # type: ignore[method-assign]
+        with self.assertRaises(queue_module.QueueIndeterminateError) as caught:
+            store._promote_candidates()
+        self.assertEqual(str(caught.exception), "queue_promotion_indeterminate")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("commit_uncertain", repr(caught.exception))
+        store._commit = original_commit  # type: ignore[method-assign]
+        self.assertEqual(verify_database(store.path, expected_config=store.config.as_json())["status_counts"]["CANDIDATE"], 1)
+        self.assertEqual(store._promote_candidates()[0]["accepted_count"], 1)
 
     def test_restart_promotes_durable_candidate_before_new_native_work(self) -> None:
         from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime

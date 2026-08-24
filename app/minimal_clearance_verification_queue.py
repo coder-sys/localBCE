@@ -1943,7 +1943,25 @@ class _VerificationQueueStore:
         """Replay one immutable candidate image, then CAS one ACCEPT_BATCH."""
         self._owner_assert()
         from app.minimal_clearance_verification_queue_independent import verify_completed_batch
-        with closing(self._connect()) as connection:
+        def rollback_uncertain(connection: sqlite3.Connection, began: bool) -> None:
+            if not began:
+                return
+            try:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+            except BaseException:
+                _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+
+        def close_uncertain(connection: sqlite3.Connection | None) -> None:
+            if connection is None:
+                return
+            try:
+                connection.close()
+            except BaseException:
+                _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+
+        connection = self._connect()
+        try:
             began = False
             try:
                 self._begin_read(connection); began = True; self._schema_check(connection); meta = self._meta(connection)
@@ -1954,8 +1972,7 @@ class _VerificationQueueStore:
                     except QueueIndeterminateError:
                         raise
                     except VerificationQueueError:
-                        if began and connection.in_transaction:
-                            connection.execute("ROLLBACK")
+                        rollback_uncertain(connection, began)
                         _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
                     began = False
                     try:
@@ -1972,19 +1989,20 @@ class _VerificationQueueStore:
                 except QueueIndeterminateError:
                     raise
                 except VerificationQueueError:
-                    if began and connection.in_transaction:
-                        connection.execute("ROLLBACK")
+                    rollback_uncertain(connection, began)
                     _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
                 began = False
             except VerificationQueueError as exc:
-                if began and connection.in_transaction: connection.execute("ROLLBACK")
+                rollback_uncertain(connection, began)
                 _raise_fixed(exc)
             except sqlite3.Error as exc:
-                if began and connection.in_transaction: connection.execute("ROLLBACK")
+                rollback_uncertain(connection, began)
                 _raise_fixed(self._translate_sqlite(exc))
             except Exception:
-                if began and connection.in_transaction: connection.execute("ROLLBACK")
+                rollback_uncertain(connection, began)
                 _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+        finally:
+            close_uncertain(connection)
         try:
             token = verify_completed_batch(raw, operation_ids, expected_profile=self.config.as_json(), expected_installation=self.config.as_json())
         except Exception:
@@ -1993,7 +2011,8 @@ class _VerificationQueueStore:
             _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
         now = int(self.clock.now_ms())
         event = {"schema": _SCHEMA, "accepted_ms": now, "batch_id": _hex(token.batch_id), "image_sha3_512": _hex(token.image_sha3_512), "pre_head_root": _hex(token.pre_head_root), "pre_transition_count": token.pre_transition_count, "config_digest": _hex(token.config_digest), "profile_digest": _hex(token.profile_digest), "profile_epoch": token.profile_epoch, "installation_id": _hex(token.installation_id), "installation_epoch": token.installation_epoch, "operation_ids": [_hex(item) for item in token.operation_ids], "member_set_digest": _hex(token.member_set_digest), "accepted_count": token.accepted_count}
-        with closing(self._connect()) as connection:
+        connection = self._connect()
+        try:
             began = False
             try:
                 self._begin(connection); began = True; self._schema_check(connection); meta = self._meta(connection)
@@ -2009,19 +2028,20 @@ class _VerificationQueueStore:
                 except QueueIndeterminateError:
                     raise
                 except VerificationQueueError:
-                    if began and connection.in_transaction:
-                        connection.execute("ROLLBACK")
+                    rollback_uncertain(connection, began)
                     _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
                 began = False
             except (QueueIndeterminateError, VerificationQueueError) as exc:
-                if began and connection.in_transaction: connection.execute("ROLLBACK")
+                rollback_uncertain(connection, began)
                 _raise_fixed(exc if isinstance(exc, VerificationQueueError) else QueueIndeterminateError("queue_promotion_indeterminate"))
             except sqlite3.Error as exc:
-                if began and connection.in_transaction: connection.execute("ROLLBACK")
+                rollback_uncertain(connection, began)
                 _raise_fixed(self._translate_sqlite(exc))
             except Exception:
-                if began and connection.in_transaction: connection.execute("ROLLBACK")
+                rollback_uncertain(connection, began)
                 _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+        finally:
+            close_uncertain(connection)
         try:
             self._after_commit("promote_batch")
             self._owner_assert()
