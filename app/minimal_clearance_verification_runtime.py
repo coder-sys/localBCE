@@ -242,6 +242,7 @@ class MinimalClearanceVerificationRuntime:
         self._source_root = source_root
         self._source_identity = _directory_identity(source_root)
         self._workspace_parent = workspace_parent
+        self._config = config
         self._store: _VerificationQueueStore | None = None
         self._custody: _FilesystemArtifactCustody | None = None
         self._verifier: NativeMinimalClearanceVerifier | None = None
@@ -378,6 +379,13 @@ class MinimalClearanceVerificationRuntime:
             return self._store._export_bytes()
         finally:
             self._assert_owners()
+
+    def _expected_config(self) -> dict[str, object]:
+        """Return the runtime-owned queue configuration for internal evidence consumers."""
+        self._assert_owners()
+        if self._closed:
+            _raise_fixed("runtime_closed")
+        return self._config.as_json()
 
     def support_summary(self) -> dict[str, object]:
         self._assert_owners()

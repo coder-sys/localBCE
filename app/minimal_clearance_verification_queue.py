@@ -32,7 +32,10 @@ from app.minimal_clearance_proof_primitives import (
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 from app.minimal_clearance_verification_profile import (
     CIRCUIT_ID as _PROFILE_CIRCUIT_ID,
+    GOVERNANCE_SNAPSHOT as _PROFILE_GOVERNANCE_SNAPSHOT,
     PROFILE_EPOCH as _PROFILE_EPOCH,
+    SOURCE_PROFILE as _PROFILE_SOURCE_PROFILE,
+    SOURCE_REGISTRY_SNAPSHOT as _PROFILE_SOURCE_REGISTRY_SNAPSHOT,
     ExperimentalPrivateZkProfile,
     derive_profile_digest,
     statement_matches_static,
@@ -377,6 +380,9 @@ class QueueConfig:
             "installation_id": _hex(self.installation_id or bytes(64)),
             "installation_epoch": self.installation_epoch,
             "circuit_id": _hex(_PROFILE_CIRCUIT_ID),
+            "source_registry_snapshot": _hex(_PROFILE_SOURCE_REGISTRY_SNAPSHOT),
+            "source_profile": _hex(_PROFILE_SOURCE_PROFILE),
+            "governance_snapshot": _hex(_PROFILE_GOVERNANCE_SNAPSHOT),
             "proof_suite_id": None,
             "production_usable": False,
             "activation": False,
@@ -1297,7 +1303,7 @@ class _VerificationQueueStore:
 
     def _bootstrap_missing(self) -> None:
         self._owner_assert()
-        parent = self.path.parent; parent_identity = _directory_identity(parent); descriptor: int | None = None; stage: Path | None = None; stage_identity: tuple[int, int, int, int, int] | None = None; published_identity: tuple[int, int, int] | None = None; published_by_call = False
+        parent = self.path.parent; parent_identity = _directory_identity(parent); descriptor: int | None = None; stage: Path | None = None; stage_identity: tuple[int, int, int, int, int] | None = None
         try:
             descriptor, name = tempfile.mkstemp(prefix=".queue-bootstrap-", dir=parent); os.close(descriptor); descriptor = None; stage = Path(name); stage_identity = _database_identity(stage)
             connection = sqlite3.connect(stage, timeout=5.0, isolation_level=None)
@@ -1316,7 +1322,7 @@ class _VerificationQueueStore:
             verify_database(stage, expected_config=self.config.as_json())
             if _directory_identity(parent) != parent_identity: raise VerificationQueueError("queue_database_parent")
             try:
-                os.link(stage, self.path); published_by_call = True; target = os.lstat(self.path); published_identity = (int(target.st_dev), int(target.st_ino), int(target.st_nlink))
+                os.link(stage, self.path); os.lstat(self.path)
                 try:
                     descriptor = os.open(str(parent), int(getattr(os, "O_RDONLY", 0)) | int(getattr(os, "O_DIRECTORY", 0))); os.fsync(descriptor)
                 except (OSError, ValueError):
@@ -1337,7 +1343,6 @@ class _VerificationQueueStore:
                 current_stage = os.lstat(stage)
                 if (int(current_stage.st_dev), int(current_stage.st_ino)) != stage_identity[:2]: raise VerificationQueueError("queue_bootstrap_identity")
                 os.unlink(stage); stage = None
-            published_by_call = False
         except Exception as exc:
             if isinstance(exc, VerificationQueueError): _raise_fixed(exc)
             if exc.__class__.__name__ == "IndependentQueueError": _raise_fixed(QueueIntegrityError("queue_bootstrap_verify"))
@@ -1350,11 +1355,6 @@ class _VerificationQueueStore:
                 try:
                     current = os.lstat(stage)
                     if (int(current.st_dev), int(current.st_ino)) == stage_identity[:2]: os.unlink(stage)
-                except (OSError, ValueError): pass
-            if published_by_call and published_identity is not None:
-                try:
-                    current = os.lstat(self.path)
-                    if (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) == published_identity: os.unlink(self.path)
                 except (OSError, ValueError): pass
         self._owner_assert()
 
@@ -1859,7 +1859,7 @@ class _VerificationQueueStore:
                 counts = {status: 0 for status in _STATUS}
                 for (status,) in connection.execute("SELECT status FROM queue_jobs ORDER BY admission_seq"):
                     counts[str(status)] = counts.get(str(status), 0) + 1
-                oldest = connection.execute("SELECT MIN(admission_seq) FROM queue_jobs WHERE status IN ('QUEUED','LEASED')").fetchone()[0]
+                oldest = connection.execute("SELECT MIN(admission_seq) FROM queue_jobs WHERE status IN ('QUEUED','LEASED','CANDIDATE')").fetchone()[0]
                 lease_age = connection.execute("SELECT MIN(?-leased_ms) FROM queue_leases", (int(self.clock.now_ms()),)).fetchone()[0]
                 rows = [str(code) for (code,) in connection.execute("SELECT last_error_code FROM queue_jobs WHERE last_error_code IS NOT NULL ORDER BY last_error_code")]
                 failures: dict[str, int] = {}
@@ -1902,7 +1902,7 @@ class _VerificationQueueStore:
         projection = self._read_projection()
         lease_age = projection["oldest_lease_age_ms"]
         counts = projection["counts"]
-        result = {"schema": _SCHEMA, "queue_id": self.config.queue_id, "head_root": _hex(projection["head_root"]), "status_counts": counts, "nonterminal_depth": counts["QUEUED"] + counts["LEASED"], "oldest_admission_seq": projection["oldest_admission_seq"], "oldest_lease_age_bucket": None if lease_age is None else ("0-59s" if lease_age < 60_000 else "60s+"), "failure_counts": projection["failure_counts"], "storage_used_bytes": projection["storage_used_bytes"], "storage_reserved_bytes": projection["storage_reserved_bytes"], "storage_capacity_bytes": MAX_QUEUE_DATABASE_BYTES}
+        result = {"schema": _SCHEMA, "queue_id": self.config.queue_id, "head_root": _hex(projection["head_root"]), "status_counts": counts, "nonterminal_depth": counts["QUEUED"] + counts["LEASED"] + counts["CANDIDATE"], "oldest_admission_seq": projection["oldest_admission_seq"], "oldest_lease_age_bucket": None if lease_age is None else ("0-59s" if lease_age < 60_000 else "60s+"), "failure_counts": projection["failure_counts"], "storage_used_bytes": projection["storage_used_bytes"], "storage_reserved_bytes": projection["storage_reserved_bytes"], "storage_capacity_bytes": MAX_QUEUE_DATABASE_BYTES}
         self._owner_assert(); return result
 
     def _verify_integrity(self) -> None:
@@ -1949,12 +1949,33 @@ class _VerificationQueueStore:
                 self._begin_read(connection); began = True; self._schema_check(connection); meta = self._meta(connection)
                 rows = connection.execute("SELECT j.operation_id FROM queue_jobs j JOIN queue_transitions t ON t.operation_id=j.operation_id WHERE j.status='CANDIDATE' AND t.transition_kind='COMPLETE_CANDIDATE' ORDER BY t.sequence LIMIT 256").fetchall()
                 if not rows:
-                    self._commit(connection); began = False; self._owner_assert(); return None
+                    try:
+                        self._commit(connection)
+                    except QueueIndeterminateError:
+                        raise
+                    except VerificationQueueError:
+                        if began and connection.in_transaction:
+                            connection.execute("ROLLBACK")
+                        _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+                    began = False
+                    try:
+                        self._owner_assert()
+                    except BaseException:
+                        _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+                    return None
                 operation_ids = tuple(bytes(row[0]) for row in rows)
                 raw = connection.serialize()
                 if type(raw) is not bytes or not 0 < len(raw) <= MAX_QUEUE_DATABASE_BYTES: raise QueueBackpressureError("queue_export_capacity")
                 pre_head = bytes(meta[11]); pre_count = int(meta[12]); pre_config = bytes(meta[4]); pre_profile = bytes(meta[7]); pre_profile_epoch = int(meta[8]); pre_install = bytes(meta[9]); pre_install_epoch = int(meta[10]);
-                self._commit(connection); began = False
+                try:
+                    self._commit(connection)
+                except QueueIndeterminateError:
+                    raise
+                except VerificationQueueError:
+                    if began and connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                    _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+                began = False
             except VerificationQueueError as exc:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(exc)
@@ -1982,7 +2003,16 @@ class _VerificationQueueStore:
                 for operation_id in operation_ids:
                     updated = connection.execute("UPDATE queue_jobs SET status='VERIFIED',updated_ms=?,last_error_code=NULL WHERE operation_id=? AND status='CANDIDATE'", (now, operation_id))
                     if updated.rowcount != 1: raise QueueIndeterminateError("queue_promotion_indeterminate")
-                meta_after = self._meta(connection); self._update_storage_locked(connection, nonterminal=int(meta_after[16]) - len(operation_ids), leases=int(meta_after[17])); self._commit(connection); began = False
+                meta_after = self._meta(connection); self._update_storage_locked(connection, nonterminal=int(meta_after[16]) - len(operation_ids), leases=int(meta_after[17]))
+                try:
+                    self._commit(connection)
+                except QueueIndeterminateError:
+                    raise
+                except VerificationQueueError:
+                    if began and connection.in_transaction:
+                        connection.execute("ROLLBACK")
+                    _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
+                began = False
             except (QueueIndeterminateError, VerificationQueueError) as exc:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(exc if isinstance(exc, VerificationQueueError) else QueueIndeterminateError("queue_promotion_indeterminate"))
@@ -1992,7 +2022,11 @@ class _VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
-        self._after_commit("promote_batch"); self._owner_assert()
+        try:
+            self._after_commit("promote_batch")
+            self._owner_assert()
+        except BaseException:
+            _raise_fixed(QueueIndeterminateError("queue_promotion_indeterminate"))
         return {"batch_id": token.batch_id, "head_root": _sha(_HEAD_DOMAIN, token.pre_head_root, _u64(token.pre_transition_count + 1), _sha(_EVENT_DOMAIN, _u64(token.pre_transition_count + 1), b"ACCEPT_BATCH", b"", b"", _json_bytes(event))), "accepted_count": token.accepted_count}
 
     def _promote_candidates(self) -> tuple[dict[str, Any], ...]:

@@ -114,10 +114,23 @@ def _hash_text(domain: bytes, value: str) -> bytes:
     return hashlib.sha3_512(domain + b"\x00" + value.encode("ascii")).digest()
 
 
+_PROFILE_SOURCE_REGISTRY_SNAPSHOT: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v1", "snapshot-1"
+)
+_PROFILE_SOURCE_PROFILE: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SOURCE-PROFILE/v1", "synthetic-authoritative"
+)
+_PROFILE_GOVERNANCE_SNAPSHOT: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v2", "governance-1"
+)
+
+
 def _profile_digest(verifier: bytes) -> bytes:
     parts = (
         (3).to_bytes(4, "big"), _PROFILE_ROLE, bytes(64),
         _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+        _PROFILE_SOURCE_REGISTRY_SNAPSHOT, _PROFILE_SOURCE_PROFILE,
+        _PROFILE_GOVERNANCE_SNAPSHOT,
         _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(_PROFILE_DIRECTIVES)),
         _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
         _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
@@ -138,6 +151,9 @@ def _statement_profile_matches(statement: Any) -> bool:
         fixed = {
             "protocol_version": 3, "proof_role": _PROFILE_ROLE, "proof_suite": bytes(64),
             "execution_context": _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+            "source_registry_snapshot": _PROFILE_SOURCE_REGISTRY_SNAPSHOT,
+            "source_profile": _PROFILE_SOURCE_PROFILE,
+            "governance_snapshot": _PROFILE_GOVERNANCE_SNAPSHOT,
             "automatic_control_set": _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(_PROFILE_DIRECTIVES)),
             "evaluator_id": _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
             "schema_id": _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
@@ -228,14 +244,14 @@ def _integer(value: Any, code: str, *, minimum: int = 0) -> int:
 
 
 def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
-    keys = {"schema_version", "queue_id", "capacity", "lease_seconds", "max_attempts", "max_worker_concurrency", "verifier_sha256", "artifact_bytes_cap", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "circuit_id", "proof_suite_id", "production_usable", "activation", "retryable_codes"}
-    if type(value) is not dict or set(value) != keys or value["schema_version"] != _SCHEMA_VERSION: _fail("config_keys")
+    keys = {"schema_version", "queue_id", "capacity", "lease_seconds", "max_attempts", "max_worker_concurrency", "verifier_sha256", "artifact_bytes_cap", "profile_digest", "profile_epoch", "installation_id", "installation_epoch", "circuit_id", "source_registry_snapshot", "source_profile", "governance_snapshot", "proof_suite_id", "production_usable", "activation", "retryable_codes"}
+    if type(value) is not dict or set(value) != keys or type(value["schema_version"]) is not int or value["schema_version"] != _SCHEMA_VERSION: _fail("config_keys")
     queue_id = _token(value["queue_id"], "config_queue_id"); capacity = _integer(value["capacity"], "config_capacity", minimum=1); lease_seconds = _integer(value["lease_seconds"], "config_lease_seconds", minimum=1)
-    if capacity > _MAX_CAPACITY or lease_seconds != _LEASE_SECONDS or value["max_attempts"] != 3 or value["max_worker_concurrency"] != _MAX_WORKERS: _fail("config_bounds")
+    if capacity > _MAX_CAPACITY or lease_seconds != _LEASE_SECONDS or type(value["max_attempts"]) is not int or value["max_attempts"] != 3 or type(value["max_worker_concurrency"]) is not int or value["max_worker_concurrency"] != _MAX_WORKERS: _fail("config_bounds")
     artifact_cap = _integer(value["artifact_bytes_cap"], "config_artifact_cap", minimum=1)
     if artifact_cap > 512 * 1024 * 1024: _fail("config_artifact_cap")
     verifier = _blob(value["verifier_sha256"], 32, "config_verifier")
-    if _blob(value["profile_digest"], 64, "config_profile") != _profile_digest(verifier) or value["profile_epoch"] != _PROFILE_EPOCH or _blob(value["installation_id"], 64, "config_installation") is None or type(value["installation_epoch"]) is not int or value["installation_epoch"] < 1 or _blob(value["circuit_id"], 32, "config_circuit") != _PROFILE_CIRCUIT_ID or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False: _fail("config_profile")
+    if (_blob(value["profile_digest"], 64, "config_profile") != _profile_digest(verifier) or type(value["profile_epoch"]) is not int or value["profile_epoch"] != _PROFILE_EPOCH or _blob(value["installation_id"], 64, "config_installation") is None or type(value["installation_epoch"]) is not int or value["installation_epoch"] < 1 or _blob(value["circuit_id"], 32, "config_circuit") != _PROFILE_CIRCUIT_ID or _blob(value["source_registry_snapshot"], 64, "config_source_registry") != _PROFILE_SOURCE_REGISTRY_SNAPSHOT or _blob(value["source_profile"], 64, "config_source_profile") != _PROFILE_SOURCE_PROFILE or _blob(value["governance_snapshot"], 64, "config_governance") != _PROFILE_GOVERNANCE_SNAPSHOT or value["proof_suite_id"] is not None or value["production_usable"] is not False or value["activation"] is not False): _fail("config_profile")
     retryable = value["retryable_codes"]
     if type(retryable) is not list or tuple(retryable) != tuple(sorted(_RETRYABLE_CODES)): _fail("config_retryable")
     canonical = _json_bytes(value); return value, canonical, _sha(_MATERIAL_DOMAIN, canonical)
@@ -309,9 +325,9 @@ def _event_expected(kind: str, event: Any) -> None:
         if type(event["status"]) is not str or event["status"] not in _STATUS: _fail("transition_status")
         _integer(event["at_ms"], "transition_time")
     if kind == "ACCEPT_BATCH":
-        if event["schema"] != _SCHEMA or type(event["operation_ids"]) is not list or not 1 <= len(event["operation_ids"]) <= 256 or event["accepted_count"] != len(event["operation_ids"]): _fail("transition_batch_shape")
+        if event["schema"] != _SCHEMA or type(event["operation_ids"]) is not list or not 1 <= len(event["operation_ids"]) <= 256 or type(event["accepted_count"]) is not int or event["accepted_count"] != len(event["operation_ids"]): _fail("transition_batch_shape")
         _integer(event["accepted_ms"], "transition_batch_time"); _blob(event["batch_id"], 64, "transition_batch_id"); _blob(event["image_sha3_512"], 64, "transition_batch_image"); _blob(event["pre_head_root"], 64, "transition_batch_head"); _integer(event["pre_transition_count"], "transition_batch_count"); _blob(event["config_digest"], 64, "transition_batch_config"); _blob(event["profile_digest"], 64, "transition_batch_profile");
-        if event["profile_epoch"] != _PROFILE_EPOCH: _fail("transition_batch_profile_epoch")
+        if type(event["profile_epoch"]) is not int or event["profile_epoch"] != _PROFILE_EPOCH: _fail("transition_batch_profile_epoch")
         _blob(event["installation_id"], 64, "transition_batch_installation"); _integer(event["installation_epoch"], "transition_batch_installation_epoch", minimum=1); _blob(event["member_set_digest"], 64, "transition_batch_members")
         if any(type(item) is not str or re.fullmatch(r"[0-9A-F]{128}", item) is None for item in event["operation_ids"]): _fail("transition_batch_operation")
     elif kind == "ADMIT":
@@ -477,7 +493,8 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
             # Promotion takes the oldest deterministic candidate prefix.  A
             # suffix comparison would reject the first batch (and could let a
             # reordered >256-member batch evade the intended queue order).
-            if operation_order != expected_candidates[:len(operation_order)] or any(operation in accepted_members for operation in operation_order): _fail("batch_members")
+            expected_count = min(256, len(expected_candidates))
+            if len(operation_order) != expected_count or operation_order != expected_candidates[:expected_count] or any(operation in accepted_members for operation in operation_order): _fail("batch_members")
             member_digest = _sha(_BATCH_DOMAIN, b"".join(operation_order))
             if member_digest != bytes.fromhex(str(event["member_set_digest"])) or _sha(_BATCH_DOMAIN, bytes.fromhex(str(event["image_sha3_512"])), bytes(row[4]), int(event["pre_transition_count"]).to_bytes(8, "big"), config_digest, bytes(meta[7]), int(meta[8]).to_bytes(8, "big"), bytes(meta[9]), int(meta[10]).to_bytes(8, "big"), member_digest, int(event["accepted_count"]).to_bytes(8, "big")) != bytes.fromhex(str(event["batch_id"])): _fail("batch_identity")
             for operation in operation_order:
@@ -561,7 +578,7 @@ def verify_completed_batch(
         try: config = json.loads(bytes(metadata[0]).decode("ascii"))
         except (UnicodeDecodeError, json.JSONDecodeError): _fail("batch_config")
         if expected_profile is not None:
-            for key in ("profile_digest", "profile_epoch", "circuit_id", "proof_suite_id", "production_usable", "activation"):
+            for key in ("profile_digest", "profile_epoch", "circuit_id", "source_registry_snapshot", "source_profile", "governance_snapshot", "proof_suite_id", "production_usable", "activation"):
                 if expected_profile.get(key) != config.get(key): _fail("batch_profile")
         if expected_installation is not None:
             for key in ("installation_id", "installation_epoch"):
@@ -696,7 +713,7 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
     if _path_identity(path, allow_missing=True) is not None:
         if _database_bytes(path) != raw: _fail("restore_target_conflict")
         return verify_database(path)
-    stage: Path | None = None; stage_identity: tuple[int, int, int, int, int] | None = None; published_identity: tuple[int, int, int] | None = None; published_by_call = False
+    stage: Path | None = None; stage_identity: tuple[int, int, int, int, int] | None = None
     try:
         if _parent_identity(path.parent) != parent_identity: _fail("restore_parent")
         fd, name = tempfile.mkstemp(prefix=".queue-restore-", dir=path.parent); stage = Path(name); stage_identity = _path_identity(stage)
@@ -708,7 +725,7 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
         if verify_database(stage) != summary: _fail("restore_stage")
         if _parent_identity(path.parent) != parent_identity: _fail("restore_parent")
         try:
-            os.link(stage, path); published_by_call = True; current = os.lstat(path); published_identity = (int(current.st_dev), int(current.st_ino), int(current.st_nlink)); _fsync_parent(path)
+            os.link(stage, path); os.lstat(path); _fsync_parent(path)
         except FileExistsError:
             if _database_bytes(path) != raw: _fail("restore_target_conflict")
         current = os.lstat(stage)
@@ -717,7 +734,7 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
         if _parent_identity(path.parent) != parent_identity: _fail("restore_parent")
         result = verify_database(path)
         if result != summary: _fail("restore_parity")
-        published_by_call = False; return result
+        return result
     except IndependentQueueError: raise
     except (OSError, sqlite3.Error, ValueError): _fail("restore_publication")
     finally:
@@ -725,11 +742,6 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
             try:
                 current = os.lstat(stage)
                 if (int(current.st_dev), int(current.st_ino)) == stage_identity[:2]: os.unlink(stage)
-            except (OSError, ValueError): pass
-        if published_by_call and published_identity is not None:
-            try:
-                current = os.lstat(path)
-                if (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) == published_identity: os.unlink(path)
             except (OSError, ValueError): pass
 
 

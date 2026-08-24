@@ -20,8 +20,8 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig
-from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
+from app.minimal_clearance_verification_queue import ArtifactMetadata
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile
 from app.minimal_clearance_verification_queue_independent import (
     read_verified_jobs,
     restore_export_to_fresh_database,
@@ -74,7 +74,6 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
     artifact_ref = artifact.name
     metadata = ArtifactMetadata(artifact_ref, ARTIFACT_BYTES, bytes.fromhex(ARTIFACT_SHA256), bytes.fromhex(ARTIFACT_SHA3_512))
     profile = ExperimentalPrivateZkProfile.supplied(verifier, bytes.fromhex(VERIFIER_SHA256))
-    config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-queue-exercise-v4", capacity=512, artifact_bytes_cap=512 * 1024 * 1024, installation_id=derive_installation_id(runtime_root))
     job_ids = tuple(f"queue-job-{index}" for index in range(4))
     started = time.perf_counter()
     with MinimalClearanceVerificationRuntime(
@@ -87,17 +86,18 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
         runtime_result = runtime.run(max_jobs=4)
         runtime._verify_integrity()
         exported = runtime._export_bytes()
+        runtime_config = runtime._expected_config()
     wave_wall_ms = max(1, int(round((time.perf_counter() - started) * 1000)))
     if runtime_result.indeterminate or runtime_result.verified != 4:
         raise RuntimeError("queue_verification_not_verified")
 
     runtime_database = runtime_root / "queue.sqlite"
-    producer_summary = verify_database(runtime_database, expected_config=config.as_json())
-    export_summary = verify_export_bytes(exported, expected_config=config.as_json())
+    producer_summary = verify_database(runtime_database, expected_config=runtime_config)
+    export_summary = verify_export_bytes(exported, expected_config=runtime_config)
     restored_summary = restore_export_to_fresh_database(restore_database, exported)
     if producer_summary != export_summary or export_summary != restored_summary:
         raise RuntimeError("independent_reconstruction_mismatch")
-    jobs = read_verified_jobs(runtime_database, job_ids, expected_config=config.as_json())
+    jobs = read_verified_jobs(runtime_database, job_ids, expected_config=runtime_config)
     if len(jobs) != 4 or any(job.exit_code != 0 or job.timed_out or not job.cap_enforced for job in jobs):
         raise RuntimeError("queue_receipt_not_verified")
     artifact_size_after, artifact_hash_after, artifact_readonly_after = _read_identity(artifact)
@@ -115,8 +115,8 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
     ]
     output = {
         "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/INTEGRATION-EVIDENCE/v4",
-        "queue_schema": config.as_json()["schema_version"],
-        "queue_id": config.queue_id,
+        "queue_schema": runtime_config["schema_version"],
+        "queue_id": runtime_config["queue_id"],
         "verification_count": runtime_result.processed,
         "verified_count": runtime_result.verified,
         "retry_count": runtime_result.requeued,

@@ -23,8 +23,8 @@ if __package__ in (None, ""):
     if str(_REPOSITORY_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig
-from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
+from app.minimal_clearance_verification_queue import ArtifactMetadata
+from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile
 from app.minimal_clearance_verification_queue_independent import (
     read_verified_jobs,
     restore_export_to_fresh_database,
@@ -173,7 +173,6 @@ def run_serial(
         bytes.fromhex(ARTIFACT_SHA3_512),
     )
     profile = ExperimentalPrivateZkProfile.supplied(verifier, bytes.fromhex(VERIFIER_SHA256))
-    config = QueueConfig.from_profile(profile, queue_id="minimal-clearance-serial-exercise-v4", capacity=512, artifact_bytes_cap=512 * 1024 * 1024, installation_id=derive_installation_id(runtime_root))
     job_ids = tuple(f"serial-job-{index}" for index in range(job_count))
     started = time.perf_counter()
     try:
@@ -187,6 +186,7 @@ def run_serial(
             runtime_result = runtime.run(max_jobs=job_count)
             runtime._verify_integrity()
             exported = runtime._export_bytes()
+            runtime_config = runtime._expected_config()
     except ThroughputError:
         raise
     except BaseException:
@@ -197,10 +197,10 @@ def run_serial(
 
     try:
         runtime_database = runtime_root / "queue.sqlite"
-        producer_summary = verify_database(runtime_database, expected_config=config.as_json())
-        export_summary = verify_export_bytes(exported, expected_config=config.as_json())
+        producer_summary = verify_database(runtime_database, expected_config=runtime_config)
+        export_summary = verify_export_bytes(exported, expected_config=runtime_config)
         restored_summary = restore_export_to_fresh_database(restore_database, exported)
-        jobs = read_verified_jobs(runtime_database, job_ids, expected_config=config.as_json())
+        jobs = read_verified_jobs(runtime_database, job_ids, expected_config=runtime_config)
     except BaseException:
         _fail("independent_reconstruction")
     if producer_summary != export_summary or export_summary != restored_summary:
@@ -214,8 +214,8 @@ def run_serial(
 
     output = {
         "schema": SCHEMA,
-        "queue_schema": config.as_json()["schema_version"],
-        "queue_id": config.queue_id,
+        "queue_schema": runtime_config["schema_version"],
+        "queue_id": runtime_config["queue_id"],
         "verification_count": runtime_result.processed,
         "verified_count": runtime_result.verified,
         "rejected_count": runtime_result.rejected,

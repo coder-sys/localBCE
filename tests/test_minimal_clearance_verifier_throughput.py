@@ -57,6 +57,9 @@ class _FakeRuntime:
     def _export_bytes(self):
         return b"verified-sqlite-image"
 
+    def _expected_config(self):
+        return {"schema_version": 4, "queue_id": "serial"}
+
 
 class MinimalClearanceVerifierThroughputTests(TestCase):
     def test_source_has_only_serial_runtime_boundary(self):

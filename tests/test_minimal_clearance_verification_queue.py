@@ -11,7 +11,9 @@ import sqlite3
 import sys
 import tempfile
 from unittest import TestCase
+from unittest.mock import patch
 import app.minimal_clearance_verification_queue as queue_module
+import app.minimal_clearance_verification_queue_independent as independent_queue_module
 
 from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
@@ -38,12 +40,20 @@ from app.minimal_clearance_verification_queue import (
 )
 from app.minimal_clearance_verification_queue_independent import (
     IndependentQueueError,
+    _parse_config,
     read_verified_jobs,
     restore_export_to_fresh_database,
     verify_database,
     verify_export_bytes,
 )
-from app.minimal_clearance_verification_profile import ExperimentalPrivateZkProfile, derive_installation_id
+from app.minimal_clearance_verification_profile import (
+    GOVERNANCE_SNAPSHOT,
+    SOURCE_PROFILE,
+    SOURCE_REGISTRY_SNAPSHOT,
+    ExperimentalPrivateZkProfile,
+    derive_installation_id,
+    statement_matches_static,
+)
 
 
 _RETAINED_ARTIFACT = Path(r"C:\Temp\blind-ledger-minimal-clearance-proof-20260817c\minimal_clearance_case0.blmc")
@@ -87,16 +97,28 @@ def _Acceptance() -> MinimalProofAcceptanceV1:
     return _accepted()
 
 
+def _mutated_static_acceptance(field: str) -> MinimalProofAcceptanceV1:
+    acceptance = _accepted()
+    value = bytes(acceptance.statement.get(field))
+    raw = bytearray(acceptance.statement.statement_bytes)
+    offset = raw.find(value)
+    if offset < 0:
+        raise AssertionError(field)
+    raw[offset] ^= 1
+    return replace(acceptance, statement=_parse_statement(bytes(raw)))
+
+
 class _Factory:
-    def __init__(self, *, failure: BaseException | None = None) -> None:
+    def __init__(self, *, failure: BaseException | None = None, acceptance: MinimalProofAcceptanceV1 | None = None) -> None:
         self.failure = failure
+        self.acceptance = acceptance
         self.instances: list[NativeMinimalClearanceVerifier] = []
 
     def __call__(self) -> NativeMinimalClearanceVerifier:
         verifier = object.__new__(NativeMinimalClearanceVerifier)
         verifier._test_failure = self.failure  # type: ignore[attr-defined]
         if self.failure is None:
-            verifier._test_acceptance = _accepted()  # type: ignore[attr-defined]
+            verifier._test_acceptance = self.acceptance or _accepted()  # type: ignore[attr-defined]
         self.instances.append(verifier)
         return verifier
 
@@ -188,10 +210,60 @@ class VerificationQueueTests(TestCase):
         config = self._config(capacity=512)
         self.assertEqual(config.as_json()["schema_version"], 4)
         self.assertEqual(config.as_json()["max_worker_concurrency"], 1)
+        self.assertEqual(config.as_json()["source_registry_snapshot"], SOURCE_REGISTRY_SNAPSHOT.hex().upper())
+        self.assertEqual(config.as_json()["source_profile"], SOURCE_PROFILE.hex().upper())
+        self.assertEqual(config.as_json()["governance_snapshot"], GOVERNANCE_SNAPSHOT.hex().upper())
         self.assertEqual(config.lease_seconds, 3_600)
         self.assertEqual(config.max_attempts, 3)
         with self.assertRaises(VerificationQueueError):
             QueueConfig("too-wide", 513, _VERIFIER, 1)
+
+        for key, bad in (("schema_version", True), ("max_attempts", 3.0), ("max_worker_concurrency", True), ("profile_epoch", 7.0)):
+            candidate = config.as_json()
+            candidate[key] = bad
+            with self.assertRaises(IndependentQueueError):
+                _parse_config(candidate)
+        for key in ("source_registry_snapshot", "source_profile", "governance_snapshot"):
+            candidate = config.as_json()
+            candidate.pop(key)
+            with self.assertRaises(IndependentQueueError):
+                _parse_config(candidate)
+
+    def test_profile_static_fields_are_bound_before_candidate_and_replayed(self) -> None:
+        acceptance = _accepted()
+        self.assertTrue(statement_matches_static(acceptance.statement))
+        for field in ("source_registry_snapshot", "source_profile", "governance_snapshot"):
+            mutated = _mutated_static_acceptance(field)
+            self.assertFalse(statement_matches_static(mutated.statement))
+            store = self._store(name=f"static-{field}.sqlite")
+            result = self._verify_one(store, factory=_Factory(acceptance=mutated))
+            self.assertEqual(result.status, "HELD")
+            self.assertEqual(store._snapshot()["counts"]["CANDIDATE"], 0)
+
+            replay_store = self._store(name=f"replay-{field}.sqlite")
+            self._verify_one(replay_store)
+            with closing(sqlite3.connect(replay_store.path)) as connection:
+                connection.execute("DROP TRIGGER queue_results_no_update")
+                row = connection.execute("SELECT operation_id,receipt_bytes FROM queue_results").fetchone()
+                self.assertIsNotNone(row)
+                receipt = json.loads(bytes(row[1]).decode("ascii"))
+                receipt["evidence"]["acceptance_bytes"] = _mutated_static_acceptance(field).canonical_bytes().hex().upper()
+                mutated_receipt = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("ascii")
+                connection.execute("UPDATE queue_results SET receipt_bytes=? WHERE operation_id=?", (mutated_receipt, bytes(row[0])))
+                connection.commit()
+                exported = connection.serialize()
+            with self.assertRaises(IndependentQueueError):
+                verify_database(replay_store.path)
+            with self.assertRaises(IndependentQueueError):
+                verify_export_bytes(exported)
+
+    def test_candidate_counts_as_nonterminal_projection(self) -> None:
+        store = self._store()
+        self.assertEqual(store._support_summary()["nonterminal_depth"], 0)
+        self._verify_one(store)
+        summary = store._support_summary()
+        self.assertEqual(summary["nonterminal_depth"], 1)
+        self.assertEqual(summary["oldest_admission_seq"], 1)
 
     def test_admission_exact_retry_conflict_and_bounded_capacity(self) -> None:
         store = self._store(capacity=1)
@@ -301,6 +373,55 @@ class VerificationQueueTests(TestCase):
         with self.assertRaises(IndependentQueueError):
             verify_database(restored, expected_config={**store.config.as_json(), "schema_version": 2})
 
+    def test_create_only_bootstrap_keeps_target_after_post_link_fault(self) -> None:
+        path = self.root / "bootstrap-post-link.sqlite"
+        owner = _QueueRuntimeOwnership(lock_path=path.with_name(path.name + ".runtime-lock"), parent=path.parent)
+        self._owners.append(owner)
+        real_verify = independent_queue_module.verify_database
+        calls = {"count": 0}
+
+        def fault(target, *, expected_config=None):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise IndependentQueueError("post_link_fault")
+            return real_verify(target, expected_config=expected_config)
+
+        with patch.object(independent_queue_module, "verify_database", side_effect=fault):
+            with self.assertRaises(VerificationQueueError):
+                _VerificationQueueStore(path=path, config=self._config(), owner=owner)
+        self.assertTrue(path.is_file())
+        self.assertEqual(real_verify(path, expected_config=self._config().as_json())["schema"], "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v4")
+        retry = _VerificationQueueStore(path=path, config=self._config(), owner=owner)
+        self.assertEqual(retry._snapshot()["counts"]["QUEUED"], 0)
+        self.assertEqual(tuple(self.root.glob(".queue-bootstrap-*")), ())
+
+    def test_create_only_restore_keeps_target_after_post_link_fault(self) -> None:
+        store = self._store()
+        exported = store._export_bytes()
+        target = self.root / "restore-post-link.sqlite"
+        real_verify = independent_queue_module.verify_database
+        calls = {"count": 0}
+
+        def fault(path, *, expected_config=None):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise IndependentQueueError("post_link_fault")
+            return real_verify(path, expected_config=expected_config)
+
+        with patch.object(independent_queue_module, "verify_database", side_effect=fault):
+            with self.assertRaises(IndependentQueueError):
+                restore_export_to_fresh_database(target, exported)
+        self.assertTrue(target.is_file())
+        self.assertEqual(real_verify(target), verify_export_bytes(exported))
+        self.assertEqual(restore_export_to_fresh_database(target, exported), verify_export_bytes(exported))
+        self.assertEqual(tuple(self.root.glob(".queue-restore-*")), ())
+        conflict = self.root / "restore-conflict.sqlite"
+        conflict.write_bytes(b"pre-existing-conflict")
+        before = conflict.read_bytes()
+        with self.assertRaises(IndependentQueueError):
+            restore_export_to_fresh_database(conflict, exported)
+        self.assertEqual(conflict.read_bytes(), before)
+
     def test_batch_reader_replays_once_and_returns_requested_order(self) -> None:
         store = self._store(capacity=2)
         self._verify_one(store, "job-a")
@@ -325,6 +446,34 @@ class VerificationQueueTests(TestCase):
         self.assertEqual(store._promote_candidates(), ())
         summary = verify_database(store.path, expected_config=store.config.as_json())
         self.assertEqual(summary["accepted_batch_count"], 1)
+
+    def test_candidate_promotion_requires_complete_oldest_prefix(self) -> None:
+        store = self._store(capacity=512)
+        for index in range(257):
+            self._verify_one(store, f"prefix-job-{index}")
+        first = store._promote_candidate_batch()
+        second = store._promote_candidate_batch()
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(first["accepted_count"], 256)
+        self.assertEqual(second["accepted_count"], 1)
+        self.assertIsNone(store._promote_candidate_batch())
+        self.assertEqual(verify_database(store.path, expected_config=store.config.as_json())["accepted_batch_count"], 2)
+
+    def test_promotion_response_loss_is_indeterminate_and_restart_converges(self) -> None:
+        fired = {"value": False}
+
+        def fault(label: str) -> None:
+            if label == "promote_batch" and not fired["value"]:
+                fired["value"] = True
+                raise RuntimeError("post-commit-canary")
+
+        store = self._store(after_commit_fault=fault)
+        self._verify_one(store)
+        with self.assertRaises(queue_module.QueueIndeterminateError):
+            store._promote_candidates()
+        self.assertEqual(verify_database(store.path, expected_config=store.config.as_json())["status_counts"]["VERIFIED"], 1)
+        self.assertEqual(store._promote_candidates(), ())
 
     def test_restart_promotes_durable_candidate_before_new_native_work(self) -> None:
         from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime

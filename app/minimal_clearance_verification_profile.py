@@ -10,8 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 from pathlib import Path
-import re
-from typing import Any, Final, Mapping
+from typing import Any, Final
 
 
 _DIGEST_BYTES: Final[int] = 64
@@ -33,12 +32,26 @@ def _hash_text(domain: bytes, value: str) -> bytes:
     return hashlib.sha3_512(domain + b"\x00" + value.encode("ascii")).digest()
 
 
+SOURCE_REGISTRY_SNAPSHOT: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SOURCE-REGISTRY-SNAPSHOT/v1", "snapshot-1"
+)
+SOURCE_PROFILE: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/SOURCE-PROFILE/v1", "synthetic-authoritative"
+)
+GOVERNANCE_SNAPSHOT: Final[bytes] = _hash_text(
+    b"BL/NATIVE-V3/GOVERNANCE-SNAPSHOT/v2", "governance-1"
+)
+
+
 def _profile_identity_material() -> tuple[bytes, ...]:
     return (
         PROTOCOL_VERSION.to_bytes(4, "big"),
         PROOF_ROLE,
         _ZERO_SUITE,
         _hash_text(b"BL/NATIVE-V3/EXECUTION-CONTEXT/v2", "minimal-clearance"),
+        SOURCE_REGISTRY_SNAPSHOT,
+        SOURCE_PROFILE,
+        GOVERNANCE_SNAPSHOT,
         _hash_text(b"BL/NATIVE-V3/CONTROL-SET/v2", ",".join(DIRECTIVES)),
         _hash_text(b"BL/NATIVE-V3/EVALUATOR/v1", "minimal-clearance-evaluator"),
         _hash_text(b"BL/NATIVE-V3/SCHEMA/v1", "minimal-clearance-schema"),
@@ -81,12 +94,15 @@ def statement_matches_static(statement: Any) -> bool:
             "proof_role": PROOF_ROLE,
             "proof_suite": _ZERO_SUITE,
             "execution_context": _profile_identity_material()[3],
-            "automatic_control_set": _profile_identity_material()[4],
-            "evaluator_id": _profile_identity_material()[5],
-            "schema_id": _profile_identity_material()[6],
-            "program_id": _profile_identity_material()[7],
-            "policy_id": _profile_identity_material()[8],
-            "settlement_domain": _profile_identity_material()[9],
+            "source_registry_snapshot": SOURCE_REGISTRY_SNAPSHOT,
+            "source_profile": SOURCE_PROFILE,
+            "governance_snapshot": GOVERNANCE_SNAPSHOT,
+            "automatic_control_set": _profile_identity_material()[7],
+            "evaluator_id": _profile_identity_material()[8],
+            "schema_id": _profile_identity_material()[9],
+            "program_id": _profile_identity_material()[10],
+            "policy_id": _profile_identity_material()[11],
+            "settlement_domain": _profile_identity_material()[12],
             "epoch": PROFILE_EPOCH,
         }
         return all(statement.get(name) == value for name, value in fixed.items())
@@ -140,12 +156,15 @@ class ExperimentalPrivateZkProfile:
             "directives": list(DIRECTIVES),
             "native_dimensions": list(NATIVE_DIMENSIONS),
             "execution_context": material[3].hex().upper(),
-            "automatic_control_set": material[4].hex().upper(),
-            "evaluator_id": material[5].hex().upper(),
-            "schema_id": material[6].hex().upper(),
-            "program_id": material[7].hex().upper(),
-            "policy_id": material[8].hex().upper(),
-            "settlement_domain": material[9].hex().upper(),
+            "source_registry_snapshot": material[4].hex().upper(),
+            "source_profile": material[5].hex().upper(),
+            "governance_snapshot": material[6].hex().upper(),
+            "automatic_control_set": material[7].hex().upper(),
+            "evaluator_id": material[8].hex().upper(),
+            "schema_id": material[9].hex().upper(),
+            "program_id": material[10].hex().upper(),
+            "policy_id": material[11].hex().upper(),
+            "settlement_domain": material[12].hex().upper(),
         }
 
     def matches_statement(self, statement: Any) -> bool:
@@ -154,7 +173,7 @@ class ExperimentalPrivateZkProfile:
 
 __all__ = (
     "CIRCUIT_ID", "DIRECTIVES", "ExperimentalPrivateZkProfile",
-    "NATIVE_DIMENSIONS", "PROFILE_EPOCH", "PROOF_ROLE",
+    "GOVERNANCE_SNAPSHOT", "NATIVE_DIMENSIONS", "PROFILE_EPOCH", "PROOF_ROLE",
     "PROTOCOL_VERSION", "derive_installation_id", "derive_profile_digest",
-    "statement_matches_static",
+    "SOURCE_PROFILE", "SOURCE_REGISTRY_SNAPSHOT", "statement_matches_static",
 )
