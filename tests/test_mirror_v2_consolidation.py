@@ -33,6 +33,75 @@ def _ingress_token(seed: str) -> str:
     return (seed + "-ingress-token").ljust(32, "x")
 
 
+def _rechain_ingress_with_fetch_capture_rebind(path: Path, replacements: dict[int, str]) -> None:
+    """Rebind a copied ingress event chain so semantic fetch/capture checks are reached."""
+
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute("SELECT * FROM ingress_events ORDER BY sequence").fetchall()
+        previous = ingress_independent.GENESIS_ROOT
+        stream_roots: dict[tuple[str, str], str] = {}
+        stream_last: dict[tuple[str, str], int] = {}
+        for row in rows:
+            value = json.loads(bytes(row["event_raw"]).decode("ascii"))
+            if row["sequence"] in replacements:
+                material = dict(value["material"])
+                material["capture_operation_id"] = replacements[row["sequence"]]
+                value["material"] = material
+                value["operation_id"] = ingress_independent._digest(
+                    "fetch-operation",
+                    {
+                        "operation_id": material["capture_operation_id"],
+                        "page_index": material["page_index"],
+                        "transport_attempt": material["transport_attempt"],
+                    },
+                )
+                value["material_digest"] = ingress_independent._digest("material", material)
+                value["payload_digest"] = ingress_independent._digest("fetch-payload", material)
+            value["before_root"] = previous
+            stream_key = (value["stream_kind"], value["stream_id"])
+            value["stream_before_root"] = stream_roots.get(stream_key, ingress_independent.GENESIS_ROOT)
+            value["event_id"] = ingress_independent._digest(
+                "event-id",
+                {key: value[key] for key in ingress_independent.EVENT_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            )
+            value["after_root"] = ingress_independent._event_root(
+                sequence=value["sequence"], previous=value["before_root"], event_id=value["event_id"],
+                event_kind=value["event_kind"], stream_kind=value["stream_kind"], stream_id=value["stream_id"],
+                slot_id=value["slot_id"], next_state=value["next_state"], observed_at=value["observed_at"],
+                material_digest=value["material_digest"],
+            )
+            value["stream_after_root"] = ingress_independent._stream_root(
+                sequence=value["sequence"], previous=value["stream_before_root"], event_id=value["event_id"],
+                stream_kind=value["stream_kind"], stream_id=value["stream_id"], next_state=value["next_state"],
+                observed_at=value["observed_at"], material_digest=value["material_digest"],
+            )
+            event_raw = ingress_independent._canonical(value)
+            connection.execute(
+                """UPDATE ingress_events SET event_id=?,operation_id=?,material_digest=?,payload_digest=?,
+                   before_root=?,after_root=?,stream_before_root=?,stream_after_root=?,event_raw=?,receipt_digest=?
+                   WHERE sequence=?""",
+                (
+                    value["event_id"], value["operation_id"], value["material_digest"], value["payload_digest"],
+                    value["before_root"], value["after_root"], value["stream_before_root"], value["stream_after_root"],
+                    event_raw, ingress_independent._raw_digest("receipt", event_raw), value["sequence"],
+                ),
+            )
+            previous = value["after_root"]
+            stream_roots[stream_key] = value["stream_after_root"]
+            stream_last[stream_key] = value["sequence"]
+        for (stream_kind, stream_id), head_root in stream_roots.items():
+            connection.execute(
+                "UPDATE ingress_heads SET head_root=?,event_sequence=? WHERE stream_kind=? AND stream_id=?",
+                (head_root, stream_last[(stream_kind, stream_id)], stream_kind, stream_id),
+            )
+        connection.execute("UPDATE ingress_meta SET head_root=? WHERE meta_id=1", (previous,))
+        connection.commit()
+    finally:
+        connection.close()
+
+
 class _ManualClock:
     def __init__(self, value: int) -> None:
         self.value = value
@@ -1160,6 +1229,59 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotIn("authenticated", receipts[0])
         self.assertTrue(service.verify()["attestation_count"] == 2)
 
+    def test_fetch_capture_operation_is_cross_bound_across_rehashed_event_chain(self) -> None:
+        single = self.root / "rebound-fetch-capture.db"
+        shutil.copy2(self.ingress_path, single)
+        connection = sqlite3.connect(single)
+        try:
+            sequence = connection.execute(
+                "SELECT sequence FROM ingress_events WHERE event_kind='FETCH_ATTESTATION'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        _rechain_ingress_with_fetch_capture_rebind(single, {int(sequence): "f" * 128})
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:fetch-capture-binding"):
+            ingress_independent.verify_database(
+                single,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+            )
+
+        from app.mirror import nc_medicaid_fhir as fhir
+        from tests.test_nc_medicaid_fhir_source import _bundle, _transport
+
+        request_url = profile.REQUEST_URL
+        throttled = fhir.fixture_response(_bundle(), request_url, status=429, headers=(("Retry-After", "2"),))
+        success = fhir.fixture_response(_bundle(), request_url)
+        retry_envelope = fhir.build_fixture_envelope(
+            _transport(_bundle(), retries={(request_url, 0): throttled, (request_url, 1): success})
+        )
+        service, slot_id = self._fresh_ingress("rebound-fetch-attempts.db")
+        token = _ingress_token("rebound-fetch-attempts")
+        service.claim_slot(slot_id, lease_token=token)
+        service.admit_capture(
+            retry_envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token=token,
+        )
+        two_fetch = self.root / "rebound-two-fetch-operations.db"
+        shutil.copy2(service.path, two_fetch)
+        connection = sqlite3.connect(two_fetch)
+        try:
+            second = connection.execute(
+                "SELECT sequence FROM ingress_events WHERE event_kind='FETCH_ATTESTATION' AND transport_attempt=1"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        _rechain_ingress_with_fetch_capture_rebind(two_fetch, {int(second): "e" * 128})
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:fetch-capture-binding"):
+            ingress_independent.verify_database(
+                two_fetch,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+            )
+
     def test_failed_attempt_events_remain_failure_evidence(self) -> None:
         from app.mirror import nc_medicaid_fhir as fhir
         from tests.test_nc_medicaid_fhir_source import _bundle
@@ -1691,6 +1813,92 @@ class MirrorV2Fixture(unittest.TestCase):
                 expected_config_digest=self.core_config.digest,
                 ingress_path=alternate_path,
             )
+
+    def test_core_independent_binds_graph_artifact_to_envelope_derived_input(self) -> None:
+        from app.mirror import nc_medicaid_fhir_independent as fhir_independent
+        from app.mirror import provider_trust_graph as graph_producer
+        from app.mirror import provider_trust_graph_independent as graph_independent
+        from tests.test_nc_medicaid_fhir_source import _envelope
+
+        envelope_b = _envelope(location_variant="changed")
+        self.assertNotEqual(self.envelope, envelope_b)
+        fhir_independent.verify_bytes(envelope_b)
+        coverage_a = fhir_independent.to_verified_source_coverage(
+            fhir_independent.verify_bytes(self.envelope)
+        )
+        registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
+        connection = sqlite3.connect(self.core_path)
+        try:
+            graph_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE kind='GRAPH'").fetchone()[0])
+            source_raw = bytes(connection.execute("SELECT raw FROM core_artifacts WHERE kind='SOURCE_OBSERVATION'").fetchone()[0])
+        finally:
+            connection.close()
+        source_value = json.loads(source_raw.decode("ascii"))
+        verified_a = graph_independent.verify_artifact_v2(graph_raw, registry)
+        self.assertTrue(
+            graph_independent.verify_input_binding_v2(
+                coverage_a.graph_input,
+                graph_raw,
+                registry,
+            )["accepted"]
+        )
+        core_independent._replay_source_admission(self.envelope, graph_raw, source_value, verified_a)
+
+        input_b_value = json.loads(coverage_a.graph_input.decode("utf-8"))
+        input_b_value["sources"][0]["coverage_effective_end"] -= 1
+        input_b_value["sources"][0]["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
+            input_b_value["sources"][0], profile.NC_MEDICAID_GRAPH_PROFILE
+        )
+        input_b = graph_producer.canonical_input(input_b_value)
+        graph_b, _telemetry = graph_producer.build_report(input_b, profile=profile.NC_MEDICAID_GRAPH_PROFILE)
+        verified_b = graph_independent.verify_artifact_v2(graph_b, registry)
+        self.assertTrue(
+            graph_independent.verify_input_binding_v2(input_b, graph_b, registry)["accepted"]
+        )
+        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-sources"):
+            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_b, registry)
+        with self.assertRaisesRegex(core_independent.CoreVerificationError, "core:source-admission"):
+            core_independent._replay_source_admission(self.envelope, graph_b, source_value, verified_b)
+
+        for label, field, replacement, expected in (
+            ("subject", "provider_graph_subject", "SYNTH_OTHER_PROVIDER", "input:subject"),
+            ("scope", "scope", "SYNTH_OTHER_SCOPE", "input:scope"),
+            ("profile", "profile_id", "SYNTH_OTHER_PROFILE", "input:profile"),
+        ):
+            with self.subTest(input_field=label):
+                bad_input = json.loads(coverage_a.graph_input.decode("utf-8"))
+                bad_input[field] = replacement
+                with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, expected):
+                    graph_independent.verify_input_binding_v2(
+                        graph_producer.canonical_input(bad_input), graph_raw, registry
+                    )
+
+        input_time_value = json.loads(coverage_a.graph_input.decode("utf-8"))
+        input_time_value["observation_time"] += 1
+        for source in input_time_value["sources"]:
+            source["coverage_observation_time"] += 1
+            for record in source["records"]:
+                record["observed_at"] += 1
+            source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
+                source, profile.NC_MEDICAID_GRAPH_PROFILE
+            )
+        input_time = graph_producer.canonical_input(input_time_value)
+        graph_time, _telemetry = graph_producer.build_report(input_time, profile=profile.NC_MEDICAID_GRAPH_PROFILE)
+        self.assertTrue(graph_independent.verify_input_binding_v2(input_time, graph_time, registry)["accepted"])
+        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-time"):
+            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_time, registry)
+
+        input_parity_value = json.loads(coverage_a.graph_input.decode("utf-8"))
+        input_parity_value["parity_cases"] = [{
+            "case_id": "CASE_001",
+            "expected_kind": "EVIDENCE_INCOMPLETE",
+            "expected_present": True,
+        }]
+        input_parity = graph_producer.canonical_input(input_parity_value)
+        graph_parity, _telemetry = graph_producer.build_report(input_parity, profile=profile.NC_MEDICAID_GRAPH_PROFILE)
+        self.assertTrue(graph_independent.verify_input_binding_v2(input_parity, graph_parity, registry)["accepted"])
+        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "input:artifact-parity"):
+            graph_independent.verify_input_binding_v2(coverage_a.graph_input, graph_parity, registry)
 
     def test_core_structural_only_verification_is_not_upstream_acceptance(self) -> None:
         structural = core_independent.verify_database(

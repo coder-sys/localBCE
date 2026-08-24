@@ -318,7 +318,7 @@ def _replay_source_admission(
     envelope_raw: bytes,
     graph_raw: bytes,
     source: Mapping[str, object],
-    graph_result: Mapping[str, object] | None = None,
+    graph_result: graph._VerifiedGraphArtifactV2 | None = None,
 ) -> None:
     if type(envelope_raw) is not bytes or not envelope_raw or len(envelope_raw) > ingress.MAX_RAW_ENVELOPE_BYTES:
         raise CoreVerificationError("core:ingress-binding")
@@ -327,7 +327,12 @@ def _replay_source_admission(
     try:
         fhir_result = fhir.verify_bytes(envelope_raw, profile=NC_MEDICAID_PROFILE)
         coverage = fhir.to_verified_source_coverage(fhir_result, profile=NC_MEDICAID_PROFILE)
-        checked_graph = graph_result if graph_result is not None else graph.verify_bytes_v2(graph_raw, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
+        checked_graph = graph_result.summary if graph_result is not None else graph.verify_bytes_v2(graph_raw, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
+        graph._bind_input_to_verified_v2(
+            coverage.graph_input,
+            graph_raw,
+            verified=graph_result,
+        )
     except Exception:
         raise CoreVerificationError("core:source-admission") from None
     graph_profile = NC_MEDICAID_PROFILE.graph_profile
@@ -700,7 +705,7 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
         graph_report_ids: dict[str, str] = {}
         graph_digests: dict[str, str] = {}
         admission_graph_digests: dict[str, str] = {}
-        graph_checks: dict[str, dict[str, object]] = {}
+        graph_checks: dict[str, graph._VerifiedGraphArtifactV2] = {}
         observation_times: dict[str, int] = {}
         previous_root = GENESIS_ROOT
         previous_observed = 0
@@ -755,16 +760,17 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: 
                 if material["kind"] == "GRAPH":
                     graph_digest = _raw_digest("graph-artifact", raw_artifact)
                     try:
-                        graph_checked = graph.verify_bytes_v2(raw_artifact, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
+                        graph_checked = graph.verify_artifact_v2(raw_artifact, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
                     except Exception:
                         raise CoreVerificationError("core:graph") from None
-                    graph_report_id = graph_checked.get("report_id")
-                    if type(graph_report_id) is not str or graph_checked.get("accepted") is not True or graph_checked.get("profile_digest") != row_artifact["profile_digest"]:
+                    graph_summary = graph_checked.summary
+                    graph_report_id = graph_summary.get("report_id")
+                    if type(graph_report_id) is not str or graph_summary.get("accepted") is not True or graph_summary.get("profile_digest") != row_artifact["profile_digest"]:
                         raise CoreVerificationError("core:graph")
                     graph_report_ids[artifact_id] = graph_report_id
                     graph_digests[artifact_id] = graph_digest
                     admission_graph_digests[artifact_id] = _admission_raw_digest("graph-artifact", raw_artifact)
-                    graph_checks[artifact_id] = dict(graph_checked)
+                    graph_checks[artifact_id] = graph_checked
                     expected_operation = _digest("graph-operation", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                     expected_request = _digest("graph-request", {"graph_id": graph_report_id, "graph_digest": graph_digest})
                 elif material["kind"] == "SOURCE_OBSERVATION":

@@ -819,6 +819,7 @@ def _verify_event(
     slot_leases: dict[str, tuple[str | None, int | None, int]],
     artifacts: Mapping[str, Mapping[str, object]],
     capture_operations: dict[str, str],
+    fetch_capture_operations: dict[str, str],
     heads: dict[tuple[str, str], tuple[str | None, str, int]],
     stream_roots: dict[tuple[str, str], str],
     fetches: dict[str, list[dict[str, object]]],
@@ -1030,6 +1031,9 @@ def _verify_event(
             if material["operation_id"] != expected_operation:
                 raise IngressVerificationError("ingress:event-capture")
             capture_operations[artifact_id] = expected_operation
+            fetch_operation = fetch_capture_operations.get(artifact_id)
+            if fetch_operation is None or fetch_operation != expected_operation:
+                raise IngressVerificationError("ingress:fetch-capture-binding")
             expected_request = _digest("request", {"operation_id": expected_operation, "slot_id": row["slot_id"], "artifact_id": artifact_id})
             expected_payload = artifact_id
             raw_artifact = artifacts[artifact_id]["raw"]
@@ -1236,6 +1240,10 @@ def _verify_event(
         capture_operation = value["material"].get("capture_operation_id")
         if type(capture_operation) is not str:
             raise IngressVerificationError("ingress:event-material")
+        existing_capture_operation = fetch_capture_operations.get(str(receipt["artifact_id"]))
+        if existing_capture_operation is not None and existing_capture_operation != capture_operation:
+            raise IngressVerificationError("ingress:fetch-capture-binding")
+        fetch_capture_operations[str(receipt["artifact_id"])] = capture_operation
         material["capture_operation_id"] = capture_operation
         if (
             row["material_digest"] != _digest("material", material)
@@ -1337,6 +1345,7 @@ def _verify_connection(
         global_observed_at: list[int | None] = [None]
         slot_leases: dict[str, tuple[str | None, int | None, int]] = {}
         capture_operations: dict[str, str] = {}
+        fetch_capture_operations: dict[str, str] = {}
         previous = GENESIS_ROOT
         heads: dict[tuple[str, str], tuple[str | None, str, int]] = {}
         stream_roots: dict[tuple[str, str], str] = {}
@@ -1359,6 +1368,7 @@ def _verify_connection(
                 slot_leases=slot_leases,
                 artifacts=artifacts,
                 capture_operations=capture_operations,
+                fetch_capture_operations=fetch_capture_operations,
                 heads=heads,
                 stream_roots=stream_roots,
                 fetches=fetches,
@@ -1376,6 +1386,11 @@ def _verify_connection(
             actual_keys = [(int(item["page_index"]), int(item["transport_attempt"])) for item in selected]
             if actual_keys != expected_keys:
                 raise IngressVerificationError("ingress:attestation-count")
+            if artifact_id in capture_operations and (
+                artifact_id not in fetch_capture_operations
+                or fetch_capture_operations[artifact_id] != capture_operations[artifact_id]
+            ):
+                raise IngressVerificationError("ingress:fetch-capture-binding")
             if artifact["_terminal_event_sequence"] is None or artifact["_stored_event_sequence"] != artifact["_terminal_event_sequence"]:
                 raise IngressVerificationError("ingress:artifact-event-sequence")
             artifact.pop("_stored_event_sequence", None)

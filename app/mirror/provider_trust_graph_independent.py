@@ -186,6 +186,27 @@ OUTPUT_KEYS = {
 PROFILE_KEYS = {"profile_id", "version", "profile_digest"}
 V2_OUTPUT_KEYS = OUTPUT_KEYS | {"profile"}
 V2_IDENTITY_KEYS = IDENTITY_KEYS | PROFILE_KEYS
+INPUT_SCHEMA_V2 = "mirror-provider-trust-graph-input-v2"
+INPUT_KEYS_V2 = {
+    "schema",
+    "profile_id",
+    "profile_version",
+    "profile_digest",
+    "provider_graph_subject",
+    "scope",
+    "observation_time",
+    "sources",
+    "prior_artifact",
+    "remediation",
+    "parity_cases",
+}
+PARITY_INPUT_KEYS = {"case_id", "expected_kind", "expected_present"}
+REMEDIATION_INPUT_KEYS = {
+    "action_artifact_id",
+    "submitted_at",
+    "retest_result",
+    "prior_finding_ids",
+}
 _RE_HEX = re.compile(r"^[0-9a-f]{128}$")
 _RE_RECORD = re.compile(r"^SYNTH_(CREDENTIAL|ENROLLMENT)_RECORD_00[1-8]$")
 _RE_ACTION = re.compile(r"^SYNTH_ACTION_00[1-8]$")
@@ -220,6 +241,17 @@ class _GraphProfile:
             return self.source_roles.index(source_id)
         except ValueError as exc:
             raise_redacted(IndependentProviderTrustGraphError, "profile:source-role")
+
+
+@dataclass(frozen=True)
+class _VerifiedGraphArtifactV2:
+    """One independently verified V2 artifact retained only in bounded memory."""
+
+    value: dict[str, object]
+    profile: _GraphProfile
+    summary: dict[str, object]
+    raw_digest: str
+    raw_length: int
 
 
 def _profile_material(profile: object) -> dict[str, object]:
@@ -424,12 +456,22 @@ def _parse(raw: bytes) -> dict[str, object]:
     return value
 
 
+def _parse_input(raw: bytes) -> dict[str, object]:
+    if type(raw) is not bytes or not raw or len(raw) > 262_144:
+        raise IndependentProviderTrustGraphError("input:byte-cap")
+    return _parse(raw)
+
+
 def _digest(label: str, value: object, *, profile: _GraphProfile | None = None) -> str:
     h = hashlib.sha3_512()
     version = "v2" if profile is not None and profile.v2 else "v1"
     h.update(("BL/MIRROR/PROVIDER-TRUST-GRAPH/" + label + "/" + version + "\0").encode("ascii"))
     h.update(_canonical(value))
     return h.hexdigest()
+
+
+def _raw_digest(raw: bytes) -> str:
+    return hashlib.sha3_512(raw).hexdigest()
 
 
 def _expect_keys(value: object, expected: set[str], label: str) -> dict[str, object]:
@@ -569,9 +611,10 @@ def _validate_source(
     observation_time: int,
     *,
     profile: _GraphProfile | None = None,
+    output: bool = True,
 ) -> dict[str, object]:
     view = _profile_view(profile)
-    source = _expect_keys(value, SOURCE_OUTPUT_KEYS, "source")
+    source = _expect_keys(value, SOURCE_OUTPUT_KEYS if output else SOURCE_INPUT_KEYS, "source")
     source_id = _text(source["source_id"], "source:id")
     source_kind = _text(source["source_kind"], "source:kind")
     if source_id not in view.source_roles or source_kind not in view.source_kinds:
@@ -609,7 +652,8 @@ def _validate_source(
         raise IndependentProviderTrustGraphError("source:record-order-or-duplicate")
     _text(provenance["provenance_id"], "source:provenance-id")
     _hex(provenance["integrity_digest"], "source:integrity")
-    _hex(source["source_root"], "source:root")
+    if output:
+        _hex(source["source_root"], "source:root")
     return source
 
 
@@ -626,11 +670,12 @@ def _validate_sources(
     observation_time: int,
     *,
     profile: _GraphProfile | None = None,
+    output: bool = True,
 ) -> list[dict[str, object]]:
     view = _profile_view(profile)
     if not isinstance(sources, list) or len(sources) != len(view.source_roles):
         raise IndependentProviderTrustGraphError("sources:exact-count")
-    items = [_validate_source(source, observation_time, profile=view) for source in sources]
+    items = [_validate_source(source, observation_time, profile=view, output=output) for source in sources]
     ids = [source["source_id"] for source in items]
     if ids != list(view.source_roles) or ids != sorted(ids):
         raise IndependentProviderTrustGraphError("sources:identity-or-order")
@@ -641,10 +686,88 @@ def _validate_sources(
     for source in items:
         if source["provenance"]["integrity_digest"] != _integrity_digest(source, profile=view):  # type: ignore[index]
             raise IndependentProviderTrustGraphError("source:integrity-mismatch")
-        without_root = {key: value for key, value in source.items() if key != "source_root"}
-        if source["source_root"] != _source_root(without_root, profile=view):
-            raise IndependentProviderTrustGraphError("source:root-mismatch")
+        if output:
+            without_root = {key: value for key, value in source.items() if key != "source_root"}
+            if source["source_root"] != _source_root(without_root, profile=view):
+                raise IndependentProviderTrustGraphError("source:root-mismatch")
     return items
+
+
+def _validate_input_parity(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > MAX_PARITY_CASES:
+        raise IndependentProviderTrustGraphError("input:parity-count")
+    result: list[dict[str, object]] = []
+    for raw in value:
+        item = _expect_keys(raw, PARITY_INPUT_KEYS, "input:parity")
+        _text(item["case_id"], "input:parity-id")
+        expected_kind = _text(item["expected_kind"], "input:parity-kind")
+        if expected_kind not in FINDING_KINDS:
+            raise IndependentProviderTrustGraphError("input:parity-kind")
+        _bool(item["expected_present"], "input:parity-present")
+        result.append(item)
+    ids = [item["case_id"] for item in result]
+    if ids != sorted(ids) or len(set(ids)) != len(ids):
+        raise IndependentProviderTrustGraphError("input:parity-order")
+    return result
+
+
+def _validate_input_remediation(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    item = _expect_keys(value, REMEDIATION_INPUT_KEYS, "input:remediation")
+    action = _text(item["action_artifact_id"], "input:remediation-action")
+    if _RE_ACTION.fullmatch(action) is None:
+        raise IndependentProviderTrustGraphError("input:remediation-action")
+    _int(item["submitted_at"], "input:remediation-submitted")
+    result = _text(item["retest_result"], "input:remediation-result")
+    if result not in ("PASSED", "FAILED"):
+        raise IndependentProviderTrustGraphError("input:remediation-result")
+    prior_ids = _sorted_unique(item["prior_finding_ids"], "input:remediation-findings", maximum=MAX_FINDINGS)
+    if not prior_ids:
+        raise IndependentProviderTrustGraphError("input:remediation-findings")
+    return item
+
+
+def _validate_graph_input(value: object, *, profile: _GraphProfile) -> dict[str, object]:
+    item = _expect_keys(value, INPUT_KEYS_V2, "input")
+    if item["schema"] != INPUT_SCHEMA_V2:
+        raise IndependentProviderTrustGraphError("input:schema")
+    if (
+        item["profile_id"] != profile.profile_id
+        or item["profile_version"] != profile.version
+        or item["profile_digest"] != profile.profile_digest
+    ):
+        raise IndependentProviderTrustGraphError("input:profile")
+    if _text(item["provider_graph_subject"], "input:subject") != profile.subject:
+        raise IndependentProviderTrustGraphError("input:subject")
+    if _text(item["scope"], "input:scope") != profile.scope:
+        raise IndependentProviderTrustGraphError("input:scope")
+    observation_time = _int(item["observation_time"], "input:observation-time", minimum=1)
+    if not profile.observation_start <= observation_time < profile.observation_end:  # type: ignore[operator]
+        raise IndependentProviderTrustGraphError("input:observation-window")
+    _validate_sources(item["sources"], observation_time, profile=profile, output=False)
+    prior_artifact = item["prior_artifact"]
+    if prior_artifact is not None:
+        _validate_prior_artifact(prior_artifact, profile=profile)
+    remediation = _validate_input_remediation(item["remediation"])
+    _validate_input_parity(item["parity_cases"])
+    if (remediation is None) != (prior_artifact is None):
+        raise IndependentProviderTrustGraphError("input:prior-remediation-pair")
+    if prior_artifact is not None:
+        assert isinstance(prior_artifact, dict) and remediation is not None
+        prior_snapshot = _expect_keys(
+            prior_artifact["observation_snapshot"],
+            {"snapshot_id", "snapshot_root", "observation_time"},
+            "input:prior-snapshot",
+        )
+        prior_findings = prior_artifact["findings"]
+        if not isinstance(prior_findings, list):
+            raise IndependentProviderTrustGraphError("input:prior-findings")
+        if remediation["submitted_at"] <= prior_snapshot["observation_time"] or remediation["submitted_at"] > observation_time:
+            raise IndependentProviderTrustGraphError("input:prior-chronology")
+        if not set(remediation["prior_finding_ids"]).issubset({finding["finding_id"] for finding in prior_findings if isinstance(finding, dict)}):
+            raise IndependentProviderTrustGraphError("input:prior-findings")
+    return item
 
 
 def _finding(value: object, snapshot_id: str, *, profile: _GraphProfile | None = None) -> dict[str, object]:
@@ -1023,9 +1146,7 @@ def verify_bytes(raw: bytes) -> dict[str, object]:
     }
 
 
-def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:
-    """Verify V2 only against an external state-configured profile registry."""
-
+def _verify_v2_artifact(raw: bytes, profile_registry: Mapping[str, object]) -> _VerifiedGraphArtifactV2:
     if not isinstance(profile_registry, Mapping) or not profile_registry:
         raise IndependentProviderTrustGraphError("profile:registry-required")
     artifact = _parse(raw)
@@ -1041,7 +1162,7 @@ def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[
         raise IndependentProviderTrustGraphError("profile:artifact-not-authority")
     item = _verify_artifact(artifact, allow_retest=True, history_depth=MAX_HISTORY_DEPTH, profile=view)
     report = _expect_keys(item["report"], REPORT_KEYS, "report")
-    return {
+    summary = {
         "report_id": report["report_id"],
         "finding_kinds": [finding["kind"] for finding in item["findings"]],
         "lifecycle": report["lifecycle"],
@@ -1052,6 +1173,110 @@ def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[
         "profile_digest": view.profile_digest,
         "accepted": True,
     }
+    return _VerifiedGraphArtifactV2(
+        value=item,
+        profile=view,
+        summary=summary,
+        raw_digest=_raw_digest(raw),
+        raw_length=len(raw),
+    )
+
+
+def verify_artifact_v2(raw: bytes, profile_registry: Mapping[str, object]) -> _VerifiedGraphArtifactV2:
+    """Return one bounded in-memory independent V2 artifact verification."""
+
+    return _verify_v2_artifact(raw, profile_registry)
+
+
+def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:
+    """Verify V2 only against an external state-configured profile registry."""
+
+    return dict(_verify_v2_artifact(raw, profile_registry).summary)
+
+
+def _bind_input_to_verified_v2(
+    graph_input_raw: bytes,
+    artifact_raw: bytes,
+    *,
+    verified: _VerifiedGraphArtifactV2,
+) -> dict[str, object]:
+    """Bind one FHIR-derived canonical graph input to one verified graph artifact."""
+
+    if type(graph_input_raw) is not bytes or not graph_input_raw or len(graph_input_raw) > 262_144:
+        raise IndependentProviderTrustGraphError("input:byte-cap")
+    if type(artifact_raw) is not bytes or not artifact_raw or len(artifact_raw) > MAX_ARTIFACT_BYTES:
+        raise IndependentProviderTrustGraphError("artifact:byte-cap")
+    checked = verified
+    if (
+        not isinstance(checked, _VerifiedGraphArtifactV2)
+        or checked.raw_length != len(artifact_raw)
+        or checked.raw_digest != _raw_digest(artifact_raw)
+    ):
+        raise IndependentProviderTrustGraphError("artifact:verification-binding")
+    input_value = _validate_graph_input(_parse_input(graph_input_raw), profile=checked.profile)
+    artifact = checked.value
+    subject = _expect_keys(artifact["subject"], {"provider_graph_subject", "scope"}, "artifact:subject")
+    if {
+        "provider_graph_subject": subject["provider_graph_subject"],
+        "scope": subject["scope"],
+    } != {
+        "provider_graph_subject": input_value["provider_graph_subject"],
+        "scope": input_value["scope"],
+    }:
+        raise IndependentProviderTrustGraphError("input:artifact-subject")
+    snapshot = _expect_keys(artifact["observation_snapshot"], {"snapshot_id", "snapshot_root", "observation_time"}, "artifact:snapshot")
+    if snapshot["observation_time"] != input_value["observation_time"]:
+        raise IndependentProviderTrustGraphError("input:artifact-time")
+    source_coverage = artifact["source_coverage"]
+    if not isinstance(source_coverage, list):
+        raise IndependentProviderTrustGraphError("input:artifact-sources")
+    projected_sources = [
+        {key: source[key] for key in source if key != "source_root"}
+        for source in source_coverage
+        if isinstance(source, dict)
+    ]
+    if len(projected_sources) != len(source_coverage) or projected_sources != input_value["sources"]:
+        raise IndependentProviderTrustGraphError("input:artifact-sources")
+    parity = artifact["parity_cases"]
+    if not isinstance(parity, list):
+        raise IndependentProviderTrustGraphError("input:artifact-parity")
+    projected_parity = [
+        {key: case[key] for key in PARITY_INPUT_KEYS}
+        for case in parity
+        if isinstance(case, dict) and PARITY_INPUT_KEYS.issubset(case)
+    ]
+    if len(projected_parity) != len(parity) or projected_parity != input_value["parity_cases"]:
+        raise IndependentProviderTrustGraphError("input:artifact-parity")
+    input_remediation = input_value["remediation"]
+    artifact_remediation = artifact["remediation"]
+    if (input_remediation is None) != (artifact_remediation is None):
+        raise IndependentProviderTrustGraphError("input:artifact-remediation")
+    if input_remediation is not None:
+        if not isinstance(artifact_remediation, dict):
+            raise IndependentProviderTrustGraphError("input:artifact-remediation")
+        for key in REMEDIATION_INPUT_KEYS:
+            if artifact_remediation.get(key) != input_remediation[key]:
+                raise IndependentProviderTrustGraphError("input:artifact-remediation")
+        if artifact_remediation.get("prior_artifact") != input_value["prior_artifact"]:
+            raise IndependentProviderTrustGraphError("input:artifact-prior")
+    elif input_value["prior_artifact"] is not None:
+        raise IndependentProviderTrustGraphError("input:artifact-prior")
+    return dict(checked.summary)
+
+
+def verify_input_binding_v2(
+    graph_input_raw: bytes,
+    artifact_raw: bytes,
+    profile_registry: Mapping[str, object],
+) -> dict[str, object]:
+    """Independently verify and bind one canonical input to one V2 artifact."""
+
+    checked = _verify_v2_artifact(artifact_raw, profile_registry)
+    return _bind_input_to_verified_v2(
+        graph_input_raw,
+        artifact_raw,
+        verified=checked,
+    )
 
 
 def verify_file(path: str | Path) -> dict[str, object]:
