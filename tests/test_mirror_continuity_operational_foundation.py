@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from contextlib import redirect_stderr
+import ast
 import io
 import json
 import os
@@ -350,6 +351,49 @@ class MirrorContinuityOperationalFoundationTests(unittest.TestCase):
         self.assertEqual(before_counts, self._row_counts())
         self.assertEqual(before_files, self._file_state())
         self.assertEqual(set(store.ARTIFACT_KINDS), set(independent.ARTIFACT_KINDS))
+
+    def test_removed_views_have_no_active_files_or_imports(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        removed = (
+            "contract_mirror",
+            "denominator_ledger",
+            "transaction_mirror",
+            "money_mirror",
+            "transition_mirror",
+            "state_value_ledger",
+            "rehearsal",
+        )
+        removed_paths = tuple(
+            (root / "app" / "mirror" / f"{name}{suffix}.py")
+            for name in removed
+            for suffix in ("", "_independent")
+        )
+        removed_paths += (
+            root / "tests" / "test_mirror_rehearsal.py",
+            root / "tests" / "rehearsal_job_object.py",
+            root / "tests" / "test_mirror_busy_recovery.py",
+        )
+        for path in removed_paths:
+            self.assertFalse(path.exists(), path)
+
+        forbidden_modules = {f"app.mirror.{name}" for name in removed}
+        for base in (root / "app", root / "tests"):
+            for path in base.rglob("*.py"):
+                if any(part in {".git", ".pytest_cache", "__pycache__"} for part in path.parts):
+                    continue
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        imported = {alias.name for alias in node.names}
+                    elif isinstance(node, ast.ImportFrom):
+                        module = node.module or ""
+                        imported = {
+                            f"{module}.{alias.name}" if module == "app.mirror" else module
+                            for alias in node.names
+                        }
+                    else:
+                        continue
+                    self.assertTrue(imported.isdisjoint(forbidden_modules), path)
 
     def test_tampered_receipt_retry_and_corrupt_history_cannot_advance(self) -> None:
         instance = self._store()

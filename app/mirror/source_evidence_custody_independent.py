@@ -25,7 +25,7 @@ SCHEMA_VERSION = 2
 STAGE_KIND = "SOURCE_EVIDENCE_CUSTODIED"
 DOMAIN = "BL/MIRROR/SOURCE-EVIDENCE-CUSTODY/"
 ADMISSION_DOMAIN = "BL/MIRROR/SOURCE-ADMISSION/"
-STORE_DOMAIN = "BL/MIRROR/CONTINUITY-STORE-V2/"
+STORE_DOMAIN = "BL/MIRROR/CONTINUITY-STORE-V3/"
 MAX_ARTIFACT_BYTES = 524_288
 MAX_ENVELOPE_BYTES = 180_000
 MAX_RECEIPT_BYTES = 32_768
@@ -197,7 +197,7 @@ def admission_digest(label: str, value: object) -> str:
 
 def storage_payload_hash(raw: bytes) -> str:
     digest = hashlib.sha3_512()
-    digest.update((STORE_DOMAIN + "CANONICAL-PAYLOAD/v2\0").encode("ascii"))
+    digest.update((STORE_DOMAIN + "CANONICAL-PAYLOAD/v3\0").encode("ascii"))
     digest.update(raw)
     return digest.hexdigest()
 
