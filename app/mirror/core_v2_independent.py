@@ -347,8 +347,7 @@ def _check_common_types(value: Mapping[str, object]) -> None:
             raise CoreVerificationError("core:event-field")
 
 
-def verify_database(path: str | Path, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_path: str | Path | None = None) -> dict[str, object]:
-    connection = _open(path)
+def _verify_connection(connection: sqlite3.Connection, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_path: str | Path | None = None, ingress_bytes: bytes | None = None) -> dict[str, object]:
     try:
         if _table_names(connection) != tuple(sorted(TABLES)):
             raise CoreVerificationError("core:tables")
@@ -624,10 +623,16 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
             key = (str(row["stream_kind"]), str(row["stream_id"]))
             if row["head_root"] != stream_roots[key] or row["event_sequence"] != stream_sequences[key] or row["head_ref"] != stream_refs.get(key):
                 raise CoreVerificationError("core:head")
-        if ingress_path is not None:
+        if ingress_bytes is not None or ingress_path is not None:
             source_ids = tuple(str(actual_artifacts[aid]["ingress_artifact_id"]) for aid in expected_artifacts if expected_artifacts[aid]["kind"] == "SOURCE_OBSERVATION")
-            if source_ids:
+            if ingress_bytes is not None:
+                ingress_result = ingress.verify_bytes(ingress_bytes, expected_database_id=str(meta["ingress_database_id"]), include_raw=True, artifact_ids=source_ids)
+                snapshots = ingress_result.get("selected_artifacts", {})
+            elif source_ids:
                 snapshots = ingress.read_artifact_snapshots(ingress_path, source_ids)
+            else:
+                snapshots = {}
+            if source_ids:
                 for aid in expected_artifacts:
                     value = actual_artifacts[aid]
                     if value.get("kind") != "SOURCE_OBSERVATION":
@@ -646,12 +651,44 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
         raise
     except (OSError, sqlite3.Error, TypeError, ValueError, KeyError):
         raise CoreVerificationError("core:database") from None
+
+
+def verify_database(path: str | Path, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_path: str | Path | None = None) -> dict[str, object]:
+    connection = _open(path)
+    try:
+        return _verify_connection(connection, expected_database_id=expected_database_id, expected_config_digest=expected_config_digest, ingress_path=ingress_path)
     finally:
         try:
             connection.execute("ROLLBACK")
         except sqlite3.Error:
             pass
         connection.close()
+
+
+def verify_bytes(raw: bytes, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_bytes: bytes | None = None) -> dict[str, object]:
+    if type(raw) is not bytes or not raw or len(raw) > MAX_DATABASE_BYTES:
+        raise CoreVerificationError("core:image")
+    if ingress_bytes is not None and (type(ingress_bytes) is not bytes or not ingress_bytes or len(ingress_bytes) > ingress.MAX_DATABASE_BYTES):
+        raise CoreVerificationError("core:ingress-image")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(":memory:", isolation_level=None, timeout=0.25)
+        connection.row_factory = sqlite3.Row
+        connection.deserialize(raw)
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        return _verify_connection(connection, expected_database_id=expected_database_id, expected_config_digest=expected_config_digest, ingress_bytes=ingress_bytes)
+    except CoreVerificationError:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError, KeyError):
+        raise CoreVerificationError("core:image") from None
+    finally:
+        if connection is not None:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            connection.close()
 
 
 def logical_export(result: Mapping[str, object]) -> bytes:
@@ -661,4 +698,4 @@ def logical_export(result: Mapping[str, object]) -> bytes:
     })
 
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "DOMAIN", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES", "TABLES", "TABLE_COLUMNS", "EXPLICIT_INDEX", "ARTIFACT_KINDS", "SESSION_STATES", "DELIVERY_STATES", "OBSERVATION_RESULTS", "FIXED_FLAGS", "EVENT_KINDS", "CoreVerificationError", "verify_database", "logical_export", "_canonical", "_digest", "_raw_digest", "_parse", "_event_root", "_stream_root", "GENESIS_ROOT"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "DOMAIN", "MAX_DATABASE_BYTES", "MAX_ARTIFACT_BYTES", "MAX_EVENT_BYTES", "TABLES", "TABLE_COLUMNS", "EXPLICIT_INDEX", "ARTIFACT_KINDS", "SESSION_STATES", "DELIVERY_STATES", "OBSERVATION_RESULTS", "FIXED_FLAGS", "EVENT_KINDS", "CoreVerificationError", "verify_database", "verify_bytes", "logical_export", "_canonical", "_digest", "_raw_digest", "_parse", "_event_root", "_stream_root", "GENESIS_ROOT"]

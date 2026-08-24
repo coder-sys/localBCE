@@ -241,7 +241,8 @@ def _component(value: object, label: str) -> dict[str, object]:
     _hex(value["config_digest"], label)
     _hex(value["head_root"], label)
     _hex(value["image_digest"], label)
-    if type(value["watermark"]) is not int or value["watermark"] < 0 or type(value["image_length"]) is not int or value["image_length"] <= 0:
+    cap = ingress.MAX_DATABASE_BYTES if "ingress" in label else core.MAX_DATABASE_BYTES if "core" in label else 0
+    if type(value["watermark"]) is not int or value["watermark"] < 0 or type(value["image_length"]) is not int or not 0 < value["image_length"] <= cap:
         raise RecoveryVerificationError(label)
     return value
 
@@ -355,7 +356,10 @@ def _transition_material(kind: str, material: object, point: Mapping[str, object
 
 
 def _verify_event(row: sqlite3.Row, meta: sqlite3.Row, previous: str, points: dict[str, dict[str, object]], receipts: dict[str, bytes]) -> str:
-    raw = bytes(row["event_raw"])
+    raw_value = row["event_raw"]
+    if type(raw_value) is not bytes or not raw_value or len(raw_value) > MAX_EVENT_BYTES:
+        raise RecoveryVerificationError("recovery:event")
+    raw = raw_value
     value = _parse(raw, "recovery:event")
     if set(value) != _EVENT_RAW_KEYS or tuple(row.keys()) != _EVENT_COLUMNS:
         raise RecoveryVerificationError("recovery:event-binding")
@@ -429,14 +433,20 @@ def _verify_snapshot(connection: sqlite3.Connection, *, expected_database_id: st
         row = persisted.get(point_id)
         if row is None or dict(row) != point:
             raise RecoveryVerificationError("recovery:point-reconstruction")
+    expected_generation = 1
+    prior_point: Mapping[str, object] | None = None
     for point in sorted(points.values(), key=lambda item: int(item["generation"])):
+        if point["generation"] != expected_generation:
+            raise RecoveryVerificationError("recovery:point-chain")
         if point["prior_point_id"] is None:
-            if point["generation"] != 1:
+            if prior_point is not None or point["generation"] != 1 or point["prior_root"] != GENESIS_ROOT:
                 raise RecoveryVerificationError("recovery:point-chain")
         else:
             prior = points.get(point["prior_point_id"])
-            if prior is None or prior["generation"] >= point["generation"] or prior["updated_sequence"] >= point["sequence"] or event_roots.get(int(prior["updated_sequence"])) != point["prior_root"]:
+            if prior is None or prior is not prior_point or prior["generation"] != expected_generation - 1 or prior["updated_sequence"] >= point["sequence"] or event_roots.get(int(prior["updated_sequence"])) != point["prior_root"]:
                 raise RecoveryVerificationError("recovery:point-chain")
+        prior_point = point
+        expected_generation += 1
     if meta["current_generation"] != max((int(point["generation"]) for point in points.values()), default=0) or meta["sequence"] != len(events) or meta["head_root"] != previous:
         raise RecoveryVerificationError("recovery:meta-root")
     summary = {

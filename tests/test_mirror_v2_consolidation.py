@@ -1391,6 +1391,166 @@ class MirrorV2Fixture(unittest.TestCase):
             recovery.RecoveryServiceV2(oversized, self.recovery_config, self.custody, self.storage)
         self.assertEqual(before, oversized.stat().st_size)
 
+    def test_recovery_catalog_reopens_and_ddl_failures_leave_no_partial_schema(self) -> None:
+        service = recovery.RecoveryServiceV2(self.root / "reopen-recovery.db", self.recovery_config, self.custody, self.storage)
+        self.assertTrue(service.verify()["accepted"])
+        reopened = recovery.RecoveryServiceV2(self.root / "reopen-recovery.db", self.recovery_config, self.custody, self.storage)
+        self.assertEqual(service.verify(), reopened.verify())
+
+        from unittest import mock
+
+        original_connection = recovery._connection
+        failure_points = (
+            "CREATE TABLE recovery_meta",
+            "CREATE TABLE recovery_points",
+            "CREATE TABLE recovery_events",
+            "CREATE INDEX recovery_points_state_idx",
+            "CREATE UNIQUE INDEX recovery_events_chain_idx",
+            "CREATE INDEX recovery_events_operation_idx",
+            "INSERT INTO recovery_meta",
+        )
+        for index, needle in enumerate(failure_points):
+            path = self.root / (f"ddl-failure-{index}.db")
+
+            class FailingConnection:
+                def __init__(self, inner: sqlite3.Connection) -> None:
+                    self.inner = inner
+
+                def execute(self, sql: str, *parameters: object):
+                    if needle in sql:
+                        raise sqlite3.OperationalError("synthetic DDL boundary failure")
+                    return self.inner.execute(sql, *parameters)
+
+                def __getattr__(self, name: str) -> object:
+                    return getattr(self.inner, name)
+
+            with self.subTest(failure=needle):
+                with mock.patch.object(recovery, "_connection", side_effect=lambda target: FailingConnection(original_connection(target))):
+                    with self.assertRaises(recovery.RecoveryError):
+                        recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+                connection = sqlite3.connect(path)
+                try:
+                    tables = tuple(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"))
+                finally:
+                    connection.close()
+                self.assertEqual((), tables)
+
+    def test_recovery_generation_chain_is_contiguous_and_retry_is_source_free(self) -> None:
+        empty_path = self.root / "generation-recovery.db"
+        service = recovery.RecoveryServiceV2(empty_path, self.recovery_config, self.custody, self.storage)
+        before = service.verify()
+        with self.assertRaises(recovery.RecoveryConflictError):
+            service.create_point(self.ingress_path, self.core_path, generation=2)
+        self.assertEqual(before, service.verify())
+
+        first = service.create_point(self.ingress_path, self.core_path, generation=1)
+        with self.assertRaises(recovery.RecoveryConflictError):
+            service.create_point(self.ingress_path, self.core_path, generation=3)
+        second = service.create_point(self.ingress_path, self.core_path, generation=2)
+        selected = recovery_independent.select_point(service.path, point_id=second.point_id)
+        self.assertEqual(first.point_id, selected["point"]["prior_point_id"])
+        self.assertEqual(first.after_root, selected["point"]["prior_root"])
+        self.ingress_path.unlink()
+        self.core_path.unlink()
+        self.assertEqual(first.raw, service.create_point(self.ingress_path, self.core_path, generation=1).raw)
+
+    def test_recovery_exact_images_are_verified_once_and_wrong_image_fails_before_catalog_mutation(self) -> None:
+        before = self.recovery_service.verify()
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            self.recovery_service._read_pair(self.core_path, self.core_path)
+        self.assertEqual(before, self.recovery_service.verify())
+        ing, cor, ing_raw, core_raw = self.recovery_service._read_pair(self.ingress_path, self.core_path)
+        self.assertEqual(ing["head_root"], ingress_independent.verify_bytes(ing_raw, expected_database_id=self.ingress_config.database_id, expected_config_digest=self.ingress_config.digest)["head_root"])
+        self.assertEqual(cor["head_root"], core_independent.verify_bytes(core_raw, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest, ingress_bytes=ing_raw)["head_root"])
+        with self.assertRaises(ingress_independent.IngressVerificationError):
+            ingress_independent.verify_bytes(core_raw)
+        with self.assertRaises(core_independent.CoreVerificationError):
+            core_independent.verify_bytes(ing_raw)
+
+    def test_recovery_verified_retry_and_bootstrap_fail_closed_after_key_revocation(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.custody.revoked.add(("synthetic-key", 1))
+        self.ingress_path.unlink()
+        self.core_path.unlink()
+        with self.assertRaises(recovery.RecoveryConflictError):
+            self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        with self.assertRaises(recovery.RecoveryConflictError):
+            self.recovery_service.bootstrap(point.point_id)
+        self.assertEqual("VERIFIED", recovery_independent.select_point(self.recovery_path, point_id=point.point_id)["point"]["state"])
+
+    def test_recovery_object_pending_retry_uses_stored_object_without_source_reread(self) -> None:
+        class PutThenLoseResponse(_Storage):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lost = True
+
+            def put_if_absent(self, object_id: str, sealed: bytes, *, key_id: str, key_epoch: int) -> recovery.StorageReceipt:
+                receipt = super().put_if_absent(object_id, sealed, key_id=key_id, key_epoch=key_epoch)
+                if self.lost:
+                    self.lost = False
+                    raise RuntimeError("response lost after storage commit")
+                return receipt
+
+        storage = PutThenLoseResponse()
+        service = recovery.RecoveryServiceV2(self.root / "pending-stored-recovery.db", self.recovery_config, self.custody, storage)
+        with self.assertRaises(recovery.RecoveryIndeterminateError):
+            service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("OBJECT_PENDING", recovery_independent.select_point(service.path, generation=1)["point"]["state"])
+        self.ingress_path.unlink()
+        self.core_path.unlink()
+        recovered = service.create_point(self.ingress_path, self.core_path, generation=1)
+        self.assertEqual("VERIFIED", recovered.state)
+
+    def test_recovery_event_raw_type_and_prepare_component_caps_fail_before_allocation(self) -> None:
+        point = self.recovery_service.create_point(self.ingress_path, self.core_path, generation=1)
+        bad = self.root / "integer-event-raw.db"
+        shutil.copy2(self.recovery_path, bad)
+        connection = sqlite3.connect(bad)
+        try:
+            connection.execute("UPDATE recovery_events SET event_raw=123 WHERE sequence=1")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(recovery_independent.RecoveryVerificationError):
+            recovery_independent.verify_database(bad, expected_database_id=self.recovery_config.database_id, expected_config_digest=self.recovery_config.digest)
+        ingress_component = {"database_id": "i", "chain_id": "c", "config_digest": "0" * 128, "head_root": "0" * 128, "watermark": 0, "image_digest": "0" * 128, "image_length": ingress_independent.MAX_DATABASE_BYTES + 1}
+        with self.assertRaises(recovery_independent.RecoveryVerificationError):
+            recovery_independent._component(ingress_component, "recovery:prepare-ingress")
+        self.assertEqual("VERIFIED", point.state)
+
+    def test_recovery_bounded_image_rejects_hardlinks_symlinks_and_all_sidecars(self) -> None:
+        hardlink = self.root / "recovery-hardlink.db"
+        os.link(self.recovery_path, hardlink)
+        with self.assertRaises(recovery.RecoveryError):
+            recovery._bounded_image(hardlink, recovery.MAX_DATABASE_BYTES, "recovery:hardlink")
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(os.fspath(self.recovery_path) + suffix)
+            sidecar.write_bytes(b"synthetic sidecar")
+            try:
+                with self.assertRaises(recovery.RecoveryError):
+                    recovery._bounded_image(self.recovery_path, recovery.MAX_DATABASE_BYTES, "recovery:sidecar")
+            finally:
+                sidecar.unlink()
+        symlink = self.root / "recovery-symlink.db"
+        try:
+            os.symlink(self.recovery_path, symlink)
+        except (OSError, NotImplementedError) as error:
+            self.skipTest("symlink capability unavailable: " + type(error).__name__)
+        try:
+            with self.assertRaises(recovery.RecoveryError):
+                recovery._bounded_image(symlink, recovery.MAX_DATABASE_BYTES, "recovery:symlink")
+            dangling = Path(os.fspath(self.recovery_path) + "-wal")
+            os.symlink(self.root / "missing-wal", dangling)
+            try:
+                with self.assertRaises(recovery.RecoveryError):
+                    recovery._bounded_image(self.recovery_path, recovery.MAX_DATABASE_BYTES, "recovery:dangling-sidecar")
+            finally:
+                if os.path.lexists(dangling):
+                    dangling.unlink()
+        finally:
+            if os.path.lexists(symlink):
+                symlink.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -684,8 +684,8 @@ def _verify_event(
     return row["after_root"]
 
 
-def verify_database(
-    path: str | Path,
+def _verify_connection(
+    connection: sqlite3.Connection,
     *,
     expected_database_id: str | None = None,
     expected_config_digest: str | None = None,
@@ -693,7 +693,6 @@ def verify_database(
     artifact_id: str | None = None,
     artifact_ids: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
-    connection = _open(path)
     try:
         if _table_names(connection) != tuple(sorted(TABLES)):
             raise IngressVerificationError("ingress:tables")
@@ -846,12 +845,73 @@ def verify_database(
         raise
     except (sqlite3.Error, OSError, TypeError, ValueError):
         raise IngressVerificationError("ingress:database") from None
+
+
+def verify_database(
+    path: str | Path,
+    *,
+    expected_database_id: str | None = None,
+    expected_config_digest: str | None = None,
+    include_raw: bool = False,
+    artifact_id: str | None = None,
+    artifact_ids: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    connection = _open(path)
+    try:
+        return _verify_connection(
+            connection,
+            expected_database_id=expected_database_id,
+            expected_config_digest=expected_config_digest,
+            include_raw=include_raw,
+            artifact_id=artifact_id,
+            artifact_ids=artifact_ids,
+        )
     finally:
         try:
             connection.execute("ROLLBACK")
         except sqlite3.Error:
             pass
         connection.close()
+
+
+def verify_bytes(
+    raw: bytes,
+    *,
+    expected_database_id: str | None = None,
+    expected_config_digest: str | None = None,
+    include_raw: bool = False,
+    artifact_id: str | None = None,
+    artifact_ids: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    if type(raw) is not bytes or not raw or len(raw) > MAX_DATABASE_BYTES:
+        raise IngressVerificationError("ingress:image")
+    try:
+        connection = sqlite3.connect(":memory:", isolation_level=None, timeout=0.25)
+        connection.row_factory = sqlite3.Row
+        connection.deserialize(raw)
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        return _verify_connection(
+            connection,
+            expected_database_id=expected_database_id,
+            expected_config_digest=expected_config_digest,
+            include_raw=include_raw,
+            artifact_id=artifact_id,
+            artifact_ids=artifact_ids,
+        )
+    except IngressVerificationError:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise IngressVerificationError("ingress:image") from None
+    finally:
+        try:
+            connection.execute("ROLLBACK")
+        except (NameError, sqlite3.Error):
+            pass
+        try:
+            connection.close()
+        except (NameError, sqlite3.Error):
+            pass
 
 
 def read_artifact(path: str | Path, artifact_id: str) -> dict[str, object]:
@@ -929,7 +989,7 @@ def logical_export(result: Mapping[str, object]) -> bytes:
 
 __all__ = [
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
-    "IngressVerificationError", "content_root", "verify_database",
+    "IngressVerificationError", "content_root", "verify_database", "verify_bytes",
     "read_artifact", "logical_export", "_canonical", "_digest", "_raw_digest",
     "read_artifact_snapshot",
     "read_artifact_snapshots",
