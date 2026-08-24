@@ -218,6 +218,23 @@ class IngressReceipt:
     database_id: str
 
 
+@dataclass(frozen=True)
+class EligibleSlotV1:
+    """Bounded, non-PHI scheduling projection owned by Ingress."""
+
+    slot_id: str
+    scheduled_at: int
+    attempt: int
+    state: str
+
+    @property
+    def prior_attempt(self) -> int:
+        return self.attempt
+
+
+EligibleSlotProjectionV1 = EligibleSlotV1
+
+
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
@@ -1686,6 +1703,62 @@ class IngressServiceV2:
     def current(self, *, include_raw: bool = False) -> dict[str, object]:
         return self.verify(include_raw=include_raw)
 
+    def eligible_slots(self, limit: int) -> tuple[EligibleSlotV1, ...]:
+        """Return due or expired slots from one identity-checked read snapshot."""
+
+        if type(limit) is not int or not 1 <= limit <= 16:
+            raise IngressConflictError("ingress:eligible-limit")
+        self._assert_database_identity()
+        try:
+            owner_now = self._owner_now()
+        except IngressError:
+            raise
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = independent._open(self.path)
+            rows = connection.execute(
+                """
+                SELECT slot_id, scheduled_at, attempt, state
+                FROM ingress_slots
+                WHERE (state='LEASED' AND lease_until IS NOT NULL AND lease_until <= ?)
+                   OR (state='DUE' AND scheduled_at <= ?)
+                ORDER BY CASE WHEN state='LEASED' THEN 0 ELSE 1 END,
+                         scheduled_at, slot_id
+                LIMIT ?
+                """,
+                (owner_now, owner_now, limit),
+            ).fetchall()
+            result: list[EligibleSlotV1] = []
+            for row in rows:
+                slot_id = _bounded_digest_string(row["slot_id"], "ingress:eligible")
+                scheduled_at = row["scheduled_at"]
+                attempt = row["attempt"]
+                state = row["state"]
+                if (
+                    type(scheduled_at) is not int
+                    or scheduled_at < 0
+                    or type(attempt) is not int
+                    or attempt < 0
+                    or state not in {"DUE", "LEASED"}
+                ):
+                    raise IngressError("ingress:eligible")
+                result.append(EligibleSlotV1(slot_id, scheduled_at, attempt, str(state)))
+            return tuple(result)
+        except independent.IngressVerificationError:
+            raise IngressError("ingress:eligible") from None
+        except IngressError:
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            raise_redacted(IngressError, "ingress:eligible")
+        finally:
+            if connection is not None:
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                connection.close()
+            self._assert_database_identity()
+
     def logical_export(self) -> bytes:
         return independent.logical_export(self.verify())
 
@@ -1703,7 +1776,7 @@ class IngressServiceV2:
 
 
 __all__ = [
-    "IngressConfigV2", "IngressReceipt", "IngressError",
+    "IngressConfigV2", "IngressReceipt", "EligibleSlotV1", "EligibleSlotProjectionV1", "IngressError",
     "IngressConflictError", "IngressBusyError", "IngressServiceV2",
     "SCHEMA", "SCHEMA_VERSION", "TABLES", "STATES", "FIXED_FLAGS",
     "MAX_IDENTIFIER_BYTES",

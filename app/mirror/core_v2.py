@@ -636,7 +636,7 @@ class CoreServiceV2:
             for artifact_id in unresolved:
                 item = snapshots[artifact_id]
                 if (
-                    item.get("current_artifact_id") != artifact_id
+                    item.get("artifact_id") != artifact_id
                     or item.get("terminal_state") != "QUARANTINED"
                     or item.get("terminal_event_kind") not in {"ADMIT", "QUARANTINE", "CONFIRM_QUARANTINE"}
                 ):

@@ -12,13 +12,16 @@ behavior into approved state policy.
 ## Smallest current boundary
 
 ```text
-authorized source adapter
+synthetic acquisition port (production authorization remains external)
+        |
+        v
+Operational owner V1 -- one lock, bounded due/retry/recovery composition
         |
         v
 Ingress V2 -- one bounded raw intake frame owner
         |
         v
-Core V3 ---- derived graph, reconciliation, and case state
+Core V2 ---- derived graph, reconciliation, and case state
         |
         v
 Recovery V2 - explicit export, restore, and publication recovery points
@@ -29,6 +32,15 @@ and the sole durable raw intake frame. Core owns independently reconstructed der
 events, heads, reconciliation, and case progression. Recovery owns encrypted bundle identity,
 key/storage binding, restore, and explicit publication recovery. No layer may create a second raw
 capture owner or mutate another layer's tables.
+
+The operational owner is a composition boundary, not a new data owner. It pins one ordinary local
+root, the three existing stores, one nonblocking operational lock, one verifier-owned clock, one
+acquisition identity/policy/profile, and a fixed run bound of at most sixteen eligible slots. It
+processes expired leases before new due work, lets Ingress perform all lease recovery and admission,
+calls Core once for a nonempty admitted batch, and creates a Recovery point only for an explicitly
+supplied generation. It has no daemon, scheduler, network, raw capture, orchestration database,
+automatic restore, or automatic publication path; ambiguous path, lock, store, or verifier state
+fails closed with a fixed operational result.
 
 The current consolidated stores have exactly five Ingress tables, six Core tables, and three
 Recovery tables. These counts are current executable grammar, not a permanent product metric;
