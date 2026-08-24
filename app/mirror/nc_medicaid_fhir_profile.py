@@ -39,7 +39,8 @@ VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V4"
 VERIFIER_EPOCH = 4
 SCOPE = SOURCE_PROFILE_ID
 
-# Fixture-only defaults. They are examples, not contract allowlists.
+# Capture defaults are fixture examples; the canonical resource variants below
+# are immutable contract material.
 SYNTHETIC_PRACTITIONER_ID = "SYNTH_NC_PRACTITIONER_001"
 SYNTHETIC_ROLE_ID = "SYNTH_NC_PRACTITIONER_ROLE_001"
 SYNTHETIC_LOCATION_ID = "SYNTH_NC_LOCATION_001"
@@ -174,6 +175,28 @@ _SYNTHETIC_RESOURCE_VARIANTS = {
     "Location": {"baseline": _SYNTHETIC_RESOURCES["Location"], "changed": {**_SYNTHETIC_RESOURCES["Location"], "name": SYNTHETIC_CHANGED_LOCATION_NAME}},
 }
 _SYNTHETIC_RESOURCE_BYTES = MappingProxyType({resource_type: MappingProxyType({variant: _canonical(resource) for variant, resource in variants.items()}) for resource_type, variants in _SYNTHETIC_RESOURCE_VARIANTS.items()})
+
+
+def _synthetic_resource_digest(raw: bytes) -> str:
+    digest = hashlib.sha3_512()
+    digest.update(b"BL/MIRROR/NC-MEDICAID/FHIR/SYNTHETIC-RESOURCE/v2\0")
+    digest.update(raw)
+    return digest.hexdigest()
+
+
+_SYNTHETIC_RESOURCE_DIGESTS = MappingProxyType({
+    resource_type: MappingProxyType({variant: _synthetic_resource_digest(raw) for variant, raw in variants.items()})
+    for resource_type, variants in _SYNTHETIC_RESOURCE_BYTES.items()
+})
+
+
+def synthetic_resource_variants(resource_type: str) -> tuple[bytes, ...]:
+    try:
+        return tuple(_SYNTHETIC_RESOURCE_BYTES[resource_type].values())
+    except (KeyError, TypeError):
+        raise NcMedicaidFhirProfileError("profile:synthetic-resource") from None
+
+
 def synthetic_resource(resource_type: str, variant: str = "baseline") -> dict[str, object]:
     try:
         raw = _SYNTHETIC_RESOURCE_BYTES[resource_type][variant]
@@ -184,7 +207,7 @@ def synthetic_resource(resource_type: str, variant: str = "baseline") -> dict[st
 
 @dataclass(frozen=True)
 class NcMedicaidFhirSourceProfile:
-    """The static contract; fixture properties below are not contract material."""
+    """The immutable static source contract; capture context is separate."""
 
     source_profile_id: str = SOURCE_PROFILE_ID
     version: int = SOURCE_PROFILE_VERSION
@@ -240,6 +263,7 @@ class NcMedicaidFhirSourceProfile:
             "allowed_resource_types": list(self.allowed_resource_types),
             "resource_cardinality": {key: value for key, value in self.resource_cardinality},
             "allowed_resource_fields": {key: list(value) for key, value in self.allowed_resource_fields},
+            "synthetic_resource_digests": {key: dict(value) for key, value in _SYNTHETIC_RESOURCE_DIGESTS.items()},
             "query_template": {"parameters": [list(value) for value in QUERY_PARAMETER_TEMPLATE], "page_parameter": self.page_parameter},
             "allowed_media_type": self.allowed_media_type, "transport_caps": dict(self.transport_caps),
             "max_server_marker_age_days": self.max_server_marker_age_days,
@@ -306,5 +330,5 @@ __all__ = [
     "NcMedicaidFhirSourceProfile", "RECORD_AUTHENTICATION", "REQUEST_URL", "SOURCE_CONTRACT_SCHEMA",
     "SOURCE_CONTRACT_VERSION", "SOURCE_MEANING", "SOURCE_PROFILE_ID", "SOURCE_PROFILE_VERSION",
     "SYNTHETIC_CHANGED_LOCATION_NAME", "TRANSPORT_PROVENANCE",
-    "VERIFIER_EPOCH", "VERIFIER_ID", "synthetic_resource",
+    "VERIFIER_EPOCH", "VERIFIER_ID", "synthetic_resource", "synthetic_resource_variants",
 ]

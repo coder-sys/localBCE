@@ -12,7 +12,7 @@ from app.mirror.error_boundary import raise_redacted
 from app.mirror.nc_medicaid_fhir_profile import (
     ALLOWED_MEDIA_TYPE, ALLOWED_RESOURCE_FIELDS, ALLOWED_RESOURCE_TYPES, CLAIM_FLAGS,
     DEFAULT_CAPTURE_CONTEXT, DynamicCaptureContext, NC_MEDICAID_PROFILE,
-    NcMedicaidFhirSourceProfile,
+    NcMedicaidFhirSourceProfile, synthetic_resource_variants,
 )
 from app.mirror.source_admission import EvidenceMode, VerifiedSourceCoverage
 
@@ -258,6 +258,8 @@ def _validate_resource(value: object, profile: NcMedicaidFhirSourceProfile) -> d
         for item in endpoint:
             if not isinstance(item, dict) or set(item) != {"reference"} or _REFERENCE.fullmatch(str(item["reference"])) is None:
                 raise IndependentNcMedicaidFhirError("location:endpoint:unlinked")
+    if _canonical(resource) not in synthetic_resource_variants(resource_type):
+        raise IndependentNcMedicaidFhirError("resource:synthetic-binding")
     return resource
 
 
@@ -354,8 +356,23 @@ def _freshness(marker: str | None) -> str:
     return "STALE" if marker.startswith(("1900", "197")) else "FRESH"
 
 
-def _graph_record_id(profile, role_index: int, context: DynamicCaptureContext) -> str:
-    return _digest("graph-record", {"profile": profile.profile_digest, "role": role_index, "context": context.material()})
+def _verified_resource_digests(resources: object, profile: NcMedicaidFhirSourceProfile) -> dict[str, str]:
+    if not isinstance(resources, list) or len(resources) != sum(count for _resource_type, count in profile.resource_cardinality):
+        raise IndependentNcMedicaidFhirError("resource:graph-binding")
+    result: dict[str, str] = {}
+    for value in resources:
+        resource = _validate_resource(value, profile)
+        resource_type = str(resource["resourceType"])
+        if resource_type in result:
+            raise IndependentNcMedicaidFhirError("resource:graph-binding")
+        result[resource_type] = _digest("resource", resource)
+    if set(result) != set(profile.allowed_resource_types):
+        raise IndependentNcMedicaidFhirError("resource:graph-binding")
+    return result
+
+
+def _graph_record_id(profile, role_index: int, context: DynamicCaptureContext, resource_digests: tuple[str, ...]) -> str:
+    return _digest("graph-record", {"profile": profile.profile_digest, "role": role_index, "context": context.material(), "resource_digests": list(resource_digests)})
 
 
 def _graph_source(graph_profile, role_index: int, observation_time: int, *, complete: bool, record_id: str) -> dict[str, object]:
@@ -380,14 +397,24 @@ def _graph_source(graph_profile, role_index: int, observation_time: int, *, comp
     return source
 
 
-def _graph_input(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext) -> bytes:
+def _graph_input(profile: NcMedicaidFhirSourceProfile, context: DynamicCaptureContext, resources: object) -> bytes:
     graph_profile = profile.graph_profile_for_context(context)
+    resource_digests = _verified_resource_digests(resources, profile)
     value = {
         "schema": "mirror-provider-trust-graph-input-v2", "profile_id": graph_profile.profile_id,
         "profile_version": graph_profile.version, "profile_digest": graph_profile.profile_digest,
         "provider_graph_subject": graph_profile.subject, "scope": graph_profile.scope,
         "observation_time": context.observation_time,
-        "sources": [_graph_source(graph_profile, 0, context.observation_time, complete=False, record_id=_graph_record_id(graph_profile, 0, context)), _graph_source(graph_profile, 1, context.observation_time, complete=False, record_id=_graph_record_id(graph_profile, 1, context))],
+        "sources": [
+            _graph_source(
+                graph_profile, 0, context.observation_time, complete=False,
+                record_id=_graph_record_id(graph_profile, 0, context, (resource_digests["Practitioner"],)),
+            ),
+            _graph_source(
+                graph_profile, 1, context.observation_time, complete=False,
+                record_id=_graph_record_id(graph_profile, 1, context, (resource_digests["PractitionerRole"], resource_digests["Location"])),
+            ),
+        ],
         "prior_artifact": None, "remediation": None, "parity_cases": [],
     }
     return _canonical(value)
@@ -511,7 +538,7 @@ def to_verified_source_coverage(result: Mapping[str, object], *, profile: NcMedi
         profile_id=graph_profile.profile_id, subject=graph_profile.subject, scope=graph_profile.scope,
         observation_time=context.observation_time, effective_start=graph_profile.effective_start,
         effective_end=graph_profile.effective_end, complete=False, source_roles=graph_profile.source_roles,
-        evidence_mode=EvidenceMode.OBSERVATION_ONLY, graph_input=_graph_input(profile, context),
+        evidence_mode=EvidenceMode.OBSERVATION_ONLY, graph_input=_graph_input(profile, context, result.get("resources")),
         credential_id=context.credential_id, enrollment_id=context.enrollment_id,
         subject_locator_digest=context.subject_locator_digest, source_contract_digest=profile.profile_digest,
         fetched_at=context.fetched_at, envelope_id=str(result["envelope_id"]), snapshot_id=str(result["snapshot_id"]),

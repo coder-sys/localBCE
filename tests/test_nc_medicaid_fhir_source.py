@@ -141,11 +141,21 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(profile.NcMedicaidFhirProfileError, "profile:synthetic-resource"):
             profile.synthetic_resource("Location", variant="unregistered")
 
-        value = json.loads(_envelope().decode("ascii"))
-        location = value["pages"][0]["bundle"]["entry"][2]["resource"]
-        location["name"] = "Unregistered Synthetic Location"
-        changed_result = independent.verify_bytes(_rebind(value))
+        changed_result = independent.verify_bytes(_envelope(location_variant="changed"))
         self.assertEqual("COMPLETE", changed_result["source_status"])
+        changed_admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, independent.NcMedicaidFhirVerifier()).admit(_envelope(location_variant="changed"))
+        baseline_admission = SourceAdmissionService(profile.NC_MEDICAID_GRAPH_PROFILE, independent.NcMedicaidFhirVerifier()).admit(_envelope())
+        baseline_graph = json.loads(baseline_admission.graph_input.decode("ascii"))
+        changed_graph = json.loads(changed_admission.graph_input.decode("ascii"))
+        self.assertNotEqual(
+            baseline_graph["sources"][1]["records"][0]["record_id"],
+            changed_graph["sources"][1]["records"][0]["record_id"],
+        )
+
+        value = json.loads(_envelope().decode("ascii"))
+        value["pages"][0]["bundle"]["entry"][2]["resource"]["name"] = "Unregistered Synthetic Location"
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
+            independent.verify_bytes(_rebind(value))
 
     def test_v2_profile_envelope_is_rejected_without_migration(self) -> None:
         for field, replacement in (
@@ -243,8 +253,8 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         practitioner["identifier"][0]["value"] = "REAL-PATIENT-123"
         practitioner["name"][0]["family"] = "Jane Patient SSN 123"
         practitioner["name"][0]["given"] = ["jane@example.com"]
-        dynamic_result = independent.verify_bytes(_rebind(value))
-        self.assertEqual("COMPLETE", dynamic_result["source_status"])
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
+            independent.verify_bytes(_rebind(value))
 
         secret_body = b"Bearer SECRET patient=123 C:\\Users\\private"
         secret_url = "https://wrong.example/PRIVATE-PATIENT-123?token=SECRET"
@@ -342,7 +352,7 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         mutations.append(("resource:duplicate", value))
         value = json.loads(_envelope().decode("ascii"))
         value["pages"][0]["bundle"]["entry"][1]["resource"]["practitioner"] = {"reference": "Location/" + profile.SYNTHETIC_LOCATION_ID}
-        mutations.append(("reference:binding", value))
+        mutations.append(("resource:synthetic-binding", value))
         for code, mutated in mutations:
             with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, code):
                 independent.verify_bytes(_rebind(mutated))

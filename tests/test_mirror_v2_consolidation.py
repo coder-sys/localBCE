@@ -1636,6 +1636,37 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertEqual(before["sequence"], after["sequence"])
         self.assertEqual(before["artifact_count"], after["artifact_count"])
 
+    def test_phi_rebound_is_rejected_before_ingress_mutation_or_persistence(self) -> None:
+        from tests.test_nc_medicaid_fhir_source import _rebind
+
+        path = self.root / "phi-rebound-ingress.db"
+        service, slot_id = self._fresh_ingress(path.name)
+        token = _ingress_token("phi-rebound")
+        service.claim_slot(slot_id, lease_token=token)
+        before_state = self._state_fingerprint(service)
+        before_bytes = path.read_bytes()
+        value = json.loads(self.envelope.decode("ascii"))
+        practitioner = value["pages"][0]["bundle"]["entry"][0]["resource"]
+        practitioner["identifier"][0]["value"] = "REAL-PATIENT-123"
+        practitioner["name"][0]["family"] = "Jane Patient SSN 123"
+        practitioner["name"][0]["given"] = ["jane@example.com"]
+        rebound = _rebind(value)
+        canaries = (b"REAL-PATIENT-123", b"Jane Patient SSN 123", b"jane@example.com")
+        with self.assertRaisesRegex(ingress.IngressError, "ingress:envelope-reject") as captured:
+            service.admit_capture(
+                rebound,
+                evidence_raw=_external_evidence(self.ingress_config, self.envelope),
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
+                lease_token=token,
+            )
+        self.assertTrue(all(canary.decode("ascii") not in str(captured.exception) for canary in canaries))
+        self.assertEqual(before_state, self._state_fingerprint(service))
+        self.assertEqual(before_bytes, path.read_bytes())
+        self.assertTrue(all(canary not in path.read_bytes() for canary in canaries))
+        self.assertTrue(all(canary not in service.logical_export() for canary in canaries))
+        self.assertTrue(all(canary.decode("ascii") not in json.dumps(service.support(), sort_keys=True) for canary in canaries))
+
     def test_complete_frame_binding_and_concurrent_idempotency(self) -> None:
         from tests.test_nc_medicaid_fhir_source import _envelope
 
@@ -1722,7 +1753,7 @@ class MirrorV2Fixture(unittest.TestCase):
         context = profile.DynamicCaptureContext(
             "5" * 128, "6" * 128, "7" * 128, "8" * 128, 7_060, 7_070,
         )
-        bundle = _bundle()
+        bundle = _bundle(location_variant="changed")
         request_url = profile.NC_MEDICAID_PROFILE.page_url(0, context)
         bundle["link"][0]["url"] = request_url
         dynamic_envelope = fhir.build_fixture_envelope(
@@ -1751,6 +1782,7 @@ class MirrorV2Fixture(unittest.TestCase):
         before_core = self.core.verify(ingress_path=self.ingress_path)
         result = self.core.ingest_source(self.ingress_path, receipt.artifact_id or "")
         self.assertEqual(profile.NC_MEDICAID_PROFILE.profile_digest, result["receipt"].raw.decode("ascii").split('"profile_digest":"', 1)[1].split('"', 1)[0])
+        self.assertEqual("OBSERVED_CHANGED", result["observation_status"])
         self.assertEqual(before_core["artifact_count"] + 3, self.core.verify(ingress_path=self.ingress_path)["artifact_count"])
 
     def test_profile_owned_changed_observation_rejects_equal_time_without_authority(self) -> None:
