@@ -51,7 +51,11 @@ _SHA3 = hashlib.sha3_512(_RAW).digest()
 _VERIFIER = bytes.fromhex("AB" * 32)
 
 
-def _fake_verify(verifier: NativeMinimalClearanceVerifier, _artifact: Path):
+def _fake_verify(
+    verifier: NativeMinimalClearanceVerifier,
+    _artifact: Path,
+    **_expected_metadata: object,
+):
     acceptance = getattr(verifier, "_test_acceptance", None)
     if type(acceptance) is MinimalProofAcceptanceV1:
         return NativeVerificationCallResult(acceptance, _containment())

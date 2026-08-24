@@ -19,7 +19,11 @@ from app.minimal_clearance_verification_runtime import (
 )
 
 
-def _runtime_failure(_verifier: NativeMinimalClearanceVerifier, _artifact: Path) -> object:
+def _runtime_failure(
+    _verifier: NativeMinimalClearanceVerifier,
+    _artifact: Path,
+    **_expected_metadata: object,
+) -> object:
     raise MinimalClearanceProofStateError("verifier_timeout")
 
 

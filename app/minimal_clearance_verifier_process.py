@@ -1,10 +1,10 @@
 """Windows-only containment for the native minimal-clearance verifier.
 
-The caller supplies a private executable snapshot and workspace.  The child is
-created suspended, assigned to a bounded Job Object, and only then resumed;
-stdout and stderr are drained through anonymous pipes.  There is deliberately
-no subprocess fallback: inability to establish the boundary is a fail-closed
-error.
+The child is created suspended, assigned to a bounded Job Object, and only
+then resumed.  Its only inherited handles are the two capture pipes and, for
+verification, the already-open artifact supplied as standard input.  There
+is deliberately no subprocess fallback: inability to establish the boundary
+is a fail-closed error.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _HANDLE_FLAG_INHERIT = 0x00000001
+_DUPLICATE_SAME_ACCESS = 0x00000002
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 
 
@@ -213,6 +214,7 @@ def _create_process_with_owned_output_handles(
     kernel32: object,
     executable: Path,
     output_handles: tuple[int, int],
+    stdin_handle: int | None = None,
     parent_descriptors: list[int],
     startup: _StartupInfoEx,
     environment: ctypes.Array,
@@ -227,12 +229,31 @@ def _create_process_with_owned_output_handles(
     attribute_list = wintypes.LPVOID()
     attribute_list_initialized = False
     process_created = False
+    child_stdin_handle: int | None = None
     primary_error: BaseException | None = None
     try:
         stdout_handle, stderr_handle = output_handles
         startup.StartupInfo.cb = ctypes.sizeof(startup)
+        startup.StartupInfo.hStdInput = wintypes.HANDLE(0)
         startup.StartupInfo.hStdOutput = wintypes.HANDLE(stdout_handle)
         startup.StartupInfo.hStdError = wintypes.HANDLE(stderr_handle)
+
+        inherited_values = [stdout_handle, stderr_handle]
+        if stdin_handle is not None:
+            if type(stdin_handle) is not int or stdin_handle <= 0:
+                raise VerifierProcessError("verifier_input_handle")
+            if not hasattr(kernel32, "DuplicateHandle") or not hasattr(kernel32, "GetCurrentProcess"):
+                raise VerifierProcessError("verifier_api_missing:DuplicateHandle")
+            duplicate = wintypes.HANDLE()
+            if not kernel32.DuplicateHandle(
+                kernel32.GetCurrentProcess(), wintypes.HANDLE(stdin_handle),
+                kernel32.GetCurrentProcess(), ctypes.byref(duplicate), 0,
+                True, _DUPLICATE_SAME_ACCESS,
+            ):
+                raise _win_error("verifier_input_duplicate")
+            child_stdin_handle = int(duplicate.value)
+            startup.StartupInfo.hStdInput = wintypes.HANDLE(child_stdin_handle)
+            inherited_values.append(child_stdin_handle)
 
         attribute_size = ctypes.c_size_t(0)
         first_call = kernel32.InitializeProcThreadAttributeList(
@@ -247,8 +268,8 @@ def _create_process_with_owned_output_handles(
         ):
             raise _win_error("verifier_attribute_list_initialize")
         attribute_list_initialized = True
-        inherited_handles = (wintypes.HANDLE * 2)(
-            wintypes.HANDLE(stdout_handle), wintypes.HANDLE(stderr_handle)
+        inherited_handles = (wintypes.HANDLE * len(inherited_values))(
+            *(wintypes.HANDLE(value) for value in inherited_values)
         )
         if not kernel32.UpdateProcThreadAttribute(
             attribute_list, 0, _PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -276,6 +297,12 @@ def _create_process_with_owned_output_handles(
                 kernel32.DeleteProcThreadAttributeList(attribute_list)
             except BaseException:
                 cleanup_errors.append(VerifierProcessError("verifier_attribute_list_delete"))
+        if child_stdin_handle is not None:
+            try:
+                if not kernel32.CloseHandle(child_stdin_handle):
+                    cleanup_errors.append(VerifierProcessError("verifier_input_close"))
+            except BaseException:
+                cleanup_errors.append(VerifierProcessError("verifier_input_close"))
         try:
             _close_parent_descriptors_once(descriptors)
         except VerifierProcessError as close_error:
@@ -328,6 +355,7 @@ def run_contained_verifier(
     *,
     workspace: Path,
     timeout_seconds: float,
+    _stdin_descriptor: int | None = None,
 ) -> ContainedVerifierResult:
     """Run one native verifier form under the required suspended Job Object."""
 
@@ -341,6 +369,10 @@ def run_contained_verifier(
         raise VerifierProcessError("verifier_timeout")
     if any(type(argument) is not str for argument in arguments):
         raise VerifierProcessError("verifier_argument_type")
+    if _stdin_descriptor is not None and (
+        type(_stdin_descriptor) is not int or _stdin_descriptor < 0
+    ):
+        raise VerifierProcessError("verifier_input_handle")
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     required_apis = (
@@ -384,6 +416,17 @@ def run_contained_verifier(
     kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    if _stdin_descriptor is not None:
+        if not hasattr(kernel32, "DuplicateHandle") or not hasattr(kernel32, "GetCurrentProcess"):
+            raise VerifierProcessError("verifier_api_missing:DuplicateHandle")
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.DuplicateHandle.argtypes = [
+            wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+            ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL,
+            wintypes.DWORD,
+        ]
+        kernel32.DuplicateHandle.restype = wintypes.BOOL
     kernel32.InitializeProcThreadAttributeList.argtypes = [
         wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
         ctypes.POINTER(ctypes.c_size_t),
@@ -454,11 +497,20 @@ def run_contained_verifier(
                         pass
             stdout_read = stdout_write = stderr_read = stderr_write = None
             raise
+        inherited_stdin: int | None = None
+        if _stdin_descriptor is not None:
+            try:
+                import msvcrt
+
+                inherited_stdin = int(msvcrt.get_osfhandle(_stdin_descriptor))
+            except (OSError, ValueError, ImportError, TypeError):
+                raise VerifierProcessError("verifier_input_handle") from None
         try:
             _create_process_with_owned_output_handles(
                 kernel32=kernel32,
                 executable=executable,
                 output_handles=(stdout_handle, stderr_handle),
+                stdin_handle=inherited_stdin,
                 parent_descriptors=[stdout_write, stderr_write],  # type: ignore[list-item]
                 startup=startup,
                 environment=environment,

@@ -47,6 +47,8 @@ class _Kernel:
         self.QueryInformationJobObject = _FakeFunction(self._query)
         self.CloseHandle = _FakeFunction(self._close)
         self.SetHandleInformation = _FakeFunction(lambda *_: 1)
+        self.GetCurrentProcess = _FakeFunction(lambda: 9000)
+        self.DuplicateHandle = _FakeFunction(self._duplicate)
         self.InitializeProcThreadAttributeList = _FakeFunction(self._attrs_init)
         self.UpdateProcThreadAttribute = _FakeFunction(self._attrs_update)
         self.DeleteProcThreadAttributeList = _FakeFunction(self._attrs_delete)
@@ -79,9 +81,16 @@ class _Kernel:
         self.events.append(("attr_update", int(attribute)))
         if self.failure == "attribute_update":
             return 0
-        handles = ctypes.cast(value, ctypes.POINTER(process.wintypes.HANDLE * 2)).contents
+        count = int(size) // ctypes.sizeof(process.wintypes.HANDLE)
+        handles = ctypes.cast(value, ctypes.POINTER(process.wintypes.HANDLE * count)).contents
         self.handles = [int(item.value if hasattr(item, "value") else item) for item in handles]
         self.events.append(("attr_bytes", int(size)))
+        return 1
+
+    def _duplicate(self, _source_process, _source_handle, _target_process, target_ptr, _access, _inherit, _options):
+        target = ctypes.cast(target_ptr, ctypes.POINTER(process.wintypes.HANDLE)).contents
+        target.value = 14000
+        self.events.append(("duplicate", 14000))
         return 1
 
     def _attrs_delete(self, _attribute_list):
@@ -93,6 +102,8 @@ class _Kernel:
         self.events.append(("create_args", (bool(inherit), int(flags))))
         startup = ctypes.cast(startup_ptr, ctypes.POINTER(process._StartupInfoEx)).contents
         self.events.append(("startup_cb", int(startup.StartupInfo.cb)))
+        input_handle = startup.StartupInfo.hStdInput
+        self.events.append(("startup_input", 0 if input_handle is None else int(input_handle)))
         if self.failure == "create":
             return 0
         if self._barrier is not None:
@@ -167,6 +178,22 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertTrue(create_args[0])
         self.assertTrue(create_args[1] & process._EXTENDED_STARTUPINFO_PRESENT)
         self.assertEqual([name for name, _ in kernel.events if name.startswith("attr_")], ["attr_size", "attr_initialize", "attr_update", "attr_bytes", "attr_delete"])
+
+    def test_verify_handle_list_adds_only_artifact_stdin(self):
+        kernel = _Kernel()
+        parent, readers = self._descriptors()
+        try:
+            process._create_process_with_owned_output_handles(
+                kernel32=kernel, output_handles=(13101, 13102), stdin_handle=13103,
+                parent_descriptors=parent, **self._inputs(),
+            )
+        finally:
+            for descriptor in readers:
+                os.close(descriptor)
+        self.assertEqual(kernel.handles, [13101, 13102, 14000])
+        self.assertIn(("duplicate", 14000), kernel.events)
+        self.assertIn(("close", 14000), kernel.events)
+        self.assertIn(("startup_input", 14000), kernel.events)
 
     def test_parallel_creation_has_no_global_creation_lock_or_shared_capture(self):
         kernel = _Kernel(overlap=True)

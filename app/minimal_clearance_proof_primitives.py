@@ -9,6 +9,8 @@ settlement/payment state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ctypes
+from ctypes import wintypes
 import hashlib
 import json
 import os
@@ -67,6 +69,24 @@ PRIVATE_ZK_INITIAL_PAYMENT_ROOT = _private_zk_wide("payment-genesis.v1")
 PRIVATE_ZK_INITIAL_CLEARANCE_ROOT = _private_zk_wide("clearance-genesis.v1")
 PRIVATE_ZK_EPOCH = 7
 _PRIVATE_ZK_PROFILE_DOMAIN = b"BL/NATIVE-V3/PRIVATE-ZK/PROFILE/v1\x00"
+
+_GENERIC_READ: Final[int] = 0x80000000
+_GENERIC_EXECUTE: Final[int] = 0x20000000
+_FILE_SHARE_READ: Final[int] = 0x00000001
+_FILE_SHARE_WRITE: Final[int] = 0x00000002
+_OPEN_EXISTING: Final[int] = 3
+_FILE_ATTRIBUTE_NORMAL: Final[int] = 0x00000080
+_FILE_ATTRIBUTE_DIRECTORY: Final[int] = 0x00000010
+_FILE_ATTRIBUTE_REPARSE_POINT: Final[int] = 0x00000400
+_FILE_FLAG_OPEN_REPARSE_POINT: Final[int] = 0x00200000
+_FILE_FLAG_BACKUP_SEMANTICS: Final[int] = 0x02000000
+
+
+def _is_reparse(metadata: os.stat_result) -> bool:
+    return bool(
+        int(getattr(metadata, "st_file_attributes", 0))
+        & _FILE_ATTRIBUTE_REPARSE_POINT
+    )
 
 
 def _private_zk_profile_digest(statement: MinimalProofStatementV1, verifier_sha256: bytes) -> bytes:
@@ -529,12 +549,13 @@ def _parse_acceptance_output(
         r"public_inputs=([0-9]+) layers=([0-9]+) terms=([0-9]+) "
         r"public_bytes=([0-9]+) proof_bytes=([0-9]+) rate=([0-9]+) "
         r"queries=([0-9]+) transcript_version=([0-9]+) circuit_id=([0-9a-f]{64}) "
+        r"statement_sha3_512=([0-9a-f]{128}) "
         r"state_mutations=0 clear_authorizations=0\n",
         text,
     )
     if match is None:
         raise MinimalClearanceProofStateError("proof_verifier_output_grammar")
-    numbers = tuple(_positive_decimal(value, "proof_verifier_output") for value in match.groups()[:-1])
+    numbers = tuple(_positive_decimal(value, "proof_verifier_output") for value in match.groups()[:9])
     expected = (
         _NATIVE_INPUTS, _NATIVE_PUBLIC_INPUTS, _NATIVE_LAYERS, _NATIVE_TERMS,
         public_bytes, proof_bytes, _NATIVE_RATE, _NATIVE_QUERIES, _NATIVE_TRANSCRIPT_VERSION,
@@ -542,7 +563,10 @@ def _parse_acceptance_output(
     if numbers != expected or bytes.fromhex(match.group(10)) != _CIRCUIT_ID:
         raise MinimalClearanceProofStateError("proof_verifier_output_profile")
     _parse_build_trace(stderr, expected_lines=8)
-    return stdout
+    try:
+        return bytes.fromhex(match.group(11))
+    except ValueError:
+        raise MinimalClearanceProofStateError("proof_verifier_statement_digest") from None
 
 
 def _parse_preflight_output(stdout: bytes, stderr: bytes) -> None:
@@ -572,28 +596,6 @@ def _parse_preflight_output(stdout: bytes, stderr: bytes) -> None:
     if values[7:] != (0x0102030405060708, 0x1112131415161718):
         raise MinimalClearanceProofStateError("proof_preflight_endian")
     _parse_build_trace(stderr, expected_lines=5)
-
-
-def _parse_public_statement_output(stdout: bytes, stderr: bytes, path: Path) -> None:
-    try:
-        text = stdout.decode("ascii", "strict")
-    except UnicodeDecodeError:
-        raise MinimalClearanceProofStateError("proof_statement_output_encoding") from None
-    text = text.replace("\r\n", "\n")
-    if "\r" in text:
-        raise MinimalClearanceProofStateError("proof_statement_output_grammar")
-    expected = (
-        f"MINIMAL_CLEARANCE_VERIFIER_PUBLIC_STATEMENT bytes={_PUBLIC_BYTES} "
-        f"path={path} verifier_owned_reconstruction=1\n"
-    )
-    if text != expected:
-        raise MinimalClearanceProofStateError("proof_statement_output_grammar")
-    try:
-        stderr.decode("ascii", "strict")
-    except UnicodeDecodeError:
-        raise MinimalClearanceProofStateError("proof_statement_stderr_encoding") from None
-    if stderr != b"":
-        raise MinimalClearanceProofStateError("proof_statement_stderr_grammar")
 
 
 def _validate_statement_and_state(values: dict[str, object], state: dict[str, object]) -> None:
@@ -951,6 +953,275 @@ def _remove_native_workspace(directory: Path, *, keep_artifact: Path | None = No
         raise MinimalClearanceProofStateError("verifier_workspace_cleanup") from None
 
 
+class _HeldWindowsFile:
+    """One descriptor-owned Windows file held across the native call."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        maximum: int,
+        executable: bool = False,
+    ) -> None:
+        if os.name != "nt":
+            raise MinimalClearanceProofStateError("verifier_windows_only")
+        if not isinstance(path, Path) or not path.is_absolute() or type(maximum) is not int or maximum <= 0:
+            raise MinimalClearanceProofStateError("verifier_file_input")
+        self.path = path
+        self.maximum = maximum
+        self._descriptor: int | None = None
+        self._chain: list[tuple[Path, tuple[int, int, int, int], int]] = []
+        self._closed = False
+        try:
+            self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            self._configure_kernel()
+        except BaseException:
+            raise MinimalClearanceProofStateError("verifier_file_custody") from None
+        try:
+            before = os.lstat(path)
+            _require_regular_metadata(before, maximum=maximum, label="verifier_file")
+            if executable:
+                self._chain = self._open_directory_chain(path.parent)
+            access = _GENERIC_READ | (_GENERIC_EXECUTE if executable else 0)
+            share = _FILE_SHARE_READ if executable else 0
+            raw = self._kernel32.CreateFileW(
+                str(path), access, share, None, _OPEN_EXISTING,
+                _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT, None,
+            )
+            raw_value = self._handle_value(raw)
+            if raw_value in (0, -1):
+                raise OSError
+            try:
+                self._validate_handle(raw_value, expect_directory=False)
+                import msvcrt
+
+                descriptor = msvcrt.open_osfhandle(
+                    raw_value, int(os.O_RDONLY) | int(getattr(os, "O_BINARY", 0))
+                )
+            except BaseException:
+                self._kernel32.CloseHandle(ctypes.wintypes.HANDLE(raw_value))
+                raise
+            self._descriptor = descriptor
+            opened = os.fstat(descriptor)
+            _require_regular_metadata(opened, maximum=maximum, label="verifier_file")
+            if _file_identity(opened) != _file_identity(before):
+                raise OSError
+            self._identity = _file_identity(opened)
+            self._assert_path_and_chain()
+        except MinimalClearanceProofStateError:
+            self.close()
+            raise
+        except BaseException:
+            self.close()
+            raise MinimalClearanceProofStateError("verifier_file_custody") from None
+
+    @staticmethod
+    def _handle_value(raw: object) -> int:
+        value = getattr(raw, "value", raw)
+        if value is None:
+            return 0
+        return int(value)
+
+    def _configure_kernel(self) -> None:
+        self._kernel32.CreateFileW.argtypes = [
+            ctypes.wintypes.LPCWSTR, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+            ctypes.wintypes.HANDLE,
+        ]
+        self._kernel32.CreateFileW.restype = ctypes.wintypes.HANDLE
+        self._kernel32.GetFileInformationByHandle.argtypes = [
+            ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID,
+        ]
+        self._kernel32.GetFileInformationByHandle.restype = ctypes.wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+    def _validate_handle(self, raw: int, *, expect_directory: bool) -> None:
+        class _FileInformation(ctypes.Structure):
+            _fields_ = [
+                ("dwFileAttributes", ctypes.wintypes.DWORD),
+                ("ftCreationTime", ctypes.c_ulonglong),
+                ("ftLastAccessTime", ctypes.c_ulonglong),
+                ("ftLastWriteTime", ctypes.c_ulonglong),
+                ("dwVolumeSerialNumber", ctypes.wintypes.DWORD),
+                ("nFileSizeHigh", ctypes.wintypes.DWORD),
+                ("nFileSizeLow", ctypes.wintypes.DWORD),
+                ("nNumberOfLinks", ctypes.wintypes.DWORD),
+                ("nFileIndexHigh", ctypes.wintypes.DWORD),
+                ("nFileIndexLow", ctypes.wintypes.DWORD),
+            ]
+
+        information = _FileInformation()
+        if not self._kernel32.GetFileInformationByHandle(
+            ctypes.wintypes.HANDLE(raw), ctypes.byref(information)
+        ):
+            raise OSError
+        attributes = int(information.dwFileAttributes)
+        if attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+            raise OSError
+        is_directory = bool(attributes & _FILE_ATTRIBUTE_DIRECTORY)
+        if is_directory != expect_directory or int(information.nNumberOfLinks) != 1:
+            raise OSError
+
+    def _open_directory_chain(self, directory: Path) -> list[tuple[Path, tuple[int, int, int, int], int]]:
+        chain: list[tuple[Path, tuple[int, int, int, int], int]] = []
+        current = directory
+        try:
+            while True:
+                metadata = os.lstat(current)
+                if not stat.S_ISDIR(metadata.st_mode) or _is_reparse(metadata) or int(metadata.st_nlink) != 1:
+                    raise OSError
+                raw = self._kernel32.CreateFileW(
+                    str(current), _GENERIC_READ,
+                    _FILE_SHARE_READ | _FILE_SHARE_WRITE, None, _OPEN_EXISTING,
+                    _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+                    None,
+                )
+                raw_value = self._handle_value(raw)
+                if raw_value in (0, -1):
+                    raise OSError
+                try:
+                    self._validate_handle(raw_value, expect_directory=True)
+                except BaseException:
+                    self._kernel32.CloseHandle(ctypes.wintypes.HANDLE(raw_value))
+                    raise
+                identity = _file_identity(metadata)
+                chain.append((current, identity, raw_value))
+                parent = current.parent
+                if parent == current:
+                    break
+                current = parent
+            return chain
+        except BaseException:
+            for _path, _identity, raw in reversed(chain):
+                try:
+                    self._kernel32.CloseHandle(ctypes.wintypes.HANDLE(raw))
+                except BaseException:
+                    pass
+            raise
+
+    def _assert_path_and_chain(self) -> None:
+        descriptor = self._descriptor
+        if self._closed or descriptor is None:
+            raise MinimalClearanceProofStateError("verifier_file_custody")
+        opened = os.fstat(descriptor)
+        if _file_identity(opened) != self._identity:
+            raise MinimalClearanceProofStateError("verifier_file_identity")
+        current = os.lstat(self.path)
+        _require_regular_metadata(current, maximum=self.maximum, label="verifier_file")
+        if _file_identity(current) != self._identity:
+            raise MinimalClearanceProofStateError("verifier_file_identity")
+        for path, identity, raw in self._chain:
+            current_dir = os.lstat(path)
+            if _file_identity(current_dir) != identity or not stat.S_ISDIR(current_dir.st_mode) or _is_reparse(current_dir):
+                raise MinimalClearanceProofStateError("verifier_executable_parent")
+            self._validate_handle(raw, expect_directory=True)
+
+    def _read_held(self) -> bytes:
+        descriptor = self._descriptor
+        if descriptor is None or self._closed:
+            raise MinimalClearanceProofStateError("verifier_file_custody")
+        try:
+            self._assert_path_and_chain()
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            chunks: list[bytes] = []
+            total = 0
+            while total <= self.maximum:
+                chunk = os.read(descriptor, min(1 << 20, self.maximum + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > self.maximum:
+                    raise MinimalClearanceProofStateError("verifier_file_size")
+                chunks.append(chunk)
+            if total <= 0:
+                raise MinimalClearanceProofStateError("verifier_file_size")
+            if total != int(os.fstat(descriptor).st_size):
+                raise MinimalClearanceProofStateError("verifier_file_identity")
+            self._assert_path_and_chain()
+            return b"".join(chunks)
+        except MinimalClearanceProofStateError:
+            raise
+        except BaseException:
+            raise MinimalClearanceProofStateError("verifier_file_read") from None
+
+    def digest(self, algorithm: str) -> tuple[int, bytes]:
+        descriptor = self._descriptor
+        if descriptor is None or self._closed:
+            raise MinimalClearanceProofStateError("verifier_file_custody")
+        try:
+            self._assert_path_and_chain()
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            hasher = hashlib.new(algorithm)
+            total = 0
+            while total <= self.maximum:
+                chunk = os.read(descriptor, min(1 << 20, self.maximum + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > self.maximum:
+                    raise MinimalClearanceProofStateError("verifier_file_size")
+                hasher.update(chunk)
+            if total != int(os.fstat(descriptor).st_size):
+                raise MinimalClearanceProofStateError("verifier_file_identity")
+            self._assert_path_and_chain()
+            return total, hasher.digest()
+        except MinimalClearanceProofStateError:
+            raise
+        except BaseException:
+            raise MinimalClearanceProofStateError("verifier_file_read") from None
+
+    @property
+    def descriptor(self) -> int:
+        if self._descriptor is None or self._closed:
+            raise MinimalClearanceProofStateError("verifier_file_custody")
+        return self._descriptor
+
+    def reset(self) -> None:
+        descriptor = self._descriptor
+        if descriptor is None or self._closed:
+            raise MinimalClearanceProofStateError("verifier_file_custody")
+        try:
+            self._assert_path_and_chain()
+            os.lseek(descriptor, 0, os.SEEK_SET)
+        except MinimalClearanceProofStateError:
+            raise
+        except BaseException:
+            raise MinimalClearanceProofStateError("verifier_file_seek") from None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        failed = False
+        descriptor = self._descriptor
+        self._descriptor = None
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                failed = True
+        for _path, _identity, raw in reversed(self._chain):
+            try:
+                if not self._kernel32.CloseHandle(ctypes.wintypes.HANDLE(raw)):
+                    failed = True
+            except BaseException:
+                failed = True
+        self._chain.clear()
+        if failed:
+            raise MinimalClearanceProofStateError("verifier_file_close") from None
+
+    def __enter__(self) -> "_HeldWindowsFile":
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        self.close()
+
+
+def _open_held_file(path: Path, *, maximum: int, executable: bool = False) -> _HeldWindowsFile:
+    return _HeldWindowsFile(path, maximum=maximum, executable=executable)
+
+
 class NativeMinimalClearanceVerifier:
     """Runs the pinned independent verifier and uses its reconstruction output."""
 
@@ -973,31 +1244,54 @@ class NativeMinimalClearanceVerifier:
         self.workspace_parent = workspace_parent
         self.timeout_seconds = timeout_seconds
         self._preflight_checked = False
-        directory = _new_native_workspace(workspace_parent)
-        try:
-            _snapshot_verified_file(executable, directory, label="verifier-executable", maximum=_MAX_EXECUTABLE_BYTES, expected_sha256=self._executable_sha256)
-        finally:
-            _remove_native_workspace(directory)
+        self.identity_sha256()
 
     def identity_sha256(self) -> bytes:
-        current = hashlib.sha256(
-            _read_bounded_regular_file(
-                self.executable, maximum=_MAX_EXECUTABLE_BYTES,
-                label="verifier_executable",
-            )
-        ).digest()
+        if os.name == "nt" and hasattr(self, "workspace_parent"):
+            with _open_held_file(
+                self.executable, maximum=_MAX_EXECUTABLE_BYTES, executable=True
+            ) as held:
+                _size, current = held.digest("sha256")
+        else:
+            current = hashlib.sha256(
+                _read_bounded_regular_file(
+                    self.executable, maximum=_MAX_EXECUTABLE_BYTES,
+                    label="verifier_executable",
+                )
+            ).digest()
         if current != self._executable_sha256:
             raise MinimalClearanceProofStateError("verifier_executable_identity_changed")
         return current
 
-    def _run(self, workspace: Path, executable_snapshot: Path, *args: str):
+    def _run(
+        self,
+        workspace: Path,
+        *args: str,
+        artifact: _HeldWindowsFile | None = None,
+    ) -> ContainedVerifierResult:
         try:
-            result = run_contained_verifier(
-                executable_snapshot, tuple(args), workspace=workspace,
-                timeout_seconds=self.timeout_seconds,
-            )
-        except VerifierProcessError:
-            raise MinimalClearanceProofStateError("verifier_process_unavailable") from None
+            with _open_held_file(
+                self.executable, maximum=_MAX_EXECUTABLE_BYTES, executable=True
+            ) as executable:
+                _size, before_digest = executable.digest("sha256")
+                if before_digest != self._executable_sha256:
+                    raise MinimalClearanceProofStateError("verifier_executable_identity_changed")
+                process_failed = False
+                try:
+                    result = run_contained_verifier(
+                        self.executable, tuple(args), workspace=workspace,
+                        timeout_seconds=self.timeout_seconds,
+                        _stdin_descriptor=(None if artifact is None else artifact.descriptor),
+                    )
+                except VerifierProcessError:
+                    process_failed = True
+                _size, after_digest = executable.digest("sha256")
+                if after_digest != self._executable_sha256 or after_digest != before_digest:
+                    raise MinimalClearanceProofStateError("verifier_executable_identity_changed")
+                if process_failed:
+                    raise MinimalClearanceProofStateError("verifier_process_unavailable")
+        except MinimalClearanceProofStateError:
+            raise
         if result.timed_out:
             raise MinimalClearanceProofStateError("verifier_timeout")
         if not result.cap_enforced or result.cap_bytes != CAP_BYTES or result.active_process_limit != 1:
@@ -1011,12 +1305,7 @@ class NativeMinimalClearanceVerifier:
             return
         workspace = _new_native_workspace(self.workspace_parent)
         try:
-            executable_snapshot, _ = _snapshot_verified_file(
-                self.executable, workspace, label="verifier-executable",
-                maximum=_MAX_EXECUTABLE_BYTES,
-                expected_sha256=self._executable_sha256,
-            )
-            result = self._run(workspace, executable_snapshot, "--preflight")
+            result = self._run(workspace, "--preflight")
             if result.exit_code != 0:
                 raise MinimalClearanceProofStateError("verifier_preflight_rejected")
             _parse_preflight_output(result.stdout, result.stderr)
@@ -1029,77 +1318,75 @@ class NativeMinimalClearanceVerifier:
         self.identity_sha256()
         self._ensure_preflight()
 
-    def expected_statement(self) -> bytes:
-        self._ensure_preflight()
-        workspace = _new_native_workspace(self.workspace_parent)
-        try:
-            executable_snapshot, _ = _snapshot_verified_file(
-                self.executable, workspace, label="verifier-executable",
-                maximum=_MAX_EXECUTABLE_BYTES,
-                expected_sha256=self._executable_sha256,
-            )
-            path = workspace / "statement.bin"
-            result = self._run(workspace, executable_snapshot, "--public-statement-file", str(path))
-            if result.exit_code != 0:
-                raise MinimalClearanceProofStateError("verifier_statement_reconstruction")
-            _parse_public_statement_output(result.stdout, result.stderr, path)
-            statement = _read_bounded_regular_file(
-                path, maximum=_PUBLIC_BYTES, label="verifier_statement"
-            )
-            if len(statement) != _PUBLIC_BYTES:
-                raise MinimalClearanceProofStateError("verifier_statement_length")
-            return statement
-        finally:
-            _remove_native_workspace(workspace)
-
-    def verify(self, artifact_path: Path) -> NativeVerificationCallResult:
+    def verify(
+        self,
+        artifact_path: Path,
+        *,
+        expected_artifact_bytes: int,
+        expected_artifact_sha256: bytes,
+        expected_artifact_sha3_512: bytes,
+    ) -> NativeVerificationCallResult:
         self._ensure_preflight()
         if not isinstance(artifact_path, Path) or artifact_path.parent.parent != self.workspace_parent:
             raise MinimalClearanceProofStateError("verifier_workspace")
         workspace = artifact_path.parent
         if not _workspace_parent_ok(workspace):
             raise MinimalClearanceProofStateError("verifier_workspace")
+        if (
+            type(expected_artifact_bytes) is not int
+            or not 0 < expected_artifact_bytes <= _MAX_ARTIFACT_BYTES
+            or type(expected_artifact_sha256) is not bytes
+            or len(expected_artifact_sha256) != _SHA256_BYTES
+            or type(expected_artifact_sha3_512) is not bytes
+            or len(expected_artifact_sha3_512) != _DIGEST_BYTES
+        ):
+            raise MinimalClearanceProofStateError("proof_artifact_metadata")
         try:
-            executable_snapshot, _ = _snapshot_verified_file(
-                self.executable, workspace, label="verifier-executable",
-                maximum=_MAX_EXECUTABLE_BYTES,
-                expected_sha256=self._executable_sha256,
-            )
-            artifact_snapshot, raw = _snapshot_verified_file(
-                artifact_path, workspace, label="proof-artifact",
-                maximum=_MAX_ARTIFACT_BYTES,
-            )
-            circuit_id, public_bytes, proof_bytes = _artifact_public_bytes(raw)
-            if circuit_id != _CIRCUIT_ID:
-                raise MinimalClearanceProofStateError("proof_circuit_id")
-            statement_output = workspace / "verified-statement.bin"
-            result = self._run(
-                workspace, executable_snapshot, "--verified-statement-file",
-                str(statement_output), str(artifact_snapshot),
-            )
-            if result.exit_code != 0:
-                raise MinimalClearanceProofStateError("proof_verifier_rejected")
-            _parse_acceptance_output(
-                result.stdout, result.stderr,
-                public_bytes=len(public_bytes), proof_bytes=len(proof_bytes),
-            )
-            verified_statement = _read_bounded_regular_file(
-                statement_output, maximum=_PUBLIC_BYTES,
-                label="proof_verified_statement",
-            )
-            if len(verified_statement) != _PUBLIC_BYTES:
-                raise MinimalClearanceProofStateError("proof_verified_statement_length")
-            if verified_statement != public_bytes:
-                raise MinimalClearanceProofStateError("proof_public_statement_mismatch")
-            statement = _parse_statement(verified_statement)
-            acceptance = MinimalProofAcceptanceV1(
-                statement=statement,
-                artifact_sha256=hashlib.sha256(raw).digest(),
-                artifact_digest=hashlib.sha3_512(raw).digest(),
-                artifact_bytes=len(raw),
-                circuit_id=circuit_id,
-            )
-            return NativeVerificationCallResult(acceptance, result)
+            with _open_held_file(
+                artifact_path, maximum=_MAX_ARTIFACT_BYTES, executable=False
+            ) as artifact:
+                raw = artifact._read_held()
+                if (
+                    len(raw) != expected_artifact_bytes
+                    or hashlib.sha256(raw).digest() != expected_artifact_sha256
+                    or hashlib.sha3_512(raw).digest() != expected_artifact_sha3_512
+                ):
+                    raise MinimalClearanceProofStateError("proof_artifact_identity")
+                circuit_id, public_bytes, proof_bytes = _artifact_public_bytes(raw)
+                if circuit_id != _CIRCUIT_ID:
+                    raise MinimalClearanceProofStateError("proof_circuit_id")
+                artifact.reset()
+                result = self._run(
+                    workspace, "--verify-stdin", artifact=artifact
+                )
+                post_raw = artifact._read_held()
+                if (
+                    post_raw != raw
+                    or len(post_raw) != expected_artifact_bytes
+                    or hashlib.sha256(post_raw).digest() != expected_artifact_sha256
+                    or hashlib.sha3_512(post_raw).digest() != expected_artifact_sha3_512
+                ):
+                    raise MinimalClearanceProofStateError("proof_artifact_identity")
+                post_circuit_id, post_public_bytes, post_proof_bytes = _artifact_public_bytes(post_raw)
+                if post_circuit_id != circuit_id or post_public_bytes != public_bytes or post_proof_bytes != proof_bytes:
+                    raise MinimalClearanceProofStateError("proof_artifact_identity")
+                if result.exit_code != 0:
+                    raise MinimalClearanceProofStateError("proof_verifier_rejected")
+                statement_digest = _parse_acceptance_output(
+                    result.stdout, result.stderr,
+                    public_bytes=len(post_public_bytes), proof_bytes=len(post_proof_bytes),
+                )
+                if statement_digest != hashlib.sha3_512(post_public_bytes).digest():
+                    raise MinimalClearanceProofStateError("proof_verified_statement_digest")
+                statement = _parse_statement(post_public_bytes)
+                acceptance = MinimalProofAcceptanceV1(
+                    statement=statement,
+                    artifact_sha256=hashlib.sha256(post_raw).digest(),
+                    artifact_digest=hashlib.sha3_512(post_raw).digest(),
+                    artifact_bytes=len(post_raw),
+                    circuit_id=post_circuit_id,
+                )
+                return NativeVerificationCallResult(acceptance, result)
         finally:
             _remove_native_workspace(workspace, keep_artifact=artifact_path)
 

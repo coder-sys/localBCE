@@ -2015,7 +2015,12 @@ class _QueueProcessor:
             return self._snapshot_failure(work, snapshot, "verifier_identity")
         started = time.perf_counter(); self.last_verification_started = started
         try:
-            call_result = self.verifier.verify(snapshot.path)
+            call_result = self.verifier.verify(
+                snapshot.path,
+                expected_artifact_bytes=work.metadata.artifact_bytes,
+                expected_artifact_sha256=work.metadata.artifact_sha256,
+                expected_artifact_sha3_512=work.metadata.artifact_sha3_512,
+            )
         except MinimalClearanceProofStateError as exc:
             if self._cleanup_snapshot(snapshot):
                 return self._terminal(work, status="HELD", error_code="custody_cleanup")

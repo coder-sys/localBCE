@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <share.h>
+#include <windows.h>
 #endif
 #include <memory>
 #include <string>
@@ -564,6 +565,101 @@ std::string CircuitId(
   return result;
 }
 
+std::string HexDigest(const Digest& digest) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(digest.size() * 2);
+  for (uint8_t byte : digest) {
+    result.push_back(kHex[byte >> 4]);
+    result.push_back(kHex[byte & 0xf]);
+  }
+  return result;
+}
+
+bool ReadVerifyStdinBytes(std::vector<uint8_t>& bytes, std::string& error) {
+#ifdef _WIN32
+  const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+  if (input == nullptr || input == INVALID_HANDLE_VALUE ||
+      GetFileType(input) != FILE_TYPE_DISK) {
+    error = "stdin-handle";
+    return false;
+  }
+  BY_HANDLE_FILE_INFORMATION before{};
+  if (!GetFileInformationByHandle(input, &before) ||
+      (before.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+      before.nNumberOfLinks != 1) {
+    error = "stdin-identity";
+    return false;
+  }
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(input, &size) || size.QuadPart < 0) {
+    error = "stdin-size";
+    return false;
+  }
+  const uint64_t before_size =
+      (static_cast<uint64_t>(before.nFileSizeHigh) << 32) |
+      static_cast<uint64_t>(before.nFileSizeLow);
+  if (static_cast<uint64_t>(size.QuadPart) != before_size) {
+    error = "stdin-identity";
+    return false;
+  }
+  const uint64_t maximum = kHeaderBytes + kPublicStatementBytes + kMaxProofBytes;
+  if (static_cast<uint64_t>(size.QuadPart) > maximum) {
+    error = "stdin-size-cap";
+    return false;
+  }
+  bytes.assign(static_cast<size_t>(size.QuadPart), 0);
+  LARGE_INTEGER origin{};
+  if (!SetFilePointerEx(input, origin, nullptr, FILE_BEGIN)) {
+    error = "stdin-seek";
+    return false;
+  }
+  size_t offset = 0;
+  while (offset < bytes.size()) {
+    const DWORD request = static_cast<DWORD>(std::min<size_t>(
+        bytes.size() - offset, 1u << 20));
+    DWORD received = 0;
+    if (!ReadFile(input, bytes.data() + offset, request, &received, nullptr) ||
+        received == 0) {
+      error = "stdin-short";
+      return false;
+    }
+    offset += received;
+  }
+  uint8_t trailing = 0;
+  DWORD received = 0;
+  if (!ReadFile(input, &trailing, 1, &received, nullptr)) {
+    error = "stdin-trailing-read";
+    return false;
+  }
+  if (received != 0) {
+    error = "stdin-trailing";
+    return false;
+  }
+  if (!SetFilePointerEx(input, origin, nullptr, FILE_BEGIN)) {
+    error = "stdin-reset";
+    return false;
+  }
+  BY_HANDLE_FILE_INFORMATION after{};
+  if (!GetFileInformationByHandle(input, &after) ||
+      (after.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+      after.nNumberOfLinks != 1 ||
+      after.dwVolumeSerialNumber != before.dwVolumeSerialNumber ||
+      after.nFileIndexHigh != before.nFileIndexHigh ||
+      after.nFileIndexLow != before.nFileIndexLow ||
+      after.nFileSizeHigh != before.nFileSizeHigh ||
+      after.nFileSizeLow != before.nFileSizeLow) {
+    error = "stdin-identity";
+    return false;
+  }
+  return true;
+#else
+  (void)bytes;
+  error = "windows-only";
+  return false;
+#endif
+}
+
 bool FillPublicInput(const PublicStatement& statement,
                      const std::unique_ptr<proofs::Circuit<RelationField>>& circuit,
                      proofs::Dense<RelationField>& public_input,
@@ -652,158 +748,10 @@ bool ValidateArtifact(const Artifact& artifact, const PublicStatement& expected,
   return VerifyProof(artifact, expected, circuit, reason, diagnostic_logs);
 }
 
-bool WriteNewStatementFile(const std::string& path,
-                           const std::vector<uint8_t>& statement,
-                           std::string& reason) {
-#ifdef _WIN32
-  int descriptor = -1;
-  const errno_t open_result = _sopen_s(
-      &descriptor, path.c_str(), _O_BINARY | _O_WRONLY | _O_CREAT | _O_EXCL,
-      _SH_DENYRW, _S_IREAD);
-  if (open_result != 0 || descriptor < 0) {
-    reason = "create";
-    return false;
-  }
-  const int written = _write(
-      descriptor, statement.data(), static_cast<unsigned int>(statement.size()));
-  bool success = written == static_cast<int>(statement.size());
-  if (_commit(descriptor) != 0) success = false;
-  if (_close(descriptor) != 0) success = false;
-  if (!success) {
-    descriptor = -1;
-    reason = "write";
-    std::remove(path.c_str());
-    return false;
-  }
-  descriptor = -1;
-  return true;
-#else
-  (void)path;
-  (void)statement;
-  reason = "windows-only";
-  return false;
-#endif
-}
-
-bool Flip(std::vector<uint8_t>& bytes, size_t offset) {
-  if (offset >= bytes.size()) return false;
-  bytes[offset] ^= 1;
-  return true;
-}
-
-size_t DigestStatementOffset(size_t index) {
-  return kHeaderBytes + kDigestOffset + index * kDigestBytes;
-}
-
-bool ApplyMutation(const std::string& name, std::vector<uint8_t>& bytes) {
-  const size_t proof_offset = kHeaderBytes + kPublicStatementBytes;
-  if (name == "artifact_bit_flip" || name == "proof_flip_begin") {
-    return Flip(bytes, proof_offset);
-  }
-  if (name == "proof_flip_middle") {
-    return Flip(bytes, proof_offset + (bytes.size() - proof_offset) / 2);
-  }
-  if (name == "proof_flip_end") return Flip(bytes, bytes.size() - 1);
-  if (name == "truncation") {
-    if (bytes.empty()) return false;
-    bytes.pop_back();
-    return true;
-  }
-  if (name == "trailing_bytes") {
-    bytes.push_back(0xa5);
-    return true;
-  }
-  if (name == "wrong_magic") return Flip(bytes, 0);
-  if (name == "wrong_version") {
-    PutU32(bytes, 8, 2);
-    return true;
-  }
-  if (name == "wrong_circuit_id") return Flip(bytes, 12);
-  if (name == "wrong_proof_length") {
-    PutU64(bytes, 60, static_cast<uint64_t>(bytes.size()));
-    return true;
-  }
-  if (name == "wrong_public_length") {
-    PutU32(bytes, 56, static_cast<uint32_t>(kPublicStatementBytes - 1));
-    return true;
-  }
-  if (name == "public_statement_byte") return Flip(bytes, kHeaderBytes);
-  if (name == "public_statement_reorder") {
-    std::swap(bytes[kHeaderBytes + kRoleOffset],
-              bytes[kHeaderBytes + kRoleOffset + 1]);
-    return true;
-  }
-  if (name == "epoch_endian") return Flip(bytes, kHeaderBytes + kEpochOffset);
-  if (name == "sequence_endian") {
-    return Flip(bytes, kHeaderBytes + kSequenceOffset + 7);
-  }
-  if (name == "source_commitment_target") return Flip(bytes, DigestStatementOffset(14));
-  if (name == "registry_snapshot") return Flip(bytes, DigestStatementOffset(2));
-  if (name == "profile_substitution") return Flip(bytes, DigestStatementOffset(3));
-  if (name == "subject_substitution") return Flip(bytes, DigestStatementOffset(11));
-  if (name == "request_replay_substitution") return Flip(bytes, DigestStatementOffset(13));
-  if (name == "state_before_substitution") return Flip(bytes, DigestStatementOffset(24));
-  if (name == "policy_result_conflation") return Flip(bytes, kHeaderBytes + kStateOffset + 5);
-  if (name == "effective_directive_conflation") return Flip(bytes, kHeaderBytes + kStateOffset + 6);
-  if (name == "chronology_equality") return Flip(bytes, kHeaderBytes + kStateOffset + 32);
-  if (name == "chronology_order") return Flip(bytes, kHeaderBytes + kStateOffset + 48);
-  if (name == "exception_substitution") return Flip(bytes, DigestStatementOffset(20));
-  if (name == "read_write_role") return Flip(bytes, kHeaderBytes + kStateOffset + 132);
-  if (name == "access_index") return Flip(bytes, kHeaderBytes + kStateOffset + 104);
-  if (name == "access_value") {
-    return Flip(bytes, kHeaderBytes + kStateDigestOffset + 21 * kDigestBytes);
-  }
-  if (name == "state_commitment") return Flip(bytes, kHeaderBytes + kStateOffset);
-  if (name == "decision_id") return Flip(bytes, DigestStatementOffset(23));
-  if (name == "state_after_substitution") return Flip(bytes, DigestStatementOffset(25));
-  if (name == "receipt_derivation") return Flip(bytes, DigestStatementOffset(23) + 1);
-  if (name == "settlement_derivation") return Flip(bytes, DigestStatementOffset(25) + 1);
-  if (name == "cross_context") return Flip(bytes, DigestStatementOffset(1));
-  return false;
-}
-
 int Reject(const std::string& reason) {
   std::printf("MINIMAL_CLEARANCE_VERIFIER_REJECT reason=%s "
               "state_mutations=0 clear_authorizations=0\n",
               reason.c_str());
-  return 1;
-}
-
-int Mutation(const std::string& name, const std::string& path,
-             bool diagnostic_logs) {
-  std::vector<uint8_t> bytes;
-  std::string error;
-  if (!read_artifact_bytes(path, bytes, error)) {
-    std::printf("MINIMAL_CLEARANCE_VERIFIER_MUTATION_PASS name=%s copy_only=1 "
-                "reason=read.%s\n",
-                name.c_str(), error.c_str());
-    return 0;
-  }
-  if (!ApplyMutation(name, bytes)) {
-    std::printf("MINIMAL_CLEARANCE_VERIFIER_MUTATION_FAIL name=%s "
-                "reason=unsupported-or-short\n",
-                name.c_str());
-    return 1;
-  }
-  Artifact artifact;
-  if (!parse_artifact_bytes(bytes, artifact, error)) {
-    std::printf("MINIMAL_CLEARANCE_VERIFIER_MUTATION_PASS name=%s copy_only=1 "
-                "reason=artifact.%s state_mutations=0\n",
-                name.c_str(), error.c_str());
-    return 0;
-  }
-  const PublicStatement expected = BuildVerifierOwnedStatement();
-  auto circuit = build_circuit();
-  std::string reason;
-  if (!ValidateArtifact(artifact, expected, circuit, reason, diagnostic_logs)) {
-    std::printf("MINIMAL_CLEARANCE_VERIFIER_MUTATION_PASS name=%s copy_only=1 "
-                "reason=%s state_mutations=0\n",
-                name.c_str(), reason.c_str());
-    return 0;
-  }
-  std::printf("MINIMAL_CLEARANCE_VERIFIER_MUTATION_FAIL name=%s copy_only=1 "
-              "reason=accepted state_mutations=0\n",
-              name.c_str());
   return 1;
 }
 
@@ -932,51 +880,29 @@ int main(int argc, char** argv) {
   if (argc == 3 && std::string(argv[1]) == "--public-parity") {
     return PublicParity(argv[2]);
   }
-  if (argc == 4 && std::string(argv[1]) == "--verified-statement-file") {
-    std::ifstream existing(argv[2], std::ios::binary);
-    if (existing.good()) return Reject("statement-output-exists");
+  if (argc == 2 && std::string(argv[1]) == "--verify-stdin") {
     std::vector<uint8_t> bytes;
     std::string error;
-    if (!read_artifact_bytes(argv[3], bytes, error)) {
-      return Reject("artifact." + error);
-    }
+    if (!ReadVerifyStdinBytes(bytes, error)) return Reject("artifact." + error);
     Artifact artifact;
     if (!parse_artifact_bytes(bytes, artifact, error)) {
       return Reject("artifact." + error);
     }
     const PublicStatement expected = BuildVerifierOwnedStatement();
-    const std::vector<uint8_t> expected_bytes = SerializeStatement(expected);
     auto circuit = build_circuit();
     std::string reason;
-    if (!ValidateArtifact(artifact, expected, circuit, reason, diagnostic_logs) ||
-        artifact.public_statement != expected_bytes) {
-      if (reason.empty()) reason = "statement-byte-mismatch";
+    if (!ValidateArtifact(artifact, expected, circuit, reason, diagnostic_logs)) {
       return Reject(reason);
-    }
-    if (!WriteNewStatementFile(argv[2], expected_bytes, reason)) {
-      return Reject("statement-output." + reason);
     }
     std::printf("MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=%zu public_inputs=%zu "
                 "layers=%zu terms=%zu public_bytes=%zu proof_bytes=%zu rate=%u "
                 "queries=%u transcript_version=%u circuit_id=%s "
-                "state_mutations=0 clear_authorizations=0\n",
+                "statement_sha3_512=%s state_mutations=0 clear_authorizations=0\n",
                 circuit->ninputs, circuit->npub_in, circuit->nl, circuit->nterms(),
                 artifact.public_statement.size(), artifact.proof.size(),
                 kLigeroRate, kLigeroQueries, kTranscriptVersion,
-                CircuitId(circuit).c_str());
-    return 0;
-  }
-  if (argc == 3 && std::string(argv[1]) == "--public-statement-file") {
-    const std::vector<uint8_t> bytes =
-        SerializeStatement(BuildVerifierOwnedStatement());
-    std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
-    if (!output) return 2;
-    output.write(reinterpret_cast<const char*>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
-    if (!output) return 2;
-    std::printf("MINIMAL_CLEARANCE_VERIFIER_PUBLIC_STATEMENT bytes=%zu path=%s "
-                "verifier_owned_reconstruction=1\n",
-                bytes.size(), argv[2]);
+                CircuitId(circuit).c_str(),
+                HexDigest(HashBytes(artifact.public_statement)).c_str());
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--circuit-id") {
@@ -987,38 +913,5 @@ int main(int argc, char** argv) {
                 circuit->nl, circuit->nterms());
     return 0;
   }
-  if ((argc == 4 || argc == 5) && std::string(argv[2]) == "--mutation") {
-    if (argc == 5 && std::string(argv[4]) != "--diagnostic-logs") return 2;
-    return Mutation(argv[3], argv[1], diagnostic_logs);
-  }
-  if (argc != 2 && argc != 3) {
-    std::fprintf(stderr,
-                 "usage: longfellow_minimal_clearance_verifier ARTIFACT | "
-                 "ARTIFACT --mutation NAME [--diagnostic-logs] | "
-                 "--preflight | --public-parity PATH | "
-                 "--public-statement-file PATH | --circuit-id\n");
-    return 2;
-  }
-  std::vector<uint8_t> bytes;
-  std::string error;
-  if (!read_artifact_bytes(argv[1], bytes, error)) return Reject("artifact." + error);
-  Artifact artifact;
-  if (!parse_artifact_bytes(bytes, artifact, error)) {
-    return Reject("artifact." + error);
-  }
-  const PublicStatement expected = BuildVerifierOwnedStatement();
-  auto circuit = build_circuit();
-  std::string reason;
-  if (!ValidateArtifact(artifact, expected, circuit, reason, diagnostic_logs)) {
-    return Reject(reason);
-  }
-  std::printf("MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=%zu public_inputs=%zu "
-              "layers=%zu terms=%zu public_bytes=%zu proof_bytes=%zu rate=%u "
-              "queries=%u transcript_version=%u circuit_id=%s "
-              "state_mutations=0 clear_authorizations=0\n",
-              circuit->ninputs, circuit->npub_in, circuit->nl, circuit->nterms(),
-              artifact.public_statement.size(), artifact.proof.size(),
-              kLigeroRate, kLigeroQueries, kTranscriptVersion,
-              CircuitId(circuit).c_str());
-  return 0;
+  return Reject("unsupported-argument");
 }

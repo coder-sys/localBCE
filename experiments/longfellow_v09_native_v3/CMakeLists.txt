@@ -98,8 +98,11 @@ configure_file(
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
-add_library(longfellow_task_crypto
+add_library(longfellow_task_crypto STATIC
   src/crypto.cpp
   src/log.cpp
 )
@@ -496,6 +499,10 @@ target_compile_definitions(longfellow_minimal_clearance_verifier PRIVATE
 target_link_libraries(longfellow_minimal_clearance_verifier PRIVATE
   longfellow_minimal_clearance_verifier_circuit
   longfellow_minimal_clearance_proof_artifact)
+if(MSVC)
+  target_link_options(longfellow_minimal_clearance_verifier PRIVATE
+    "/DEPENDENTLOADFLAG:0x800")
+endif()
 
 add_executable(longfellow_minimal_clearance_public_parity
   src/native_v3_minimal_clearance_public_parity.cpp
