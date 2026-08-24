@@ -272,103 +272,137 @@ def _connection(path: Path, *, expected_identity: tuple[int, int, int] | None = 
         if after_setup != after_connect or (expected_identity is not None and after_setup != expected_identity):
             raise RecoveryError("recovery:database-open")
         return connection
-    except RecoveryError:
-        if connection is not None:
-            connection.close()
-        raise
+    except RecoveryError as error:
+        if connection is None:
+            raise
+        _finish_initialization_transaction(connection, commit=False, error=error)
     except sqlite3.Error as error:
-        if connection is not None:
+        mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database-open")
+        if connection is None:
+            raise_redacted(type(mapped), str(mapped))
+        _finish_initialization_transaction(connection, commit=False, error=mapped)
+    except (OSError, TypeError, ValueError) as error:
+        mapped = RecoveryError("recovery:database-open")
+        if connection is None:
+            raise_redacted(type(mapped), str(mapped))
+        _finish_initialization_transaction(connection, commit=False, error=mapped)
+
+
+def _finish_initialization_transaction(connection: sqlite3.Connection, *, commit: bool, error: BaseException | None = None) -> None:
+    if commit:
+        if error is not None:
+            _finish_initialization_transaction(connection, commit=False, error=error)
+        try:
+            connection.commit()
+        except BaseException:
+            try:
+                connection.close()
+            except BaseException:
+                pass
+            raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+        try:
             connection.close()
-        if _sqlite_is_capacity(error):
-            _capacity()
-        raise_redacted(RecoveryError, "recovery:database-open")
-    except (OSError, TypeError, ValueError):
-        if connection is not None:
-            connection.close()
-        raise_redacted(RecoveryError, "recovery:database-open")
+        except BaseException:
+            raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+        return
+
+    rollback_failed = False
+    try:
+        connection.rollback()
+    except BaseException:
+        rollback_failed = True
+    try:
+        connection.close()
+    except BaseException:
+        raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+    if rollback_failed:
+        raise_redacted(RecoveryIndeterminateError, "recovery:transaction-indeterminate")
+    if error is None:
+        return
+    raise_redacted(type(error), str(error))
 
 
 def _init(path: Path, config: RecoveryConfigV2) -> None:
     existing_identity = _path_identity(path, allow_missing=True)
     connection = _connection(path)
-    opened_identity = _path_identity(path, allow_missing=False)
+    try:
+        opened_identity = _path_identity(path, allow_missing=False)
+    except RecoveryError as error:
+        _finish_initialization_transaction(connection, commit=False, error=error)
+    except Exception:
+        _finish_initialization_transaction(connection, commit=False, error=RecoveryError("recovery:database-open"))
     if opened_identity is None or (existing_identity is not None and opened_identity != existing_identity):
-        connection.close()
-        raise RecoveryError("recovery:database-open")
-    verify_existing = False
+        _finish_initialization_transaction(connection, commit=False, error=RecoveryError("recovery:database-open"))
+    created = False
     try:
         existing = tuple(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall())
         if existing and existing != tuple(sorted(TABLES)):
             raise RecoveryError("recovery:legacy-schema")
         if not existing:
+            created = True
             connection.execute("BEGIN IMMEDIATE")
-            try:
-                connection.execute("""
-                    CREATE TABLE recovery_meta(
-                        meta_id INTEGER PRIMARY KEY CHECK(meta_id=1), schema TEXT NOT NULL,
-                        schema_version INTEGER NOT NULL, database_id TEXT NOT NULL,
-                        chain_id TEXT NOT NULL, config_digest TEXT NOT NULL,
-                        sequence INTEGER NOT NULL, head_root TEXT NOT NULL,
-                        profile_digest TEXT NOT NULL, key_custody_id_digest TEXT NOT NULL,
-                        storage_id_digest TEXT NOT NULL, ingress_database_id TEXT NOT NULL,
-                        core_database_id TEXT NOT NULL, current_generation INTEGER NOT NULL
-                    )
-                """)
-                connection.execute("""
-                    CREATE TABLE recovery_points(
-                        point_id TEXT PRIMARY KEY, generation INTEGER NOT NULL UNIQUE,
-                        state TEXT NOT NULL, object_id TEXT NOT NULL UNIQUE,
-                        bundle_digest TEXT NOT NULL, bundle_length INTEGER NOT NULL,
-                        ingress_database_id TEXT NOT NULL, ingress_config_digest TEXT NOT NULL,
-                        ingress_head_root TEXT NOT NULL, ingress_watermark INTEGER NOT NULL,
-                        core_database_id TEXT NOT NULL, core_config_digest TEXT NOT NULL,
-                        core_head_root TEXT NOT NULL, core_watermark INTEGER NOT NULL,
-                        key_id TEXT NOT NULL, key_epoch INTEGER NOT NULL, key_state TEXT NOT NULL,
-                        storage_id TEXT NOT NULL, prior_point_id TEXT, prior_root TEXT NOT NULL,
-                        operation_id TEXT NOT NULL UNIQUE, request_digest TEXT NOT NULL,
-                        sequence INTEGER NOT NULL, updated_sequence INTEGER NOT NULL
-                    )
-                """)
-                connection.execute("""
-                    CREATE TABLE recovery_events(
-                        sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
-                        event_kind TEXT NOT NULL, database_id TEXT NOT NULL,
-                        chain_id TEXT NOT NULL, stream_kind TEXT NOT NULL,
-                        stream_id TEXT NOT NULL, point_id TEXT NOT NULL,
-                        operation_id TEXT NOT NULL, request_digest TEXT NOT NULL,
-                        prior_state TEXT NOT NULL, next_state TEXT NOT NULL,
-                        attempt INTEGER NOT NULL, before_root TEXT NOT NULL,
-                        after_root TEXT NOT NULL, material_digest TEXT NOT NULL,
-                        payload_digest TEXT NOT NULL, payload_length INTEGER NOT NULL,
-                        event_raw BLOB NOT NULL, receipt_digest TEXT NOT NULL,
-                        FOREIGN KEY(point_id) REFERENCES recovery_points(point_id)
-                    )
-                """)
-                connection.execute("CREATE INDEX recovery_points_state_idx ON recovery_points(state,generation)")
-                connection.execute("CREATE UNIQUE INDEX recovery_events_chain_idx ON recovery_events(chain_id,sequence)")
-                connection.execute("CREATE INDEX recovery_events_operation_idx ON recovery_events(operation_id,event_kind)")
-                connection.execute(
-                    "INSERT INTO recovery_meta VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, 0, independent.GENESIS_ROOT, config.profile_digest, _digest("custody-id", config.custody_id), _digest("storage-id", config.storage_id), config.ingress_database_id, config.core_database_id, 0),
+            connection.execute("""
+                CREATE TABLE recovery_meta(
+                    meta_id INTEGER PRIMARY KEY CHECK(meta_id=1), schema TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL, database_id TEXT NOT NULL,
+                    chain_id TEXT NOT NULL, config_digest TEXT NOT NULL,
+                    sequence INTEGER NOT NULL, head_root TEXT NOT NULL,
+                    profile_digest TEXT NOT NULL, key_custody_id_digest TEXT NOT NULL,
+                    storage_id_digest TEXT NOT NULL, ingress_database_id TEXT NOT NULL,
+                    core_database_id TEXT NOT NULL, current_generation INTEGER NOT NULL
                 )
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
+            """)
+            connection.execute("""
+                CREATE TABLE recovery_points(
+                    point_id TEXT PRIMARY KEY, generation INTEGER NOT NULL UNIQUE,
+                    state TEXT NOT NULL, object_id TEXT NOT NULL UNIQUE,
+                    bundle_digest TEXT NOT NULL, bundle_length INTEGER NOT NULL,
+                    ingress_database_id TEXT NOT NULL, ingress_config_digest TEXT NOT NULL,
+                    ingress_head_root TEXT NOT NULL, ingress_watermark INTEGER NOT NULL,
+                    core_database_id TEXT NOT NULL, core_config_digest TEXT NOT NULL,
+                    core_head_root TEXT NOT NULL, core_watermark INTEGER NOT NULL,
+                    key_id TEXT NOT NULL, key_epoch INTEGER NOT NULL, key_state TEXT NOT NULL,
+                    storage_id TEXT NOT NULL, prior_point_id TEXT, prior_root TEXT NOT NULL,
+                    operation_id TEXT NOT NULL UNIQUE, request_digest TEXT NOT NULL,
+                    sequence INTEGER NOT NULL, updated_sequence INTEGER NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE recovery_events(
+                    sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
+                    event_kind TEXT NOT NULL, database_id TEXT NOT NULL,
+                    chain_id TEXT NOT NULL, stream_kind TEXT NOT NULL,
+                    stream_id TEXT NOT NULL, point_id TEXT NOT NULL,
+                    operation_id TEXT NOT NULL, request_digest TEXT NOT NULL,
+                    prior_state TEXT NOT NULL, next_state TEXT NOT NULL,
+                    attempt INTEGER NOT NULL, before_root TEXT NOT NULL,
+                    after_root TEXT NOT NULL, material_digest TEXT NOT NULL,
+                    payload_digest TEXT NOT NULL, payload_length INTEGER NOT NULL,
+                    event_raw BLOB NOT NULL, receipt_digest TEXT NOT NULL,
+                    FOREIGN KEY(point_id) REFERENCES recovery_points(point_id)
+                )
+            """)
+            connection.execute("CREATE INDEX recovery_points_state_idx ON recovery_points(state,generation)")
+            connection.execute("CREATE UNIQUE INDEX recovery_events_chain_idx ON recovery_events(chain_id,sequence)")
+            connection.execute("CREATE INDEX recovery_events_operation_idx ON recovery_events(operation_id,event_kind)")
+            connection.execute(
+                "INSERT INTO recovery_meta VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (SCHEMA, SCHEMA_VERSION, config.database_id, config.chain_id, config.digest, 0, independent.GENESIS_ROOT, config.profile_digest, _digest("custody-id", config.custody_id), _digest("storage-id", config.storage_id), config.ingress_database_id, config.core_database_id, 0),
+            )
         else:
-            verify_existing = True
             row = connection.execute("SELECT * FROM recovery_meta WHERE meta_id=1").fetchone()
             if row is None or row["database_id"] != config.database_id or row["chain_id"] != config.chain_id or row["config_digest"] != config.digest or row["profile_digest"] != config.profile_digest or row["key_custody_id_digest"] != _digest("custody-id", config.custody_id) or row["storage_id_digest"] != _digest("storage-id", config.storage_id) or row["ingress_database_id"] != config.ingress_database_id or row["core_database_id"] != config.core_database_id:
                 raise RecoveryError("recovery:identity")
-    except RecoveryError:
-        raise
+    except RecoveryError as error:
+        _finish_initialization_transaction(connection, commit=False, error=error)
     except sqlite3.Error as error:
-        if _sqlite_is_capacity(error):
-            _capacity()
-        raise_redacted(RecoveryError, "recovery:database-initialize")
-    finally:
-        connection.close()
-    if verify_existing:
+        mapped = RecoveryError("recovery:capacity" if _sqlite_is_capacity(error) else "recovery:database-initialize")
+        _finish_initialization_transaction(connection, commit=False, error=mapped)
+    except Exception:
+        _finish_initialization_transaction(connection, commit=False, error=RecoveryError("recovery:database-initialize"))
+    else:
+        _finish_initialization_transaction(connection, commit=created)
+    if not created:
         try:
             independent.verify_database(path, expected_database_id=config.database_id, expected_config_digest=config.digest)
         except independent.RecoveryVerificationError:

@@ -187,6 +187,57 @@ class _FailOnceStorage(_Storage):
         return super().put_if_absent(object_id, sealed, key_id=key_id, key_epoch=key_epoch)
 
 
+class _InitializationFaultConnection:
+    def __init__(
+        self,
+        inner: sqlite3.Connection,
+        *,
+        trigger: str | None = None,
+        precommit_error: BaseException | None = None,
+        fail_rollback: bool = False,
+        fail_close: bool = False,
+        fail_commit: bool = False,
+    ) -> None:
+        self.inner = inner
+        self.trigger = trigger
+        self.precommit_error = precommit_error
+        self.fail_rollback = fail_rollback
+        self.fail_close = fail_close
+        self.fail_commit = fail_commit
+        self.rollback_calls = 0
+        self.close_calls = 0
+        self.commit_calls = 0
+
+    def execute(self, sql: str, *parameters: object):
+        if self.trigger is not None and self.trigger in sql:
+            if self.precommit_error is None:
+                raise RuntimeError("initialization fault missing error")
+            raise self.precommit_error
+        return self.inner.execute(sql, *parameters)
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+        if self.fail_rollback:
+            raise RuntimeError("CANARY_INIT_ROLLBACK_PHI_PATH")
+        self.inner.rollback()
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+        self.inner.commit()
+        if self.fail_commit:
+            raise RuntimeError("CANARY_INIT_COMMIT_PHI_PATH")
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.fail_close:
+            self.inner.close()
+            raise RuntimeError("CANARY_INIT_CLOSE_PHI_PATH")
+        self.inner.close()
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.inner, name)
+
+
 class _RandomizedCustody(_Custody):
     def __init__(self) -> None:
         super().__init__()
@@ -2454,6 +2505,123 @@ class MirrorV2Fixture(unittest.TestCase):
         with self.assertRaises(recovery.RecoveryError):
             recovery.RecoveryServiceV2(oversized, self.recovery_config, self.custody, self.storage)
         self.assertEqual(before, oversized.stat().st_size)
+
+    def test_recovery_initialization_finalization_faults_are_fixed_and_retryable(self) -> None:
+        original_connection = recovery._connection
+
+        def table_names(path: Path) -> tuple[str, ...]:
+            connection = sqlite3.connect(path)
+            try:
+                return tuple(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"))
+            finally:
+                connection.close()
+
+        for name, kwargs in (
+            ("rollback", {"trigger": "CREATE TABLE recovery_points", "precommit_error": sqlite3.OperationalError("CANARY_INIT_PRECOMMIT"), "fail_rollback": True}),
+            ("close", {"trigger": "CREATE TABLE recovery_points", "precommit_error": sqlite3.OperationalError("CANARY_INIT_PRECOMMIT"), "fail_close": True}),
+        ):
+            with self.subTest(fault=name):
+                path = self.root / f"init-{name}-fault.db"
+                faults: list[_InitializationFaultConnection] = []
+
+                def open_fault(target: Path, *, _kwargs=kwargs):
+                    fault = _InitializationFaultConnection(original_connection(target), **_kwargs)
+                    faults.append(fault)
+                    return fault
+
+                with mock.patch.object(recovery, "_connection", side_effect=open_fault):
+                    with self.assertRaises(recovery.RecoveryIndeterminateError) as caught:
+                        recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+                self.assertEqual("recovery:transaction-indeterminate", str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertNotIn("CANARY_INIT_", repr(caught.exception))
+                self.assertEqual(1, faults[0].rollback_calls)
+                self.assertEqual(1, faults[0].close_calls)
+                self.assertEqual((), table_names(path))
+
+        path = self.root / "init-commit-then-raise.db"
+        faults = []
+        with mock.patch.object(
+            recovery,
+            "_connection",
+            side_effect=lambda target: faults.append(_InitializationFaultConnection(original_connection(target), fail_commit=True)) or faults[-1],
+        ):
+            with self.assertRaises(recovery.RecoveryIndeterminateError) as caught:
+                recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+        self.assertEqual("recovery:transaction-indeterminate", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY_INIT_", repr(caught.exception))
+        self.assertEqual(1, faults[0].commit_calls)
+        self.assertEqual(1, faults[0].close_calls)
+        self.assertEqual(0, faults[0].rollback_calls)
+        self.assertEqual(tuple(sorted(recovery.TABLES)), table_names(path))
+        connection = sqlite3.connect(path)
+        try:
+            self.assertEqual((1,), tuple(connection.execute("SELECT COUNT(*) FROM recovery_meta").fetchone()))
+            self.assertEqual((0, 0), tuple(connection.execute("SELECT sequence,current_generation FROM recovery_meta").fetchone()))
+        finally:
+            connection.close()
+        reopened = recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+        self.assertTrue(reopened.verify()["accepted"])
+        self.assertEqual(0, reopened.verify()["point_count"])
+
+        path = self.root / "init-close-after-commit.db"
+        faults = []
+        with mock.patch.object(
+            recovery,
+            "_connection",
+            side_effect=lambda target: faults.append(_InitializationFaultConnection(original_connection(target), fail_close=True)) or faults[-1],
+        ):
+            with self.assertRaises(recovery.RecoveryIndeterminateError) as caught:
+                recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+        self.assertEqual("recovery:transaction-indeterminate", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY_INIT_", repr(caught.exception))
+        self.assertEqual(1, faults[0].commit_calls)
+        self.assertEqual(1, faults[0].close_calls)
+        self.assertEqual(0, faults[0].rollback_calls)
+        self.assertEqual(tuple(sorted(recovery.TABLES)), table_names(path))
+
+        for name, injected in (("sqlite", sqlite3.OperationalError("CANARY_INIT_SQLITE")), ("unexpected", RuntimeError("CANARY_INIT_UNEXPECTED"))):
+            with self.subTest(fault=name):
+                path = self.root / f"init-{name}-precommit.db"
+                faults = []
+                kwargs = {"trigger": "CREATE TABLE recovery_points", "precommit_error": injected}
+
+                def open_precommit(target: Path, *, _kwargs=kwargs):
+                    fault = _InitializationFaultConnection(original_connection(target), **_kwargs)
+                    faults.append(fault)
+                    return fault
+
+                with mock.patch.object(recovery, "_connection", side_effect=open_precommit):
+                    with self.assertRaises(recovery.RecoveryError) as caught:
+                        recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+                self.assertEqual("recovery:database-initialize", str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertNotIn("CANARY_INIT_", repr(caught.exception))
+                self.assertEqual(1, faults[0].rollback_calls)
+                self.assertEqual(1, faults[0].close_calls)
+                self.assertEqual((), table_names(path))
+                retry = recovery.RecoveryServiceV2(path, self.recovery_config, self.custody, self.storage)
+                self.assertTrue(retry.verify()["accepted"])
+                self.assertEqual(tuple(sorted(recovery.TABLES)), table_names(path))
+
+        legacy = self.root / "init-deterministic-legacy.db"
+        connection = sqlite3.connect(legacy)
+        try:
+            connection.execute("CREATE TABLE old_schema(value TEXT)")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(recovery.RecoveryError) as caught:
+            recovery.RecoveryServiceV2(legacy, self.recovery_config, self.custody, self.storage)
+        self.assertEqual("recovery:legacy-schema", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
 
     def test_recovery_catalog_reopens_and_ddl_failures_leave_no_partial_schema(self) -> None:
         service = recovery.RecoveryServiceV2(self.root / "reopen-recovery.db", self.recovery_config, self.custody, self.storage)
