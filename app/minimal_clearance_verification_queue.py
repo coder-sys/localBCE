@@ -696,6 +696,218 @@ def _sidecar_identity(path: Path) -> tuple[int, int, int, int, int]:
     return int(item.st_dev), int(item.st_ino), int(item.st_nlink), int(item.st_size), int(item.st_mtime_ns)
 
 
+class _QueueRuntimeOwnership:
+    """One OS-held ownership object for an exact marker and parent.
+
+    The runtime is the only production caller that may create this object.  On
+    Windows the marker handle denies write/delete/rename sharing; on POSIX the
+    advisory lock is retained with identity checks and no stronger claim.
+    """
+
+    def __init__(self, *, lock_path: Path, parent: Path) -> None:
+        if (
+            not isinstance(lock_path, Path)
+            or not isinstance(parent, Path)
+            or lock_path.parent != parent
+            or not _owned_directory(parent)
+        ):
+            _raise_fixed(VerificationQueueError("queue_owner"))
+        self._path = lock_path
+        self._parent = parent
+        self._parent_identity = _directory_identity(parent)
+        self._path_identity: tuple[int, int, int] | None = None
+        self._descriptor: int | None = None
+        self._locked = False
+        self._closed = False
+        try:
+            before = None
+            try:
+                before = os.lstat(self._path)
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError):
+                _raise_fixed(VerificationQueueError("queue_owner"))
+            if before is not None and (
+                not stat.S_ISREG(before.st_mode)
+                or int(before.st_nlink) != 1
+                or _is_reparse(before)
+            ):
+                _raise_fixed(VerificationQueueError("queue_owner"))
+
+            if os.name == "nt":
+                import ctypes
+                import msvcrt
+
+                if before is None:
+                    create_flags = int(os.O_RDWR) | int(os.O_CREAT) | int(os.O_EXCL) | int(getattr(os, "O_BINARY", 0))
+                    try:
+                        created = os.open(str(self._path), create_flags, 0o600)
+                        os.close(created)
+                    except FileExistsError:
+                        pass
+                    except (OSError, ValueError):
+                        _raise_fixed(VerificationQueueError("queue_owner"))
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.CreateFileW.argtypes = [
+                    ctypes.c_wchar_p,
+                    ctypes.c_uint32,
+                    ctypes.c_uint32,
+                    ctypes.c_void_p,
+                    ctypes.c_uint32,
+                    ctypes.c_uint32,
+                    ctypes.c_void_p,
+                ]
+                kernel32.CreateFileW.restype = ctypes.c_void_p
+                kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+                kernel32.CloseHandle.restype = ctypes.c_int
+                handle = kernel32.CreateFileW(
+                    str(self._path),
+                    0xC0000000,  # GENERIC_READ | GENERIC_WRITE
+                    0x00000001,  # FILE_SHARE_READ only: deny write/delete/rename
+                    None,
+                    3,  # OPEN_ALWAYS
+                    0x00200080,  # FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+                    None,
+                )
+                handle_value = getattr(handle, "value", handle)
+                invalid = ctypes.c_void_p(-1).value
+                if handle_value in (None, invalid):
+                    _raise_fixed(VerificationQueueError("queue_owner"))
+                try:
+                    descriptor = msvcrt.open_osfhandle(
+                        int(handle_value), int(os.O_RDWR) | int(getattr(os, "O_BINARY", 0))
+                    )
+                except (OSError, ValueError):
+                    kernel32.CloseHandle(ctypes.c_void_p(handle_value))
+                    _raise_fixed(VerificationQueueError("queue_owner"))
+            else:
+                flags = int(os.O_RDWR) | int(os.O_CREAT) | int(getattr(os, "O_BINARY", 0))
+                if before is None:
+                    flags |= int(getattr(os, "O_EXCL", 0))
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= int(os.O_NOFOLLOW)
+                descriptor = os.open(str(self._path), flags, 0o600)
+                if before is not None:
+                    opened_before = os.fstat(descriptor)
+                    if (
+                        int(opened_before.st_dev),
+                        int(opened_before.st_ino),
+                        int(opened_before.st_nlink),
+                    ) != (int(before.st_dev), int(before.st_ino), int(before.st_nlink)):
+                        _raise_fixed(VerificationQueueError("queue_owner"))
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            self._descriptor = descriptor
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or int(opened.st_nlink) != 1 or _is_reparse(opened):
+                _raise_fixed(VerificationQueueError("queue_owner"))
+            if int(opened.st_size) > 1:
+                _raise_fixed(VerificationQueueError("queue_owner"))
+            if int(opened.st_size) == 1:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.read(descriptor, 1) != b"\x00":
+                    _raise_fixed(VerificationQueueError("queue_owner"))
+            else:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                _write_all(descriptor, b"\x00")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            current = os.lstat(self._path)
+            identity = (int(opened.st_dev), int(opened.st_ino), int(opened.st_nlink))
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or int(current.st_nlink) != 1
+                or _is_reparse(current)
+                or
+                (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) != identity
+                or _directory_identity(self._parent) != self._parent_identity
+            ):
+                _raise_fixed(VerificationQueueError("queue_owner"))
+            self._path_identity = identity
+            self._locked = True
+            self.assert_live()
+        except VerificationQueueError:
+            try:
+                self.close()
+            except VerificationQueueError:
+                pass
+            raise
+        except (OSError, ValueError, ImportError):
+            try:
+                self.close()
+            except VerificationQueueError:
+                pass
+            _raise_fixed(VerificationQueueError("queue_owner"))
+
+    def assert_scope(self, *, lock_path: Path, parent: Path) -> None:
+        if not isinstance(lock_path, Path) or not isinstance(parent, Path):
+            _raise_fixed(VerificationQueueError("queue_owner"))
+        if self._path != lock_path or self._parent != parent:
+            _raise_fixed(VerificationQueueError("queue_owner"))
+        self.assert_live()
+
+    def assert_live(self) -> None:
+        descriptor = self._descriptor
+        if self._closed or not self._locked or descriptor is None or self._path_identity is None:
+            _raise_fixed(VerificationQueueError("queue_owner"))
+        try:
+            opened = os.fstat(descriptor)
+            current = os.lstat(self._path)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or int(opened.st_nlink) != 1
+                or _is_reparse(opened)
+                or not stat.S_ISREG(current.st_mode)
+                or int(current.st_nlink) != 1
+                or _is_reparse(current)
+                or (int(opened.st_dev), int(opened.st_ino), int(opened.st_nlink)) != self._path_identity
+                or (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) != self._path_identity
+                or _directory_identity(self._parent) != self._parent_identity
+                or int(opened.st_size) != 1
+            ):
+                _raise_fixed(VerificationQueueError("queue_owner"))
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            marker = os.read(descriptor, 2)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            if marker != b"\x00" or int(current.st_size) != 1:
+                _raise_fixed(VerificationQueueError("queue_owner"))
+        except VerificationQueueError:
+            raise
+        except (OSError, ValueError):
+            _raise_fixed(VerificationQueueError("queue_owner"))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        descriptor = self._descriptor
+        self._descriptor = None
+        failed = False
+        if descriptor is not None:
+            try:
+                if self._locked:
+                    if os.name == "nt":
+                        # CreateFileW sharing is the Windows ownership lock;
+                        # closing the descriptor releases it atomically.
+                        pass
+                    else:
+                        import fcntl
+
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except (OSError, ValueError):
+                failed = True
+            finally:
+                self._locked = False
+                try:
+                    os.close(descriptor)
+                except (OSError, ValueError):
+                    failed = True
+        if failed:
+            _raise_fixed(VerificationQueueError("queue_owner_close"))
+
+
 class _FilesystemArtifactCustody:
     """Verifier-owned bounded snapshot adapter; queue state sees only opaque refs."""
 
@@ -922,20 +1134,30 @@ def _normalize_sql(value: str) -> str:
 class _VerificationQueueStore:
     """The sole writer for the local queue database."""
 
-    def __init__(self, *, path: Path, config: QueueConfig, clock: QueueClock | None = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None) -> None:
+    def __init__(self, *, path: Path, config: QueueConfig, owner: _QueueRuntimeOwnership | None = None, clock: QueueClock | None = None, before_fault: Callable[[str], None] | None = None, after_commit_fault: Callable[[str], None] | None = None) -> None:
         if not isinstance(path, Path): raise VerificationQueueError("queue_database_path")
+        if type(config) is not QueueConfig: raise VerificationQueueError("queue_configuration")
+        if type(owner) is not _QueueRuntimeOwnership: raise VerificationQueueError("queue_owner")
+        owner.assert_scope(lock_path=path.with_name(path.name + ".runtime-lock"), parent=path.parent)
         if not _owned_directory(path.parent): raise VerificationQueueError("queue_database_parent")
         _database_identity(path, allow_missing=True)
-        self.path = path; self.config = config; self.clock = clock or SystemQueueClock(); self._before_fault = before_fault; self._after_commit_fault = after_commit_fault
+        self.path = path; self.config = config; self._owner = owner; self.clock = clock or SystemQueueClock(); self._before_fault = before_fault; self._after_commit_fault = after_commit_fault
         self._path_identity: tuple[int, int, int, int, int] | None = None; self._parent_identity = _directory_identity(path.parent)
+        self._owner_assert()
         if _database_identity(path, allow_missing=True) is None:
             self._bootstrap_missing()
         else:
             self._recover_hot_journal()
             self._verify_existing_before_open()
-        self._path_identity = _database_identity(path); self._parent_identity = _directory_identity(path.parent); self._verify_integrity()
+        self._path_identity = _database_identity(path); self._parent_identity = _directory_identity(path.parent); self._owner_assert(); self._verify_integrity(); self._owner_assert()
+
+    def _owner_assert(self) -> None:
+        if type(self._owner) is not _QueueRuntimeOwnership:
+            _raise_fixed(VerificationQueueError("queue_owner"))
+        self._owner.assert_scope(lock_path=self.path.with_name(self.path.name + ".runtime-lock"), parent=self.path.parent)
 
     def _verify_existing_before_open(self) -> None:
+        self._owner_assert()
         try:
             from app.minimal_clearance_verification_queue_independent import IndependentQueueError, verify_database
             verify_database(self.path, expected_config=self.config.as_json())
@@ -945,6 +1167,7 @@ class _VerificationQueueStore:
             _raise_fixed(exc)
         except Exception:
             _raise_fixed(QueueIntegrityError("queue_database_verify"))
+        self._owner_assert()
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
@@ -952,6 +1175,7 @@ class _VerificationQueueStore:
 
     def _recover_hot_journal(self) -> None:
         """Allow SQLite's native rollback recovery, then verify the result."""
+        self._owner_assert()
         # A rollback journal may be consumed by SQLite, but a competing WAL
         # or shared-memory sidecar must be rejected before SQLite opens the
         # database.  This path never parses or removes any sidecar itself.
@@ -967,6 +1191,7 @@ class _VerificationQueueStore:
         try:
             os.lstat(journal)
         except FileNotFoundError:
+            self._owner_assert()
             return
         except (OSError, ValueError):
             _raise_fixed(VerificationQueueError("queue_database_journal"))
@@ -1007,8 +1232,10 @@ class _VerificationQueueStore:
         # The sidecar identity is captured to make the intended recovery
         # object explicit; no caller-visible path or sidecar bytes are used.
         _ = journal_identity
+        self._owner_assert()
 
     def _bootstrap_missing(self) -> None:
+        self._owner_assert()
         parent = self.path.parent; parent_identity = _directory_identity(parent); descriptor: int | None = None; stage: Path | None = None; stage_identity: tuple[int, int, int, int, int] | None = None; published_identity: tuple[int, int, int] | None = None; published_by_call = False
         try:
             descriptor, name = tempfile.mkstemp(prefix=".queue-bootstrap-", dir=parent); os.close(descriptor); descriptor = None; stage = Path(name); stage_identity = _database_identity(stage)
@@ -1068,8 +1295,10 @@ class _VerificationQueueStore:
                     current = os.lstat(self.path)
                     if (int(current.st_dev), int(current.st_ino), int(current.st_nlink)) == published_identity: os.unlink(self.path)
                 except (OSError, ValueError): pass
+        self._owner_assert()
 
     def _connect(self) -> sqlite3.Connection:
+        self._owner_assert()
         journal = Path(str(self.path) + "-journal")
         try:
             os.lstat(journal)
@@ -1101,6 +1330,7 @@ class _VerificationQueueStore:
             _connection_binding(connection, self.path, identity, parent_identity)
             final = _database_identity(self.path)
             if final is None or final[:3] != identity[:3] or _directory_identity(self.path.parent) != parent_identity: _raise_fixed(VerificationQueueError("queue_database_identity"))
+            self._owner_assert()
             return connection
         except (VerificationQueueError, QueueBackpressureError, QueueIntegrityError) as exc:
             if connection is not None:
@@ -1198,32 +1428,39 @@ class _VerificationQueueStore:
         connection.execute("INSERT INTO queue_transitions VALUES (?,?,?,?,?,?,?,?)", (sequence, kind, job_id, operation_id, before, after, event_bytes, digest)); connection.execute("UPDATE queue_metadata SET head_root=?,next_transition_seq=? WHERE id=1", (after, sequence)); return sequence, after
 
     def _begin(self, connection: sqlite3.Connection) -> None:
+        self._owner_assert()
         self._assert_connection(connection)
-        try: connection.execute("BEGIN IMMEDIATE"); self._assert_connection(connection)
+        try: connection.execute("BEGIN IMMEDIATE"); self._assert_connection(connection); self._owner_assert()
         except sqlite3.Error as exc: _raise_fixed(self._translate_sqlite(exc))
 
     def _begin_read(self, connection: sqlite3.Connection) -> None:
+        self._owner_assert()
         self._assert_connection(connection)
         try:
             connection.execute("BEGIN")
             self._assert_connection(connection)
+            self._owner_assert()
         except sqlite3.Error as exc:
             _raise_fixed(self._translate_sqlite(exc))
 
     def _assert_connection(self, connection: sqlite3.Connection) -> None:
+        self._owner_assert()
         identity = _database_identity(self.path)
         parent_identity = _directory_identity(self.path.parent)
         if identity is None or (self._path_identity is not None and identity[:3] != self._path_identity[:3]) or (self._parent_identity is not None and parent_identity != self._parent_identity):
             _raise_fixed(VerificationQueueError("queue_database_identity"))
         _connection_binding(connection, self.path, identity, parent_identity)
+        self._owner_assert()
 
     def _commit(self, connection: sqlite3.Connection) -> None:
+        self._owner_assert()
         self._assert_connection(connection)
         try:
             connection.execute("COMMIT")
         except sqlite3.Error as exc:
             _raise_fixed(self._translate_sqlite(exc))
         self._assert_connection(connection)
+        self._owner_assert()
 
     @staticmethod
     def _translate_sqlite(error: sqlite3.Error) -> VerificationQueueError:
@@ -1233,6 +1470,7 @@ class _VerificationQueueStore:
         return VerificationQueueError("queue_database_write")
 
     def _admit(self, *, job_id: str, metadata: ArtifactMetadata) -> QueueJob:
+        self._owner_assert()
         _safe_token(job_id, "job_id", maximum=_MAX_QUEUE_ID)
         if metadata.artifact_bytes > self.config.artifact_bytes_cap: raise QueueConflictError("artifact_cap")
         material = _material_digest(self.config, job_id, metadata); operation_id = _operation_id(self.config, job_id, material); now = int(self.clock.now_ms())
@@ -1242,7 +1480,7 @@ class _VerificationQueueStore:
                 self._begin(connection); began = True; self._schema_check(connection); meta = self._meta(connection); existing = self._get_job_locked(connection, job_id)
                 if existing is not None:
                     if existing.operation_id != operation_id or existing.metadata != metadata: raise QueueConflictError("admission_conflict")
-                    self._commit(connection); began = False; return existing
+                    self._commit(connection); began = False; self._owner_assert(); return existing
                 depth = int(meta[12])
                 if depth >= self.config.capacity: raise QueueBackpressureError("queue_capacity")
                 if self._page_bytes(connection) + MAX_TERMINAL_GROWTH_PER_NONTERMINAL * (depth + 1) > MAX_QUEUE_DATABASE_BYTES: raise QueueBackpressureError("queue_storage_capacity")
@@ -1257,7 +1495,7 @@ class _VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(VerificationQueueError("queue_internal"))
-        self._after_commit("admit"); return QueueJob(job_id, operation_id, metadata, "QUEUED", admission_seq, 0, now, None)
+        self._after_commit("admit"); self._owner_assert(); return QueueJob(job_id, operation_id, metadata, "QUEUED", admission_seq, 0, now, None)
 
     @staticmethod
     def _decode_event(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -1291,6 +1529,7 @@ class _VerificationQueueStore:
         return count
 
     def _recover_expired(self) -> int:
+        self._owner_assert()
         now = int(self.clock.now_ms())
         with closing(self._connect()) as connection:
             began = False
@@ -1305,9 +1544,10 @@ class _VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(VerificationQueueError("queue_internal"))
-        return count
+        self._owner_assert(); return count
 
     def _recover_startup_leases(self) -> int:
+        self._owner_assert()
         now = int(self.clock.now_ms())
         with closing(self._connect()) as connection:
             began = False
@@ -1322,9 +1562,10 @@ class _VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(VerificationQueueError("queue_internal"))
-        return count
+        self._owner_assert(); return count
 
     def _recover_claim_after_commit(self, *, job_id: str, raw_token: bytes) -> _QueueWorkItem:
+        self._owner_assert()
         try:
             with closing(self._connect()) as connection:
                 row = connection.execute("SELECT j.*,l.token_digest,l.claim_sequence,l.leased_ms,l.expires_ms FROM queue_jobs j JOIN queue_leases l ON l.job_id=j.job_id WHERE j.job_id=? AND j.status='LEASED' AND l.worker_id=?", (job_id, _RUNTIME_WORKER_ID)).fetchone()
@@ -1335,13 +1576,16 @@ class _VerificationQueueStore:
                 if bytes(row[14]) != digest:
                     _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
                 self._claim_event_without_raw(connection, job_id=job.job_id, operation_id=job.operation_id, claim_sequence=int(row[15]))
-                return _QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, job.attempt, _RUNTIME_WORKER_ID, int(row[15]), raw_token, int(row[17]), self.config.verifier_sha256)
+                result = _QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, job.attempt, _RUNTIME_WORKER_ID, int(row[15]), raw_token, int(row[17]), self.config.verifier_sha256)
+                self._owner_assert()
+                return result
         except QueueIndeterminateError:
             raise
         except BaseException:
             _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
 
     def _claim_next(self) -> _QueueWorkItem | None:
+        self._owner_assert()
         worker_id = _RUNTIME_WORKER_ID
         try:
             raw_token = secrets.token_bytes(32)
@@ -1363,7 +1607,7 @@ class _VerificationQueueStore:
                 metadata = self._meta(connection)
                 if int(metadata[13]) >= 1: raise QueueBackpressureError("queue_worker_capacity")
                 row = connection.execute("SELECT * FROM queue_jobs INDEXED BY queue_jobs_status_eligible WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
-                if row is None: self._commit(connection); began = False; return None
+                if row is None: self._commit(connection); began = False; self._owner_assert(); return None
                 job = self._row_to_job(tuple(row)); attempt = job.attempt + 1; expires = now + self.config.lease_seconds * 1000; claim_sequence = int(metadata[8]) + 1; token_digest = _lease_digest(self.config, job.job_id, worker_id, attempt, claim_sequence, now, expires, raw_token)
                 updated = connection.execute("UPDATE queue_jobs SET status='LEASED',attempt=?,updated_ms=?,last_error_code=NULL WHERE job_id=? AND status='QUEUED' AND attempt=?", (attempt, now, job.job_id, job.attempt))
                 if updated.rowcount != 1: raise QueueLeaseError("claim_cas")
@@ -1383,7 +1627,7 @@ class _VerificationQueueStore:
             self._after_commit("claim")
         except QueueIndeterminateError:
             return self._recover_claim_after_commit(job_id=job.job_id, raw_token=raw_token)
-        return _QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, attempt, worker_id, claim_sequence, raw_token, expires, self.config.verifier_sha256)
+        self._owner_assert(); return _QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, attempt, worker_id, claim_sequence, raw_token, expires, self.config.verifier_sha256)
 
     def _validate_work(self, work: _QueueWorkItem) -> None:
         if type(work) is not _QueueWorkItem or work.queue_id != self.config.queue_id: raise QueueLeaseError("completion_work_invalid")
@@ -1411,6 +1655,7 @@ class _VerificationQueueStore:
         provisional = _VerificationReceipt(_SCHEMA, self.config.queue_id, work.job_id, work.operation_id, work.attempt, evidence, bytes(64)); receipt_id = _sha(_RECEIPT_DOMAIN, _json_bytes(provisional.as_json(include_id=False))); return _VerificationReceipt(provisional.schema, provisional.queue_id, provisional.job_id, provisional.operation_id, provisional.attempt, provisional.evidence, receipt_id)
 
     def _complete(self, work: _QueueWorkItem, *, status: str, evidence: _VerificationEvidence | None = None, error_code: str | None = None) -> QueueResult:
+        self._owner_assert()
         self._validate_work(work)
         if status not in _TERMINAL: raise QueueIntegrityError("completion_status")
         if error_code is not None: error_code = _safe_code(error_code)
@@ -1423,7 +1668,7 @@ class _VerificationQueueStore:
                     if not self._historical_work_matches(connection, work, tuple(durable)): raise QueueLeaseError("completion_lease_fence")
                     result = self._result_from_row(tuple(durable)); intended_error = None if status == "VERIFIED" else error_code or ("verification_rejected" if status == "REJECTED" else "queue_held")
                     if result.status != status or result.receipt_bytes != receipt_bytes or result.error_code != intended_error: raise QueueConflictError("completion_conflict")
-                    self._commit(connection); began = False; return result
+                    self._commit(connection); began = False; self._owner_assert(); return result
                 job = self._require_live_lease(connection, work)
                 if status == "VERIFIED" and receipt is None: raise QueueIntegrityError("verified_receipt_missing")
                 if status != "VERIFIED" and evidence is not None: raise QueueIntegrityError("nonverified_evidence")
@@ -1441,7 +1686,7 @@ class _VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(VerificationQueueError("queue_internal"))
-        self._after_commit("complete"); return QueueResult(work.job_id, work.operation_id, status, receipt_bytes, new_error)
+        self._after_commit("complete"); self._owner_assert(); return QueueResult(work.job_id, work.operation_id, status, receipt_bytes, new_error)
 
     def _complete_verified(self, work: _QueueWorkItem, evidence: _VerificationEvidence) -> QueueResult:
         self._validate_work(work)
@@ -1455,6 +1700,7 @@ class _VerificationQueueStore:
         return self._complete(work, status="REJECTED", error_code=error_code)
 
     def _complete_retryable(self, work: _QueueWorkItem, error_code: str) -> QueueResult | None:
+        self._owner_assert()
         self._validate_work(work); error_code = _safe_code(error_code)
         if error_code not in self.config.retryable_codes: raise QueueIntegrityError("retry_code_not_allowed")
         if work.attempt >= self.config.max_attempts: return self._complete(work, status="HELD", error_code=error_code)
@@ -1467,9 +1713,9 @@ class _VerificationQueueStore:
                     if not self._historical_work_matches(connection, work, tuple(durable)): raise QueueLeaseError("completion_lease_fence")
                     result = self._result_from_row(tuple(durable))
                     if result.status != "HELD" or result.error_code != error_code: raise QueueConflictError("retry_conflict")
-                    self._commit(connection); began = False; return result
+                    self._commit(connection); began = False; self._owner_assert(); return result
                 current = self._get_job_locked(connection, work.job_id)
-                if current is not None and current.status == "QUEUED" and current.attempt == work.attempt and current.last_error_code == error_code: self._commit(connection); began = False; return None
+                if current is not None and current.status == "QUEUED" and current.attempt == work.attempt and current.last_error_code == error_code: self._commit(connection); began = False; self._owner_assert(); return None
                 if current is not None and current.status != "LEASED": self._commit(connection); began = False; _raise_fixed(QueueIndeterminateError("retry_reconciled"))
                 job = self._require_live_lease(connection, work); lease = connection.execute("SELECT worker_id,token_digest,attempt,claim_sequence,leased_ms,expires_ms FROM queue_leases WHERE job_id=?", (work.job_id,)).fetchone()
                 if lease is None: raise QueueLeaseError("completion_lease_mismatch")
@@ -1485,18 +1731,23 @@ class _VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(VerificationQueueError("queue_internal"))
-        self._after_commit("retry"); return None
+        self._after_commit("retry"); self._owner_assert(); return None
 
     def _retry_result(self, operation_id: bytes) -> QueueResult | None:
+        self._owner_assert()
         operation_id = _bytes(operation_id, 64, "operation_id")
         with closing(self._connect()) as connection: row = connection.execute("SELECT operation_id,job_id,terminal_status,receipt_bytes,error_code,completed_ms,claim_sequence,worker_id,leased_ms,expires_ms,token_digest FROM queue_results WHERE operation_id=?", (operation_id,)).fetchone()
+        self._owner_assert()
         return None if row is None else self._result_from_row(tuple(row))
 
     def _get_job(self, job_id: str) -> QueueJob | None:
+        self._owner_assert()
         _safe_token(job_id, "job_id", maximum=_MAX_QUEUE_ID)
-        with closing(self._connect()) as connection: return self._get_job_locked(connection, job_id)
+        with closing(self._connect()) as connection: result = self._get_job_locked(connection, job_id)
+        self._owner_assert(); return result
 
     def _read_projection(self) -> dict[str, Any]:
+        self._owner_assert()
         with closing(self._connect()) as connection:
             began = False
             try:
@@ -1523,7 +1774,7 @@ class _VerificationQueueStore:
                     "storage_reserved_bytes": int(meta[11]),
                 }
                 connection.execute("COMMIT"); began = False
-                return projection
+                self._owner_assert(); return projection
             except VerificationQueueError as exc:
                 if began and connection.in_transaction:
                     connection.execute("ROLLBACK")
@@ -1538,24 +1789,31 @@ class _VerificationQueueStore:
                 _raise_fixed(VerificationQueueError("queue_projection"))
 
     def _snapshot(self) -> dict[str, Any]:
+        self._owner_assert()
         projection = self._read_projection()
-        return {"head_root": projection["head_root"], "counts": projection["counts"], "leases": projection["leases"], "transitions": projection["transitions"]}
+        result = {"head_root": projection["head_root"], "counts": projection["counts"], "leases": projection["leases"], "transitions": projection["transitions"]}
+        self._owner_assert(); return result
 
     def _support_summary(self) -> dict[str, Any]:
+        self._owner_assert()
         projection = self._read_projection()
         lease_age = projection["oldest_lease_age_ms"]
         counts = projection["counts"]
-        return {"schema": _SCHEMA, "queue_id": self.config.queue_id, "head_root": _hex(projection["head_root"]), "status_counts": counts, "nonterminal_depth": counts["QUEUED"] + counts["LEASED"], "oldest_admission_seq": projection["oldest_admission_seq"], "oldest_lease_age_bucket": None if lease_age is None else ("0-59s" if lease_age < 60_000 else "60s+"), "failure_counts": projection["failure_counts"], "storage_used_bytes": projection["storage_used_bytes"], "storage_reserved_bytes": projection["storage_reserved_bytes"], "storage_capacity_bytes": MAX_QUEUE_DATABASE_BYTES}
+        result = {"schema": _SCHEMA, "queue_id": self.config.queue_id, "head_root": _hex(projection["head_root"]), "status_counts": counts, "nonterminal_depth": counts["QUEUED"] + counts["LEASED"], "oldest_admission_seq": projection["oldest_admission_seq"], "oldest_lease_age_bucket": None if lease_age is None else ("0-59s" if lease_age < 60_000 else "60s+"), "failure_counts": projection["failure_counts"], "storage_used_bytes": projection["storage_used_bytes"], "storage_reserved_bytes": projection["storage_reserved_bytes"], "storage_capacity_bytes": MAX_QUEUE_DATABASE_BYTES}
+        self._owner_assert(); return result
 
     def _verify_integrity(self) -> None:
+        self._owner_assert()
         try:
             from app.minimal_clearance_verification_queue_independent import IndependentQueueError, verify_database
             verify_database(self.path, expected_config=self.config.as_json())
         except IndependentQueueError: _raise_fixed(QueueIntegrityError("queue_integrity"))
         except VerificationQueueError as exc: _raise_fixed(exc)
         except Exception: _raise_fixed(QueueIntegrityError("queue_integrity"))
+        self._owner_assert()
 
     def _export_bytes(self) -> bytes:
+        self._owner_assert()
         with closing(self._connect()) as connection:
             began = False
             try:
@@ -1575,12 +1833,18 @@ class _VerificationQueueStore:
             from app.minimal_clearance_verification_queue_independent import verify_export_bytes
             verify_export_bytes(raw, expected_config=self.config.as_json())
         except Exception: _raise_fixed(QueueIntegrityError("queue_export_integrity"))
+        self._owner_assert()
         return raw
 
     def _process_one(self, *, verifier: NativeMinimalClearanceVerifier, custody: _FilesystemArtifactCustody) -> QueueResult | None:
-        return _QueueProcessor(store=self, verifier=verifier, custody=custody).process_one()
+        self._owner_assert()
+        result = _QueueProcessor(store=self, verifier=verifier, custody=custody).process_one()
+        self._owner_assert()
+        return result
 
-    def _close(self) -> None: return None
+    def _close(self) -> None:
+        self._owner_assert()
+        return None
 
 
 def _parse_receipt(raw: bytes, config: QueueConfig) -> _VerificationReceipt:

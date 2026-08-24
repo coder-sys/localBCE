@@ -32,6 +32,7 @@ from app.minimal_clearance_verification_queue import (
     QueueLeaseError,
     QueueRetryableError,
     VerificationQueueError,
+    _QueueRuntimeOwnership,
     _VerificationQueueStore,
 )
 from app.minimal_clearance_verification_queue_independent import (
@@ -122,11 +123,14 @@ class VerificationQueueTests(TestCase):
         NativeMinimalClearanceVerifier.identity_sha256 = lambda _self: _VERIFIER  # type: ignore[assignment]
         NativeMinimalClearanceVerifier.preflight = lambda _self: None  # type: ignore[assignment]
         NativeMinimalClearanceVerifier.verify = _fake_verify  # type: ignore[assignment]
+        self._owners: list[_QueueRuntimeOwnership] = []
 
     def tearDown(self) -> None:
         NativeMinimalClearanceVerifier.identity_sha256 = self._identity
         NativeMinimalClearanceVerifier.verify = self._verify
         NativeMinimalClearanceVerifier.preflight = self._preflight
+        for owner in reversed(self._owners):
+            owner.close()
         self.temp.cleanup()
 
     def _config(self, *, capacity: int = 4) -> QueueConfig:
@@ -141,9 +145,15 @@ class VerificationQueueTests(TestCase):
         name: str | None = None,
     ) -> _VerificationQueueStore:
         path = self.root / (name or f"queue-{len(list(self.root.glob('queue-*.sqlite')))}.sqlite")
+        owner = _QueueRuntimeOwnership(
+            lock_path=path.with_name(path.name + ".runtime-lock"),
+            parent=path.parent,
+        )
+        self._owners.append(owner)
         return _VerificationQueueStore(
             path=path,
             config=self._config(capacity=capacity),
+            owner=owner,
             clock=clock,
             after_commit_fault=after_commit_fault,
         )
@@ -330,6 +340,18 @@ class VerificationQueueTests(TestCase):
         self.assertFalse(hasattr(queue_module, "QueueWorkItem"))
         self.assertFalse(hasattr(queue_module, "VerificationEvidence"))
 
+    def test_store_owner_loss_and_path_substitution_fail_before_database_touch(self) -> None:
+        store = self._store()
+        store._owner.close()
+        with self.assertRaises(VerificationQueueError) as closed:
+            store._snapshot()
+        self.assertEqual(str(closed.exception), "queue_owner")
+        replacement = self._store(name="replacement.sqlite")
+        replacement.path = self.root / "not-the-owned-database.sqlite"
+        with self.assertRaises(VerificationQueueError) as substituted:
+            replacement._snapshot()
+        self.assertEqual(str(substituted.exception), "queue_owner")
+
     def test_database_sidecars_are_rejected_before_read(self) -> None:
         store = self._store()
         for suffix in ("-wal", "-shm"):
@@ -337,7 +359,7 @@ class VerificationQueueTests(TestCase):
             sidecar.write_bytes(b"sidecar-canary")
             before = sidecar.read_bytes()
             with self.assertRaises(VerificationQueueError):
-                _VerificationQueueStore(path=store.path, config=store.config)
+                _VerificationQueueStore(path=store.path, config=store.config, owner=store._owner)
             self.assertEqual(sidecar.read_bytes(), before)
             sidecar.unlink()
 

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from app.minimal_clearance_proof_primitives import MinimalClearanceProofStateError, NativeMinimalClearanceVerifier
-from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, _VerificationQueueStore
+from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, VerificationQueueError, _QueueRuntimeOwnership, _VerificationQueueStore
 from app.minimal_clearance_verification_runtime import (
     MinimalClearanceVerificationRuntime,
     RuntimeRunResult,
@@ -42,11 +44,14 @@ class VerificationRuntimeTests(unittest.TestCase):
         NativeMinimalClearanceVerifier.identity_sha256 = lambda _self: self.verifier_hash  # type: ignore[assignment]
         NativeMinimalClearanceVerifier.preflight = lambda _self: None  # type: ignore[assignment]
         NativeMinimalClearanceVerifier.verify = _runtime_failure  # type: ignore[assignment]
+        self._owners: list[_QueueRuntimeOwnership] = []
 
     def tearDown(self) -> None:
         NativeMinimalClearanceVerifier.identity_sha256 = self.identity
         NativeMinimalClearanceVerifier.preflight = self.preflight
         NativeMinimalClearanceVerifier.verify = self.verify
+        for owner in reversed(self._owners):
+            owner.close()
         self.temp.cleanup()
 
     def _runtime(self, database: Path) -> MinimalClearanceVerificationRuntime:
@@ -57,6 +62,14 @@ class VerificationRuntimeTests(unittest.TestCase):
             source_root=self.source_root,
             workspace_parent=self.workspace,
         )
+
+    def _direct_store(self, database: Path) -> _VerificationQueueStore:
+        owner = _QueueRuntimeOwnership(
+            lock_path=database.with_name(database.name + ".runtime-lock"),
+            parent=database.parent,
+        )
+        self._owners.append(owner)
+        return _VerificationQueueStore(path=database, config=self.config, owner=owner)
 
     def test_one_os_released_owner_blocks_second_runtime_before_claim(self) -> None:
         database = self.root / "runtime.sqlite"
@@ -73,6 +86,80 @@ class VerificationRuntimeTests(unittest.TestCase):
         self.assertEqual(second.run(max_jobs=1).processed, 0)
         second.close()
 
+    def test_private_store_requires_exact_live_runtime_owner_and_preserves_lease(self) -> None:
+        database = self.root / "private-store.sqlite"
+        missing_database = self.root / "missing-without-owner.sqlite"
+        with self.assertRaises(VerificationQueueError):
+            _VerificationQueueStore(path=missing_database, config=self.config)
+        self.assertFalse(missing_database.exists())
+        runtime = self._runtime(database)
+        metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
+        runtime.admit(job_id="owned-job", metadata=metadata)
+        work = runtime._store._claim_next()  # type: ignore[union-attr]
+        self.assertIsNotNone(work)
+        with self.assertRaises(VerificationQueueError) as missing:
+            _VerificationQueueStore(path=database, config=self.config)  # type: ignore[call-arg]
+        self.assertEqual(str(missing.exception), "queue_owner")
+
+        wrong_database = self.root / "wrong-owner.sqlite"
+        wrong_owner = _QueueRuntimeOwnership(
+            lock_path=wrong_database.with_name(wrong_database.name + ".runtime-lock"),
+            parent=wrong_database.parent,
+        )
+        self._owners.append(wrong_owner)
+        with self.assertRaises(VerificationQueueError) as wrong:
+            _VerificationQueueStore(path=database, config=self.config, owner=wrong_owner)
+        self.assertEqual(str(wrong.exception), "queue_owner")
+        with self.assertRaises(VerificationQueueError) as second_owner:
+            _QueueRuntimeOwnership(
+                lock_path=database.with_name(database.name + ".runtime-lock"),
+                parent=database.parent,
+            )
+        self.assertEqual(str(second_owner.exception), "queue_owner")
+
+        self.assertEqual(runtime._store._get_job("owned-job").status, "LEASED")  # type: ignore[union-attr]
+        result = runtime._store._complete_rejected(work, "proof_rejected")  # type: ignore[union-attr]
+        self.assertEqual(result.status, "REJECTED")
+        retry = runtime._store._complete_rejected(work, "proof_rejected")  # type: ignore[union-attr]
+        self.assertEqual(retry.status, "REJECTED")
+        runtime.close()
+        restarted = self._runtime(database)
+        restarted.close()
+
+    @unittest.skipUnless(os.name == "nt", "Windows CreateFile share-deny contention is not qualified on this platform")
+    def test_windows_subprocess_cannot_acquire_or_replace_runtime_owner(self) -> None:
+        database = self.root / "windows-contention.sqlite"
+        runtime = self._runtime(database)
+        lock = database.with_name(database.name + ".runtime-lock")
+        try:
+            with self.assertRaises(OSError):
+                lock.unlink()
+            with self.assertRaises(OSError):
+                lock.write_bytes(b"replace")
+            script = (
+                "import sys\n"
+                "from pathlib import Path\n"
+                "from app.minimal_clearance_verification_queue import QueueConfig\n"
+                "from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime, VerificationRuntimeError\n"
+                "try:\n"
+                " MinimalClearanceVerificationRuntime(database=Path(sys.argv[1]), config=QueueConfig('runtime-queue',4,bytes.fromhex('AB'*32),512*1024*1024), executable=Path(sys.executable), source_root=Path(sys.argv[2]), workspace_parent=Path(sys.argv[3]))\n"
+                "except VerificationRuntimeError as error:\n"
+                " raise SystemExit(0 if str(error) == 'runtime_owner' else 2)\n"
+                "raise SystemExit(3)\n"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(database), str(self.source_root), str(self.workspace)],
+                cwd=str(Path(__file__).parents[1]),
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout, "")
+            self.assertEqual(completed.stderr, "")
+        finally:
+            runtime.close()
+
     def test_workspace_parent_is_a_process_owner_across_distinct_databases(self) -> None:
         first = self._runtime(self.root / "first.sqlite")
         try:
@@ -81,6 +168,20 @@ class VerificationRuntimeTests(unittest.TestCase):
             self.assertEqual(str(raised.exception), "runtime_owner")
         finally:
             first.close()
+
+    def test_runtime_owner_loss_is_fixed_and_closes_other_owner(self) -> None:
+        runtime = self._runtime(self.root / "owner-loss.sqlite")
+        runtime._database_owner.close()  # type: ignore[union-attr]
+        with self.assertRaises(VerificationRuntimeError) as raised:
+            runtime.snapshot()
+        self.assertEqual(str(raised.exception), "runtime_owner")
+        with self.assertRaises(VerificationRuntimeError):
+            runtime.close()
+        replacement = _QueueRuntimeOwnership(
+            lock_path=self.workspace / ".BLV3-WORKSPACE-PARENT-LOCK",
+            parent=self.workspace,
+        )
+        replacement.close()
 
     def test_same_database_cannot_switch_workspace_parent(self) -> None:
         database = self.root / "switched.sqlite"
@@ -125,10 +226,12 @@ class VerificationRuntimeTests(unittest.TestCase):
 
     def test_sequential_runtime_processing_has_bounded_aggregate_result(self) -> None:
         database = self.root / "process.sqlite"
-        store = _VerificationQueueStore(path=database, config=self.config)
+        store = self._direct_store(database)
         metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
         store._admit(job_id="job-1", metadata=metadata)
         store._admit(job_id="job-2", metadata=metadata)
+        store._owner.close()
+        self._owners.remove(store._owner)
         runtime = self._runtime(database)
         try:
             result = runtime.run(max_jobs=2)
@@ -153,16 +256,23 @@ class VerificationRuntimeTests(unittest.TestCase):
 
     def test_startup_recovers_unexpired_lease_before_preflight(self) -> None:
         database = self.root / "restart.sqlite"
-        store = _VerificationQueueStore(path=database, config=self.config)
+        store = self._direct_store(database)
         metadata = ArtifactMetadata("opaque-ref", len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest())
         store._admit(job_id="restart-job", metadata=metadata)
         store._claim_next()
+        store._owner.close()
+        self._owners.remove(store._owner)
         runtime = self._runtime(database)
         try:
             self.assertEqual(runtime._recovered_leases, 1)
         finally:
             runtime.close()
-        reopened = _VerificationQueueStore(path=database, config=self.config)
+        reopened_owner = _QueueRuntimeOwnership(
+            lock_path=database.with_name(database.name + ".runtime-lock"),
+            parent=database.parent,
+        )
+        self._owners.append(reopened_owner)
+        reopened = _VerificationQueueStore(path=database, config=self.config, owner=reopened_owner)
         self.assertEqual(reopened._get_job("restart-job").status, "QUEUED")
         self.assertEqual(reopened._get_job("restart-job").last_error_code, "runtime_restart")
 
