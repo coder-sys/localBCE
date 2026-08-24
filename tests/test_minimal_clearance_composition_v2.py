@@ -11,6 +11,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 import tests.test_minimal_clearance_verification_queue as queue_fixtures
+from app.minimal_clearance_acceptance_independent import parse_acceptance_bytes
 from app.minimal_clearance_composition import (
     CompositionConfigV2,
     CompositionConflictError,
@@ -22,6 +23,7 @@ from app.minimal_clearance_composition import (
 )
 from app.minimal_clearance_composition_independent import IndependentCompositionError, verify_database
 import app.minimal_clearance_composition as composition_module
+import app.minimal_clearance_composition_independent as composition_independent_module
 
 
 class _Receiver:
@@ -190,6 +192,74 @@ class CompositionV2Tests(unittest.TestCase):
         self.assertEqual(envelope["settlement_id"], receipt["settlement_id"])
         self.assertEqual(envelope["settlement_domain"], receipt["settlement_domain"])
         verify_database(store.path, expected_config=store.config.as_json)
+
+    def test_state_binding_is_receiver_independent_but_handoff_is_receiver_bound(self) -> None:
+        queue = self._verified()
+        config_a = self._config()
+        config_b = CompositionConfigV2(queue_id=config_a.queue_id, queue_config_digest=config_a.queue_config_digest, verifier_sha256=config_a.verifier_sha256, receiver_identity=b"Y" * 32, receiver_epoch=2)
+        store_a = ClearanceCompositionStoreV2(path=self.root / "state-a.sqlite3", config=config_a)
+        store_b = ClearanceCompositionStoreV2(path=self.root / "state-b.sqlite3", config=config_b)
+        result_a = store_a.process_verified_job(queue.path, "job-1")
+        result_b = store_b.process_verified_job(queue.path, "job-1")
+        self.assertEqual(result_a.state_receipt_bytes, result_b.state_receipt_bytes)
+        self.assertEqual(result_a.state_receipt_digest, result_b.state_receipt_digest)
+        assert result_a.state_receipt_bytes is not None
+        receipt = json.loads(result_a.state_receipt_bytes.decode("ascii"))
+        receipt_b = json.loads(result_b.state_receipt_bytes.decode("ascii"))
+        self.assertNotEqual(config_a.profile_digest, composition_independent_module._profile_digest(queue_fixtures._Acceptance().statement, config_a.verifier_sha256))
+        with closing(sqlite3.connect(store_a.path)) as connection_a, closing(sqlite3.connect(store_b.path)) as connection_b:
+            state_sql = "SELECT state_id,state_epoch,state_sequence,state_continuity_root,state_clearance_root,state_clearance_count,state_replay_root,payment_root,settled_batch_count,state_binding,audit_head,last_operation_digest FROM composition_meta WHERE id=1"
+            self.assertEqual(connection_a.execute(state_sql).fetchone(), connection_b.execute(state_sql).fetchone())
+            row_a = connection_a.execute("SELECT state_receipt_digest,envelope_bytes,envelope_digest,outbox_operation_id,idempotency_key FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()
+            row_b = connection_b.execute("SELECT state_receipt_digest,envelope_bytes,envelope_digest,outbox_operation_id,idempotency_key FROM composition_transactions WHERE queue_job_id='job-1'").fetchone()
+        self.assertEqual(row_a[0], row_b[0])
+        self.assertNotEqual(row_a[1], row_b[1])
+        self.assertNotEqual(row_a[2:], row_b[2:])
+        self.assertNotEqual(config_a.digest, config_b.digest)
+        self.assertEqual(receipt["state_binding_after"], receipt_b["state_binding_after"])
+        verify_database(store_a.path, expected_config=config_a.as_json)
+        verify_database(store_b.path, expected_config=config_b.as_json)
+
+        tampered = self.root / "ack-profile-state-binding.sqlite3"
+        shutil.copy2(store_a.path, tampered)
+        with closing(sqlite3.connect(tampered)) as connection:
+            transaction_guard = connection.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='composition_transactions_guard'").fetchone()[0]
+            event_guard = connection.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='composition_events_no_update'").fetchone()[0]
+            connection.execute("DROP TRIGGER composition_transactions_guard")
+            connection.execute("DROP TRIGGER composition_events_no_update")
+            tx = tuple(connection.execute("SELECT * FROM composition_transactions WHERE queue_job_id='job-1'").fetchone())
+            acceptance = parse_acceptance_bytes(bytes(tx[5]))
+            initial_state = composition_independent_module._state_expected(acceptance.statement, config_a.verifier_sha256)
+            replay_after = composition_module._sha(composition_module._STATE_REPLAY, bytes(initial_state[6]), acceptance.statement.attempt_id, acceptance.statement.request_id, acceptance.statement.receipt_id)
+            wrong_binding = composition_module._sha(composition_module._STATE_BINDING, bytes(initial_state[9]), bytes(tx[11]), acceptance.statement.state_after_id, replay_after, bytes.fromhex(receipt["clearance_root_after"]), composition_module._u64(int(receipt["clearance_count_after"])), bytes(initial_state[7]), composition_module._u64(0), composition_module._u64(int(initial_state[1])), composition_module._u64(int(receipt["sequence_after"])), config_a.verifier_sha256, config_a.profile_digest)
+            self.assertNotEqual(wrong_binding, bytes.fromhex(receipt["state_binding_after"]))
+            receipt["state_binding_after"] = wrong_binding.hex().upper()
+            receipt_raw = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("ascii")
+            receipt_digest = composition_module._receipt_digest(receipt_raw)
+            envelope = json.loads(bytes(tx[17]).decode("ascii"))
+            envelope["state_receipt_digest"] = receipt_digest.hex().upper()
+            envelope_raw = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("ascii")
+            envelope_digest = composition_module._sha(composition_module._ENVELOPE, envelope_raw)
+            outbox_operation_id = composition_module._operation_identity(config_a, "job-1", envelope_digest)
+            idempotency_key = composition_module._idempotency_key(config_a, "job-1", envelope_digest)
+            connection.execute("UPDATE composition_transactions SET state_receipt_bytes=?,state_receipt_digest=?,envelope_bytes=?,envelope_digest=?,outbox_operation_id=?,idempotency_key=? WHERE queue_job_id='job-1'", (receipt_raw, receipt_digest, envelope_raw, envelope_digest, outbox_operation_id, idempotency_key))
+            event = tuple(connection.execute("SELECT * FROM composition_events WHERE event_kind='APPLIED'").fetchone())
+            event_value = json.loads(bytes(event[11]).decode("ascii"))
+            event_value["payload"]["state_receipt_digest"] = receipt_digest.hex().upper()
+            event_value["payload"]["envelope_digest"] = envelope_digest.hex().upper()
+            event_value["payload"]["outbox_operation_id"] = outbox_operation_id.hex().upper()
+            event_value["payload"]["idempotency_key"] = idempotency_key.hex().upper()
+            event_value["receipt_digest"] = receipt_digest.hex().upper()
+            event_raw = json.dumps(event_value, sort_keys=True, separators=(",", ":")).encode("ascii")
+            event_digest = composition_module._sha(composition_module._EVENT, composition_module._u64(int(event[0])), composition_module._u64(int(event[2])), str(event[3]).encode("ascii"), composition_module._fixed_ascii(str(event[1]), "job_id"), bytes(event[4]), bytes(event[5]), bytes(event[6]), str(event[7]).encode("ascii"), str(event[8]).encode("ascii"), bytes(event[9]), event_raw, receipt_digest)
+            event_root = composition_module._sha(composition_module._HEAD, bytes(event[9]), composition_module._u64(int(event[0])), event_digest)
+            connection.execute("UPDATE composition_events SET event_bytes=?,event_digest=?,event_root=?,receipt_digest=? WHERE global_sequence=?", (event_raw, event_digest, event_root, receipt_digest, event[0]))
+            connection.execute("UPDATE composition_meta SET event_head=? WHERE id=1", (event_root,))
+            connection.execute(transaction_guard)
+            connection.execute(event_guard)
+            connection.commit()
+        with self.assertRaisesRegex(IndependentCompositionError, "receipt_state"):
+            verify_database(tampered, expected_config=config_a.as_json)
 
     def test_different_valid_ack_is_conflict_event_and_ack_fast_path_checks_work_identity(self) -> None:
         queue = self._verified()
