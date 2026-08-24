@@ -453,6 +453,7 @@ def _verify_event(
     slot_attempts: dict[str, int],
     slot_schedules: Mapping[str, int],
     slot_times: dict[str, int],
+    global_observed_at: list[int | None],
     slot_leases: dict[str, tuple[str | None, int | None, int]],
     artifacts: Mapping[str, Mapping[str, object]],
     heads: dict[tuple[str, str], tuple[str | None, str, int]],
@@ -540,6 +541,10 @@ def _verify_event(
     previous_observed_at = slot_times.get(str(row["slot_id"]))
     if previous_observed_at is not None and row["observed_at"] < previous_observed_at:
         raise IngressVerificationError("ingress:event-chronology")
+    previous_global_observed_at = global_observed_at[0]
+    if previous_global_observed_at is not None and row["observed_at"] < previous_global_observed_at:
+        raise IngressVerificationError("ingress:event-chronology")
+    global_observed_at[0] = int(row["observed_at"])
     if row["event_kind"] == "LEASE":
         if type(row["lease_token"]) is not str or not row["lease_token"] or type(row["lease_until"]) is not int or row["lease_until"] <= row["observed_at"]:
             raise IngressVerificationError("ingress:lease")
@@ -718,6 +723,7 @@ def verify_database(
         slot_attempts: dict[str, int] = {}
         slot_schedules = {str(row["slot_id"]): int(row["scheduled_at"]) for row in slots}
         slot_times: dict[str, int] = {}
+        global_observed_at: list[int | None] = [None]
         slot_leases: dict[str, tuple[str | None, int | None, int]] = {}
         previous = GENESIS_ROOT
         heads: dict[tuple[str, str], tuple[str | None, str, int]] = {}
@@ -735,6 +741,7 @@ def verify_database(
                 slot_attempts=slot_attempts,
                 slot_schedules=slot_schedules,
                 slot_times=slot_times,
+                global_observed_at=global_observed_at,
                 slot_leases=slot_leases,
                 artifacts=artifacts,
                 heads=heads,

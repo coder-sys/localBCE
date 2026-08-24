@@ -365,6 +365,13 @@ class MirrorV2Fixture(unittest.TestCase):
         state_before = self._state_fingerprint(self.ingress)
         self.clock.value = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds + 1
         self.clock.raise_on_read = True
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:operation-conflict"):
+            self.ingress.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                lease_token="wrong-after-commit",
+            )
+        self.assertEqual(state_before, self._state_fingerprint(self.ingress))
         retry = self.ingress.admit_capture(
             self.envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
@@ -372,6 +379,107 @@ class MirrorV2Fixture(unittest.TestCase):
         )
         self.assertEqual(before.raw, retry.raw)
         self.assertEqual(state_before, self._state_fingerprint(self.ingress))
+
+    def test_cross_slot_owner_clock_rewind_reaches_global_independent_rule(self) -> None:
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.cadence_seconds
+        second_slot = self.ingress.ensure_slot(self.clock.value)
+        second_slot_id = json.loads(second_slot.raw.decode("ascii"))["slot_id"]
+        tampered = self.root / "global-clock-rewind.db"
+        shutil.copy2(self.ingress_path, tampered)
+        connection = sqlite3.connect(tampered)
+        try:
+            row = connection.execute(
+                "SELECT sequence,event_raw FROM ingress_events ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            sequence = int(row[0])
+            event = json.loads(bytes(row[1]).decode("ascii"))
+            self.assertEqual(second_slot_id, event["slot_id"])
+            event["observed_at"] = profile.FIXTURE_OBSERVATION_TIME - 1
+            event["event_id"] = ingress_independent._digest(
+                "event-id",
+                {
+                    key: event[key]
+                    for key in ingress_independent.EVENT_KEYS
+                    if key not in {"event_id", "after_root", "stream_after_root"}
+                },
+            )
+            event["after_root"] = ingress_independent._event_root(
+                sequence=event["sequence"],
+                previous=event["before_root"],
+                event_id=event["event_id"],
+                event_kind=event["event_kind"],
+                stream_kind=event["stream_kind"],
+                stream_id=event["stream_id"],
+                slot_id=event["slot_id"],
+                next_state=event["next_state"],
+                observed_at=event["observed_at"],
+                material_digest=event["material_digest"],
+            )
+            event["stream_after_root"] = ingress_independent._stream_root(
+                sequence=event["sequence"],
+                previous=event["stream_before_root"],
+                event_id=event["event_id"],
+                stream_kind=event["stream_kind"],
+                stream_id=event["stream_id"],
+                next_state=event["next_state"],
+                observed_at=event["observed_at"],
+                material_digest=event["material_digest"],
+            )
+            event_raw = ingress_independent._canonical(event)
+            receipt_digest = ingress_independent._raw_digest("receipt", event_raw)
+            connection.execute(
+                "UPDATE ingress_events SET event_id=?,observed_at=?,after_root=?,stream_after_root=?,event_raw=?,receipt_digest=? WHERE sequence=?",
+                (
+                    event["event_id"], event["observed_at"], event["after_root"],
+                    event["stream_after_root"], event_raw, receipt_digest, sequence,
+                ),
+            )
+            connection.execute("UPDATE ingress_meta SET head_root=? WHERE sequence=?", (event["after_root"], sequence))
+            connection.execute(
+                "UPDATE ingress_heads SET head_root=? WHERE stream_kind=? AND stream_id=?",
+                (event["stream_after_root"], event["stream_kind"], event["stream_id"]),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:event-chronology"):
+            ingress_independent.verify_database(
+                tampered,
+                expected_database_id=self.ingress_config.database_id,
+                expected_config_digest=self.ingress_config.digest,
+            )
+
+    def test_cross_slot_owner_clock_rewind_rejects_without_mutation(self) -> None:
+        base = profile.FIXTURE_OBSERVATION_TIME
+        config = ingress.IngressConfigV2(
+            database_id="ingress-global-clock-synthetic",
+            chain_id="ingress-global-clock-chain",
+            policy_digest=self.ingress_config.policy_digest,
+            authorization_digest=self.ingress_config.authorization_digest,
+            terms_digest=self.ingress_config.terms_digest,
+            cadence_seconds=self.ingress_config.cadence_seconds,
+            effective_start=self.ingress_config.effective_start,
+            effective_end=self.ingress_config.effective_end,
+            max_slots=self.ingress_config.max_slots,
+            max_attempts=self.ingress_config.max_attempts,
+            lease_seconds=300,
+        )
+        clock = _ManualClock(base)
+        service = ingress.IngressServiceV2(self.root / "global-clock-owner.db", config, clock=clock)
+        first = service.ensure_slot(base)
+        first_slot_id = json.loads(first.raw.decode("ascii"))["slot_id"]
+        service.claim_slot(first_slot_id, lease_token="lease-first")
+        clock.value = base + self.ingress_config.cadence_seconds
+        second = service.ensure_slot(clock.value)
+        second_slot_id = json.loads(second.raw.decode("ascii"))["slot_id"]
+        clock.value = base + 100
+        service.admit_capture(self.envelope, scheduled_at=base, lease_token="lease-first")
+        clock.value = base + 90
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:clock-rewind"):
+            service.claim_slot(second_slot_id, lease_token="lease-second")
+        self.assertEqual(before, self._state_fingerprint(service))
 
     def test_fetch_events_preserve_verifier_derived_retry_attempts(self) -> None:
         from app.mirror import nc_medicaid_fhir as fhir

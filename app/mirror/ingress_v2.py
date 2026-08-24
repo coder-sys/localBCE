@@ -436,11 +436,8 @@ class IngressServiceV2:
             raise IngressError("ingress:clock")
         return value
 
-    def _last_observed_at(self, connection: sqlite3.Connection, slot_id: str) -> int | None:
-        row = connection.execute(
-            "SELECT MAX(observed_at) FROM ingress_events WHERE slot_id=?",
-            (slot_id,),
-        ).fetchone()
+    def _last_observed_at(self, connection: sqlite3.Connection) -> int | None:
+        row = connection.execute("SELECT MAX(observed_at) FROM ingress_events").fetchone()
         if row is None or row[0] is None:
             return None
         value = row[0]
@@ -478,6 +475,9 @@ class IngressServiceV2:
             if meta is None or int(meta[0]) >= self.config.max_slots:
                 raise IngressConflictError("ingress:capacity")
             owner_now = self._owner_now()
+            last_observed_at = self._last_observed_at(connection)
+            if last_observed_at is not None and owner_now < last_observed_at:
+                raise IngressConflictError("ingress:clock-rewind")
             connection.execute(
                 "INSERT INTO ingress_slots(slot_id,scheduled_at,state,attempt,lease_token,lease_until,artifact_id,operation_id) VALUES(?,?,?,?,?,?,?,?)",
                 (slot_id, scheduled_at, "DUE", 0, None, None, None, operation_id),
@@ -525,7 +525,7 @@ class IngressServiceV2:
             if row is None:
                 raise IngressConflictError("ingress:slot-missing")
             owner_now = self._owner_now()
-            last_observed_at = self._last_observed_at(connection, slot_id)
+            last_observed_at = self._last_observed_at(connection)
             if last_observed_at is not None and owner_now < last_observed_at:
                 raise IngressConflictError("ingress:clock-rewind")
             if row["state"] == "LEASED" and row["lease_until"] is not None and row["lease_until"] <= owner_now:
@@ -637,12 +637,36 @@ class IngressServiceV2:
                 (operation_id,),
             ).fetchone()
             if existing is not None:
-                if existing["payload_digest"] != artifact_id:
+                capture = connection.execute(
+                    "SELECT * FROM ingress_events WHERE operation_id=? AND event_kind='CAPTURE' ORDER BY sequence DESC LIMIT 1",
+                    (operation_id,),
+                ).fetchone()
+                lease = None
+                if capture is not None:
+                    lease = connection.execute(
+                        "SELECT * FROM ingress_events WHERE slot_id=? AND event_kind='LEASE' AND attempt=? ORDER BY sequence DESC LIMIT 1",
+                        (slot_id, capture["attempt"]),
+                    ).fetchone()
+                if (
+                    existing["slot_id"] != slot_id
+                    or existing["operation_id"] != operation_id
+                    or existing["request_digest"] != request_digest
+                    or existing["payload_digest"] != artifact_id
+                    or existing["lease_token"] != lease_token
+                    or capture is None
+                    or capture["slot_id"] != slot_id
+                    or capture["operation_id"] != operation_id
+                    or capture["request_digest"] != request_digest
+                    or capture["payload_digest"] != artifact_id
+                    or capture["lease_token"] != lease_token
+                    or lease is None
+                    or lease["lease_token"] != lease_token
+                ):
                     raise IngressConflictError("ingress:operation-conflict")
                 connection.commit()
                 return self._receipt(bytes(existing["event_raw"]), artifact_id=artifact_id, next_state=str(existing["next_state"]))
             owner_now = self._owner_now()
-            last_observed_at = self._last_observed_at(connection, slot_id)
+            last_observed_at = self._last_observed_at(connection)
             if last_observed_at is not None and owner_now < last_observed_at:
                 raise IngressConflictError("ingress:clock-rewind")
             if owner_now < scheduled_at:
