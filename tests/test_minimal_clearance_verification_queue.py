@@ -12,13 +12,17 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest import TestCase
+from unittest.mock import patch
 
 from app.minimal_clearance_proof_primitives import (
+    MinimalClearanceProofStateError,
     MinimalProofAcceptanceV1,
     NativeMinimalClearanceVerifier,
     _CIRCUIT_ID,
@@ -41,6 +45,7 @@ from app.minimal_clearance_verification_queue import (
     QueueLeaseError,
     QueueRetryableError,
     QueueConfig,
+    VerificationQueueError,
     QueueWorker,
     VerificationEvidence,
     VerificationQueueStore,
@@ -325,9 +330,12 @@ class VerificationQueueTests(TestCase):
         store = self._store(capacity=5)
         for index in range(5):
             self._admit(store, f"job-{index}", f"opaque-{index}")
-        claims = [store.claim_next(worker_id=f"worker-{index}", lease_token=self._lease_token(f"worker-{index}")) for index in range(4)]
+        tokens = [bytes([65 + index]) * 32 for index in range(4)]
+        claims = [store.claim_next(worker_id=f"worker-{index}", lease_token=tokens[index]) for index in range(4)]
         self.assertTrue(all(claim is not None for claim in claims))
-        recovered = store.claim_next(worker_id="worker-0", lease_token=self._lease_token("worker-0"))
+        with self.assertRaises(QueueLeaseError):
+            store.claim_next(worker_id="worker-0", lease_token=self._lease_token("worker-0"))
+        recovered = store.claim_next(worker_id="worker-0", lease_token=tokens[0])
         self.assertEqual(recovered, claims[0])
         with self.assertRaises(QueueBackpressureError) as caught:
             store.claim_next(worker_id="worker-4", lease_token=self._lease_token("worker-4"))
@@ -372,7 +380,21 @@ class VerificationQueueTests(TestCase):
             store=native_reject_store, worker_id="native-reject-worker", custody=_Custody(self.root / "native-reject-custody"),
             verifier_factory=_Factory(failure=RuntimeError("proof_verifier_rejected")),
         ).process_one()
-        self.assertEqual(native_rejected.status, "REJECTED")
+        self.assertEqual(native_rejected.status, "HELD")
+        proof_reject_store = self._store()
+        self._admit(proof_reject_store)
+        proof_rejected = QueueWorker(
+            store=proof_reject_store, worker_id="proof-reject-worker", custody=_Custody(self.root / "proof-reject-custody"),
+            verifier_factory=_Factory(failure=MinimalClearanceProofStateError("proof_verifier_rejected")),
+        ).process_one()
+        self.assertEqual(proof_rejected.status, "REJECTED")
+        proof_retry_store = self._store()
+        self._admit(proof_retry_store)
+        proof_retry = QueueWorker(
+            store=proof_retry_store, worker_id="proof-retry-worker", custody=_Custody(self.root / "proof-retry-custody"),
+            verifier_factory=_Factory(failure=MinimalClearanceProofStateError("verifier_timeout")),
+        ).process_one()
+        self.assertEqual(proof_retry.status, "QUEUED")
 
     def test_snapshot_and_output_failures_are_terminal_or_retryable(self) -> None:
         for name, snapshot in (
@@ -641,6 +663,9 @@ class VerificationQueueTests(TestCase):
         with self.assertRaises(QueueLeaseError) as caught:
             store.claim_next(worker_id="random-worker", lease_token=b"n" * 32)
         self.assertNotIn(token.hex(), str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertTrue(caught.exception.__suppress_context__)
         reopened = VerificationQueueStore(path=store.path, config=store.config, clock=clock)
         self.assertEqual(reopened.claim_next(worker_id="random-worker", lease_token=token), work)
         with self.assertRaises(QueueLeaseError):
@@ -690,6 +715,162 @@ class VerificationQueueTests(TestCase):
         with self.assertRaises(QueueLeaseError):
             store.complete_rejected(work, "proof_rejected")
         verify_database(store.path)
+
+    def test_worker_exception_classifier_is_exact_and_redacted(self) -> None:
+        canary = "claimant_123"
+        seen = {"str": False}
+
+        class ExplodingRuntimeError(RuntimeError):
+            def __str__(self):
+                seen["str"] = True
+                raise AssertionError("classifier called __str__")
+
+        class RogueRetryable(QueueRetryableError):
+            pass
+
+        chained = RuntimeError("outer")
+        chained.__cause__ = RuntimeError("context_canary")
+        errors: tuple[BaseException, ...] = (
+            RuntimeError(canary),
+            QueueRetryableError(canary),
+            QueueHeldError(canary),
+            RogueRetryable(canary),
+            chained,
+            ExplodingRuntimeError(canary),
+        )
+        for index, failure in enumerate(errors):
+            with self.subTest(error=type(failure).__name__):
+                store = self._store()
+                self._admit(store, f"job-{index}")
+                result = QueueWorker(
+                    store=store, worker_id=f"classifier-{index}", custody=_Custody(self.root / f"classifier-{index}"),
+                    verifier_factory=_Factory(failure=failure),
+                ).process_one()
+                self.assertEqual(result.status, "HELD")
+                self.assertEqual(result.error_code, "worker_exception")
+                evidence = store.export_bytes() + json.dumps(store.support_summary(), sort_keys=True).encode("ascii")
+                self.assertNotIn(canary.encode("ascii"), evidence)
+                self.assertNotIn(b"context_canary", evidence)
+        self.assertFalse(seen["str"])
+
+        for index, failure in enumerate((QueueLeaseError("lease_expired"), QueueIndeterminateError("queue_commit_indeterminate")), 20):
+            with self.subTest(external_port=type(failure).__name__):
+                store = self._store()
+                self._admit(store, f"job-{index}")
+
+                class SpoofedCustody:
+                    def snapshot(self, artifact_ref, expected, *, failure=failure):
+                        raise failure
+
+                result = QueueWorker(
+                    store=store, worker_id=f"spoof-{index}", custody=SpoofedCustody(), verifier_factory=_Factory(),
+                ).process_one()
+                self.assertEqual(result.status, "HELD")
+                self.assertEqual(result.error_code, "worker_exception")
+                self.assertEqual(store.get_job(f"job-{index}").status, "HELD")
+
+    def test_percent_encoded_file_uri_binds_literal_target(self) -> None:
+        target = self.root / "queue%23.sqlite"
+        decoy = self.root / "queue#.sqlite"
+        decoy_config = QueueConfig("decoy-queue", 2, 30, _VERIFIER, 512 * 1024 * 1024, ("custody_read", "verifier_timeout"))
+        VerificationQueueStore(path=decoy, config=decoy_config)
+        decoy_before = decoy.read_bytes()
+        target_store = VerificationQueueStore(path=target, config=self._config())
+        self._admit(target_store)
+        self.assertEqual(target_store.get_job("job-1").status, "QUEUED")
+        self.assertEqual(verify_database(target, expected_config=target_store.config.as_json())["queue_id"], "queue-test")
+        self.assertEqual(decoy.read_bytes(), decoy_before)
+
+    def test_sqlite_connection_substitution_is_rejected_before_queue_read(self) -> None:
+        import app.minimal_clearance_verification_queue as producer
+        import app.minimal_clearance_verification_queue_independent as independent
+
+        target = self.root / "target.sqlite"
+        decoy = self.root / "decoy.sqlite"
+        target_store = VerificationQueueStore(path=target, config=self._config())
+        VerificationQueueStore(path=decoy, config=QueueConfig("decoy-queue", 2, 30, _VERIFIER, 512 * 1024 * 1024, ("custody_read", "verifier_timeout")))
+        target_before = target.read_bytes()
+        decoy_before = decoy.read_bytes()
+        original_connect = producer.sqlite3.connect
+
+        def decoy_connection(*args, **kwargs):
+            return original_connect(decoy.as_uri() + "?mode=rw", uri=True, timeout=5.0, isolation_level=None)
+
+        with patch.object(producer.sqlite3, "connect", side_effect=decoy_connection):
+            with self.assertRaises(VerificationQueueError):
+                target_store.get_job("job-1")
+        self.assertEqual(target.read_bytes(), target_before)
+        self.assertEqual(decoy.read_bytes(), decoy_before)
+
+        original_connect = independent.sqlite3.connect
+
+        def independent_decoy_connection(*args, **kwargs):
+            return original_connect(decoy.as_uri() + "?mode=ro", uri=True, timeout=5.0, isolation_level=None)
+
+        with patch.object(independent.sqlite3, "connect", side_effect=independent_decoy_connection):
+            with self.assertRaises(IndependentQueueError):
+                verify_database(target)
+        self.assertEqual(target.read_bytes(), target_before)
+        self.assertEqual(decoy.read_bytes(), decoy_before)
+
+    def test_producer_rejects_counterfeit_schema_sql_before_mutation(self) -> None:
+        cases = ("table", "trigger", "index")
+        for index, case in enumerate(cases):
+            with self.subTest(schema_object=case):
+                store = self._store()
+                with closing(sqlite3.connect(store.path)) as connection:
+                    connection.execute("PRAGMA writable_schema=ON")
+                    if case == "table":
+                        connection.execute("UPDATE sqlite_master SET sql=replace(sql,'CHECK(id=1)','CHECK(id>=1)') WHERE type='table' AND name='queue_metadata'")
+                    elif case == "index":
+                        connection.execute("UPDATE sqlite_master SET sql=replace(sql,'next_eligible_ms','updated_ms') WHERE type='index' AND name='queue_jobs_status_eligible'")
+                    else:
+                        connection.execute("DROP TRIGGER queue_results_no_update")
+                        connection.execute("CREATE TRIGGER queue_results_no_update BEFORE UPDATE ON queue_results BEGIN SELECT 1; END")
+                    connection.commit()
+                before = store.path.read_bytes()
+                with self.assertRaises(QueueIntegrityError):
+                    store.admit(job_id=f"counterfeit-{index}", metadata=self._metadata(f"counterfeit-{index}"))
+                self.assertEqual(store.path.read_bytes(), before)
+                with self.assertRaises(IndependentQueueError):
+                    verify_database(store.path)
+
+    def test_hot_delete_journal_recovers_natively_and_malformed_stays(self) -> None:
+        source = self._store(capacity=512)
+        for index in range(100):
+            self._admit(source, f"job-{index}", f"opaque-{index}")
+        expected = verify_database(source.path, expected_config=source.config.as_json())
+        crashed = self.root / "crashed.sqlite"
+        crashed.write_bytes(source.path.read_bytes())
+        child_code = (
+            "import os,sqlite3,sys; "
+            "connection=sqlite3.connect(sys.argv[1], isolation_level=None); "
+            "connection.execute('PRAGMA cache_size=1'); "
+            "connection.execute('PRAGMA journal_mode=DELETE'); "
+            "connection.execute('BEGIN IMMEDIATE'); "
+            "connection.execute('UPDATE queue_jobs SET updated_ms=updated_ms+1'); "
+            "os._exit(0)"
+        )
+        completed = subprocess.run([sys.executable, "-c", child_code, str(crashed)], check=False, capture_output=True)
+        self.assertEqual(completed.returncode, 0)
+        journal = Path(str(crashed) + "-journal")
+        self.assertTrue(journal.exists())
+        recovered = VerificationQueueStore(path=crashed, config=source.config)
+        self.assertFalse(journal.exists())
+        self.assertEqual(verify_database(crashed, expected_config=recovered.config.as_json()), expected)
+
+        malformed = self.root / "malformed.sqlite"
+        malformed.write_bytes(source.path.read_bytes())
+        malformed_before = malformed.read_bytes()
+        malformed_journal = Path(str(malformed) + "-journal")
+        malformed_journal.write_bytes(b"\x00" * 512)
+        with self.assertRaises(VerificationQueueError) as caught:
+            VerificationQueueStore(path=malformed, config=source.config)
+        self.assertEqual(str(caught.exception), "queue_journal_recovery")
+        self.assertTrue(malformed_journal.exists())
+        self.assertEqual(malformed.read_bytes(), malformed_before)
+        with self.assertRaises(IndependentQueueError):
+            verify_database(malformed)
 
 
 if __name__ == "__main__":

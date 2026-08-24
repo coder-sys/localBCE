@@ -273,19 +273,63 @@ def _parent_identity(path: Path) -> tuple[int, int, int]:
     return int(item.st_dev), int(item.st_ino), int(item.st_nlink)
 
 
+def _database_uri(path: Path, mode: str) -> str:
+    if mode not in {"ro", "rw"}:
+        _fail("database_mode")
+    try:
+        return path.resolve(strict=True).as_uri() + f"?mode={mode}"
+    except (OSError, ValueError):
+        _fail("database_path")
+
+
+def _connection_binding(
+    connection: sqlite3.Connection,
+    intended: Path,
+    intended_identity: tuple[int, int, int, int, int],
+    parent_identity: tuple[int, int, int],
+) -> None:
+    try:
+        rows = connection.execute("PRAGMA database_list").fetchall()
+        if len(rows) != 1 or str(rows[0][1]) != "main" or not str(rows[0][2]): _fail("database_binding")
+        opened = Path(str(rows[0][2])).resolve(strict=True)
+        expected = intended.resolve(strict=True)
+        if opened != expected: _fail("database_binding")
+        current = _path_identity(opened)
+        if current is None or current[:3] != intended_identity[:3] or _parent_identity(intended.parent) != parent_identity: _fail("database_identity")
+    except IndependentQueueError:
+        raise
+    except Exception:
+        _fail("database_binding")
+
+
 def _open_readonly(path: Path) -> sqlite3.Connection:
     identity = _path_identity(path)
-    for suffix in ("-wal", "-shm"):
+    parent_identity = _parent_identity(path.parent)
+    for suffix in ("-journal", "-wal", "-shm"):
         try: os.lstat(Path(str(path) + suffix))
         except FileNotFoundError: continue
         except (OSError, ValueError): _fail("database_journal")
         _fail("database_journal")
+    connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5.0, isolation_level=None); connection.execute("PRAGMA query_only=ON"); current = _path_identity(path)
-        if identity is None or current is None or identity[:3] != current[:3]: connection.close(); _fail("database_identity")
+        connection = sqlite3.connect(_database_uri(path, "ro"), uri=True, timeout=5.0, isolation_level=None)
+        if identity is None: _fail("database_identity")
+        _connection_binding(connection, path, identity, parent_identity)
+        connection.execute("PRAGMA query_only=ON")
+        _connection_binding(connection, path, identity, parent_identity)
+        current = _path_identity(path)
+        if current is None or identity[:3] != current[:3] or _parent_identity(path.parent) != parent_identity: _fail("database_identity")
         return connection
-    except IndependentQueueError: raise
-    except (OSError, sqlite3.Error): _fail("database_read")
+    except IndependentQueueError:
+        if connection is not None:
+            try: connection.close()
+            except Exception: pass
+        raise
+    except Exception:
+        if connection is not None:
+            try: connection.close()
+            except Exception: pass
+        _fail("database_read")
 
 
 def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -378,11 +422,12 @@ def _verify_connection(connection: sqlite3.Connection, *, expected_config: Mappi
 
 
 def verify_database(path: Path, *, expected_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    identity = _path_identity(path); connection = _open_readonly(path)
+    identity = _path_identity(path); parent_identity = _parent_identity(path.parent); connection = _open_readonly(path)
     try:
-        connection.execute("BEGIN"); summary = _verify_connection(connection, expected_config=expected_config)
+        _connection_binding(connection, path, identity, parent_identity)  # type: ignore[arg-type]
+        connection.execute("BEGIN"); _connection_binding(connection, path, identity, parent_identity); summary = _verify_connection(connection, expected_config=expected_config)
         if identity is None or identity[3] != int(connection.execute("PRAGMA page_count").fetchone()[0]) * _PAGE_SIZE: _fail("database_image_bounds")
-        connection.execute("COMMIT"); return summary
+        _connection_binding(connection, path, identity, parent_identity); connection.execute("COMMIT"); _connection_binding(connection, path, identity, parent_identity); return summary
     except IndependentQueueError:
         if connection.in_transaction: connection.execute("ROLLBACK")
         raise
@@ -411,11 +456,11 @@ def verify_export_bytes(raw: bytes, *, expected_config: Mapping[str, Any] | None
 
 
 def _database_bytes(path: Path) -> bytes:
-    identity = _path_identity(path); connection = _open_readonly(path)
+    identity = _path_identity(path); parent_identity = _parent_identity(path.parent); connection = _open_readonly(path)
     try:
-        connection.execute("BEGIN"); _verify_connection(connection)
+        _connection_binding(connection, path, identity, parent_identity); connection.execute("BEGIN"); _connection_binding(connection, path, identity, parent_identity); _verify_connection(connection)
         if identity is None or identity[3] != int(connection.execute("PRAGMA page_count").fetchone()[0]) * _PAGE_SIZE: _fail("database_image_bounds")
-        raw = connection.serialize(); connection.execute("COMMIT")
+        raw = connection.serialize(); _connection_binding(connection, path, identity, parent_identity); connection.execute("COMMIT"); _connection_binding(connection, path, identity, parent_identity)
         if type(raw) is not bytes or not 0 < len(raw) <= _MAX_DATABASE: _fail("database_capacity")
         return raw
     except IndependentQueueError: raise
@@ -425,15 +470,15 @@ def _database_bytes(path: Path) -> bytes:
 
 def read_verified_job(path: Path, job_id: str, *, expected_config: Mapping[str, Any] | None = None) -> IndependentVerifiedQueueJob:
     if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None: _fail("job_id")
-    identity = _path_identity(path); connection = _open_readonly(path)
+    identity = _path_identity(path); parent_identity = _parent_identity(path.parent); connection = _open_readonly(path)
     try:
-        connection.execute("BEGIN"); summary = _verify_connection(connection, expected_config=expected_config)
+        _connection_binding(connection, path, identity, parent_identity); connection.execute("BEGIN"); _connection_binding(connection, path, identity, parent_identity); summary = _verify_connection(connection, expected_config=expected_config)
         if identity is None or identity[3] != int(connection.execute("PRAGMA page_count").fetchone()[0]) * _PAGE_SIZE: _fail("database_image_bounds")
         metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone(); row = connection.execute("SELECT j.*,r.terminal_status,r.receipt_bytes FROM queue_jobs j JOIN queue_results r ON r.operation_id=j.operation_id WHERE j.job_id=?", (job_id,)).fetchone()
         if metadata is None or row is None or row[7] != "VERIFIED" or row[14] != "VERIFIED" or row[15] is None: _fail("job_not_verified")
         config = json.loads(bytes(metadata[0]).decode("ascii")); receipt_bytes = bytes(row[15]); receipt_value = json.loads(receipt_bytes.decode("ascii")); receipt = _parse_receipt(receipt_value, config); evidence = receipt["evidence"]
         result = IndependentVerifiedQueueJob(queue_id=str(config["queue_id"]), config_digest=bytes.fromhex(summary["config_digest"]), verifier_sha256=bytes(evidence["verifier_sha256"]), job_id=job_id, operation_id=bytes(receipt["operation_id"]), attempt=int(receipt["attempt"]), receipt_bytes=receipt_bytes, receipt_id=bytes(receipt["receipt_id"]), acceptance_bytes=bytes(evidence["acceptance_bytes"]), proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]), artifact_ref=str(row[3]), artifact_bytes=int(row[4]), artifact_sha256=bytes(row[5]), artifact_sha3_512=bytes(row[6]), circuit_id=bytes(evidence["circuit_id"]), peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]), cap_bytes=int(evidence["cap_bytes"]), cap_enforced=bool(evidence["cap_enforced"]), active_process_limit=int(evidence["active_process_limit"]), timed_out=bool(evidence["timed_out"]), exit_code=int(evidence["exit_code"]), stdout_sha3_512=bytes(evidence["stdout_sha3_512"]), stderr_sha3_512=bytes(evidence["stderr_sha3_512"]))
-        connection.execute("ROLLBACK"); return result
+        _connection_binding(connection, path, identity, parent_identity); connection.execute("ROLLBACK"); _connection_binding(connection, path, identity, parent_identity); return result
     except IndependentQueueError:
         if connection.in_transaction: connection.execute("ROLLBACK")
         raise
