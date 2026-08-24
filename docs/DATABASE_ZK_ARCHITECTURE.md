@@ -146,7 +146,7 @@ The focused evidence is `tests/test_bl_pq512_production_boundary.py`,
 `tests/test_bl_pq512_transactional_database_boundary.py`,
 `tests/test_bl_pq512_transactional_privacy_v2_migration.py`,
 `tests/attacks/test_bl_pq512_transactional_privacy_v2_migration_attacks.py`,
-`tests/test_bl_pq512_built_audit_pending_release.py`, and the public-input, commitment, nullifier,
+the public-input, commitment, nullifier,
 and custody tests named by the active-core map. These are synthetic compatibility regressions; they
 do not select a proof backend or make historical package claims current.
 

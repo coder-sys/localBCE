@@ -11,7 +11,7 @@ Status: nonactivating checklist; no production qualification is claimed.
    receiver identities. No environment-root, deleted readiness module, or legacy compatibility
    sentinel is a production configuration.
 5. Measure the complete native process tree on the pinned CPU-only laptop: resident memory must be
-   strictly below the exact 5,000,000,000 decimal-byte floor, with no proving-attributable swap or
+   strictly below the exact 5,000,000,000 decimal-byte cap, with no proving-attributable swap or
    pagefile growth; retain the raw resource evidence and cleanup result.
 6. After evidence closes the six qualification blockers, rerun
    `python -m tools.qualification_gate require-production`. Only after all eight blockers close,

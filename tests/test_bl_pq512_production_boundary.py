@@ -10,12 +10,10 @@ from app.batch.pq_suite_candidate import CandidateSidecarV1
 from app.native_public_input_projection import PublicInputProjectionV1
 from app.production_boundary import (
     GovernanceAuthorityV2,
-    LocalSettlementV2,
     NativeStarkVerifierConfig,
     NativeStarkVerifierPort,
     NativeVerificationResult,
     ProductionBoundaryError,
-    SettlementSnapshotV2,
     _BATCH_NONCE_BINDING,
     _SETTLEMENT_DOMAIN_BINDING,
     _digest,
@@ -245,99 +243,3 @@ def test_production_envelope_decode_round_trips_after_receipt_binding() -> None:
     )
     assert decoded == envelope
     assert decoded.encode() == envelope.encode()
-
-
-def test_local_settlement_binds_projection_and_publishes_atomically() -> None:
-    envelope, nonce, roots, domain = _fixture()
-    verifier = _ReceiptVerifier()
-    submitter = _wide("submitter")
-    settlement = LocalSettlementV2(
-        verifier=verifier,
-        settlement_domain=domain,
-        governance_authority=roots,
-        initial_nullifier_root=(
-            int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
-        ).to_bytes(32, "big"),
-        authorized_submitters=(submitter,),
-    )
-    before = settlement.snapshot()
-    receipt = settlement.submit(
-        envelope=envelope,
-        batch_nonce=nonce,
-        submitter=submitter,
-    )
-    after = settlement.snapshot()
-    assert isinstance(before, SettlementSnapshotV2)
-    assert before.sequence == 0
-    assert before.settled_batch_count == 0
-    assert receipt.sequence_before == 0
-    assert receipt.sequence_after == 1
-    assert after.sequence == 1
-    assert after.settled_batch_count == 1
-    assert after.state_binding == receipt.state_binding
-    assert verifier.calls == 1
-
-
-def test_projection_mutation_is_rejected_before_native_verifier_or_state_change() -> None:
-    envelope, nonce, roots, domain = _fixture()
-    verifier = _ReceiptVerifier()
-    submitter = _wide("submitter")
-    settlement = LocalSettlementV2(
-        verifier=verifier,
-        settlement_domain=domain,
-        governance_authority=roots,
-        initial_nullifier_root=(
-            int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
-        ).to_bytes(32, "big"),
-        authorized_submitters=(submitter,),
-    )
-    mutated = bytearray(envelope.public_outputs)
-    mutated[9] ^= 1
-    forged = replace(envelope, public_outputs=bytes(mutated))
-    with pytest.raises(ProductionBoundaryError, match="v2_public_projection_mismatch"):
-        settlement.submit(envelope=forged, batch_nonce=nonce, submitter=submitter)
-    assert settlement.snapshot().sequence == 0
-    assert verifier.calls == 0
-
-
-def test_native_rejection_does_not_publish_state_and_replay_is_blocked() -> None:
-    envelope, nonce, roots, domain = _fixture()
-    submitter = _wide("submitter")
-    verifier = _ReceiptVerifier(reject=True)
-    settlement = LocalSettlementV2(
-        verifier=verifier,
-        settlement_domain=domain,
-        governance_authority=roots,
-        initial_nullifier_root=(
-            int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
-        ).to_bytes(32, "big"),
-        authorized_submitters=(submitter,),
-    )
-    with pytest.raises(ProductionBoundaryError, match="native_verifier_rejected"):
-        settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
-    assert settlement.snapshot().settled_batch_count == 0
-
-    verifier.reject = False
-    settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
-    with pytest.raises(ProductionBoundaryError, match="settlement_batch_nonce_replay"):
-        settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
-
-
-def test_settlement_recomputes_native_receipt_binding_before_publication() -> None:
-    envelope, nonce, roots, domain = _fixture()
-    submitter = _wide("submitter")
-    verifier = _ForgedCommitmentVerifier()
-    settlement = LocalSettlementV2(
-        verifier=verifier,
-        settlement_domain=domain,
-        governance_authority=roots,
-        initial_nullifier_root=(
-            int.from_bytes(_wide("nullifier-before"), "big") % (FIELD_MODULUS - 1) + 1
-        ).to_bytes(32, "big"),
-        authorized_submitters=(submitter,),
-    )
-    with pytest.raises(ProductionBoundaryError, match="settlement_verifier_binding_mismatch"):
-        settlement.submit(envelope=envelope, batch_nonce=nonce, submitter=submitter)
-    snapshot = settlement.snapshot()
-    assert snapshot.sequence == 0
-    assert snapshot.settled_batch_count == 0

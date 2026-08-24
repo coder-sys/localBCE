@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from hashlib import sha3_512
 
 import pytest
@@ -10,11 +9,8 @@ from experiments.bl_pq512_crypto_foundation.oods_reference import CirclePoint
 from experiments.bl_pq512_crypto_foundation.field16_reference import Fp16
 from experiments.bl_pq512_crypto_foundation.production_candidate import (
     NativeVerificationReceipt,
-    PROOF_PACKAGE_COMMITMENT_DOMAIN,
     ProductionCandidateError,
-    TRANSCRIPT_COMMITMENT_DOMAIN,
     build_production_envelope,
-    select_built_audit_pending_suite,
     statement_commitment,
     statement_evidence_commitment,
 )
@@ -72,42 +68,6 @@ def _sidecar(suite: bytes, schema: bytes, verifier: bytes) -> bytes:
         strong_payment_state_root_after=_wide("candidate-payment-after"),
         strong_batch_commitment=_wide("candidate-batch"),
     ).encode()
-
-
-def test_candidate_envelope_binds_statement_but_remains_aggregate_unqualified() -> None:
-    suite = _wide("candidate-suite")
-    schema = _wide("candidate-schema")
-    verifier = _wide("candidate-verifier")
-    public_outputs = bytes(12 * 32)
-    sidecar = _sidecar(suite, schema, verifier)
-    base_bundle = _bundle(suite)
-    evidence = statement_evidence_commitment(public_outputs, sidecar, base_bundle)
-    bundle = replace(base_bundle, evidence_commitment=evidence)
-    envelope = build_production_envelope(
-        public_outputs=public_outputs,
-        sidecar=sidecar,
-        proof_package=b"opaque-proof-package",
-        transcript_evidence=b"opaque-transcript",
-        challenge_bundle=bundle,
-    )
-    verification = NativeVerificationReceipt(
-        proof_suite_id=suite,
-        schema_id=schema,
-        verifier_artifact_identity=verifier,
-        envelope_commitment=sha3_512(envelope.encode()).digest(),
-        statement_commitment=statement_commitment(public_outputs, sidecar),
-        evidence_commitment=evidence,
-        proof_package_commitment=sha3_512(
-            PROOF_PACKAGE_COMMITMENT_DOMAIN + envelope.proof_package
-        ).digest(),
-        transcript_commitment=sha3_512(
-            TRANSCRIPT_COMMITMENT_DOMAIN + envelope.transcript_evidence
-        ).digest(),
-    )
-    with pytest.raises(
-        ProductionCandidateError, match="candidate_aggregate_qualification_required"
-    ):
-        select_built_audit_pending_suite(envelope, verification=verification)
 
 
 def test_candidate_rejects_bundle_statement_swap() -> None:

@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-from typing import Final, Iterable, Protocol, Sequence
+from typing import Final, Protocol, Sequence
 
 from app.batch.poseidon import FIELD_MODULUS
 from app.batch.pq_suite_candidate import CandidateSidecarV1
@@ -45,7 +45,6 @@ _SETTLEMENT_DOMAIN_BINDING = b"BL/PQ512/V2/SETTLEMENT-DOMAIN/v1\x00"
 _BATCH_NONCE_BINDING = b"BL/PQ512/V2/BATCH-NONCE/v1\x00"
 _VALUE_COMMITMENT_BINDING = b"BL/PQ512/V2/VALUE-COMMITMENT/v1\x00"
 _SETTLEMENT_COMMITMENT_BINDING = b"BL/PQ512/V2/SETTLEMENT-COMMITMENT/v1\x00"
-_STATE_BINDING = b"BL/PQ512/V2/ATOMIC-STATE/v1\x00"
 _DATABASE_STATE_BINDING = b"BL/PQ512/V2/DATABASE-ATOMIC-STATE/v1\x00"
 _NATIVE_VERIFIER_ARTIFACT_BINDING = b"BL/PQ512/V2/NATIVE-VERIFIER-ARTIFACT/v1\x00"
 
@@ -691,173 +690,14 @@ class TransactionalSettlementStoragePort(Protocol):
         """Release local resources."""
 
 
-@dataclass(frozen=True, slots=True)
-class SettlementSnapshotV2:
-    sequence: int
-    nullifier_root: bytes
-    state_binding: bytes
-    settled_batch_count: int
-
-    def __post_init__(self) -> None:
-        if type(self.sequence) is not int or self.sequence < 0:
-            raise ProductionBoundaryError("settlement_snapshot_sequence_invalid")
-        _field("settlement_snapshot_nullifier_root", self.nullifier_root, nonzero=True)
-        _wide("settlement_snapshot_binding", self.state_binding)
-        if type(self.settled_batch_count) is not int or self.settled_batch_count < 0:
-            raise ProductionBoundaryError("settlement_snapshot_count_invalid")
-
-
-class LocalSettlementV2:
-    """Atomic, nonactivating Privacy V2 state/settlement model."""
-
-    def __init__(
-        self,
-        *,
-        verifier: NativeVerifierPort,
-        settlement_domain: bytes,
-        governance_authority: GovernanceAuthorityV2,
-        initial_nullifier_root: bytes,
-        authorized_submitters: Iterable[bytes],
-    ) -> None:
-        # Protocol runtime checks are intentionally avoided; the first
-        # submit performs the exact method check without accepting a flag.
-        if not callable(getattr(verifier, "verify", None)):
-            raise TypeError("settlement_native_verifier_required")
-        self._verifier = verifier
-        self._settlement_domain = _field("settlement_domain", settlement_domain, nonzero=True)
-        if type(governance_authority) is not GovernanceAuthorityV2:
-            raise TypeError("settlement_governance_authority_required")
-        self._governance_authority = governance_authority
-        self._current_nullifier_root = _field(
-            "initial_nullifier_root", initial_nullifier_root, nonzero=True
-        )
-        self._sequence = 0
-        self._authorized_submitters = frozenset(
-            _wide("authorized_submitter", value) for value in authorized_submitters
-        )
-        if not self._authorized_submitters:
-            raise ProductionBoundaryError("settlement_submitters_empty")
-        self._settled_nonces: set[bytes] = set()
-        self._settled_commitments: set[bytes] = set()
-        self._state_binding = _digest(
-            _STATE_BINDING,
-            self._current_nullifier_root,
-            self._sequence.to_bytes(8, "big"),
-        )
-
-    def snapshot(self) -> SettlementSnapshotV2:
-        return SettlementSnapshotV2(
-            sequence=self._sequence,
-            nullifier_root=self._current_nullifier_root,
-            state_binding=self._state_binding,
-            settled_batch_count=len(self._settled_nonces),
-        )
-
-    def submit(
-        self,
-        *,
-        envelope: ProductionProofEnvelope,
-        batch_nonce: bytes,
-        submitter: bytes,
-    ) -> SettlementReceiptV2:
-        if type(envelope) is not ProductionProofEnvelope:
-            raise ProductionBoundaryError("settlement_envelope_required")
-        submitter_id = _wide("settlement_submitter", submitter)
-        if submitter_id not in self._authorized_submitters:
-            raise ProductionBoundaryError("settlement_submitter_not_authorized")
-        nonce = _field("settlement_batch_nonce", batch_nonce, nonzero=True)
-        if nonce in self._settled_nonces:
-            raise ProductionBoundaryError("settlement_batch_nonce_replay")
-        parsed_sidecar = _sidecar(envelope.sidecar)
-        if parsed_sidecar.sequence_before != self._sequence:
-            raise ProductionBoundaryError("settlement_sequence_stale")
-        if _field_alias(parsed_sidecar.strong_nullifier_root_before) != self._current_nullifier_root:
-            raise ProductionBoundaryError("settlement_nullifier_root_stale")
-        fields = validate_v2_public_projection(
-            public_fields=tuple(
-                envelope.public_outputs[index : index + PUBLIC_FIELD_BYTES]
-                for index in range(0, PUBLIC_OUTPUT_BYTES, PUBLIC_FIELD_BYTES)
-            ),
-            sidecar=envelope.sidecar,
-            settlement_domain=self._settlement_domain,
-            batch_nonce=nonce,
-            governance_authority=self._governance_authority,
-            suite_id=envelope.suite_id,
-            schema_id=envelope.schema_id,
-            verifier_artifact_identity=envelope.verifier_artifact_identity,
-        )
-        if fields[2] in self._settled_nonces:
-            raise ProductionBoundaryError("settlement_batch_nonce_replay")
-        if fields[11] in self._settled_commitments:
-            raise ProductionBoundaryError("settlement_commitment_replay")
-        result = self._verifier.verify(envelope)
-        if type(result) is not NativeVerificationResult:
-            raise ProductionBoundaryError("settlement_verifier_result_invalid")
-        receipt = result.receipt
-        if type(receipt) is not NativeVerificationReceipt:
-            raise ProductionBoundaryError("settlement_verifier_receipt_invalid")
-        expected_envelope = hashlib.sha3_512(envelope.encode()).digest()
-        expected_statement = statement_commitment(envelope.public_outputs, envelope.sidecar)
-        expected_package = hashlib.sha3_512(
-            PROOF_PACKAGE_COMMITMENT_DOMAIN + envelope.proof_package
-        ).digest()
-        expected_transcript = hashlib.sha3_512(
-            TRANSCRIPT_COMMITMENT_DOMAIN + envelope.transcript_evidence
-        ).digest()
-        if (
-            result.envelope_commitment != expected_envelope
-            or receipt.envelope_commitment != expected_envelope
-            or result.statement_commitment != expected_statement
-            or receipt.statement_commitment != expected_statement
-            or receipt.evidence_commitment != envelope.evidence_commitment
-            or receipt.proof_package_commitment != expected_package
-            or receipt.transcript_commitment != expected_transcript
-            or receipt.proof_suite_id != envelope.suite_id
-            or receipt.schema_id != envelope.schema_id
-            or receipt.verifier_artifact_identity != envelope.verifier_artifact_identity
-        ):
-            raise ProductionBoundaryError("settlement_verifier_binding_mismatch")
-        next_root = _field_alias(parsed_sidecar.strong_nullifier_root_after)
-        next_binding = _digest(
-            _STATE_BINDING,
-            self._state_binding,
-            fields[2],
-            next_root,
-            result.envelope_commitment,
-            result.receipt.evidence_commitment,
-        )
-        receipt = SettlementReceiptV2(
-            sequence_before=self._sequence,
-            sequence_after=parsed_sidecar.sequence_after,
-            nullifier_root_before=self._current_nullifier_root,
-            nullifier_root_after=next_root,
-            public_fields_commitment=public_fields_commitment(fields),
-            envelope_commitment=result.envelope_commitment,
-            native_statement_commitment=result.statement_commitment,
-            proof_suite_id=receipt.proof_suite_id,
-            state_binding=next_binding,
-        )
-        # No state mutation occurs before every structural and native check
-        # above succeeds.  The three writes below are the atomic publication
-        # point for this in-memory local boundary.
-        self._settled_nonces.add(fields[2])
-        self._settled_commitments.add(fields[11])
-        self._current_nullifier_root = next_root
-        self._sequence = receipt.sequence_after
-        self._state_binding = receipt.state_binding
-        return receipt
-
-
 __all__ = (
     "DatabaseSettlementSnapshotV2",
     "GovernanceAuthorityV2",
-    "LocalSettlementV2",
     "NativeStarkVerifierConfig",
     "NativeStarkVerifierPort",
     "NativeVerificationResult",
     "ProductionBoundaryError",
     "SettlementReceiptV2",
-    "SettlementSnapshotV2",
     "TransactionalSettlementStoragePort",
     "VerifiedSettlementOperationV2",
     "build_v2_public_fields",

@@ -95,7 +95,6 @@ CURRENT_TOP_LEVELS = frozenset(
         "docs",
         "experiments",
         "ops",
-        "portal_shared",
         "requirements",
         "schemas",
         "test_data",

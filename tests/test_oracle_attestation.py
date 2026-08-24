@@ -106,6 +106,7 @@ class OracleAttestationTests(unittest.TestCase):
                 claim_source_commitment=commitment,
             )
         )
+
         with self.assertRaisesRegex(ValueError, "oracle_attestation_invalid"):
             resolve_attested_flags(
                 {"eligibility_active": False},
@@ -115,6 +116,62 @@ class OracleAttestationTests(unittest.TestCase):
                 claim_id="BL-CLAIM-0001",
                 claim_source_commitment=commitment,
             )
+
+    def test_wrong_claim_expired_and_replayed_attestations_reject(self):
+        good = make_test_attestation(
+            "eligibility_active",
+            True,
+            claim_id="BL-HARDEN-ORACLE",
+            claim_source_commitment=17,
+        )
+        self.assertTrue(
+            verify_oracle_attestation(
+                good,
+                claim_id="BL-HARDEN-ORACLE",
+                claim_source_commitment=17,
+            )
+        )
+        self.assertFalse(
+            verify_oracle_attestation(
+                good,
+                claim_id="OTHER-CLAIM",
+                claim_source_commitment=17,
+            )
+        )
+
+        expired = make_test_attestation(
+            "eligibility_active",
+            True,
+            claim_id="BL-HARDEN-ORACLE",
+            valid_from="2020-01-01",
+            valid_until="2020-12-31",
+            claim_source_commitment=17,
+        )
+        self.assertFalse(
+            verify_oracle_attestation(
+                expired,
+                claim_id="BL-HARDEN-ORACLE",
+                claim_source_commitment=17,
+            )
+        )
+
+        replay_cache = set()
+        self.assertTrue(
+            verify_oracle_attestation(
+                good,
+                claim_id="BL-HARDEN-ORACLE",
+                claim_source_commitment=17,
+                replay_cache=replay_cache,
+            )
+        )
+        self.assertFalse(
+            verify_oracle_attestation(
+                good,
+                claim_id="BL-HARDEN-ORACLE",
+                claim_source_commitment=17,
+                replay_cache=replay_cache,
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ def test_current_manifest_locks_profiles_and_dual_hashes_reconcile() -> None:
     assert digests.size == len(locked._canonical_json(manifest))
     assert len(digests.sha256) == 64
     assert len(digests.sha3_512) == 128
-    production = {"cffi", "cryptography", "pqcrypto", "pycparser"}
+    production = {"pqcrypto"}
     development = production | {
         "colorama",
         "iniconfig",

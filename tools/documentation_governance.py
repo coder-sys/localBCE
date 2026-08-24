@@ -143,7 +143,6 @@ _REPOSITORY_TOP_LEVELS = {
     "docs",
     "experiments",
     "ops",
-    "portal_shared",
 }
 _PROTECTED_ROLES = frozenset()
 _REJECTED_ARCHITECTURES_PATH = "docs/REJECTED_ARCHITECTURES.md"

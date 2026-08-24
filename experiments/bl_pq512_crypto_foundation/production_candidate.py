@@ -11,9 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import os
-from pathlib import Path
-import stat
 from typing import Final
 
 from app.batch.poseidon import FIELD_MODULUS
@@ -22,12 +19,6 @@ from experiments.bl_pq512_crypto_foundation.selected_public_coin import (
     MAX_SELECTED_TRANSCRIPT_BYTES,
     SelectedChallengeBundle,
 )
-from experiments.bl_pq512_crypto_foundation.software_custody_candidate import (
-    SoftwareCustodyCertificate,
-)
-
-
-ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 ENVELOPE_MAGIC: Final[bytes] = b"BLPQENV1"
 ENVELOPE_VERSION: Final[int] = 2
 PUBLIC_FIELD_COUNT: Final[int] = 12
@@ -267,104 +258,6 @@ class ProductionProofEnvelope:
         return public_outputs
 
     @classmethod
-    def read_file(
-        cls,
-        path: Path,
-        *,
-        evidence_commitment: bytes,
-        expected_suite_id: bytes | None = None,
-        expected_schema_id: bytes | None = None,
-        expected_verifier_artifact_identity: bytes | None = None,
-    ) -> "ProductionProofEnvelope":
-        """Parse one v2 file without reading the whole envelope into memory.
-
-        The fixed prefix, identities, sidecar, both section lengths, and exact
-        file length are checked before either variable body is allocated.
-        """
-
-        if not isinstance(path, Path) or not path.is_absolute():
-            raise ProductionCandidateError("candidate_envelope_path_invalid")
-        _wide("evidence_commitment", evidence_commitment)
-        try:
-            with path.open("rb") as handle:
-                metadata = os.fstat(handle.fileno())
-                if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_ENVELOPE_BYTES:
-                    raise ProductionCandidateError("candidate_envelope_file_bounds_invalid")
-                prefix = handle.read(ENVELOPE_PREFIX_BYTES)
-                header = _parse_envelope_prefix(prefix)
-                for label, expected, observed in (
-                    ("suite_id", expected_suite_id, header.suite_id),
-                    ("schema_id", expected_schema_id, header.schema_id),
-                    (
-                        "verifier_artifact_identity",
-                        expected_verifier_artifact_identity,
-                        header.verifier_artifact_identity,
-                    ),
-                ):
-                    if expected is not None and _wide(label, expected) != observed:
-                        raise ProductionCandidateError("candidate_envelope_identity_mismatch")
-                transcript_length_offset = ENVELOPE_PREFIX_BYTES + header.proof_length
-                if transcript_length_offset + 8 > metadata.st_size:
-                    raise ProductionCandidateError("candidate_envelope_truncated")
-                handle.seek(transcript_length_offset)
-                transcript_length_bytes = handle.read(8)
-                if len(transcript_length_bytes) != 8:
-                    raise ProductionCandidateError("candidate_transcript_length_truncated")
-                transcript_length = int.from_bytes(transcript_length_bytes, "big")
-                _validate_envelope_lengths(
-                    header.proof_length,
-                    transcript_length,
-                    metadata.st_size,
-                )
-                handle.seek(ENVELOPE_PREFIX_BYTES)
-                proof_package = handle.read(header.proof_length)
-                if len(proof_package) != header.proof_length:
-                    raise ProductionCandidateError("candidate_proof_package_truncated")
-                if handle.read(8) != transcript_length_bytes:
-                    raise ProductionCandidateError("candidate_envelope_changed_during_read")
-                transcript_evidence = handle.read(transcript_length)
-                if len(transcript_evidence) != transcript_length:
-                    raise ProductionCandidateError("candidate_transcript_truncated")
-                if handle.read(1):
-                    raise ProductionCandidateError("candidate_envelope_trailing_bytes")
-                observed_hash = hashlib.sha3_512()
-                observed_hash.update(prefix)
-                observed_hash.update(proof_package)
-                observed_hash.update(transcript_length_bytes)
-                observed_hash.update(transcript_evidence)
-                handle.seek(0)
-                stable_hash = hashlib.sha3_512()
-                stable_length = 0
-                while chunk := handle.read(1024 * 1024):
-                    stable_hash.update(chunk)
-                    stable_length += len(chunk)
-                after = os.fstat(handle.fileno())
-                if (
-                    metadata.st_dev,
-                    metadata.st_ino,
-                    metadata.st_size,
-                    metadata.st_mtime_ns,
-                ) != (
-                    after.st_dev,
-                    after.st_ino,
-                    after.st_size,
-                    after.st_mtime_ns,
-                ) or stable_length != metadata.st_size or stable_hash.digest() != observed_hash.digest():
-                    raise ProductionCandidateError("candidate_envelope_changed_during_read")
-        except (OSError, MemoryError) as exc:
-            raise ProductionCandidateError("candidate_envelope_file_read_failed") from exc
-        return cls(
-            suite_id=header.suite_id,
-            schema_id=header.schema_id,
-            verifier_artifact_identity=header.verifier_artifact_identity,
-            public_outputs=header.public_outputs,
-            sidecar=header.sidecar,
-            proof_package=proof_package,
-            transcript_evidence=transcript_evidence,
-            evidence_commitment=evidence_commitment,
-        )
-
-    @classmethod
     def decode(
         cls,
         encoded: bytes,
@@ -492,25 +385,6 @@ class NativeVerificationReceipt:
         return cls(**values)
 
 
-def select_built_audit_pending_suite(
-    envelope: ProductionProofEnvelope,
-    *,
-    verification: NativeVerificationReceipt,
-    custody: SoftwareCustodyCertificate | None = None,
-    aggregate_release: object | None = None,
-    root: Path = ROOT,
-) -> None:
-    if not isinstance(envelope, ProductionProofEnvelope):
-        raise TypeError("candidate_envelope_required")
-    if not isinstance(verification, NativeVerificationReceipt):
-        raise TypeError("candidate_native_verification_receipt_required")
-    if aggregate_release is None:
-        raise ProductionCandidateError("candidate_aggregate_qualification_required")
-    raise ProductionCandidateError(
-        "candidate_complete_aggregate_qualification_unimplemented"
-    )
-
-
 __all__ = (
     "ENVELOPE_MAGIC",
     "ENVELOPE_PREFIX_BYTES",
@@ -523,7 +397,6 @@ __all__ = (
     "SIDECAR_BYTES",
     "TRANSCRIPT_COMMITMENT_DOMAIN",
     "build_production_envelope",
-    "select_built_audit_pending_suite",
     "statement_commitment",
     "statement_evidence_commitment",
 )

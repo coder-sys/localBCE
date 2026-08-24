@@ -274,6 +274,10 @@ class ReleaseManifestGateTests(unittest.TestCase):
             gate.PathLane.RETAINED_COMPATIBILITY,
             gate.classify_path("experiments/fixed_shape_claim_air/air_binary_ir.py").lane,
         )
+        self.assertEqual(
+            gate.PathLane.UNKNOWN,
+            gate.classify_path("portal_shared/stale.py").lane,
+        )
         for path in (
             "NEW_AUTHORITY.md",
             "DESIGN_IDEOLOGY.md",
