@@ -251,6 +251,7 @@ class MirrorV2Fixture(unittest.TestCase):
         self.ingress_receipt = self.ingress.admit_capture(
             self.envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
             lease_token="lease-v2",
         )
         ing_snapshot = self.ingress.verify()
@@ -338,6 +339,7 @@ class MirrorV2Fixture(unittest.TestCase):
             service.admit_capture(
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
                 lease_token="not-held",
             )
         self.assertEqual(before, self._state_fingerprint(service))
@@ -351,6 +353,7 @@ class MirrorV2Fixture(unittest.TestCase):
             service.admit_capture(
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
                 lease_token="lease-old",
             )
         self.assertEqual(before, self._state_fingerprint(service))
@@ -361,10 +364,11 @@ class MirrorV2Fixture(unittest.TestCase):
             lease_token="lease-new",
         )
         before = self._state_fingerprint(service)
-        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:lease-token"):
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:attempt"):
             service.admit_capture(
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
                 lease_token="lease-old",
             )
         self.assertEqual(before, self._state_fingerprint(service))
@@ -384,7 +388,248 @@ class MirrorV2Fixture(unittest.TestCase):
         capture_parameters = inspect.signature(ingress.IngressServiceV2.admit_capture).parameters
         self.assertNotIn("now", claim_parameters)
         self.assertNotIn("observed_at", capture_parameters)
+        self.assertIn("attempt", capture_parameters)
         self.assertIn("clock", inspect.signature(ingress.IngressServiceV2).parameters)
+
+    def test_ingress_lease_and_operation_values_are_digest_only(self) -> None:
+        service, slot_id = self._fresh_ingress("digest-only-ingress.db")
+        raw_token = "lease-bearer-canary-raw"
+        raw_operation = "caller-operation-canary-raw"
+        service.claim_slot(slot_id, lease_token=raw_token)
+        receipt = service.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token=raw_token,
+            operation_id=raw_operation,
+        )
+        database_bytes = service.path.read_bytes()
+        logical_export = service.logical_export()
+        support = json.dumps(service.support(), sort_keys=True).encode("ascii")
+        for surface in (database_bytes, logical_export, receipt.raw, support):
+            self.assertNotIn(raw_token.encode("ascii"), surface)
+            self.assertNotIn(raw_operation.encode("ascii"), surface)
+        connection = sqlite3.connect(service.path)
+        try:
+            persisted = [bytes(row[0]) for row in connection.execute("SELECT event_raw FROM ingress_events")]
+            lease_values = [row[0] for row in connection.execute("SELECT lease_token FROM ingress_events WHERE lease_token IS NOT NULL")]
+        finally:
+            connection.close()
+        self.assertTrue(all(raw_token.encode("ascii") not in raw for raw in persisted))
+        self.assertTrue(all(raw_operation.encode("ascii") not in raw for raw in persisted))
+        self.assertTrue(all(type(value) is str and len(value) == 128 for value in lease_values))
+
+    def test_claim_slot_lost_response_retries_exactly_and_fences_tokens(self) -> None:
+        service, slot_id = self._fresh_ingress("claim-response-loss.db")
+        first = service.claim_slot(slot_id, lease_token="claim-response-loss")
+        before = self._state_fingerprint(service)
+        retry = service.claim_slot(slot_id, lease_token="claim-response-loss")
+        self.assertEqual(first.raw, retry.raw)
+        self.assertEqual(before, self._state_fingerprint(service))
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:lease-token"):
+            service.claim_slot(slot_id, lease_token="claim-different-live")
+        self.clock.value = profile.FIXTURE_OBSERVATION_TIME + self.ingress_config.lease_seconds
+        self.clock.value += 1
+        next_receipt = service.claim_slot(slot_id, lease_token="claim-response-loss")
+        self.assertEqual("LEASED", next_receipt.next_state)
+        self.assertEqual(2, json.loads(next_receipt.raw.decode("ascii"))["attempt"])
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:attempt"):
+            service.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
+                lease_token="claim-response-loss",
+            )
+        self.assertEqual(before, self._state_fingerprint(service))
+        admitted = service.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=2,
+            lease_token="claim-response-loss",
+        )
+        self.assertEqual("QUARANTINED", admitted.next_state)
+
+    def test_expired_max_attempt_claim_is_slot_hold_without_artifact_authority(self) -> None:
+        config = ingress.IngressConfigV2(
+            database_id="ingress-hold-synthetic",
+            chain_id="ingress-hold-chain",
+            policy_digest=self.ingress_config.policy_digest,
+            authorization_digest=self.ingress_config.authorization_digest,
+            terms_digest=self.ingress_config.terms_digest,
+            effective_start=self.ingress_config.effective_start,
+            effective_end=self.ingress_config.effective_end,
+            cadence_seconds=self.ingress_config.cadence_seconds,
+            max_slots=1,
+            max_attempts=1,
+            lease_seconds=self.ingress_config.lease_seconds,
+        )
+        clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME)
+        service = ingress.IngressServiceV2(self.root / "max-attempt-hold.db", config, clock=clock)
+        created = service.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
+        slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
+        service.claim_slot(slot_id, lease_token="same-hold-token")
+        clock.value += config.lease_seconds
+        held = service.claim_slot(slot_id, lease_token="same-hold-token")
+        self.assertEqual("HELD", held.next_state)
+        self.assertIsNone(held.artifact_id)
+        snapshot = service.verify()
+        self.assertEqual(0, snapshot["artifact_count"])
+        self.assertEqual({"HELD": 1}, {key: value for key, value in snapshot["state_counts"].items() if value})
+        connection = sqlite3.connect(service.path)
+        try:
+            self.assertEqual(
+                0,
+                connection.execute(
+                    "SELECT COUNT(*) FROM ingress_heads WHERE stream_kind='QUARANTINE'"
+                ).fetchone()[0],
+            )
+            event = connection.execute(
+                "SELECT event_kind,stream_kind,stream_id,payload_digest,receipt_bytes FROM ingress_events WHERE event_kind='HOLD'"
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual("HOLD", event[0])
+        self.assertEqual("SLOT", event[1])
+        self.assertEqual(slot_id, event[2])
+        self.assertIsNone(event[4])
+
+    def test_ingress_oversize_caller_strings_fail_before_mutation(self) -> None:
+        service, slot_id = self._fresh_ingress("oversize-caller.db")
+        before = self._state_fingerprint(service)
+        with self.assertRaisesRegex(ingress.IngressError, "ingress:lease"):
+            service.claim_slot(slot_id, lease_token="x" * 1025)
+        with self.assertRaisesRegex(ingress.IngressError, "ingress:operation"):
+            service.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
+                lease_token="bounded-token",
+                operation_id="x" * 257,
+            )
+        self.assertEqual(before, self._state_fingerprint(service))
+
+    def test_artifact_watermark_is_reconstructed_from_terminal_event(self) -> None:
+        artifact_id = self.ingress_receipt.artifact_id or ""
+        connection = sqlite3.connect(self.ingress_path)
+        try:
+            terminal = connection.execute(
+                "SELECT sequence FROM ingress_events WHERE event_kind='ADMIT' AND payload_digest=?",
+                (artifact_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertIsNotNone(terminal)
+        terminal_sequence = int(terminal[0])
+        selected = ingress_independent.read_artifact(self.ingress_path, artifact_id)
+        self.assertEqual(terminal_sequence, selected["event_sequence"])
+        self.assertEqual(terminal_sequence, selected["watermark"])
+        selected_snapshot = ingress_independent.read_artifact_snapshot(self.ingress_path, artifact_id)
+        self.assertEqual(terminal_sequence, selected_snapshot["watermark"])
+
+        tampered = self.root / "artifact-watermark-tampered.db"
+        shutil.copy2(self.ingress_path, tampered)
+        connection = sqlite3.connect(tampered)
+        try:
+            connection.execute(
+                "UPDATE ingress_artifacts SET event_sequence=? WHERE artifact_id=?",
+                (terminal_sequence + 1, artifact_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:artifact-event-sequence"):
+            ingress_independent.read_artifact(tampered, artifact_id)
+
+    def test_capacity_hold_is_terminal_and_preserves_no_capture_bytes(self) -> None:
+        service, slot_id = self._fresh_ingress("capacity-hold.db")
+        service.claim_slot(slot_id, lease_token="capacity-hold-token")
+        service._capacity_available = lambda *args, **kwargs: False
+        receipt = service.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token="capacity-hold-token",
+        )
+        self.assertEqual("HELD", receipt.next_state)
+        self.clock.raise_on_read = True
+        self.assertEqual(receipt.raw, service.admit_capture(
+            self.envelope,
+            scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
+            lease_token="capacity-hold-token",
+        ).raw)
+        snapshot = service.verify(include_raw=True)
+        self.assertEqual(0, snapshot["artifact_count"])
+        self.assertEqual(1, snapshot["slot_count"])
+        self.assertEqual(1, snapshot["state_counts"]["HELD"])
+        self.assertEqual(3, snapshot["event_count"])
+        connection = sqlite3.connect(service.path)
+        try:
+            row = connection.execute(
+                "SELECT state,lease_token,lease_until,artifact_id FROM ingress_slots WHERE slot_id=?",
+                (slot_id,),
+            ).fetchone()
+            fetch_count = connection.execute(
+                "SELECT COUNT(*) FROM ingress_events WHERE event_kind='FETCH_ATTESTATION'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(("HELD", None, None, None), tuple(row))
+        self.assertEqual(0, fetch_count)
+
+    def test_ingress_atomic_schema_failures_leave_no_partial_tables(self) -> None:
+        original_ddl = ingress._SCHEMA_DDL
+        for index in range(len(original_ddl)):
+            path = self.root / f"ingress-ddl-failure-{index}.db"
+            ingress._SCHEMA_DDL = original_ddl[:index] + ("THIS IS INVALID SQL",) + original_ddl[index + 1:]
+            try:
+                with self.assertRaisesRegex(ingress.IngressError, "ingress:database-initialize"):
+                    ingress.IngressServiceV2(path, self.ingress_config, clock=self.clock)
+            finally:
+                ingress._SCHEMA_DDL = original_ddl
+            connection = sqlite3.connect(path)
+            try:
+                tables = tuple(row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ))
+            finally:
+                connection.close()
+            self.assertEqual((), tables)
+            ingress.IngressServiceV2(path, self.ingress_config, clock=self.clock)
+
+    def test_ingress_path_and_page_capacity_gates_are_executable(self) -> None:
+        service, _slot_id = self._fresh_ingress("ingress-capacity-gates.db")
+        connection = ingress._connection(service.path)
+        try:
+            page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+            max_pages = int(connection.execute("PRAGMA max_page_count").fetchone()[0])
+            self.assertLessEqual(page_size * max_pages, ingress.MAX_DATABASE_BYTES)
+        finally:
+            connection.close()
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(os.fspath(service.path) + suffix)
+            sidecar.write_bytes(b"sidecar")
+            try:
+                with self.assertRaisesRegex(ingress.IngressError, "ingress:database-open"):
+                    ingress.IngressServiceV2(service.path, self.ingress_config, clock=self.clock)
+            finally:
+                sidecar.unlink()
+        hardlink = self.root / "ingress-hardlink.db"
+        os.link(service.path, hardlink)
+        try:
+            with self.assertRaisesRegex(ingress_independent.IngressVerificationError, "ingress:database"):
+                ingress_independent.verify_database(hardlink)
+        finally:
+            hardlink.unlink()
+        oversized = self.root / "ingress-oversized.db"
+        with oversized.open("wb") as stream:
+            stream.seek(ingress.MAX_DATABASE_BYTES)
+            stream.write(b"x")
+        before_size = oversized.stat().st_size
+        with self.assertRaisesRegex(ingress.IngressError, "ingress:database-open"):
+            ingress.IngressServiceV2(oversized, self.ingress_config, clock=self.clock)
+        self.assertEqual(before_size, oversized.stat().st_size)
 
     def test_core_v2_has_exact_six_tables_columns_and_one_explicit_index(self) -> None:
         self.assertIn("clock", inspect.signature(core.CoreServiceV2).parameters)
@@ -634,6 +879,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.admit_capture(
             self.envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
             lease_token="lease-owner-time",
         )
         connection = sqlite3.connect(service.path)
@@ -657,12 +903,22 @@ class MirrorV2Fixture(unittest.TestCase):
             self.ingress.admit_capture(
                 self.envelope,
                 scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=1,
                 lease_token="wrong-after-commit",
+            )
+        self.assertEqual(state_before, self._state_fingerprint(self.ingress))
+        with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:operation-conflict"):
+            self.ingress.admit_capture(
+                self.envelope,
+                scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+                attempt=2,
+                lease_token="lease-v2",
             )
         self.assertEqual(state_before, self._state_fingerprint(self.ingress))
         retry = self.ingress.admit_capture(
             self.envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
             lease_token="lease-v2",
         )
         self.assertEqual(before.raw, retry.raw)
@@ -762,7 +1018,7 @@ class MirrorV2Fixture(unittest.TestCase):
         second = service.ensure_slot(clock.value)
         second_slot_id = json.loads(second.raw.decode("ascii"))["slot_id"]
         clock.value = base + 100
-        service.admit_capture(self.envelope, scheduled_at=base, lease_token="lease-first")
+        service.admit_capture(self.envelope, scheduled_at=base, attempt=1, lease_token="lease-first")
         clock.value = base + 90
         before = self._state_fingerprint(service)
         with self.assertRaisesRegex(ingress.IngressConflictError, "ingress:clock-rewind"):
@@ -784,6 +1040,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.admit_capture(
             retry_envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
             lease_token="lease-retry",
         )
         connection = sqlite3.connect(service.path)
@@ -813,6 +1070,7 @@ class MirrorV2Fixture(unittest.TestCase):
         receipt = service.admit_capture(
             failed_envelope,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
             lease_token="lease-failed",
         )
         self.assertEqual("HELD", receipt.next_state)
@@ -887,6 +1145,7 @@ class MirrorV2Fixture(unittest.TestCase):
         service.admit_capture(
             raw,
             scheduled_at=profile.FIXTURE_OBSERVATION_TIME,
+            attempt=1,
             lease_token="lease-order",
         )
 
@@ -950,7 +1209,7 @@ class MirrorV2Fixture(unittest.TestCase):
         created = changed_ingress.ensure_slot(profile.FIXTURE_OBSERVATION_TIME)
         slot_id = json.loads(created.raw.decode("ascii"))["slot_id"]
         changed_ingress.claim_slot(slot_id, lease_token="lease-interleaved-changed")
-        changed_receipt = changed_ingress.admit_capture(_envelope(location_variant="changed"), scheduled_at=profile.FIXTURE_OBSERVATION_TIME, lease_token="lease-interleaved-changed")
+        changed_receipt = changed_ingress.admit_capture(_envelope(location_variant="changed"), scheduled_at=profile.FIXTURE_OBSERVATION_TIME, attempt=1, lease_token="lease-interleaved-changed")
         result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
         return self.core.admit_case(result["reconciliation_artifact_id"] or "")
 
@@ -1049,6 +1308,7 @@ class MirrorV2Fixture(unittest.TestCase):
         changed_receipt = changed_ingress.admit_capture(
             _envelope(location_variant="changed"),
             scheduled_at=scheduled_at,
+            attempt=1,
             lease_token="lease-v2-changed",
         )
         result = self.core.ingest_source(changed_path, changed_receipt.artifact_id or "")
