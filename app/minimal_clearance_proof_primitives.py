@@ -8,7 +8,7 @@ settlement/payment state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -42,6 +42,9 @@ _ARTIFACT_HEADER_BYTES: Final[int] = 68
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024 + _ARTIFACT_HEADER_BYTES + _PUBLIC_BYTES
 _MAX_EXECUTABLE_BYTES: Final[int] = _MAX_ARTIFACT_BYTES
 _MAX_ACCEPTANCE: Final[int] = 65_536
+_WORKSPACE_PREFIX: Final[str] = "BLV3-WORKSPACE-"
+_WORKSPACE_MARKER_NAME: Final[str] = ".BLV3-WORKSPACE"
+_WORKSPACE_MARKER: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE-WORKSPACE/v3\x00"
 _STATE_MAGIC = b"BLST"
 _STATE_BYTES: Final[int] = 1622
 _STATE_HEADER_BYTES: Final[int] = 150
@@ -331,6 +334,14 @@ class MinimalProofAcceptanceV1:
     @property
     def effective_directive(self) -> int:
         return self.statement.directive
+
+
+@dataclass(frozen=True, slots=True)
+class NativeVerificationCallResult:
+    """Immutable result binding one acceptance to its own containment call."""
+
+    acceptance: MinimalProofAcceptanceV1 = field(repr=False)
+    containment: ContainedVerifierResult = field(repr=False)
 
 
 def _expected_state_id(
@@ -883,6 +894,63 @@ def _artifact_public_bytes(raw: bytes) -> tuple[bytes, bytes, bytes]:
     return circuit_id, raw[_ARTIFACT_HEADER_BYTES : _ARTIFACT_HEADER_BYTES + public_size], raw[_ARTIFACT_HEADER_BYTES + public_size :]
 
 
+def _workspace_parent_ok(path: Path) -> bool:
+    try:
+        item = os.lstat(path)
+        return stat.S_ISDIR(item.st_mode) and int(item.st_nlink) == 1 and not bool(int(getattr(item, "st_file_attributes", 0)) & int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)))
+    except (OSError, ValueError):
+        return False
+
+
+def _new_native_workspace(parent: Path) -> Path:
+    if not isinstance(parent, Path) or not _workspace_parent_ok(parent):
+        raise MinimalClearanceProofStateError("verifier_workspace")
+    try:
+        directory = Path(tempfile.mkdtemp(prefix=_WORKSPACE_PREFIX, dir=parent))
+        marker = directory / _WORKSPACE_MARKER_NAME
+        descriptor = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.write(descriptor, _WORKSPACE_MARKER)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.chmod(marker, stat.S_IREAD)
+        return directory
+    except (OSError, ValueError):
+        raise MinimalClearanceProofStateError("verifier_workspace") from None
+
+
+def _remove_native_workspace(directory: Path, *, keep_artifact: Path | None = None) -> None:
+    try:
+        marker = directory / _WORKSPACE_MARKER_NAME
+        marker_before = os.lstat(marker)
+        if not stat.S_ISREG(marker_before.st_mode) or int(marker_before.st_nlink) != 1 or bool(int(getattr(marker_before, "st_file_attributes", 0)) & int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))):
+            raise OSError
+        flags = int(os.O_RDONLY) | int(getattr(os, "O_BINARY", 0)) | int(getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(str(marker), flags)
+        try:
+            marker_opened = os.fstat(descriptor)
+            marker_bytes = os.read(descriptor, len(_WORKSPACE_MARKER) + 1)
+        finally:
+            os.close(descriptor)
+        if (int(marker_opened.st_dev), int(marker_opened.st_ino), int(marker_opened.st_nlink)) != (int(marker_before.st_dev), int(marker_before.st_ino), int(marker_before.st_nlink)) or marker_bytes != _WORKSPACE_MARKER:
+            raise OSError
+        for item in list(directory.iterdir()):
+            if item == marker or (keep_artifact is not None and item == keep_artifact):
+                continue
+            current = os.lstat(item)
+            if not stat.S_ISREG(current.st_mode) or int(current.st_nlink) != 1:
+                raise OSError
+            item.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            item.unlink()
+        if keep_artifact is None:
+            marker.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            marker.unlink()
+            directory.rmdir()
+    except (OSError, ValueError):
+        raise MinimalClearanceProofStateError("verifier_workspace_cleanup") from None
+
+
 class NativeMinimalClearanceVerifier:
     """Runs the pinned independent verifier and uses its reconstruction output."""
 
@@ -891,6 +959,7 @@ class NativeMinimalClearanceVerifier:
         executable: Path,
         *,
         executable_sha256: str,
+        workspace_parent: Path,
         timeout_seconds: float = 30.0 * 60.0,
     ) -> None:
         if type(executable_sha256) is not str or re.fullmatch(r"[0-9a-fA-F]{64}", executable_sha256) is None:
@@ -899,15 +968,16 @@ class NativeMinimalClearanceVerifier:
             raise MinimalClearanceProofStateError("verifier_timeout")
         self.executable = executable
         self._executable_sha256 = bytes.fromhex(executable_sha256)
+        if not isinstance(workspace_parent, Path) or not _workspace_parent_ok(workspace_parent):
+            raise MinimalClearanceProofStateError("verifier_workspace")
+        self.workspace_parent = workspace_parent
         self.timeout_seconds = timeout_seconds
-        self.last_containment_result: ContainedVerifierResult | None = None
         self._preflight_checked = False
-        with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-identity-") as directory:
-            _snapshot_verified_file(
-                executable, Path(directory), label="verifier-executable",
-                maximum=_MAX_EXECUTABLE_BYTES,
-                expected_sha256=self._executable_sha256,
-            )
+        directory = _new_native_workspace(workspace_parent)
+        try:
+            _snapshot_verified_file(executable, directory, label="verifier-executable", maximum=_MAX_EXECUTABLE_BYTES, expected_sha256=self._executable_sha256)
+        finally:
+            _remove_native_workspace(directory)
 
     def identity_sha256(self) -> bytes:
         current = hashlib.sha256(
@@ -928,7 +998,6 @@ class NativeMinimalClearanceVerifier:
             )
         except VerifierProcessError:
             raise MinimalClearanceProofStateError("verifier_process_unavailable") from None
-        self.last_containment_result = result
         if result.timed_out:
             raise MinimalClearanceProofStateError("verifier_timeout")
         if not result.cap_enforced or result.cap_bytes != CAP_BYTES or result.active_process_limit != 1:
@@ -940,8 +1009,8 @@ class NativeMinimalClearanceVerifier:
     def _ensure_preflight(self) -> None:
         if self._preflight_checked:
             return
-        with tempfile.TemporaryDirectory(prefix="blind-ledger-minimal-preflight-") as directory:
-            workspace = Path(directory)
+        workspace = _new_native_workspace(self.workspace_parent)
+        try:
             executable_snapshot, _ = _snapshot_verified_file(
                 self.executable, workspace, label="verifier-executable",
                 maximum=_MAX_EXECUTABLE_BYTES,
@@ -951,12 +1020,19 @@ class NativeMinimalClearanceVerifier:
             if result.exit_code != 0:
                 raise MinimalClearanceProofStateError("verifier_preflight_rejected")
             _parse_preflight_output(result.stdout, result.stderr)
+        finally:
+            _remove_native_workspace(workspace)
         self._preflight_checked = True
+
+    def preflight(self) -> None:
+        """Run the pinned preflight once before the runtime admits work."""
+        self.identity_sha256()
+        self._ensure_preflight()
 
     def expected_statement(self) -> bytes:
         self._ensure_preflight()
-        with tempfile.TemporaryDirectory(prefix="blind-ledger-minimal-statement-") as directory:
-            workspace = Path(directory)
+        workspace = _new_native_workspace(self.workspace_parent)
+        try:
             executable_snapshot, _ = _snapshot_verified_file(
                 self.executable, workspace, label="verifier-executable",
                 maximum=_MAX_EXECUTABLE_BYTES,
@@ -973,11 +1049,17 @@ class NativeMinimalClearanceVerifier:
             if len(statement) != _PUBLIC_BYTES:
                 raise MinimalClearanceProofStateError("verifier_statement_length")
             return statement
+        finally:
+            _remove_native_workspace(workspace)
 
-    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
+    def verify(self, artifact_path: Path) -> NativeVerificationCallResult:
         self._ensure_preflight()
-        with tempfile.TemporaryDirectory(prefix="blind-ledger-verifier-acceptance-") as directory:
-            workspace = Path(directory)
+        if not isinstance(artifact_path, Path) or artifact_path.parent.parent != self.workspace_parent:
+            raise MinimalClearanceProofStateError("verifier_workspace")
+        workspace = artifact_path.parent
+        if not _workspace_parent_ok(workspace):
+            raise MinimalClearanceProofStateError("verifier_workspace")
+        try:
             executable_snapshot, _ = _snapshot_verified_file(
                 self.executable, workspace, label="verifier-executable",
                 maximum=_MAX_EXECUTABLE_BYTES,
@@ -1010,18 +1092,21 @@ class NativeMinimalClearanceVerifier:
             if verified_statement != public_bytes:
                 raise MinimalClearanceProofStateError("proof_public_statement_mismatch")
             statement = _parse_statement(verified_statement)
-        return MinimalProofAcceptanceV1(
-            statement=statement,
-            artifact_sha256=hashlib.sha256(raw).digest(),
-            artifact_digest=hashlib.sha3_512(raw).digest(),
-            artifact_bytes=len(raw),
-            circuit_id=circuit_id,
-        )
+            acceptance = MinimalProofAcceptanceV1(
+                statement=statement,
+                artifact_sha256=hashlib.sha256(raw).digest(),
+                artifact_digest=hashlib.sha3_512(raw).digest(),
+                artifact_bytes=len(raw),
+                circuit_id=circuit_id,
+            )
+            return NativeVerificationCallResult(acceptance, result)
+        finally:
+            _remove_native_workspace(workspace, keep_artifact=artifact_path)
 
 
 
 __all__ = (
     "MinimalClearanceProofStateError",
     "MinimalProofStatementV1", "MinimalProofAcceptanceV1",
-    "NativeMinimalClearanceVerifier", "parse_acceptance_bytes",
+    "NativeMinimalClearanceVerifier", "NativeVerificationCallResult", "parse_acceptance_bytes",
 )

@@ -1,8 +1,8 @@
-"""Run exactly one four-job queue integration exercise.
+"""Run one bounded, single-owner V3 queue exercise.
 
-The command accepts paths, but the canonical JSON contains only synthetic
-identities, bounded measurements, and queue state summaries.  It never calls
-the prover or the clearance state store.
+The exercise is synthetic/nonproduction evidence.  It never calls a prover or
+the clearance state/payment owner, and it does not overwrite checked-in
+historical evidence.
 """
 
 from __future__ import annotations
@@ -20,20 +20,14 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from app.minimal_clearance_verification_queue import (
-    ArtifactMetadata,
-    FilesystemArtifactCustody,
-    QueueConfig,
-    QueueWorker,
-    VerificationQueueStore,
-    run_bounded_workers,
-)
+from app.minimal_clearance_verification_queue import ArtifactMetadata, QueueConfig, VerificationQueueStore
 from app.minimal_clearance_verification_queue_independent import (
+    read_verified_jobs,
     restore_export_to_fresh_database,
     verify_database,
     verify_export_bytes,
 )
-from app.minimal_clearance_proof_primitives import NativeMinimalClearanceVerifier
+from app.minimal_clearance_verification_runtime import MinimalClearanceVerificationRuntime
 
 
 ARTIFACT_BYTES = 411_672
@@ -41,23 +35,9 @@ ARTIFACT_SHA256 = "69F653130822D15977BC14E450B62A5A20FF7CF12512C7BBBC79714B5A5BB
 ARTIFACT_SHA3_512 = "A2D3DDBA8C6ECAABC70147793185318FA7910E8EBBA0675D614E95885DAC23331C3F2FE3689F30748B030C9A26D55D704DB244C5DC36136896F6B87F42045BE1"
 VERIFIER_SHA256 = "E2BD096389E7D9CB3F8D83314747CA3D493DF6C30D86A57041F74B84F0023F3E"
 CAP_BYTES = 5_000_000_000
-ARTIFACT_REF = "retained-minimal-proof-v1"
 
 
-class _Factory:
-    def __init__(self, executable: Path) -> None:
-        self.executable = executable
-        self.instances: list[NativeMinimalClearanceVerifier] = []
-
-    def __call__(self) -> NativeMinimalClearanceVerifier:
-        verifier = NativeMinimalClearanceVerifier(
-            self.executable, executable_sha256=VERIFIER_SHA256, timeout_seconds=30.0 * 60.0,
-        )
-        self.instances.append(verifier)
-        return verifier
-
-
-def _read_identity(path: Path) -> tuple[bytes, str, bool]:
+def _read_identity(path: Path) -> tuple[int, str, bool]:
     try:
         if not path.is_file() or path.is_symlink():
             raise RuntimeError("identity_source_not_regular")
@@ -67,7 +47,7 @@ def _read_identity(path: Path) -> tuple[bytes, str, bool]:
         raise
     except (OSError, ValueError):
         raise RuntimeError("identity_source_not_regular") from None
-    return raw, hashlib.sha256(raw).hexdigest().upper(), readonly
+    return len(raw), hashlib.sha256(raw).hexdigest().upper(), readonly
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:
@@ -77,46 +57,35 @@ def _json_bytes(value: dict[str, Any]) -> bytes:
 def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, restore_database: Path, evidence_output: Path) -> dict[str, Any]:
     if any(path.exists() or path.is_symlink() for path in (database, restore_database, evidence_output)):
         raise RuntimeError("fresh_target_required")
-    if not workspace.is_dir():
+    if not workspace.is_dir() or workspace.is_symlink():
         raise RuntimeError("workspace_parent_required")
-    artifact_raw, artifact_hash, artifact_readonly = _read_identity(artifact)
-    if len(artifact_raw) != ARTIFACT_BYTES or artifact_hash != ARTIFACT_SHA256 or hashlib.sha3_512(artifact_raw).hexdigest().upper() != ARTIFACT_SHA3_512 or not artifact_readonly:
+    artifact_size, artifact_hash, artifact_readonly = _read_identity(artifact)
+    if artifact_size != ARTIFACT_BYTES or artifact_hash != ARTIFACT_SHA256 or not artifact_readonly:
         raise RuntimeError("retained_artifact_identity")
     _, verifier_hash, _ = _read_identity(verifier)
     if verifier_hash != VERIFIER_SHA256:
         raise RuntimeError("verifier_identity")
 
-    metadata = ArtifactMetadata(ARTIFACT_REF, ARTIFACT_BYTES, bytes.fromhex(ARTIFACT_SHA256), bytes.fromhex(ARTIFACT_SHA3_512))
-    config = QueueConfig(
-        queue_id="minimal-clearance-queue-exercise-v1", capacity=4, lease_seconds=300,
-        verifier_sha256=bytes.fromhex(VERIFIER_SHA256), artifact_bytes_cap=512 * 1024 * 1024,
-        retryable_codes=("custody_read", "custody_snapshot", "verifier_memory_cap", "verifier_process_unavailable", "verifier_timeout"),
-    )
-    custody = FilesystemArtifactCustody(resolver=lambda ref: artifact if ref == ARTIFACT_REF else Path("missing"), workspace_parent=workspace)
-    factory = _Factory(verifier)
+    artifact_ref = artifact.name
+    metadata = ArtifactMetadata(artifact_ref, ARTIFACT_BYTES, bytes.fromhex(ARTIFACT_SHA256), bytes.fromhex(ARTIFACT_SHA3_512))
+    config = QueueConfig("minimal-clearance-queue-exercise-v3", 4, bytes.fromhex(VERIFIER_SHA256), 512 * 1024 * 1024)
     store = VerificationQueueStore(path=database, config=config)
-    for index in range(4):
-        store.admit(job_id=f"queue-job-{index}", metadata=metadata)
-    workers = tuple(
-        QueueWorker(store=store, worker_id=f"queue-worker-{index}", custody=custody, verifier_factory=factory)
-        for index in range(4)
-    )
-    wave_started = time.perf_counter()
-    results = run_bounded_workers(workers)
-    wave_wall_ms = max(1, int(round((time.perf_counter() - wave_started) * 1000)))
-    if len(results) != 4 or any(result is None or result.status != "VERIFIED" for result in results):
+    job_ids = tuple(f"queue-job-{index}" for index in range(4))
+    for job_id in job_ids:
+        store.admit(job_id=job_id, metadata=metadata)
+    started = time.perf_counter()
+    with MinimalClearanceVerificationRuntime(
+        database=database,
+        config=config,
+        executable=verifier,
+        source_root=artifact.parent,
+        workspace_parent=workspace,
+    ) as runtime:
+        runtime_result = runtime.run(max_jobs=4)
+    wave_wall_ms = max(1, int(round((time.perf_counter() - started) * 1000)))
+    if runtime_result.indeterminate or runtime_result.verified != 4:
         raise RuntimeError("queue_verification_not_verified")
-    if len(factory.instances) != 4 or len({id(item) for item in factory.instances}) != 4:
-        raise RuntimeError("verifier_instance_sharing")
-    intervals = [(worker.last_verification_started, worker.last_verification_ended) for worker in workers]
-    if not all(start > 0 and end >= start for start, end in intervals) or max(start for start, _ in intervals) >= min(end for _, end in intervals):
-        raise RuntimeError("verifier_no_overlap")
-    direct_containment = []
-    for item in factory.instances:
-        result = item.last_containment_result
-        if result is None or result.exit_code != 0 or result.timed_out or result.cap_bytes != CAP_BYTES or result.cap_enforced is not True or result.active_process_limit != 1 or result.peak_job_commit_bytes > CAP_BYTES:
-            raise RuntimeError("containment_not_qualified")
-        direct_containment.append(result)
+
     store.verify_integrity()
     exported = store.export_bytes()
     producer_summary = verify_database(database, expected_config=config.as_json())
@@ -124,45 +93,71 @@ def run(*, artifact: Path, verifier: Path, database: Path, workspace: Path, rest
     restored_summary = restore_export_to_fresh_database(restore_database, exported)
     if producer_summary != export_summary or export_summary != restored_summary:
         raise RuntimeError("independent_reconstruction_mismatch")
-    _, artifact_hash_after, artifact_readonly_after = _read_identity(artifact)
+    jobs = read_verified_jobs(database, job_ids, expected_config=config.as_json())
+    if len(jobs) != 4 or any(job.exit_code != 0 or job.timed_out or not job.cap_enforced for job in jobs):
+        raise RuntimeError("queue_receipt_not_verified")
+    artifact_size_after, artifact_hash_after, artifact_readonly_after = _read_identity(artifact)
     _, verifier_hash_after, _ = _read_identity(verifier)
-    if artifact_hash_after != ARTIFACT_SHA256 or artifact_readonly_after is not True or verifier_hash_after != VERIFIER_SHA256:
+    if artifact_size_after != ARTIFACT_BYTES or artifact_hash_after != ARTIFACT_SHA256 or artifact_readonly_after is not True or verifier_hash_after != VERIFIER_SHA256:
         raise RuntimeError("source_identity_changed")
-    claims = range(int(export_summary["claim_count"]))
-    completes = range(int(export_summary["completion_count"]))
-    receipts = []
-    for result in results:
-        receipt = json.loads(result.receipt_bytes.decode("ascii"))
-        evidence = receipt["evidence"]
-        receipts.append({
-            "job_id": receipt["job_id"], "artifact_bytes": evidence["artifact_bytes"],
-            "peak_job_commit_bytes": evidence["peak_job_commit_bytes"],
-            "stdout_sha3_512": evidence["stdout_sha3_512"], "stderr_sha3_512": evidence["stderr_sha3_512"],
-        })
-    receipts.sort(key=lambda item: item["job_id"])
+
+    per_job = [
+        {
+            "job_id": job.job_id,
+            "artifact_bytes": job.artifact_bytes,
+            "peak_job_commit_bytes": job.peak_job_commit_bytes,
+        }
+        for job in jobs
+    ]
     output = {
-        "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/INTEGRATION-EVIDENCE/v1",
-        "queue_schema": config.as_json()["schema_version"], "queue_id": config.queue_id,
-        "verification_count": 4, "verified_count": 4, "retry_count": 0, "rejected_count": 0, "held_count": 0,
-        "distinct_job_count": len({item["job_id"] for item in receipts}), "distinct_lease_count": len(claims),
-        "distinct_worker_count": int(export_summary["distinct_worker_count"]), "distinct_verifier_instance_count": len(factory.instances),
-        "distinct_custody_snapshot_count": len(claims), "verification_overlap": True,
-        "artifact_bytes": ARTIFACT_BYTES, "artifact_sha256": ARTIFACT_SHA256, "artifact_sha3_512": ARTIFACT_SHA3_512,
-        "artifact_readonly_before": artifact_readonly, "artifact_readonly_after": artifact_readonly_after,
-        "verifier_sha256": VERIFIER_SHA256, "cap_bytes": CAP_BYTES, "cap_enforced": True, "active_process_limit": 1,
-        "peak_job_commit_bytes": [item["peak_job_commit_bytes"] for item in receipts],
-        "peak_job_commit_max_bytes": max(item["peak_job_commit_bytes"] for item in receipts),
-        "timed_out": False, "exit_codes": [item.exit_code for item in direct_containment],
-        "wave_wall_ms": wave_wall_ms, "per_job": receipts,
-        "per_verifier_wall_ms": [worker.last_verification_wall_ms for worker in workers],
-        "transition_claim_count": len(claims), "transition_complete_verified_count": len(completes),
-        "queue_reconstruction_parity": True, "export_restore_parity": True,
-        "final_queue_head_root": producer_summary["head_root"], "final_status_counts": producer_summary["status_counts"],
-        "state_store_mutation_count": 0, "clearance_authorization_count": 0, "payment_movement_count": 0,
-        "prover_invocation_count": 0, "proof_suite_id": None, "production_usable": False,
-        "activation": False, "payment_authority": False, "clearance_authority": False,
+        "schema": "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/INTEGRATION-EVIDENCE/v2",
+        "queue_schema": config.as_json()["schema_version"],
+        "queue_id": config.queue_id,
+        "verification_count": runtime_result.processed,
+        "verified_count": runtime_result.verified,
+        "retry_count": runtime_result.requeued,
+        "rejected_count": runtime_result.rejected,
+        "held_count": runtime_result.held,
+        "distinct_job_count": len(jobs),
+        "distinct_lease_count": int(export_summary["claim_count"]),
+        "distinct_worker_count": int(export_summary["distinct_worker_count"]),
+        "distinct_verifier_instance_count": 1,
+        "distinct_custody_snapshot_count": len(jobs),
+        "verification_overlap": False,
+        "single_owner_runtime": True,
+        "artifact_bytes": ARTIFACT_BYTES,
+        "artifact_sha256": ARTIFACT_SHA256,
+        "artifact_sha3_512": ARTIFACT_SHA3_512,
+        "artifact_readonly_before": artifact_readonly,
+        "artifact_readonly_after": artifact_readonly_after,
+        "verifier_sha256": VERIFIER_SHA256,
+        "cap_bytes": CAP_BYTES,
+        "cap_enforced": True,
+        "active_process_limit": 1,
+        "peak_job_commit_bytes": [job.peak_job_commit_bytes for job in jobs],
+        "peak_job_commit_max_bytes": max(job.peak_job_commit_bytes for job in jobs),
+        "timed_out": False,
+        "exit_codes": [job.exit_code for job in jobs],
+        "wave_wall_ms": wave_wall_ms,
+        "per_job": per_job,
+        "transition_claim_count": int(export_summary["claim_count"]),
+        "transition_complete_verified_count": int(export_summary["completion_count"]),
+        "queue_reconstruction_parity": True,
+        "export_restore_parity": True,
+        "runtime_recovered_leases": runtime_result.recovered_leases,
+        "runtime_scavenged_workspaces": runtime_result.scavenged_workspaces,
+        "state_store_mutation_count": 0,
+        "clearance_authorization_count": 0,
+        "payment_movement_count": 0,
+        "prover_invocation_count": 0,
+        "proof_suite_id": None,
+        "production_usable": False,
+        "activation": False,
+        "payment_authority": False,
+        "clearance_authority": False,
         "experimental_software_only": True,
-        "full_claim_cost_measured": False, "proving_throughput_measured": False,
+        "full_claim_cost_measured": False,
+        "proving_throughput_measured": False,
         "production_queue_db_multinode_soak_qualified": False,
     }
     encoded = _json_bytes(output)
@@ -188,7 +183,11 @@ def main() -> int:
     parser.add_argument("--restore-database", type=Path, required=True)
     parser.add_argument("--evidence-output", type=Path, required=True)
     args = parser.parse_args()
-    output = run(**vars(args))
+    try:
+        output = run(**vars(args))
+    except BaseException:
+        print('{"error":"integration_exercise_failed"}')
+        return 2
     print(json.dumps(output, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
     return 0
 

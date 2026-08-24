@@ -8,7 +8,6 @@ turns verifier acceptance into a directive.
 from __future__ import annotations
 
 from contextlib import closing
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -20,35 +19,17 @@ import secrets
 import sqlite3
 import stat
 import tempfile
-from threading import Lock
 import time
 from typing import Any, Callable, Final, Mapping, NoReturn, Protocol
-import weakref
 
 from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
     MinimalProofAcceptanceV1,
+    NativeVerificationCallResult,
     NativeMinimalClearanceVerifier,
     parse_acceptance_bytes,
 )
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
-
-
-# Capture the genuine class-owned boundaries once, before any caller can hand
-# the worker an object with instance-shadowed methods or a monkey-patched
-# subclass.  The verifier boundary dispatches transitively to _ensure_preflight
-# and _run, so all four class-owned methods are part of the attestation.
-_NATIVE_IDENTITY_METHOD: Final = NativeMinimalClearanceVerifier.identity_sha256
-_NATIVE_VERIFY_METHOD: Final = NativeMinimalClearanceVerifier.verify
-_NATIVE_PREFLIGHT_METHOD: Final = NativeMinimalClearanceVerifier._ensure_preflight
-_NATIVE_RUN_METHOD: Final = NativeMinimalClearanceVerifier._run
-
-# A concrete verifier carries mutable process/containment telemetry.  A weak,
-# process-owned claim prevents a caller-controlled factory from sharing one
-# mutable object across workers while allowing abandoned objects to be
-# collected without an unbounded registry.
-_VERIFIER_CLAIM_LOCK: Final = Lock()
-_VERIFIER_CLAIMED: Final = weakref.WeakSet()
 
 
 class VerificationQueueError(RuntimeError):
@@ -98,8 +79,8 @@ def _raise_fixed(error: VerificationQueueError) -> NoReturn:
         raise
 
 
-_SCHEMA_VERSION: Final[int] = 2
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v2"
+_SCHEMA_VERSION: Final[int] = 3
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v3"
 _STATUS: Final = frozenset({"QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"})
 _NONTERMINAL: Final = frozenset({"QUEUED", "LEASED"})
 _TERMINAL: Final = frozenset({"VERIFIED", "REJECTED", "HELD"})
@@ -118,19 +99,24 @@ _ACTIVE_PROCESS_LIMIT: Final[int] = 1
 MAX_QUEUE_DATABASE_BYTES: Final[int] = 64 * 1024 * 1024
 MAX_QUEUE_CAPACITY: Final[int] = 512
 MAX_TERMINAL_GROWTH_PER_NONTERMINAL: Final[int] = 64 * 1024
-MAX_WORKER_CONCURRENCY: Final[int] = 4
+_RUNTIME_WORKER_ID: Final[str] = "minimal-clearance-runtime"
+_LEASE_SECONDS: Final[int] = 3_600
+_MAX_ATTEMPTS: Final[int] = 3
+_WORKSPACE_PREFIX: Final[str] = "BLV3-WORKSPACE-"
+_WORKSPACE_MARKER_NAME: Final[str] = ".BLV3-WORKSPACE"
+_WORKSPACE_MARKER: Final[bytes] = b"BL/NATIVE-V3/MINIMAL-CLEARANCE-WORKSPACE/v3\x00"
 _PAGE_SIZE: Final[int] = 4096
 _MAX_PAGE_COUNT: Final[int] = MAX_QUEUE_DATABASE_BYTES // _PAGE_SIZE
 _MAX_ARTIFACT_BYTES: Final[int] = 512 * 1024 * 1024
 BOOTSTRAP_CAPABILITY_LIMITATION_COUNT = 0
 
-_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v1\x00"
-_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v1\x00"
-_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v1\x00"
-_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v1\x00"
-_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v1\x00"
-_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v1\x00"
-_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v1\x00"
+_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v3\x00"
+_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v3\x00"
+_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v3\x00"
+_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v3\x00"
+_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v3\x00"
+_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v3\x00"
+_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v3\x00"
 _LEASE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/LEASE-FENCE/v3\x00"
 
 # These are producer-owned literals, not caller-controlled strings.  A worker
@@ -303,41 +289,37 @@ class SystemQueueClock:
 class QueueConfig:
     queue_id: str
     capacity: int
-    lease_seconds: int
     verifier_sha256: bytes
     artifact_bytes_cap: int
-    retryable_codes: tuple[str, ...]
-    max_attempts: int = 3
-    max_worker_concurrency: int = MAX_WORKER_CONCURRENCY
 
     def __post_init__(self) -> None:
         _safe_token(self.queue_id, "queue_id", maximum=_MAX_QUEUE_ID)
         if type(self.capacity) is not int or not 1 <= self.capacity <= MAX_QUEUE_CAPACITY:
             raise VerificationQueueError("queue_capacity_invalid")
-        if type(self.lease_seconds) is not int or not 1 <= self.lease_seconds <= 3_600:
-            raise VerificationQueueError("queue_lease_seconds_invalid")
         _bytes(self.verifier_sha256, 32, "queue_verifier_sha256")
         if type(self.artifact_bytes_cap) is not int or not 0 < self.artifact_bytes_cap <= _MAX_ARTIFACT_BYTES:
             raise VerificationQueueError("queue_artifact_cap_invalid")
-        if type(self.max_attempts) is not int or self.max_attempts != 3:
-            raise VerificationQueueError("queue_max_attempts_invalid")
-        if type(self.max_worker_concurrency) is not int or self.max_worker_concurrency != MAX_WORKER_CONCURRENCY:
-            raise VerificationQueueError("queue_worker_concurrency_invalid")
-        if type(self.retryable_codes) is not tuple or not self.retryable_codes:
-            raise VerificationQueueError("queue_retryable_codes_invalid")
-        if tuple(sorted(set(self.retryable_codes))) != self.retryable_codes:
-            raise VerificationQueueError("queue_retryable_codes_order")
-        for code in self.retryable_codes:
-            _safe_code(code, "queue_retryable_code")
+
+    @property
+    def lease_seconds(self) -> int:
+        return _LEASE_SECONDS
+
+    @property
+    def max_attempts(self) -> int:
+        return _MAX_ATTEMPTS
+
+    @property
+    def retryable_codes(self) -> tuple[str, ...]:
+        return tuple(sorted(_QUEUE_RETRY_CODES))
 
     def as_json(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
             "queue_id": self.queue_id,
             "capacity": self.capacity,
-            "lease_seconds": self.lease_seconds,
-            "max_attempts": self.max_attempts,
-            "max_worker_concurrency": self.max_worker_concurrency,
+            "lease_seconds": _LEASE_SECONDS,
+            "max_attempts": _MAX_ATTEMPTS,
+            "max_worker_concurrency": 1,
             "verifier_sha256": _hex(self.verifier_sha256),
             "artifact_bytes_cap": self.artifact_bytes_cap,
             "retryable_codes": list(self.retryable_codes),
@@ -374,7 +356,7 @@ class ArtifactMetadata:
 class CustodySnapshot:
     """In-memory custody result; the path never enters queue storage/export."""
 
-    path: Path
+    path: Path = field(repr=False)
     artifact_bytes: int
     artifact_sha256: bytes
     artifact_sha3_512: bytes
@@ -403,7 +385,7 @@ class VerificationEvidence:
     artifact_sha3_512: bytes
     verifier_sha256: bytes
     circuit_id: bytes
-    acceptance_bytes: bytes
+    acceptance_bytes: bytes = field(repr=False)
     proof_acceptance_digest: bytes
     peak_job_commit_bytes: int
     cap_bytes: int
@@ -486,18 +468,13 @@ class QueueResult:
     job_id: str
     operation_id: bytes
     status: str
-    receipt_bytes: bytes | None
-    error_code: str | None
+    receipt_bytes: bytes | None = field(default=None, repr=False)
+    error_code: str | None = None
 
 
 class ProofArtifactCustodyPort(Protocol):
     def snapshot(self, artifact_ref: str, expected: ArtifactMetadata) -> CustodySnapshot:
         """Return a fresh verifier-owned read-only snapshot."""
-
-
-class VerificationFactory(Protocol):
-    def __call__(self) -> NativeMinimalClearanceVerifier:
-        """Return a fresh verifier instance for one job."""
 
 
 def _is_reparse(stat_result: os.stat_result) -> bool:
@@ -571,15 +548,32 @@ def _write_all(descriptor: int, chunk: bytes) -> None:
         offset += written
 
 
-def _new_owned_directory(parent: Path) -> Path:
+def _new_owned_directory(parent: Path) -> tuple[Path, tuple[int, int, int]]:
     if not _owned_directory(parent):
         raise QueueRetryableError("custody_parent")
+    marker: Path | None = None
     try:
-        directory = Path(tempfile.mkdtemp(prefix="bl-queue-", dir=parent))
+        directory = Path(tempfile.mkdtemp(prefix=_WORKSPACE_PREFIX, dir=parent))
         if not _owned_directory(directory):
             raise OSError
-        return directory
+        marker = directory / _WORKSPACE_MARKER_NAME
+        descriptor = os.open(str(marker), int(os.O_CREAT) | int(os.O_EXCL) | int(os.O_WRONLY) | int(getattr(os, "O_BINARY", 0)), 0o600)
+        try:
+            _write_all(descriptor, _WORKSPACE_MARKER)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.chmod(marker, stat.S_IREAD)
+        marker_stat = os.lstat(marker)
+        if not stat.S_ISREG(marker_stat.st_mode) or int(marker_stat.st_nlink) != 1 or _is_reparse(marker_stat):
+            raise OSError
+        return directory, (int(marker_stat.st_dev), int(marker_stat.st_ino), int(marker_stat.st_nlink))
     except (OSError, ValueError):
+        if marker is not None:
+            try:
+                marker.unlink(missing_ok=True)
+            except OSError:
+                pass
         _raise_fixed(QueueRetryableError("custody_workspace"))
 
 
@@ -655,22 +649,55 @@ def _sidecar_identity(path: Path) -> tuple[int, int, int, int, int]:
 class FilesystemArtifactCustody:
     """Verifier-owned bounded snapshot adapter; queue state sees only opaque refs."""
 
-    def __init__(self, *, resolver: Callable[[str], Path], workspace_parent: Path) -> None:
-        if not callable(resolver) or not isinstance(workspace_parent, Path) or not _owned_directory(workspace_parent):
+    def __init__(self, *, source_root: Path, workspace_parent: Path) -> None:
+        if not isinstance(source_root, Path) or not isinstance(workspace_parent, Path) or not _owned_directory(source_root) or not _owned_directory(workspace_parent):
             raise VerificationQueueError("custody_configuration")
-        self._resolver = resolver; self._workspace_parent = workspace_parent
+        self._source_root = source_root
+        self._workspace_parent = workspace_parent
+        self._source_root_identity = _directory_identity(source_root)
+        self._workspace_parent_identity = _directory_identity(workspace_parent)
+
+    def _source_path(self, artifact_ref: str) -> Path:
+        if (
+            type(artifact_ref) is not str
+            or artifact_ref in {".", ".."}
+            or any(part in artifact_ref for part in ("/", "\\", ":"))
+            or _SAFE_TOKEN.fullmatch(artifact_ref) is None
+        ):
+            raise QueueHeldError("custody_source")
+        if _directory_identity(self._source_root) != self._source_root_identity or _directory_identity(self._workspace_parent) != self._workspace_parent_identity:
+            raise QueueHeldError("custody_parent")
+        source = self._source_root / artifact_ref
+        try:
+            if source.parent != self._source_root:
+                raise QueueHeldError("custody_source")
+            return source
+        except (OSError, ValueError):
+            _raise_fixed(QueueHeldError("custody_source"))
 
     @staticmethod
     def _readonly(path: Path) -> None:
         path.chmod(stat.S_IREAD)
 
     @staticmethod
-    def _cleanup(directory: Path, artifact: Path, directory_identity: tuple[int, int], artifact_identity: tuple[int, int, int]) -> None:
+    def _cleanup(directory: Path, artifact: Path, marker: Path, directory_identity: tuple[int, int], artifact_identity: tuple[int, int, int], marker_identity: tuple[int, int, int]) -> None:
         try:
             current_directory = os.stat(directory, follow_symlinks=False); current_artifact = os.stat(artifact, follow_symlinks=False)
             if (int(current_directory.st_dev), int(current_directory.st_ino)) != directory_identity or (int(current_artifact.st_dev), int(current_artifact.st_ino), int(current_artifact.st_nlink)) != artifact_identity:
                 raise OSError
-            os.chmod(artifact, stat.S_IRUSR | stat.S_IWUSR); os.unlink(artifact); os.rmdir(directory)
+            current_marker = os.lstat(marker)
+            if marker.name != _WORKSPACE_MARKER_NAME or marker.parent != directory or (int(current_marker.st_dev), int(current_marker.st_ino), int(current_marker.st_nlink)) != marker_identity or not stat.S_ISREG(current_marker.st_mode) or _is_reparse(current_marker):
+                raise OSError
+            flags = int(os.O_RDONLY) | int(getattr(os, "O_BINARY", 0)) | int(getattr(os, "O_NOFOLLOW", 0))
+            marker_descriptor = os.open(str(marker), flags)
+            try:
+                opened_marker = os.fstat(marker_descriptor)
+                marker_bytes = os.read(marker_descriptor, len(_WORKSPACE_MARKER) + 1)
+            finally:
+                os.close(marker_descriptor)
+            if (int(opened_marker.st_dev), int(opened_marker.st_ino), int(opened_marker.st_nlink)) != marker_identity or marker_bytes != _WORKSPACE_MARKER:
+                raise OSError
+            os.chmod(artifact, stat.S_IRUSR | stat.S_IWUSR); os.chmod(marker, stat.S_IRUSR | stat.S_IWUSR); os.unlink(artifact); os.unlink(marker); os.rmdir(directory)
         except (OSError, ValueError):
             _raise_fixed(QueueHeldError("custody_cleanup"))
 
@@ -678,16 +705,11 @@ class FilesystemArtifactCustody:
         _safe_token(artifact_ref, "artifact_ref", maximum=_MAX_ARTIFACT_REF)
         if type(expected) is not ArtifactMetadata or expected.artifact_bytes > _MAX_ARTIFACT_BYTES:
             raise QueueHeldError("custody_source")
-        try:
-            source = self._resolver(artifact_ref)
-        except Exception:
-            _raise_fixed(QueueHeldError("custody_source"))
-        if not isinstance(source, Path):
-            raise QueueHeldError("custody_source")
-        source_handle: int | None = None; directory: Path | None = None; artifact: Path | None = None; artifact_identity: tuple[int, int, int] | None = None
+        source = self._source_path(artifact_ref)
+        source_handle: int | None = None; directory: Path | None = None; artifact: Path | None = None; artifact_identity: tuple[int, int, int] | None = None; marker_identity: tuple[int, int, int] | None = None
         try:
             source_handle, source_stat = _open_regular_file(source, expected.artifact_bytes)
-            directory = _new_owned_directory(self._workspace_parent); artifact = directory / "artifact.bin"
+            directory, marker_identity = _new_owned_directory(self._workspace_parent); artifact = directory / "artifact.bin"
             descriptor = os.open(str(artifact), int(os.O_CREAT) | int(os.O_EXCL) | int(os.O_WRONLY) | int(getattr(os, "O_BINARY", 0)), 0o600)
             opened_artifact = os.fstat(descriptor); artifact_identity = (int(opened_artifact.st_dev), int(opened_artifact.st_ino), int(opened_artifact.st_nlink))
             digest256 = hashlib.sha256(); digest512 = hashlib.sha3_512(); total = 0
@@ -717,18 +739,21 @@ class FilesystemArtifactCustody:
             if verified != expected.artifact_bytes or verify256.digest() != digest256_value or verify512.digest() != digest512_value or not _same_file_identity(snapshot_stat, os.stat(artifact, follow_symlinks=False)):
                 raise QueueHeldError("custody_snapshot_identity")
             directory_stat = os.stat(directory, follow_symlinks=False)
-            return CustodySnapshot(artifact, verified, digest256_value, digest512_value, True, lambda: self._cleanup(directory, artifact, (int(directory_stat.st_dev), int(directory_stat.st_ino)), artifact_identity))
+            marker = directory / _WORKSPACE_MARKER_NAME
+            if marker_identity is None:
+                raise QueueHeldError("custody_snapshot_identity")
+            return CustodySnapshot(artifact, verified, digest256_value, digest512_value, True, lambda: self._cleanup(directory, artifact, marker, (int(directory_stat.st_dev), int(directory_stat.st_ino)), artifact_identity, marker_identity))
         except QueueHeldError:
             cleanup_failed = False
             if source_handle is not None:
                 try: os.close(source_handle)
                 except OSError: pass
-            if artifact is not None and artifact_identity is not None and directory is not None:
+            if artifact is not None and artifact_identity is not None and marker_identity is not None and directory is not None:
                 try:
-                    directory_stat = os.stat(directory, follow_symlinks=False); self._cleanup(directory, artifact, (int(directory_stat.st_dev), int(directory_stat.st_ino)), artifact_identity)
+                    directory_stat = os.stat(directory, follow_symlinks=False); self._cleanup(directory, artifact, directory / _WORKSPACE_MARKER_NAME, (int(directory_stat.st_dev), int(directory_stat.st_ino)), artifact_identity, marker_identity)
                 except (OSError, QueueHeldError): cleanup_failed = True
             elif directory is not None:
-                try: os.rmdir(directory)
+                try: (directory / _WORKSPACE_MARKER_NAME).unlink(missing_ok=True); os.rmdir(directory)
                 except OSError: cleanup_failed = True
             if cleanup_failed: _raise_fixed(QueueHeldError("custody_cleanup"))
             raise
@@ -737,12 +762,12 @@ class FilesystemArtifactCustody:
             if source_handle is not None:
                 try: os.close(source_handle)
                 except OSError: pass
-            if artifact is not None and artifact_identity is not None and directory is not None:
+            if artifact is not None and artifact_identity is not None and marker_identity is not None and directory is not None:
                 try:
-                    directory_stat = os.stat(directory, follow_symlinks=False); self._cleanup(directory, artifact, (int(directory_stat.st_dev), int(directory_stat.st_ino)), artifact_identity)
+                    directory_stat = os.stat(directory, follow_symlinks=False); self._cleanup(directory, artifact, directory / _WORKSPACE_MARKER_NAME, (int(directory_stat.st_dev), int(directory_stat.st_ino)), artifact_identity, marker_identity)
                 except QueueHeldError: cleanup_failed = True
             elif directory is not None:
-                try: os.rmdir(directory)
+                try: (directory / _WORKSPACE_MARKER_NAME).unlink(missing_ok=True); os.rmdir(directory)
                 except OSError: cleanup_failed = True
             if cleanup_failed: _raise_fixed(QueueHeldError("custody_cleanup"))
             _raise_fixed(QueueRetryableError("custody_snapshot"))
@@ -801,7 +826,7 @@ _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
 }
 
 _DDL: Final[tuple[str, ...]] = (
-    "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=2), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 4))",
+    "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=3), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
     "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT)",
     "CREATE TABLE queue_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3), claim_sequence INTEGER NOT NULL UNIQUE CHECK(claim_sequence>=1), leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id))",
     "CREATE TABLE queue_results (operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=64), job_id TEXT NOT NULL UNIQUE, terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_bytes BLOB CHECK(receipt_bytes IS NULL OR length(receipt_bytes)<=16384), error_code TEXT, completed_ms INTEGER NOT NULL CHECK(completed_ms>=0), claim_sequence INTEGER NOT NULL CHECK(claim_sequence>=1), worker_id TEXT NOT NULL, leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), token_digest BLOB NOT NULL CHECK(length(token_digest)=64), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), CHECK((terminal_status='VERIFIED' AND receipt_bytes IS NOT NULL AND error_code IS NULL) OR (terminal_status IN ('REJECTED','HELD') AND receipt_bytes IS NULL AND error_code IS NOT NULL)))",
@@ -1075,7 +1100,7 @@ class VerificationQueueStore:
         self._assert_connection(connection)
         row = connection.execute("SELECT * FROM queue_metadata WHERE id=1").fetchone()
         if row is None or len(row) != 14: raise QueueIntegrityError("queue_metadata_missing")
-        if int(row[1]) != _SCHEMA_VERSION or str(row[2]) != self.config.queue_id or bytes(row[3]) != self.config.canonical_bytes or bytes(row[4]) != self.config.digest or bytes(row[5]) != self.config.verifier_sha256 or int(row[6]) != self.config.artifact_bytes_cap or int(row[10]) < 0 or int(row[11]) < 0 or int(row[12]) < 0 or int(row[12]) > self.config.capacity or int(row[13]) < 0 or int(row[13]) > MAX_WORKER_CONCURRENCY: raise QueueIntegrityError("queue_metadata_drift")
+        if int(row[1]) != _SCHEMA_VERSION or str(row[2]) != self.config.queue_id or bytes(row[3]) != self.config.canonical_bytes or bytes(row[4]) != self.config.digest or bytes(row[5]) != self.config.verifier_sha256 or int(row[6]) != self.config.artifact_bytes_cap or int(row[10]) < 0 or int(row[11]) < 0 or int(row[12]) < 0 or int(row[12]) > self.config.capacity or int(row[13]) < 0 or int(row[13]) > 1: raise QueueIntegrityError("queue_metadata_drift")
         return tuple(row)
 
     @staticmethod
@@ -1087,7 +1112,7 @@ class VerificationQueueStore:
 
     def _update_storage_locked(self, connection: sqlite3.Connection, *, nonterminal: int | None = None, leases: int | None = None) -> None:
         meta = self._meta(connection); active = int(meta[12]) if nonterminal is None else nonterminal; live = int(meta[13]) if leases is None else leases
-        if not 0 <= active <= self.config.capacity or not 0 <= live <= MAX_WORKER_CONCURRENCY: raise QueueIntegrityError("queue_counter_metadata")
+        if not 0 <= active <= self.config.capacity or not 0 <= live <= 1: raise QueueIntegrityError("queue_counter_metadata")
         reserved = active * MAX_TERMINAL_GROWTH_PER_NONTERMINAL; used = self._page_bytes(connection)
         if used + reserved > MAX_QUEUE_DATABASE_BYTES: raise QueueBackpressureError("queue_storage_capacity")
         connection.execute("UPDATE queue_metadata SET storage_used_bytes=?,storage_reserved_bytes=?,nonterminal_count=?,live_lease_count=? WHERE id=1", (used, reserved, active, live)); used_after = self._page_bytes(connection)
@@ -1219,25 +1244,44 @@ class VerificationQueueStore:
                 _raise_fixed(VerificationQueueError("queue_internal"))
         return count
 
-    @staticmethod
-    def _raw_claim_token(value: object, code: str) -> bytes:
-        if type(value) is not bytes or len(value) != 32: raise QueueLeaseError(code)
-        return bytes(value)
+    def _recover_claim_after_commit(self, *, job_id: str, raw_token: bytes) -> QueueWorkItem:
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute("SELECT j.*,l.token_digest,l.claim_sequence,l.leased_ms,l.expires_ms FROM queue_jobs j JOIN queue_leases l ON l.job_id=j.job_id WHERE j.job_id=? AND j.status='LEASED' AND l.worker_id=?", (job_id, _RUNTIME_WORKER_ID)).fetchone()
+                if row is None:
+                    _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
+                job = self._row_to_job(tuple(row[:14]))
+                digest = _lease_digest(self.config, job.job_id, _RUNTIME_WORKER_ID, job.attempt, int(row[15]), int(row[16]), int(row[17]), raw_token)
+                if bytes(row[14]) != digest:
+                    _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
+                self._claim_event_without_raw(connection, job_id=job.job_id, operation_id=job.operation_id, claim_sequence=int(row[15]))
+                return QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, job.attempt, _RUNTIME_WORKER_ID, int(row[15]), raw_token, int(row[17]), self.config.verifier_sha256)
+        except QueueIndeterminateError:
+            raise
+        except BaseException:
+            _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
 
-    def claim_next(self, *, worker_id: str, lease_token: bytes) -> QueueWorkItem | None:
-        _safe_token(worker_id, "worker_id", maximum=_MAX_WORKER_ID); raw_token = self._raw_claim_token(lease_token, "claim_token_shape"); now = int(self.clock.now_ms())
+    def claim_next(self) -> QueueWorkItem | None:
+        worker_id = _RUNTIME_WORKER_ID
+        try:
+            raw_token = secrets.token_bytes(32)
+        except BaseException:
+            _raise_fixed(QueueIndeterminateError("queue_entropy_unavailable"))
+        if type(raw_token) is not bytes or len(raw_token) != 32:
+            _raise_fixed(QueueIndeterminateError("queue_entropy_unavailable"))
+        now = int(self.clock.now_ms())
         with closing(self._connect()) as connection:
             began = False
             try:
                 self._begin(connection); began = True; self._schema_check(connection); self._meta(connection); self._expire_locked(connection, now)
                 existing = connection.execute("SELECT j.*,l.token_digest,l.claim_sequence,l.leased_ms,l.expires_ms FROM queue_jobs j JOIN queue_leases l ON l.job_id=j.job_id WHERE j.status='LEASED' AND l.worker_id=? AND l.expires_ms>?", (worker_id, now)).fetchone()
                 if existing is not None:
-                    existing_job = self._row_to_job(tuple(existing[:14])); digest = _lease_digest(self.config, existing_job.job_id, worker_id, existing_job.attempt, int(existing[15]), int(existing[16]), int(existing[17]), raw_token)
-                    if bytes(existing[14]) != digest: raise QueueLeaseError("claim_token_invalid")
-                    self._claim_event_without_raw(connection, job_id=existing_job.job_id, operation_id=existing_job.operation_id, claim_sequence=int(existing[15])); self._commit(connection); began = False
-                    return QueueWorkItem(self.config.queue_id, existing_job.job_id, existing_job.operation_id, existing_job.metadata, existing_job.attempt, worker_id, int(existing[15]), raw_token, int(existing[17]), self.config.verifier_sha256)
+                    # A fresh call has no right to recover a live bearer.  The
+                    # only recovery path is the local post-commit path below,
+                    # while the original raw token is still in memory.
+                    raise QueueBackpressureError("queue_worker_capacity")
                 metadata = self._meta(connection)
-                if int(metadata[13]) >= MAX_WORKER_CONCURRENCY: raise QueueBackpressureError("queue_worker_capacity")
+                if int(metadata[13]) >= 1: raise QueueBackpressureError("queue_worker_capacity")
                 row = connection.execute("SELECT * FROM queue_jobs INDEXED BY queue_jobs_status_eligible WHERE status='QUEUED' AND next_eligible_ms<=? ORDER BY admission_seq LIMIT 1", (now,)).fetchone()
                 if row is None: self._commit(connection); began = False; return None
                 job = self._row_to_job(tuple(row)); attempt = job.attempt + 1; expires = now + self.config.lease_seconds * 1000; claim_sequence = int(metadata[8]) + 1; token_digest = _lease_digest(self.config, job.job_id, worker_id, attempt, claim_sequence, now, expires, raw_token)
@@ -1255,11 +1299,15 @@ class VerificationQueueStore:
             except Exception:
                 if began and connection.in_transaction: connection.execute("ROLLBACK")
                 _raise_fixed(VerificationQueueError("queue_internal"))
-        self._after_commit("claim"); return QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, attempt, worker_id, claim_sequence, raw_token, expires, self.config.verifier_sha256)
+        try:
+            self._after_commit("claim")
+        except QueueIndeterminateError:
+            return self._recover_claim_after_commit(job_id=job.job_id, raw_token=raw_token)
+        return QueueWorkItem(self.config.queue_id, job.job_id, job.operation_id, job.metadata, attempt, worker_id, claim_sequence, raw_token, expires, self.config.verifier_sha256)
 
     def _validate_work(self, work: QueueWorkItem) -> None:
         if type(work) is not QueueWorkItem or work.queue_id != self.config.queue_id: raise QueueLeaseError("completion_work_invalid")
-        if type(work.job_id) is not str or len(work.job_id) > _MAX_QUEUE_ID or _SAFE_TOKEN.fullmatch(work.job_id) is None or type(work.operation_id) is not bytes or len(work.operation_id) != 64 or type(work.metadata) is not ArtifactMetadata or type(work.attempt) is not int or not 1 <= work.attempt <= self.config.max_attempts or type(work.worker_id) is not str or len(work.worker_id) > _MAX_WORKER_ID or _SAFE_TOKEN.fullmatch(work.worker_id) is None or type(work.claim_sequence) is not int or work.claim_sequence < 1 or type(work.lease_expires_ms) is not int or work.lease_expires_ms <= 0 or type(work.expected_verifier_sha256) is not bytes or len(work.expected_verifier_sha256) != 32 or type(work.lease_token) is not bytes or len(work.lease_token) != 32: raise QueueLeaseError("completion_work_invalid")
+        if type(work.job_id) is not str or len(work.job_id) > _MAX_QUEUE_ID or _SAFE_TOKEN.fullmatch(work.job_id) is None or type(work.operation_id) is not bytes or len(work.operation_id) != 64 or type(work.metadata) is not ArtifactMetadata or type(work.attempt) is not int or not 1 <= work.attempt <= _MAX_ATTEMPTS or work.worker_id != _RUNTIME_WORKER_ID or type(work.claim_sequence) is not int or work.claim_sequence < 1 or type(work.lease_expires_ms) is not int or work.lease_expires_ms <= 0 or type(work.expected_verifier_sha256) is not bytes or len(work.expected_verifier_sha256) != 32 or type(work.lease_token) is not bytes or len(work.lease_token) != 32: raise QueueLeaseError("completion_work_invalid")
 
     def _historical_work_matches(self, connection: sqlite3.Connection, work: QueueWorkItem, result_row: tuple[Any, ...] | None = None) -> bool:
         try:
@@ -1416,6 +1464,9 @@ class VerificationQueueStore:
         except Exception: _raise_fixed(QueueIntegrityError("queue_export_integrity"))
         return raw
 
+    def _process_one(self, *, verifier: NativeMinimalClearanceVerifier, custody: FilesystemArtifactCustody) -> QueueResult | None:
+        return _QueueProcessor(store=self, verifier=verifier, custody=custody).process_one()
+
     def close(self) -> None: return None
 
 
@@ -1437,17 +1488,13 @@ def _parse_receipt(raw: bytes, config: QueueConfig) -> VerificationReceipt:
     return result
 
 
-class QueueWorker:
-    """One fixed worker identity; each claim gets one random bearer in memory."""
+class _QueueProcessor:
+    """One runtime-owned synchronous verifier/custody processing boundary."""
 
-    def __init__(self, *, store: VerificationQueueStore, worker_id: str, custody: ProofArtifactCustodyPort, verifier_factory: VerificationFactory) -> None:
-        _safe_token(worker_id, "worker_id", maximum=_MAX_WORKER_ID)
-        try:
-            custody_snapshot = getattr(custody, "snapshot", None)
-        except BaseException:
-            _raise_fixed(VerificationQueueError("queue_worker_port"))
-        if not callable(verifier_factory) or not callable(custody_snapshot): raise VerificationQueueError("queue_worker_port")
-        self.store = store; self.worker_id = worker_id; self.custody = custody; self.verifier_factory = verifier_factory; self.last_verification_wall_ms: int | None = None; self.last_verification_started: float | None = None; self.last_verification_ended: float | None = None
+    def __init__(self, *, store: VerificationQueueStore, custody: ProofArtifactCustodyPort, verifier: NativeMinimalClearanceVerifier) -> None:
+        if type(verifier) is not NativeMinimalClearanceVerifier or type(custody) is not FilesystemArtifactCustody:
+            raise VerificationQueueError("queue_processor_port")
+        self.store = store; self.custody = custody; self.verifier = verifier; self.last_verification_wall_ms: int | None = None; self.last_verification_started: float | None = None; self.last_verification_ended: float | None = None
 
     def _reconcile_lease_loss(self, work: QueueWorkItem) -> QueueResult:
         try:
@@ -1499,39 +1546,6 @@ class QueueWorker:
             _raise_fixed(QueueIndeterminateError("queue_retry_indeterminate"))
         except BaseException:
             _raise_fixed(QueueIndeterminateError("queue_retry_indeterminate"))
-
-    @staticmethod
-    def _attested_native_verifier(verifier: object) -> bool:
-        """Accept only the unmodified concrete native verifier boundary."""
-        try:
-            if type(verifier) is not NativeMinimalClearanceVerifier:
-                return False
-            attributes = vars(verifier)
-            if any(name in attributes for name in ("identity_sha256", "verify", "_ensure_preflight", "_run")):
-                return False
-            methods = type(verifier).__dict__
-            return (
-                methods.get("identity_sha256") is _NATIVE_IDENTITY_METHOD
-                and methods.get("verify") is _NATIVE_VERIFY_METHOD
-                and methods.get("_ensure_preflight") is _NATIVE_PREFLIGHT_METHOD
-                and methods.get("_run") is _NATIVE_RUN_METHOD
-            )
-        except BaseException:
-            return False
-
-    @staticmethod
-    def _claim_attested_native_verifier(verifier: object) -> bool:
-        """Claim one attested mutable verifier object exactly once."""
-        if not QueueWorker._attested_native_verifier(verifier):
-            return False
-        try:
-            with _VERIFIER_CLAIM_LOCK:
-                if verifier in _VERIFIER_CLAIMED:
-                    return False
-                _VERIFIER_CLAIMED.add(verifier)
-                return True
-        except BaseException:
-            return False
 
     @staticmethod
     def _snapshot_valid(snapshot: object, work: QueueWorkItem) -> bool:
@@ -1596,10 +1610,7 @@ class QueueWorker:
         return self._terminal(work, status="HELD", error_code="worker_exception")
 
     def process_one(self) -> QueueResult | None:
-        try: lease_token = secrets.token_bytes(32)
-        except BaseException: _raise_fixed(QueueIndeterminateError("queue_entropy_unavailable"))
-        try: work = self.store.claim_next(worker_id=self.worker_id, lease_token=lease_token)
-        except QueueIndeterminateError: work = self.store.claim_next(worker_id=self.worker_id, lease_token=lease_token)
+        work = self.store.claim_next()
         if work is None: return None
         snapshot: CustodySnapshot | None = None
         try:
@@ -1609,20 +1620,14 @@ class QueueWorker:
         if not self._snapshot_valid(snapshot, work):
             return self._snapshot_failure(work, snapshot, "custody_snapshot_identity")
         try:
-            verifier = self.verifier_factory()
-        except BaseException:
-            return self._snapshot_failure(work, snapshot, "verifier_factory")
-        if not self._claim_attested_native_verifier(verifier):
-            return self._snapshot_failure(work, snapshot, "verifier_type")
-        try:
-            identity = _NATIVE_IDENTITY_METHOD(verifier)
+            identity = self.verifier.identity_sha256()
         except BaseException:
             return self._snapshot_failure(work, snapshot, "verifier_identity")
         if identity != self.store.config.verifier_sha256:
             return self._snapshot_failure(work, snapshot, "verifier_identity")
         started = time.perf_counter(); self.last_verification_started = started
         try:
-            acceptance = _NATIVE_VERIFY_METHOD(verifier, snapshot.path)
+            call_result = self.verifier.verify(snapshot.path)
         except MinimalClearanceProofStateError as exc:
             if self._cleanup_snapshot(snapshot):
                 return self._terminal(work, status="HELD", error_code="custody_cleanup")
@@ -1631,8 +1636,12 @@ class QueueWorker:
             return self._snapshot_failure(work, snapshot, "worker_exception")
         finally:
             ended = time.perf_counter(); self.last_verification_ended = ended; self.last_verification_wall_ms = max(1, int(round((ended - started) * 1000)))
+        if type(call_result) is not NativeVerificationCallResult:
+            if self._cleanup_snapshot(snapshot):
+                return self._terminal(work, status="HELD", error_code="custody_cleanup")
+            return self._terminal(work, status="HELD", error_code="verifier_result_shape")
         try:
-            evidence = build_verification_evidence(acceptance, getattr(verifier, "last_containment_result", None), snapshot, self.store.config.verifier_sha256)
+            evidence = build_verification_evidence(call_result.acceptance, call_result.containment, snapshot, self.store.config.verifier_sha256)
         except (QueueDeterministicRejectError, QueueRetryableError, QueueHeldError) as exc:
             if self._cleanup_snapshot(snapshot):
                 return self._terminal(work, status="HELD", error_code="custody_cleanup")
@@ -1644,12 +1653,4 @@ class QueueWorker:
         snapshot = None
         return self._terminal(work, status="VERIFIED", evidence=evidence)
 
-
-def run_bounded_workers(workers: tuple[QueueWorker, ...]) -> tuple[QueueResult | None, ...]:
-    if type(workers) is not tuple or not 0 < len(workers) <= MAX_WORKER_CONCURRENCY: raise VerificationQueueError("queue_worker_bound")
-    if len({worker.worker_id for worker in workers}) != len(workers): raise VerificationQueueError("queue_worker_identity_duplicate")
-    with ThreadPoolExecutor(max_workers=len(workers), thread_name_prefix="bl-queue-worker") as executor:
-        futures = [executor.submit(worker.process_one) for worker in workers]; return tuple(future.result() for future in futures)
-
-
-__all__ = ("ArtifactMetadata", "CustodySnapshot", "FilesystemArtifactCustody", "ProofArtifactCustodyPort", "QueueBackpressureError", "QueueClock", "QueueConfig", "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueJob", "QueueLeaseError", "QueueResult", "QueueRetryableError", "QueueWorkItem", "SystemQueueClock", "VerificationEvidence", "VerificationFactory", "VerificationQueueError", "VerificationQueueStore", "VerificationReceipt", "QueueWorker", "build_verification_evidence", "run_bounded_workers", "MAX_QUEUE_DATABASE_BYTES", "MAX_QUEUE_CAPACITY", "MAX_TERMINAL_GROWTH_PER_NONTERMINAL", "MAX_WORKER_CONCURRENCY", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT")
+__all__ = ("ArtifactMetadata", "CustodySnapshot", "FilesystemArtifactCustody", "ProofArtifactCustodyPort", "QueueBackpressureError", "QueueClock", "QueueConfig", "QueueConflictError", "QueueDeterministicRejectError", "QueueHeldError", "QueueIndeterminateError", "QueueIntegrityError", "QueueJob", "QueueLeaseError", "QueueResult", "QueueRetryableError", "QueueWorkItem", "SystemQueueClock", "VerificationEvidence", "VerificationQueueError", "VerificationQueueStore", "VerificationReceipt", "build_verification_evidence", "MAX_QUEUE_DATABASE_BYTES", "MAX_QUEUE_CAPACITY", "MAX_TERMINAL_GROWTH_PER_NONTERMINAL", "BOOTSTRAP_CAPABILITY_LIMITATION_COUNT")

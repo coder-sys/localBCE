@@ -1,19 +1,21 @@
 """Windows-only containment for the native minimal-clearance verifier.
 
-The caller supplies a private executable snapshot and private artifact/output
-paths.  The child is created suspended, assigned to a bounded Job Object, and
-only then resumed.  There is deliberately no subprocess fallback: inability
-to establish the boundary is a fail-closed error.
+The caller supplies a private executable snapshot and workspace.  The child is
+created suspended, assigned to a bounded Job Object, and only then resumed;
+stdout and stderr are drained through anonymous pipes.  There is deliberately
+no subprocess fallback: inability to establish the boundary is a fail-closed
+error.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ctypes
 from ctypes import wintypes
 import os
 from pathlib import Path
-import uuid
+import threading
+import time
 
 
 class VerifierProcessError(RuntimeError):
@@ -119,8 +121,8 @@ class _ProcessInformation(ctypes.Structure):
 @dataclass(frozen=True, slots=True)
 class ContainedVerifierResult:
     exit_code: int
-    stdout: bytes
-    stderr: bytes
+    stdout: bytes = field(repr=False)
+    stderr: bytes = field(repr=False)
     peak_job_commit_bytes: int
     cap_bytes: int
     cap_enforced: bool
@@ -167,36 +169,28 @@ def _environment_block(workspace: Path) -> ctypes.Array:
         "PATH": system32,
         "TEMP": str(workspace),
         "TMP": str(workspace),
-        "BL_NETWORK_DISABLED": "1",
     }
     block = "\0".join(f"{key}={values[key]}" for key in sorted(values, key=str.upper)) + "\0\0"
     return ctypes.create_unicode_buffer(block)
 
 
-def _create_output_handle(path: Path) -> tuple[int, int]:
-    flags = os.O_BINARY | os.O_CREAT | os.O_EXCL | os.O_WRONLY
+def _create_output_pipe() -> tuple[int, int, int]:
     try:
-        descriptor = os.open(path, flags, 0o600)
+        read_descriptor, write_descriptor = os.pipe()
     except OSError:
         raise VerifierProcessError("verifier_output_create") from None
     try:
         import msvcrt
 
-        handle = msvcrt.get_osfhandle(descriptor)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.SetHandleInformation.argtypes = [
-            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD
-        ]
-        kernel32.SetHandleInformation.restype = wintypes.BOOL
-        if not kernel32.SetHandleInformation(
-            wintypes.HANDLE(handle), _HANDLE_FLAG_INHERIT, _HANDLE_FLAG_INHERIT
-        ):
-            raise _win_error("verifier_output_inherit")
-        return descriptor, handle
-    except Exception:
-        os.close(descriptor)
-        path.unlink(missing_ok=True)
-        raise
+        handle = msvcrt.get_osfhandle(write_descriptor)
+        os.set_handle_inheritable(handle, True)
+        return read_descriptor, write_descriptor, handle
+    except BaseException:
+        try:
+            os.close(read_descriptor)
+        finally:
+            os.close(write_descriptor)
+        raise VerifierProcessError("verifier_output_inherit") from None
 
 
 def _close_parent_descriptors_once(descriptors: list[int]) -> None:
@@ -218,7 +212,8 @@ def _create_process_with_owned_output_handles(
     *,
     kernel32: object,
     executable: Path,
-    output_paths: tuple[Path, Path],
+    output_handles: tuple[int, int],
+    parent_descriptors: list[int],
     startup: _StartupInfoEx,
     environment: ctypes.Array,
     command_line: ctypes.Array,
@@ -227,17 +222,14 @@ def _create_process_with_owned_output_handles(
 ) -> None:
     """Create the child with an explicit inherited-handle allowlist."""
 
-    descriptors: list[int] = []
+    descriptors: list[int] = list(parent_descriptors)
     attribute_storage: ctypes.Array | None = None
     attribute_list = wintypes.LPVOID()
     attribute_list_initialized = False
     process_created = False
     primary_error: BaseException | None = None
     try:
-        stdout_fd, stdout_handle = _create_output_handle(output_paths[0])
-        descriptors.append(stdout_fd)
-        stderr_fd, stderr_handle = _create_output_handle(output_paths[1])
-        descriptors.append(stderr_fd)
+        stdout_handle, stderr_handle = output_handles
         startup.StartupInfo.cb = ctypes.sizeof(startup)
         startup.StartupInfo.hStdOutput = wintypes.HANDLE(stdout_handle)
         startup.StartupInfo.hStdError = wintypes.HANDLE(stderr_handle)
@@ -296,23 +288,38 @@ def _create_process_with_owned_output_handles(
                 raise VerifierProcessError("verifier_process_cleanup") from None
 
 
-def _read_capped(path: Path, limit: int, label: str) -> bytes:
+def _drain_pipe(
+    descriptor: int,
+    limit: int,
+    label: str,
+    output: dict[str, bytes],
+    failure: dict[str, str],
+    overflow: threading.Event,
+) -> None:
+    data = bytearray()
     try:
-        size = path.stat().st_size
-        if size > limit:
-            raise VerifierProcessError(f"{label}_cap")
-        data = path.read_bytes()
-    except VerifierProcessError:
-        raise
-    except OSError:
-        raise VerifierProcessError(f"{label}_read") from None
-    if len(data) != size or len(data) > limit:
-        raise VerifierProcessError(f"{label}_read")
-    try:
-        data.decode("ascii")
-    except UnicodeDecodeError:
-        raise VerifierProcessError(f"{label}_encoding") from None
-    return data
+        while len(data) <= limit:
+            chunk = os.read(descriptor, min(64 * 1024, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > limit:
+                overflow.set()
+                failure.setdefault("code", f"{label}_cap")
+                break
+        if "code" not in failure:
+            try:
+                bytes(data).decode("ascii")
+            except UnicodeDecodeError:
+                failure["code"] = f"{label}_encoding"
+    except BaseException:
+        failure.setdefault("code", f"{label}_read")
+    finally:
+        output[label] = bytes(data[: limit + 1])
+        try:
+            os.close(descriptor)
+        except OSError:
+            failure.setdefault("code", f"{label}_close")
 
 
 def run_contained_verifier(
@@ -389,13 +396,19 @@ def run_contained_verifier(
     kernel32.UpdateProcThreadAttribute.restype = wintypes.BOOL
     kernel32.DeleteProcThreadAttributeList.argtypes = [wintypes.LPVOID]
     kernel32.DeleteProcThreadAttributeList.restype = None
-    output_paths = (
-        workspace / f"stdout-{uuid.uuid4().hex}.bin",
-        workspace / f"stderr-{uuid.uuid4().hex}.bin",
-    )
     process_info = _ProcessInformation()
     job = wintypes.HANDLE()
     timed_out = False
+    stdout_read: int | None = None
+    stderr_read: int | None = None
+    stdout_write: int | None = None
+    stderr_write: int | None = None
+    stdout_handle = 0
+    stderr_handle = 0
+    reader_threads: list[threading.Thread] = []
+    reader_failure: dict[str, str] = {}
+    reader_output: dict[str, bytes] = {}
+    reader_overflow = threading.Event()
     try:
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
@@ -429,32 +442,76 @@ def run_contained_verifier(
             _CREATE_SUSPENDED | _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT
             | _EXTENDED_STARTUPINFO_PRESENT
         )
-        _create_process_with_owned_output_handles(
-            kernel32=kernel32,
-            executable=executable,
-            output_paths=output_paths,
-            startup=startup,
-            environment=environment,
-            command_line=command_line,
-            creation_flags=creation_flags,
-            process_info=process_info,
-        )
+        try:
+            stdout_read, stdout_write, stdout_handle = _create_output_pipe()
+            stderr_read, stderr_write, stderr_handle = _create_output_pipe()
+        except BaseException:
+            for descriptor in (stdout_read, stdout_write, stderr_read, stderr_write):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            stdout_read = stdout_write = stderr_read = stderr_write = None
+            raise
+        try:
+            _create_process_with_owned_output_handles(
+                kernel32=kernel32,
+                executable=executable,
+                output_handles=(stdout_handle, stderr_handle),
+                parent_descriptors=[stdout_write, stderr_write],  # type: ignore[list-item]
+                startup=startup,
+                environment=environment,
+                command_line=command_line,
+                creation_flags=creation_flags,
+                process_info=process_info,
+            )
+        finally:
+            # The helper owns and closes both parent descriptors on every path.
+            stdout_write = None
+            stderr_write = None
         if not kernel32.AssignProcessToJobObject(job, process_info.hProcess):
             kernel32.TerminateProcess(process_info.hProcess, 1)
             raise _win_error("verifier_job_assign")
         if kernel32.ResumeThread(process_info.hThread) == 0xFFFFFFFF:
             kernel32.TerminateJobObject(job, 1)
             raise _win_error("verifier_process_resume")
+        reader_threads = [
+            threading.Thread(target=_drain_pipe, args=(stdout_read, MAX_STDOUT_BYTES, "stdout", reader_output, reader_failure, reader_overflow), daemon=True),
+            threading.Thread(target=_drain_pipe, args=(stderr_read, MAX_STDERR_BYTES, "stderr", reader_output, reader_failure, reader_overflow), daemon=True),
+        ]
+        for reader in reader_threads:
+            reader.start()
+        stdout_read = None
+        stderr_read = None
         wait_ms = max(1, int(timeout_seconds * 1000))
-        wait_result = kernel32.WaitForSingleObject(process_info.hProcess, wait_ms)
-        if wait_result == _WAIT_TIMEOUT:
-            timed_out = True
-            if not kernel32.TerminateJobObject(job, 1):
-                raise _win_error("verifier_timeout_terminate")
-            if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
-                raise _win_error("verifier_timeout_wait")
-        elif wait_result != _WAIT_OBJECT_0:
-            raise _win_error("verifier_wait")
+        deadline = time.monotonic() + (wait_ms / 1000.0)
+        while True:
+            if reader_overflow.is_set() or "code" in reader_failure:
+                if not kernel32.TerminateJobObject(job, 1):
+                    raise _win_error("verifier_output_terminate")
+                if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
+                    raise _win_error("verifier_output_wait")
+                raise VerifierProcessError(reader_failure.get("code", "verifier_output_read"))
+            remaining = max(1, int((deadline - time.monotonic()) * 1000))
+            wait_result = kernel32.WaitForSingleObject(process_info.hProcess, min(50, remaining))
+            if wait_result == _WAIT_OBJECT_0:
+                break
+            if wait_result != _WAIT_TIMEOUT:
+                raise _win_error("verifier_wait")
+            if time.monotonic() >= deadline:
+                timed_out = True
+                if not kernel32.TerminateJobObject(job, 1):
+                    raise _win_error("verifier_timeout_terminate")
+                if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
+                    raise _win_error("verifier_timeout_wait")
+                break
+        for reader in reader_threads:
+            reader.join(timeout=5)
+        if any(reader.is_alive() for reader in reader_threads):
+            raise VerifierProcessError("verifier_output_read")
+        if reader_overflow.is_set() or "code" in reader_failure:
+            raise VerifierProcessError(reader_failure.get("code", "verifier_output_read"))
         exit_code = wintypes.DWORD()
         if not kernel32.GetExitCodeProcess(process_info.hProcess, ctypes.byref(exit_code)):
             raise _win_error("verifier_exit_code")
@@ -465,8 +522,8 @@ def run_contained_verifier(
         ):
             raise _win_error("verifier_job_query")
         peak_commit = int(observed.PeakJobMemoryUsed)
-        stdout = _read_capped(output_paths[0], MAX_STDOUT_BYTES, "verifier_stdout")
-        stderr = _read_capped(output_paths[1], MAX_STDERR_BYTES, "verifier_stderr")
+        stdout = reader_output.get("stdout", b"")
+        stderr = reader_output.get("stderr", b"")
         if peak_commit > CAP_BYTES:
             raise VerifierProcessError("verifier_job_memory_cap")
         return ContainedVerifierResult(
@@ -477,6 +534,15 @@ def run_contained_verifier(
         )
     finally:
         cleanup_errors: list[BaseException] = []
+        for reader in reader_threads:
+            if reader.is_alive():
+                reader.join(timeout=5)
+        for descriptor in (stdout_read, stderr_read, stdout_write, stderr_write):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
         if process_info.hThread:
             if not kernel32.CloseHandle(process_info.hThread):
                 cleanup_errors.append(_win_error("verifier_thread_close"))
@@ -486,11 +552,6 @@ def run_contained_verifier(
         if job:
             if not kernel32.CloseHandle(job):
                 cleanup_errors.append(_win_error("verifier_job_close"))
-        for path in output_paths:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                cleanup_errors.append(exc)
         if cleanup_errors:
             raise VerifierProcessError("verifier_cleanup") from None
 

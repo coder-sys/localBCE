@@ -7,7 +7,7 @@ persisted HMAC fence, its CLAIM event, and the complete append-only replay.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -32,11 +32,11 @@ class IndependentVerifiedQueueJob:
     job_id: str
     operation_id: bytes
     attempt: int
-    receipt_bytes: bytes
+    receipt_bytes: bytes = field(repr=False)
     receipt_id: bytes
-    acceptance_bytes: bytes
+    acceptance_bytes: bytes = field(repr=False)
     proof_acceptance_digest: bytes
-    artifact_ref: str
+    artifact_ref: str = field(repr=False)
     artifact_bytes: int
     artifact_sha256: bytes
     artifact_sha3_512: bytes
@@ -51,14 +51,15 @@ class IndependentVerifiedQueueJob:
     stderr_sha3_512: bytes
 
 
-_SCHEMA_VERSION: Final[int] = 2
-_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v2"
+_SCHEMA_VERSION: Final[int] = 3
+_SCHEMA: Final[str] = "BL/NATIVE-V3/MINIMAL-CLEARANCE-VERIFICATION-QUEUE/v3"
 _STATUS: Final = frozenset({"QUEUED", "LEASED", "VERIFIED", "REJECTED", "HELD"})
 _NONTERMINAL: Final = frozenset({"QUEUED", "LEASED"})
 _TERMINAL: Final = frozenset({"VERIFIED", "REJECTED", "HELD"})
 _MAX_DATABASE: Final[int] = 64 * 1024 * 1024
 _MAX_CAPACITY: Final[int] = 512
-_MAX_WORKERS: Final[int] = 4
+_MAX_WORKERS: Final[int] = 1
+_LEASE_SECONDS: Final[int] = 3_600
 _MAX_TERMINAL_GROWTH: Final[int] = 64 * 1024
 _PAGE_SIZE: Final[int] = 4096
 _MAX_PAGES: Final[int] = _MAX_DATABASE // _PAGE_SIZE
@@ -68,13 +69,19 @@ _CAP_BYTES: Final[int] = 5_000_000_000
 _ACTIVE_PROCESS_LIMIT: Final[int] = 1
 _TOKEN = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
-_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v1\x00"
-_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v1\x00"
-_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v1\x00"
-_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v1\x00"
-_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v1\x00"
-_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v1\x00"
-_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v1\x00"
+_RETRYABLE_CODES: Final = frozenset({
+    "custody_read", "custody_snapshot", "custody_parent", "custody_workspace", "verifier_output_type",
+    "verifier_output_cap", "verifier_output_encoding", "telemetry_missing", "verifier_result_shape",
+    "verifier_containment_shape", "verifier_containment", "verifier_resource", "verifier_timeout",
+    "verifier_process_unavailable", "verifier_memory_cap", "verifier_statement_reconstruction", "verifier_preflight_rejected",
+})
+_MATERIAL_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/MATERIAL/v3\x00"
+_GENESIS_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/GENESIS/v3\x00"
+_OPERATION_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/OPERATION/v3\x00"
+_EVENT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/EVENT/v3\x00"
+_HEAD_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/HEAD/v3\x00"
+_RECEIPT_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/RECEIPT/v3\x00"
+_ACCEPTANCE_DOMAIN = b"BL/NATIVE-V3/VERIFICATION-QUEUE/ACCEPTANCE/v3\x00"
 RESTORE_CAPABILITY_LIMITATION_COUNT = 0
 
 _TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
@@ -89,7 +96,7 @@ _INDEXES = frozenset({"queue_jobs_status_eligible", "queue_leases_expiry", "queu
 _TRIGGER_NAMES = frozenset({"queue_jobs_no_delete", "queue_jobs_no_update", "queue_leases_no_update", "queue_results_no_update", "queue_results_no_delete", "queue_transitions_no_update", "queue_transitions_no_delete", "queue_metadata_immutable"})
 
 _TABLE_SQL: Final[dict[str, str]] = {
-    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=2), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 4))",
+    "queue_metadata": "CREATE TABLE queue_metadata (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL CHECK(schema_version=3), queue_id TEXT NOT NULL, config_json BLOB NOT NULL, config_digest BLOB NOT NULL CHECK(length(config_digest)=64), verifier_sha256 BLOB NOT NULL CHECK(length(verifier_sha256)=32), artifact_bytes_cap INTEGER NOT NULL CHECK(artifact_bytes_cap>0), head_root BLOB NOT NULL CHECK(length(head_root)=64), next_transition_seq INTEGER NOT NULL CHECK(next_transition_seq>=0), next_admission_seq INTEGER NOT NULL CHECK(next_admission_seq>=0), storage_used_bytes INTEGER NOT NULL CHECK(storage_used_bytes>=0), storage_reserved_bytes INTEGER NOT NULL CHECK(storage_reserved_bytes>=0), nonterminal_count INTEGER NOT NULL CHECK(nonterminal_count>=0), live_lease_count INTEGER NOT NULL CHECK(live_lease_count BETWEEN 0 AND 1))",
     "queue_jobs": "CREATE TABLE queue_jobs (job_id TEXT PRIMARY KEY, operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=64), material_digest BLOB NOT NULL CHECK(length(material_digest)=64), artifact_ref TEXT NOT NULL, artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes>0), artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256)=32), artifact_sha3_512 BLOB NOT NULL CHECK(length(artifact_sha3_512)=64), status TEXT NOT NULL CHECK(status IN ('QUEUED','LEASED','VERIFIED','REJECTED','HELD')), admission_seq INTEGER NOT NULL UNIQUE CHECK(admission_seq>=1), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 0 AND 3), next_eligible_ms INTEGER NOT NULL CHECK(next_eligible_ms>=0), created_ms INTEGER NOT NULL CHECK(created_ms>=0), updated_ms INTEGER NOT NULL CHECK(updated_ms>=0), last_error_code TEXT)",
     "queue_leases": "CREATE TABLE queue_leases (job_id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, token_digest BLOB NOT NULL CHECK(length(token_digest)=64), attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3), claim_sequence INTEGER NOT NULL UNIQUE CHECK(claim_sequence>=1), leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id))",
     "queue_results": "CREATE TABLE queue_results (operation_id BLOB PRIMARY KEY CHECK(length(operation_id)=64), job_id TEXT NOT NULL UNIQUE, terminal_status TEXT NOT NULL CHECK(terminal_status IN ('VERIFIED','REJECTED','HELD')), receipt_bytes BLOB CHECK(receipt_bytes IS NULL OR length(receipt_bytes)<=16384), error_code TEXT, completed_ms INTEGER NOT NULL CHECK(completed_ms>=0), claim_sequence INTEGER NOT NULL CHECK(claim_sequence>=1), worker_id TEXT NOT NULL, leased_ms INTEGER NOT NULL CHECK(leased_ms>=0), expires_ms INTEGER NOT NULL CHECK(expires_ms>leased_ms), token_digest BLOB NOT NULL CHECK(length(token_digest)=64), FOREIGN KEY(operation_id) REFERENCES queue_jobs(operation_id), FOREIGN KEY(job_id) REFERENCES queue_jobs(job_id), CHECK((terminal_status='VERIFIED' AND receipt_bytes IS NOT NULL AND error_code IS NULL) OR (terminal_status IN ('REJECTED','HELD') AND receipt_bytes IS NULL AND error_code IS NOT NULL)))",
@@ -158,11 +165,11 @@ def _parse_config(value: Any) -> tuple[dict[str, Any], bytes, bytes]:
     keys = {"schema_version", "queue_id", "capacity", "lease_seconds", "max_attempts", "max_worker_concurrency", "verifier_sha256", "artifact_bytes_cap", "retryable_codes"}
     if type(value) is not dict or set(value) != keys or value["schema_version"] != _SCHEMA_VERSION: _fail("config_keys")
     queue_id = _token(value["queue_id"], "config_queue_id"); capacity = _integer(value["capacity"], "config_capacity", minimum=1); lease_seconds = _integer(value["lease_seconds"], "config_lease_seconds", minimum=1)
-    if capacity > _MAX_CAPACITY or lease_seconds > 3600 or value["max_attempts"] != 3 or value["max_worker_concurrency"] != _MAX_WORKERS: _fail("config_bounds")
+    if capacity > _MAX_CAPACITY or lease_seconds != _LEASE_SECONDS or value["max_attempts"] != 3 or value["max_worker_concurrency"] != _MAX_WORKERS: _fail("config_bounds")
     artifact_cap = _integer(value["artifact_bytes_cap"], "config_artifact_cap", minimum=1)
     if artifact_cap > 512 * 1024 * 1024: _fail("config_artifact_cap")
     _blob(value["verifier_sha256"], 32, "config_verifier"); retryable = value["retryable_codes"]
-    if type(retryable) is not list or not retryable or any(type(item) is not str or _CODE.fullmatch(item) is None for item in retryable) or retryable != sorted(set(retryable)): _fail("config_retryable")
+    if type(retryable) is not list or tuple(retryable) != tuple(sorted(_RETRYABLE_CODES)): _fail("config_retryable")
     canonical = _json_bytes(value); return value, canonical, _sha(_MATERIAL_DOMAIN, canonical)
 
 
@@ -468,17 +475,31 @@ def _database_bytes(path: Path) -> bytes:
     finally: connection.close()
 
 
-def read_verified_job(path: Path, job_id: str, *, expected_config: Mapping[str, Any] | None = None) -> IndependentVerifiedQueueJob:
-    if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None: _fail("job_id")
+def _verified_job_from_row(row: tuple[Any, ...], config: Mapping[str, Any], summary: Mapping[str, Any]) -> IndependentVerifiedQueueJob:
+    if len(row) != 16 or row[7] != "VERIFIED" or row[14] != "VERIFIED" or row[15] is None: _fail("job_not_verified")
+    try:
+        receipt_bytes = bytes(row[15]); receipt_value = json.loads(receipt_bytes.decode("ascii")); receipt = _parse_receipt(receipt_value, config); evidence = receipt["evidence"]
+        return IndependentVerifiedQueueJob(queue_id=str(config["queue_id"]), config_digest=bytes.fromhex(str(summary["config_digest"])), verifier_sha256=bytes(evidence["verifier_sha256"]), job_id=str(row[0]), operation_id=bytes(receipt["operation_id"]), attempt=int(receipt["attempt"]), receipt_bytes=receipt_bytes, receipt_id=bytes(receipt["receipt_id"]), acceptance_bytes=bytes(evidence["acceptance_bytes"]), proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]), artifact_ref=str(row[3]), artifact_bytes=int(row[4]), artifact_sha256=bytes(row[5]), artifact_sha3_512=bytes(row[6]), circuit_id=bytes(evidence["circuit_id"]), peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]), cap_bytes=int(evidence["cap_bytes"]), cap_enforced=bool(evidence["cap_enforced"]), active_process_limit=int(evidence["active_process_limit"]), timed_out=bool(evidence["timed_out"]), exit_code=int(evidence["exit_code"]), stdout_sha3_512=bytes(evidence["stdout_sha3_512"]), stderr_sha3_512=bytes(evidence["stderr_sha3_512"]))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, KeyError):
+        _fail("job_read")
+
+
+def read_verified_jobs(path: Path, job_ids: list[str] | tuple[str, ...], *, expected_config: Mapping[str, Any] | None = None) -> tuple[IndependentVerifiedQueueJob, ...]:
+    if type(job_ids) not in (list, tuple) or not 1 <= len(job_ids) <= 256 or len(set(job_ids)) != len(job_ids) or any(type(job_id) is not str or _TOKEN.fullmatch(job_id) is None for job_id in job_ids): _fail("job_ids")
     identity = _path_identity(path); parent_identity = _parent_identity(path.parent); connection = _open_readonly(path)
     try:
         _connection_binding(connection, path, identity, parent_identity); connection.execute("BEGIN"); _connection_binding(connection, path, identity, parent_identity); summary = _verify_connection(connection, expected_config=expected_config)
         if identity is None or identity[3] != int(connection.execute("PRAGMA page_count").fetchone()[0]) * _PAGE_SIZE: _fail("database_image_bounds")
-        metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone(); row = connection.execute("SELECT j.*,r.terminal_status,r.receipt_bytes FROM queue_jobs j JOIN queue_results r ON r.operation_id=j.operation_id WHERE j.job_id=?", (job_id,)).fetchone()
-        if metadata is None or row is None or row[7] != "VERIFIED" or row[14] != "VERIFIED" or row[15] is None: _fail("job_not_verified")
-        config = json.loads(bytes(metadata[0]).decode("ascii")); receipt_bytes = bytes(row[15]); receipt_value = json.loads(receipt_bytes.decode("ascii")); receipt = _parse_receipt(receipt_value, config); evidence = receipt["evidence"]
-        result = IndependentVerifiedQueueJob(queue_id=str(config["queue_id"]), config_digest=bytes.fromhex(summary["config_digest"]), verifier_sha256=bytes(evidence["verifier_sha256"]), job_id=job_id, operation_id=bytes(receipt["operation_id"]), attempt=int(receipt["attempt"]), receipt_bytes=receipt_bytes, receipt_id=bytes(receipt["receipt_id"]), acceptance_bytes=bytes(evidence["acceptance_bytes"]), proof_acceptance_digest=bytes(evidence["proof_acceptance_digest"]), artifact_ref=str(row[3]), artifact_bytes=int(row[4]), artifact_sha256=bytes(row[5]), artifact_sha3_512=bytes(row[6]), circuit_id=bytes(evidence["circuit_id"]), peak_job_commit_bytes=int(evidence["peak_job_commit_bytes"]), cap_bytes=int(evidence["cap_bytes"]), cap_enforced=bool(evidence["cap_enforced"]), active_process_limit=int(evidence["active_process_limit"]), timed_out=bool(evidence["timed_out"]), exit_code=int(evidence["exit_code"]), stdout_sha3_512=bytes(evidence["stdout_sha3_512"]), stderr_sha3_512=bytes(evidence["stderr_sha3_512"]))
-        _connection_binding(connection, path, identity, parent_identity); connection.execute("ROLLBACK"); _connection_binding(connection, path, identity, parent_identity); return result
+        metadata = connection.execute("SELECT config_json FROM queue_metadata WHERE id=1").fetchone()
+        if metadata is None: _fail("metadata_missing")
+        try: config = json.loads(bytes(metadata[0]).decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError): _fail("config_encoding")
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = connection.execute(f"SELECT j.*,r.terminal_status,r.receipt_bytes FROM queue_jobs j JOIN queue_results r ON r.operation_id=j.operation_id WHERE j.job_id IN ({placeholders})", tuple(job_ids)).fetchall()
+        by_id = {str(row[0]): tuple(row) for row in rows}
+        if set(by_id) != set(job_ids): _fail("job_not_verified")
+        result = tuple(_verified_job_from_row(by_id[job_id], config, summary) for job_id in job_ids)
+        _connection_binding(connection, path, identity, parent_identity); connection.execute("COMMIT"); _connection_binding(connection, path, identity, parent_identity); return result
     except IndependentQueueError:
         if connection.in_transaction: connection.execute("ROLLBACK")
         raise
@@ -486,6 +507,11 @@ def read_verified_job(path: Path, job_id: str, *, expected_config: Mapping[str, 
         if connection.in_transaction: connection.execute("ROLLBACK")
         _fail("job_read")
     finally: connection.close()
+
+
+def read_verified_job(path: Path, job_id: str, *, expected_config: Mapping[str, Any] | None = None) -> IndependentVerifiedQueueJob:
+    if type(job_id) is not str or _TOKEN.fullmatch(job_id) is None: _fail("job_id")
+    return read_verified_jobs(path, (job_id,), expected_config=expected_config)[0]
 
 
 def _fsync_parent(path: Path) -> None:
@@ -544,4 +570,4 @@ def restore_export_to_fresh_database(path: Path, raw: bytes) -> dict[str, Any]:
             except (OSError, ValueError): pass
 
 
-__all__ = ("IndependentQueueError", "IndependentVerifiedQueueJob", "read_verified_job", "restore_export_to_fresh_database", "verify_database", "verify_export_bytes")
+__all__ = ("IndependentQueueError", "IndependentVerifiedQueueJob", "read_verified_job", "read_verified_jobs", "restore_export_to_fresh_database", "verify_database", "verify_export_bytes")

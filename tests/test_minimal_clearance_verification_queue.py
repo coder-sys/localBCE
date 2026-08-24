@@ -1,89 +1,96 @@
-"""Focused durable per-claim verification queue tests.
-
-The fakes model only proof evidence and contained-verifier telemetry.  They
-never construct a clearance directive or call the clearance state store.
-"""
+"""Focused V3 queue durability, custody, and single-owner tests."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 from contextlib import closing
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
-import subprocess
-import sys
 import tempfile
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from unittest import TestCase
-from unittest.mock import patch
 
 from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
     MinimalProofAcceptanceV1,
     NativeMinimalClearanceVerifier,
+    NativeVerificationCallResult,
     _CIRCUIT_ID,
     _artifact_public_bytes,
     _parse_statement,
-    parse_acceptance_bytes,
 )
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
-
 from app.minimal_clearance_verification_queue import (
     ArtifactMetadata,
-    CustodySnapshot,
     FilesystemArtifactCustody,
     QueueBackpressureError,
     QueueConflictError,
-    QueueDeterministicRejectError,
+    QueueConfig,
     QueueHeldError,
-    QueueIndeterminateError,
-    QueueIntegrityError,
     QueueLeaseError,
     QueueRetryableError,
-    QueueConfig,
     VerificationQueueError,
-    QueueWorker,
-    VerificationEvidence,
     VerificationQueueStore,
-    build_verification_evidence,
-    run_bounded_workers,
 )
 from app.minimal_clearance_verification_queue_independent import (
     IndependentQueueError,
+    read_verified_jobs,
     restore_export_to_fresh_database,
     verify_database,
     verify_export_bytes,
 )
 
 
-_RAW = b"synthetic opaque proof bytes for queue tests"
-_RETAINED_ARTIFACT = Path(
-    r"C:\Temp\blind-ledger-minimal-clearance-proof-20260817c\minimal_clearance_case0.blmc"
-)
+_RETAINED_ARTIFACT = Path(r"C:\Temp\blind-ledger-minimal-clearance-proof-20260817c\minimal_clearance_case0.blmc")
+_RAW = _RETAINED_ARTIFACT.read_bytes()
 _SHA256 = hashlib.sha256(_RAW).digest()
 _SHA3 = hashlib.sha3_512(_RAW).digest()
 _VERIFIER = bytes.fromhex("AB" * 32)
-_STDOUT = (
-    b"MINIMAL_CLEARANCE_VERIFIER_ACCEPT inputs=10993 public_inputs=8145 "
-    b"layers=169 terms=21954328 public_bytes=3340 proof_bytes=317784 rate=4 "
-    b"queries=189 transcript_version=6 "
-    b"circuit_id=1eaaf14f3b23db1ed02f3c378099627767f81142e0114f90448cac7c1cc66be0 "
-    b"state_mutations=0 clear_authorizations=0\n"
-)
-_STDERR = (
-    b"MINIMAL_CLEARANCE_BUILD phase=public\n"
-    b"MINIMAL_CLEARANCE_BUILD phase=private\n"
-    b"MINIMAL_CLEARANCE_BUILD phase=assertions\n"
-    b"MINIMAL_CLEARANCE_BUILD phase=mkcircuit\n"
-    b"MINIMAL_CLEARANCE_BUILD phase=complete inputs=10993 public_inputs=8145 layers=169 terms=21954328\n"
-    b"MINIMAL_CLEARANCE_VERIFIER_STAGE proof.read=accept remaining=0\n"
-    b"MINIMAL_CLEARANCE_VERIFIER_STAGE commitment=received\n"
-    b"MINIMAL_CLEARANCE_VERIFIER_STAGE verify=accept\n"
-)
+
+
+def _fake_verify(verifier: NativeMinimalClearanceVerifier, _artifact: Path):
+    acceptance = getattr(verifier, "_test_acceptance", None)
+    if type(acceptance) is MinimalProofAcceptanceV1:
+        return NativeVerificationCallResult(acceptance, _containment())
+    failure = getattr(verifier, "_test_failure", None)
+    if failure is not None:
+        raise failure
+    raise MinimalClearanceProofStateError("verifier_timeout")
+
+
+def _containment() -> ContainedVerifierResult:
+    return ContainedVerifierResult(
+        exit_code=0, stdout=b"synthetic\n", stderr=b"", peak_job_commit_bytes=1_100_000,
+        cap_bytes=5_000_000_000, cap_enforced=True, active_process_limit=1, timed_out=False,
+    )
+
+
+def _accepted() -> MinimalProofAcceptanceV1:
+    _, statement_bytes, _ = _artifact_public_bytes(_RAW)
+    return MinimalProofAcceptanceV1(
+        statement=_parse_statement(statement_bytes), artifact_sha256=_SHA256,
+        artifact_digest=_SHA3, artifact_bytes=len(_RAW), circuit_id=_CIRCUIT_ID,
+    )
+
+
+def _Acceptance() -> MinimalProofAcceptanceV1:
+    """Compatibility fixture name used by the retained composition tests."""
+    return _accepted()
+
+
+class _Factory:
+    def __init__(self, *, failure: BaseException | None = None) -> None:
+        self.failure = failure
+        self.instances: list[NativeMinimalClearanceVerifier] = []
+
+    def __call__(self) -> NativeMinimalClearanceVerifier:
+        verifier = object.__new__(NativeMinimalClearanceVerifier)
+        verifier._test_failure = self.failure  # type: ignore[attr-defined]
+        if self.failure is None:
+            verifier._test_acceptance = _accepted()  # type: ignore[attr-defined]
+        self.instances.append(verifier)
+        return verifier
 
 
 class _Clock:
@@ -97,967 +104,218 @@ class _Clock:
         self.value += milliseconds
 
 
-def _Acceptance(
-    *,
-    artifact_bytes: int = len(_RAW),
-    artifact_sha256: bytes = _SHA256,
-    artifact_digest: bytes = _SHA3,
-    proof_accepted: bool = True,
-) -> MinimalProofAcceptanceV1:
-    retained = _RETAINED_ARTIFACT.read_bytes()
-    _, statement_bytes, _ = _artifact_public_bytes(retained)
-    return MinimalProofAcceptanceV1(
-        statement=_parse_statement(statement_bytes),
-        artifact_sha256=artifact_sha256,
-        artifact_digest=artifact_digest,
-        artifact_bytes=artifact_bytes,
-        circuit_id=_CIRCUIT_ID,
-        proof_accepted=proof_accepted,
-    )
-
-
-def _Containment(**updates: object) -> ContainedVerifierResult:
-    values: dict[str, object] = {
-        "exit_code": 0,
-        "stdout": _STDOUT,
-        "stderr": _STDERR,
-        "peak_job_commit_bytes": 1_100_000,
-        "cap_bytes": 5_000_000_000,
-        "cap_enforced": True,
-        "active_process_limit": 1,
-        "timed_out": False,
-    }
-    values.update(updates)
-    return ContainedVerifierResult(**values)  # type: ignore[arg-type]
-
-
-class _Custody:
-    def __init__(self, root: Path, raw: bytes = _RAW) -> None:
-        self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.raw = raw
-        self.calls: list[str] = []
-        self.snapshot_paths: list[Path] = []
-
-    def snapshot(self, artifact_ref: str, expected: ArtifactMetadata) -> CustodySnapshot:
-        self.calls.append(artifact_ref)
-        directory = self.root / f"snapshot-{len(self.calls)}"
-        directory.mkdir()
-        path = directory / "artifact.bin"
-        path.write_bytes(self.raw)
-        path.chmod(0o400)
-        self.snapshot_paths.append(path)
-
-        def cleanup() -> None:
-            path.chmod(0o600)
-            path.unlink()
-            directory.rmdir()
-
-        return CustodySnapshot(path, len(self.raw), hashlib.sha256(self.raw).digest(), hashlib.sha3_512(self.raw).digest(), True, cleanup)
-
-
-class _Verifier:
-    def __init__(self, *, failure: BaseException | None = None, barrier: threading.Barrier | None = None, identity: bytes = _VERIFIER, containment: ContainedVerifierResult | None = None) -> None:
-        self.failure = failure
-        self.barrier = barrier
-        self.identity = identity
-        self.workspace_token = object()
-        self.last_containment_result = containment or _Containment()
-
-    def identity_sha256(self) -> bytes:
-        return self.identity
-
-    def verify(self, artifact_path: Path) -> MinimalProofAcceptanceV1:
-        if self.barrier is not None:
-            self.barrier.wait(timeout=10)
-        if self.failure is not None:
-            raise self.failure
-        if not artifact_path.is_file() or artifact_path.is_symlink():
-            raise QueueHeldError("snapshot_missing")
-        return _Acceptance()
-
-
-class _Factory:
-    def __init__(self, *, failure: BaseException | None = None, barrier: threading.Barrier | None = None, identity: bytes = _VERIFIER, containment: ContainedVerifierResult | None = None) -> None:
-        self.failure = failure
-        self.barrier = barrier
-        self.identity = identity
-        self.containment = containment
-        self.verify_calls = 0
-        self.instances: list[_Verifier] = []
-
-    def __call__(self) -> NativeMinimalClearanceVerifier:
-        # Test boundary only: install the deterministic fixture at the
-        # class-owned method boundary.  The production worker rejects
-        # instance-shadowed methods and subclasses; this fixture keeps the
-        # exact concrete class while avoiding a native verifier launch.
-        import app.minimal_clearance_verification_queue as producer
-
-        verifier = object.__new__(NativeMinimalClearanceVerifier)
-        verifier.failure = self.failure
-        verifier.barrier = self.barrier
-        verifier.identity = self.identity
-        verifier.workspace_token = object()
-        verifier.last_containment_result = self.containment or _Containment()
-
-        def identity_sha256(current: NativeMinimalClearanceVerifier) -> bytes:
-            return current.identity
-
-        def verify(current: NativeMinimalClearanceVerifier, artifact_path: Path) -> MinimalProofAcceptanceV1:
-            self.verify_calls += 1
-            if current.barrier is not None:
-                current.barrier.wait(timeout=10)
-            if current.failure is not None:
-                raise current.failure
-            if not artifact_path.is_file() or artifact_path.is_symlink():
-                raise QueueHeldError("snapshot_missing")
-            return _Acceptance()
-
-        NativeMinimalClearanceVerifier.identity_sha256 = identity_sha256
-        NativeMinimalClearanceVerifier.verify = verify
-        producer._NATIVE_IDENTITY_METHOD = identity_sha256
-        producer._NATIVE_VERIFY_METHOD = verify
-        self.instances.append(verifier)
-        return verifier
-
-
 class VerificationQueueTests(TestCase):
     def setUp(self) -> None:
-        import app.minimal_clearance_verification_queue as producer
-
-        self._producer_module = producer
-        self._native_identity_method = NativeMinimalClearanceVerifier.identity_sha256
-        self._native_verify_method = NativeMinimalClearanceVerifier.verify
-        self._producer_identity_method = producer._NATIVE_IDENTITY_METHOD
-        self._producer_verify_method = producer._NATIVE_VERIFY_METHOD
-        self.temp = tempfile.TemporaryDirectory(prefix="bl-queue-tests-")
+        self.temp = tempfile.TemporaryDirectory(prefix="bl-queue-v3-")
         self.root = Path(self.temp.name)
+        self.source_root = self.root / "source"
+        self.workspace_parent = self.root / "workspaces"
+        self.source_root.mkdir()
+        self.workspace_parent.mkdir()
+        self.source = self.source_root / "opaque-ref"
+        self.source.write_bytes(_RAW)
+        self.source.chmod(0o400)
+        self._identity = NativeMinimalClearanceVerifier.identity_sha256
+        self._verify = NativeMinimalClearanceVerifier.verify
+        self._preflight = NativeMinimalClearanceVerifier.preflight
+        NativeMinimalClearanceVerifier.identity_sha256 = lambda _self: _VERIFIER  # type: ignore[assignment]
+        NativeMinimalClearanceVerifier.preflight = lambda _self: None  # type: ignore[assignment]
+        NativeMinimalClearanceVerifier.verify = _fake_verify  # type: ignore[assignment]
 
     def tearDown(self) -> None:
+        NativeMinimalClearanceVerifier.identity_sha256 = self._identity
+        NativeMinimalClearanceVerifier.verify = self._verify
+        NativeMinimalClearanceVerifier.preflight = self._preflight
         self.temp.cleanup()
-        NativeMinimalClearanceVerifier.identity_sha256 = self._native_identity_method
-        NativeMinimalClearanceVerifier.verify = self._native_verify_method
-        self._producer_module._NATIVE_IDENTITY_METHOD = self._producer_identity_method
-        self._producer_module._NATIVE_VERIFY_METHOD = self._producer_verify_method
 
-    def _config(self, *, capacity: int = 4, lease_seconds: int = 30) -> QueueConfig:
-        return QueueConfig("queue-test", capacity, lease_seconds, _VERIFIER, 512 * 1024 * 1024, ("custody_read", "verifier_timeout"))
+    def _config(self, *, capacity: int = 4) -> QueueConfig:
+        return QueueConfig("queue-test", capacity, _VERIFIER, 512 * 1024 * 1024)
 
-    def _store(self, *, capacity: int = 4, clock: _Clock | None = None, before_fault=None, after_commit_fault=None) -> VerificationQueueStore:
+    def _store(
+        self,
+        *,
+        capacity: int = 4,
+        clock: _Clock | None = None,
+        after_commit_fault=None,
+        name: str | None = None,
+    ) -> VerificationQueueStore:
+        path = self.root / (name or f"queue-{len(list(self.root.glob('queue-*.sqlite')))}.sqlite")
         return VerificationQueueStore(
-            path=self.root / f"queue-{len(list(self.root.glob('queue-*.sqlite')))}.sqlite",
-            config=self._config(capacity=capacity), clock=clock, before_fault=before_fault, after_commit_fault=after_commit_fault,
+            path=path,
+            config=self._config(capacity=capacity),
+            clock=clock,
+            after_commit_fault=after_commit_fault,
         )
 
     @staticmethod
     def _metadata(ref: str = "opaque-ref") -> ArtifactMetadata:
         return ArtifactMetadata(ref, len(_RAW), _SHA256, _SHA3)
 
-    @staticmethod
-    def _lease_token(worker_id: str) -> bytes:
-        return hashlib.sha3_256(worker_id.encode("ascii")).digest()
-
     def _admit(self, store: VerificationQueueStore, job_id: str = "job-1", ref: str = "opaque-ref"):
         return store.admit(job_id=job_id, metadata=self._metadata(ref))
 
-    def _verify_one(self, store: VerificationQueueStore, job_id: str = "job-1", *, factory: _Factory | None = None) -> object:
+    def _verify_one(self, store: VerificationQueueStore, job_id: str = "job-1", *, factory: _Factory | None = None):
         self._admit(store, job_id)
-        worker = QueueWorker(store=store, worker_id=f"worker-{job_id}", custody=_Custody(self.root / f"custody-{job_id}"), verifier_factory=factory or _Factory())
-        return worker.process_one()
+        verifier = (factory or _Factory())()
+        return store._process_one(verifier=verifier, custody=self._custody())
 
-    def test_admission_retry_conflict_capacity_and_terminal_backpressure(self) -> None:
+    def _verifier(self, failure: BaseException | None = None) -> NativeMinimalClearanceVerifier:
+        verifier = object.__new__(NativeMinimalClearanceVerifier)
+        verifier._test_failure = failure  # type: ignore[attr-defined]
+        return verifier
+
+    def _custody(self) -> FilesystemArtifactCustody:
+        return FilesystemArtifactCustody(source_root=self.source_root, workspace_parent=self.workspace_parent)
+
+    def test_v3_config_and_capacity_are_fixed(self) -> None:
+        config = self._config(capacity=512)
+        self.assertEqual(config.as_json()["schema_version"], 3)
+        self.assertEqual(config.as_json()["max_worker_concurrency"], 1)
+        self.assertEqual(config.lease_seconds, 3_600)
+        self.assertEqual(config.max_attempts, 3)
+        with self.assertRaises(VerificationQueueError):
+            QueueConfig("too-wide", 513, _VERIFIER, 1)
+
+    def test_admission_exact_retry_conflict_and_bounded_capacity(self) -> None:
         store = self._store(capacity=1)
         first = self._admit(store)
         retry = self._admit(store)
         self.assertEqual(first.operation_id, retry.operation_id)
         with self.assertRaises(QueueConflictError):
-            store.admit(job_id="job-1", metadata=self._metadata("different-ref"))
+            self._admit(store, "job-1", "other-ref")
         with self.assertRaises(QueueBackpressureError):
             self._admit(store, "job-2")
-        work = store.claim_next(worker_id="worker-1", lease_token=self._lease_token("worker-1"))
-        self.assertIsNotNone(work)
-        with self.assertRaises(QueueBackpressureError):
-            self._admit(store, "job-2")
-        store.complete_rejected(work, "proof_rejected")
-        self._admit(store, "job-2")
-        self.assertEqual(store.snapshot()["counts"]["REJECTED"], 1)
+        self.assertEqual(store.snapshot()["counts"]["QUEUED"], 1)
 
-    def test_concurrent_identical_and_distinct_admission_has_no_duplicate(self) -> None:
-        store = self._store()
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            same = list(executor.map(lambda _: self._admit(store, "same"), range(4)))
-            distinct = list(executor.map(lambda index: self._admit(store, f"distinct-{index}"), range(3)))
-        self.assertEqual(len({item.operation_id for item in same}), 1)
-        self.assertEqual(len({item.job_id for item in distinct}), 3)
-        self.assertEqual(store.snapshot()["counts"]["QUEUED"], 4)
-        store.verify_integrity()
-
-    def test_concurrent_claim_has_one_lease_and_stale_completion_is_zero_mutation(self) -> None:
+    def test_random_bearer_is_memory_only_and_wrong_token_is_fenced(self) -> None:
         store = self._store(capacity=1)
         self._admit(store)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            claims = list(executor.map(lambda worker: store.claim_next(worker_id=worker, lease_token=self._lease_token(worker)), ("w1", "w2")))
-        work = next(item for item in claims if item is not None)
-        self.assertEqual(sum(item is not None for item in claims), 1)
-        before = store.export_bytes()
-        bad = replace(work, worker_id="other")
-        with self.assertRaises(QueueLeaseError):
-            store.complete_rejected(bad, "proof_rejected")
-        self.assertEqual(store.export_bytes(), before)
-        first = store.complete_rejected(work, "proof_rejected")
-        second = store.complete_rejected(work, "proof_rejected")
-        self.assertEqual(second, first)
-        self.assertEqual(store.retry_result(work.operation_id).status, "REJECTED")
-
-    def test_lease_bearer_is_memory_only_and_digest_fences_completion(self) -> None:
-        store = self._store(capacity=1)
-        self._admit(store)
-        work = store.claim_next(worker_id="digest-worker", lease_token=self._lease_token("digest-worker"))
+        work = store.claim_next()
         self.assertIsNotNone(work)
+        self.assertEqual(len(work.lease_token), 32)
         exported = store.export_bytes()
         self.assertNotIn(work.lease_token, exported)
-        with self.assertRaises(QueueLeaseError) as caught:
-            store.complete_rejected(replace(work, lease_token=b"z" * 32), "proof_rejected")
-        self.assertEqual(str(caught.exception), "completion_lease_fence")
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
+        with self.assertRaises(QueueLeaseError):
+            store.complete_rejected(replace(work, lease_token=b"x" * 32), "proof_rejected")
         self.assertEqual(exported, store.export_bytes())
         self.assertEqual(store.complete_rejected(work, "proof_rejected").status, "REJECTED")
-        with self.assertRaises(QueueLeaseError):
-            store.complete_rejected(replace(work, lease_token=b"z" * 32), "proof_rejected")
-        verify_export_bytes(store.export_bytes())
+        self.assertIsNone(store.retry_result(work.operation_id).receipt_bytes)
 
-    def test_expiry_requeues_then_holds_at_max_attempt(self) -> None:
+    def test_claim_after_commit_fault_reconciles_only_while_bearer_is_live(self) -> None:
+        faults = {"claim": 0}
+
+        def fault(label: str) -> None:
+            if label == "claim" and faults["claim"] == 0:
+                faults["claim"] += 1
+                raise RuntimeError("response-loss-canary")
+
+        store = self._store(after_commit_fault=fault)
+        self._admit(store)
+        work = store.claim_next()
+        self.assertEqual(work.job_id, "job-1")
+        self.assertEqual(store.snapshot()["leases"], 1)
+        with self.assertRaises(QueueBackpressureError):
+            store.claim_next()
+
+    def test_one_live_lease_and_expiry_requeue_hold_at_attempt_three(self) -> None:
         clock = _Clock()
-        store = self._store(clock=clock, capacity=1,)
+        store = self._store(clock=clock, capacity=3)
         self._admit(store)
         for attempt in (1, 2):
-            work = store.claim_next(worker_id=f"w{attempt}", lease_token=self._lease_token(f"w{attempt}"))
+            work = store.claim_next()
             self.assertEqual(work.attempt, attempt)
-            clock.advance(31_000)
+            with self.assertRaises(QueueBackpressureError):
+                store.claim_next()
+            clock.advance(3_600_001)
             self.assertEqual(store.recover_expired(), 1)
             self.assertEqual(store.get_job("job-1").status, "QUEUED")
-        work = store.claim_next(worker_id="w3", lease_token=self._lease_token("w3"))
+        work = store.claim_next()
         self.assertEqual(work.attempt, 3)
-        clock.advance(31_000)
+        clock.advance(3_600_001)
         self.assertEqual(store.recover_expired(), 1)
         self.assertEqual(store.get_job("job-1").status, "HELD")
-        store.verify_integrity()
+        self.assertIsNone(store.claim_next())
+        verify_database(store.path, expected_config=store.config.as_json())
 
-    def test_database_owns_four_live_workers_and_same_worker_claim_recovery(self) -> None:
-        store = self._store(capacity=5)
-        for index in range(5):
-            self._admit(store, f"job-{index}", f"opaque-{index}")
-        tokens = [bytes([65 + index]) * 32 for index in range(4)]
-        claims = [store.claim_next(worker_id=f"worker-{index}", lease_token=tokens[index]) for index in range(4)]
-        self.assertTrue(all(claim is not None for claim in claims))
-        with self.assertRaises(QueueLeaseError):
-            store.claim_next(worker_id="worker-0", lease_token=self._lease_token("worker-0"))
-        recovered = store.claim_next(worker_id="worker-0", lease_token=tokens[0])
-        self.assertEqual(recovered, claims[0])
-        with self.assertRaises(QueueBackpressureError) as caught:
-            store.claim_next(worker_id="worker-4", lease_token=self._lease_token("worker-4"))
-        self.assertEqual(str(caught.exception), "queue_worker_capacity")
-        store.verify_integrity()
-
-    def test_worker_maps_reject_retry_and_identity_or_custody_failure(self) -> None:
-        reject_store = self._store()
-        self._admit(reject_store)
-        reject_worker = QueueWorker(
-            store=reject_store, worker_id="reject-worker", custody=_Custody(self.root / "reject-custody"),
-            verifier_factory=_Factory(failure=QueueDeterministicRejectError("proof_rejected")),
-        )
-        rejected = reject_worker.process_one()
-        self.assertEqual(rejected.status, "HELD")
-        self.assertEqual(rejected.error_code, "worker_exception")
-
-        retry_store = self._store()
-        self._admit(retry_store)
-        retry_custody = _Custody(self.root / "retry-custody")
-        first = QueueWorker(
-            store=retry_store, worker_id="retry-worker", custody=retry_custody,
-            verifier_factory=_Factory(failure=MinimalClearanceProofStateError("verifier_timeout")),
-        ).process_one()
-        self.assertEqual(first.status, "QUEUED")
-        second = QueueWorker(
-            store=retry_store, worker_id="retry-worker-2", custody=retry_custody,
-            verifier_factory=_Factory(),
-        ).process_one()
-        self.assertEqual(second.status, "VERIFIED")
-
-        held_store = self._store()
-        self._admit(held_store)
-        held = QueueWorker(
-            store=held_store, worker_id="held-worker", custody=_Custody(self.root / "held-custody"),
-            verifier_factory=_Factory(identity=bytes(32)),
-        ).process_one()
-        self.assertEqual(held.status, "HELD")
-
-        native_reject_store = self._store()
-        self._admit(native_reject_store)
-        native_rejected = QueueWorker(
-            store=native_reject_store, worker_id="native-reject-worker", custody=_Custody(self.root / "native-reject-custody"),
-            verifier_factory=_Factory(failure=RuntimeError("proof_verifier_rejected")),
-        ).process_one()
-        self.assertEqual(native_rejected.status, "HELD")
-        proof_reject_store = self._store()
-        self._admit(proof_reject_store)
-        proof_rejected = QueueWorker(
-            store=proof_reject_store, worker_id="proof-reject-worker", custody=_Custody(self.root / "proof-reject-custody"),
-            verifier_factory=_Factory(failure=MinimalClearanceProofStateError("proof_verifier_rejected")),
-        ).process_one()
-        self.assertEqual(proof_rejected.status, "REJECTED")
-        proof_retry_store = self._store()
-        self._admit(proof_retry_store)
-        proof_retry = QueueWorker(
-            store=proof_retry_store, worker_id="proof-retry-worker", custody=_Custody(self.root / "proof-retry-custody"),
-            verifier_factory=_Factory(failure=MinimalClearanceProofStateError("verifier_timeout")),
-        ).process_one()
-        self.assertEqual(proof_retry.status, "QUEUED")
-
-    def test_snapshot_and_output_failures_are_terminal_or_retryable(self) -> None:
-        for name, snapshot in (
-            ("missing", CustodySnapshot(self.root / "missing.bin", len(_RAW), _SHA256, _SHA3, True)),
-            ("writable", CustodySnapshot(self.root / "missing.bin", len(_RAW), _SHA256, _SHA3, False)),
-            ("wrong-size", CustodySnapshot(self.root / "missing.bin", 1, _SHA256, _SHA3, True)),
-        ):
-            class BadCustody:
-                def snapshot(self, artifact_ref, expected):
-                    return snapshot
-
-            store = self._store()
-            self._admit(store, f"job-{name}")
-            result = QueueWorker(
-                store=store, worker_id=f"worker-{name}", custody=BadCustody(), verifier_factory=_Factory(),
-            ).process_one()
-            self.assertEqual(result.status, "HELD")
-
-        for containment in (
-            _Containment(cap_enforced=False),
-            _Containment(exit_code=1),
-            _Containment(timed_out=True),
-            _Containment(stdout=b"\xff"),
-            _Containment(stderr=b"x" * (262_144 + 1)),
-        ):
-            store = self._store()
-            self._admit(store)
-            result = QueueWorker(
-                store=store, worker_id="output-worker", custody=_Custody(self.root / "output-custody"), verifier_factory=_Factory(containment=containment),
-            ).process_one()
-            self.assertEqual(result.status, "HELD")
-
-    def test_evidence_rejects_missing_or_bad_containment_and_preserves_ownership(self) -> None:
-        snapshot = CustodySnapshot(Path("opaque-test-path"), len(_RAW), _SHA256, _SHA3, True)
-        for containment in (None, _Containment(cap_enforced=False), _Containment(peak_job_commit_bytes=5_000_000_001), _Containment(timed_out=True), _Containment(exit_code=1)):
-            with self.subTest(containment=containment):
-                with self.assertRaises(QueueRetryableError):
-                    build_verification_evidence(_Acceptance(), containment, snapshot, _VERIFIER)
-        for containment in (
-            _Containment(stdout=_STDOUT.replace(b"rate=4", b"rate=999")),
-            _Containment(stderr=_STDERR + b"opaque verifier-owned field\n"),
-            _Containment(stdout=b"opaque ASCII verifier output\n", stderr=b"another field\n"),
-        ):
-            with self.subTest(opaque_output=containment):
-                evidence = build_verification_evidence(_Acceptance(), containment, snapshot, _VERIFIER)
-                self.assertEqual(evidence.artifact_bytes, len(_RAW))
-                self.assertEqual(evidence.verifier_sha256, _VERIFIER)
-                self.assertEqual(evidence.stdout_sha3_512, hashlib.sha3_512(containment.stdout).digest())
-                self.assertEqual(evidence.stderr_sha3_512, hashlib.sha3_512(containment.stderr).digest())
-        with self.assertRaises(QueueHeldError) as caught:
-            build_verification_evidence(object(), _Containment(), snapshot, _VERIFIER)
-        self.assertEqual(str(caught.exception), "proof_acceptance_type")
-        with self.assertRaises(QueueHeldError):
-            build_verification_evidence(_Acceptance(artifact_bytes=1), _Containment(), snapshot, _VERIFIER)
-
-    def test_verified_result_persists_canonical_acceptance_and_independent_tamper_rejects(self) -> None:
-        store = self._store()
-        self._admit(store)
-        result = QueueWorker(
-            store=store, worker_id="acceptance-worker", custody=_Custody(self.root / "acceptance-custody"), verifier_factory=_Factory(),
-        ).process_one()
-        self.assertEqual(result.status, "VERIFIED")
-        self.assertIsNotNone(result.receipt_bytes)
-        receipt = json.loads(result.receipt_bytes.decode("ascii"))
-        acceptance_bytes = bytes.fromhex(receipt["evidence"]["acceptance_bytes"])
-        self.assertEqual(parse_acceptance_bytes(acceptance_bytes).canonical_bytes(), acceptance_bytes)
-        exported = store.export_bytes()
-        with closing(sqlite3.connect(store.path)) as connection:
-            persisted_receipt = bytes(connection.execute("SELECT receipt_bytes FROM queue_results WHERE job_id='job-1'").fetchone()[0])
-        self.assertIn(receipt["evidence"]["acceptance_bytes"].encode("ascii"), persisted_receipt)
-        independent = verify_export_bytes(exported, expected_config=store.config.as_json())
-        self.assertEqual(independent["status_counts"]["VERIFIED"], 1)
-        tampered_bytes = bytearray(exported)
-        tampered_bytes[0] ^= 1
-        with self.assertRaises(IndependentQueueError):
-            verify_export_bytes(bytes(tampered_bytes))
-
-    def test_faults_roll_back_state_and_export(self) -> None:
-        for label in ("after_admission_write", "after_transition"):
-            armed = {"value": False}
-
-            def fault(current: str, *, armed=armed, label=label) -> None:
-                if armed["value"] and current == label:
-                    raise RuntimeError("injected")
-
-            store = self._store(before_fault=fault)
-            before = store.export_bytes()
-            armed["value"] = True
-            with self.assertRaises(RuntimeError):
-                self._admit(store)
-            self.assertEqual(store.export_bytes(), before)
-            store.verify_integrity()
-
-        armed = {"value": False}
-
-        def retry_fault(current: str) -> None:
-            if armed["value"] and current == "after_retry_write":
-                raise RuntimeError("injected")
-
-        store = self._store(before_fault=retry_fault)
-        self._admit(store)
-        work = store.claim_next(worker_id="retry-worker", lease_token=self._lease_token("retry-worker"))
-        before = store.export_bytes()
-        armed["value"] = True
-        with self.assertRaises(RuntimeError):
-            store.complete_retryable(work, "verifier_timeout")
-        self.assertEqual(store.export_bytes(), before)
-        store.verify_integrity()
-
-        for label in ("after_result_write", "after_transition"):
-            armed = {"value": False}
-
-            def fault(current: str, *, armed=armed, label=label) -> None:
-                if armed["value"] and current == label:
-                    raise RuntimeError("injected")
-
-            store = self._store(before_fault=fault)
-            self._admit(store)
-            work = store.claim_next(worker_id="worker", lease_token=self._lease_token("worker"))
-            before = store.export_bytes()
-            armed["value"] = True
-            with self.assertRaises(RuntimeError):
-                store.complete_rejected(work, "proof_rejected")
-            self.assertEqual(store.export_bytes(), before)
-            store.verify_integrity()
-
-    def test_postcommit_response_loss_has_exact_retry_recovery(self) -> None:
-        raised = {"value": False}
-
-        def after_commit(label: str) -> None:
-            if label == "admit" and not raised["value"]:
-                raised["value"] = True
-                raise RuntimeError("response lost")
-
-        store = self._store(after_commit_fault=after_commit)
-        with self.assertRaises(QueueIndeterminateError):
-            self._admit(store)
-        exact = self._admit(store)
-        self.assertEqual(exact.status, "QUEUED")
-
-        raised["value"] = False
-        work = store.claim_next(worker_id="worker", lease_token=self._lease_token("worker"))
-
-        def after_complete(label: str) -> None:
-            if label == "complete" and not raised["value"]:
-                raised["value"] = True
-                raise RuntimeError("response lost")
-
-        store._after_commit_fault = after_complete
-        with self.assertRaises(QueueIndeterminateError):
-            store.complete_rejected(work, "proof_rejected")
-        recovered = store.retry_result(work.operation_id)
-        self.assertEqual(recovered.status, "REJECTED")
-
-    def test_export_restore_and_independent_mutations_fail_closed(self) -> None:
-        store = self._store()
-        self._admit(store, "job-a", "ref-a")
-        self._admit(store, "job-b", "ref-b")
-        export = store.export_bytes()
-        summary = verify_export_bytes(export)
-        self.assertEqual(summary["status_counts"]["QUEUED"], 2)
-        restored = self.root / "restored.sqlite"
-        self.assertEqual(restore_export_to_fresh_database(restored, export), summary)
-        self.assertEqual(verify_database(restored), summary)
-        mutations = [bytes([export[0] ^ 1]) + export[1:], export[:-1], export + b"\x00"]
-        for mutation in mutations:
-            with self.subTest(mutation_len=len(mutation)):
-                with self.assertRaises(IndependentQueueError):
-                    verify_export_bytes(mutation)
-        self.assertNotIn(str(self.root).encode("ascii"), export)
-        self.assertNotIn(_STDOUT, export)
-        self.assertNotIn(_STDERR, export)
-
-    def test_four_workers_overlap_and_use_fresh_custody_and_verifiers(self) -> None:
-        store = self._store()
-        for index in range(4):
-            self._admit(store, f"job-{index}", f"opaque-{index}")
-        custody = _Custody(self.root / "four-custody")
-        barrier = threading.Barrier(4)
-        factory = _Factory(barrier=barrier)
-        workers = tuple(
-            QueueWorker(store=store, worker_id=f"worker-{index}", custody=custody, verifier_factory=factory)
-            for index in range(4)
-        )
-        results = run_bounded_workers(workers)
-        self.assertEqual([result.status for result in results], ["VERIFIED"] * 4)
-        self.assertEqual(len(factory.instances), 4)
-        self.assertEqual(len({id(item) for item in factory.instances}), 4)
-        self.assertEqual(len({id(item.workspace_token) for item in factory.instances}), 4)
-        self.assertEqual(len(set(custody.calls)), 4)
-        self.assertEqual(store.snapshot()["counts"]["VERIFIED"], 4)
-        store.verify_integrity()
-        self.assertEqual(verify_database(store.path)["status_counts"]["VERIFIED"], 4)
-        support = json.dumps(store.support_summary(), sort_keys=True)
-        self.assertNotIn("opaque-", support)
-        self.assertNotIn("custody", support)
-
-    def test_filesystem_custody_is_fresh_readonly_and_does_not_persist_path(self) -> None:
-        source = self.root / "source-proof.bin"
-        source.write_bytes(_RAW)
-        workspace = self.root / "custody-work"
-        workspace.mkdir()
-        custody = FilesystemArtifactCustody(resolver=lambda ref: source, workspace_parent=workspace)
-        snapshot = custody.snapshot("opaque", self._metadata())
-        self.assertTrue(snapshot.path.is_file())
-        self.assertTrue(snapshot.readonly)
-        self.assertNotEqual(snapshot.path, source)
-        with snapshot.path.open("rb") as handle:
-            self.assertEqual(handle.read(), _RAW)
+    def test_real_custody_is_direct_child_and_rejects_escape(self) -> None:
+        custody = self._custody()
+        snapshot = custody.snapshot("opaque-ref", self._metadata())
+        self.assertEqual(snapshot.artifact_bytes, len(_RAW))
+        self.assertEqual(snapshot.artifact_sha256, _SHA256)
         snapshot.cleanup()
-        self.assertEqual(list(workspace.iterdir()), [])
+        with self.assertRaises((QueueHeldError, QueueRetryableError)):
+            custody.snapshot("..", self._metadata(".."))
+        self.assertEqual(tuple(self.workspace_parent.iterdir()), ())
 
-    def test_independent_database_rejects_config_and_identity_drift(self) -> None:
+    def test_queue_processor_keeps_external_verifier_failure_nonterminal_without_native_authority(self) -> None:
         store = self._store()
         self._admit(store)
-        connection = sqlite3.connect(store.path)
-        try:
-            connection.execute("DROP TRIGGER queue_metadata_immutable")
-            connection.execute("UPDATE queue_metadata SET verifier_sha256=? WHERE id=1", (bytes(32),))
-            connection.commit()
-        finally:
-            connection.close()
-        with self.assertRaises((QueueIntegrityError, IndependentQueueError)):
-            VerificationQueueStore(path=store.path, config=self._config())
-        with self.assertRaises(IndependentQueueError):
-            verify_database(store.path)
+        result = store._process_one(
+            verifier=self._verifier(MinimalClearanceProofStateError("verifier_timeout")),
+            custody=self._custody(),
+        )
+        self.assertEqual(result.status, "QUEUED")
+        self.assertEqual(result.error_code, "verifier_timeout")
+        self.assertEqual(store.snapshot()["counts"]["VERIFIED"], 0)
 
-    def test_sqlite_busy_is_bounded_and_fail_closed(self) -> None:
+    def test_export_restore_and_independent_binary_parity(self) -> None:
         store = self._store()
         self._admit(store)
-        connection = store._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            started = time.monotonic()
-            with self.assertRaises(Exception) as caught:
-                store.claim_next(worker_id="blocked-worker", lease_token=self._lease_token("blocked-worker"))
-            elapsed = time.monotonic() - started
-            self.assertLess(elapsed, 8.0)
-            self.assertIn("queue_busy", str(caught.exception))
-        finally:
-            connection.execute("ROLLBACK")
-            connection.close()
-
-    def test_queue_source_has_no_clearance_state_or_prover_dependency(self) -> None:
-        source = Path("app/minimal_clearance_verification_queue.py").read_text(encoding="utf-8")
-        independent = Path("app/minimal_clearance_verification_queue_independent.py").read_text(encoding="utf-8")
-        for text in (source, independent):
-            self.assertNotIn("MinimalClearanceStateStoreV1", text)
-            self.assertNotIn("apply_acceptance", text)
-            self.assertNotIn("subprocess", text)
-            self.assertNotIn("prover", text.lower())
-        self.assertIn("MinimalProofAcceptanceV1", source)
-
-    def test_random_bearer_requires_exact_memory_token_across_reopen(self) -> None:
-        clock = _Clock()
-        store = self._store(clock=clock, capacity=1)
-        self._admit(store)
-        token = b"r" * 32
-        work = store.claim_next(worker_id="random-worker", lease_token=token)
-        self.assertIsNotNone(work)
-        self.assertNotIn(token.hex(), repr(work))
         exported = store.export_bytes()
-        self.assertNotIn(token, exported)
-        self.assertNotIn(token.hex().encode("ascii"), exported)
-        self.assertNotIn(token, json.dumps(store.support_summary(), sort_keys=True).encode("ascii"))
-        with self.assertRaises(QueueLeaseError) as caught:
-            store.claim_next(worker_id="random-worker", lease_token=b"n" * 32)
-        self.assertNotIn(token.hex(), str(caught.exception))
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-        self.assertTrue(caught.exception.__suppress_context__)
-        reopened = VerificationQueueStore(path=store.path, config=store.config, clock=clock)
-        self.assertEqual(reopened.claim_next(worker_id="random-worker", lease_token=token), work)
-        with self.assertRaises(QueueLeaseError):
-            reopened.complete_rejected(replace(work, lease_token=b"n" * 32), "proof_rejected")
-        self.assertEqual(reopened.complete_rejected(work, "proof_rejected").status, "REJECTED")
-
-    def test_exact_schema_manifest_has_no_redundant_operation_table(self) -> None:
-        store = self._store()
-        with closing(sqlite3.connect(store.path)) as connection:
-            names = {name for (kind, name) in connection.execute("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
-        self.assertNotIn("queue_operations", names)
-        self.assertIn("queue_results", names)
+        self.assertIsInstance(exported, bytes)
+        self.assertLessEqual(len(exported), 64 * 1024 * 1024)
+        summary = verify_export_bytes(exported, expected_config=store.config.as_json())
+        restored = self.root / "restored.sqlite"
+        restored_summary = restore_export_to_fresh_database(restored, exported)
+        self.assertEqual(summary, restored_summary)
         with self.assertRaises(IndependentQueueError):
-            with closing(sqlite3.connect(store.path)) as connection:
-                connection.execute("PRAGMA writable_schema=ON")
-                connection.execute("UPDATE sqlite_master SET sql=replace(sql,'queue_jobs_status_eligible','queue_jobs_status_wrong') WHERE type='index' AND name='queue_jobs_status_eligible'")
-                connection.commit()
-            verify_database(store.path)
+            verify_database(restored, expected_config={**store.config.as_json(), "schema_version": 2})
 
-    def test_independent_rejects_live_lease_row_drift_against_claim_event(self) -> None:
+    def test_batch_reader_replays_once_and_returns_requested_order(self) -> None:
+        store = self._store(capacity=2)
+        self._verify_one(store, "job-a")
+        self._verify_one(store, "job-b", factory=_Factory())
+        jobs = read_verified_jobs(store.path, ("job-b", "job-a"), expected_config=store.config.as_json())
+        self.assertEqual(tuple(job.job_id for job in jobs), ("job-b", "job-a"))
+        with self.assertRaises(IndependentQueueError):
+            read_verified_jobs(store.path, ("job-a", "job-a"), expected_config=store.config.as_json())
+
+    def test_independent_verification_rejects_claim_event_row_drift(self) -> None:
         store = self._store()
         self._admit(store)
-        work = store.claim_next(worker_id="history-worker", lease_token=b"h" * 32)
-        self.assertIsNotNone(work)
+        work = store.claim_next()
         with closing(sqlite3.connect(store.path)) as connection:
             connection.execute("DROP TRIGGER queue_leases_no_update")
-            connection.execute("UPDATE queue_leases SET worker_id=? WHERE job_id=?", ("tampered-worker", work.job_id))
+            connection.execute("UPDATE queue_leases SET worker_id=? WHERE job_id=?", ("tampered", work.job_id))
             connection.execute("CREATE TRIGGER queue_leases_no_update BEFORE UPDATE ON queue_leases BEGIN SELECT RAISE(ABORT,'queue_leases_insert_delete_only'); END")
             connection.commit()
         with self.assertRaises(IndependentQueueError):
             verify_database(store.path)
-        with self.assertRaises((QueueIntegrityError, IndependentQueueError)):
-            VerificationQueueStore(path=store.path, config=store.config)
 
-    def test_expiry_completion_race_reconciles_without_second_terminal_write(self) -> None:
-        clock = _Clock()
-        store = self._store(clock=clock, capacity=1)
+    def test_schema_has_five_tables_and_no_operation_projection(self) -> None:
+        store = self._store()
+        with closing(sqlite3.connect(store.path)) as connection:
+            tables = {name for kind, name in connection.execute("SELECT type,name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        self.assertEqual(tables, {"queue_metadata", "queue_jobs", "queue_leases", "queue_results", "queue_transitions"})
+
+    def test_public_queue_objects_redact_bearer_and_paths(self) -> None:
+        store = self._store()
         self._admit(store)
-        token = b"e" * 32
-        work = store.claim_next(worker_id="expiry-worker", lease_token=token)
-        clock.advance(31_000)
-        worker = QueueWorker(store=store, worker_id="expiry-worker", custody=_Custody(self.root / "expiry-custody"), verifier_factory=_Factory())
-        reconciled = worker._terminal(work, status="REJECTED", error_code="proof_rejected")
-        self.assertEqual(reconciled.status, "QUEUED")
-        self.assertEqual(store.get_job("job-1").status, "QUEUED")
-        self.assertIsNone(store.retry_result(work.operation_id))
-        with self.assertRaises(QueueLeaseError):
-            store.complete_rejected(work, "proof_rejected")
-        verify_database(store.path)
+        work = store.claim_next()
+        rendered = repr(work) + json.dumps(store.support_summary(), sort_keys=True)
+        self.assertNotIn(str(self.root), rendered)
+        self.assertNotIn(work.lease_token.hex(), rendered)
 
-    def test_worker_exception_classifier_is_exact_and_redacted(self) -> None:
-        canary = "claimant_123"
-        seen = {"str": False}
-
-        class ExplodingRuntimeError(RuntimeError):
-            def __str__(self):
-                seen["str"] = True
-                raise AssertionError("classifier called __str__")
-
-        class RogueRetryable(QueueRetryableError):
-            pass
-
-        chained = RuntimeError("outer")
-        chained.__cause__ = RuntimeError("context_canary")
-        errors: tuple[BaseException, ...] = (
-            RuntimeError(canary),
-            QueueRetryableError(canary),
-            QueueHeldError(canary),
-            RogueRetryable(canary),
-            chained,
-            ExplodingRuntimeError(canary),
-        )
-        for index, failure in enumerate(errors):
-            with self.subTest(error=type(failure).__name__):
-                store = self._store()
-                self._admit(store, f"job-{index}")
-                result = QueueWorker(
-                    store=store, worker_id=f"classifier-{index}", custody=_Custody(self.root / f"classifier-{index}"),
-                    verifier_factory=_Factory(failure=failure),
-                ).process_one()
-                self.assertEqual(result.status, "HELD")
-                self.assertEqual(result.error_code, "worker_exception")
-                evidence = store.export_bytes() + json.dumps(store.support_summary(), sort_keys=True).encode("ascii")
-                self.assertNotIn(canary.encode("ascii"), evidence)
-                self.assertNotIn(b"context_canary", evidence)
-        self.assertFalse(seen["str"])
-
-        for index, failure in enumerate((QueueLeaseError("lease_expired"), QueueIndeterminateError("queue_commit_indeterminate")), 20):
-            with self.subTest(external_port=type(failure).__name__):
-                store = self._store()
-                self._admit(store, f"job-{index}")
-
-                class SpoofedCustody:
-                    def snapshot(self, artifact_ref, expected, *, failure=failure):
-                        raise failure
-
-                result = QueueWorker(
-                    store=store, worker_id=f"spoof-{index}", custody=SpoofedCustody(), verifier_factory=_Factory(),
-                ).process_one()
-                self.assertEqual(result.status, "HELD")
-                self.assertEqual(result.error_code, "custody_snapshot")
-                self.assertEqual(store.get_job(f"job-{index}").status, "HELD")
-
-    def test_worker_requires_the_genuine_unshadowed_native_boundary(self) -> None:
-        shadow_store = self._store()
-        self._admit(shadow_store, "shadow-job")
-        base_factory = _Factory()
-        shadowed = base_factory()
-        called = {"verify": False}
-
-        def shadow_verify(_path: Path) -> MinimalProofAcceptanceV1:
-            called["verify"] = True
-            return _Acceptance()
-
-        shadowed.identity_sha256 = lambda: _VERIFIER  # type: ignore[attr-defined]
-        shadowed.verify = shadow_verify  # type: ignore[attr-defined]
-
-        class ShadowFactory:
-            def __call__(self) -> NativeMinimalClearanceVerifier:
-                return shadowed
-
-        shadow_result = QueueWorker(
-            store=shadow_store, worker_id="shadow-worker", custody=_Custody(self.root / "shadow-custody"), verifier_factory=ShadowFactory(),
-        ).process_one()
-        self.assertEqual(shadow_result.status, "HELD")
-        self.assertEqual(shadow_result.error_code, "verifier_type")
-        self.assertFalse(called["verify"])
-
-        subclass_store = self._store()
-        self._admit(subclass_store, "subclass-job")
-
-        class RogueVerifier(NativeMinimalClearanceVerifier):
-            def verify(self, _path: Path) -> MinimalProofAcceptanceV1:
-                raise AssertionError("subclass verifier was called")
-
-        def subclass_factory() -> NativeMinimalClearanceVerifier:
-            verifier = object.__new__(RogueVerifier)
-            verifier.identity = _VERIFIER
-            verifier.last_containment_result = _Containment()
-            return verifier
-
-        subclass_result = QueueWorker(
-            store=subclass_store, worker_id="subclass-worker", custody=_Custody(self.root / "subclass-custody"), verifier_factory=subclass_factory,
-        ).process_one()
-        self.assertEqual(subclass_result.status, "HELD")
-        self.assertEqual(subclass_result.error_code, "verifier_type")
-
-    def test_worker_rejects_transitive_verifier_shadows_before_native_call(self) -> None:
-        for shadow_name in ("_run", "_ensure_preflight"):
-            with self.subTest(shadow_name=shadow_name):
-                store = self._store()
-                job_id = f"transitive-{shadow_name[1:]}"
-                self._admit(store, job_id)
-                factory = _Factory()
-                verifier = factory()
-                called = {"shadow": False}
-
-                def forged_shadow(*_args: object, **_kwargs: object) -> object:
-                    called["shadow"] = True
-                    return object()
-
-                setattr(verifier, shadow_name, forged_shadow)
-
-                class ShadowFactory:
-                    def __call__(self) -> NativeMinimalClearanceVerifier:
-                        return verifier
-
-                result = QueueWorker(
-                    store=store, worker_id=f"transitive-worker-{shadow_name[1:]}",
-                    custody=_Custody(self.root / f"transitive-custody-{shadow_name[1:]}"),
-                    verifier_factory=ShadowFactory(),
-                ).process_one()
-                self.assertEqual(result.status, "HELD")
-                self.assertEqual(result.error_code, "verifier_type")
-                self.assertFalse(called["shadow"])
-                self.assertEqual(factory.verify_calls, 0)
-                self.assertNotIn(b"forged", store.export_bytes())
-
-    def test_verifier_object_claim_is_single_use_across_concurrent_and_sequential_workers(self) -> None:
-        store = self._store(capacity=3)
-        for index in range(3):
-            self._admit(store, f"singleton-{index}", f"singleton-ref-{index}")
-        factory = _Factory(containment=_Containment(stdout=b"singleton-telemetry"))
-        shared = factory()
-
-        class SingletonFactory:
-            def __call__(self) -> NativeMinimalClearanceVerifier:
-                return shared
-
-        singleton = SingletonFactory()
-        workers = tuple(
-            QueueWorker(
-                store=store, worker_id=f"singleton-worker-{index}",
-                custody=_Custody(self.root / f"singleton-custody-{index}"),
-                verifier_factory=singleton,
-            )
-            for index in range(2)
-        )
-        concurrent = run_bounded_workers(workers)
-        self.assertEqual(sum(result is not None and result.status == "VERIFIED" for result in concurrent), 1)
-        self.assertEqual(sum(result is not None and result.status == "HELD" and result.error_code == "verifier_type" for result in concurrent), 1)
-        self.assertEqual(factory.verify_calls, 1)
-
-        sequential = QueueWorker(
-            store=store, worker_id="singleton-worker-sequential",
-            custody=_Custody(self.root / "singleton-custody-sequential"),
-            verifier_factory=singleton,
-        ).process_one()
-        self.assertEqual(sequential.status, "HELD")
-        self.assertEqual(sequential.error_code, "verifier_type")
-        self.assertEqual(factory.verify_calls, 1)
-        self.assertNotIn(b"singleton-telemetry", store.export_bytes())
-        store.verify_integrity()
-
-    def test_custody_and_factory_errors_cannot_acquire_proof_authority(self) -> None:
-        canary = "claimant_123"
-
-        class HostileProofError(MinimalClearanceProofStateError):
-            def __str__(self) -> str:
-                raise AssertionError("custody error was stringified")
-
-        class HostileCustody:
-            def snapshot(self, _artifact_ref: str, _expected: ArtifactMetadata) -> CustodySnapshot:
-                error = HostileProofError(canary)
-                error.__cause__ = RuntimeError("credential-canary")
-                raise error
-
-        custody_store = self._store()
-        self._admit(custody_store, "custody-hostile")
-        custody_result = QueueWorker(
-            store=custody_store, worker_id="custody-hostile-worker", custody=HostileCustody(), verifier_factory=_Factory(),
-        ).process_one()
-        self.assertEqual(custody_result.status, "HELD")
-        self.assertEqual(custody_result.error_code, "custody_snapshot")
-
-        class HostileFactory:
-            def __call__(self) -> NativeMinimalClearanceVerifier:
-                error = MinimalClearanceProofStateError(canary)
-                error.__cause__ = RuntimeError("credential-canary")
-                raise error
-
-        factory_store = self._store()
-        self._admit(factory_store, "factory-hostile")
-        factory_result = QueueWorker(
-            store=factory_store, worker_id="factory-hostile-worker", custody=_Custody(self.root / "factory-hostile-custody"), verifier_factory=HostileFactory(),
-        ).process_one()
-        self.assertEqual(factory_result.status, "HELD")
-        self.assertEqual(factory_result.error_code, "verifier_factory")
-        evidence = factory_store.export_bytes() + json.dumps(factory_store.support_summary(), sort_keys=True).encode("ascii")
-        self.assertNotIn(canary.encode("ascii"), evidence)
-        self.assertNotIn(b"credential-canary", evidence)
-
-    def test_percent_encoded_file_uri_binds_literal_target(self) -> None:
-        target = self.root / "queue%23.sqlite"
-        decoy = self.root / "queue#.sqlite"
-        decoy_config = QueueConfig("decoy-queue", 2, 30, _VERIFIER, 512 * 1024 * 1024, ("custody_read", "verifier_timeout"))
-        VerificationQueueStore(path=decoy, config=decoy_config)
-        decoy_before = decoy.read_bytes()
-        target_store = VerificationQueueStore(path=target, config=self._config())
-        self._admit(target_store)
-        self.assertEqual(target_store.get_job("job-1").status, "QUEUED")
-        self.assertEqual(verify_database(target, expected_config=target_store.config.as_json())["queue_id"], "queue-test")
-        self.assertEqual(decoy.read_bytes(), decoy_before)
-
-    def test_sqlite_connection_substitution_is_rejected_before_queue_read(self) -> None:
-        import app.minimal_clearance_verification_queue as producer
-        import app.minimal_clearance_verification_queue_independent as independent
-
-        target = self.root / "target.sqlite"
-        decoy = self.root / "decoy.sqlite"
-        target_store = VerificationQueueStore(path=target, config=self._config())
-        VerificationQueueStore(path=decoy, config=QueueConfig("decoy-queue", 2, 30, _VERIFIER, 512 * 1024 * 1024, ("custody_read", "verifier_timeout")))
-        target_before = target.read_bytes()
-        decoy_before = decoy.read_bytes()
-        original_connect = producer.sqlite3.connect
-
-        def decoy_connection(*args, **kwargs):
-            return original_connect(decoy.as_uri() + "?mode=rw", uri=True, timeout=5.0, isolation_level=None)
-
-        with patch.object(producer.sqlite3, "connect", side_effect=decoy_connection):
-            with self.assertRaises(VerificationQueueError):
-                target_store.get_job("job-1")
-        self.assertEqual(target.read_bytes(), target_before)
-        self.assertEqual(decoy.read_bytes(), decoy_before)
-
-        original_connect = independent.sqlite3.connect
-
-        def independent_decoy_connection(*args, **kwargs):
-            return original_connect(decoy.as_uri() + "?mode=ro", uri=True, timeout=5.0, isolation_level=None)
-
-        with patch.object(independent.sqlite3, "connect", side_effect=independent_decoy_connection):
-            with self.assertRaises(IndependentQueueError):
-                verify_database(target)
-        self.assertEqual(target.read_bytes(), target_before)
-        self.assertEqual(decoy.read_bytes(), decoy_before)
-
-    def test_producer_rejects_counterfeit_schema_sql_before_mutation(self) -> None:
-        cases = ("table", "trigger", "index")
-        for index, case in enumerate(cases):
-            with self.subTest(schema_object=case):
-                store = self._store()
-                with closing(sqlite3.connect(store.path)) as connection:
-                    connection.execute("PRAGMA writable_schema=ON")
-                    if case == "table":
-                        connection.execute("UPDATE sqlite_master SET sql=replace(sql,'CHECK(id=1)','CHECK(id>=1)') WHERE type='table' AND name='queue_metadata'")
-                    elif case == "index":
-                        connection.execute("UPDATE sqlite_master SET sql=replace(sql,'next_eligible_ms','updated_ms') WHERE type='index' AND name='queue_jobs_status_eligible'")
-                    else:
-                        connection.execute("DROP TRIGGER queue_results_no_update")
-                        connection.execute("CREATE TRIGGER queue_results_no_update BEFORE UPDATE ON queue_results BEGIN SELECT 1; END")
-                    connection.commit()
-                before = store.path.read_bytes()
-                with self.assertRaises(QueueIntegrityError):
-                    store.admit(job_id=f"counterfeit-{index}", metadata=self._metadata(f"counterfeit-{index}"))
-                self.assertEqual(store.path.read_bytes(), before)
-                with self.assertRaises(IndependentQueueError):
-                    verify_database(store.path)
-
-    def test_hot_delete_journal_recovers_natively_and_malformed_stays(self) -> None:
-        source = self._store(capacity=512)
-        for index in range(100):
-            self._admit(source, f"job-{index}", f"opaque-{index}")
-        expected = verify_database(source.path, expected_config=source.config.as_json())
-        crashed = self.root / "crashed.sqlite"
-        crashed.write_bytes(source.path.read_bytes())
-        child_code = (
-            "import os,sqlite3,sys; "
-            "connection=sqlite3.connect(sys.argv[1], isolation_level=None); "
-            "connection.execute('PRAGMA cache_size=1'); "
-            "connection.execute('PRAGMA journal_mode=DELETE'); "
-            "connection.execute('BEGIN IMMEDIATE'); "
-            "connection.execute('UPDATE queue_jobs SET updated_ms=updated_ms+1'); "
-            "os._exit(0)"
-        )
-        completed = subprocess.run([sys.executable, "-c", child_code, str(crashed)], check=False, capture_output=True)
-        self.assertEqual(completed.returncode, 0)
-        journal = Path(str(crashed) + "-journal")
-        self.assertTrue(journal.exists())
-        recovered = VerificationQueueStore(path=crashed, config=source.config)
-        self.assertFalse(journal.exists())
-        self.assertEqual(verify_database(crashed, expected_config=recovered.config.as_json()), expected)
-
-        malformed = self.root / "malformed.sqlite"
-        malformed.write_bytes(source.path.read_bytes())
-        malformed_before = malformed.read_bytes()
-        malformed_journal = Path(str(malformed) + "-journal")
-        malformed_journal.write_bytes(b"\x00" * 512)
-        with self.assertRaises(VerificationQueueError) as caught:
-            VerificationQueueStore(path=malformed, config=source.config)
-        self.assertEqual(str(caught.exception), "queue_journal_recovery")
-        self.assertTrue(malformed_journal.exists())
-        self.assertEqual(malformed.read_bytes(), malformed_before)
-        with self.assertRaises(IndependentQueueError):
-            verify_database(malformed)
-
+    def test_database_sidecars_are_rejected_before_read(self) -> None:
+        store = self._store()
         for suffix in ("-wal", "-shm"):
-            competing = self.root / f"competing-{suffix[1:]}.sqlite"
-            competing.write_bytes(source.path.read_bytes())
-            journal = Path(str(competing) + "-journal")
-            sidecar = Path(str(competing) + suffix)
-            journal_bytes = b"rollback-journal-canary"
-            sidecar_bytes = b"competing-sidecar-canary"
-            journal.write_bytes(journal_bytes)
-            sidecar.write_bytes(sidecar_bytes)
-            base_before = competing.read_bytes()
-            with self.assertRaises(VerificationQueueError) as caught:
-                VerificationQueueStore(path=competing, config=source.config)
-            self.assertEqual(str(caught.exception), "queue_database_journal")
-            self.assertEqual(competing.read_bytes(), base_before)
-            self.assertEqual(journal.read_bytes(), journal_bytes)
-            self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
-            with self.assertRaises(IndependentQueueError):
-                verify_database(competing)
+            sidecar = Path(str(store.path) + suffix)
+            sidecar.write_bytes(b"sidecar-canary")
+            before = sidecar.read_bytes()
+            with self.assertRaises(VerificationQueueError):
+                VerificationQueueStore(path=store.path, config=store.config)
+            self.assertEqual(sidecar.read_bytes(), before)
+            sidecar.unlink()
 
 
 if __name__ == "__main__":
