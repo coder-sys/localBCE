@@ -20,6 +20,7 @@ from app.mirror.nc_medicaid_fhir_profile import (
     NcMedicaidFhirProfileError,
     NcMedicaidFhirSourceProfile,
 )
+from app.mirror.error_boundary import raise_redacted
 
 
 class NcMedicaidFhirError(ValueError):
@@ -120,8 +121,8 @@ class LiveFhirTransport:
 def canonical_json(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise NcMedicaidFhirError("json:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(NcMedicaidFhirError, "json:noncanonical")
 
 
 def _duplicate_reject(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -138,8 +139,8 @@ def _parse_fixture_body(raw: bytes) -> dict[str, object]:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_reject, parse_constant=lambda _value: (_ for _ in ()).throw(NcMedicaidFhirError("json:constant")))
     except NcMedicaidFhirError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise NcMedicaidFhirError("json:parse") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise_redacted(NcMedicaidFhirError, "json:parse")
     if not isinstance(value, dict):
         raise NcMedicaidFhirError("json:top-level")
     if canonical_json(value) != raw:
@@ -197,8 +198,8 @@ def _retry_after(response: FhirTransportResponse) -> int | None:
         return None
     try:
         seconds = int(value)
-    except (TypeError, ValueError) as exc:
-        raise NcMedicaidFhirError("retry-after") from exc
+    except (TypeError, ValueError):
+        raise_redacted(NcMedicaidFhirError, "retry-after")
     if seconds < 0 or seconds > NC_MEDICAID_PROFILE.transport_caps["max_retry_after_seconds"]:
         raise NcMedicaidFhirError("retry-after")
     return seconds
@@ -305,11 +306,18 @@ def _fetch_page(profile: NcMedicaidFhirSourceProfile, transport: FhirTransport, 
             if failure_code not in ("rate-limit", "server-error") or attempt >= profile.transport_caps["max_retries"]:
                 break
         except FhirTransportError as exc:
-            transport_error = "timeout" if str(exc) == "timeout" else "transport"
+            transport_error = "timeout" if exc.args == ("timeout",) else "transport"
             attempts.append(0)
             retry_after_values.append(None)
             if attempt >= profile.transport_caps["max_retries"]:
                 failure_code = "timeout" if transport_error == "timeout" else "retry-exhausted"
+                break
+        except Exception:
+            transport_error = "transport"
+            attempts.append(0)
+            retry_after_values.append(None)
+            if attempt >= profile.transport_caps["max_retries"]:
+                failure_code = "retry-exhausted"
                 break
     if response is None:
         return _failure_page(profile, sequence, request_url, None, attempts, retry_after_values, failure_code or "timeout", transport_error)

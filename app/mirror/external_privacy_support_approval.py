@@ -13,6 +13,8 @@ import json
 import re
 from typing import Protocol
 
+from app.mirror.error_boundary import raise_redacted
+
 
 ARTIFACT_KIND = "MIRROR_EXTERNAL_PRIVACY_SUPPORT_APPROVAL_V1"
 SCHEMA = "mirror-external-privacy-support-approval-v1"
@@ -89,8 +91,8 @@ def _canonical(value: object) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise ExternalPrivacySupportApprovalError("privacy-support:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(ExternalPrivacySupportApprovalError, "privacy-support:noncanonical")
 
 
 def _digest(label: str, value: object) -> str:
@@ -380,8 +382,8 @@ class ExternalPrivacySupportApprovalService:
                 "support_authority_evidence_digest": verifier.support_authority_evidence_digest,
                 "revocation_head_digest": verifier.revocation_head_digest,
             }
-        except AttributeError as exc:
-            raise ExternalPrivacySupportApprovalError("privacy-support:verifier-config") from exc
+        except Exception:
+            raise_redacted(ExternalPrivacySupportApprovalError, "privacy-support:verifier-config")
         if verifier_id != policy.verifier_id or verifier_epoch != policy.verifier_epoch:
             raise ExternalPrivacySupportApprovalError("privacy-support:verifier-config")
         _text(verifier_id, "verifier-id")
@@ -400,8 +402,8 @@ class ExternalPrivacySupportApprovalService:
             raise ExternalPrivacySupportApprovalError("privacy-support:evidence-byte-cap")
         try:
             result = self.verifier.verify(snapshot)
-        except Exception as exc:
-            raise ExternalPrivacySupportApprovalError("privacy-support:verifier-failure") from exc
+        except Exception:
+            raise_redacted(ExternalPrivacySupportApprovalError, "privacy-support:verifier-failure")
         if type(result) is not VerifiedPrivacySupportAssertionV1:
             raise ExternalPrivacySupportApprovalError("privacy-support:verifier-result-type")
         if result.policy_digest != self.policy.digest:

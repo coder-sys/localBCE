@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import traceback
 import unittest
 
 from app.mirror import external_source_adapter as adapter
@@ -202,6 +203,33 @@ class ExternalSourceAdapterTests(unittest.TestCase):
         artifact = self.service.admit(self.raw)
         with self.assertRaisesRegex(independent.IndependentExternalSourceError, "payload-rebound"):
             independent.verify_artifact(artifact.raw, policy=self.policy.material(), capture_raw=b"altered-capture-v1xx")
+
+    def test_public_errors_discard_verifier_and_parser_canaries(self) -> None:
+        canary = "PHI_CANARY Bearer SECRET C:\\Users\\private\\record"
+
+        class RaisingVerifier(_FixtureVerifier):
+            def verify(self, capture_raw: bytes) -> adapter.VerifiedExternalCaptureV1:
+                raise RuntimeError(canary)
+
+        with self.assertRaises(adapter.ExternalSourceAdapterError) as caught:
+            adapter.ExternalSourceAdapterService(self.policy, RaisingVerifier(self.policy)).admit(self.raw)
+        error = caught.exception
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertEqual(str(error), "external:verifier-failure")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        self.assertTrue(error.__suppress_context__)
+        self.assertNotIn(canary, repr(error) + rendered)
+
+        with self.assertRaises(independent.IndependentExternalSourceError) as caught:
+            independent.verify_artifact(b'{"artifact_kind":"caf\xc3\xa9"}', policy=self.policy.material())
+        error = caught.exception
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertEqual(str(error), "external:parse")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        self.assertTrue(error.__suppress_context__)
+        self.assertNotIn("caf", repr(error) + rendered)
 
     def test_independent_mutations_reject_unknown_fields_status_flags_and_rebound_ids(self) -> None:
         artifact = self.service.admit(self.raw)

@@ -26,6 +26,7 @@ from app.mirror.nc_medicaid_fhir_profile import (
     SYNTHETIC_ROLE_ID,
 )
 from app.mirror.source_admission import EvidenceMode, VerifiedSourceCoverage
+from app.mirror.error_boundary import raise_redacted
 
 
 class IndependentNcMedicaidFhirError(ValueError):
@@ -80,8 +81,8 @@ _REFERENCE = re.compile(r"^(Practitioner|Location)/[A-Za-z0-9._-]{1,64}$")
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise IndependentNcMedicaidFhirError("json:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(IndependentNcMedicaidFhirError, "json:noncanonical")
 
 
 def _duplicate_reject(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -124,8 +125,8 @@ def _parse(raw: bytes, profile: NcMedicaidFhirSourceProfile) -> dict[str, object
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_reject, parse_constant=lambda _value: (_ for _ in ()).throw(IndependentNcMedicaidFhirError("json:constant")))
     except IndependentNcMedicaidFhirError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentNcMedicaidFhirError("json:parse") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise_redacted(IndependentNcMedicaidFhirError, "json:parse")
     if not isinstance(value, dict):
         raise IndependentNcMedicaidFhirError("json:top-level")
     _walk(value, profile=profile)
@@ -230,8 +231,8 @@ def _validate_date(value: object, label: str) -> str:
         raise IndependentNcMedicaidFhirError(f"{label}:format")
     try:
         datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise IndependentNcMedicaidFhirError(f"{label}:format") from exc
+    except ValueError:
+        raise_redacted(IndependentNcMedicaidFhirError, f"{label}:format")
     return text
 
 
@@ -584,8 +585,8 @@ def _freshness(profile: NcMedicaidFhirSourceProfile, marker: str | None) -> str:
     try:
         fetched = datetime.fromisoformat(profile.fetched_at.replace("Z", "+00:00")).astimezone(timezone.utc)
         updated = datetime.fromisoformat(marker.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError as exc:
-        raise IndependentNcMedicaidFhirError("markers:last-updated") from exc
+    except ValueError:
+        raise_redacted(IndependentNcMedicaidFhirError, "markers:last-updated")
     age = (fetched - updated).days
     if age < 0 or age > profile.max_server_marker_age_days:
         return "STALE"
@@ -768,10 +769,25 @@ def verify_bytes(raw: bytes, *, profile: NcMedicaidFhirSourceProfile = NC_MEDICA
 
 
 def to_verified_source_coverage(result: Mapping[str, object], *, profile: NcMedicaidFhirSourceProfile = NC_MEDICAID_PROFILE) -> VerifiedSourceCoverage:
-    if result.get("accepted") is not True or result.get("source_status") != "COMPLETE" or result.get("page_complete") is not True:
-        code = result.get("failure_code") or result.get("source_status") or "partial"
-        raise IndependentNcMedicaidFhirError("source:" + str(code).lower())
-    if result.get("freshness") not in {"FRESH", "UNKNOWN"}:
+    try:
+        accepted = result.get("accepted")
+        source_status = result.get("source_status")
+        page_complete = result.get("page_complete")
+        failure_code = result.get("failure_code")
+        freshness = result.get("freshness")
+    except Exception:
+        raise_redacted(IndependentNcMedicaidFhirError, "source:input")
+    if accepted is not True or type(source_status) is not str or source_status != "COMPLETE" or page_complete is not True:
+        if failure_code is not None:
+            if type(failure_code) is not str or failure_code not in FAILURE_CODES:
+                raise_redacted(IndependentNcMedicaidFhirError, "source:invalid")
+            code = failure_code.lower()
+        elif type(source_status) is str and source_status in SOURCE_STATUSES:
+            code = source_status.lower()
+        else:
+            raise_redacted(IndependentNcMedicaidFhirError, "source:invalid")
+        raise_redacted(IndependentNcMedicaidFhirError, "source:" + code)
+    if type(freshness) is not str or freshness not in {"FRESH", "UNKNOWN"}:
         raise IndependentNcMedicaidFhirError("source:stale")
     graph_profile = profile.graph_profile
     graph_input = _graph_input(profile, profile.observation_time)

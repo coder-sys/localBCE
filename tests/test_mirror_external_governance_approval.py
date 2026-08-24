@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import traceback
 import unittest
 
 from app.mirror import external_governance_approval as producer
@@ -148,6 +149,33 @@ class GovernanceApprovalTests(unittest.TestCase):
 
         with self.assertRaisesRegex(producer.ExternalGovernanceApprovalError, "verifier-result-type"):
             producer.ExternalGovernanceApprovalService(self.policy, WrongTypeVerifier(self.policy)).observe(self.evidence)
+
+    def test_public_errors_discard_verifier_and_parser_canaries(self) -> None:
+        canary = "PHI_CANARY Bearer SECRET C:\\Users\\private\\record"
+
+        class RaisingVerifier(_FixtureVerifier):
+            def verify(self, evidence_raw: bytes) -> producer.VerifiedGovernanceAssertionV1:
+                raise RuntimeError(canary)
+
+        with self.assertRaises(producer.ExternalGovernanceApprovalError) as caught:
+            producer.ExternalGovernanceApprovalService(self.policy, RaisingVerifier(self.policy)).observe(self.evidence)
+        error = caught.exception
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertEqual(str(error), "governance:verifier-failure")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        self.assertTrue(error.__suppress_context__)
+        self.assertNotIn(canary, repr(error) + rendered)
+
+        with self.assertRaises(independent.IndependentExternalGovernanceError) as caught:
+            independent.verify_artifact(b'{"artifact_kind":"caf\xc3\xa9"}', policy=self.policy.material())
+        error = caught.exception
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertEqual(str(error), "governance:parse")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        self.assertTrue(error.__suppress_context__)
+        self.assertNotIn("caf", repr(error) + rendered)
 
     def test_policy_quarantine_authority_and_evidence_bindings_are_not_caller_selected(self) -> None:
         cases = (

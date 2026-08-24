@@ -13,6 +13,8 @@ import json
 import re
 from typing import Mapping
 
+from app.mirror.error_boundary import raise_redacted
+
 
 ARTIFACT_KIND = "MIRROR_EXTERNAL_SOURCE_EVIDENCE_V1"
 SCHEMA = "mirror-external-source-evidence-v1"
@@ -90,8 +92,8 @@ class IndependentExternalSourceError(ValueError):
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise IndependentExternalSourceError("external:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(IndependentExternalSourceError, "external:noncanonical")
 
 
 def _digest(label: str, value: object) -> str:
@@ -157,8 +159,8 @@ def _walk(value: object, *, depth: int = 0, nodes: list[int] | None = None) -> N
             raise IndependentExternalSourceError("external:string-cap")
         try:
             value.encode("ascii")
-        except UnicodeEncodeError as exc:
-            raise IndependentExternalSourceError("external:ascii") from exc
+        except UnicodeEncodeError:
+            raise_redacted(IndependentExternalSourceError, "external:ascii")
     elif isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
@@ -181,8 +183,8 @@ def _parse(raw: bytes) -> dict[str, object]:
         )
     except IndependentExternalSourceError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise IndependentExternalSourceError("external:parse") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise_redacted(IndependentExternalSourceError, "external:parse")
     if not isinstance(value, dict):
         raise IndependentExternalSourceError("external:top-level")
     _walk(value)

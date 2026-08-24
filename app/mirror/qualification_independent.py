@@ -15,6 +15,8 @@ import json
 import re
 from typing import Mapping
 
+from app.mirror.error_boundary import raise_redacted
+
 
 ARTIFACT_KIND = "MIRROR_QUALIFICATION_V3"
 SCHEMA = "mirror-qualification-manifest-v3"
@@ -285,8 +287,8 @@ class IndependentQualificationError(ValueError):
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise IndependentQualificationError("qualification:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(IndependentQualificationError, "qualification:noncanonical")
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -311,8 +313,8 @@ def _walk(value: object, *, depth: int = 0, count: list[int] | None = None) -> N
         try:
             if len(value.encode("ascii")) > MAX_STRING_BYTES:
                 raise IndependentQualificationError("qualification:string-cap")
-        except UnicodeEncodeError as exc:
-            raise IndependentQualificationError("qualification:ascii") from exc
+        except UnicodeEncodeError:
+            raise_redacted(IndependentQualificationError, "qualification:ascii")
     if isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
@@ -331,8 +333,8 @@ def _parse(raw: bytes) -> dict[str, object]:
         value = json.loads(raw.decode("ascii"), object_pairs_hook=_reject_duplicate_keys, parse_constant=lambda _value: (_ for _ in ()).throw(IndependentQualificationError("qualification:constant")))
     except IndependentQualificationError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentQualificationError("qualification:parse") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise_redacted(IndependentQualificationError, "qualification:parse")
     if not isinstance(value, dict):
         raise IndependentQualificationError("qualification:top-level")
     _walk(value)
@@ -559,8 +561,8 @@ def _validate_custody(value: object, core: Mapping[str, object]) -> dict[str, ob
         raise IndependentQualificationError("qualification:envelope-ciphertext")
     try:
         ciphertext = bytes.fromhex(ciphertext_hex)
-    except ValueError as exc:
-        raise IndependentQualificationError("qualification:envelope-ciphertext") from exc
+    except ValueError:
+        raise_redacted(IndependentQualificationError, "qualification:envelope-ciphertext")
     if len(ciphertext) > 32_768:
         raise IndependentQualificationError("qualification:envelope-byte-cap")
     key = _synthetic_key(key_id, epoch)
@@ -574,8 +576,8 @@ def _validate_custody(value: object, core: Mapping[str, object]) -> dict[str, ob
         raise IndependentQualificationError("qualification:envelope-plaintext")
     try:
         seed = json.loads(plaintext.decode("ascii"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise IndependentQualificationError("qualification:envelope-seed") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise_redacted(IndependentQualificationError, "qualification:envelope-seed")
     if _canonical(seed) != plaintext:
         raise IndependentQualificationError("qualification:envelope-seed")
     if not isinstance(seed, dict) or set(seed) != {"profile_id", "manifest_core_digest", "purpose"} or seed["profile_id"] != PROFILE_ID or seed["purpose"] != CUSTODY_PURPOSE:
@@ -706,12 +708,17 @@ def _validate_value(
 
 
 def verify_artifact(raw: bytes, *, prior_raw: bytes | None = None) -> dict[str, object]:
-    value = _parse(raw)
-    prior_value = None
-    if prior_raw is not None:
-        prior_value = _parse(prior_raw)
-        _validate_value(prior_value, check_prior=False)
-    return _validate_value(value, prior_value=prior_value)
+    try:
+        value = _parse(raw)
+        prior_value = None
+        if prior_raw is not None:
+            prior_value = _parse(prior_raw)
+            _validate_value(prior_value, check_prior=False)
+        return _validate_value(value, prior_value=prior_value)
+    except IndependentQualificationError:
+        raise
+    except Exception:
+        raise_redacted(IndependentQualificationError, "qualification:verification")
 
 
 def inspect_artifact(raw: bytes) -> dict[str, object]:
@@ -723,8 +730,13 @@ def inspect_artifact(raw: bytes) -> dict[str, object]:
     its transaction owner to enforce lifecycle legality and head binding.
     """
 
-    value = _parse(raw)
-    return _validate_value(value, check_prior=False)
+    try:
+        value = _parse(raw)
+        return _validate_value(value, check_prior=False)
+    except IndependentQualificationError:
+        raise
+    except Exception:
+        raise_redacted(IndependentQualificationError, "qualification:verification")
 
 
 def verify_bytes(raw: bytes, *, prior_raw: bytes | None = None) -> dict[str, object]:

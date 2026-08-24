@@ -14,6 +14,8 @@ import json
 import re
 from typing import Mapping, Protocol
 
+from app.mirror.error_boundary import raise_redacted
+
 
 ARTIFACT_KIND = "MIRROR_EXTERNAL_SOURCE_EVIDENCE_V1"
 SCHEMA = "mirror-external-source-evidence-v1"
@@ -80,8 +82,8 @@ class ExternalCaptureVerifier(Protocol):
 def _canonical(value: object) -> bytes:
     try:
         return json.dumps(value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise ExternalSourceAdapterError("external:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(ExternalSourceAdapterError, "external:noncanonical")
 
 
 def _digest(label: str, value: object) -> str:
@@ -345,8 +347,8 @@ class ExternalSourceAdapterService:
         try:
             verifier_id = verifier.verifier_id
             verifier_epoch = verifier.verifier_epoch
-        except AttributeError as exc:
-            raise ExternalSourceAdapterError("external:verifier-config") from exc
+        except Exception:
+            raise_redacted(ExternalSourceAdapterError, "external:verifier-config")
         if verifier_id != policy.verifier_id or verifier_epoch != policy.verifier_epoch:
             raise ExternalSourceAdapterError("external:verifier-config")
         _safe_text(verifier_id, "verifier-id")
@@ -362,8 +364,8 @@ class ExternalSourceAdapterService:
             raise ExternalSourceAdapterError("external:capture-byte-cap")
         try:
             result = self.verifier.verify(snapshot)
-        except Exception as exc:
-            raise ExternalSourceAdapterError("external:verifier-failure") from exc
+        except Exception:
+            raise_redacted(ExternalSourceAdapterError, "external:verifier-failure")
         if type(result) is not VerifiedExternalCaptureV1:
             raise ExternalSourceAdapterError("external:verifier-result-type")
         if result.policy_digest != self.policy.digest or result.verifier_id != self.policy.verifier_id or result.verifier_epoch != self.policy.verifier_epoch:

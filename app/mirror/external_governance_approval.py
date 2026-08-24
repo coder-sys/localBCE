@@ -14,6 +14,8 @@ import json
 import re
 from typing import Protocol
 
+from app.mirror.error_boundary import raise_redacted
+
 
 ARTIFACT_KIND = "MIRROR_EXTERNAL_GOVERNANCE_APPROVAL_V1"
 SCHEMA = "mirror-external-governance-approval-v1"
@@ -86,8 +88,8 @@ def _canonical(value: object) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise ExternalGovernanceApprovalError("governance:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(ExternalGovernanceApprovalError, "governance:noncanonical")
 
 
 def _digest(label: str, value: object) -> str:
@@ -328,8 +330,8 @@ class ExternalGovernanceApprovalService:
                 "terms_digest": verifier.terms_digest,
                 "retention_policy_digest": verifier.retention_policy_digest,
             }
-        except AttributeError as exc:
-            raise ExternalGovernanceApprovalError("governance:verifier-config") from exc
+        except Exception:
+            raise_redacted(ExternalGovernanceApprovalError, "governance:verifier-config")
         if verifier_id != policy.verifier_id or verifier_epoch != policy.verifier_epoch:
             raise ExternalGovernanceApprovalError("governance:verifier-config")
         _text(verifier_id, "verifier-id")
@@ -348,8 +350,8 @@ class ExternalGovernanceApprovalService:
             raise ExternalGovernanceApprovalError("governance:evidence-byte-cap")
         try:
             result = self.verifier.verify(snapshot)
-        except Exception as exc:
-            raise ExternalGovernanceApprovalError("governance:verifier-failure") from exc
+        except Exception:
+            raise_redacted(ExternalGovernanceApprovalError, "governance:verifier-failure")
         if type(result) is not VerifiedGovernanceAssertionV1:
             raise ExternalGovernanceApprovalError("governance:verifier-result-type")
         if result.policy_digest != self.policy.digest:

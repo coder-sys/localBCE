@@ -12,6 +12,8 @@ import json
 import re
 from typing import Mapping
 
+from app.mirror.error_boundary import raise_redacted
+
 
 ARTIFACT_KIND = "MIRROR_EXTERNAL_GOVERNANCE_APPROVAL_V1"
 SCHEMA = "mirror-external-governance-approval-v1"
@@ -89,8 +91,8 @@ def _canonical(value: object) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError) as exc:
-        raise IndependentExternalGovernanceError("governance:noncanonical") from exc
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise_redacted(IndependentExternalGovernanceError, "governance:noncanonical")
 
 
 def _digest(label: str, value: object) -> str:
@@ -154,8 +156,8 @@ def _walk(value: object, *, depth: int = 0, nodes: list[int] | None = None) -> N
             raise IndependentExternalGovernanceError("governance:string-cap")
         try:
             value.encode("ascii")
-        except UnicodeEncodeError as exc:
-            raise IndependentExternalGovernanceError("governance:ascii") from exc
+        except UnicodeEncodeError:
+            raise_redacted(IndependentExternalGovernanceError, "governance:ascii")
     elif isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
@@ -178,8 +180,8 @@ def _parse(raw: bytes) -> dict[str, object]:
         )
     except IndependentExternalGovernanceError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise IndependentExternalGovernanceError("governance:parse") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise_redacted(IndependentExternalGovernanceError, "governance:parse")
     if not isinstance(value, dict):
         raise IndependentExternalGovernanceError("governance:top-level")
     _walk(value)

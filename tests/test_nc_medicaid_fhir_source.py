@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import traceback
 import unittest
 
 from app.mirror import nc_medicaid_fhir as fhir
@@ -400,6 +401,55 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         self.assertIn(partial_result["source_status"], {"PARTIAL", "FAILED"})
         with self.assertRaises(independent.IndependentNcMedicaidFhirError):
             independent.NcMedicaidFhirVerifier().verify(partial)
+
+    def test_public_errors_redact_input_and_custom_transport_canaries(self) -> None:
+        canary = "PHI_CANARY Bearer SECRET C:\\Users\\private\\record"
+
+        class ExplodingTransport:
+            def fetch(self, request_url: str, *, timeout_seconds: int, attempt: int) -> fhir.FhirTransportResponse:
+                del request_url, timeout_seconds, attempt
+                raise RuntimeError(canary)
+
+        raw = fhir.build_fixture_envelope(ExplodingTransport())
+        self.assertNotIn(canary.encode("ascii"), raw)
+        result = independent.verify_bytes(raw)
+        self.assertEqual(result["failure_code"], "retry-exhausted")
+        self.assertEqual(result["source_status"], "FAILED")
+
+        class StopSignal(BaseException):
+            pass
+
+        class StoppingTransport:
+            def fetch(self, request_url: str, *, timeout_seconds: int, attempt: int) -> fhir.FhirTransportResponse:
+                del request_url, timeout_seconds, attempt
+                raise StopSignal(canary)
+
+        with self.assertRaises(StopSignal):
+            fhir.build_fixture_envelope(StoppingTransport())
+
+        for field, value in (("source_status", canary), ("failure_code", canary)):
+            result_value = {"accepted": False, "source_status": "PARTIAL", "page_complete": False, "failure_code": None}
+            result_value[field] = value
+            with self.assertRaises(independent.IndependentNcMedicaidFhirError) as caught:
+                independent.to_verified_source_coverage(result_value)
+            error = caught.exception
+            rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            self.assertEqual(str(error), "source:invalid")
+            self.assertIsNone(error.__cause__)
+            self.assertIsNone(error.__context__)
+            self.assertTrue(error.__suppress_context__)
+            self.assertNotIn(canary, repr(error) + rendered)
+
+        malformed = b'{"source":"' + canary.encode("ascii") + b'"'
+        with self.assertRaises(independent.IndependentNcMedicaidFhirError) as caught:
+            independent.verify_bytes(malformed)
+        error = caught.exception
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertEqual(str(error), "json:parse")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        self.assertTrue(error.__suppress_context__)
+        self.assertNotIn(canary, repr(error) + rendered)
 
 if __name__ == "__main__":
     unittest.main()
