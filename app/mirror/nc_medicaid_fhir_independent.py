@@ -352,8 +352,8 @@ def _validate_resource(value: object, profile: NcMedicaidFhirSourceProfile) -> d
             raise IndependentNcMedicaidFhirError("location:status")
         _validate_address(resource["address"])
         _validate_reference_list(resource["endpoint"], "location:endpoint")
-    expected_digest = dict(profile.synthetic_resource_digests).get(str(resource_type))
-    if expected_digest is None or hashlib.sha3_512(_canonical(resource)).hexdigest() != expected_digest:
+    expected_digests = dict(profile.synthetic_resource_digests).get(str(resource_type))
+    if expected_digests is None or hashlib.sha3_512(_canonical(resource)).hexdigest() not in expected_digests:
         raise IndependentNcMedicaidFhirError("resource:synthetic-binding")
     return resource
 

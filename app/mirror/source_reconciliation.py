@@ -6,6 +6,7 @@ import time
 from typing import Mapping
 
 from app.mirror import continuity_store as store
+from app.mirror.error_boundary import raise_redacted
 from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import source_reconciliation_independent as independent
 
@@ -26,8 +27,8 @@ def _prior_identity(raw: bytes | None) -> tuple[str | None, str | None]:
         return artifact_id, stage_id
     except SourceReconciliationError:
         raise
-    except Exception as exc:
-        raise SourceReconciliationError("reconciliation:prior-identity") from exc
+    except Exception:
+        raise_redacted(SourceReconciliationError, "reconciliation:prior-identity")
 
 
 class SourceReconciliationService:
@@ -80,14 +81,14 @@ class SourceReconciliationService:
                     candidate,
                     self.graph_profile_registry,
                 )
-            except store.StoreBusyError as exc:
+            except store.StoreBusyError:
                 if attempt == 2:
-                    raise SourceReconciliationError(f"reconciliation:admission:{exc}") from exc
+                    raise_redacted(SourceReconciliationError, "reconciliation:busy-retry-exhausted")
                 time.sleep(0.05 * (attempt + 1))
             except SourceReconciliationError:
                 raise
-            except Exception as exc:
-                raise SourceReconciliationError(f"reconciliation:admission:{exc}") from exc
+            except Exception:
+                raise_redacted(SourceReconciliationError, "reconciliation:admission")
         raise SourceReconciliationError("reconciliation:busy-retry-exhausted")
 
     def reconcile_current(self, custody_raw: bytes) -> store.AdmissionReceipt:

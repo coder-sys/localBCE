@@ -7,7 +7,9 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import traceback
 import unittest
+from unittest.mock import patch
 
 from app.governance import provider_continuity_control_pack_v2 as governance
 from app.mirror import continuity_export as export
@@ -69,9 +71,8 @@ def _rebind_reconciliation(value: dict[str, object]) -> bytes:
     return _canonical({**body, "artifact_id": artifact_id, "current_stage_id": stage_id, "transition_id": transition_id})
 
 
-def _changed_envelope(marker: str, *, name: str = "Synthetic NC Site") -> bytes:
-    resources = [_practitioner(), _role(), _location()]
-    resources[2]["name"] = name
+def _changed_envelope(marker: str) -> bytes:
+    resources = [_practitioner(), _role(), profile.synthetic_resource("Location", variant="changed")]
     return fhir.build_fixture_envelope(_transport(_bundle(resources=resources, last_updated=marker)))
 
 
@@ -147,13 +148,50 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
         receipt = recon_service.reconcile(custody_raw)
         return custody_raw, _payload_for_receipt(source_service.store, receipt), receipt
 
+    def test_public_reconciliation_errors_redact_hostile_inner_context(self) -> None:
+        instance, registry, source_service, recon_service = self._services("redaction.db")
+        admitted = source_service.ingest(_envelope())
+        custody_raw = _payload_for_receipt(instance, admitted.custody_receipt)
+        canaries = (
+            "Jane Patient SSN 123-45-6789",
+            "Bearer SECRET-TOKEN",
+            r"C:\Users\private\source.fhir",
+        )
+
+        def hostile_builder(*_args: object, **_kwargs: object) -> bytes:
+            raise RuntimeError(" | ".join(canaries))
+
+        with patch.object(reconciliation_independent, "build_artifact", side_effect=hostile_builder):
+            with self.assertRaisesRegex(reconciliation.SourceReconciliationError, "^reconciliation:admission$") as raised:
+                recon_service.reconcile(custody_raw)
+        error = raised.exception
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertEqual("reconciliation:admission", str(error))
+        self.assertEqual("SourceReconciliationError('reconciliation:admission')", repr(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        for canary in canaries:
+            self.assertNotIn(canary, str(error))
+            self.assertNotIn(canary, repr(error))
+            self.assertNotIn(canary, rendered)
+
+        with patch.object(instance, "admit_source_reconciliation", side_effect=store.StoreBusyError(canaries[1])):
+            with self.assertRaisesRegex(reconciliation.SourceReconciliationError, "^reconciliation:busy-retry-exhausted$") as raised_busy:
+                recon_service.reconcile(custody_raw)
+        busy_error = raised_busy.exception
+        busy_rendered = "".join(traceback.format_exception(type(busy_error), busy_error, busy_error.__traceback__))
+        self.assertEqual("reconciliation:busy-retry-exhausted", str(busy_error))
+        self.assertIsNone(busy_error.__cause__)
+        self.assertIsNone(busy_error.__context__)
+        self.assertNotIn(canaries[1], busy_rendered)
+
     def test_initial_changed_retry_independent_binding_export_restore_and_support(self) -> None:
         instance, registry, _graph_raw = _approved_store(self.root)
         source_service = custody.SourceEvidenceCustodyService(instance, graph_profile_registry=registry)
         recon_service = reconciliation.SourceReconciliationService(instance, graph_profile_registry=registry)
 
         custody_one, recon_one, first = self._custody_and_reconcile(source_service, recon_service, _envelope())
-        second_source_admission = source_service.ingest(_changed_envelope("2026-08-15T11:00:00Z", name="Synthetic NC Site Changed"))
+        second_source_admission = source_service.ingest(_changed_envelope("2026-08-15T11:00:00Z"))
         custody_two = _payload_for_receipt(instance, second_source_admission.custody_receipt)
         context = instance.source_reconciliation_context(custody_two, registry)
         prior_value = reconciliation_independent._parse(context["prior_reconciliation_raw"])
@@ -215,7 +253,7 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
         self.assertNotIn(profile.SYNTHETIC_PRACTITIONER_ID, support_text)
         self.assertNotIn("NCPROV-001", support_text)
         self.assertNotIn("Synthetic NC Site Changed", support_text)
-        self.assertNotIn(_changed_envelope("2026-08-15T11:00:00Z", name="Synthetic NC Site Changed").hex(), support_text)
+        self.assertNotIn(_changed_envelope("2026-08-15T11:00:00Z").hex(), support_text)
 
     def test_content_identity_anchors_and_honest_chronology(self) -> None:
         instance, registry, source_service, recon_service = self._services("content-identity.db")
@@ -246,7 +284,7 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
         changed_raw, changed_recon, _ = self._custody_and_reconcile(
             source_service,
             recon_service,
-            _changed_envelope("2026-08-15T00:00:00Z", name="Synthetic Changed Content"),
+            _changed_envelope("2026-08-15T00:00:00Z"),
         )
         changed_value = json.loads(changed_recon.decode("ascii"))
         self.assertEqual(reconciliation_independent.STATUS_OBSERVED_CHANGED, changed_value["result"]["source_observation_status"])
@@ -280,7 +318,7 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
         _changed_after_failure_raw, changed_after_failure_recon_raw, _ = self._custody_and_reconcile(
             changed_after_failure_source,
             changed_after_failure_recon,
-            _changed_envelope("2026-08-15T00:00:00Z", name="Synthetic Recovered Change"),
+            _changed_envelope("2026-08-15T00:00:00Z"),
         )
         changed_after_failure_value = json.loads(changed_after_failure_recon_raw.decode("ascii"))
         self.assertEqual(reconciliation_independent.STATUS_OBSERVED_CHANGED, changed_after_failure_value["result"]["source_observation_status"])
@@ -358,7 +396,7 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
             chronology_anchor_custody_raw=stale_context["chronology_anchor_custody_raw"],
             graph_profile_registry=stale_registry,
         )
-        stale_source.ingest(_changed_envelope("2026-08-15T00:00:00Z", name="Synthetic Later Head"))
+        stale_source.ingest(_changed_envelope("2026-08-15T00:00:00Z"))
         before_stale = store_independent.verify_database(stale_instance.path, stale_registry)
         with self.assertRaises(store.StoreConflictError):
             stale_instance.admit_source_reconciliation(stale_second_raw, stale_candidate, stale_registry)
@@ -438,7 +476,7 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
         conflict_raw, conflict_recon, _ = self._custody_and_reconcile(
             source_service,
             recon_service,
-            _changed_envelope(profile.FIXTURE_LAST_UPDATED, name="Synthetic Conflicting Site"),
+            _changed_envelope(profile.FIXTURE_LAST_UPDATED),
         )
         self.assertEqual(
             reconciliation_independent.STATUS_CONFLICTING,
@@ -458,7 +496,7 @@ class MirrorSourceReconciliationTests(unittest.TestCase):
         late_raw, late_recon, _ = self._custody_and_reconcile(
             source_service,
             recon_service,
-            _changed_envelope("2026-08-13T12:00:00Z", name="Synthetic Late Site"),
+            _changed_envelope("2026-08-13T12:00:00Z"),
         )
         self.assertEqual(
             reconciliation_independent.STATUS_STALE_OR_GAPPED,

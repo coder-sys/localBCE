@@ -112,7 +112,7 @@ def _rebind(value: dict[str, object]) -> bytes:
 
 class NcMedicaidFhirSourceTests(unittest.TestCase):
     def test_fixed_profile_and_contract_digest_are_verifier_owned(self) -> None:
-        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v2", profile.SOURCE_PROFILE_ID)
+        self.assertEqual("ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v3", profile.SOURCE_PROFILE_ID)
         self.assertEqual("https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir", profile.BASE_URL)
         self.assertEqual("provider-directory-observation-associated-with-NCTracks-and-health-plan-contract-data", profile.NC_MEDICAID_PROFILE.source_meaning)
         self.assertEqual("official-hostname-over-tls-unverified", profile.NC_MEDICAID_PROFILE.transport_provenance)
@@ -126,6 +126,34 @@ class NcMedicaidFhirSourceTests(unittest.TestCase):
         self.assertEqual(profile.NC_MEDICAID_GRAPH_PROFILE.profile_digest, graph_independent._profile_digest(profile.NC_MEDICAID_GRAPH_PROFILE))
         with self.assertRaises(profile.NcMedicaidFhirProfileError):
             profile.NcMedicaidFhirSourceProfile(capability_statement_identity="CALLER_OVERRIDE")
+
+    def test_profile_owned_location_variant_allowlist_rejects_unregistered_change(self) -> None:
+        baseline = profile.synthetic_resource("Location")
+        changed = profile.synthetic_resource("Location", variant="changed")
+        self.assertEqual("Synthetic NC Site", baseline["name"])
+        self.assertEqual(profile.SYNTHETIC_CHANGED_LOCATION_NAME, changed["name"])
+        self.assertNotEqual(baseline, changed)
+        baseline["name"] = "caller-supplied location"
+        self.assertEqual("Synthetic NC Site", profile.synthetic_resource("Location")["name"])
+        with self.assertRaisesRegex(profile.NcMedicaidFhirProfileError, "profile:synthetic-resource"):
+            profile.synthetic_resource("Location", variant="unregistered")
+
+        value = json.loads(_envelope().decode("ascii"))
+        location = value["pages"][0]["bundle"]["entry"][2]["resource"]
+        location["name"] = "Unregistered Synthetic Location"
+        with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "resource:synthetic-binding"):
+            independent.verify_bytes(_rebind(value))
+
+    def test_v2_profile_envelope_is_rejected_without_migration(self) -> None:
+        for field, replacement in (
+            ("source_profile_id", "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v2"),
+            ("source_profile_version", 2),
+        ):
+            with self.subTest(field=field):
+                value = json.loads(_envelope().decode("ascii"))
+                value["profile"][field] = replacement
+                with self.assertRaisesRegex(independent.IndependentNcMedicaidFhirError, "profile:binding"):
+                    independent.verify_bytes(_rebind(value))
 
     def test_valid_fixture_is_deterministic_and_maps_to_observation_only_graph(self) -> None:
         first = _envelope()

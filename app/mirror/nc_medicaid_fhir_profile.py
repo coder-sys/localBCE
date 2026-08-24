@@ -22,8 +22,8 @@ class NcMedicaidFhirProfileError(ValueError):
     """Raised when the immutable fixture profile is not internally consistent."""
 
 
-SOURCE_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v2"
-SOURCE_PROFILE_VERSION = 2
+SOURCE_PROFILE_ID = "ncmedicaid.provider-directory.fhir-r4.practitioner-role-location.v3"
+SOURCE_PROFILE_VERSION = 3
 OWNER_ID = "NCDHHS"
 SYSTEM_ID = "NC Medicaid Provider Directory API"
 BASE_URL = "https://provider-directory-api.connect.medicaid.ncdhhs.gov/fhir"
@@ -32,15 +32,16 @@ FHIR_VERSION = "4.0.1"
 SOURCE_MEANING = "provider-directory-observation-associated-with-NCTracks-and-health-plan-contract-data"
 TRANSPORT_PROVENANCE = "official-hostname-over-tls-unverified"
 RECORD_AUTHENTICATION = "undocumented"
-CAPABILITY_STATEMENT_IDENTITY = "NC_MEDICAID_FHIR_CAPABILITY_STATEMENT_UNBOUND_V2"
+CAPABILITY_STATEMENT_IDENTITY = "NC_MEDICAID_FHIR_CAPABILITY_STATEMENT_UNBOUND_V3"
 CAPABILITY_STATEMENT_DIGEST: str | None = None
-VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V2"
-VERIFIER_EPOCH = 2
+VERIFIER_ID = "SYNTH_NC_MEDICAID_FHIR_VERIFIER_V3"
+VERIFIER_EPOCH = 3
 SCOPE = SOURCE_PROFILE_ID
 SYNTHETIC_SUBJECT = "SYNTH_NC_MEDICAID_PROVIDER_001"
 SYNTHETIC_PRACTITIONER_ID = "SYNTH_NC_PRACTITIONER_001"
 SYNTHETIC_ROLE_ID = "SYNTH_NC_PRACTITIONER_ROLE_001"
 SYNTHETIC_LOCATION_ID = "SYNTH_NC_LOCATION_001"
+SYNTHETIC_CHANGED_LOCATION_NAME = "Synthetic NC Site Changed"
 SYNTHETIC_CREDENTIAL_ID = "SYNTH_NC_FHIR_DIRECTORY_PRACTITIONER_001"
 SYNTHETIC_ENROLLMENT_ID = "SYNTH_NC_FHIR_DIRECTORY_ROLE_LOCATION_001"
 FIXTURE_OBSERVATION_TIME = 7_000
@@ -165,25 +166,46 @@ _SYNTHETIC_RESOURCES = {
         "endpoint": [],
     },
 }
-_SYNTHETIC_RESOURCE_BYTES = {key: _canonical(value) for key, value in _SYNTHETIC_RESOURCES.items()}
+_SYNTHETIC_RESOURCE_VARIANTS = {
+    "Practitioner": {"baseline": _SYNTHETIC_RESOURCES["Practitioner"]},
+    "PractitionerRole": {"baseline": _SYNTHETIC_RESOURCES["PractitionerRole"]},
+    "Location": {
+        "baseline": _SYNTHETIC_RESOURCES["Location"],
+        "changed": {**_SYNTHETIC_RESOURCES["Location"], "name": SYNTHETIC_CHANGED_LOCATION_NAME},
+    },
+}
+_SYNTHETIC_RESOURCE_BYTES = MappingProxyType(
+    {
+        resource_type: MappingProxyType(
+            {variant: _canonical(resource) for variant, resource in variants.items()}
+        )
+        for resource_type, variants in _SYNTHETIC_RESOURCE_VARIANTS.items()
+    }
+)
 SYNTHETIC_RESOURCE_DIGESTS = tuple(
-    sorted((key, hashlib.sha3_512(raw).hexdigest()) for key, raw in _SYNTHETIC_RESOURCE_BYTES.items())
+    sorted(
+        (
+            resource_type,
+            tuple(sorted(hashlib.sha3_512(raw).hexdigest() for raw in variants.values())),
+        )
+        for resource_type, variants in _SYNTHETIC_RESOURCE_BYTES.items()
+    )
 )
 
 
-def synthetic_resource(resource_type: str) -> dict[str, object]:
-    """Return one fresh copy of the only zero-PHI resource allowed by this fixture profile."""
+def synthetic_resource(resource_type: str, variant: str = "baseline") -> dict[str, object]:
+    """Return a fresh copy of one profile-owned zero-PHI resource variant."""
 
     try:
-        raw = _SYNTHETIC_RESOURCE_BYTES[resource_type]
-    except KeyError as exc:
-        raise NcMedicaidFhirProfileError("profile:synthetic-resource") from exc
+        raw = _SYNTHETIC_RESOURCE_BYTES[resource_type][variant]
+    except (KeyError, TypeError):
+        raise NcMedicaidFhirProfileError("profile:synthetic-resource") from None
     return json.loads(raw.decode("ascii"))
 
 
 def _digest(label: str, value: object) -> str:
     digest = hashlib.sha3_512()
-    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/PROFILE/" + label + "/v1\0").encode("ascii"))
+    digest.update(("BL/MIRROR/NC-MEDICAID/FHIR/PROFILE/" + label + "/v3\0").encode("ascii"))
     digest.update(_canonical(value))
     return digest.hexdigest()
 
@@ -207,7 +229,7 @@ class NcMedicaidFhirSourceProfile:
     allowed_resource_types: tuple[str, ...] = ALLOWED_RESOURCE_TYPES
     resource_cardinality: tuple[tuple[str, int], ...] = RESOURCE_CARDINALITY
     allowed_resource_fields: tuple[tuple[str, tuple[str, ...]], ...] = ALLOWED_RESOURCE_FIELDS
-    synthetic_resource_digests: tuple[tuple[str, str], ...] = SYNTHETIC_RESOURCE_DIGESTS
+    synthetic_resource_digests: tuple[tuple[str, tuple[str, ...]], ...] = SYNTHETIC_RESOURCE_DIGESTS
     query_parameters: tuple[tuple[str, str], ...] = QUERY_PARAMETERS
     page_parameter: str = PAGE_PARAMETER
     request_url: str = REQUEST_URL
@@ -280,7 +302,7 @@ class NcMedicaidFhirSourceProfile:
             "allowed_resource_types": list(self.allowed_resource_types),
             "resource_cardinality": {key: value for key, value in self.resource_cardinality},
             "allowed_resource_fields": {key: list(value) for key, value in self.allowed_resource_fields},
-            "synthetic_resource_digests": {key: value for key, value in self.synthetic_resource_digests},
+            "synthetic_resource_digests": {key: list(value) for key, value in self.synthetic_resource_digests},
             "query_parameters": [list(value) for value in self.query_parameters],
             "page_parameter": self.page_parameter,
             "request_url": self.request_url,
@@ -374,6 +396,7 @@ __all__ = [
     "SOURCE_MEANING",
     "SOURCE_PROFILE_ID",
     "SOURCE_PROFILE_VERSION",
+    "SYNTHETIC_CHANGED_LOCATION_NAME",
     "SYNTHETIC_RESOURCE_DIGESTS",
     "TRANSPORT_PROVENANCE",
     "synthetic_resource",
