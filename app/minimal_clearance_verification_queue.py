@@ -32,6 +32,14 @@ from app.minimal_clearance_proof_primitives import (
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 
 
+# Capture the genuine class-owned boundaries once, before any caller can hand
+# the worker an object with instance-shadowed methods or a monkey-patched
+# subclass.  Calls below use these references directly after the exact-type
+# and class-dictionary checks.
+_NATIVE_IDENTITY_METHOD: Final = NativeMinimalClearanceVerifier.identity_sha256
+_NATIVE_VERIFY_METHOD: Final = NativeMinimalClearanceVerifier.verify
+
+
 class VerificationQueueError(RuntimeError):
     """Base fail-closed queue error with a fixed code only."""
 
@@ -174,22 +182,6 @@ def _exact_code(error: BaseException, *, types: tuple[type[BaseException], ...],
     if type(args) is not tuple or len(args) != 1 or type(args[0]) is not str:
         return None
     return args[0] if args[0] in allowed else None
-
-
-def _trusted_worker_code(error: BaseException) -> tuple[str, str] | None:
-    if type(error) is MinimalClearanceProofStateError:
-        code = _exact_code(error, types=(MinimalClearanceProofStateError,), allowed=_PROOF_TRUSTED_CODES)
-        return ("proof", code) if code is not None else None
-    if type(error) is QueueDeterministicRejectError:
-        code = _exact_code(error, types=(QueueDeterministicRejectError,), allowed=_PROOF_DETERMINISTIC_REJECT_CODES | {"proof_rejected"})
-        return ("reject", code) if code is not None else None
-    if type(error) is QueueRetryableError:
-        code = _exact_code(error, types=(QueueRetryableError,), allowed=_QUEUE_RETRY_CODES)
-        return ("retry", code) if code is not None else None
-    if type(error) is QueueHeldError:
-        code = _exact_code(error, types=(QueueHeldError,), allowed=_QUEUE_HELD_CODES)
-        return ("held", code) if code is not None else None
-    return None
 
 
 def _trusted_store_code(error: BaseException, allowed: frozenset[str]) -> str | None:
@@ -870,6 +862,17 @@ class VerificationQueueStore:
 
     def _recover_hot_journal(self) -> None:
         """Allow SQLite's native rollback recovery, then verify the result."""
+        # A rollback journal may be consumed by SQLite, but a competing WAL
+        # or shared-memory sidecar must be rejected before SQLite opens the
+        # database.  This path never parses or removes any sidecar itself.
+        for suffix in ("-wal", "-shm"):
+            try:
+                os.lstat(Path(str(self.path) + suffix))
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError):
+                _raise_fixed(VerificationQueueError("queue_database_journal"))
+            _raise_fixed(VerificationQueueError("queue_database_journal"))
         journal = Path(str(self.path) + "-journal")
         try:
             os.lstat(journal)
@@ -1031,7 +1034,7 @@ class VerificationQueueStore:
     def _after_commit(self, label: str) -> None:
         if self._after_commit_fault is not None:
             try: self._after_commit_fault(label)
-            except Exception: _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
+            except BaseException: _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
 
     def _schema_check(self, connection: sqlite3.Connection) -> None:
         for table, expected in _TABLE_COLUMNS.items():
@@ -1428,18 +1431,22 @@ class QueueWorker:
 
     def __init__(self, *, store: VerificationQueueStore, worker_id: str, custody: ProofArtifactCustodyPort, verifier_factory: VerificationFactory) -> None:
         _safe_token(worker_id, "worker_id", maximum=_MAX_WORKER_ID)
-        if not callable(verifier_factory) or not callable(getattr(custody, "snapshot", None)): raise VerificationQueueError("queue_worker_port")
+        try:
+            custody_snapshot = getattr(custody, "snapshot", None)
+        except BaseException:
+            _raise_fixed(VerificationQueueError("queue_worker_port"))
+        if not callable(verifier_factory) or not callable(custody_snapshot): raise VerificationQueueError("queue_worker_port")
         self.store = store; self.worker_id = worker_id; self.custody = custody; self.verifier_factory = verifier_factory; self.last_verification_wall_ms: int | None = None; self.last_verification_started: float | None = None; self.last_verification_ended: float | None = None
 
     def _reconcile_lease_loss(self, work: QueueWorkItem) -> QueueResult:
         try:
             durable = self.store.retry_result(work.operation_id)
-        except VerificationQueueError:
+        except BaseException:
             _raise_fixed(QueueIndeterminateError("queue_lease_indeterminate"))
         if durable is not None: return durable
         try:
             job = self.store.get_job(work.job_id)
-        except VerificationQueueError:
+        except BaseException:
             _raise_fixed(QueueIndeterminateError("queue_lease_indeterminate"))
         if job is not None and job.status == "QUEUED" and job.attempt == work.attempt: return QueueResult(job.job_id, job.operation_id, "QUEUED", None, job.last_error_code)
         _raise_fixed(QueueIndeterminateError("queue_lease_indeterminate"))
@@ -1456,9 +1463,11 @@ class QueueWorker:
             if _trusted_store_code(exc, _STORE_INDETERMINATE_CODES) is None: _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
             try:
                 durable = self.store.retry_result(work.operation_id)
-            except VerificationQueueError:
+            except BaseException:
                 _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
             if durable is not None: return durable
+            _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
+        except BaseException:
             _raise_fixed(QueueIndeterminateError("queue_commit_indeterminate"))
 
     def _retry(self, work: QueueWorkItem, code: str) -> QueueResult:
@@ -1473,47 +1482,136 @@ class QueueWorker:
                 durable = self.store.retry_result(work.operation_id)
                 if durable is not None: return durable
                 job = self.store.get_job(work.job_id)
-            except VerificationQueueError:
+            except BaseException:
                 _raise_fixed(QueueIndeterminateError("queue_retry_indeterminate"))
             if job is not None and job.status == "QUEUED" and job.attempt == work.attempt: return QueueResult(work.job_id, work.operation_id, "QUEUED", None, job.last_error_code)
             _raise_fixed(QueueIndeterminateError("queue_retry_indeterminate"))
+        except BaseException:
+            _raise_fixed(QueueIndeterminateError("queue_retry_indeterminate"))
+
+    @staticmethod
+    def _attested_native_verifier(verifier: object) -> bool:
+        """Accept only the unmodified concrete native verifier boundary."""
+        try:
+            if type(verifier) is not NativeMinimalClearanceVerifier:
+                return False
+            attributes = vars(verifier)
+            if "identity_sha256" in attributes or "verify" in attributes:
+                return False
+            methods = type(verifier).__dict__
+            return methods.get("identity_sha256") is _NATIVE_IDENTITY_METHOD and methods.get("verify") is _NATIVE_VERIFY_METHOD
+        except BaseException:
+            return False
+
+    @staticmethod
+    def _snapshot_valid(snapshot: object, work: QueueWorkItem) -> bool:
+        try:
+            return (
+                type(snapshot) is CustodySnapshot
+                and isinstance(snapshot.path, Path)
+                and snapshot.path.is_file()
+                and not snapshot.path.is_symlink()
+                and snapshot.artifact_bytes == work.metadata.artifact_bytes
+                and snapshot.artifact_sha256 == work.metadata.artifact_sha256
+                and snapshot.artifact_sha3_512 == work.metadata.artifact_sha3_512
+                and snapshot.readonly is True
+                and callable(snapshot.cleanup)
+            )
+        except BaseException:
+            return False
+
+    @staticmethod
+    def _cleanup_snapshot(snapshot: CustodySnapshot | None) -> bool:
+        if type(snapshot) is not CustodySnapshot:
+            return False
+        try:
+            cleanup = snapshot.cleanup
+            if not callable(cleanup):
+                return False
+            cleanup()
+            return False
+        except BaseException:
+            return True
+
+    def _snapshot_failure(self, work: QueueWorkItem, snapshot: CustodySnapshot | None, code: str) -> QueueResult:
+        if self._cleanup_snapshot(snapshot):
+            return self._terminal(work, status="HELD", error_code="custody_cleanup")
+        return self._terminal(work, status="HELD", error_code=code)
+
+    def _proof_failure(self, work: QueueWorkItem, error: BaseException) -> QueueResult:
+        if type(error) is not MinimalClearanceProofStateError:
+            return self._terminal(work, status="HELD", error_code="worker_exception")
+        code = _exact_code(error, types=(MinimalClearanceProofStateError,), allowed=_PROOF_TRUSTED_CODES | _PROOF_DETERMINISTIC_REJECT_CODES)
+        if code is None:
+            return self._terminal(work, status="HELD", error_code="worker_exception")
+        if code in _PROOF_DETERMINISTIC_REJECT_CODES:
+            return self._terminal(work, status="REJECTED", error_code=code)
+        if code in self.store.config.retryable_codes:
+            return self._retry(work, code)
+        return self._terminal(work, status="HELD", error_code=code)
+
+    def _producer_failure(self, work: QueueWorkItem, error: BaseException) -> QueueResult:
+        """Map only fixed errors raised by the producer-owned evidence builder."""
+        if type(error) is QueueDeterministicRejectError:
+            code = _exact_code(error, types=(QueueDeterministicRejectError,), allowed=_PROOF_DETERMINISTIC_REJECT_CODES | {"proof_rejected"})
+            return self._terminal(work, status="REJECTED", error_code=code) if code is not None else self._terminal(work, status="HELD", error_code="worker_exception")
+        if type(error) is QueueRetryableError:
+            code = _exact_code(error, types=(QueueRetryableError,), allowed=_QUEUE_RETRY_CODES)
+            if code is None:
+                return self._terminal(work, status="HELD", error_code="worker_exception")
+            return self._retry(work, code) if code in self.store.config.retryable_codes else self._terminal(work, status="HELD", error_code=code)
+        if type(error) is QueueHeldError:
+            code = _exact_code(error, types=(QueueHeldError,), allowed=_QUEUE_HELD_CODES)
+            return self._terminal(work, status="HELD", error_code=code) if code is not None else self._terminal(work, status="HELD", error_code="worker_exception")
+        return self._terminal(work, status="HELD", error_code="worker_exception")
 
     def process_one(self) -> QueueResult | None:
         try: lease_token = secrets.token_bytes(32)
-        except Exception: _raise_fixed(QueueIndeterminateError("queue_entropy_unavailable"))
+        except BaseException: _raise_fixed(QueueIndeterminateError("queue_entropy_unavailable"))
         try: work = self.store.claim_next(worker_id=self.worker_id, lease_token=lease_token)
         except QueueIndeterminateError: work = self.store.claim_next(worker_id=self.worker_id, lease_token=lease_token)
         if work is None: return None
         snapshot: CustodySnapshot | None = None
         try:
             snapshot = self.custody.snapshot(work.metadata.artifact_ref, work.metadata)
-            if type(snapshot) is not CustodySnapshot or not snapshot.path.is_file() or snapshot.path.is_symlink() or snapshot.artifact_bytes != work.metadata.artifact_bytes or snapshot.artifact_sha256 != work.metadata.artifact_sha256 or snapshot.artifact_sha3_512 != work.metadata.artifact_sha3_512 or snapshot.readonly is not True or not callable(snapshot.cleanup): raise QueueHeldError("custody_snapshot_identity")
+        except BaseException:
+            return self._terminal(work, status="HELD", error_code="custody_snapshot")
+        if not self._snapshot_valid(snapshot, work):
+            return self._snapshot_failure(work, snapshot, "custody_snapshot_identity")
+        try:
             verifier = self.verifier_factory()
-            if not isinstance(verifier, NativeMinimalClearanceVerifier): raise QueueHeldError("verifier_type")
-            if verifier.identity_sha256() != self.store.config.verifier_sha256: raise QueueHeldError("verifier_identity")
-            started = time.perf_counter(); self.last_verification_started = started
-            try: acceptance = verifier.verify(snapshot.path)
-            finally:
-                ended = time.perf_counter(); self.last_verification_ended = ended; self.last_verification_wall_ms = max(1, int(round((ended - started) * 1000)))
-            evidence = build_verification_evidence(acceptance, getattr(verifier, "last_containment_result", None), snapshot, self.store.config.verifier_sha256); cleanup = snapshot.cleanup
-            if cleanup is not None:
-                try: cleanup()
-                except Exception: _raise_fixed(QueueHeldError("custody_cleanup"))
-            snapshot = None
-        except Exception as exc:
-            if snapshot is not None and snapshot.cleanup is not None:
-                try: snapshot.cleanup()
-                except Exception: exc = QueueHeldError("custody_cleanup")
-                snapshot = None
-            trusted = _trusted_worker_code(exc)
-            if trusted is not None:
-                kind, code = trusted
-                if kind in {"reject", "proof"} and code in _PROOF_DETERMINISTIC_REJECT_CODES:
-                    return self._terminal(work, status="REJECTED", error_code=code)
-                if code in self.store.config.retryable_codes:
-                    return self._retry(work, code)
-                return self._terminal(work, status="HELD", error_code=code)
-            return self._terminal(work, status="HELD", error_code="worker_exception")
+        except BaseException:
+            return self._snapshot_failure(work, snapshot, "verifier_factory")
+        if not self._attested_native_verifier(verifier):
+            return self._snapshot_failure(work, snapshot, "verifier_type")
+        try:
+            identity = _NATIVE_IDENTITY_METHOD(verifier)
+        except BaseException:
+            return self._snapshot_failure(work, snapshot, "verifier_identity")
+        if identity != self.store.config.verifier_sha256:
+            return self._snapshot_failure(work, snapshot, "verifier_identity")
+        started = time.perf_counter(); self.last_verification_started = started
+        try:
+            acceptance = _NATIVE_VERIFY_METHOD(verifier, snapshot.path)
+        except MinimalClearanceProofStateError as exc:
+            if self._cleanup_snapshot(snapshot):
+                return self._terminal(work, status="HELD", error_code="custody_cleanup")
+            return self._proof_failure(work, exc)
+        except BaseException:
+            return self._snapshot_failure(work, snapshot, "worker_exception")
+        finally:
+            ended = time.perf_counter(); self.last_verification_ended = ended; self.last_verification_wall_ms = max(1, int(round((ended - started) * 1000)))
+        try:
+            evidence = build_verification_evidence(acceptance, getattr(verifier, "last_containment_result", None), snapshot, self.store.config.verifier_sha256)
+        except (QueueDeterministicRejectError, QueueRetryableError, QueueHeldError) as exc:
+            if self._cleanup_snapshot(snapshot):
+                return self._terminal(work, status="HELD", error_code="custody_cleanup")
+            return self._producer_failure(work, exc)
+        except BaseException:
+            return self._snapshot_failure(work, snapshot, "worker_exception")
+        if self._cleanup_snapshot(snapshot):
+            return self._terminal(work, status="HELD", error_code="custody_cleanup")
+        snapshot = None
         return self._terminal(work, status="VERIFIED", evidence=evidence)
 
 

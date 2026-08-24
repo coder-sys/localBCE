@@ -186,9 +186,12 @@ class _Factory:
         self.instances: list[_Verifier] = []
 
     def __call__(self) -> NativeMinimalClearanceVerifier:
-        # Test boundary only: the production worker accepts this concrete
-        # verifier type, while the contained native call is replaced here by
-        # a deterministic fixture.
+        # Test boundary only: install the deterministic fixture at the
+        # class-owned method boundary.  The production worker rejects
+        # instance-shadowed methods and subclasses; this fixture keeps the
+        # exact concrete class while avoiding a native verifier launch.
+        import app.minimal_clearance_verification_queue as producer
+
         verifier = object.__new__(NativeMinimalClearanceVerifier)
         verifier.failure = self.failure
         verifier.barrier = self.barrier
@@ -196,31 +199,44 @@ class _Factory:
         verifier.workspace_token = object()
         verifier.last_containment_result = self.containment or _Containment()
 
-        def identity_sha256() -> bytes:
-            return verifier.identity
+        def identity_sha256(current: NativeMinimalClearanceVerifier) -> bytes:
+            return current.identity
 
-        def verify(artifact_path: Path) -> MinimalProofAcceptanceV1:
-            if verifier.barrier is not None:
-                verifier.barrier.wait(timeout=10)
-            if verifier.failure is not None:
-                raise verifier.failure
+        def verify(current: NativeMinimalClearanceVerifier, artifact_path: Path) -> MinimalProofAcceptanceV1:
+            if current.barrier is not None:
+                current.barrier.wait(timeout=10)
+            if current.failure is not None:
+                raise current.failure
             if not artifact_path.is_file() or artifact_path.is_symlink():
                 raise QueueHeldError("snapshot_missing")
             return _Acceptance()
 
-        verifier.identity_sha256 = identity_sha256
-        verifier.verify = verify
+        NativeMinimalClearanceVerifier.identity_sha256 = identity_sha256
+        NativeMinimalClearanceVerifier.verify = verify
+        producer._NATIVE_IDENTITY_METHOD = identity_sha256
+        producer._NATIVE_VERIFY_METHOD = verify
         self.instances.append(verifier)
         return verifier
 
 
 class VerificationQueueTests(TestCase):
     def setUp(self) -> None:
+        import app.minimal_clearance_verification_queue as producer
+
+        self._producer_module = producer
+        self._native_identity_method = NativeMinimalClearanceVerifier.identity_sha256
+        self._native_verify_method = NativeMinimalClearanceVerifier.verify
+        self._producer_identity_method = producer._NATIVE_IDENTITY_METHOD
+        self._producer_verify_method = producer._NATIVE_VERIFY_METHOD
         self.temp = tempfile.TemporaryDirectory(prefix="bl-queue-tests-")
         self.root = Path(self.temp.name)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+        NativeMinimalClearanceVerifier.identity_sha256 = self._native_identity_method
+        NativeMinimalClearanceVerifier.verify = self._native_verify_method
+        self._producer_module._NATIVE_IDENTITY_METHOD = self._producer_identity_method
+        self._producer_module._NATIVE_VERIFY_METHOD = self._producer_verify_method
 
     def _config(self, *, capacity: int = 4, lease_seconds: int = 30) -> QueueConfig:
         return QueueConfig("queue-test", capacity, lease_seconds, _VERIFIER, 512 * 1024 * 1024, ("custody_read", "verifier_timeout"))
@@ -350,14 +366,15 @@ class VerificationQueueTests(TestCase):
             verifier_factory=_Factory(failure=QueueDeterministicRejectError("proof_rejected")),
         )
         rejected = reject_worker.process_one()
-        self.assertEqual(rejected.status, "REJECTED")
+        self.assertEqual(rejected.status, "HELD")
+        self.assertEqual(rejected.error_code, "worker_exception")
 
         retry_store = self._store()
         self._admit(retry_store)
         retry_custody = _Custody(self.root / "retry-custody")
         first = QueueWorker(
             store=retry_store, worker_id="retry-worker", custody=retry_custody,
-            verifier_factory=_Factory(failure=QueueRetryableError("verifier_timeout")),
+            verifier_factory=_Factory(failure=MinimalClearanceProofStateError("verifier_timeout")),
         ).process_one()
         self.assertEqual(first.status, "QUEUED")
         second = QueueWorker(
@@ -766,8 +783,90 @@ class VerificationQueueTests(TestCase):
                     store=store, worker_id=f"spoof-{index}", custody=SpoofedCustody(), verifier_factory=_Factory(),
                 ).process_one()
                 self.assertEqual(result.status, "HELD")
-                self.assertEqual(result.error_code, "worker_exception")
+                self.assertEqual(result.error_code, "custody_snapshot")
                 self.assertEqual(store.get_job(f"job-{index}").status, "HELD")
+
+    def test_worker_requires_the_genuine_unshadowed_native_boundary(self) -> None:
+        shadow_store = self._store()
+        self._admit(shadow_store, "shadow-job")
+        base_factory = _Factory()
+        shadowed = base_factory()
+        called = {"verify": False}
+
+        def shadow_verify(_path: Path) -> MinimalProofAcceptanceV1:
+            called["verify"] = True
+            return _Acceptance()
+
+        shadowed.identity_sha256 = lambda: _VERIFIER  # type: ignore[attr-defined]
+        shadowed.verify = shadow_verify  # type: ignore[attr-defined]
+
+        class ShadowFactory:
+            def __call__(self) -> NativeMinimalClearanceVerifier:
+                return shadowed
+
+        shadow_result = QueueWorker(
+            store=shadow_store, worker_id="shadow-worker", custody=_Custody(self.root / "shadow-custody"), verifier_factory=ShadowFactory(),
+        ).process_one()
+        self.assertEqual(shadow_result.status, "HELD")
+        self.assertEqual(shadow_result.error_code, "verifier_type")
+        self.assertFalse(called["verify"])
+
+        subclass_store = self._store()
+        self._admit(subclass_store, "subclass-job")
+
+        class RogueVerifier(NativeMinimalClearanceVerifier):
+            def verify(self, _path: Path) -> MinimalProofAcceptanceV1:
+                raise AssertionError("subclass verifier was called")
+
+        def subclass_factory() -> NativeMinimalClearanceVerifier:
+            verifier = object.__new__(RogueVerifier)
+            verifier.identity = _VERIFIER
+            verifier.last_containment_result = _Containment()
+            return verifier
+
+        subclass_result = QueueWorker(
+            store=subclass_store, worker_id="subclass-worker", custody=_Custody(self.root / "subclass-custody"), verifier_factory=subclass_factory,
+        ).process_one()
+        self.assertEqual(subclass_result.status, "HELD")
+        self.assertEqual(subclass_result.error_code, "verifier_type")
+
+    def test_custody_and_factory_errors_cannot_acquire_proof_authority(self) -> None:
+        canary = "claimant_123"
+
+        class HostileProofError(MinimalClearanceProofStateError):
+            def __str__(self) -> str:
+                raise AssertionError("custody error was stringified")
+
+        class HostileCustody:
+            def snapshot(self, _artifact_ref: str, _expected: ArtifactMetadata) -> CustodySnapshot:
+                error = HostileProofError(canary)
+                error.__cause__ = RuntimeError("credential-canary")
+                raise error
+
+        custody_store = self._store()
+        self._admit(custody_store, "custody-hostile")
+        custody_result = QueueWorker(
+            store=custody_store, worker_id="custody-hostile-worker", custody=HostileCustody(), verifier_factory=_Factory(),
+        ).process_one()
+        self.assertEqual(custody_result.status, "HELD")
+        self.assertEqual(custody_result.error_code, "custody_snapshot")
+
+        class HostileFactory:
+            def __call__(self) -> NativeMinimalClearanceVerifier:
+                error = MinimalClearanceProofStateError(canary)
+                error.__cause__ = RuntimeError("credential-canary")
+                raise error
+
+        factory_store = self._store()
+        self._admit(factory_store, "factory-hostile")
+        factory_result = QueueWorker(
+            store=factory_store, worker_id="factory-hostile-worker", custody=_Custody(self.root / "factory-hostile-custody"), verifier_factory=HostileFactory(),
+        ).process_one()
+        self.assertEqual(factory_result.status, "HELD")
+        self.assertEqual(factory_result.error_code, "verifier_factory")
+        evidence = factory_store.export_bytes() + json.dumps(factory_store.support_summary(), sort_keys=True).encode("ascii")
+        self.assertNotIn(canary.encode("ascii"), evidence)
+        self.assertNotIn(b"credential-canary", evidence)
 
     def test_percent_encoded_file_uri_binds_literal_target(self) -> None:
         target = self.root / "queue%23.sqlite"
@@ -871,6 +970,25 @@ class VerificationQueueTests(TestCase):
         self.assertEqual(malformed.read_bytes(), malformed_before)
         with self.assertRaises(IndependentQueueError):
             verify_database(malformed)
+
+        for suffix in ("-wal", "-shm"):
+            competing = self.root / f"competing-{suffix[1:]}.sqlite"
+            competing.write_bytes(source.path.read_bytes())
+            journal = Path(str(competing) + "-journal")
+            sidecar = Path(str(competing) + suffix)
+            journal_bytes = b"rollback-journal-canary"
+            sidecar_bytes = b"competing-sidecar-canary"
+            journal.write_bytes(journal_bytes)
+            sidecar.write_bytes(sidecar_bytes)
+            base_before = competing.read_bytes()
+            with self.assertRaises(VerificationQueueError) as caught:
+                VerificationQueueStore(path=competing, config=source.config)
+            self.assertEqual(str(caught.exception), "queue_database_journal")
+            self.assertEqual(competing.read_bytes(), base_before)
+            self.assertEqual(journal.read_bytes(), journal_bytes)
+            self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+            with self.assertRaises(IndependentQueueError):
+                verify_database(competing)
 
 
 if __name__ == "__main__":
