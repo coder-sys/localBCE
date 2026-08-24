@@ -1,4 +1,10 @@
-"""Independent verifier for the six-table Mirror core owner."""
+"""Independent reconstruction for the six-table Mirror Core V2 owner.
+
+The event_raw column is the only canonical Core event authority.  This module
+reads one SQLite snapshot, replays the typed event stream, reconstructs every
+state table, and only then compares the derived state with the stored views.
+It deliberately does not import the Core producer.
+"""
 
 from __future__ import annotations
 
@@ -20,59 +26,52 @@ MAX_DATABASE_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 262_144
 GENESIS_ROOT = "0" * 128
 TABLES = (
-    "core_meta",
-    "core_artifacts",
-    "core_heads",
-    "core_sessions",
-    "core_slots",
-    "core_events",
+    "core_meta", "core_artifacts", "core_heads", "core_sessions", "core_slots", "core_events",
 )
-ARTIFACT_KINDS = (
-    "GRAPH",
-    "SOURCE_OBSERVATION",
-    "RECONCILIATION",
-    "GOVERNANCE",
-    "PRIVACY",
-    "CASE",
-)
-SESSION_STATES = ("OPEN", "RUNNING", "PAUSED", "COMPLETED", "ABORTED")
+TABLE_COLUMNS = {
+    "core_meta": ("meta_id", "schema", "schema_version", "database_id", "chain_id", "config_digest", "sequence", "head_root", "ingress_database_id", "ingress_watermark"),
+    "core_artifacts": ("artifact_id", "kind", "raw", "profile_digest", "source_artifact_id", "predecessor_id", "current_state", "created_event_sequence"),
+    "core_heads": ("stream_kind", "stream_id", "head_ref", "head_root", "event_sequence"),
+    "core_sessions": ("session_id", "state", "source_artifact_id", "governance_artifact_id", "privacy_artifact_id", "head_root", "last_slot", "delivery_state", "delivery_job_id", "delivery_attempt", "delivery_lease_token_digest", "delivery_lease_until", "delivery_response_digest", "delivery_error_code"),
+    "core_slots": ("session_id", "slot_number", "result_digest", "result_raw"),
+    "core_events": ("sequence", "event_id", "event_kind", "operation_id", "subject_id", "event_raw", "receipt_digest"),
+}
+ARTIFACT_KINDS = ("GRAPH", "SOURCE_OBSERVATION", "RECONCILIATION", "GOVERNANCE", "PRIVACY", "CASE")
+SESSION_STATES = ("OPEN", "RUNNING", "PAUSED")
+DELIVERY_STATES = ("DUE", "INTENT", "UNKNOWN", "ACK", "EXHAUSTED")
 OBSERVATION_RESULTS = ("PARITY", "DISCREPANCY", "INDETERMINATE")
 FIXED_FLAGS = {
-    "read_only": True,
-    "observation_only": True,
-    "synthetic_only": True,
-    "production_usable": False,
-    "activation": False,
-    "payment_authority": False,
-    "clearance_authority": False,
-    "settlement_authority": False,
-    "adjudication_authority": False,
-    "controlled_shadow_ready": False,
-    "proofSuiteId": None,
+    "read_only": True, "observation_only": True, "synthetic_only": True,
+    "production_usable": False, "activation": False, "payment_authority": False,
+    "clearance_authority": False, "settlement_authority": False,
+    "adjudication_authority": False, "controlled_shadow_ready": False, "proofSuiteId": None,
 }
 EVENT_KINDS = (
-    "ARTIFACT",
-    "SESSION_OPEN",
-    "SESSION_START",
-    "OBSERVATION",
-    "SESSION_PAUSE",
-    "CASE_ADVANCE",
-    "DELIVERY_INTENT",
-    "DELIVERY_ACK",
-    "DELIVERY_RESPONSE_UNKNOWN",
-    "DELIVERY_REQUEUE",
+    "ARTIFACT", "SESSION_OPEN", "SESSION_START", "OBSERVATION", "SESSION_PAUSE",
+    "DELIVERY_INTENT", "DELIVERY_REQUEUE", "DELIVERY_ACK", "DELIVERY_RESPONSE_UNKNOWN",
+    "DELIVERY_EXHAUSTED",
 )
 CASE_EDGES = {
-    "OPEN": {"RESPONSIBILITY"},
-    "RESPONSIBILITY": {"REMEDIATION"},
-    "REMEDIATION": {"RETEST"},
-    "RETEST": {"PERSISTENCE"},
+    "OPEN": {"RESPONSIBILITY"}, "RESPONSIBILITY": {"REMEDIATION"},
+    "REMEDIATION": {"RETEST"}, "RETEST": {"PERSISTENCE"},
     "PERSISTENCE": {"RESOLVED", "SUPERSEDED"},
 }
+SESSION_FIELDS = (
+    "session_id", "state", "source_artifact_id", "governance_artifact_id", "privacy_artifact_id",
+    "last_slot", "delivery_state", "delivery_job_id", "delivery_attempt",
+    "delivery_lease_token_digest", "delivery_lease_until", "delivery_response_digest", "delivery_error_code",
+)
+EVENT_RAW_KEYS = {
+    "schema", "schema_version", "database_id", "chain_id", "sequence", "event_id", "event_kind",
+    "stream_kind", "stream_id", "operation_id", "subject_id", "request_digest", "prior_state",
+    "next_state", "attempt", "observed_at", "material", "material_digest", "payload_digest",
+    "payload_length", "before_root", "after_root", "stream_before_root", "stream_after_root",
+}
+EXPLICIT_INDEX = "core_artifacts_kind_source_event_idx"
 
 
 class CoreVerificationError(ValueError):
-    """Fixed independent core failure."""
+    """Fixed independent Core failure."""
 
 
 def _canonical(value: object) -> bytes:
@@ -125,48 +124,22 @@ def _hex(value: object, label: str) -> str:
     return value
 
 
-def _event_root(sequence: int, previous: str, event_id: str, kind: str, subject_id: str, next_state: str, material_digest: str, stream_kind: str = "OWNER", stream_id: str | None = None) -> str:
-    return _digest(
-        "event-root",
-        {
-            "sequence": sequence,
-            "previous_root": previous,
-            "event_id": event_id,
-            "event_kind": kind,
-            "subject_id": subject_id,
-            "stream_kind": stream_kind,
-            "stream_id": stream_id or subject_id,
-            "next_state": next_state,
-            "material_digest": material_digest,
-        },
-    )
+def _event_root(body: Mapping[str, object]) -> str:
+    keys = ("schema", "schema_version", "database_id", "chain_id", "sequence", "event_id", "event_kind", "stream_kind", "stream_id", "operation_id", "subject_id", "request_digest", "prior_state", "next_state", "attempt", "observed_at", "material_digest", "payload_digest", "payload_length", "before_root", "stream_before_root")
+    return _digest("event-root", {key: body[key] for key in keys})
 
 
-def _stream_root(sequence: int, previous: str, event_id: str, stream_kind: str, stream_id: str, next_state: str, material_digest: str) -> str:
-    return _digest(
-        "stream-root",
-        {
-            "sequence": sequence,
-            "previous_root": previous,
-            "event_id": event_id,
-            "stream_kind": stream_kind,
-            "stream_id": stream_id,
-            "next_state": next_state,
-            "material_digest": material_digest,
-        },
-    )
+def _stream_root(body: Mapping[str, object]) -> str:
+    keys = ("schema", "schema_version", "database_id", "chain_id", "sequence", "event_id", "event_kind", "stream_kind", "stream_id", "operation_id", "subject_id", "prior_state", "next_state", "attempt", "observed_at", "material_digest", "payload_digest", "payload_length", "stream_before_root")
+    return _digest("stream-root", {key: body[key] for key in keys})
 
 
 def _table_names(connection: sqlite3.Connection) -> tuple[str, ...]:
-    return tuple(row[0] for row in connection.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-    ).fetchall())
+    return tuple(row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall())
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> tuple[str, ...]:
-    return tuple(row[1] for row in connection.execute(
-        "SELECT * FROM pragma_table_info(?) ORDER BY cid", (table,)
-    ).fetchall())
+    return tuple(row[1] for row in connection.execute("SELECT * FROM pragma_table_info(?) ORDER BY cid", (table,)).fetchall())
 
 
 def _open(path: str | Path) -> sqlite3.Connection:
@@ -186,72 +159,42 @@ def _open(path: str | Path) -> sqlite3.Connection:
 
 
 def _verify_meta(connection: sqlite3.Connection) -> sqlite3.Row:
-    row = connection.execute("SELECT * FROM core_meta").fetchone()
-    if row is None or tuple(row.keys()) != (
-        "meta_id", "schema", "schema_version", "database_id", "chain_id",
-        "config_digest", "sequence", "head_root", "ingress_database_id",
-        "ingress_watermark", "session_count",
-    ):
+    row = connection.execute("SELECT * FROM core_meta WHERE meta_id=1").fetchone()
+    if row is None or tuple(row.keys()) != TABLE_COLUMNS["core_meta"]:
         raise CoreVerificationError("core:meta")
     if row["meta_id"] != 1 or row["schema"] != SCHEMA or row["schema_version"] != SCHEMA_VERSION:
         raise CoreVerificationError("core:schema")
-    for key in ("config_digest", "head_root"):
-        _hex(row[key], "core:" + key)
-    if row["head_root"] != GENESIS_ROOT and len(row["head_root"]) != 128:
-        raise CoreVerificationError("core:head-root")
+    _hex(row["config_digest"], "core:config")
+    _hex(row["head_root"], "core:head-root")
     for key in ("database_id", "chain_id", "ingress_database_id"):
         if type(row[key]) is not str or not row[key]:
             raise CoreVerificationError("core:identity")
-    if type(row["sequence"]) is not int or row["sequence"] < 0 or type(row["ingress_watermark"]) is not int or row["ingress_watermark"] < 0 or type(row["session_count"]) is not int or row["session_count"] < 0:
+    if any(type(row[key]) is not int or row[key] < 0 for key in ("sequence", "ingress_watermark")):
         raise CoreVerificationError("core:sequence")
     return row
 
 
 def _verify_source_projection(value: Mapping[str, object]) -> None:
-    expected = {
-        "schema", "schema_version", "kind", "artifact_id", "ingress_database_id",
-        "ingress_artifact_id", "ingress_event_sequence", "ingress_head_root",
-        "envelope_id", "envelope_digest", "snapshot_id", "snapshot_root",
-        "content_root", "profile_id", "profile_version", "profile_digest",
-        "source_status", "freshness", "page_count", "resource_count",
-        "graph_artifact_id", "graph_artifact_digest", "observation_status",
-        "chronology", "flags",
-    }
+    expected = {"schema", "schema_version", "kind", "artifact_id", "ingress_database_id", "ingress_artifact_id", "ingress_event_sequence", "ingress_head_root", "envelope_id", "envelope_digest", "snapshot_id", "snapshot_root", "content_root", "profile_id", "profile_version", "profile_digest", "source_status", "freshness", "page_count", "resource_count", "graph_artifact_id", "graph_artifact_digest", "observation_status", "chronology", "flags"}
     if set(value) != expected or value["schema"] != "mirror-core-source-observation-v2" or value["schema_version"] != 2 or value["kind"] != "SOURCE_OBSERVATION":
         raise CoreVerificationError("core:source-keys")
-    for key in (
-        "artifact_id", "ingress_head_root", "envelope_id", "envelope_digest",
-        "snapshot_id", "snapshot_root", "content_root", "profile_digest",
-        "graph_artifact_digest",
-    ):
+    for key in ("artifact_id", "ingress_head_root", "envelope_id", "envelope_digest", "snapshot_id", "snapshot_root", "content_root", "profile_digest", "graph_artifact_digest"):
         _hex(value[key], "core:source-" + key)
     if any(key in value for key in ("raw", "envelope", "resources", "resource_values", "bytes_hex")):
         raise CoreVerificationError("core:source-raw")
     if type(value["ingress_database_id"]) is not str or type(value["ingress_artifact_id"]) is not str:
         raise CoreVerificationError("core:source-identity")
-    if value["source_status"] not in {"COMPLETE", "PARTIAL", "FAILED", "STALE"} or value["freshness"] not in {"FRESH", "UNKNOWN", "STALE"}:
-        raise CoreVerificationError("core:source-status")
-    if value["observation_status"] not in {"OBSERVED_NEW", "OBSERVED_CONTINUED", "OBSERVED_CHANGED", "INCOMPLETE", "FAILED"}:
-        raise CoreVerificationError("core:source-observation")
-    if value["chronology"] not in {"INITIAL", "EQUAL", "ADVANCING", "UNKNOWN"}:
-        raise CoreVerificationError("core:source-chronology")
-    if value["flags"] != FIXED_FLAGS:
-        raise CoreVerificationError("core:source-flags")
-    expected_id = _digest(
-        "source-artifact-id",
-        {key: value[key] for key in expected if key not in {"artifact_id", "flags"}},
-    )
-    if value["artifact_id"] != expected_id:
+    if value["source_status"] not in {"COMPLETE", "PARTIAL", "FAILED", "STALE"} or value["freshness"] not in {"FRESH", "UNKNOWN", "STALE"} or value["observation_status"] not in {"OBSERVED_NEW", "OBSERVED_CONTINUED", "OBSERVED_CHANGED", "INCOMPLETE", "FAILED"} or value["chronology"] not in {"INITIAL", "EQUAL", "ADVANCING", "UNKNOWN"} or value["flags"] != FIXED_FLAGS:
+        raise CoreVerificationError("core:source-binding")
+    if any(type(value[key]) is not int or value[key] < 0 for key in ("ingress_event_sequence", "page_count", "resource_count")):
+        raise CoreVerificationError("core:source-count")
+    if value["artifact_id"] != _digest("source-artifact-id", {key: value[key] for key in expected if key not in {"artifact_id", "flags"}}):
         raise CoreVerificationError("core:source-id")
 
 
 def _verify_reconciliation(value: Mapping[str, object]) -> None:
-    expected = {
-        "schema", "schema_version", "kind", "artifact_id", "current_source_artifact_id",
-        "prior_source_artifact_id", "current_content_root", "prior_content_root",
-        "source_status", "observation_status", "chronology", "linkage", "flags",
-    }
-    if set(value) != expected or value["schema"] != "mirror-core-reconciliation-v2" or value["kind"] != "RECONCILIATION":
+    expected = {"schema", "schema_version", "kind", "artifact_id", "current_source_artifact_id", "prior_source_artifact_id", "current_content_root", "prior_content_root", "source_status", "observation_status", "chronology", "linkage", "flags"}
+    if set(value) != expected or value["schema"] != "mirror-core-reconciliation-v2" or value["schema_version"] != 2 or value["kind"] != "RECONCILIATION":
         raise CoreVerificationError("core:reconciliation-keys")
     for key in ("artifact_id", "current_source_artifact_id", "current_content_root"):
         _hex(value[key], "core:reconciliation-id")
@@ -259,111 +202,147 @@ def _verify_reconciliation(value: Mapping[str, object]) -> None:
         _hex(value["prior_source_artifact_id"], "core:reconciliation-prior")
     if value["prior_content_root"] is not None:
         _hex(value["prior_content_root"], "core:reconciliation-prior-root")
-    if value["observation_status"] not in {"OBSERVED_NEW", "OBSERVED_CONTINUED", "OBSERVED_CHANGED", "INCOMPLETE", "FAILED"}:
-        raise CoreVerificationError("core:reconciliation-status")
-    if value["chronology"] not in {"INITIAL", "EQUAL", "ADVANCING", "UNKNOWN"} or value["linkage"] not in {"UNCHANGED", "LINKED", "UNLINKED"}:
+    if value["observation_status"] not in {"OBSERVED_NEW", "OBSERVED_CONTINUED", "OBSERVED_CHANGED", "INCOMPLETE", "FAILED"} or value["chronology"] not in {"INITIAL", "EQUAL", "ADVANCING", "UNKNOWN"} or value["linkage"] not in {"UNCHANGED", "LINKED", "UNLINKED"} or value["flags"] != FIXED_FLAGS:
         raise CoreVerificationError("core:reconciliation-binding")
-    if value["flags"] != FIXED_FLAGS:
-        raise CoreVerificationError("core:reconciliation-flags")
-    expected_id = _digest("reconciliation-id", {key: value[key] for key in expected if key != "artifact_id"})
-    if value["artifact_id"] != expected_id:
+    if value["artifact_id"] != _digest("reconciliation-id", {key: value[key] for key in expected if key != "artifact_id"}):
         raise CoreVerificationError("core:reconciliation-id")
 
 
-def _verify_artifact(row: sqlite3.Row) -> dict[str, object]:
-    expected = (
-        "artifact_id", "kind", "raw", "profile_digest", "source_artifact_id",
-        "predecessor_id", "sequence", "current_state", "created_event_sequence",
-    )
-    if tuple(row.keys()) != expected:
+def _verify_artifact_value(row: Mapping[str, object]) -> dict[str, object]:
+    if tuple(row.keys()) != TABLE_COLUMNS["core_artifacts"]:
         raise CoreVerificationError("core:artifact-columns")
     raw = row["raw"]
+    if type(raw) is not bytes:
+        raise CoreVerificationError("core:artifact-raw")
     value = _parse(raw, "core:artifact")
-    if value.get("kind") != row["kind"] or row["kind"] not in ARTIFACT_KINDS:
+    kind = row["kind"]
+    if kind not in ARTIFACT_KINDS or value.get("kind") != kind:
         raise CoreVerificationError("core:artifact-kind")
-    if row["kind"] == "GRAPH":
+    if kind == "GRAPH":
+        expected = {"schema", "schema_version", "kind", "artifact_id", "graph", "graph_digest", "flags"}
+        if set(value) != expected or value["schema"] != "mirror-core-graph-v2" or value["schema_version"] != 2 or value["flags"] != FIXED_FLAGS:
+            raise CoreVerificationError("core:graph")
         try:
-            expected_graph_keys = {"schema", "schema_version", "kind", "artifact_id", "graph", "graph_digest", "flags"}
-            if set(value) != expected_graph_keys or value.get("schema") != "mirror-core-graph-v2" or value.get("schema_version") != 2 or value.get("flags") != FIXED_FLAGS:
-                raise CoreVerificationError("core:graph")
-            graph_value = value.get("graph")
-            graph_raw = _canonical(graph_value)
+            graph_raw = _canonical(value["graph"])
             checked = graph.verify_bytes_v2(graph_raw, dict(NC_MEDICAID_GRAPH_PROFILE_REGISTRY))
-            if value.get("graph_digest") != _raw_digest("graph-artifact", graph_raw) or value.get("artifact_id") != checked.get("report_id"):
-                raise CoreVerificationError("core:graph")
         except Exception:
+            raise CoreVerificationError("core:graph") from None
+        if checked.get("accepted") is not True or value["graph_digest"] != _raw_digest("graph-artifact", graph_raw) or value["artifact_id"] != checked.get("report_id"):
             raise CoreVerificationError("core:graph")
-        if checked.get("accepted") is not True:
-            raise CoreVerificationError("core:graph")
-    elif row["kind"] == "SOURCE_OBSERVATION":
+    elif kind == "SOURCE_OBSERVATION":
         _verify_source_projection(value)
-    elif row["kind"] == "RECONCILIATION":
+    elif kind == "RECONCILIATION":
         _verify_reconciliation(value)
-    elif row["kind"] in {"GOVERNANCE", "PRIVACY"}:
-        if value.get("kind") != row["kind"] or value.get("flags") != FIXED_FLAGS:
+    elif kind in {"GOVERNANCE", "PRIVACY"}:
+        if value.get("kind") != kind or value.get("flags") != FIXED_FLAGS:
             raise CoreVerificationError("core:approval")
-        expected_approval_keys = (
-            {"schema", "schema_version", "kind", "artifact_id", "decision", "policy_digest", "evidence_digest", "verifier_id", "verifier_epoch", "valid_from", "valid_until", "flags"}
-            if row["kind"] == "GOVERNANCE" else
-            {"schema", "schema_version", "kind", "artifact_id", "privacy_decision", "support_decision", "policy_digest", "evidence_digest", "verifier_id", "verifier_epoch", "valid_from", "valid_until", "flags"}
-        )
-        if set(value) != expected_approval_keys or value.get("schema") not in {"mirror-core-governance-v2", "mirror-core-privacy-v2"} or value.get("schema_version") != 2:
+        expected = ({"schema", "schema_version", "kind", "artifact_id", "decision", "policy_digest", "evidence_digest", "verifier_id", "verifier_epoch", "valid_from", "valid_until", "flags"} if kind == "GOVERNANCE" else {"schema", "schema_version", "kind", "artifact_id", "privacy_decision", "support_decision", "policy_digest", "evidence_digest", "verifier_id", "verifier_epoch", "valid_from", "valid_until", "flags"})
+        if set(value) != expected or value["schema_version"] != 2 or value["schema"] not in {"mirror-core-governance-v2", "mirror-core-privacy-v2"}:
             raise CoreVerificationError("core:approval")
-        if type(value.get("artifact_id")) is not str or len(value["artifact_id"]) != 128 or any(char not in "0123456789abcdef" for char in value["artifact_id"]):
+        for key in ("artifact_id", "policy_digest", "evidence_digest"):
+            _hex(value[key], "core:approval")
+        if type(value["verifier_id"]) is not str or not value["verifier_id"] or type(value["verifier_epoch"]) is not int or value["verifier_epoch"] < 0 or any(type(value[key]) is not int or value[key] < 0 for key in ("valid_from", "valid_until")) or value["valid_until"] <= value["valid_from"]:
             raise CoreVerificationError("core:approval")
-        if type(value.get("policy_digest")) is not str or len(value["policy_digest"]) != 128 or any(char not in "0123456789abcdef" for char in value["policy_digest"]):
-            raise CoreVerificationError("core:approval")
-        if type(value.get("evidence_digest")) is not str or len(value["evidence_digest"]) != 128 or any(char not in "0123456789abcdef" for char in value["evidence_digest"]):
-            raise CoreVerificationError("core:approval")
-        if type(value.get("verifier_id")) is not str or not value["verifier_id"] or type(value.get("verifier_epoch")) is not int or value["verifier_epoch"] < 0:
-            raise CoreVerificationError("core:approval")
-        for key in ("valid_from", "valid_until"):
-            if type(value.get(key)) is not int or value[key] < 0:
-                raise CoreVerificationError("core:approval")
-        if value["valid_until"] <= value["valid_from"]:
-            raise CoreVerificationError("core:approval")
-        if value.get("decision") not in {"GRANTED", "DENIED", "WITHDRAWN"} and row["kind"] == "GOVERNANCE":
+        if kind == "GOVERNANCE" and value["decision"] not in {"GRANTED", "DENIED", "WITHDRAWN"}:
             raise CoreVerificationError("core:governance")
-        if row["kind"] == "PRIVACY" and (
-            value.get("privacy_decision") not in {"GRANTED", "DENIED", "WITHDRAWN"}
-            or value.get("support_decision") not in {"GRANTED", "DENIED", "WITHDRAWN"}
-        ):
+        if kind == "PRIVACY" and (value["privacy_decision"] not in {"GRANTED", "DENIED", "WITHDRAWN"} or value["support_decision"] not in {"GRANTED", "DENIED", "WITHDRAWN"}):
             raise CoreVerificationError("core:privacy")
-    elif row["kind"] == "CASE":
-        expected_case_keys = {"schema", "schema_version", "kind", "artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "state", "responsibility", "remediation", "retest", "parity", "reason", "flags"}
-        if set(value) != expected_case_keys or value.get("schema") != "mirror-core-case-v2" or value.get("schema_version") != 2 or value.get("kind") != "CASE" or value.get("state") not in {"OPEN", "RESPONSIBILITY", "REMEDIATION", "RETEST", "PERSISTENCE", "RESOLVED", "SUPERSEDED"} or value.get("flags") != FIXED_FLAGS:
+    else:
+        expected = {"schema", "schema_version", "kind", "artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id", "state", "responsibility", "remediation", "retest", "parity", "reason", "flags"}
+        if set(value) != expected or value["schema"] != "mirror-core-case-v2" or value["schema_version"] != 2 or value["flags"] != FIXED_FLAGS or value["state"] not in {"OPEN", "RESPONSIBILITY", "REMEDIATION", "RETEST", "PERSISTENCE", "RESOLVED", "SUPERSEDED"}:
             raise CoreVerificationError("core:case")
         for key in ("artifact_id", "case_id", "reconciliation_artifact_id", "source_artifact_id"):
-            if type(value.get(key)) is not str or len(value[key]) != 128 or any(char not in "0123456789abcdef" for char in value[key]):
-                raise CoreVerificationError("core:case")
-        if value.get("responsibility") not in {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"} or value.get("remediation") not in {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"} or value.get("retest") not in {"UNREQUESTED", "REQUESTED", "EXECUTED"} or value.get("parity") not in {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"} or value.get("reason") not in {"SOURCE_CHANGED", "SOURCE_INCOMPLETE", "SOURCE_CONFLICTED", "OBSERVATION_ONLY"}:
+            _hex(value[key], "core:case")
+        if value["responsibility"] not in {"UNKNOWN", "SHARED", "STATE_SOURCE", "PLAN_OR_PROVIDER", "RIGHTRAIL_PROCESSING"} or value["remediation"] not in {"UNOBSERVED", "PROPOSED", "ASSERTED", "VERIFIED"} or value["retest"] not in {"UNREQUESTED", "REQUESTED", "EXECUTED"} or value["parity"] not in {"UNKNOWN", "PARTIAL", "MATCHED", "DIVERGENT"} or value["reason"] not in {"SOURCE_CHANGED", "SOURCE_INCOMPLETE", "SOURCE_CONFLICTED", "OBSERVATION_ONLY"}:
             raise CoreVerificationError("core:case")
-    expected_id = _digest(
-        "artifact-row-id",
-        {"kind": row["kind"], "raw": _raw_digest("artifact-bytes", raw), "predecessor_id": row["predecessor_id"], "sequence": row["sequence"]},
-    )
+    for key in ("profile_digest",):
+        _hex(row[key], "core:artifact-profile")
+    for key in ("source_artifact_id", "predecessor_id"):
+        if row[key] is not None:
+            _hex(row[key], "core:artifact-link")
+    if type(row["created_event_sequence"]) is not int or row["created_event_sequence"] <= 0:
+        raise CoreVerificationError("core:artifact-sequence")
+    expected_id = _digest("artifact-row-id", {"kind": kind, "raw": _raw_digest("artifact-bytes", raw), "profile_digest": row["profile_digest"], "source_artifact_id": row["source_artifact_id"], "predecessor_id": row["predecessor_id"]})
     if row["artifact_id"] != expected_id:
         raise CoreVerificationError("core:artifact-id")
-    if (
-        type(row["sequence"]) is not int
-        or row["sequence"] <= 0
-        or type(row["created_event_sequence"]) is not int
-        or row["created_event_sequence"] != row["sequence"]
-    ):
-        raise CoreVerificationError("core:artifact-sequence")
-    expected_state = {
-        "GRAPH": "GRAPH",
-        "SOURCE_OBSERVATION": value["observation_status"] if row["kind"] == "SOURCE_OBSERVATION" else None,
-        "RECONCILIATION": value["observation_status"] if row["kind"] == "RECONCILIATION" else None,
-        "GOVERNANCE": value["decision"] if row["kind"] == "GOVERNANCE" else None,
-        "PRIVACY": value["privacy_decision"] if row["kind"] == "PRIVACY" else None,
-        "CASE": value["state"] if row["kind"] == "CASE" else None,
-    }[row["kind"]]
+    if kind == "GRAPH":
+        expected_state = "GRAPH"
+    elif kind in {"SOURCE_OBSERVATION", "RECONCILIATION"}:
+        expected_state = value["observation_status"]
+    elif kind == "GOVERNANCE":
+        expected_state = value["decision"]
+    elif kind == "PRIVACY":
+        expected_state = value["privacy_decision"]
+    else:
+        expected_state = value["state"]
     if row["current_state"] != expected_state:
         raise CoreVerificationError("core:artifact-state")
-    if type(row["profile_digest"]) is not str or len(row["profile_digest"]) != 128:
-        raise CoreVerificationError("core:artifact-profile")
+    return value
+
+
+def _verify_session_snapshot(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != set(SESSION_FIELDS):
+        raise CoreVerificationError("core:session-material")
+    if type(value["session_id"]) is not str or not value["session_id"] or value["state"] not in SESSION_STATES or value["delivery_state"] not in DELIVERY_STATES:
+        raise CoreVerificationError("core:session-material")
+    for key in ("source_artifact_id", "governance_artifact_id", "privacy_artifact_id"):
+        _hex(value[key], "core:session-material")
+    if type(value["last_slot"]) is not int or value["last_slot"] < -1 or type(value["delivery_attempt"]) is not int or value["delivery_attempt"] < 0:
+        raise CoreVerificationError("core:session-material")
+    if value["delivery_lease_until"] is not None and (type(value["delivery_lease_until"]) is not int or value["delivery_lease_until"] < 0):
+        raise CoreVerificationError("core:session-material")
+    if value["delivery_lease_token_digest"] is not None:
+        _hex(value["delivery_lease_token_digest"], "core:token-digest")
+    if value["delivery_response_digest"] is not None:
+        _hex(value["delivery_response_digest"], "core:delivery-response")
+    if value["delivery_state"] == "DUE" and any(value[key] is not None for key in ("delivery_lease_token_digest", "delivery_lease_until", "delivery_response_digest", "delivery_error_code")):
+        raise CoreVerificationError("core:delivery-state")
+    if value["delivery_state"] == "INTENT" and (value["delivery_job_id"] is None or value["delivery_lease_token_digest"] is None or value["delivery_lease_until"] is None or value["delivery_response_digest"] is not None or value["delivery_error_code"] is not None):
+        raise CoreVerificationError("core:delivery-state")
+    if value["delivery_state"] in {"ACK", "UNKNOWN", "EXHAUSTED"} and (value["delivery_job_id"] is None or value["delivery_lease_token_digest"] is None or value["delivery_lease_until"] is None):
+        raise CoreVerificationError("core:delivery-state")
+    if value["delivery_state"] == "ACK" and (value["delivery_response_digest"] is None or value["delivery_error_code"] is not None):
+        raise CoreVerificationError("core:delivery-state")
+    if value["delivery_state"] == "UNKNOWN" and (value["delivery_response_digest"] is not None or value["delivery_error_code"] not in {"RESPONSE_LOST", "TIMEOUT", "REMOTE_INDETERMINATE"}):
+        raise CoreVerificationError("core:delivery-state")
+    if value["delivery_state"] == "EXHAUSTED" and (value["delivery_response_digest"] is not None or value["delivery_error_code"] != "ATTEMPTS_EXHAUSTED"):
+        raise CoreVerificationError("core:delivery-state")
     return dict(value)
+
+
+def _material_keys(kind: str) -> set[str]:
+    if kind == "ARTIFACT":
+        return {"artifact_id", "kind", "raw_hex", "raw_digest", "raw_length", "profile_digest", "source_artifact_id", "predecessor_id", "current_state", "ingress_watermark"}
+    if kind in {"SESSION_OPEN", "SESSION_START"}:
+        return {"session"}
+    if kind == "SESSION_PAUSE":
+        return {"session", "current_source_artifact_id", "reason"}
+    if kind == "OBSERVATION":
+        return {"observation", "session"}
+    if kind == "DELIVERY_INTENT":
+        return {"session", "job_id", "delivery_id", "token_digest", "lease_until"}
+    if kind == "DELIVERY_REQUEUE":
+        return {"session", "job_id", "delivery_id", "expired_attempt", "prior_token_digest", "prior_lease_until", "reason"}
+    if kind == "DELIVERY_ACK":
+        return {"session", "job_id", "delivery_id", "token_digest", "response_digest"}
+    if kind == "DELIVERY_RESPONSE_UNKNOWN":
+        return {"session", "job_id", "delivery_id", "token_digest", "error_code"}
+    if kind == "DELIVERY_EXHAUSTED":
+        return {"session", "job_id", "delivery_id", "token_digest", "lease_until", "error_code", "max_attempts"}
+    raise CoreVerificationError("core:event-kind")
+
+
+def _check_common_types(value: Mapping[str, object]) -> None:
+    if value["schema"] != SCHEMA or value["schema_version"] != SCHEMA_VERSION or type(value["database_id"]) is not str or type(value["chain_id"]) is not str:
+        raise CoreVerificationError("core:event-schema")
+    for key in ("request_digest", "material_digest", "payload_digest", "before_root", "after_root", "stream_before_root", "stream_after_root"):
+        _hex(value[key], "core:event-hex")
+    for key in ("sequence", "attempt", "observed_at", "payload_length"):
+        if type(value[key]) is not int or value[key] < 0:
+            raise CoreVerificationError("core:event-number")
+    for key in ("event_id", "operation_id", "subject_id", "event_kind", "stream_kind", "stream_id", "prior_state", "next_state"):
+        if type(value[key]) is not str or not value[key]:
+            raise CoreVerificationError("core:event-field")
 
 
 def verify_database(path: str | Path, *, expected_database_id: str | None = None, expected_config_digest: str | None = None, ingress_path: str | Path | None = None) -> dict[str, object]:
@@ -371,240 +350,296 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
     try:
         if _table_names(connection) != tuple(sorted(TABLES)):
             raise CoreVerificationError("core:tables")
-        expected_columns = {
-            "core_meta": ("meta_id", "schema", "schema_version", "database_id", "chain_id", "config_digest", "sequence", "head_root", "ingress_database_id", "ingress_watermark", "session_count"),
-            "core_artifacts": ("artifact_id", "kind", "raw", "profile_digest", "source_artifact_id", "predecessor_id", "sequence", "current_state", "created_event_sequence"),
-            "core_heads": ("stream_kind", "stream_id", "artifact_id", "head_root", "event_sequence"),
-            "core_sessions": ("session_id", "state", "source_artifact_id", "governance_artifact_id", "privacy_artifact_id", "operation_id", "head_root", "last_slot", "lease_until", "delivery_state", "delivery_job_id", "delivery_attempt", "delivery_lease_token", "delivery_lease_until", "delivery_response_digest", "delivery_error_code"),
-            "core_slots": ("session_id", "slot_number", "state", "attempt", "lease_token", "lease_until", "result_digest", "result_raw"),
-            "core_events": ("sequence", "event_id", "event_kind", "database_id", "chain_id", "stream_kind", "stream_id", "operation_id", "subject_id", "request_digest", "prior_state", "next_state", "attempt", "before_root", "after_root", "stream_before_root", "stream_after_root", "material_digest", "payload_digest", "payload_length", "event_raw", "receipt_digest"),
-        }
-        for table, columns in expected_columns.items():
+        for table, columns in TABLE_COLUMNS.items():
             if _columns(connection, table) != columns:
                 raise CoreVerificationError("core:columns")
+        indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'").fetchall()}
+        if indexes != {EXPLICIT_INDEX}:
+            raise CoreVerificationError("core:indexes")
         meta = _verify_meta(connection)
         if expected_database_id is not None and meta["database_id"] != expected_database_id:
             raise CoreVerificationError("core:database-id")
         if expected_config_digest is not None and meta["config_digest"] != expected_config_digest:
             raise CoreVerificationError("core:config")
-        rows = connection.execute("SELECT * FROM core_artifacts ORDER BY sequence").fetchall()
-        artifacts = {row["artifact_id"]: _verify_artifact(row) for row in rows}
-        artifact_rows = {row["artifact_id"]: row for row in rows}
-        if len(artifacts) != len(rows):
-            raise CoreVerificationError("core:artifact-duplicate")
-        for row in rows:
-            if row["kind"] != "CASE":
-                continue
-            value = artifacts[row["artifact_id"]]
-            predecessor_id = row["predecessor_id"]
-            if value["state"] == "OPEN":
-                if predecessor_id is not None:
-                    raise CoreVerificationError("core:case-chain")
-                continue
-            if type(predecessor_id) is not str or predecessor_id not in artifacts or artifact_rows[predecessor_id]["kind"] != "CASE":
-                raise CoreVerificationError("core:case-chain")
-            predecessor = artifacts[predecessor_id]
-            if predecessor["case_id"] != value["case_id"] or predecessor["reconciliation_artifact_id"] != value["reconciliation_artifact_id"] or predecessor["source_artifact_id"] != value["source_artifact_id"]:
-                raise CoreVerificationError("core:case-chain")
-            if value["state"] not in CASE_EDGES.get(predecessor["state"], set()):
-                raise CoreVerificationError("core:case-transition")
-            changed = [
-                key for key in ("responsibility", "remediation", "retest", "parity")
-                if predecessor[key] != value[key]
-            ]
-            expected_change = {
-                "RESPONSIBILITY": "responsibility",
-                "REMEDIATION": "remediation",
-                "RETEST": "retest",
-                "PERSISTENCE": "parity",
-            }.get(value["state"])
-            if expected_change is None:
-                if changed:
-                    raise CoreVerificationError("core:case-chain")
-            elif any(key != expected_change for key in changed):
-                raise CoreVerificationError("core:case-chain")
-            if value["state"] == "RETEST" and predecessor["remediation"] == "UNOBSERVED":
-                raise CoreVerificationError("core:case-chain")
-            if value["state"] == "PERSISTENCE" and predecessor["retest"] != "EXECUTED":
-                raise CoreVerificationError("core:case-chain")
-            if value["state"] == "RESOLVED" and (predecessor["parity"] != "MATCHED" or predecessor["remediation"] != "VERIFIED" or predecessor["retest"] != "EXECUTED"):
-                raise CoreVerificationError("core:case-chain")
-        ingress_snapshot: dict[str, dict[str, object]] = {}
-        if ingress_path is not None:
-            source_ids = tuple(
-                str(value["ingress_artifact_id"])
-                for value in artifacts.values()
-                if value.get("kind") == "SOURCE_OBSERVATION"
-            )
-            if source_ids:
-                ingress_snapshot = ingress.read_artifact_snapshots(ingress_path, source_ids)
-        for artifact_id, value in artifacts.items():
-            if value.get("kind") == "SOURCE_OBSERVATION" and ingress_path is not None:
-                projection = _verify_source_projection(value)
-                ing = ingress_snapshot.get(str(value["ingress_artifact_id"]))
-                if ing is None:
-                    raise CoreVerificationError("core:ingress-binding")
-                if ing["artifact_id"] != value["ingress_artifact_id"] or ing["envelope_id"] != value["envelope_id"] or ing["content_root"] != value["content_root"] or ing["event_sequence"] != value["ingress_event_sequence"]:
-                    raise CoreVerificationError("core:ingress-binding")
+
+        artifact_rows = connection.execute("SELECT * FROM core_artifacts ORDER BY created_event_sequence,artifact_id").fetchall()
+        actual_artifacts: dict[str, dict[str, object]] = {}
+        for row in artifact_rows:
+            if row["artifact_id"] in actual_artifacts:
+                raise CoreVerificationError("core:artifact-duplicate")
+            actual_artifacts[str(row["artifact_id"])] = _verify_artifact_value(row)
+
         events = connection.execute("SELECT * FROM core_events ORDER BY sequence").fetchall()
-        previous = GENESIS_ROOT
-        artifact_states: dict[str, str] = {}
-        session_states: dict[str, str] = {}
-        slot_states: dict[tuple[str, int], str] = {}
+        expected_artifacts: dict[str, dict[str, object]] = {}
+        expected_sessions: dict[str, dict[str, object]] = {}
+        expected_slots: dict[tuple[str, int], dict[str, object]] = {}
         stream_roots: dict[tuple[str, str], str] = {}
         stream_refs: dict[tuple[str, str], str] = {}
-        delivery_states: dict[str, tuple[str, int, str]] = {}
+        stream_sequences: dict[tuple[str, str], int] = {}
+        previous_root = GENESIS_ROOT
+        previous_observed = 0
+        ingress_watermark = 0
+
         for expected_sequence, row in enumerate(events, start=1):
-            if row["sequence"] != expected_sequence or row["database_id"] != meta["database_id"] or row["chain_id"] != meta["chain_id"] or row["before_root"] != previous:
+            if tuple(row.keys()) != TABLE_COLUMNS["core_events"] or row["sequence"] != expected_sequence:
                 raise CoreVerificationError("core:event-order")
-            value = _parse(row["event_raw"], "core:event-raw")
-            required = {
-                "schema", "schema_version", "database_id", "chain_id", "sequence",
-                "event_id", "event_kind", "stream_kind", "stream_id", "operation_id", "subject_id",
-                "request_digest", "prior_state", "next_state", "attempt",
-                "before_root", "after_root", "stream_before_root", "stream_after_root", "material_digest", "payload_digest",
-                "payload_length",
-            }
-            row_event_keys = required - {"schema", "schema_version"}
-            if set(value) != required or any(value[key] != row[key] for key in row_event_keys):
-                raise CoreVerificationError("core:event-receipt")
-            if row["event_kind"] not in EVENT_KINDS:
+            raw_event = bytes(row["event_raw"])
+            value = _parse(raw_event, "core:event-raw")
+            if set(value) != EVENT_RAW_KEYS:
+                raise CoreVerificationError("core:event-keys")
+            _check_common_types(value)
+            if any(value[key] != row[key] for key in ("sequence", "event_id", "event_kind", "operation_id", "subject_id")):
+                raise CoreVerificationError("core:event-table")
+            if value["database_id"] != meta["database_id"] or value["chain_id"] != meta["chain_id"] or value["before_root"] != previous_root:
+                raise CoreVerificationError("core:event-order")
+            if value["observed_at"] < previous_observed:
+                raise CoreVerificationError("core:chronology")
+            previous_observed = int(value["observed_at"])
+            if value["event_kind"] not in EVENT_KINDS:
                 raise CoreVerificationError("core:event-kind")
-            if row["event_id"] != _digest("event-id", {key: value[key] for key in required if key not in {"event_id", "after_root", "stream_after_root"}}):
-                raise CoreVerificationError("core:event-id")
-            if row["receipt_digest"] != _raw_digest("receipt", row["event_raw"]):
+            material = value["material"]
+            if not isinstance(material, dict) or set(material) != _material_keys(str(value["event_kind"])):
+                raise CoreVerificationError("core:event-material")
+            if value["material_digest"] != _digest("material", material) or value["event_id"] != _digest("event-id", {key: value[key] for key in EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}}):
+                raise CoreVerificationError("core:event-digest")
+            if row["receipt_digest"] != _raw_digest("receipt", raw_event):
                 raise CoreVerificationError("core:event-receipt")
-            expected_after = _event_root(row["sequence"], previous, row["event_id"], row["event_kind"], row["subject_id"], row["next_state"], row["material_digest"], row["stream_kind"], row["stream_id"])
-            if row["after_root"] != expected_after:
-                raise CoreVerificationError("core:event-root")
-            stream_key = (str(row["stream_kind"]), str(row["stream_id"]))
-            if row["stream_before_root"] != stream_roots.get(stream_key, GENESIS_ROOT):
+            stream_key = (str(value["stream_kind"]), str(value["stream_id"]))
+            if value["stream_before_root"] != stream_roots.get(stream_key, GENESIS_ROOT):
                 raise CoreVerificationError("core:stream-order")
-            expected_stream_after = _stream_root(
-                row["sequence"], row["stream_before_root"], row["event_id"],
-                row["stream_kind"], row["stream_id"], row["next_state"], row["material_digest"],
-            )
-            if row["stream_after_root"] != expected_stream_after:
-                raise CoreVerificationError("core:stream-root")
-            stream_roots[stream_key] = row["stream_after_root"]
-            stream_refs[stream_key] = str(row["payload_digest"] if row["event_kind"] == "ARTIFACT" else row["stream_id"])
-            if row["event_kind"] == "ARTIFACT":
-                if row["payload_digest"] not in artifacts or row["prior_state"] != "NONE" or row["next_state"] not in ARTIFACT_KINDS:
+            if value["after_root"] != _event_root(value) or value["stream_after_root"] != _stream_root(value):
+                raise CoreVerificationError("core:event-root")
+            stream_roots[stream_key] = str(value["stream_after_root"])
+            stream_sequences[stream_key] = int(value["sequence"])
+            previous_root = str(value["after_root"])
+            kind = str(value["event_kind"])
+
+            if kind == "ARTIFACT":
+                if value["prior_state"] != "NONE" or value["next_state"] not in ARTIFACT_KINDS or value["stream_kind"] != "ARTIFACT" or value["stream_id"] != value["next_state"]:
                     raise CoreVerificationError("core:event-artifact")
-                artifact_row = artifact_rows[row["payload_digest"]]
-                if (
-                    row["subject_id"] != row["payload_digest"]
-                    or row["stream_kind"] != "ARTIFACT"
-                    or row["stream_id"] != row["next_state"]
-                    or row["payload_length"] != len(bytes(artifact_row["raw"]))
-                    or row["sequence"] != artifact_row["sequence"]
-                    or row["sequence"] != artifact_row["created_event_sequence"]
-                    or row["material_digest"] != _digest(
-                        "material",
-                        {
-                            "kind": artifact_row["kind"],
-                            "raw": _raw_digest("artifact-bytes", bytes(artifact_row["raw"])),
-                            "predecessor_id": artifact_row["predecessor_id"],
-                            "sequence": artifact_row["sequence"],
-                        },
-                    )
-                ):
+                if type(material["raw_hex"]) is not str or material["raw_hex"] != material["raw_hex"].lower() or len(material["raw_hex"]) % 2:
                     raise CoreVerificationError("core:event-artifact")
-                artifact_states[row["payload_digest"]] = row["next_state"]
-            elif row["event_kind"] == "SESSION_OPEN":
-                if row["prior_state"] != "NONE" or row["next_state"] != "OPEN":
-                    raise CoreVerificationError("core:session-transition")
-                session_states[row["subject_id"]] = "OPEN"
-            elif row["event_kind"] == "SESSION_START":
-                if session_states.get(row["subject_id"]) != "OPEN" or row["next_state"] != "RUNNING":
-                    raise CoreVerificationError("core:session-transition")
-                session_states[row["subject_id"]] = "RUNNING"
-            elif row["event_kind"] == "SESSION_PAUSE":
-                if session_states.get(row["subject_id"]) != "RUNNING" or row["next_state"] != "PAUSED":
-                    raise CoreVerificationError("core:session-transition")
-                session_states[row["subject_id"]] = "PAUSED"
-            elif row["event_kind"] == "OBSERVATION":
-                if session_states.get(row["subject_id"]) not in {"RUNNING", "PAUSED"} or row["next_state"] != "OBSERVED":
-                    raise CoreVerificationError("core:observation-transition")
-            elif row["event_kind"] == "CASE_ADVANCE":
-                if row["next_state"] not in {"OPEN", "RESPONSIBILITY", "REMEDIATION", "RETEST", "PERSISTENCE", "RESOLVED", "SUPERSEDED"}:
-                    raise CoreVerificationError("core:case-transition")
-            elif row["event_kind"] in {"DELIVERY_INTENT", "DELIVERY_REQUEUE", "DELIVERY_ACK", "DELIVERY_RESPONSE_UNKNOWN"}:
-                if row["stream_kind"] != "DELIVERY" or not row["stream_id"]:
-                    raise CoreVerificationError("core:delivery-stream")
-                prior_delivery = delivery_states.get(row["subject_id"], ("DUE", 0, row["stream_id"]))
-                prior_delivery_state, prior_attempt, prior_job = prior_delivery
-                if prior_job != row["stream_id"]:
-                    raise CoreVerificationError("core:delivery-job")
-                if row["event_kind"] == "DELIVERY_REQUEUE":
-                    if row["prior_state"] not in {"INTENT", "UNKNOWN"} or row["next_state"] != "DUE" or row["attempt"] != prior_attempt:
-                        raise CoreVerificationError("core:delivery-transition")
-                elif row["event_kind"] == "DELIVERY_INTENT":
-                    if row["prior_state"] not in {"DUE", "UNKNOWN", "INTENT"} or row["next_state"] != "INTENT" or row["attempt"] != prior_attempt + 1:
-                        raise CoreVerificationError("core:delivery-transition")
+                try:
+                    raw_artifact = bytes.fromhex(material["raw_hex"])
+                except ValueError:
+                    raise CoreVerificationError("core:event-artifact") from None
+                if type(material["raw_length"]) is not int or material["raw_length"] != len(raw_artifact) or material["raw_digest"] != _raw_digest("artifact-bytes", raw_artifact):
+                    raise CoreVerificationError("core:event-artifact")
+                _hex(material["profile_digest"], "core:event-artifact")
+                synthetic = {"artifact_id": material["artifact_id"], "kind": material["kind"], "raw": raw_artifact, "profile_digest": material["profile_digest"], "source_artifact_id": material["source_artifact_id"], "predecessor_id": material["predecessor_id"], "current_state": material["current_state"], "created_event_sequence": value["sequence"]}
+                parsed_artifact = _verify_artifact_value(synthetic)
+                if material["artifact_id"] != value["subject_id"] or material["artifact_id"] != value["payload_digest"] or material["kind"] != value["next_state"] or value["payload_length"] != len(raw_artifact) or type(material["ingress_watermark"]) is not int or material["ingress_watermark"] < 0:
+                    raise CoreVerificationError("core:event-artifact")
+                if material["kind"] == "GRAPH":
+                    expected_operation = _digest("graph-operation", {"graph_id": parsed_artifact["artifact_id"], "graph_digest": parsed_artifact["graph_digest"]})
+                    expected_request = _digest("graph-request", {"graph_id": parsed_artifact["artifact_id"], "graph_digest": parsed_artifact["graph_digest"]})
+                elif material["kind"] == "SOURCE_OBSERVATION":
+                    expected_operation = _digest("source-operation", {"ingress_artifact_id": parsed_artifact["ingress_artifact_id"]})
+                    expected_request = _digest("source-request", {"ingress_artifact_id": parsed_artifact["ingress_artifact_id"]})
+                elif material["kind"] == "RECONCILIATION":
+                    expected_operation = _digest("reconciliation-operation", {"source_artifact_id": parsed_artifact["current_source_artifact_id"]})
+                    expected_request = _digest("reconciliation-request", {"source_artifact_id": parsed_artifact["current_source_artifact_id"]})
+                elif material["kind"] in {"GOVERNANCE", "PRIVACY"}:
+                    approval_digest = _raw_digest("approval", raw_artifact)
+                    expected_operation = _digest("approval-operation", {"kind": material["kind"], "raw": approval_digest})
+                    expected_request = _digest("approval-request", {"kind": material["kind"], "raw": approval_digest})
+                elif material["predecessor_id"] is None:
+                    expected_operation = _digest("case-operation", {"case_id": parsed_artifact["case_id"]})
+                    expected_request = _digest("case-request", {"reconciliation_artifact_id": parsed_artifact["reconciliation_artifact_id"]})
                 else:
-                    expected = "ACK" if row["event_kind"] == "DELIVERY_ACK" else "UNKNOWN"
-                    if row["prior_state"] != "INTENT" or row["next_state"] != expected or row["attempt"] != prior_attempt:
+                    prior_case = _parse(bytes(expected_artifacts[material["predecessor_id"]]["raw"])) if material["predecessor_id"] in expected_artifacts else None
+                    if prior_case is None:
+                        raise CoreVerificationError("core:case-chain")
+                    supplied = {"responsibility": None, "remediation": None, "retest": None, "parity": None}
+                    field_for_state = {"RESPONSIBILITY": "responsibility", "REMEDIATION": "remediation", "RETEST": "retest", "PERSISTENCE": "parity"}.get(parsed_artifact["state"])
+                    if field_for_state is not None:
+                        supplied[field_for_state] = parsed_artifact[field_for_state]
+                    expected_operation = _digest("case-transition-operation", {"case_artifact_id": material["predecessor_id"], "next_state": parsed_artifact["state"], **supplied})
+                    expected_request = _digest("case-transition-request", {"case_artifact_id": material["predecessor_id"], "next_state": parsed_artifact["state"], **supplied})
+                if value["operation_id"] != expected_operation or value["request_digest"] != expected_request:
+                    raise CoreVerificationError("core:artifact-operation")
+                ingress_watermark = max(ingress_watermark, int(material["ingress_watermark"]))
+                if material["artifact_id"] in expected_artifacts:
+                    raise CoreVerificationError("core:event-artifact-duplicate")
+                expected_artifacts[str(material["artifact_id"])] = {"artifact_id": material["artifact_id"], "kind": material["kind"], "raw": raw_artifact, "profile_digest": material["profile_digest"], "source_artifact_id": material["source_artifact_id"], "predecessor_id": material["predecessor_id"], "current_state": material["current_state"], "created_event_sequence": value["sequence"]}
+                if material["predecessor_id"] is not None and material["predecessor_id"] not in expected_artifacts:
+                    raise CoreVerificationError("core:artifact-predecessor")
+                stream_refs[stream_key] = str(material["artifact_id"])
+                if material["kind"] == "CASE":
+                    prior_id = material["predecessor_id"]
+                    if parsed_artifact["state"] == "OPEN" and prior_id is not None:
+                        raise CoreVerificationError("core:case-chain")
+                    if parsed_artifact["state"] != "OPEN":
+                        if prior_id not in expected_artifacts or expected_artifacts[prior_id]["kind"] != "CASE":
+                            raise CoreVerificationError("core:case-chain")
+                        prior_case = _parse(bytes(expected_artifacts[prior_id]["raw"]))
+                        if parsed_artifact["case_id"] != prior_case["case_id"] or parsed_artifact["reconciliation_artifact_id"] != prior_case["reconciliation_artifact_id"] or parsed_artifact["source_artifact_id"] != prior_case["source_artifact_id"] or parsed_artifact["state"] not in CASE_EDGES.get(prior_case["state"], set()):
+                            raise CoreVerificationError("core:case-chain")
+                        changed = [key for key in ("responsibility", "remediation", "retest", "parity") if parsed_artifact[key] != prior_case[key]]
+                        required_change = {"RESPONSIBILITY": "responsibility", "REMEDIATION": "remediation", "RETEST": "retest", "PERSISTENCE": "parity"}.get(parsed_artifact["state"])
+                        if (required_change is None and changed) or (required_change is not None and any(key != required_change for key in changed)):
+                            raise CoreVerificationError("core:case-chain")
+                        if parsed_artifact["state"] == "RETEST" and prior_case["remediation"] == "UNOBSERVED":
+                            raise CoreVerificationError("core:case-chain")
+                        if parsed_artifact["state"] == "PERSISTENCE" and prior_case["retest"] != "EXECUTED":
+                            raise CoreVerificationError("core:case-chain")
+                        if parsed_artifact["state"] == "RESOLVED" and (prior_case["parity"] != "MATCHED" or prior_case["remediation"] != "VERIFIED" or prior_case["retest"] != "EXECUTED"):
+                            raise CoreVerificationError("core:case-chain")
+            elif kind in {"SESSION_OPEN", "SESSION_START", "SESSION_PAUSE", "OBSERVATION"}:
+                session_id = str(value["subject_id"])
+                if kind == "SESSION_OPEN":
+                    if value["prior_state"] != "NONE" or value["next_state"] != "OPEN" or session_id in expected_sessions:
+                        raise CoreVerificationError("core:session-transition")
+                    if value["operation_id"] != _digest("session-operation", {"session_id": session_id, "action": "OPEN"}) or value["request_digest"] != _digest("session-request", {"session_id": session_id}) or value["payload_digest"] != value["material"]["session"]["source_artifact_id"]:
+                        raise CoreVerificationError("core:session-transition")
+                    snap = _verify_session_snapshot(material["session"])
+                    if snap["session_id"] != session_id or snap["state"] != "OPEN" or snap["last_slot"] != -1 or snap["delivery_state"] != "DUE":
+                        raise CoreVerificationError("core:session-transition")
+                    expected_sessions[session_id] = snap
+                elif kind == "SESSION_START":
+                    if value["prior_state"] != "OPEN" or value["next_state"] != "RUNNING" or session_id not in expected_sessions or expected_sessions[session_id]["state"] != "OPEN":
+                        raise CoreVerificationError("core:session-transition")
+                    if value["operation_id"] != _digest("session-operation", {"session_id": session_id, "action": "START"}) or value["request_digest"] != _digest("session-request", {"session_id": session_id, "action": "START"}) or value["payload_digest"] != session_id:
+                        raise CoreVerificationError("core:session-transition")
+                    snap = _verify_session_snapshot(material["session"])
+                    if snap["session_id"] != session_id or snap["state"] != "RUNNING" or snap["last_slot"] != expected_sessions[session_id]["last_slot"]:
+                        raise CoreVerificationError("core:session-transition")
+                    expected_sessions[session_id] = snap
+                elif kind == "SESSION_PAUSE":
+                    if value["prior_state"] != "RUNNING" or value["next_state"] != "PAUSED" or session_id not in expected_sessions or expected_sessions[session_id]["state"] != "RUNNING" or material["reason"] not in {"SOURCE_SUPERSEDED", "AUTHORITY_EXPIRED", "AUTHORITY_INDETERMINATE"} or type(material["current_source_artifact_id"]) is not str:
+                        raise CoreVerificationError("core:session-transition")
+                    pause_request = {"session_id": session_id, "reason": material["reason"], "current_source_artifact_id": material["current_source_artifact_id"]}
+                    if value["operation_id"] != _digest("pause-operation", pause_request) or value["request_digest"] != _digest("pause-request", pause_request) or value["payload_digest"] != _digest("pause-reason", {"reason": material["reason"]}):
+                        raise CoreVerificationError("core:session-transition")
+                    snap = _verify_session_snapshot(material["session"])
+                    if snap["session_id"] != session_id or snap["state"] != "PAUSED":
+                        raise CoreVerificationError("core:session-transition")
+                    expected_sessions[session_id] = snap
+                else:
+                    if value["prior_state"] != "RUNNING" or value["next_state"] != "RUNNING" or session_id not in expected_sessions or expected_sessions[session_id]["state"] != "RUNNING":
+                        raise CoreVerificationError("core:observation-transition")
+                    observation = material["observation"]
+                    if not isinstance(observation, dict) or set(observation) != {"schema", "schema_version", "session_id", "slot_number", "result", "counts", "flags", "result_digest"} or observation["session_id"] != session_id or observation["schema"] != "mirror-core-observation-v2" or observation["schema_version"] != 2 or observation["result"] not in OBSERVATION_RESULTS or observation["flags"] != FIXED_FLAGS or set(observation["counts"]) != {"changed", "observed"}:
+                        raise CoreVerificationError("core:observation")
+                    if observation["result_digest"] != _digest("observation", {key: observation[key] for key in observation if key != "result_digest"}) or value["payload_digest"] != observation["result_digest"]:
+                        raise CoreVerificationError("core:observation")
+                    if value["operation_id"] != _digest("observation-operation", {"session_id": session_id, "slot_number": observation["slot_number"]}) or value["request_digest"] != _digest("observation-request", {"session_id": session_id, "slot_number": observation["slot_number"]}):
+                        raise CoreVerificationError("core:observation")
+                    slot = observation["slot_number"]
+                    if type(slot) is not int or slot != expected_sessions[session_id]["last_slot"] + 1 or slot < 0:
+                        raise CoreVerificationError("core:observation-order")
+                    result_raw = _canonical(observation)
+                    if value["payload_length"] != len(result_raw):
+                        raise CoreVerificationError("core:observation")
+                    snap = _verify_session_snapshot(material["session"])
+                    if snap["last_slot"] != slot or snap["state"] != "RUNNING":
+                        raise CoreVerificationError("core:observation")
+                    expected_slots[(session_id, slot)] = {"session_id": session_id, "slot_number": slot, "result_digest": observation["result_digest"], "result_raw": result_raw}
+                    expected_sessions[session_id] = snap
+            else:
+                session_id = str(value["subject_id"])
+                if session_id not in expected_sessions or value["stream_kind"] != "DELIVERY":
+                    raise CoreVerificationError("core:delivery-stream")
+                snap = _verify_session_snapshot(material["session"])
+                if snap["session_id"] != session_id:
+                    raise CoreVerificationError("core:delivery-material")
+                job_id = material["job_id"]
+                delivery_id = material["delivery_id"]
+                if type(job_id) is not str or not job_id or delivery_id != _digest("delivery-id", {"session_id": session_id, "job_id": job_id}) or value["stream_id"] != delivery_id:
+                    raise CoreVerificationError("core:delivery-material")
+                prior = expected_sessions[session_id]
+                prior_state = prior["delivery_state"]
+                if kind == "DELIVERY_INTENT":
+                    if value["prior_state"] != "DUE" or value["next_state"] != "INTENT" or prior_state != "DUE" or value["attempt"] != prior["delivery_attempt"] + 1 or material["token_digest"] != snap["delivery_lease_token_digest"] or material["lease_until"] != snap["delivery_lease_until"] or value["observed_at"] >= int(material["lease_until"]):
                         raise CoreVerificationError("core:delivery-transition")
-                delivery_states[row["subject_id"]] = (row["next_state"], row["attempt"], row["stream_id"])
-            previous = row["after_root"]
-        session_rows = connection.execute("SELECT * FROM core_sessions").fetchall()
-        if meta["session_count"] != len(session_rows):
-            raise CoreVerificationError("core:session-count")
-        for row in session_rows:
-            if session_states.get(row["session_id"]) != row["state"]:
-                raise CoreVerificationError("core:session-state")
-            session_stream = ("SESSION", str(row["session_id"]))
-            if row["head_root"] != stream_roots.get(session_stream):
-                raise CoreVerificationError("core:session-head")
-            delivery = delivery_states.get(row["session_id"], ("DUE", 0, None))
-            if row["delivery_state"] != delivery[0] or row["delivery_attempt"] != delivery[1] or row["delivery_job_id"] != delivery[2]:
-                raise CoreVerificationError("core:delivery-state")
-        for row in connection.execute("SELECT * FROM core_slots").fetchall():
-            if row["state"] not in {"OBSERVED", "DUE"}:
-                raise CoreVerificationError("core:slot-state")
-            if row["result_raw"] is not None:
-                result = _parse(row["result_raw"], "core:result")
-                if result.get("result") not in OBSERVATION_RESULTS or result.get("result_digest") != row["result_digest"]:
-                    raise CoreVerificationError("core:result")
-        heads = connection.execute("SELECT * FROM core_heads ORDER BY stream_kind,stream_id").fetchall()
-        head_keys: set[tuple[str, str]] = set()
-        for row in heads:
-            stream_key = (str(row["stream_kind"]), str(row["stream_id"]))
-            if stream_key in head_keys or stream_key not in stream_roots or row["head_root"] != stream_roots[stream_key]:
-                raise CoreVerificationError("core:head")
-            head_keys.add(stream_key)
-            if row["artifact_id"] != stream_refs.get(stream_key):
-                raise CoreVerificationError("core:head")
-            if row["stream_kind"] == "ARTIFACT" and row["artifact_id"] not in artifacts:
-                raise CoreVerificationError("core:head")
-        if head_keys != set(stream_roots):
-            raise CoreVerificationError("core:head")
-        if meta["sequence"] != len(events) or meta["head_root"] != previous:
+                    if value["operation_id"] != _digest("delivery-intent-operation", {"session_id": session_id, "job_id": job_id, "attempt": value["attempt"], "token_digest": material["token_digest"]}) or value["request_digest"] != _digest("delivery-request", {"session_id": session_id, "job_id": job_id, "attempt": value["attempt"], "token_digest": material["token_digest"]}) or value["payload_digest"] != _digest("delivery-job", {"session_id": session_id, "job_id": job_id, "delivery_id": delivery_id}):
+                        raise CoreVerificationError("core:delivery-operation")
+                elif kind == "DELIVERY_REQUEUE":
+                    if value["prior_state"] not in {"INTENT", "UNKNOWN"} or value["next_state"] != "DUE" or prior_state != value["prior_state"] or value["attempt"] != prior["delivery_attempt"] or material["expired_attempt"] != prior["delivery_attempt"] or material["prior_token_digest"] != prior["delivery_lease_token_digest"] or material["prior_lease_until"] != prior["delivery_lease_until"] or material["reason"] != "LEASE_EXPIRED":
+                        raise CoreVerificationError("core:delivery-transition")
+                    if value["operation_id"] != _digest("delivery-requeue-operation", {"session_id": session_id, "job_id": job_id, "attempt": value["attempt"]}) or value["request_digest"] != _digest("delivery-request", {"session_id": session_id, "job_id": job_id, "action": "REQUEUE", "attempt": value["attempt"], "prior_token_digest": material["prior_token_digest"]}) or value["payload_digest"] != _digest("delivery-requeue-payload", {"job_id": job_id, "attempt": value["attempt"]}):
+                        raise CoreVerificationError("core:delivery-operation")
+                elif kind in {"DELIVERY_ACK", "DELIVERY_RESPONSE_UNKNOWN"}:
+                    expected_state = "ACK" if kind == "DELIVERY_ACK" else "UNKNOWN"
+                    if value["prior_state"] != "INTENT" or value["next_state"] != expected_state or prior_state != "INTENT" or value["attempt"] != prior["delivery_attempt"] or material["token_digest"] != prior["delivery_lease_token_digest"] or value["observed_at"] >= int(prior["delivery_lease_until"]):
+                        raise CoreVerificationError("core:delivery-transition")
+                    if kind == "DELIVERY_ACK":
+                        _hex(material["response_digest"], "core:delivery-response")
+                        if snap["delivery_response_digest"] != material["response_digest"] or snap["delivery_error_code"] is not None:
+                            raise CoreVerificationError("core:delivery-state")
+                    elif material["error_code"] not in {"RESPONSE_LOST", "TIMEOUT", "REMOTE_INDETERMINATE"} or snap["delivery_error_code"] != material["error_code"] or snap["delivery_response_digest"] is not None:
+                        raise CoreVerificationError("core:delivery-state")
+                    action = "UNKNOWN" if kind == "DELIVERY_RESPONSE_UNKNOWN" else "ACK"
+                    finish_values = {"session_id": session_id, "job_id": job_id, "attempt": value["attempt"], "action": action, "token_digest": material["token_digest"], "response_digest": None if kind == "DELIVERY_RESPONSE_UNKNOWN" else material["response_digest"], "code": material.get("error_code") if kind == "DELIVERY_RESPONSE_UNKNOWN" else None}
+                    expected_request = {"session_id": session_id, "job_id": job_id, "attempt": value["attempt"], "action": kind, "token_digest": material["token_digest"]}
+                    if value["operation_id"] != _digest("delivery-finish-operation", finish_values) or value["request_digest"] != _digest("delivery-request", expected_request) or value["payload_digest"] != _digest("delivery-response", {"job_id": job_id, "response_digest": finish_values["response_digest"], "code": finish_values["code"]}):
+                        raise CoreVerificationError("core:delivery-operation")
+                else:
+                    if value["prior_state"] not in {"INTENT", "UNKNOWN"} or value["next_state"] != "EXHAUSTED" or prior_state != value["prior_state"] or value["attempt"] != prior["delivery_attempt"] or material["token_digest"] != prior["delivery_lease_token_digest"] or material["error_code"] != "ATTEMPTS_EXHAUSTED" or type(material["max_attempts"]) is not int or not 1 <= material["max_attempts"] <= 8 or value["attempt"] != material["max_attempts"] or value["observed_at"] < int(prior["delivery_lease_until"]):
+                        raise CoreVerificationError("core:delivery-transition")
+                    if value["operation_id"] != _digest("delivery-exhausted-operation", {"session_id": session_id, "job_id": job_id, "attempt": value["attempt"]}) or value["request_digest"] != _digest("delivery-request", {"session_id": session_id, "job_id": job_id, "action": "EXHAUSTED", "attempt": value["attempt"]}) or value["payload_digest"] != _digest("delivery-exhausted-payload", {"job_id": job_id, "attempt": value["attempt"]}):
+                        raise CoreVerificationError("core:delivery-operation")
+                expected_sessions[session_id] = snap
+                stream_refs[stream_key] = delivery_id
+            if kind in {"SESSION_OPEN", "SESSION_START", "SESSION_PAUSE", "OBSERVATION"}:
+                stream_refs[stream_key] = str(value["subject_id"])
+            if kind == "ARTIFACT":
+                stream_refs[stream_key] = str(value["payload_digest"])
+
+        if meta["sequence"] != len(events) or meta["head_root"] != previous_root or meta["ingress_watermark"] != ingress_watermark:
             raise CoreVerificationError("core:meta-root")
-        result = {
-            "accepted": True,
-            "schema": SCHEMA,
-            "schema_version": SCHEMA_VERSION,
-            "database_id": meta["database_id"],
-            "chain_id": meta["chain_id"],
-            "config_digest": meta["config_digest"],
-            "sequence": meta["sequence"],
-            "head_root": meta["head_root"],
-            "ingress_database_id": meta["ingress_database_id"],
-            "ingress_watermark": meta["ingress_watermark"],
-            "artifact_count": len(rows),
-            "head_count": len(heads),
-            "session_count": connection.execute("SELECT COUNT(*) FROM core_sessions").fetchone()[0],
-            "slot_count": connection.execute("SELECT COUNT(*) FROM core_slots").fetchone()[0],
-            "event_count": len(events),
-            "flags": dict(FIXED_FLAGS),
-            "current_source_artifact_id": next((row["artifact_id"] for row in heads if row["stream_kind"] == "ARTIFACT" and row["stream_id"] == "SOURCE_OBSERVATION"), None),
+        if set(actual_artifacts) != set(expected_artifacts):
+            raise CoreVerificationError("core:artifact-reconstruction")
+        for artifact_id, expected in expected_artifacts.items():
+            row = connection.execute("SELECT * FROM core_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+            if row is None or any(row[key] != expected[key] for key in TABLE_COLUMNS["core_artifacts"]):
+                raise CoreVerificationError("core:artifact-reconstruction")
+        actual_sessions = connection.execute("SELECT * FROM core_sessions ORDER BY session_id").fetchall()
+        if len(actual_sessions) != len(expected_sessions):
+            raise CoreVerificationError("core:session-count")
+        for row in actual_sessions:
+            expected = expected_sessions.get(str(row["session_id"]))
+            if expected is None:
+                raise CoreVerificationError("core:session-reconstruction")
+            expected_row = dict(expected)
+            expected_row["head_root"] = stream_roots.get(("SESSION", str(row["session_id"])), GENESIS_ROOT)
+            if any(row[key] != expected_row[key] for key in TABLE_COLUMNS["core_sessions"]):
+                raise CoreVerificationError("core:session-reconstruction")
+        actual_slots = connection.execute("SELECT * FROM core_slots ORDER BY session_id,slot_number").fetchall()
+        if len(actual_slots) != len(expected_slots):
+            raise CoreVerificationError("core:slot-count")
+        for row in actual_slots:
+            expected = expected_slots.get((str(row["session_id"]), int(row["slot_number"])))
+            if expected is None or any(row[key] != expected[key] for key in TABLE_COLUMNS["core_slots"]):
+                raise CoreVerificationError("core:slot-reconstruction")
+        actual_heads = connection.execute("SELECT * FROM core_heads ORDER BY stream_kind,stream_id").fetchall()
+        if len(actual_heads) != len(stream_roots) or {(str(row["stream_kind"]), str(row["stream_id"])) for row in actual_heads} != set(stream_roots):
+            raise CoreVerificationError("core:head")
+        for row in actual_heads:
+            key = (str(row["stream_kind"]), str(row["stream_id"]))
+            if row["head_root"] != stream_roots[key] or row["event_sequence"] != stream_sequences[key] or row["head_ref"] != stream_refs.get(key):
+                raise CoreVerificationError("core:head")
+        if ingress_path is not None:
+            source_ids = tuple(str(actual_artifacts[aid]["ingress_artifact_id"]) for aid in expected_artifacts if expected_artifacts[aid]["kind"] == "SOURCE_OBSERVATION")
+            if source_ids:
+                snapshots = ingress.read_artifact_snapshots(ingress_path, source_ids)
+                for aid in expected_artifacts:
+                    value = actual_artifacts[aid]
+                    if value.get("kind") != "SOURCE_OBSERVATION":
+                        continue
+                    source = snapshots.get(str(value["ingress_artifact_id"]))
+                    if source is None or source["artifact_id"] != value["ingress_artifact_id"] or source["envelope_id"] != value["envelope_id"] or source["content_root"] != value["content_root"] or source["event_sequence"] != value["ingress_event_sequence"]:
+                        raise CoreVerificationError("core:ingress-binding")
+        return {
+            "accepted": True, "schema": SCHEMA, "schema_version": SCHEMA_VERSION,
+            "database_id": meta["database_id"], "chain_id": meta["chain_id"], "config_digest": meta["config_digest"],
+            "sequence": meta["sequence"], "head_root": meta["head_root"], "ingress_database_id": meta["ingress_database_id"], "ingress_watermark": meta["ingress_watermark"],
+            "artifact_count": len(expected_artifacts), "head_count": len(stream_roots), "session_count": len(expected_sessions), "slot_count": len(expected_slots), "event_count": len(events),
+            "flags": dict(FIXED_FLAGS), "current_source_artifact_id": stream_refs.get(("ARTIFACT", "SOURCE_OBSERVATION")),
         }
-        return result
     except CoreVerificationError:
         raise
-    except (OSError, sqlite3.Error, TypeError, ValueError):
+    except (OSError, sqlite3.Error, TypeError, ValueError, KeyError):
         raise CoreVerificationError("core:database") from None
     finally:
         try:
@@ -615,31 +650,10 @@ def verify_database(path: str | Path, *, expected_database_id: str | None = None
 
 
 def logical_export(result: Mapping[str, object]) -> bytes:
-    value = {
-        "schema": "mirror-core-logical-export-v2",
-        "schema_version": 2,
-        "database_id": result["database_id"],
-        "chain_id": result["chain_id"],
-        "config_digest": result["config_digest"],
-        "sequence": result["sequence"],
-        "head_root": result["head_root"],
-        "ingress_database_id": result["ingress_database_id"],
-        "ingress_watermark": result["ingress_watermark"],
-        "counts": {
-            "artifacts": result["artifact_count"],
-            "heads": result["head_count"],
-            "sessions": result["session_count"],
-            "slots": result["slot_count"],
-            "events": result["event_count"],
-        },
-        "flags": dict(FIXED_FLAGS),
-    }
-    return _canonical(value)
+    return _canonical({
+        "schema": "mirror-core-logical-export-v2", "schema_version": 2, "database_id": result["database_id"], "chain_id": result["chain_id"], "config_digest": result["config_digest"], "sequence": result["sequence"], "head_root": result["head_root"], "ingress_database_id": result["ingress_database_id"], "ingress_watermark": result["ingress_watermark"],
+        "counts": {"artifacts": result["artifact_count"], "heads": result["head_count"], "sessions": result["session_count"], "slots": result["slot_count"], "events": result["event_count"]}, "flags": dict(FIXED_FLAGS),
+    })
 
 
-__all__ = [
-    "SCHEMA", "SCHEMA_VERSION", "TABLES", "ARTIFACT_KINDS",
-    "SESSION_STATES", "OBSERVATION_RESULTS", "FIXED_FLAGS",
-    "CoreVerificationError", "verify_database", "logical_export",
-    "_canonical", "_digest", "_raw_digest", "_parse",
-]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "TABLES", "TABLE_COLUMNS", "EXPLICIT_INDEX", "ARTIFACT_KINDS", "SESSION_STATES", "DELIVERY_STATES", "OBSERVATION_RESULTS", "FIXED_FLAGS", "EVENT_KINDS", "CoreVerificationError", "verify_database", "logical_export", "_canonical", "_digest", "_raw_digest", "_parse", "_event_root", "_stream_root", "GENESIS_ROOT"]

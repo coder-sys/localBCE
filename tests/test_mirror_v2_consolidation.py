@@ -23,6 +23,10 @@ def _hex(seed: str) -> str:
     return hashlib.sha3_512(seed.encode("ascii")).hexdigest()
 
 
+def _token(seed: str) -> str:
+    return _hex("delivery-token:" + seed)
+
+
 class _ManualClock:
     def __init__(self, value: int) -> None:
         self.value = value
@@ -246,11 +250,12 @@ class MirrorV2Fixture(unittest.TestCase):
             governance_policy_digest=self.governance_policy.digest,
             privacy_policy_digest=self.privacy_policy.digest,
         )
-        self.core = core.CoreServiceV2(self.core_path, self.core_config)
+        self.core_clock = _ManualClock(profile.FIXTURE_OBSERVATION_TIME + 2)
+        self.core = core.CoreServiceV2(self.core_path, self.core_config, clock=self.core_clock)
         self.source_result = self.core.ingest_source(self.ingress_path, self.ingress_receipt.artifact_id or "")
         self.gov_core_id = self.core.admit_governance(self.governance_raw, policy=self.governance_policy, evidence_raw=b"synthetic governance assertion")
         self.privacy_core_id = self.core.admit_privacy(self.privacy_raw, policy=self.privacy_policy, evidence_raw=b"synthetic privacy assertion")
-        self.session_open = self.core.open_session(source_artifact_id=self.source_result["source_artifact_id"], governance_artifact_id=self.gov_core_id, privacy_artifact_id=self.privacy_core_id, now=profile.FIXTURE_OBSERVATION_TIME + 2)
+        self.session_open = self.core.open_session(source_artifact_id=self.source_result["source_artifact_id"], governance_artifact_id=self.gov_core_id, privacy_artifact_id=self.privacy_core_id)
         self.core.start_session(json.loads(self.session_open.raw.decode("ascii"))["subject_id"])
         self.session_id = json.loads(self.session_open.raw.decode("ascii"))["subject_id"]
         self.core.observe(self.session_id, 0, "PARITY", counts={"observed": 1, "changed": 0})
@@ -329,6 +334,107 @@ class MirrorV2Fixture(unittest.TestCase):
         self.assertNotIn("now", claim_parameters)
         self.assertNotIn("observed_at", capture_parameters)
         self.assertIn("clock", inspect.signature(ingress.IngressServiceV2).parameters)
+
+    def test_core_v2_has_exact_six_tables_columns_and_one_explicit_index(self) -> None:
+        self.assertIn("clock", inspect.signature(core.CoreServiceV2).parameters)
+        self.assertNotIn("now", inspect.signature(core.CoreServiceV2.open_session).parameters)
+        self.assertNotIn("now", inspect.signature(core.CoreServiceV2.begin_delivery).parameters)
+        connection = sqlite3.connect(self.core_path)
+        try:
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            self.assertEqual(set(core_independent.TABLES), tables)
+            for table, columns in core_independent.TABLE_COLUMNS.items():
+                actual = tuple(row[1] for row in connection.execute("SELECT * FROM pragma_table_info(?) ORDER BY cid", (table,)))
+                self.assertEqual(columns, actual)
+            indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'")}
+            self.assertEqual({"core_artifacts_kind_source_event_idx"}, indexes)
+            self.assertNotIn("CASE_ADVANCE", {row[0] for row in connection.execute("SELECT DISTINCT event_kind FROM core_events")})
+        finally:
+            connection.close()
+
+    def test_core_event_raw_reconstructs_material_and_rejects_rebound_session(self) -> None:
+        tampered = self.root / "core-rebound-session.db"
+        shutil.copy2(self.core_path, tampered)
+        connection = sqlite3.connect(tampered)
+        try:
+            row = connection.execute("SELECT sequence,event_raw FROM core_events WHERE event_kind='OBSERVATION'").fetchone()
+            event = json.loads(bytes(row[1]).decode("ascii"))
+            event["material"]["session"]["last_slot"] = 99
+            event["material_digest"] = core_independent._digest("material", event["material"])
+            event["event_id"] = core_independent._digest(
+                "event-id",
+                {key: event[key] for key in core_independent.EVENT_RAW_KEYS if key not in {"event_id", "after_root", "stream_after_root"}},
+            )
+            event["after_root"] = core_independent._event_root(event)
+            event["stream_after_root"] = core_independent._stream_root(event)
+            raw = core_independent._canonical(event)
+            connection.execute("UPDATE core_events SET event_id=?,event_raw=?,receipt_digest=? WHERE sequence=?", (event["event_id"], raw, core_independent._raw_digest("receipt", raw), row[0]))
+            connection.execute("UPDATE core_meta SET head_root=? WHERE sequence=?", (event["after_root"], row[0]))
+            connection.execute("UPDATE core_sessions SET head_root=? WHERE session_id=?", (event["stream_after_root"], self.session_id))
+            connection.execute("UPDATE core_heads SET head_root=? WHERE stream_kind='SESSION' AND stream_id=?", (event["stream_after_root"], self.session_id))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(core_independent.CoreVerificationError):
+            core_independent.verify_database(tampered, expected_database_id=self.core_config.database_id, expected_config_digest=self.core_config.digest)
+
+    def test_core_global_clock_and_old_observation_retry_are_owner_bound(self) -> None:
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 10
+        second = self.core.observe(self.session_id, 1, "DISCREPANCY", counts={"observed": 1, "changed": 1})
+        before = self.core.verify()
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 9
+        with self.assertRaisesRegex(core.CoreConflictError, "core:clock-rewind"):
+            self.core.observe(self.session_id, 2, "PARITY", counts={"observed": 2, "changed": 0})
+        self.assertEqual(before["head_root"], self.core.verify()["head_root"])
+        self.core_clock.raise_on_read = True
+        retry = self.core.observe(self.session_id, 0, "PARITY", counts={"observed": 1, "changed": 0})
+        self.assertEqual(retry.raw, self.core.observe(self.session_id, 0, "PARITY", counts={"observed": 1, "changed": 0}).raw)
+        self.assertNotEqual(second.raw, retry.raw)
+
+    def test_delivery_tokens_are_digest_only_and_terminal_retry_is_clock_free(self) -> None:
+        token = _token("digest-only")
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 20
+        intent = self.core.begin_delivery(self.session_id, "digest-job", lease_token=token)
+        before = self.core.verify()
+        with self.assertRaisesRegex(core.CoreConflictError, "core:delivery-token"):
+            self.core.acknowledge_delivery(self.session_id, job_id="digest-job", lease_token=_token("wrong"), response_digest=_hex("response"))
+        self.assertEqual(before["head_root"], self.core.verify()["head_root"])
+        connection = sqlite3.connect(self.core_path)
+        try:
+            database_bytes = self.core_path.read_bytes()
+            export = self.core.logical_export()
+            support = json.dumps(self.core.support(), sort_keys=True).encode("ascii")
+            events = [bytes(row[0]) for row in connection.execute("SELECT event_raw FROM core_events")]
+        finally:
+            connection.close()
+        self.assertNotIn(token.encode("ascii"), database_bytes)
+        self.assertNotIn(token.encode("ascii"), export)
+        self.assertNotIn(token.encode("ascii"), support)
+        self.assertTrue(any(intent.raw == event for event in events))
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 50
+        response = _hex("digest-response")
+        ack = self.core.acknowledge_delivery(self.session_id, job_id="digest-job", lease_token=token, response_digest=response)
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 100
+        self.core_clock.raise_on_read = True
+        self.assertEqual(ack.raw, self.core.acknowledge_delivery(self.session_id, job_id="digest-job", lease_token=token, response_digest=response).raw)
+
+    def test_delivery_active_token_conflict_and_stream_identity(self) -> None:
+        token = _token("active")
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 20
+        self.core.begin_delivery(self.session_id, "same-job", lease_token=token)
+        before = self.core.verify()
+        with self.assertRaisesRegex(core.CoreConflictError, "core:delivery-lease"):
+            self.core.begin_delivery(self.session_id, "same-job", lease_token=_token("different"))
+        self.assertEqual(before["head_root"], self.core.verify()["head_root"])
+        connection = sqlite3.connect(self.core_path)
+        try:
+            rows = connection.execute("SELECT stream_kind,stream_id,head_ref FROM core_heads ORDER BY stream_kind,stream_id").fetchall()
+        finally:
+            connection.close()
+        delivery = [row for row in rows if row[0] == "DELIVERY"]
+        self.assertEqual(1, len(delivery))
+        self.assertEqual(core_independent._digest("delivery-id", {"session_id": self.session_id, "job_id": "same-job"}), delivery[0][1])
+        self.assertEqual(delivery[0][1], delivery[0][2])
 
     def test_owner_clock_rewind_rejects_without_mutation(self) -> None:
         service, slot_id = self._fresh_ingress("clock-rewind.db")
@@ -681,15 +787,17 @@ class MirrorV2Fixture(unittest.TestCase):
             self.assertTrue(all(row[2] is not None and len(row[3]) == 128 and row[4] > 0 for row in heads))
         finally:
             connection.close()
-        intent = self.core.begin_delivery(self.session_id, "synthetic-job-v2", lease_token="delivery-lease", now=profile.FIXTURE_OBSERVATION_TIME + 20)
+        self.core_clock.value = profile.FIXTURE_OBSERVATION_TIME + 20
+        token = _token("synthetic-job-v2")
+        intent = self.core.begin_delivery(self.session_id, "synthetic-job-v2", lease_token=token)
         self.assertEqual(
-            self.core.begin_delivery(self.session_id, "synthetic-job-v2", lease_token="delivery-lease", now=profile.FIXTURE_OBSERVATION_TIME + 20).raw,
+            self.core.begin_delivery(self.session_id, "synthetic-job-v2", lease_token=token).raw,
             intent.raw,
         )
         response_digest = _hex("receiver-ack")
-        ack = self.core.acknowledge_delivery(self.session_id, job_id="synthetic-job-v2", lease_token="delivery-lease", response_digest=response_digest)
+        ack = self.core.acknowledge_delivery(self.session_id, job_id="synthetic-job-v2", lease_token=token, response_digest=response_digest)
         self.assertEqual(
-            self.core.acknowledge_delivery(self.session_id, job_id="synthetic-job-v2", lease_token="delivery-lease", response_digest=response_digest).raw,
+            self.core.acknowledge_delivery(self.session_id, job_id="synthetic-job-v2", lease_token=token, response_digest=response_digest).raw,
             ack.raw,
         )
         self.assertEqual(self.core.verify(ingress_path=self.ingress_path)["event_count"], 10)
@@ -831,8 +939,10 @@ class MirrorV2Fixture(unittest.TestCase):
             connection.close()
         connection = sqlite3.connect(self.core_path)
         try:
-            plan = " ".join(str(row) for row in connection.execute("EXPLAIN QUERY PLAN SELECT session_id FROM core_sessions WHERE delivery_state='DUE' AND delivery_lease_until IS NULL ORDER BY delivery_job_id"))
-            self.assertIn("core_delivery_state_idx", plan)
+            plan = " ".join(str(row) for row in connection.execute("EXPLAIN QUERY PLAN SELECT artifact_id FROM core_artifacts WHERE kind='SOURCE_OBSERVATION' AND source_artifact_id=? ORDER BY created_event_sequence", (self.source_result["source_artifact_id"],)))
+            self.assertIn("core_artifacts_kind_source_event_idx", plan)
+            explicit = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_autoindex_%'")}
+            self.assertEqual({"core_artifacts_kind_source_event_idx"}, explicit)
         finally:
             connection.close()
 
@@ -844,18 +954,21 @@ class MirrorV2Fixture(unittest.TestCase):
 
     def test_delivery_response_loss_requeues_with_bounded_exhaustion(self) -> None:
         now = profile.FIXTURE_OBSERVATION_TIME + 100
-        lease = "delivery-retry-1"
-        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease, now=now)
+        self.core_clock.value = now
+        lease = _token("delivery-retry-1")
+        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease)
         self.core.mark_delivery_unknown(self.session_id, job_id="retry-job-v2", lease_token=lease)
-        lease = "delivery-retry-2"
-        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease, now=now + self.core_config.cadence_seconds + 1)
+        lease = _token("delivery-retry-2")
+        self.core_clock.value = now + self.core_config.cadence_seconds + 1
+        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease)
         self.core.mark_delivery_unknown(self.session_id, job_id="retry-job-v2", lease_token=lease)
-        lease = "delivery-retry-3"
-        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease, now=now + 2 * (self.core_config.cadence_seconds + 1))
+        lease = _token("delivery-retry-3")
+        self.core_clock.value = now + 2 * (self.core_config.cadence_seconds + 1)
+        self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=lease)
         self.core.mark_delivery_unknown(self.session_id, job_id="retry-job-v2", lease_token=lease)
-        with self.assertRaises(core.CoreConflictError) as context:
-            self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token="delivery-retry-4", now=now + 3 * (self.core_config.cadence_seconds + 1))
-        self.assertEqual(str(context.exception), "core:delivery-exhausted")
+        self.core_clock.value = now + 3 * (self.core_config.cadence_seconds + 1)
+        terminal = self.core.begin_delivery(self.session_id, "retry-job-v2", lease_token=_token("delivery-retry-4"))
+        self.assertEqual("EXHAUSTED", terminal.next_state)
         self.assertEqual(self.core.verify(ingress_path=self.ingress_path)["flags"]["payment_authority"], False)
 
     def test_key_revocation_blocks_restore_and_storage_corruption(self) -> None:
