@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest import TestCase
 
-from app.minimal_clearance_proof_state import (
+from app.minimal_clearance_proof_primitives import (
     MinimalProofAcceptanceV1,
     NativeMinimalClearanceVerifier,
     _CIRCUIT_ID,

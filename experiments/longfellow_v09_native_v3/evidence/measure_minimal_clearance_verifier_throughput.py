@@ -29,7 +29,7 @@ if __package__ in (None, ""):
     if str(_REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPO_ROOT))
 
-from app.minimal_clearance_proof_state import (
+from app.minimal_clearance_proof_primitives import (
     MinimalClearanceProofStateError,
     NativeMinimalClearanceVerifier,
 )

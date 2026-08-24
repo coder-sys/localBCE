@@ -23,7 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Final, Mapping, Protocol
 
-from app.minimal_clearance_proof_state import MinimalProofAcceptanceV1, NativeMinimalClearanceVerifier, parse_acceptance_bytes
+from app.minimal_clearance_proof_primitives import MinimalProofAcceptanceV1, NativeMinimalClearanceVerifier, parse_acceptance_bytes
 from app.minimal_clearance_verifier_process import ContainedVerifierResult
 
 

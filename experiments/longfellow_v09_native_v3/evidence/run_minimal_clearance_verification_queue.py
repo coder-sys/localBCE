@@ -33,7 +33,7 @@ from app.minimal_clearance_verification_queue_independent import (
     verify_database,
     verify_export_bytes,
 )
-from app.minimal_clearance_proof_state import NativeMinimalClearanceVerifier
+from app.minimal_clearance_proof_primitives import NativeMinimalClearanceVerifier
 
 
 ARTIFACT_BYTES = 411_672
