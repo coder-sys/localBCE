@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 from pathlib import Path
@@ -287,41 +286,6 @@ def _scan_json_file(path: Path, *, relative: str, findings: list[str]) -> None:
         return
     except json.JSONDecodeError:
         findings.append(f"{relative}:json_malformed")
-        return
-
-    approved_envelope = False
-    if len(values) == 1 and values[0][0] is None:
-        try:
-            from tools.encrypted_witness_envelope import validate_envelope
-
-            validate_envelope(values[0][1])
-            candidate = values[0][1]
-            assert isinstance(candidate, dict)
-            nonce = base64.b64decode(candidate["nonce_b64"], validate=True)
-            wrapped_key = base64.b64decode(candidate["wrapped_key_b64"], validate=True)
-            ciphertext = base64.b64decode(candidate["ciphertext_b64"], validate=True)
-            approved_envelope = (
-                len(nonce) == 12
-                and len(wrapped_key) >= 384
-                and len(ciphertext) >= 16
-                and candidate["nonce_b64"]
-                == base64.b64encode(nonce).decode("ascii")
-                and candidate["wrapped_key_b64"]
-                == base64.b64encode(wrapped_key).decode("ascii")
-                and candidate["ciphertext_b64"]
-                == base64.b64encode(ciphertext).decode("ascii")
-            )
-        except (ImportError, RuntimeError, TypeError, ValueError):
-            approved_envelope = False
-
-    if approved_envelope:
-        envelope = values[0][1]
-        assert isinstance(envelope, dict)
-        for name in ("agency_id", "retain_until", "wrapping_key_id"):
-            _scan_text(str(envelope[name]), location=relative, findings=findings)
-        findings.append(
-            f"{relative}:encrypted_envelope_requires_authenticated_provenance"
-        )
         return
 
     findings.append(f"{relative}:unapproved_json_artifact_schema")

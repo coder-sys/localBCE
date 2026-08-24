@@ -84,9 +84,8 @@ class PrivacyArtifactScanTests(unittest.TestCase):
                 encoding="utf-8",
             )
             findings = scan_artifacts(root)
-        self.assertEqual(1, len(findings))
-        self.assertIn(
-            "encrypted_envelope_requires_authenticated_provenance", findings[0]
+        self.assertTrue(
+            any("unapproved_json_artifact_schema" in item for item in findings)
         )
 
     def test_forged_or_invalid_envelopes_never_pass_the_artifact_gate(self) -> None:

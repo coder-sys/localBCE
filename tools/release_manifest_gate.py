@@ -197,11 +197,8 @@ RELEASE_EXCLUDED_PATHS = frozenset(
     {
         "docs/security-freeze/BL-PQ512-v1/hardening.json",
         "sample_claim_input.json",
-        "tests/attacks/test_proving_evidence_policy_attacks.py",
         "tests/test_build_release_archive.py",
-        "tests/test_measure_proving.py",
         "tests/test_privacy_artifact_scan.py",
-        "tools/measure_proving.py",
         "tools/privacy_artifact_scan.py",
     }
 )
